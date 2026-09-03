@@ -664,30 +664,23 @@ const SEEK_OVERFETCH: i64 = 8;
 /// (0 or 4). The trailing `LIMIT` is inlined. Only `sac_only` / search pull side
 /// tables into the seek; the default page is a pure `assets` PK walk.
 fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> String {
-    // A code search flips the walk to ASC so native XLM comes first (task 0485).
-    // Native is stored as `asset_type = 0` with an EMPTY code, which is the
-    // MINIMUM of the identity 4-tuple this keyset walks — under the default DESC
-    // it sorts onto the LAST page, so `filter[code]=xlm` answered with `zXLMr,
-    // zXLM, …` and the one asset everybody meant was unreachable. ASC pins it to
-    // row 1 for any needle that matches it, at the same cost: the order is still
-    // the `assets` primary key, so the page stays a PK-prefix walk.
+    // ASC, both paths (task 0485). Native XLM is `asset_type = 0` with an EMPTY
+    // code — the MINIMUM of the identity 4-tuple this keyset walks — so under
+    // DESC it sorts onto the LAST page: `filter[code]=xlm` answered with
+    // `zXLMr, zXLM, …`, and the unfiltered list opened on six codeless Soroban
+    // contracts instead of XLM.
     //
-    // Safe against the cursor: `SortOrder` is a sticky query param and is NOT
-    // encoded in the cursor (see `common::cursor`), and `filter[code]` is sticky
-    // the same way — the client re-sends it on every page, so the walk keeps one
-    // direction for the whole search. `op` comes from the same call, so the
-    // comparator always points into the walk.
+    // The old DESC was not a decision. It came from `keyset_sql_desc`, whose
+    // own doc calls it the helper for endpoints with a single NEWEST-FIRST
+    // order — but this key holds no time. It read "newest first" and delivered
+    // reverse-alphabetical. Nothing pinned it: no `?order=` param, no sort
+    // control in the frontend, no claim in `docs/architecture/**`.
     //
-    // ponytail: direction, not relevance. A tier ranking like the search
-    // endpoint's (exact > prefix > substring) would have to carry the rank in
-    // the cursor; add that when someone asks for an order other than
-    // alphabetical.
-    let sort = if params.asset_code.is_some() {
-        SortOrder::Asc
-    } else {
-        SortOrder::Desc
-    };
-    let (op, order) = keyset_sql(sort, direction);
+    // Same cost either way — the order is still the `assets` primary key, so
+    // the unfiltered page stays a PK-prefix walk. `op` comes from the same
+    // call as `order`, so the cursor comparator always points into the walk;
+    // that pairing is what a keyset needs and why they are never chosen apart.
+    let (op, order) = keyset_sql(SortOrder::Asc, direction);
     let lim_over = params.limit * SEEK_OVERFETCH;
 
     let type_clause = params
@@ -1401,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn code_search_walks_ascending_so_native_is_first() {
+    fn the_walk_is_ascending_and_only_a_search_is_ranked() {
         // Task 0485. Native XLM is `asset_type = 0` with an empty code — the
         // MINIMUM of the identity 4-tuple this keyset walks — so the default
         // DESC page order buries it on the LAST page (measured on production:
@@ -1442,11 +1435,13 @@ issuer_id, contract_id) > (?, ?, ?, ?, ?, ?)"
 
         params.asset_code = None;
         let browsing = build_list_seek_sql(&params, Direction::Next);
-        // Browsing is NOT a relevance question: no rank, no join, DESC as before.
-        assert!(browsing.contains("ORDER BY asset_type DESC"), "{browsing}");
+        // Browsing walks the same direction — native XLM opens the list — but
+        // carries NO rank: with no needle there is nothing to be a good match
+        // for, so the tier would be a number about nothing.
+        assert!(browsing.contains("ORDER BY asset_type ASC"), "{browsing}");
         assert!(!browsing.contains("rank_tier"), "{browsing}");
         assert!(!browsing.contains("balance_aggregates"), "{browsing}");
-        assert!(browsing.contains(") < (?, ?, ?, ?)"), "{browsing}");
+        assert!(browsing.contains(") > (?, ?, ?, ?)"), "{browsing}");
     }
 
     #[test]
@@ -1533,7 +1528,7 @@ mod decode_smoke {
             return;
         }
 
-        let params = ResolvedListParams {
+        let mut params = ResolvedListParams {
             limit: 10,
             cursor: None,
             asset_type: None,
@@ -1552,6 +1547,20 @@ mod decode_smoke {
             "`xlm` answered with {:?} first — native XLM is the MINIMUM of the \
              identity 4-tuple, so a DESC walk buries it on the last page",
             first.asset_code
+        );
+
+        // And with NO filter at all: the asset list of a Stellar explorer
+        // opening on anything other than XLM was the same defect wearing a
+        // different hat (it opened on codeless Soroban contracts).
+        params.asset_code = None;
+        let browse = fetch_list(&ch, &params, Direction::Next)
+            .await
+            .expect("unfiltered page decodes");
+        assert_eq!(
+            browse.first().map(|r| r.asset_type),
+            Some(0),
+            "the unfiltered list must open on native XLM; got {:?}",
+            browse.first().map(|r| r.asset_code.clone())
         );
     }
 
