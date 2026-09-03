@@ -106,11 +106,24 @@ Three details that are load-bearing:
   what distinguishes `linked={true}` from `linked={false}`, which today is
   invisible.
 
-### 3. Converge the MUI `Link` sites
+### 3. Converge the MUI `Link` sites — narrower than planned
 
-Six `underline="hover"` call sites become the same rule — either by routing them
-through `IdentifierDisplay` where they render an identifier, or by matching the
-style where they do not.
+Of the six `underline="hover"` sites, only **one** turned out to be a content
+link: `transactions/cells.tsx`, the asset code in the "value moved" cell. It now
+shares `contentLinkSx` (the extracted helper both this and `IdentifierDisplay`
+consume) laid over its own `text.secondary`, so it keeps the amount / code /
+count colour hierarchy that cell depends on — `IdentifierDisplay` would have
+rendered the code in `text.primary` at weight 500, louder than the amount beside
+it.
+
+The other five — `NftDetailPage`, `LedgerDetailPage` and their two skeleton
+counterparts — are breadcrumbs (`NFTs /`, `Ledger /`), not content. On reading
+the actual components: position and container already say "this takes you back
+up a level", the same argument that keeps `SecondaryNav`/`Footer`/`NavButton`
+out of scope. `underline="hover"` is already a reasonable breadcrumb treatment,
+so these are left alone. Recorded as a correction, not silently dropped — the
+"six sites" framing in the original scope assumed a headcount the code did not
+support.
 
 ### 4. Chips stay as they are
 
@@ -123,17 +136,41 @@ not this task.
 
 ## Acceptance Criteria
 
-- [ ] A linked identifier is distinguishable from an unlinked one **without
-      hovering** — verified on a page that shows both (contract detail carries
-      `linked={false}` and linked identifiers side by side)
-- [ ] The transactions list, where every row carries a linked hash, still reads
-      as a table rather than a wall of underlines — screenshot before/after
-- [ ] Light and dark both checked; the alpha holds up on both grounds
-- [ ] The six MUI `Link underline="hover"` sites and `IdentifierDisplay` agree
-- [ ] Nav, footer and chips unchanged
-- [ ] **Docs updated** — N/A: component styling, not the shape of the system
-      (no schema, endpoint, pipeline or data-contract change).
-- [ ] **API types regenerated** — N/A, frontend only.
+- [x] A linked identifier is distinguishable from an unlinked one **without
+      hovering** — `IdentifierDisplay.test.tsx` asserts `textDecoration:
+    underline` when `linked` and `none` when not, in jsdom (not a rendering
+      approximation — a real assertion on computed style)
+- [x] The transactions list, where every row carries a linked hash, still reads
+      as a table rather than a wall of underlines — verified visually (see
+      Notes: an HTML mock at the shipped values, not the live app, because the
+      local dev proxy needs a `DEV_API_KEY` this environment does not have)
+- [x] Light and dark both checked — `IdentifierDisplay.test.tsx` renders both
+      theme modes; the visual check above covered both too
+- [~] The MUI `Link underline="hover"` sites converge where they are actually
+  content — one of six (`cells.tsx`); the other five are breadcrumbs and
+  correctly stay `underline="hover"` — see the corrected §3 above
+- [x] Nav, footer and chips unchanged — not touched; breadcrumbs also unchanged
+      per the finding above
+- [x] **Docs updated** — N/A: component styling, not the shape of the system.
+- [x] **API types regenerated** — N/A, frontend only.
+
+## Implementation Notes
+
+`contentLinkSx` (`libs/ui/src/theme/linkAffordance.ts`) is the one definition,
+exported from the package root. `IdentifierDisplay`'s `makeIdentifierSx` became
+a `theme => ({...})` function (was a plain object) so it can spread
+`contentLinkSx(theme)` in — MUI's `Box` with a polymorphic `component` rejects
+an `sx` **array** on some overloads, which is what an earlier version of this
+tried; spreading avoids the type error entirely rather than working around it.
+
+Not verified against the deployed app: the local dev proxy
+(`DEV_API_PROXY_TARGET` + `DEV_API_KEY` in `web/.env.development`, gitignored)
+needs a key this environment doesn't have, so `/contracts/…` and `/transactions`
+both 500. Verified instead with a static HTML mock built from the exact shipped
+values (mono font, real light/dark `text.primary`/`background` from
+`theme/colors.ts`, the 0.35 alpha, the 3px offset) — screenshotted and sent to
+the user, not just described. A real-app pass with a working proxy would still
+be worth doing before calling this fully closed on a device.
 
 ## Not in scope
 

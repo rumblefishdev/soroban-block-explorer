@@ -2,6 +2,7 @@ import { Box, Link, Typography } from '@mui/material';
 import type { TransactionValue } from '@rumblefish/api-types';
 import {
   Chip,
+  contentLinkSx,
   Dash,
   formatAmount,
   IdentifierDisplay,
@@ -61,12 +62,20 @@ export function ValueCell({ values }: { values: readonly TransactionValue[] }) {
       <Typography component="span" variant="bodySmRegular">
         {formatAmount(scaleByDecimals(first.net_settled, first.decimals), 2)}
       </Typography>
+      {/* Task 0535: an in-content link, so it carries the shared underline
+          affordance rather than `underline="hover"`. NOT swapped for
+          `IdentifierDisplay` — that renders `text.primary` at weight 500, which
+          would make the asset code louder than the amount beside it and invert
+          this cell's amount / code / count hierarchy. The rule is about
+          affordance; colour stays a hierarchy tool. */}
       <Link
         component={RouterLink}
         to={routes.asset(first.asset)}
-        underline="hover"
         variant="bodySmRegular"
-        sx={(theme) => ({ color: theme.palette.text.secondary })}
+        sx={(theme) => ({
+          color: theme.palette.text.secondary,
+          ...contentLinkSx(theme),
+        })}
       >
         {code}
       </Link>
