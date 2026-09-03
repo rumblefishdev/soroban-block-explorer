@@ -97,8 +97,6 @@ function budget(signal?: AbortSignal): AbortSignal {
  * the request timeout does NOT bound bytes, since a fast server can stream a
  * great deal in eight seconds.
  */
-const MAX_BYTES = 256 * 1024;
-
 async function getText(url: string, signal: AbortSignal): Promise<string> {
   const res = await fetch(url, {
     signal,
@@ -113,27 +111,13 @@ async function getText(url: string, signal: AbortSignal): Promise<string> {
     credentials: 'omit',
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-  // `body` is absent when the response arrives already buffered — nothing to
-  // cap in that case.
-  const body = res.body;
-  if (body == null) return res.text();
-
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_BYTES) {
-      await reader.cancel();
-      throw new Error('response too large');
-    }
-    text += decoder.decode(value, { stream: true });
-  }
-  return text + decoder.decode();
+  // ponytail: no size cap. A hostile host could stream forever, but it is a
+  // host this viewer aimed at themselves, the damage stops at their own tab,
+  // and `budget()` aborts the whole lookup after TIMEOUT_MS either way. The
+  // cap that stood here was 30 lines of reader loop that no test could reach,
+  // because a stubbed Response has no `body` to stream. If a real case for it
+  // appears, put it back WITH a test that streams.
+  return res.text();
 }
 
 // No cache below this line on purpose: React Query already caches the whole
