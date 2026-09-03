@@ -214,23 +214,31 @@ query was not the search bucket at all: it was a `dev_read` session joining
 208 GiB, hunting USDT0 movements for one account. Some of the 1 s rows were this
 task's own probes running as `default`.
 
-Filtered to the actual bucket (`positionCaseInsensitive(toString(a.asset_code)`)
-and to `api_reader`, the six buckets over 7 days are:
+Matching on the table name is not enough either — `liquidity_pools` and
+`soroban_contract_metadata` are read by their LIST endpoints too, and
+`/v1/liquidity-pools` reads 11.6 M rows / 460 MiB per call, which is what made
+`pool` look like a 527 ms bucket in the first pass at this table. Matching each
+bucket's own predicate instead, `api_reader` only, 7 days:
 
-| bucket      | n   | p50 | p95     | max  |
-| ----------- | --- | --- | ------- | ---- |
-| pool        | 140 | 66  | 527     | 1766 |
-| contract    | 417 | 113 | 341     | 1147 |
-| nft         | 144 | 161 | 206     | 716  |
-| **asset**   | 112 | 114 | **136** | 746  |
-| transaction | 29  | 9   | 11      | 11   |
-| account     | 27  | 4   | 10      | 13   |
+| bucket      | n   | p50 | p95     | max | max read   |
+| ----------- | --- | --- | ------- | --- | ---------- |
+| **nft**     | 112 | 163 | **189** | 716 | 13.03 MiB  |
+| **asset**   | 112 | 114 | 136     | 746 | 25.46 MiB  |
+| pool        | 62  | 74  | 93      | 335 | 4.01 MiB   |
+| contract    | 85  | 10  | 14      | 48  | 366.64 KiB |
+| transaction | 29  | 9   | 11      | 11  | 11.04 MiB  |
+| account     | 27  | 4   | 10      | 13  | 4.50 MiB   |
 
-The asset bucket is **fourth**, not first. At +52% it goes to roughly 200 ms p95,
-still under `contract` and well under `pool` — and since the buckets run
-concurrently under `tokio::try_join!`, the endpoint's p95 is set by `pool` (527
-ms) and does not move at all. Whoever wants a faster search should start there,
-not here.
+`max read` is the cross-check that the filter is honest this time: `pool` peaks
+at 4.01 MiB against a 3.97 MiB table — a full scan, as designed — and `contract`
+at 366 KiB. Neither number can belong to a list endpoint.
+
+**What this actually costs.** The buckets run concurrently under
+`tokio::try_join!`, so the endpoint's p95 is the slowest bucket: `nft`, at 189
+ms. Ranking takes `asset` from 136 to roughly 200 ms, which makes it the new
+slowest and moves the endpoint's p95 by **about 6%** — real, small, and worth
+paying for a search that currently cannot find USDC. Anyone optimising search
+should start at `nft` (p50 163 ms, the highest median of the six), not here.
 
 Holder count is refreshed by `balance_aggregates_mv` every 2 minutes, so the
 ranking is eventually consistent. That is the right trade — a two-minute-stale
