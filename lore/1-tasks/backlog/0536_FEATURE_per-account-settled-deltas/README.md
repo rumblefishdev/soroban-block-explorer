@@ -4,7 +4,7 @@ title: 'FEATURE: per-account settled deltas — direction (received / sent) on t
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0393', '0411', '0535', '0419']
+related_tasks: ['0393', '0411', '0538', '0419']
 tags:
   [
     'clickhouse',
@@ -29,7 +29,7 @@ history:
       2026-09-03) is the lossless option: store the signed delta per
       (transaction, asset, account). Cost MEASURED across three epochs before
       filing — 19.3 bn rows, 153 GB on the natural key, 249 GB with the
-      surrogate id. Hard-ordered after [[0535]]: without the natural key the
+      surrogate id. Hard-ordered after [[0538]]: without the natural key the
       same table costs 96 GB more.
 ---
 
@@ -86,15 +86,15 @@ Method and per-epoch figures: [notes/R-cost-measurement.md](notes/R-cost-measure
 |                                       | value       |
 | ------------------------------------- | ----------- |
 | Rows                                  | **19.3 bn** |
-| **With the natural key ([[0535]])**   | **153 GB**  |
+| **With the natural key ([[0538]])**   | **153 GB**  |
 | With the surrogate `transaction_id`   | 249 GB      |
-| Penalty for skipping 0535             | **+96 GB**  |
+| Penalty for skipping 0538             | **+96 GB**  |
 | Share of today's free space (459 GiB) | ~31%        |
 
 Sensitivity to the one remaining assumption (sides per Soroban transfer):
 108 GB at 1.0, 173 GB at 2.0. Everything else is measured.
 
-> **Order matters.** [[0535]] decides whether identity columns use
+> **Order matters.** [[0538]] decides whether identity columns use
 > `(ledger_sequence, application_order)` instead of the incompressible
 > surrogate. Building this table first and migrating later means paying the
 > 96 GB, then rewriting 19.3 bn rows to reclaim it.
@@ -142,7 +142,7 @@ measured at **0.092 B/row** when it leads a key (`transaction_participants`).
 
 ## Acceptance Criteria
 
-- [ ] [[0535]] resolved first — identity column decided before any row is written
+- [ ] [[0538]] resolved first — identity column decided before any row is written
 - [ ] Reducer emits per-account signed deltas; non-zero only
 - [ ] Table created with the natural key; no surrogate `transaction_id`
 - [ ] Soroban pool sides resolved or explicitly scoped out with a measured

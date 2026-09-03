@@ -1,5 +1,5 @@
 ---
-id: '0535'
+id: '0538'
 title: 'RESEARCH: identity columns that do not compress — measure the real cost of the surrogate transaction id and the duplicated hash'
 type: RESEARCH
 status: backlog

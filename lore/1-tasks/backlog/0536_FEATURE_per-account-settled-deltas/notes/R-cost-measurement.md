@@ -79,7 +79,7 @@ shape (subject + location + asset + signed `Int128`), 948 M rows:
 | Natural key           | 19.3 bn | **153 GB** |
 | With `transaction_id` | 19.3 bn | 249 GB     |
 
-Difference: **96 GB**, which is what [[0535]] is worth on this one table alone.
+Difference: **96 GB**, which is what [[0538]] is worth on this one table alone.
 
 ## The one remaining assumption
 
