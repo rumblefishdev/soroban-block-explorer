@@ -96,6 +96,9 @@ pub struct TxDetailRow {
     /// `None` for Variant A `parse_error` transactions whose envelope was
     /// unavailable (lore-0209).
     pub source_account: Option<String>,
+    /// The source account's on-ledger `home_domain`, for the SEP-2 federated
+    /// address the frontend resolves from it (task 0443, issue #363).
+    pub source_account_home_domain: Option<String>,
     pub fee_charged: i64,
     pub inner_tx_hash: Option<String>,
     pub successful: bool,
@@ -799,16 +802,17 @@ pub async fn fetch_detail(
     let Some(raw) = raw else {
         return Ok(None);
     };
-    let accounts = resolve_accounts(client, vec![raw.source_id]).await?;
+    let source = fetch_source_account(client, raw.source_id).await?;
     Ok(Some(TxDetailRow {
         id: raw.id,
         hash: raw.hash,
         ledger_sequence: raw.ledger_sequence,
         application_order: raw.application_order,
-        source_account: accounts
-            .get(&raw.source_id)
-            .cloned()
+        source_account: source
+            .as_ref()
+            .map(|s| s.account_id.clone())
             .filter(|s| !s.is_empty()),
+        source_account_home_domain: source.and_then(|s| s.home_domain).filter(|s| !s.is_empty()),
         fee_charged: raw.fee_charged,
         inner_tx_hash: raw.inner_tx_hash.filter(|s| !s.is_empty()),
         successful: raw.successful,
@@ -817,6 +821,36 @@ pub async fn fetch_detail(
         created_at: millis_to_utc(raw.created_at),
         parse_error: raw.parse_error,
     }))
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct SourceAccountRow {
+    account_id: String,
+    home_domain: Option<String>,
+}
+
+/// Source account StrKey + its `home_domain`, in the one seek the detail path
+/// already paid for.
+///
+/// Not `resolve_accounts`: that helper dedups ReplacingMergeTree versions with
+/// `LIMIT 1 BY id`, which is exact only for columns that never change across
+/// versions. `account_id` is such a column; `home_domain` is not — an account
+/// can set, change or clear it — so it needs `argMax` over the table's version
+/// column (`ReplacingMergeTree(last_seen_ledger)`), or an arbitrary older
+/// domain could be served.
+async fn fetch_source_account(
+    client: &clickhouse::Client,
+    source_id: i64,
+) -> Result<Option<SourceAccountRow>, clickhouse::error::Error> {
+    client
+        .query(
+            "SELECT any(account_id) AS account_id, \
+                    argMax(home_domain, last_seen_ledger) AS home_domain \
+             FROM accounts WHERE id = ? GROUP BY id",
+        )
+        .bind(source_id)
+        .fetch_optional::<SourceAccountRow>()
+        .await
 }
 
 pub async fn fetch_operations(

@@ -5,6 +5,7 @@ import {
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { useFederatedName } from '../../search/useFederation.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 
@@ -17,6 +18,14 @@ export function AccountSummary({
 }: {
   account: AccountDetailResponse;
 }) {
+  // SEP-2 name this account's own home domain claims for it (issue #363).
+  // Rendered only when both sides agree; an account with no home domain, or
+  // a domain that does not federate, simply has no such row.
+  const federatedName = useFederatedName(
+    account.account_id,
+    account.home_domain ?? ''
+  );
+
   return (
     <SectionCard title="Summary">
       <SummaryRow
@@ -34,6 +43,11 @@ export function AccountSummary({
           },
         ]}
       />
+      {federatedName != null && (
+        <SummaryRow
+          cells={[{ label: 'Federated address', value: federatedName }]}
+        />
+      )}
       <SummaryRow
         cells={[
           {

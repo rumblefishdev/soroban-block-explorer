@@ -756,6 +756,12 @@ export type E3ResponseTransactionDetailLight = {
    * could not be decoded (lore-0209).
    */
   source_account?: string | null;
+  /**
+   * The source account's on-chain `home_domain` (SEP-1 anchor domain),
+   * `null` when it sets none. The frontend asks that domain for the SEP-2
+   * federated address it claims for this account (task 0443, issue #363).
+   */
+  source_account_home_domain?: string | null;
   successful: boolean;
 } & {
   heavy?: null | E3HeavyFields;
@@ -2228,6 +2234,12 @@ export type TransactionDetailLight = {
    * could not be decoded (lore-0209).
    */
   source_account?: string | null;
+  /**
+   * The source account's on-chain `home_domain` (SEP-1 anchor domain),
+   * `null` when it sets none. The frontend asks that domain for the SEP-2
+   * federated address it claims for this account (task 0443, issue #363).
+   */
+  source_account_home_domain?: string | null;
   successful: boolean;
 };
 
