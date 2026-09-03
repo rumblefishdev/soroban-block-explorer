@@ -390,6 +390,11 @@ export type AssetTransactionItem = {
   operation_types: Array<string>;
   source_account: string;
   successful: boolean;
+  /**
+   * Net-settled "value moved" per asset the transaction touched (task 0393);
+   * see `TransactionValue`. Raw amounts + `decimals` — the frontend scales.
+   */
+  values: Array<TransactionValue>;
 };
 
 /**
@@ -1409,6 +1414,11 @@ export type PaginatedAssetTransactionItem = {
     operation_types: Array<string>;
     source_account: string;
     successful: boolean;
+    /**
+     * Net-settled "value moved" per asset the transaction touched (task 0393);
+     * see `TransactionValue`. Raw amounts + `decimals` — the frontend scales.
+     */
+    values: Array<TransactionValue>;
   }>;
   page: PageInfo;
 };

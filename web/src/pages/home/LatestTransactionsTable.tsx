@@ -11,6 +11,7 @@ import {
   hashColumn,
   OperationCell,
   statusColumn,
+  ValueCell,
 } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
@@ -41,6 +42,14 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
   },
   statusColumn<TransactionListItem>(),
   {
+    id: 'net_settled',
+    header: 'Net settled',
+    width: 170,
+    cell: (row) => (
+      <ValueCell values={row.values} ledgerSequence={row.ledger_sequence} />
+    ),
+  },
+  {
     id: 'time',
     header: 'Time',
     width: 210,
@@ -53,8 +62,9 @@ export const LATEST_TX_COLUMN_COUNT = columns.length;
 
 /**
  * Home-page Latest Transactions table — hash, source account, operation,
- * status and time. A 5-column subset of the full Transactions list table,
- * per the Figma home design; reuses the shared transaction cells.
+ * status, net settled and time. A subset of the full Transactions list table
+ * (no ledger, no fee), per the Figma home design; reuses the shared
+ * transaction cells.
  */
 export function LatestTransactionsTable({
   rows,
