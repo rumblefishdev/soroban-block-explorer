@@ -40,6 +40,16 @@ history:
       domain shape — 7484 accounts carry a dotless `home_domain` (`Bankless`,
       `Indonesia`, `localhost:4000`, `1`, a bare space), every one of which
       was dialled before.
+  - date: '2026-09-03'
+    status: active
+    who: karolkow
+    note: >
+      Measured the tail that the first CORS pass had left as "unknown". No
+      violators in it at all: of 115 further domains (59450 accounts), 98.7%
+      run no federation server, so they are not blocked, they simply have no
+      answer. That drops the real cost of the CORS rule from an implied 16% of
+      accounts to 1.9%, and settles the proxy question - not worth an SSRF
+      surface in production.
   - date: '2026-09-02'
     status: active
     who: karolkow
@@ -315,14 +325,59 @@ of these reject HEAD):
 | `sanbeban.com`      | `wallet.sanbeban.com/api/federation/` | **no**              |
 | `bitgo.com`         | `www.bitgo.com/api/v2/xlm/federation` | no response at all  |
 
-Weighted by accounts carrying that `home_domain`, the two compliant domains
-cover 881 118 of the 1 055 369 accounts that declare one — about 84%.
-`stellarterm.com` (15 343), `bitgo.com` (25 428) and `sanbeban.com` (5 326)
-are the visible losses, roughly 4%.
+### The tail, measured — it is not blocked, it simply does not federate
 
-The only fix is a server-side proxy, which re-introduces exactly the SSRF
-surface scope A was designed to avoid, for a few percent of accounts. Not
-worth it today; recorded so the gap is known rather than mistaken for a bug.
+The first pass stopped at the six biggest domains and left ~12% of accounts
+unexamined, which made the gap look like "84% works, 16% is broken". Measured
+2026-09-03 over the next 115 domains by account count (59 450 accounts, 46% of
+that remainder), two live requests each:
+
+| Result                                             | Domains | Accounts | Share of sample |
+| -------------------------------------------------- | ------- | -------- | --------------- |
+| No `stellar.toml` at all                           | 82      | 33 967   | 57.1%           |
+| `stellar.toml` present, **no `FEDERATION_SERVER`** | 31      | 24 687   | 41.5%           |
+| Working, sends the header                          | 2       | 796      | 1.3%            |
+| **Omits the header**                               | **0**   | **0**    | **0%**          |
+
+Not one CORS violator in the tail. Those domains are not blocked — 98.7% of
+the sampled accounts sit on a domain that runs no federation server, so there
+is no name to show whatever we do at our end.
+
+So the honest arithmetic, against the 1 055 369 accounts that declare a
+`home_domain`:
+
+|                                                                       | Accounts | Share    |
+| --------------------------------------------------------------------- | -------- | -------- |
+| Works today                                                           | 881 118  | 83.5%    |
+| **Lost to a missing CORS header** (`stellarterm.com`, `sanbeban.com`) | ~19 955  | **1.9%** |
+| `bitgo.com` — no response at all, CORS moot                           | 25 366   | 2.4%     |
+| No federation server (measured + tail extrapolation)                  | ~128 000 | ~12.1%   |
+
+**The prize for defeating CORS is 1.9% of accounts, not 16%.** Record that
+before anyone reaches for a proxy.
+
+### Can the requirement be bypassed?
+
+Technically yes: CORS binds browsers, not servers, and this repo already has a
+hardened SEP-1 fetcher (`crates/enrichment-shared/src/sep1/`) with a body cap,
+HTTPS enforced across redirects and a real TOML parser. It would work. It also
+brings back exactly the surface this scope was designed to avoid, and the two
+directions differ:
+
+- **Forward (search).** The domain is _typed by whoever is using the site_.
+  Proxying means our production API connects to an arbitrary address supplied
+  by an anonymous visitor — textbook SSRF (`a*169.254.169.254` and the cloud
+  metadata endpoint). An allowlist defends it, but then only listed domains
+  resolve, which is not the tail anyway. **Keep this in the browser
+  permanently.**
+- **Reverse (account / transaction pages).** The domain comes from the ledger,
+  and the enrichment path already walks those same domains for SEP-1. The
+  marginal new surface is small.
+
+**Decision: not now.** 1.9% does not buy a second fetch path plus an SSRF
+surface in production. If it is ever revisited, do the reverse direction first
+through the existing enrichment (those requests already leave our
+infrastructure) and never move the forward direction server-side.
 
 ## Future work
 
