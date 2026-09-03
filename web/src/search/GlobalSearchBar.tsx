@@ -32,17 +32,34 @@ export function GlobalSearchBar({
   // goes on to resolve it (task 0443).
   const state = useSearchResults({ q });
 
-  // Resolved here rather than only on the results page: every other input in
-  // this bar shows what it found once typing settles, and a row saying "press
-  // Enter" was the one place that asked for a second step. The hook waits
-  // 500 ms instead of the usual 300 — this request goes to a host the typed
-  // text chooses, so a pause mid-word must not be enough to dial it.
-  const federated = useFederatedAddress(q);
+  // Resolved here rather than only on the results page, so a federated
+  // address ends where every other query ends — a row in this dropdown.
+  //
+  // Nothing leaves the browser until the row is picked. Resolving as you type
+  // would dial whatever the half-typed text happens to name, and `lobstr.co`
+  // is a real domain on the way to `lobstr.com` (22 such prefix pairs in our
+  // own data, several with different owners). Arming is keyed to the exact
+  // query, so editing the text takes it back.
+  const [armedFor, setArmedFor] = useState<string | null>(null);
+  const armed = armedFor != null && armedFor === q.trim();
+  const federated = useFederatedAddress(q, armed);
   const federatedFor = federated.domain;
   const resolved =
-    federated.data?.kind === 'resolved' ? federated.data.accountId : null;
+    armed && federated.data?.kind === 'resolved'
+      ? federated.data.accountId
+      : null;
   const failure =
-    federated.data?.kind === 'failed' ? federated.data.reason : null;
+    armed && federated.data?.kind === 'failed' ? federated.data.reason : null;
+
+  const arm = useCallback(() => setArmedFor(q.trim()), [q]);
+
+  // Landing on the account is the point of the row; once the two hops answer,
+  // go, rather than making the user click the same row a second time.
+  useEffect(() => {
+    if (resolved == null) return;
+    onDismiss();
+    navigate(routes.account(resolved));
+  }, [resolved, navigate, onDismiss]);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   useEffect(() => {
@@ -59,9 +76,10 @@ export function GlobalSearchBar({
 
   useEffect(() => {
     registerEnterHandler(() => {
-      if (resolved != null) {
-        navigate(routes.account(resolved));
-        onDismiss();
+      // Enter is an explicit act, so it arms the lookup — and stays on the
+      // page while the two hops run, instead of handing off to /search.
+      if (federatedFor != null) {
+        arm();
         return true;
       }
       const picked = state.hitsForActiveTab[highlightedIndex];
@@ -73,9 +91,8 @@ export function GlobalSearchBar({
     });
   }, [
     registerEnterHandler,
-    resolved,
-    navigate,
-    onDismiss,
+    federatedFor,
+    arm,
     state.hitsForActiveTab,
     highlightedIndex,
     selectHitByKeyboard,
@@ -131,20 +148,14 @@ export function GlobalSearchBar({
           {federatedFor != null ? (
             // A row, not a sentence: this panel is a listbox of clickable
             // results, and a static line would be reachable by Enter only —
-            // dead to anyone who got here with the mouse. The row is disabled
-            // until there is somewhere to go, so a click mid-resolve cannot
-            // land on the wrong page.
+            // dead to anyone who got here with the mouse.
             <Box
               component="button"
               type="button"
               role="option"
               aria-selected={false}
-              disabled={resolved == null}
-              onClick={() => {
-                if (resolved == null) return;
-                onDismiss();
-                navigate(routes.account(resolved));
-              }}
+              disabled={armed}
+              onClick={arm}
               sx={(theme) => ({
                 display: 'block',
                 width: '100%',
@@ -153,12 +164,11 @@ export function GlobalSearchBar({
                 py: 1.5,
                 border: 'none',
                 background: 'none',
-                cursor: resolved == null ? 'default' : 'pointer',
+                cursor: armed ? 'default' : 'pointer',
                 '&:hover': {
-                  backgroundColor:
-                    resolved == null
-                      ? 'transparent'
-                      : theme.palette.surface.grayHover,
+                  backgroundColor: armed
+                    ? 'transparent'
+                    : theme.palette.surface.grayHover,
                 },
                 // Same ring as SearchResultRow — this synthetic row is a
                 // button, so it must draw its own.
@@ -169,7 +179,7 @@ export function GlobalSearchBar({
               })}
             >
               <Typography variant="bodySmMedium" component="span">
-                {resolved ?? q.trim()}
+                {q.trim()}
               </Typography>
               <Typography
                 variant="bodyXsRegular"
@@ -184,9 +194,9 @@ export function GlobalSearchBar({
                 })}
               >
                 {failure ??
-                  (resolved != null
-                    ? `${q.trim()} · ${federatedFor}`
-                    : `Resolving ${q.trim()} with ${federatedFor}…`)}
+                  (armed
+                    ? `Asking ${federatedFor}…`
+                    : `Federated address — look it up with ${federatedFor}`)}
               </Typography>
             </Box>
           ) : (

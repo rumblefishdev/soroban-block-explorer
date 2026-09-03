@@ -2,12 +2,18 @@ import { Box, CircularProgress, Paper, Stack, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
-import { SearchInput } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  SearchInput,
+  useDebounced,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../router/routes.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { SearchResultsView } from '../search/SearchResultsView.js';
-import { useFederatedAddress } from '../search/useFederation.js';
+import {
+  FEDERATION_SETTLE_MS,
+  useFederatedAddress,
+} from '../search/useFederation.js';
 import { useSearchResults } from '../search/useSearchResults.js';
 
 export default function SearchResultsPage() {
@@ -44,8 +50,16 @@ export default function SearchResultsPage() {
   // `directRouteFor` cannot carry this: it is synchronous, and the resolve is
   // two network round-trips. It hooks in here instead, the one point the
   // app-shell bar, the home hero and a pasted `/search?q=` URL all converge
-  // on, so neither caller needs to change.
-  const federated = useFederatedAddress(q);
+  // on, so neither caller needs to change. Armed unconditionally: landing on
+  // /search?q=… is itself the explicit act — the user pressed Enter, clicked
+  // the row, or pasted the link. The dropdown is where arming is withheld.
+  //
+  // Settled first, because this page's input stays editable after the commit:
+  // typing `bob*lobstr.com` here passes through `bob*lobstr.co`, a real
+  // domain. `useDebounced` starts at its input, so a pasted link still
+  // resolves at once and only later edits wait.
+  const settled = useDebounced(q, FEDERATION_SETTLE_MS);
+  const federated = useFederatedAddress(settled, true);
   const federatedFor = federated.domain;
   const failure =
     federated.data?.kind === 'failed' ? federated.data.reason : null;
