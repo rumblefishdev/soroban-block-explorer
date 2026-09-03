@@ -715,6 +715,48 @@ surrogate`. Idempotent under the RMT key.
    touched — an optional one-shot RPC pass over the registry closes it
    (235 reads), or accept the lag.
 
+## Config-factory (Phoenix-family) pool passes (task 0518, third adapter)
+
+Run only AFTER the adapter deploy (writer-first, as above). This family is
+the one whose history CANNOT come from events alone: its events carry
+per-field amounts, never absolute reserves (no `sync` analogue), and the
+registration event is a bare pool address — legs/fee/share token live only
+in the pool's own `CONFIG` ledger entry. Both passes therefore read RAW
+LEDGERS — but only a targeted, harvested list, fetched over public HTTPS
+(the `aws-public-blockchain` bucket, unsigned; recipe in
+`crates/db-clickhouse/tests/pair_factory_stage_real_e2e.rs` docs), never a
+full re-parse.
+
+1. **Pool registry + declarations** — exactly the **14 registration
+   ledgers** (the full population, listed in
+   `crates/db-clickhouse/tests/config_pool_stage_real_e2e.rs`; harvest
+   query in `crates/xdr-parser/tests/config_pool_real_corpus.rs`). One-off
+   generator on `extract_config_pools` + `config_pool_registry_row`:
+   registry rows AND the `pool_instance_state` declarations (share token)
+   come from the same 14 files.
+   **Closure check:** live `query_pools()` on the factory must be a
+   **SUBSET of ours — never set-equality**: the factory's vector is
+   mutable, and one real pool (`CAZ6W4WH…`, 25,873 events traded to
+   63.77M) is already delisted from it while its history stands. A
+   registry seeded from `query_pools()` alone silently loses that pool.
+2. **Reserve history** — one-off Rust pass over the **harvested activity
+   ledgers**: `SELECT DISTINCT ledger_sequence FROM soroban_events WHERE
+contract_id IN (the 14 pool surrogates)` — 195,637 ledgers / 2.04M
+   events measured 2026-09-03 (≈40 GB of per-ledger `.xdr.zst` over
+   HTTPS). Fetch each, run `extract_config_pools`, emit
+   `pool_state_changes` rows (`plane_id` = the pool's own surrogate).
+   Idempotent under the RMT key. Reserve co-occurrence (both keys per tx)
+   is measured, era-proof — a half-pair in the output is a bug, not data.
+   **Check:** per-pool spot comparison against raw creation values plus
+   the live writer's overlap window — same rule as the pair family's
+   sync↔state anti-test, with raw ledgers as the second source.
+3. **`total_shares` caveat (family-specific, recorded in the task):** the
+   declaration row carries a config-write-time snapshot only — the live
+   supply is the share token's own tracked supply (separate SEP-41
+   contract on the generic token pipeline). Do not "fix" it with a
+   per-op writer: `pool_instance_state` is RMT whole-row on `pool_id`, and
+   a config-less row would clobber `share_token_id` to 0.
+
 ## Event-name backfill (task 0517) — in-DB, per partition
 
 Fills `soroban_events.signature` for the ~3.8M historical rows whose name

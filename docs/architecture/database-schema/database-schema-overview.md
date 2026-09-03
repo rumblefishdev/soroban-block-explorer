@@ -199,6 +199,16 @@ Derived explorer entities:
   `pool_type_raw` empty (the vendor emits no type). The pair is its own LP
   token: in `pool_instance_state` its `plane_id` and `share_token_id` are
   the pair itself, `total_shares` from the SEP-41 `TotalSupply`.
+- Config-factory (Phoenix-family) pools (task 0518, third adapter) are
+  `pool_kind = 1` rows too — `deployment_id` = the factory,
+  `fee_bps` = the pool's own per-pool `total_fee_bps` (creation-time
+  snapshot; mutable on chain), `pool_type_raw` = the vendor `PairType`
+  discriminant verbatim ("0" = XYK). The share token is a SEPARATE
+  contract (like Aquarius, unlike Soroswap): `pool_instance_state` rows
+  stage only on CONFIG writes, `share_token_id` from CONFIG, and
+  `total_shares` there is a config-write-time snapshot — the live supply
+  is the share token's own tracked supply on the generic token pipeline
+  (a per-op row would clobber the RMT whole-row key).
 - `pool_state_changes` — Soroban pool reserves, ONE row per
   `(pool, plane, ledger)` (the plane is in the key so a forged plane write
   cannot evict a genuine row — see the DDL comment),

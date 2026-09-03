@@ -694,6 +694,23 @@ how a wrong fixture passed unit tests and was caught by the local e2e).
 The pair is its own LP token, so owner, stamp and declaration coincide —
 `plane_id = share_token_id =` the pair itself.
 
+**`pool_config_factory.rs` (task 0518)** is the third adapter (the
+Phoenix-family shape) and the first whose state is NOT one atomic entry:
+the pool keeps per-key PERSISTENT entries — a `CONFIG` symbol-keyed map
+(legs, separate share token, per-pool `total_fee_bps`, `pool_type`
+discriminant) written at creation/config-change only, plus bare-u32
+`DataKey` discriminants (0 = TotalShares, 1/2 = the reserves) rewritten per
+operation; the contract instance itself is storage-less. Discovery is the
+factory's `("create", "liquidity_pool")` event carrying ONLY the pool
+address, and the pool records no factory back-pointer — corroboration is
+therefore the created gate + the pool's own full CONFIG in the registering
+ledger (validated on the entire 14-registration population). Per-operation
+recognition rests on the RESERVE PAIR co-occurring in one transaction
+(measured across three eras; both-or-neither, half a pair refuses loudly).
+All three adapters feed the same `PoolFamilyWrite` seam (`pool_family.rs`,
+decision 4a): one enum from extraction to staging, a new family being a
+variant + an arm rather than a field through every pipeline struct.
+
 ## 6. Storage Contract
 
 ### 6.1 Typed Columns and Appearance Indexes, No Raw XDR
