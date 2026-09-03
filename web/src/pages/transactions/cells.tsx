@@ -102,7 +102,12 @@ export function ValueCell({
   );
   if (rest.length === 0) return cell;
   // Multi-asset transaction: the collapsed `+N` expands on hover to the full
-  // per-asset list, one line each.
+  // per-asset list, one line each, every code linking to its asset page like
+  // the primary one. The tooltip surface is INVERTED (light in dark mode), so
+  // these links inherit its text colour instead of the cell's accent — the
+  // accent is tuned for the page background and goes unreadable on the
+  // tooltip. MUI tooltips are interactive by default, so the links are
+  // reachable with the pointer.
   return (
     <Tooltip
       title={
@@ -110,7 +115,14 @@ export function ValueCell({
           {values.map((v) => (
             <span key={v.asset}>
               {formatAmount(scaleByDecimals(v.net_settled, v.decimals), 2)}{' '}
-              {valueCode(v)}
+              <Link
+                component={RouterLink}
+                to={routes.asset(v.asset)}
+                underline="always"
+                sx={{ color: 'inherit' }}
+              >
+                {valueCode(v)}
+              </Link>
             </span>
           ))}
         </Stack>
