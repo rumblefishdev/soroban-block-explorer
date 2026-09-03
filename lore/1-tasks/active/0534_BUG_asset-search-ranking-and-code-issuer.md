@@ -2,7 +2,7 @@
 id: '0534'
 title: 'BUG: asset search returns impostors and cannot parse CODE:ISSUER'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0331', '0370', '0470']
 tags: [backend, api, search, assets, priority-high, effort-small]
@@ -12,6 +12,11 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Task created. Both defects reproduced against production ClickHouse.'
+  - date: 2026-09-03
+    status: active
+    who: stkrolikiewicz
+    note: 'Promoted to active. Plan needs no research phase — both defects are
+      reproduced and the ranking fix is already verified against production.'
 ---
 
 # BUG: asset search returns impostors and cannot parse CODE:ISSUER
