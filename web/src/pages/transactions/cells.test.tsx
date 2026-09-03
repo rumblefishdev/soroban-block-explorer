@@ -18,9 +18,13 @@ describe('ValueCell', () => {
     expect(screen.getByText('n/a')).toBeInTheDocument();
   });
 
-  it('renders a dash for a live-indexed transaction with no values', () => {
+  it('renders a measured zero, not a dash, above the floor', () => {
     renderCell({ values: [], ledgerSequence: FLOOR });
+    expect(screen.getByText('0')).toBeInTheDocument();
+    // The two empty states must stay distinguishable: `n/a` = not computed,
+    // `0` = computed and nothing settled.
     expect(screen.queryByText('n/a')).not.toBeInTheDocument();
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
   });
 
   it('renders the scaled amount and code when values are present', () => {

@@ -43,9 +43,12 @@ export function OperationCell({ types }: { types: readonly string[] }) {
  * "Value moved" cell (task 0393): the net-settled amount of the primary asset
  * (scaled by its decimals) with its code linking to the asset detail page, plus
  * a `+N` count when the transaction moved more than one asset. A single narrow
- * column cannot list every asset, so the rest collapse into the count. `Dash`
- * when nothing net-settled. (Per-asset breakdown on the transaction detail page
- * is a planned follow-up — not built here.)
+ * column cannot list every asset, so the rest collapse into the count. (Per-asset
+ * breakdown on the transaction detail page is a planned follow-up — not built
+ * here.)
+ *
+ * Three distinct states, deliberately never rendered alike:
+ * `n/a` = not computed yet · `0` = computed, nothing settled · amount = moved.
  *
  * Pre-backfill honesty: the indexer writes `net_settled` live since ledger
  * 63,699,653 (first non-NULL row on prod, 2026-07-29); everything earlier is
@@ -73,7 +76,26 @@ export function ValueCell({
       </Typography>
     );
   }
-  if (values.length === 0) return <Dash />;
+  // A MEASURED zero, not a missing value — the transaction settled nothing net
+  // (an offer placed or cancelled, a contract call that moved no token, a
+  // failed transaction, a payment to self). `Dash` is defined as "missing or
+  // not-applicable", which is what `n/a` above already means; using it here
+  // would blur the two states that this column exists to keep apart. Every
+  // major explorer prints a literal zero for this case rather than a dash
+  // (Etherscan/Arbiscan/Blockscout all render `0 ETH`). Dimmed, because most
+  // transactions settle nothing and full contrast would shout over the rows
+  // that did move value.
+  if (values.length === 0) {
+    return (
+      <Typography
+        component="span"
+        variant="bodySmRegular"
+        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+      >
+        0
+      </Typography>
+    );
+  }
   const [first, ...rest] = values;
   const code = valueCode(first);
   const cell = (
