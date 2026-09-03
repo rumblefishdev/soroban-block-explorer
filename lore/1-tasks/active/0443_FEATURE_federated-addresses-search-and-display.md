@@ -306,14 +306,14 @@ the address silently has no name.
 Measured 2026-09-02 with real GET requests (a HEAD probe is useless — several
 of these reject HEAD):
 
-| Domain | Federation server | CORS |
-|---|---|---|
-| `lobstr.co` | `lobstr.co/federation/` | yes, on 200 and 404 |
-| `staging.lobstr.co` | `staging.lobstr.co/federation/` | yes |
-| `sl8.online` | `stellar.sl8.online/sep2` | yes |
-| `stellarterm.com` | `fed.stellarterm.com/federation/` | **no** |
-| `sanbeban.com` | `wallet.sanbeban.com/api/federation/` | **no** |
-| `bitgo.com` | `www.bitgo.com/api/v2/xlm/federation` | no response at all |
+| Domain              | Federation server                     | CORS                |
+| ------------------- | ------------------------------------- | ------------------- |
+| `lobstr.co`         | `lobstr.co/federation/`               | yes, on 200 and 404 |
+| `staging.lobstr.co` | `staging.lobstr.co/federation/`       | yes                 |
+| `sl8.online`        | `stellar.sl8.online/sep2`             | yes                 |
+| `stellarterm.com`   | `fed.stellarterm.com/federation/`     | **no**              |
+| `sanbeban.com`      | `wallet.sanbeban.com/api/federation/` | **no**              |
+| `bitgo.com`         | `www.bitgo.com/api/v2/xlm/federation` | no response at all  |
 
 Weighted by accounts carrying that `home_domain`, the two compliant domains
 cover 881 118 of the 1 055 369 accounts that declare one — about 84%.
@@ -330,7 +330,7 @@ worth it today; recorded so the gap is known rather than mistaken for a bug.
   2026-09-02.** The API field turned out to be nearly free: the detail path
   already key-seeks `accounts` for the source StrKey, so `home_domain` rides
   the same seek as `source_account_home_domain`. It needs `argMax(home_domain,
-  last_seen_ledger)` rather than the shared `resolve_accounts` helper — that
+last_seen_ledger)` rather than the shared `resolve_accounts` helper — that
   one dedups ReplacingMergeTree versions with `LIMIT 1 BY id`, exact only for
   columns immutable across versions, which `home_domain` is not. Measured on a
   `GA22%` slice: 195 of 3603 accounts carry more than one version, none with a
