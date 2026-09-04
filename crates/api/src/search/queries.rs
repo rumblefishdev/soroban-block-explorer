@@ -62,7 +62,6 @@ use std::collections::{BTreeSet, HashMap};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::asset_match;
 use crate::common::ch::millis_to_utc;
 use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
 use crate::common::strkey::pool_id_hex_to_strkey;
@@ -713,6 +712,10 @@ struct IssuerRow {
 /// statement comment). Step 2 resolves the page's issuer surrogates → G-StrKey
 /// via a bloom-pruned `accounts WHERE id IN (...)` seek (NEVER a full-table
 /// `accounts` join — the Code 241 trap). `route_token` is then composed in Rust.
+/// The displayed code of an asset row — native's `XLM` standing in for its
+/// empty stored code. See the note in the function body before changing it.
+const SHOWN: &str = "lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code)))";
+
 async fn search_assets(
     client: &clickhouse::Client,
     q: &str,
@@ -753,15 +756,17 @@ async fn search_assets(
     // whichever rows the scan reached first — `q=USDC` answered with ten `IUSDC`
     // rows and no USDC at all, and two identical calls could disagree.
     //
-    // Matching and ranking both come from `common::asset_match`, so this bucket,
-    // the `/v1/assets` list and the pools predicate answer "does this match" and
-    // "how well" with ONE rule. They used to be three spellings that agreed by
-    // accident — this one compared the RAW `asset_code` and carried a native
-    // special-case on the side, which is why it needed seven binds to say what
-    // now takes three. `native` is folded onto `XLM` at the door, so no arm
-    // below knows about it, and the comparison is against the DISPLAYED code —
-    // which is also why `xl` now reaches native XLM, where before only the exact
-    // words `xlm` and `native` did.
+    // `SHOWN` is the code a row DISPLAYS as, and both the match and the tier
+    // compare it — never the stored value. Native XLM stores an EMPTY code and
+    // renders as `XLM`, so comparing what is stored returned thousands of
+    // impostor codes and missed the one asset everybody meant. That is also why
+    // there is no `native` arm: the alias IS the comparison.
+    //
+    // The same expression appears in `assets::queries` (the list) and in
+    // `common::pool_asset_codes` (the legs). It was briefly a shared builder;
+    // three literal copies read better than the indirection, so if you change
+    // the shape here, change it there — `native_is_matched_by_type_not_by_
+    // stored_code` in each module is the test that fails when you do not.
     //
     // Ranking is a tier (exact > prefix > substring anywhere) rather than a
     // scoring formula: the order follows from what matched, not from a weighting
@@ -802,14 +807,13 @@ async fn search_assets(
             .fetch_all::<AssetPhase1Row>()
             .await?
     } else {
-        let shown = asset_match::shown_code("a.asset_type", "a.asset_code");
-        let matches = asset_match::matches_sql(&shown);
-        let tier = asset_match::tier_sql(&shown);
         let sql = format!(
             "{ASSET_HEAD} \
              LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
-             WHERE {matches} \
-             ORDER BY {tier} ASC, \
+             WHERE position({SHOWN}, lower(?)) > 0 \
+             ORDER BY multiIf({SHOWN} = lower(?), 0, \
+                              startsWith({SHOWN}, lower(?)), 1, \
+                              2) ASC, \
                  bagg.holder_count DESC NULLS LAST, \
                  a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC \
              LIMIT {per_group_limit}"

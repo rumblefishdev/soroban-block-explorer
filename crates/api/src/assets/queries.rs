@@ -51,7 +51,6 @@ use serde::Deserialize;
 
 use chrono::{DateTime, Utc};
 
-use crate::common::asset_match;
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
@@ -669,6 +668,10 @@ const SEEK_OVERFETCH: i64 = 8;
 /// count stay unit-testable: `code_clause` (0 or **3**), then `cursor_clause`
 /// (0 or 4). The trailing `LIMIT` is inlined. Only `sac_only` / search pull side
 /// tables into the seek; the default page is a pure `assets` PK walk.
+/// The displayed code of an asset row — native's `XLM` standing in for its
+/// empty stored code. Mirrored in `search::queries` and `pool_asset_codes`.
+const SHOWN: &str = "lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code)))";
+
 fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> String {
     // ASC, both paths (task 0485). Native XLM is `asset_type = 0` with an EMPTY
     // code — the MINIMUM of the identity 4-tuple this keyset walks — so under
@@ -729,11 +732,14 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     // deduping via `GROUP BY id` measured +30ms on EVERY search (44→78ms) to fix a
     // near-unreachable edge (assets max versions = 4). Revisit (dedup, or a search
     // over-fetch bump) if version bloat grows (task 0364 audit F1).
-    // The code test comes from `common::asset_match` — one rule, shared with
-    // the `/v1/search` bucket and the pools predicate (task 0485). Name and
-    // symbol stay local: they are free text from on-chain metadata, not asset
-    // codes, so the native alias and the tier have nothing to say about them.
-    let shown = asset_match::shown_code("a.asset_type", "a.asset_code");
+    // The needle is matched against the code the row DISPLAYS, never the one it
+    // stores: native XLM stores an EMPTY code and renders as `XLM` (task 0485).
+    // Name and symbol stay separate — they are free text from on-chain
+    // metadata, not asset codes, so the native alias has nothing to say there.
+    //
+    // The same expression appears in `search::queries` and in
+    // `common::pool_asset_codes`; `native_is_matched_by_type_not_by_stored_code`
+    // below is the test that fails if this copy drifts from them.
     let (search_join, code_clause) = if params.asset_code.is_some() {
         (
             " LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
@@ -743,7 +749,7 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
                 " AND ({matches} \
                    OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
                    OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)",
-                matches = asset_match::matches_sql(&shown)
+                matches = format!("position({SHOWN}, lower(?)) > 0")
             ),
         )
     } else {
@@ -1314,7 +1320,7 @@ mod tests {
         };
         let sql = build_list_seek_sql(&params, Direction::Next);
         assert!(
-            sql.contains(&asset_match::shown_code("a.asset_type", "a.asset_code")),
+            sql.contains(SHOWN),
             "the needle must be matched against the DISPLAYED code, so native \
              XLM is reachable; got: {sql}"
         );

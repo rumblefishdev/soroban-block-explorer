@@ -93,8 +93,8 @@ WHERE
     ($6 IS NULL OR a.asset_type = $6)
     -- Matched against the DISPLAYED code: native XLM stores an EMPTY code and
     -- renders as `XLM`, so comparing the stored value returned thousands of
-    -- impostor codes and missed the one asset everybody meant. One rule, shared
-    -- with 22_get_search.sql and the pools predicate (`common::asset_match`).
+    -- impostor codes and missed the one asset everybody meant. The same
+    -- expression appears in 22_get_search.sql and in the pools predicate.
     AND ($7 IS NULL OR position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))),
                                 lower($7)) > 0
                     OR positionCaseInsensitive(coalesce(m.name, ''), $7) > 0

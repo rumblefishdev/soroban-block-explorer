@@ -7,7 +7,6 @@
 //!
 //! See task 0043 and ADR 0008.
 
-pub mod asset_match;
 pub mod cache_control;
 pub mod ch;
 pub mod conditional;

@@ -8,8 +8,6 @@
 //! (task 0470). A second copy of this rule would drift the same way — and
 //! the native case below is precisely where a re-implementation goes wrong.
 
-use crate::common::asset_match;
-
 /// Split a free-text asset filter into at most two needles.
 ///
 /// Stellar protocol asset codes are case-sensitive (1–12 ASCII chars, any
@@ -35,19 +33,16 @@ pub fn normalize_asset_codes(raw: Option<String>) -> Vec<String> {
 /// One leg's displayed code — what the pool row RENDERS as, which for a
 /// native leg is `XLM` and not the empty string it stores.
 ///
-/// It comes from `common::asset_match`, so a pool leg and an asset row answer
-/// "does this match" with the same rule. Before that they were separate
-/// spellings that agreed by accident.
+/// The same expression the asset surfaces use on their own column names —
+/// `search::queries` and `assets::queries` each carry a `SHOWN` constant.
+/// Change one, change all three; the test below fails when this copy drifts.
 fn leg_shown(side: char, alias: &str) -> String {
-    asset_match::shown_code(
-        &format!("{alias}.asset_{side}_type"),
-        &format!("{alias}.asset_{side}_code"),
-    )
+    format!("lower(if({alias}.asset_{side}_type = 0, 'XLM', toString({alias}.asset_{side}_code)))")
 }
 
 /// One leg's match test. One bind, the needle.
 fn leg(side: char) -> String {
-    asset_match::matches_sql(&leg_shown(side, "lp"))
+    format!("position({}, lower(?)) > 0", leg_shown(side, "lp"))
 }
 
 /// Boolean expression matching pools against `codes`, plus its bind values in
@@ -141,16 +136,9 @@ mod tests {
         // Load-bearing: without the `type = 0` arm, `XLM` matches impostor
         // codes and misses every real XLM pool (task 0440).
         //
-        // Asserted through the shared builder rather than against a literal:
-        // the rule lives in `common::asset_match` now (task 0485), and a test
-        // pinning one spelling of it is exactly what let four spellings drift
-        // apart in the first place.
         let (sql, _) = asset_codes_predicate(&codes("xlm")).expect("clause");
         for side in ['a', 'b'] {
-            let shown = asset_match::shown_code(
-                &format!("lp.asset_{side}_type"),
-                &format!("lp.asset_{side}_code"),
-            );
+            let shown = leg_shown(side, "lp");
             assert!(
                 sql.contains(&shown),
                 "leg {side} lost the native alias: {sql}"

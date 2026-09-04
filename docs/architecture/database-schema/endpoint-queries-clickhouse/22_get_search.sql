@@ -150,9 +150,9 @@ LIMIT :per_group_limit;
 -- columns making the order total.
 --
 -- Both the match and the tier compare the DISPLAYED code: native XLM stores an
--- empty code and renders as `XLM`. The rule is ONE builder
--- (`common::asset_match`), shared with 08_get_assets_list.sql and the pools
--- predicate.
+-- empty code and renders as `XLM`. The same expression appears in
+-- 08_get_assets_list.sql and in the pools predicate — three literal copies,
+-- each with a test that fails if it drifts.
 --
 -- No synonyms: `native` matches the 68 assets whose code contains NATIVE, and
 -- nothing else. Native XLM answers to `xlm`, which is what it displays as.
