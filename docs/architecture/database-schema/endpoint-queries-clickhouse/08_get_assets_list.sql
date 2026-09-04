@@ -95,15 +95,8 @@ WHERE
     -- renders as `XLM`, so comparing the stored value returned thousands of
     -- impostor codes and missed the one asset everybody meant. One rule, shared
     -- with 22_get_search.sql and the pools predicate (`common::asset_match`).
-    --
-    -- `native` adds a SECOND needle ($10 = 'XLM') rather than replacing $7:
-    -- 68 mainnet assets carry a code containing NATIVE and must not vanish
-    -- because someone typed the synonym (task 0485).
     AND ($7 IS NULL OR position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))),
                                 lower($7)) > 0
-                    OR ($10 IS NOT NULL AND
-                        position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))),
-                                 lower($10)) > 0)
                     OR positionCaseInsensitive(coalesce(m.name, ''), $7) > 0
                     OR positionCaseInsensitive(coalesce(m.symbol, ''), $7) > 0)
     AND ($2 IS NULL OR (asset_type, asset_code, issuer_id, contract_id)

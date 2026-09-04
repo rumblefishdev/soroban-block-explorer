@@ -734,8 +734,6 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     // symbol stay local: they are free text from on-chain metadata, not asset
     // codes, so the native alias and the tier have nothing to say about them.
     let shown = asset_match::shown_code("a.asset_type", "a.asset_code");
-    // `native` is searched for AS WELL AS typed, never instead of it.
-    let alias = params.asset_code.as_deref().and_then(asset_match::alias);
     let (search_join, code_clause) = if params.asset_code.is_some() {
         (
             " LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
@@ -745,7 +743,7 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
                 " AND ({matches} \
                    OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
                    OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)",
-                matches = asset_match::matches_sql(&shown, alias.is_some())
+                matches = asset_match::matches_sql(&shown)
             ),
         )
     } else {
@@ -789,13 +787,9 @@ pub async fn fetch_list(
 
     let mut query = client.query(&sql);
     if let Some(code) = &params.asset_code {
-        // `code_clause` in textual order: the code test (plus its synonym when
-        // the needle has one), then m.name and m.symbol.
-        query = query.bind(code);
-        if let Some(a) = asset_match::alias(code) {
-            query = query.bind(a);
-        }
-        query = query.bind(code).bind(code);
+        // Three placeholders in `code_clause`: the shared code test, m.name,
+        // m.symbol. All take the same needle.
+        query = query.bind(code).bind(code).bind(code);
     }
     if let Some(c) = &params.cursor {
         query = query

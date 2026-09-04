@@ -811,13 +811,8 @@ async fn search_assets(
             .fetch_all::<AssetPhase1Row>()
             .await?
     } else {
-        // `native` is matched AS WELL AS what was typed, and only steers the
-        // order — swapping the word instead made the 68 assets whose code
-        // contains `NATIVE` disappear from a search for `native`.
-        let alias = asset_match::alias(q);
-        let rank_needle = asset_match::rank_needle(q);
         let shown = asset_match::shown_code("a.asset_type", "a.asset_code");
-        let matches = asset_match::matches_sql(&shown, alias.is_some());
+        let matches = asset_match::matches_sql(&shown);
         let tier = asset_match::tier_sql(&shown);
         let sql = format!(
             "{ASSET_HEAD} \
@@ -828,15 +823,12 @@ async fn search_assets(
                  a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC \
              LIMIT {per_group_limit}"
         );
-        // Left to right: the needle, its synonym when it has one, then the
-        // tier's two — which take the synonym, so `native` ranks XLM first.
-        let mut query = client.query(&sql).bind(q);
-        if let Some(a) = alias {
-            query = query.bind(a);
-        }
-        query
-            .bind(rank_needle)
-            .bind(rank_needle)
+        // One bind for the match, two for the tier — left to right, same needle.
+        client
+            .query(&sql)
+            .bind(q)
+            .bind(q)
+            .bind(q)
             .fetch_all::<AssetPhase1Row>()
             .await?
     };
