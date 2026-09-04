@@ -10,7 +10,6 @@ import {
   StatusChip,
 } from '@rumblefish/soroban-block-explorer-ui';
 
-import { useFederatedName } from '../../../search/useFederation.js';
 import { FeeCell } from '../../detail/FeeCell.js';
 import { SectionCard } from '../../detail/SectionCard.js';
 import { SummaryRow } from '../../detail/SummaryRow.js';
@@ -101,10 +100,6 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
   const memo = tx.heavy?.memo;
   const heavyUnavailable = tx.heavy == null;
   const failReason = tx.successful ? null : opFailReason(tx);
-  const federatedName = useFederatedName(
-    tx.source_account ?? '',
-    tx.source_account_home_domain ?? ''
-  );
 
   return (
     <SectionCard
@@ -214,35 +209,20 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
             label: 'Source account',
             value:
               tx.source_account != null ? (
-                <Stack
-                  direction="row"
-                  spacing={1}
-                  alignItems="center"
-                  flexWrap="wrap"
-                >
-                  <IdentifierWithCopy
-                    value={tx.source_account}
-                    type="account"
-                    truncate={false}
-                  />
-                  {/* SEP-2 name the account's own home domain claims for it —
-                      secondary to the StrKey, never a replacement, and absent
-                      unless both sides agree (issue #363).
-
-                      Beside the key rather than under it: the name arrives
-                      from two network round-trips, and stacked it would grow
-                      the row's height seconds after the card had settled,
-                      pushing the rest of the summary down. */}
-                  {federatedName != null && (
-                    <Typography
-                      variant="bodyXsRegular"
-                      component="span"
-                      sx={(theme) => ({ color: theme.palette.text.tertiary })}
-                    >
-                      {federatedName}
-                    </Typography>
-                  )}
-                </Stack>
+                // Deliberately no SEP-2 name here. A transaction page carries
+                // several accounts — source, operation destinations, signers
+                // — and naming exactly one of them reads as "we know who the
+                // sender is and not the recipient", which is false: we simply
+                // did not ask. Naming all of them means a pair of
+                // cross-origin requests per account, per page view, to hosts
+                // those accounts named. The name lives one click away, on the
+                // account's own page, which is the page whose subject the
+                // account actually is (task 0443).
+                <IdentifierWithCopy
+                  value={tx.source_account}
+                  type="account"
+                  truncate={false}
+                />
               ) : (
                 <Dash />
               ),
