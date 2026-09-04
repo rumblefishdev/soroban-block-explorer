@@ -905,8 +905,8 @@ ORDER BY (pool_id, ledger_sequence, transaction_id);
 -- every such atom carries the IDENTICAL ORDER BY tuple, so the RMT would keep
 -- one and silently drop the rest of the fill. A per-op sum is deterministic on
 -- replay, so live ingest and the historical re-parse emit byte-identical rows
--- for a key and the duplicate collapses cleanly (the single-writer argument
--- of `operation_asset_appearances.net_settled`, same reducer both paths).
+-- for a key and the duplicate collapses cleanly (the single-writer argument:
+-- one reducer, identical on the live and the re-parse path).
 --
 -- `amount` is SIGNED FROM THE POOL'S PERSPECTIVE: positive = the asset entered
 -- the pool, negative = it left. The sign pattern therefore names the event
@@ -916,8 +916,8 @@ ORDER BY (pool_id, ledger_sequence, transaction_id);
 -- by definition, the XDR sources (`ClaimLiquidityAtom.amount_{sold,bought}`,
 -- trustline balance deltas) ARE `int64`, and a per-op sum is bounded by the
 -- pool's own `int64` reserve, so no overflow is reachable. Deliberately not
--- `Int128` (that width exists in `net_settled` for Soroban i128 token amounts,
--- which a classic pool cannot carry) and not `Decimal128(7)` (the read-model
+-- `Int128` (that width is for Soroban i128 token amounts, which a classic pool
+-- cannot carry) and not `Decimal128(7)` (the read-model
 -- choice in `liquidity_pool_snapshots` for the Lambda's USD math — fact tables
 -- store raw ints, and the cross-check below is one cast away).
 --
