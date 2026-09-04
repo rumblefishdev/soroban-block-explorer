@@ -214,7 +214,12 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
             label: 'Source account',
             value:
               tx.source_account != null ? (
-                <Stack spacing={0.25}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                  flexWrap="wrap"
+                >
                   <IdentifierWithCopy
                     value={tx.source_account}
                     type="account"
@@ -222,10 +227,16 @@ export function TransactionSummary({ tx }: TransactionSummaryProps) {
                   />
                   {/* SEP-2 name the account's own home domain claims for it —
                       secondary to the StrKey, never a replacement, and absent
-                      unless both sides agree (issue #363). */}
+                      unless both sides agree (issue #363).
+
+                      Beside the key rather than under it: the name arrives
+                      from two network round-trips, and stacked it would grow
+                      the row's height seconds after the card had settled,
+                      pushing the rest of the summary down. */}
                   {federatedName != null && (
                     <Typography
                       variant="bodyXsRegular"
+                      component="span"
                       sx={(theme) => ({ color: theme.palette.text.tertiary })}
                     >
                       {federatedName}

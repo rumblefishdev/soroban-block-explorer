@@ -1,3 +1,5 @@
+import { Stack, Typography } from '@mui/material';
+
 import type { AccountDetailResponse } from '@rumblefish/api-types';
 import {
   formatAmount,
@@ -19,8 +21,8 @@ export function AccountSummary({
   account: AccountDetailResponse;
 }) {
   // SEP-2 name this account's own home domain claims for it (issue #363).
-  // Rendered only when both sides agree; an account with no home domain, or
-  // a domain that does not federate, simply has no such row.
+  // Shown only when both sides agree; an account with no home domain, or a
+  // domain that does not federate, simply has no name beside its key.
   const federatedName = useFederatedName(
     account.account_id,
     account.home_domain ?? ''
@@ -33,21 +35,38 @@ export function AccountSummary({
           {
             label: 'Account ID',
             value: (
-              <IdentifierWithCopy
-                value={account.account_id}
-                type="account"
-                linked={false}
-                truncate={false}
-              />
+              // Beside the key, not in a row of its own. The name arrives from
+              // two network round-trips, so a row would appear seconds after
+              // the card had settled and push everything below it down —
+              // reserving the row instead only moves the jump to the accounts
+              // whose domain answers nothing. Inline, the height is fixed
+              // before anything is asked and only this cell grows sideways.
+              <Stack
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                flexWrap="wrap"
+              >
+                <IdentifierWithCopy
+                  value={account.account_id}
+                  type="account"
+                  linked={false}
+                  truncate={false}
+                />
+                {federatedName != null && (
+                  <Typography
+                    variant="bodySmRegular"
+                    component="span"
+                    sx={(theme) => ({ color: theme.palette.text.tertiary })}
+                  >
+                    {federatedName}
+                  </Typography>
+                )}
+              </Stack>
             ),
           },
         ]}
       />
-      {federatedName != null && (
-        <SummaryRow
-          cells={[{ label: 'Federated address', value: federatedName }]}
-        />
-      )}
       <SummaryRow
         cells={[
           {
