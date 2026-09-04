@@ -25,7 +25,10 @@
 //! event can neither hijack an existing pool (its entries are not CREATED)
 //! nor invent one without deploying a contract that genuinely has this
 //! shape (which IS a member of the family, per 0516's shape-not-brand
-//! rule).
+//! rule). The third forgery shape — a second emitter co-claiming a GENUINE
+//! pool inside its creation ledger, which no pool-side check can arbitrate
+//! without a back-pointer — is closed at staging: conflicting emitters for
+//! one pool refuse BOTH registrations loudly (review #447).
 //!
 //! Recognition of per-operation state (no CONFIG in a swap tx) rests on the
 //! RESERVE PAIR: the same contract writing both `u32(1)` and `u32(2)` as

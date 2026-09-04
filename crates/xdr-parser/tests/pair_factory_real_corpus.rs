@@ -131,30 +131,7 @@ fn the_u32_sieve_claims_no_foreign_instance_in_the_raw_corpus() {
         let bytes = std::fs::read(path).unwrap();
         let batch = LedgerCloseMetaBatch::from_xdr(&bytes, Limits::none()).unwrap();
         for lcm in batch.ledger_close_metas.iter() {
-            let (seq, metas): (u32, Vec<&stellar_xdr::TransactionMeta>) = match lcm {
-                stellar_xdr::LedgerCloseMeta::V0(v0) => (
-                    v0.ledger_header.header.ledger_seq,
-                    v0.tx_processing
-                        .iter()
-                        .map(|t| &t.tx_apply_processing)
-                        .collect(),
-                ),
-                stellar_xdr::LedgerCloseMeta::V1(v1) => (
-                    v1.ledger_header.header.ledger_seq,
-                    v1.tx_processing
-                        .iter()
-                        .map(|t| &t.tx_apply_processing)
-                        .collect(),
-                ),
-                stellar_xdr::LedgerCloseMeta::V2(v2) => (
-                    v2.ledger_header.header.ledger_seq,
-                    v2.tx_processing
-                        .iter()
-                        .map(|t| &t.tx_apply_processing)
-                        .collect(),
-                ),
-            };
-            for (i, meta) in metas.iter().enumerate() {
+            xdr_parser::meta::for_each_tx_meta(lcm, |seq, i, meta| {
                 let hash = format!("{i:064x}");
                 let changes = xdr_parser::extract_ledger_entry_changes(meta, &hash, seq, 0);
                 for pair in extract_factory_pairs(&changes) {
@@ -163,7 +140,7 @@ fn the_u32_sieve_claims_no_foreign_instance_in_the_raw_corpus() {
                         foreign.push(format!("{} @ {}", pair.state.pair, seq));
                     }
                 }
-            }
+            });
         }
     }
     assert!(

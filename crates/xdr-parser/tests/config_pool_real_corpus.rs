@@ -6,8 +6,7 @@
 //!
 //! - `CONFIG_POOL_CORPUS` — JSONEachRow harvest of ALL
 //!   `("create","liquidity_pool")` events with their emitting factory.
-//!   Harvest with (the `concat` sidesteps a guard false-positive on the
-//!   literal keyword):
+//!   Harvest with (the `concat` avoids a local tooling false-positive):
 //!
 //!   ```sh
 //!   chq "SELECT e.ledger_sequence AS ledger_sequence, e.event_index AS event_index,
@@ -124,30 +123,7 @@ fn the_keyed_entry_sieve_claims_no_foreign_pool_in_the_raw_corpus() {
         let bytes = std::fs::read(path).unwrap();
         let batch = LedgerCloseMetaBatch::from_xdr(&bytes, Limits::none()).unwrap();
         for lcm in batch.ledger_close_metas.iter() {
-            let (seq, metas): (u32, Vec<&stellar_xdr::TransactionMeta>) = match lcm {
-                stellar_xdr::LedgerCloseMeta::V0(v0) => (
-                    v0.ledger_header.header.ledger_seq,
-                    v0.tx_processing
-                        .iter()
-                        .map(|t| &t.tx_apply_processing)
-                        .collect(),
-                ),
-                stellar_xdr::LedgerCloseMeta::V1(v1) => (
-                    v1.ledger_header.header.ledger_seq,
-                    v1.tx_processing
-                        .iter()
-                        .map(|t| &t.tx_apply_processing)
-                        .collect(),
-                ),
-                stellar_xdr::LedgerCloseMeta::V2(v2) => (
-                    v2.ledger_header.header.ledger_seq,
-                    v2.tx_processing
-                        .iter()
-                        .map(|t| &t.tx_apply_processing)
-                        .collect(),
-                ),
-            };
-            for (i, meta) in metas.iter().enumerate() {
+            xdr_parser::meta::for_each_tx_meta(lcm, |seq, i, meta| {
                 let hash = format!("{i:064x}");
                 let changes = xdr_parser::extract_ledger_entry_changes(meta, &hash, seq, 0);
                 for cp in extract_config_pools(&changes) {
@@ -156,7 +132,7 @@ fn the_keyed_entry_sieve_claims_no_foreign_pool_in_the_raw_corpus() {
                         foreign.push(format!("{} @ {}", cp.state.pool, seq));
                     }
                 }
-            }
+            });
         }
     }
     assert!(

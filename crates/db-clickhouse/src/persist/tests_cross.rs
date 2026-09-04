@@ -4093,3 +4093,50 @@ fn a_config_pool_operation_stages_reserves_without_clobbering_the_declaration() 
          replace would zero the share token"
     );
 }
+
+/// The third forgery shape (review #447): a second emitter co-claiming a
+/// GENUINE pool inside its creation ledger. No pool-side check can
+/// arbitrate it (this family has no back-pointer), and both rows would
+/// carry the same RMT version — so BOTH registrations must refuse.
+#[test]
+fn conflicting_emitters_for_one_config_pool_refuse_both() {
+    const ATTACKER: &str = "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O";
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x89);
+    let events = vec![(
+        tx.hash.clone(),
+        vec![
+            liquidity_pool_created_event(&tx.hash, CFG_FACTORY, CFG_POOL),
+            liquidity_pool_created_event(&tx.hash, ATTACKER, CFG_POOL),
+        ],
+    )];
+    // The pool itself is genuine: created, full CONFIG — the gate the
+    // attacker piggybacks on.
+    let pools = [config_pool_write(true, Some(("0", "0")), Some("0"), true)];
+    let staged = stage_config_pool(&ledger, &tx, &events, &pools);
+    assert!(
+        staged.pool_rows.iter().all(|r| r.pool_kind == 0),
+        "conflicting emitters must refuse BOTH rows — a nondeterministic \
+         deployment_id is worse than a loud gap"
+    );
+
+    // An identical duplicate from ONE emitter collapses to a single row.
+    let tx2 = synthetic_tx(0x8a);
+    let events2 = vec![(
+        tx2.hash.clone(),
+        vec![
+            liquidity_pool_created_event(&tx2.hash, CFG_FACTORY, CFG_POOL),
+            liquidity_pool_created_event(&tx2.hash, CFG_FACTORY, CFG_POOL),
+        ],
+    )];
+    let staged2 = stage_config_pool(&ledger, &tx2, &events2, &pools);
+    assert_eq!(
+        staged2
+            .pool_rows
+            .iter()
+            .filter(|r| r.pool_kind == 1)
+            .count(),
+        1,
+        "one emitter announcing twice stages exactly one row"
+    );
+}

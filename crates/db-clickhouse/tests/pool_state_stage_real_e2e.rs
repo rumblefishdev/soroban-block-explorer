@@ -31,36 +31,14 @@ fn raw_registration_ledger_stages_the_exact_rows() {
     let mut instances = Vec::new();
     let mut txs: Vec<ExtractedTransaction> = Vec::new();
     let mut seq_out = 0u32;
-    {
-        let mut per_tx = |seq: u32, i: usize, meta: &stellar_xdr::TransactionMeta| {
+    for lcm in batch.ledger_close_metas.iter() {
+        seq_out = xdr_parser::meta::for_each_tx_meta(lcm, |seq, i, meta| {
             let hash = format!("{i:064x}");
             let changes = xdr_parser::extract_ledger_entry_changes(meta, &hash, seq, 0);
             planes.extend(extract_plane_pool_data(&changes));
             instances.extend(extract_pool_instances(&changes));
             txs.push(synthetic_tx(&hash, seq));
-        };
-        for lcm in batch.ledger_close_metas.iter() {
-            match lcm {
-                stellar_xdr::LedgerCloseMeta::V0(v0) => {
-                    seq_out = v0.ledger_header.header.ledger_seq;
-                    for (i, tx) in v0.tx_processing.iter().enumerate() {
-                        per_tx(seq_out, i, &tx.tx_apply_processing);
-                    }
-                }
-                stellar_xdr::LedgerCloseMeta::V1(v1) => {
-                    seq_out = v1.ledger_header.header.ledger_seq;
-                    for (i, tx) in v1.tx_processing.iter().enumerate() {
-                        per_tx(seq_out, i, &tx.tx_apply_processing);
-                    }
-                }
-                stellar_xdr::LedgerCloseMeta::V2(v2) => {
-                    seq_out = v2.ledger_header.header.ledger_seq;
-                    for (i, tx) in v2.tx_processing.iter().enumerate() {
-                        per_tx(seq_out, i, &tx.tx_apply_processing);
-                    }
-                }
-            }
-        }
+        });
     }
 
     let ledger = ExtractedLedger {

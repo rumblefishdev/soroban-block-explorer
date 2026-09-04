@@ -58,6 +58,8 @@ use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
 
 use xdr_parser::event::extract_executable_update_new_wasm_hash;
+use xdr_parser::pool_config_factory::PoolConfig;
+use xdr_parser::pool_family::PoolFamilyWrite;
 
 use super::ids;
 use super::rows::*;
@@ -1074,7 +1076,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // collection back into per-family views for the arms below. The views are
     // borrows — no clones, no reordering, the fold stays the single dedup
     // home downstream.
-    use xdr_parser::pool_family::PoolFamilyWrite;
     let mut plane_pool_data: Vec<&xdr_parser::pool_state::ExtractedPlanePoolData> = Vec::new();
     let mut pool_instances: Vec<&xdr_parser::pool_state::ExtractedPoolInstance> = Vec::new();
     let mut factory_pairs: Vec<&xdr_parser::pool_pair_factory::ExtractedFactoryPair> = Vec::new();
@@ -1185,20 +1186,33 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // same class the router family's created gate closes) — is refused
     // loudly. No UNVERIFIED arm exists here: the factory pointer is part of
     // the recognition shape, so a pair without one is not a pair.
-    let declared_factory: HashMap<&str, (&str, bool)> = {
-        let mut m: HashMap<&str, (&str, bool)> = HashMap::new();
+    // The map also carries the instance's OWN leg tokens: the event's legs
+    // are a claim, the instance's are ledger-authenticated, and staging
+    // compares them (review #447) — the same both-or-refuse discipline as
+    // everywhere else, instead of trusting the claim because history showed
+    // them equal.
+    let declared_factory: HashMap<&str, (&str, bool, &str, &str)> = {
+        let mut m: HashMap<&str, (&str, bool, &str, &str)> = HashMap::new();
         for sp in &factory_pairs {
-            let e = m
-                .entry(sp.state.pair.as_str())
-                .or_insert((sp.state.factory.as_str(), false));
+            let e = m.entry(sp.state.pair.as_str()).or_insert((
+                sp.state.factory.as_str(),
+                false,
+                sp.state.token_0.as_str(),
+                sp.state.token_1.as_str(),
+            ));
             e.0 = sp.state.factory.as_str();
             e.1 |= sp.created;
+            e.2 = sp.state.token_0.as_str();
+            e.3 = sp.state.token_1.as_str();
         }
         m
     };
     for reg in xdr_parser::pool_pair_factory::detect_pair_registrations(events) {
         match declared_factory.get(reg.event.pair.as_str()) {
-            Some(&(factory, true)) if factory == reg.factory => {}
+            Some(&(factory, true, token_0, token_1))
+                if factory == reg.factory
+                    && token_0 == reg.event.token_0
+                    && token_1 == reg.event.token_1 => {}
             found => {
                 tracing::warn!(
                     ledger_sequence = ledger.sequence,
@@ -1206,7 +1220,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                     emitter = %reg.factory,
                     declared = ?found,
                     "new_pair registration refused — the named pair's instance does \
-                     not declare this emitter as its factory at creation"
+                     not declare this emitter as its factory at creation, or the \
+                     event's legs disagree with the instance's own"
                 );
                 continue;
             }
@@ -1227,17 +1242,22 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // fee, share token all come from the pool's own `CONFIG`. The pool
     // records NO factory back-pointer (read from chain 2026-09-03), so the
     // corroboration is the created gate plus a decodable full CONFIG written
-    // by the pool itself in the registering transaction (a genuine
-    // registration constructs the pool — config, reserves, shares — in the
-    // deploy transaction; verified on the creation ledger raw meta). A
-    // forged event can neither hijack an existing pool (not CREATED) nor
-    // name a contract without the family shape (no CONFIG decodes).
-    let declared_config: HashMap<
-        &str,
-        (Option<&xdr_parser::pool_config_factory::PoolConfig>, bool),
-    > = {
-        let mut m: HashMap<&str, (Option<&xdr_parser::pool_config_factory::PoolConfig>, bool)> =
-            HashMap::new();
+    // by the pool itself in the registering LEDGER (a genuine registration
+    // constructs the pool — config, reserves, shares — in the deploy
+    // transaction; verified on the creation ledger raw meta; the maps here
+    // aggregate per ledger, the granularity the sibling gates use too).
+    //
+    // Three forgery shapes, three answers: an event naming an EXISTING pool
+    // fails the created gate; one naming a contract without the family
+    // shape has no CONFIG to decode; and a second emitter co-claiming a
+    // GENUINE pool inside its creation ledger — the one shape the pool-side
+    // checks cannot arbitrate, because this family has no back-pointer and
+    // both rows would carry the same RMT version — is refused for BOTH
+    // emitters below (review #447): with 14 registrations in all of
+    // history, a refused genuine one is loud and backfillable, while a
+    // nondeterministic `deployment_id` would be silent and permanent.
+    let declared_config: HashMap<&str, (Option<&PoolConfig>, bool)> = {
+        let mut m: HashMap<&str, (Option<&PoolConfig>, bool)> = HashMap::new();
         for cp in &config_pools {
             let e = m.entry(cp.state.pool.as_str()).or_insert((None, false));
             if let Some(config) = cp.state.config.as_ref() {
@@ -1247,10 +1267,39 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
         m
     };
-    for reg in xdr_parser::pool_config_factory::detect_config_pool_registrations(events) {
+    let config_regs = xdr_parser::pool_config_factory::detect_config_pool_registrations(events);
+    let mut config_emitters: HashMap<&str, Vec<&str>> = HashMap::new();
+    for reg in &config_regs {
+        config_emitters
+            .entry(reg.pool.as_str())
+            .or_default()
+            .push(reg.factory.as_str());
+    }
+    let mut config_pools_staged: HashSet<&str> = HashSet::new();
+    for reg in &config_regs {
+        let emitters = &config_emitters[reg.pool.as_str()];
+        if emitters.iter().any(|e| *e != reg.factory) {
+            tracing::error!(
+                ledger_sequence = ledger.sequence,
+                pool = %reg.pool,
+                emitters = ?emitters,
+                "create/liquidity_pool registration refused for EVERY emitter — \
+                 conflicting emitters claim one pool in one ledger, and the RMT \
+                 version tie would pick the attribution nondeterministically; \
+                 a pool is missing from the registry and needs the runbook's \
+                 registration pass"
+            );
+            continue;
+        }
+        // Identical duplicates (one emitter announcing twice) collapse to
+        // one row — a second identical push would only feed the same RMT
+        // version tie with the same content.
+        if !config_pools_staged.insert(reg.pool.as_str()) {
+            continue;
+        }
         match declared_config.get(reg.pool.as_str()) {
             Some(&(Some(config), true)) => {
-                match config_pool_registry_row(&reg, config, ledger_sequence_i64) {
+                match config_pool_registry_row(reg, config, ledger_sequence_i64) {
                     Ok(row) => out.pool_rows.push(row),
                     Err(reason) => tracing::error!(
                         ledger_sequence = ledger.sequence,
@@ -1409,33 +1458,28 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         };
         let self_id = ids::contract_id(&sp.state.pair);
         if let Some((r0, r1)) = &sp.state.reserves {
-            match (r0.parse::<i128>(), r1.parse::<i128>()) {
-                (Ok(a), Ok(b)) => pool_state_rows.push(PoolStateChangeRow {
+            match parse_reserve_pair(r0, r1) {
+                Some(reserves) => pool_state_rows.push(PoolStateChangeRow {
                     pool_id,
                     ledger_sequence: i64::from(sp.ledger_sequence),
-                    reserves: vec![a, b],
+                    reserves,
                     plane_id: self_id,
                 }),
-                _ => tracing::error!(
+                None => tracing::error!(
                     ledger_sequence = sp.ledger_sequence,
                     pair = %sp.state.pair,
                     "pair reserve write refused: non-numeric reserve — a snapshot is missing"
                 ),
             }
         }
-        let total_shares = match sp.state.total_supply.as_deref() {
-            None => 0,
-            Some(raw) => match raw.parse::<i128>() {
-                Ok(v) => v,
-                Err(_) => {
-                    tracing::error!(
-                        ledger_sequence = sp.ledger_sequence,
-                        pair = %sp.state.pair,
-                        "pair write refused: non-numeric TotalSupply"
-                    );
-                    continue;
-                }
-            },
+        let Ok(total_shares) = parse_supply(sp.state.total_supply.as_deref()) else {
+            tracing::error!(
+                ledger_sequence = sp.ledger_sequence,
+                pair = %sp.state.pair,
+                "pair instance row refused: non-numeric TotalSupply (any reserve \
+                 row from this write is already staged)"
+            );
+            continue;
         };
         instance_state_rows.push(PoolInstanceStateRow {
             pool_id,
@@ -1455,11 +1499,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // (creation + admin config changes): `pool_instance_state` is RMT
     // whole-row keyed on `pool_id` alone, and a per-operation TotalShares
     // write arrives WITHOUT the config, so staging it would clobber
-    // `share_token_id` to 0 — the misleading-fallback class. The row's
-    // `total_shares` is therefore a config-write-time snapshot for this
-    // family (0 at creation, structurally); the LIVE supply is the share
-    // token's own tracked supply — the share token is a separate SEP-41
-    // contract whose mints/burns ride the generic token pipeline.
+    // `share_token_id` to 0 — the misleading-fallback class. Consequence:
+    // for THIS family the row's `total_shares` is STRUCTURALLY 0 forever
+    // (TotalShares never co-occurs with a post-creation CONFIG write) — it
+    // is not a snapshot of anything; the LIVE supply is the share token's
+    // own tracked supply — the share token is a separate SEP-41 contract
+    // whose mints/burns ride the generic token pipeline. The read half must
+    // branch on family (`share_token_id != pool_id` + deployment) and never
+    // render this 0 as a measured value.
     for cp in config_pools {
         let Some(pool_id) = ids::contract_payload(&cp.state.pool) else {
             tracing::error!(
@@ -1471,14 +1518,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         };
         let self_id = ids::contract_id(&cp.state.pool);
         if let Some((ra, rb)) = &cp.state.reserves {
-            match (ra.parse::<i128>(), rb.parse::<i128>()) {
-                (Ok(a), Ok(b)) => pool_state_rows.push(PoolStateChangeRow {
+            match parse_reserve_pair(ra, rb) {
+                Some(reserves) => pool_state_rows.push(PoolStateChangeRow {
                     pool_id,
                     ledger_sequence: i64::from(cp.ledger_sequence),
-                    reserves: vec![a, b],
+                    reserves,
                     plane_id: self_id,
                 }),
-                _ => tracing::error!(
+                None => tracing::error!(
                     ledger_sequence = cp.ledger_sequence,
                     pool = %cp.state.pool,
                     "config-pool reserve write refused: non-numeric reserve — a \
@@ -1490,19 +1537,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             // A PRESENT-but-unparseable TotalShares refuses the row loudly,
             // same as every sibling arm; absent means the config write did
             // not touch it (0 stays the structural creation value).
-            let total_shares = match cp.state.total_shares.as_deref() {
-                None => 0,
-                Some(raw) => match raw.parse::<i128>() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        tracing::error!(
-                            ledger_sequence = cp.ledger_sequence,
-                            pool = %cp.state.pool,
-                            "config-pool instance write refused: non-numeric TotalShares"
-                        );
-                        continue;
-                    }
-                },
+            let Ok(total_shares) = parse_supply(cp.state.total_shares.as_deref()) else {
+                tracing::error!(
+                    ledger_sequence = cp.ledger_sequence,
+                    pool = %cp.state.pool,
+                    "config-pool instance row refused: non-numeric TotalShares \
+                     (any reserve row from this write is already staged)"
+                );
+                continue;
             };
             instance_state_rows.push(PoolInstanceStateRow {
                 pool_id,
@@ -2652,6 +2694,23 @@ fn fold_pool_instance_state(rows: Vec<PoolInstanceStateRow>) -> Vec<PoolInstance
 /// concentrated-instance arm.
 fn parse_reserves(raw: &[String]) -> Option<Vec<i128>> {
     raw.iter().map(|r| r.parse::<i128>().ok()).collect()
+}
+
+/// The two-leg tuple flavour of [`parse_reserves`], shared by the
+/// pair-factory and config-factory arms — same all-or-nothing rule.
+fn parse_reserve_pair(a: &str, b: &str) -> Option<Vec<i128>> {
+    Some(vec![a.parse::<i128>().ok()?, b.parse::<i128>().ok()?])
+}
+
+/// Raw LP-supply string → `i128`. Absent means the write did not touch the
+/// key (a structural 0, never a fallback); PRESENT-but-unparseable is
+/// `Err` so the caller refuses the row loudly. Shared by the pair-factory
+/// (TotalSupply) and config-factory (TotalShares) arms.
+fn parse_supply(raw: Option<&str>) -> Result<i128, ()> {
+    match raw {
+        None => Ok(0),
+        Some(raw) => raw.parse::<i128>().map_err(|_| ()),
+    }
 }
 
 /// Registry row for one corroborated `new_pair` registration (task 0518).
