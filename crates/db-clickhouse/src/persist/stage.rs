@@ -637,13 +637,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         sac_classic
     };
 
-    let mut amount_by_tx_asset: HashMap<(String, i64), Option<i128>> = HashMap::new();
-    for tx in transactions {
-        for ns in ledger_deltas_net_settled(&tx.ledger_deltas, sac_map) {
-            amount_by_tx_asset.insert((tx.hash.clone(), ns.asset_id), ns.amount);
-        }
-    }
-
     // O(1) per-tx op count lookup. Built once over `operations` so the
     // transactions loop stays linear in `transactions.len()` rather than
     // the prior O(tx_count × op_groups) `iter().find()` scan.
@@ -1402,17 +1395,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                             ledger_sequence: ledger_sequence_i64,
                             transaction_id: tx_id,
                             // `Some(v)` = reduced; `None` (-> NULL) = touched but
-                            // not computable (i128-unrepresentable, or a
-                            // recognised token event whose amount we could not
-                            // read). The `Some(0)` fallback is for an asset an
-                            // OPERATION BODY declared that no movement reduced —
-                            // the reducer ran over this tx and found nothing
-                            // settling for it, so "computed, net zero" is the
-                            // honest answer, not an absence of information.
-                            net_settled: amount_by_tx_asset
-                                .get(&(tx_hash.clone(), asset_id))
-                                .copied()
-                                .unwrap_or(Some(0)),
                         });
                     }
                 }
@@ -1530,16 +1512,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 asset_id,
                 ledger_sequence: ledger_sequence_i64,
                 transaction_id: tx_id,
-                // These asset ids come from token EVENTS, but value is reduced from
-                // the LEDGER (a different source), so an event-declared asset may
-                // have no ledger-reduced entry — e.g. a contract-held SAC whose
-                // registry lookup missed, or an asset the ledger did not actually
-                // move. A miss means "value not computed for this (tx, asset)" →
-                // `None` (NULL), NOT a fabricated `Some(0)`.
-                net_settled: amount_by_tx_asset
-                    .get(&(tx_hash.clone(), asset_id))
-                    .copied()
-                    .unwrap_or(None),
             });
         }
     }

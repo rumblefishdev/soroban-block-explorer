@@ -332,12 +332,7 @@ fn column_order_transaction_participants() {
 fn column_order_operation_asset_appearances() {
     assert_columns::<OperationAssetAppearanceRow>(
         "operation_asset_appearances",
-        &[
-            "asset_id",
-            "ledger_sequence",
-            "transaction_id",
-            "net_settled",
-        ],
+        &["asset_id", "ledger_sequence", "transaction_id"],
     );
 }
 

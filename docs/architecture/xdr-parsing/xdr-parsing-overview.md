@@ -377,9 +377,14 @@ step 14, called out here so the parser/indexer boundary stays explicit):
   task 0195 §2d). Parser only writes the (`contract_id`, `token_id`,
   `current_owner_id`) tuple — see §5.1 NFT pattern.
 
-### 4.7 Transaction Value — "net settled" (task 0393)
+### 4.7 Ledger balance deltas — the value reader
 
-The tx-list "Net settled" column needs a single figure per (transaction, asset).
+> The tx-list "Net settled" COLUMN was removed on 2026-09-04 (no storage column,
+> no API field, no UI). The reader and reducer described here are KEPT: the
+> authoritative per-(account, asset) LEDGER deltas are the input the lossless
+> per-transfer replacement needs.
+
+The reducer needs a single figure per (transaction, asset).
 The protocol has no per-transaction amount — value lives on operations and Soroban
 token events — so the parser derives the **net-settled value**:
 `max(Σ positive account deltas, Σ negative account deltas)` per (tx, asset),
@@ -417,9 +422,7 @@ A single **ledger** reader feeds it, for EVERY tx (classic and Soroban):
 
 Surrogate resolution and the net reduction run at ingest
 (`db_clickhouse::persist::stage`), which writes the result to
-`operation_asset_appearances.net_settled` (`Nullable(Int128)`; §4.3 / schema
-doc). Values are stored RAW; the read scales by the asset's decimals (classic /
-SAC = 7).
+memory only — since 2026-09-04 there is no storage column for it.
 
 ## 5. Soroban-Specific Handling
 

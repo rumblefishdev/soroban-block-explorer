@@ -850,50 +850,17 @@ ORDER BY (account_id, ledger_sequence, transaction_id);
 -- source != issuer, or a trustline predating the ingest window). Harmless -- the
 -- read path reaches a fact row only via an existing `assets` row, so such orphans
 -- are unreachable dead weight, never wrong output.
--- `net_settled` (task 0393): net-settled "value moved" per (transaction, asset)
--- for the tx-list "Net settled" column. RAW `Nullable(Int128)` (scale by the
--- asset's `decimals` at read, like balances/total_supply) — the figure
--- `max(Σ positive account deltas, Σ negative account deltas)` over the tx's
--- transfers, computed one-shot per (tx, asset) in Rust from the AUTHORITATIVE
--- LEDGER balance changes (`persist::stage::ledger_deltas_net_settled` +
--- `xdr_parser::ledger_balance_deltas` + `xdr_parser::net_settled`) — account,
--- trustline, and ContractData balances; NEVER from token events (logs). It is the
--- network-flow FLOW VALUE: by the flow decomposition theorem a flow splits into
--- source→sink paths plus cycles, and a cycle contributes exactly zero — so a
--- wash / round-trip nets to `0` BY DEFINITION, not by accident (that zero-balance
--- cycle is also how the wash-trading literature identifies a wash). Gross would be
--- `Σ path + Σ cycle`; if ever wanted, `cycle volume = gross − net`.
--- NULLABLE ON PURPOSE: `NULL` = not computable (the reducer could not represent
--- the result, or a recognised event's amount was unreadable), `0` = genuinely
--- nothing settled net. Without the distinction a value that could not be computed
--- would masquerade as a real zero. The read filters `IS NOT NULL AND != 0`.
--- NON-KEY data column, version-less RMT: `net_settled` has a SINGLE writer —
--- `stage.rs`, run by both live ingest and the full S3 re-ingest — so live and
--- historical rows for a key are computed identically and the duplicate collapses
--- cleanly. The read dedups with `max(net_settled)` (`max` ignores NULL, so a
--- computed value wins over a not-computed one for the same key). There is
--- deliberately no version column: a downward "correction" of a deterministic
--- figure only happens when OUR reducer changes, which is a deploy event handled
--- by re-running the re-ingest + `OPTIMIZE FINAL` over the range —
--- not a runtime concern worth a per-row version + a full-table engine rebuild.
--- The tx-list "+ N other assets" affordance is a read-time COUNT of asset rows
--- per tx, not a stored column.
--- tx-list "value" read note (task 0393): the PK is `asset_id`-leading (for the
--- per-asset activity page), so the tx-list read filtering
--- `(ledger_sequence, transaction_id) IN (page keys)` is NOT a prefix seek — it
--- SCANS the pruned partition. Measured ~26M rows/page against a full partition
--- vs ~16k for the seek-based op-types query beside it. This endpoint family is
--- polled and previously exhausted the read quota in exactly this shape (tasks
--- 0243/0386), so a `(ledger, tx)`-ordered companion (the `accounts_recent`
--- pattern: plain MergeTree + refreshable MV + atomic EXCHANGE — a projection is
--- refused on an RMT, CH Code 344) is REQUIRED before this ships at scale. Tracked
--- as the read-path work in task 0393's Operations / follow-up section; the head
--- partition being young hides the cost today.
+-- `net_settled` (task 0393) REMOVED 2026-09-04: the per-(tx, asset) aggregate
+-- was a lossy summary — it carried no direction and no account, so on an account
+-- page an inbound and an outbound transfer rendered identically. Replaced by a
+-- lossless per-transfer design (see the follow-up task); the reducer itself
+-- (`persist::stage::ledger_deltas_net_settled` + `xdr_parser::ledger_balance_deltas`
+-- + `xdr_parser::net_settled`) is KEPT — it reads the authoritative LEDGER balance
+-- changes and is the input the replacement needs.
 CREATE TABLE IF NOT EXISTS operation_asset_appearances (
     asset_id        Int64,
     ledger_sequence Int64,
-    transaction_id  Int64,
-    net_settled     Nullable(Int128)
+    transaction_id  Int64
     -- idx_oaa_transaction_id (bloom on transaction_id, planned for the 0393
     -- "Net settled" per-tx read) REMOVED 2026-08-06: that read was withdrawn
     -- from the API before it ever shipped (see common/ch.rs; [[0411]] owns

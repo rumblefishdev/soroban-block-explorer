@@ -443,13 +443,6 @@ pub struct OperationAssetAppearanceRow {
     pub asset_id: i64,
     pub ledger_sequence: i64,
     pub transaction_id: i64,
-    /// Net-settled "value moved" for this (tx, asset), raw (scale by the asset's
-    /// `decimals` at read). Task 0393. `Some(0)` = genuinely nothing settled net
-    /// (e.g. a wash / pure cycle — zero by the flow decomposition theorem);
-    /// `None` = NOT COMPUTABLE (the reducer could not represent the result, or a
-    /// recognised event's amount was unreadable). The two must stay
-    /// distinguishable: the read drops both, but a `None` is not a real zero.
-    pub net_settled: Option<i128>,
 }
 
 /// `operation_pools` — fact, the per-(pool, transaction) presence index

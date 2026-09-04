@@ -61,7 +61,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use chrono::{DateTime, Utc};
 
-use super::dto::{TransactionValue, TxListCursor};
+use super::dto::TxListCursor;
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -83,7 +83,6 @@ pub struct TxListRow {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
-    pub values: Vec<TransactionValue>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -191,7 +190,6 @@ impl TxPageChRow {
             operation_count: self.operation_count,
             has_soroban: self.has_soroban,
             operation_types: agg.operation_types,
-            values: agg.values.into_iter().map(TransactionValue::from).collect(),
             created_at: millis_to_utc(self.created_at),
         }
     }
@@ -1115,7 +1113,6 @@ mod tests {
         };
         let agg = ch::TxListAggregates {
             operation_types: vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
-            values: vec![],
         };
         let mapped = row.into_list_row(agg);
         assert_eq!(mapped.source_account, None);
