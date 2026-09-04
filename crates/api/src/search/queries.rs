@@ -64,9 +64,7 @@ use serde::Deserialize;
 
 use crate::common::asset_match;
 use crate::common::ch::millis_to_utc;
-use crate::common::pool_asset_codes::{
-    asset_codes_predicate, asset_codes_rank, normalize_asset_codes,
-};
+use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
 use crate::common::strkey::pool_id_hex_to_strkey;
 
 use super::classifier::Classified;
@@ -386,13 +384,6 @@ async fn search_pools_by_asset_code(
     let Some((clause, binds)) = asset_codes_predicate(&codes) else {
         return Ok(Vec::new());
     };
-    // Rank before freshness (task 0485), the same tier the pools list and the
-    // assets list use — `XLM` must not answer with a busy `yXLM` pool ahead of
-    // the real ones. Recency still orders within a tier. The binds go AFTER
-    // the predicate's: the expression sits in the `ORDER BY`, textually last.
-    let (rank, rank_binds) =
-        asset_codes_rank(&codes, "lp").unwrap_or_else(|| ("0".to_string(), Vec::new()));
-
     let sql = format!(
         "SELECT pool_hex, {POOL_LABEL_SQL} \
          FROM ( \
@@ -407,12 +398,12 @@ async fn search_pools_by_asset_code(
             GROUP BY pool_id \
          ) AS lp \
          WHERE {clause} \
-         ORDER BY {rank} DESC, newest DESC \
+         ORDER BY newest DESC \
          LIMIT ?"
     );
 
     let mut query = client.query(&sql);
-    for bind in binds.iter().chain(rank_binds.iter()) {
+    for bind in &binds {
         query = query.bind(bind);
     }
     let rows = query.bind(per_group_limit).fetch_all::<PoolRow>().await?;

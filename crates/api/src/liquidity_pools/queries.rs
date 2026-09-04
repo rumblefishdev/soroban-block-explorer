@@ -68,9 +68,6 @@ pub struct PoolRow {
     /// The wire `PoolListCursor.created_at_ledger` slot stays opaque (ADR
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
-    /// Negated match tier of this row (task 0485): `0` best, `-1` prefix,
-    /// `-2` matched somewhere inside. Negated so the whole keyset runs one
-    /// direction. Cursor only — never serialized.
     /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
     /// Task 0246 — see DTO doc for surfacing rules.
     pub participant_count: i64,
@@ -858,8 +855,7 @@ pub async fn fetch_pool_by_id(
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
         created_at_ledger: r.created_at_ledger,
-        // Detail does not paginate; both cursor fields are set for struct
-        // completeness.
+        // Detail does not paginate; the field is set for struct completeness.
         cursor_ledger: r.created_at_ledger,
         participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
@@ -1648,8 +1644,6 @@ struct PoolListChRow {
     created_at_ledger: i64,
     /// `last_updated_ledger` — the list sort/cursor key (see fn doc).
     cursor_ledger: i64,
-    /// Negated match tier (task 0485) — leads the sort and the cursor, `0`
-    /// whenever the page is not ranked. Never on the wire.
     participant_count: i64,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
@@ -1704,9 +1698,9 @@ pub async fn fetch_pool_list(
     // A tampered/non-hex cursor degrades to "no keyset" (first page).
     let keyset = match params.cursor.as_ref() {
         Some(c) if is_hex_pool_id(&c.pool_id_hex) => format!(
-            "AND ((last_updated_ledger {op} {cl}) \
-                  OR (last_updated_ledger = {cl} \
-                      AND lower(hex(pool_id)) {op} '{ph}'))",
+            "AND ((lp.last_updated_ledger {op} {cl}) \
+                  OR (lp.last_updated_ledger = {cl} \
+                      AND lower(hex(lp.pool_id)) {op} '{ph}'))",
             op = op,
             cl = c.created_at_ledger,
             ph = c.pool_id_hex,
@@ -1718,13 +1712,12 @@ pub async fn fetch_pool_list(
     // issuer StrKeys — clickhouse-rs escapes them). Each `?` appears in the
     // `page` CTE WHERE in this exact push order. Issuer StrKey → surrogate id
     // resolves via an `accounts` PK seek (`ORDER BY (account_id)`), cheap.
-    // NO relevance ranking on this list, by decision (task 0485). Ranking a
-    // KEYSET page means carrying the rank in the cursor, and the pool list is
-    // a browse surface: activity is a meaningful order in its own right, and
-    // measured on production the first page of `filter[asset_codes]=XLM` is
-    // already 20 of 25 real native-leg pools, because those are the busiest on
-    // the network. The `/v1/search` pool bucket DOES rank — it has no cursor,
-    // so the tier costs it nothing.
+    // NO relevance ranking anywhere on the pools path, by decision (task
+    // 0485). Measured on production, the first page of
+    // `filter[asset_codes]=XLM` is already 20 of 25 real native-leg pools —
+    // they are the busiest on the network, so activity surfaces them without
+    // a rule. A tier over the legs was built and taken back out: 46 lines of
+    // the densest SQL in the change, for five look-alikes on page one.
     let mut binds: Vec<String> = Vec::new();
     let mut filters = String::new();
     if let Some(code) = params.asset_a_code.as_ref() {

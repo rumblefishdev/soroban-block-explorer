@@ -35,9 +35,8 @@ pub fn normalize_asset_codes(raw: Option<String>) -> Vec<String> {
 /// One leg's displayed code — what the pool row RENDERS as, which for a
 /// native leg is `XLM` and not the empty string it stores.
 ///
-/// Both matching and ranking go through this, and both come from
-/// `common::asset_match`, so a pool leg and an asset row answer "does this
-/// match" and "how well" with the same rule. Before that they were separate
+/// It comes from `common::asset_match`, so a pool leg and an asset row answer
+/// "does this match" with the same rule. Before that they were separate
 /// spellings that agreed by accident.
 fn leg_shown(side: char, alias: &str) -> String {
     asset_match::shown_code(
@@ -49,51 +48,6 @@ fn leg_shown(side: char, alias: &str) -> String {
 /// One leg's match test. One bind, the needle.
 fn leg(side: char) -> String {
     asset_match::matches_sql(&leg_shown(side, "lp"))
-}
-
-/// One leg's match TIER. Two binds, both the needle.
-fn leg_tier(side: char, alias: &str) -> String {
-    asset_match::tier_sql(&leg_shown(side, alias))
-}
-
-/// How well a pool matches `codes` — the pools' answer to the same question
-/// the assets list answers with `match_tier`, so `XLM` puts real XLM pools
-/// above the `yXLM` / `XLMFISH` look-alikes instead of trusting that the real
-/// ones happen to be the busiest.
-///
-/// **Negated**, because the pool list's whole keyset runs DESC and a
-/// mixed-direction keyset is not one comparison: `-0` beats `-1` beats `-2`
-/// under DESC, so the best shelf still comes first.
-///
-/// One needle takes the pool's BEST leg (`least`) — the needle only has to be
-/// satisfied once. A pair takes the WORSE leg of each assignment (`greatest`)
-/// and then the better assignment (`least`): both needles must be satisfied,
-/// and the pool is only as good as its weaker half. That mirrors how
-/// [`asset_codes_predicate`] already assigns each needle its own leg.
-///
-/// `None` when there is nothing to rank by — the caller then orders as before.
-pub fn asset_codes_rank(codes: &[String], alias: &str) -> Option<(String, Vec<String>)> {
-    let a = leg_tier('a', alias);
-    let b = leg_tier('b', alias);
-    match codes {
-        [one] => Some((format!("-toInt16(least({a}, {b}))"), vec![one.clone(); 4])),
-        [first, second] => Some((
-            format!("-toInt16(least(greatest({a}, {b}), greatest({a}, {b})))"),
-            // Bind order follows the `?`s left to right: the first assignment
-            // (first -> a, second -> b), then the reversed one.
-            vec![
-                first.clone(),
-                first.clone(),
-                second.clone(),
-                second.clone(),
-                second.clone(),
-                second.clone(),
-                first.clone(),
-                first.clone(),
-            ],
-        )),
-        _ => None,
-    }
 }
 
 /// Boolean expression matching pools against `codes`, plus its bind values in
