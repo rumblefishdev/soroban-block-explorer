@@ -150,10 +150,14 @@ LIMIT :per_group_limit;
 -- columns making the order total.
 --
 -- Both the match and the tier compare the DISPLAYED code: native XLM stores an
--- empty code and renders as `XLM`. `native` is folded onto `XLM` before the
--- query is built, so no arm here carries a special case for it. The rule is
--- ONE builder (`common::asset_match`), shared with 08_get_assets_list.sql and
--- with the pools predicate.
+-- empty code and renders as `XLM`. The rule is ONE builder
+-- (`common::asset_match`), shared with 08_get_assets_list.sql and the pools
+-- predicate.
+--
+-- `native` is a SYNONYM, matched alongside what was typed (:alias = 'XLM')
+-- rather than replacing it — 68 mainnet assets carry a code containing NATIVE
+-- and must still come back. Only the TIER takes the synonym, so native XLM
+-- ranks first and those assets follow it.
 SELECT a.asset_type,
        nullIf(a.asset_code, '')   AS asset_code,
        nullIf(sc.contract_id, '') AS contract_strkey,
@@ -161,10 +165,12 @@ SELECT a.asset_type,
 FROM assets a FINAL
 LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id
 LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id
-WHERE position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))), lower(:q)) > 0
-ORDER BY multiIf(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))) = lower(:q), 0,
+WHERE (position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))), lower(:q)) > 0
+       -- second arm present only when :q has a synonym
+       OR position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))), lower(:alias)) > 0)
+ORDER BY multiIf(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))) = lower(:rank), 0,
                  startsWith(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))),
-                            lower(:q)), 1,
+                            lower(:rank)), 1,
                  2) ASC,
          bagg.holder_count DESC NULLS LAST,
          a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC

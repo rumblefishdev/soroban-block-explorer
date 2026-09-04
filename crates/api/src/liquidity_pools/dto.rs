@@ -414,14 +414,6 @@ pub struct PoolActivityItem {
 /// keyset predicate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolListCursor {
-    /// Negated match tier of the page's last row when the page was RANKED by
-    /// an asset-code filter (task 0485): `0` matched the whole code, `-1` a
-    /// prefix, `-2` somewhere inside. Negated so the whole keyset runs one
-    /// direction. `#[serde(default)]` so cursors minted before ranking
-    /// existed still decode — they resume an unranked walk, where every row
-    /// carries `0` anyway.
-    #[serde(default)]
-    pub rank_neg: i16,
     pub created_at_ledger: i64,
     pub pool_id_hex: String,
 }

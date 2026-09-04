@@ -176,23 +176,11 @@ pub async fn list_assets(
 
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
-    // Normalise the needle ONCE, here, and everything downstream — predicate,
-    // rank expression, cursor — sees the same word (task 0485). `native` folds
-    // onto the code native actually displays as, so no SQL below needs an arm
-    // for it; that missing fold is what made three spellings of one rule.
-    let filter_code = params
-        .filter_code
-        .as_deref()
-        .map(crate::common::asset_match::normalize_needle);
-    // The needle also decides the page ORDER, so the cursor has to carry the
-    // rank of the row it stopped on — kept here because `resolved` takes
-    // ownership of it below.
-    let needle = filter_code.clone();
     let resolved = ResolvedListParams {
         limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
         asset_type,
-        asset_code: filter_code,
+        asset_code: params.filter_code,
         sac_only,
     };
 
@@ -212,10 +200,6 @@ pub async fn list_assets(
         |dir, r| {
             cursor::encode(
                 &AssetKeyCursor {
-                    rank_tier: needle.as_deref().map_or(0, |n| {
-                        queries::match_tier(n, r.asset_type, r.asset_code.as_deref())
-                    }),
-                    holders_neg: -i64::from(r.holder_count.unwrap_or(0)),
                     asset_type: r.asset_type,
                     asset_code: r.asset_code.clone().unwrap_or_default(),
                     issuer_id: r.issuer_id,

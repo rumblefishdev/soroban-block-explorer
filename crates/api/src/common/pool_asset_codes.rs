@@ -46,9 +46,11 @@ fn leg_shown(side: char, alias: &str) -> String {
     )
 }
 
-/// One leg's match test. One bind, the needle.
+/// One leg's match test. One bind, the needle. Pool codes carry no synonym
+/// arm: a pair query already names its legs, and `normalize_asset_codes`
+/// upper-cases the needles before they get here.
 fn leg(side: char) -> String {
-    asset_match::matches_sql(&leg_shown(side, "lp"))
+    asset_match::matches_sql(&leg_shown(side, "lp"), false)
 }
 
 /// One leg's match TIER. Two binds, both the needle.

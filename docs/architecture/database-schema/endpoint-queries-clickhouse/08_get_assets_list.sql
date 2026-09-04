@@ -33,8 +33,7 @@
 --                 a GROUP BY sub-select (no FINAL).
 --               asset_aggregates — MergeTree batch table (no FINAL).
 -- CH Pattern:   FINAL on `assets` + the metadata sub-select only. Keyset cursor
---               on the 4-tuple natural key, ASC, extended with (rank_tier,
---               holders_neg) while a code filter is present (task 0485).
+--               on the 4-tuple natural key, ASC (task 0485).
 --               asset_code substring against the DISPLAYED code (no pg_trgm in
 --               CH; linear scan acceptable on small `assets`).
 -- ADR 0044 §:   §4.5 (Replacing state). **PR #175 amendment:** `assets`
@@ -94,36 +93,35 @@ WHERE
     ($6 IS NULL OR a.asset_type = $6)
     -- Matched against the DISPLAYED code: native XLM stores an EMPTY code and
     -- renders as `XLM`, so comparing the stored value returned thousands of
-    -- impostor codes and missed the one asset everybody meant. `native` is
-    -- folded onto `XLM` before the query is built (task 0485). One rule, shared
+    -- impostor codes and missed the one asset everybody meant. One rule, shared
     -- with 22_get_search.sql and the pools predicate (`common::asset_match`).
+    --
+    -- `native` adds a SECOND needle ($10 = 'XLM') rather than replacing $7:
+    -- 68 mainnet assets carry a code containing NATIVE and must not vanish
+    -- because someone typed the synonym (task 0485).
     AND ($7 IS NULL OR position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))),
                                 lower($7)) > 0
+                    OR ($10 IS NOT NULL AND
+                        position(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))),
+                                 lower($10)) > 0)
                     OR positionCaseInsensitive(coalesce(m.name, ''), $7) > 0
                     OR positionCaseInsensitive(coalesce(m.symbol, ''), $7) > 0)
-    -- Keyset. RANKED searches resume on the rank too, because a keyset must
-    -- resume in the order it walked; `holders_neg` is the NEGATED holder count
-    -- so every sort column runs one direction and the resume stays a single
-    -- tuple comparison (task 0485).
-    AND ($2 IS NULL OR (rank_tier, holders_neg, asset_type, asset_code, issuer_id, contract_id)
-                     > ($2, $3, $4, $5, $8, $9))
--- Unfiltered browse: ORDER BY asset_type ASC, asset_code ASC, issuer_id ASC,
--- contract_id ASC — no rank columns, no balance_aggregates join. ASC because
--- native XLM is the MINIMUM of that 4-tuple, so DESC opened the asset list of a
--- Stellar explorer on codeless Soroban contracts and never showed XLM.
-ORDER BY rank_tier ASC, holders_neg ASC,
-         asset_type ASC, asset_code ASC, issuer_id ASC, contract_id ASC
+    AND ($2 IS NULL OR (asset_type, asset_code, issuer_id, contract_id)
+                     > ($2, $3, $4, $5))
+-- ASC, filtered or not, because native XLM is the MINIMUM of that 4-tuple:
+-- under DESC it sorted onto the LAST page, so `filter[code]=xlm` answered with
+-- `zXLMr, zXLM, …` and the unfiltered list opened the asset list of a Stellar
+-- explorer on codeless Soroban contracts without ever showing XLM.
+ORDER BY asset_type ASC, asset_code ASC, issuer_id ASC, contract_id ASC
 LIMIT $1;
 
--- rank_tier / holders_neg are computed in the seek's inner projection:
---   multiIf(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))) = lower($7), 0,
---           startsWith(lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code))),
---                      lower($7)), 1,
---           2)                                        AS rank_tier
---   -toInt64(coalesce(bagg.holder_count, 0))          AS holders_neg
--- with LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id, present only
--- while a code filter is: with no needle there is nothing to be a good match
--- for, so the browse page keeps its bare `assets` PK walk.
+-- NO relevance ranking on this surface, by decision (task 0485). A tier order
+-- would have to be carried in the cursor — a keyset must resume in the order it
+-- walked — which means a rank column, a second copy of the tier rule in Rust to
+-- mint that cursor, and a page-walk test to catch the two drifting. That was
+-- built, measured and taken back out: this is a browse list with a filter, and
+-- the walk direction alone answers "native first". Relevance lives in
+-- 22_get_search.sql, which has no pagination and so pays none of it.
 
 -- STALE ABOVE (not touched by task 0485): the projection still shows the
 -- single-statement shape with `asset_aggregates`. The read has been a two-phase

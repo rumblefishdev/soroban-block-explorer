@@ -13,27 +13,32 @@
 //!    is stored as `asset_type = 0` with an EMPTY code while every surface
 //!    renders it `XLM`. Comparing the stored value is why `XLM` used to return
 //!    thousands of impostor codes and miss the one asset everybody meant.
-//! 2. **Normalise the needle once, at the door.** `native` is just another way
-//!    to type `XLM`. Fold it there and no SQL downstream needs a special arm
-//!    for it — which is what let three of the four spellings differ.
+//! 2. **`native` is a SYNONYM, not a replacement.** Someone typing `native`
+//!    means XLM — but 68 mainnet assets carry a code containing `NATIVE`, and
+//!    they must not vanish because of a word swap. So the synonym is matched
+//!    ALONGSIDE what was typed, and only the ranking prefers XLM.
 //!
-//! Everything here is a pure string builder or a pure function, so the SQL and
-//! its Rust twin sit in one file and can be read side by side. That twin is
-//! load-bearing: a keyset cursor has to record the tier of the row it stopped
-//! on, and the handler only ever sees the finished row, never the SQL.
+//! Everything here is a pure string builder, so every surface's SQL says the
+//! same thing by construction rather than by review. Ranking is only used
+//! where there is no cursor to resume — see the note in the `/v1/assets` seek
+//! for why a ranked keyset costs far more than a ranked `LIMIT`.
 
-/// The needle as every surface should treat it: trimmed, and with `native`
-/// folded onto the code native actually displays as.
+/// The code a needle is a SYNONYM for, if it is one.
 ///
-/// Callers normalise ONCE, on the way in. A surface that skips this still
-/// works for `xlm` and silently loses `native`.
-pub fn normalize_needle(q: &str) -> String {
-    let q = q.trim();
-    if q.eq_ignore_ascii_case("native") {
-        "XLM".to_string()
-    } else {
-        q.to_string()
-    }
+/// Only `native` today: it is what the native asset is called, `XLM` is what
+/// it displays as. Returning it instead of replacing the needle is deliberate
+/// — an earlier version swapped the word before the query was built, and the
+/// 68 assets whose code contains `NATIVE` disappeared from a search for
+/// `native` while still turning up for `nativ`. A shorter needle must never
+/// find more than a longer one.
+pub fn alias(q: &str) -> Option<&'static str> {
+    q.trim().eq_ignore_ascii_case("native").then_some("XLM")
+}
+
+/// The needle used for RANKING: the synonym when there is one, else the needle
+/// itself. Only the order is affected — matching still sees both.
+pub fn rank_needle(q: &str) -> &str {
+    alias(q).unwrap_or(q)
 }
 
 /// SQL for the code a row DISPLAYS as, lower-cased — native's `XLM` standing
@@ -47,9 +52,15 @@ pub fn shown_code(type_expr: &str, code_expr: &str) -> String {
 }
 
 /// SQL for "does this row match at all" — a substring test against the
-/// displayed code. **One bind**, the normalised needle.
-pub fn matches_sql(shown: &str) -> String {
-    format!("position({shown}, lower(?)) > 0")
+/// displayed code. **One bind**, or **two** when the needle has an [`alias`]:
+/// the needle first, then the synonym.
+pub fn matches_sql(shown: &str, with_alias: bool) -> String {
+    let one = format!("position({shown}, lower(?)) > 0");
+    if with_alias {
+        format!("({one} OR position({shown}, lower(?)) > 0)")
+    } else {
+        one
+    }
 }
 
 /// SQL for the match TIER: `0` the needle IS the whole displayed code, `1` the
@@ -65,82 +76,44 @@ pub fn tier_sql(shown: &str) -> String {
     format!("multiIf({shown} = lower(?), 0, startsWith({shown}, lower(?)), 1, 2)")
 }
 
-/// The Rust twin of [`tier_sql`], over the same DISPLAYED code.
-///
-/// Exists because a ranked keyset resumes on the tier of the page's last row,
-/// and that cursor is built in Rust. Drift between the two is silent — it
-/// skips rows at a page boundary — so the guard is a page-walk test that
-/// demands N pages equal one page of N×size.
-pub fn tier(needle: &str, shown_code: &str) -> u8 {
-    let needle = needle.to_lowercase();
-    let shown = shown_code.to_lowercase();
-    if shown == needle {
-        0
-    } else if shown.starts_with(&needle) {
-        1
-    } else {
-        2
-    }
-}
-
-/// The displayed code of an asset row, for [`tier`] — the Rust twin of
-/// [`shown_code`]. `None` / empty means "no code", which is native's stored
-/// state and also a Soroban-native token's.
-pub fn shown_code_of(asset_type: i16, asset_code: Option<&str>) -> &str {
-    if asset_type == 0 {
-        "XLM"
-    } else {
-        asset_code.unwrap_or_default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn native_is_reachable_by_both_spellings_without_a_special_arm() {
-        // The whole point of normalising at the door: after this, `native`
-        // and `xlm` are the same query, and no SQL below needs to know.
-        assert_eq!(normalize_needle("native"), "XLM");
-        assert_eq!(normalize_needle("NaTiVe"), "XLM");
-        assert_eq!(normalize_needle(" usdc "), "usdc");
-        // Native's stored code is empty; it is matched on what it displays as.
-        assert_eq!(shown_code_of(0, None), "XLM");
-        assert_eq!(
-            tier(
-                &normalize_needle("native").to_lowercase(),
-                shown_code_of(0, None)
-            ),
-            0
-        );
-        assert_eq!(tier("xlm", shown_code_of(0, None)), 0);
+    fn native_is_a_synonym_and_never_hides_the_literal_code() {
+        // `native` means XLM — but it must not swallow the assets whose code
+        // really contains NATIVE. Both needles go into the predicate, so a
+        // shorter query can never find more than a longer one.
+        assert_eq!(alias("native"), Some("XLM"));
+        assert_eq!(alias("NaTiVe"), Some("XLM"));
+        assert_eq!(alias("nativ"), None);
+        assert_eq!(alias("usdc"), None);
+
+        let shown = shown_code("a.asset_type", "a.asset_code");
+        let with = matches_sql(&shown, alias("native").is_some());
+        assert_eq!(with.matches('?').count(), 2, "needle AND synonym: {with}");
+        assert!(with.contains(" OR "), "{with}");
+        let without = matches_sql(&shown, alias("usdc").is_some());
+        assert_eq!(without.matches('?').count(), 1, "{without}");
+
+        // Only the ORDER is steered by the synonym, so native XLM comes first
+        // and the NATIVE-coded assets follow it instead of vanishing.
+        assert_eq!(rank_needle("native"), "XLM");
+        assert_eq!(rank_needle("usdc"), "usdc");
     }
 
     #[test]
-    fn tiers_are_exact_then_prefix_then_anywhere() {
-        assert_eq!(tier("usdc", "USDC"), 0);
-        assert_eq!(tier("USDC", "usdc"), 0);
-        assert_eq!(tier("xlm", "XLMFISH"), 1);
-        assert_eq!(tier("xlm", "yXLM"), 2);
-        // Total: a row matched on its on-chain name rather than its code still
-        // gets an answer.
-        assert_eq!(tier("spiko", ""), 2);
-    }
-
-    #[test]
-    fn the_sql_and_its_twin_read_the_same_column() {
-        // Both sides must compare the DISPLAYED code — this is the bug that
-        // made `XLM` miss native, and it comes back the moment one side is
-        // rewritten against `asset_code` directly.
+    fn the_tier_reads_the_displayed_code_not_the_stored_one() {
+        // Native stores an EMPTY code and renders as XLM. Comparing the stored
+        // value is the bug that made `XLM` miss the one asset everybody meant.
         let shown = shown_code("a.asset_type", "a.asset_code");
         assert!(shown.contains("if(a.asset_type = 0, 'XLM'"), "{shown}");
+        // Bind counts are part of the contract: callers match them 1:1.
+        assert_eq!(tier_sql(&shown).matches('?').count(), 2);
         assert!(
             tier_sql(&shown).contains("startsWith"),
-            "tier must have a prefix arm"
+            "prefix arm required"
         );
-        // Bind counts are part of the contract: callers match them 1:1.
-        assert_eq!(matches_sql(&shown).matches('?').count(), 1);
-        assert_eq!(tier_sql(&shown).matches('?').count(), 2);
     }
 }

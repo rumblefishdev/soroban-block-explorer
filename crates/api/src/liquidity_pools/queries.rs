@@ -30,7 +30,7 @@ use std::collections::HashMap;
 
 use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
-use crate::common::pool_asset_codes::{asset_codes_predicate, asset_codes_rank};
+use crate::common::pool_asset_codes::asset_codes_predicate;
 
 use super::dto::{ChartDataPoint, PoolActivityCursor, PoolEvent, PoolListCursor, SharesCursor};
 
@@ -71,7 +71,6 @@ pub struct PoolRow {
     /// Negated match tier of this row (task 0485): `0` best, `-1` prefix,
     /// `-2` matched somewhere inside. Negated so the whole keyset runs one
     /// direction. Cursor only — never serialized.
-    pub rank_neg: i16,
     /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
     /// Task 0246 — see DTO doc for surfacing rules.
     pub participant_count: i64,
@@ -862,7 +861,6 @@ pub async fn fetch_pool_by_id(
         // Detail does not paginate; both cursor fields are set for struct
         // completeness.
         cursor_ledger: r.created_at_ledger,
-        rank_neg: 0,
         participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
         reserve_a: r.reserve_a,
@@ -1652,7 +1650,6 @@ struct PoolListChRow {
     cursor_ledger: i64,
     /// Negated match tier (task 0485) — leads the sort and the cursor, `0`
     /// whenever the page is not ranked. Never on the wire.
-    rank_neg: i16,
     participant_count: i64,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
@@ -1707,13 +1704,10 @@ pub async fn fetch_pool_list(
     // A tampered/non-hex cursor degrades to "no keyset" (first page).
     let keyset = match params.cursor.as_ref() {
         Some(c) if is_hex_pool_id(&c.pool_id_hex) => format!(
-            "AND ((rank_neg {op} {rk}) \
-                  OR (rank_neg = {rk} \
-                      AND ((last_updated_ledger {op} {cl}) \
-                           OR (last_updated_ledger = {cl} \
-                               AND lower(hex(pool_id)) {op} '{ph}'))))",
+            "AND ((last_updated_ledger {op} {cl}) \
+                  OR (last_updated_ledger = {cl} \
+                      AND lower(hex(pool_id)) {op} '{ph}'))",
             op = op,
-            rk = c.rank_neg,
             cl = c.created_at_ledger,
             ph = c.pool_id_hex,
         ),
@@ -1724,34 +1718,14 @@ pub async fn fetch_pool_list(
     // issuer StrKeys — clickhouse-rs escapes them). Each `?` appears in the
     // `page` CTE WHERE in this exact push order. Issuer StrKey → surrogate id
     // resolves via an `accounts` PK seek (`ORDER BY (account_id)`), cheap.
-    // RELEVANCE (task 0485). `XLM` matches 14 971 pools, and only some of them
-    // hold real native XLM — the rest were minted under codes like `yXLM` or
-    // `XLMFISH`. Ordering by activity alone put the real ones on top only
-    // because they happen to be the busiest pools on the network (measured:
-    // 20 of the first 25). That is luck, not a rule: one busy look-alike and
-    // the first row is wrong. The rank makes it a rule, and it is the SAME
-    // rule the assets list uses, so `XLM` means one thing across the product.
-    //
-    // Activity still decides INSIDE a tier, which is what the list was always
-    // about. The rank only separates "matched the whole code" from "matched
-    // part of it".
-    //
-    // Bound BEFORE the filters: the expression sits in the inner projection,
-    // which is textually ahead of the `WHERE`, and the driver fills `?` in
-    // textual order.
-    let (rank_expr, rank_binds) = match asset_codes_rank(params.asset_codes.as_slice(), "lp") {
-        Some((expr, b)) if params.pool_id_hex.is_none() => (expr, b),
-        // A pool id names ONE pool, and an unfiltered list has nothing to be
-        // relevant to. Both order as before; the constant keeps one SQL shape
-        // and collapses the rank level of the keyset to a no-op.
-        //
-        // `toInt16` is load-bearing: a bare `0` is typed `UInt8` by ClickHouse
-        // and the row struct reads `i16`, so the unranked page failed to decode
-        // (`SchemaMismatch`) while every ranked one was fine. The ranked arm
-        // negates through `toInt16` already; this arm has to match it.
-        _ => ("toInt16(0)".to_string(), Vec::new()),
-    };
-    let mut binds: Vec<String> = rank_binds;
+    // NO relevance ranking on this list, by decision (task 0485). Ranking a
+    // KEYSET page means carrying the rank in the cursor, and the pool list is
+    // a browse surface: activity is a meaningful order in its own right, and
+    // measured on production the first page of `filter[asset_codes]=XLM` is
+    // already 20 of 25 real native-leg pools, because those are the busiest on
+    // the network. The `/v1/search` pool bucket DOES rank — it has no cursor,
+    // so the tier costs it nothing.
+    let mut binds: Vec<String> = Vec::new();
     let mut filters = String::new();
     if let Some(code) = params.asset_a_code.as_ref() {
         filters.push_str(" AND lp.asset_a_code = ?");
@@ -1847,18 +1821,15 @@ pub async fn fetch_pool_list(
     let sql = format!(
         "WITH \
          page AS ( \
-             SELECT * FROM ( \
-                 SELECT lp.pool_id AS pool_id, lp.asset_a_type AS asset_a_type, \
-                        lp.asset_a_code AS asset_a_code, \
-                        lp.asset_a_issuer_id AS asset_a_issuer_id, \
-                        lp.asset_b_type AS asset_b_type, lp.asset_b_code AS asset_b_code, \
-                        lp.asset_b_issuer_id AS asset_b_issuer_id, lp.fee_bps AS fee_bps, \
-                        lp.last_updated_ledger AS last_updated_ledger, \
-                        {rank_expr} AS rank_neg \
-                 FROM liquidity_pools lp FINAL \
-                 WHERE 1 = 1{filters} \
-             ) WHERE 1 = 1 {keyset} \
-             ORDER BY rank_neg {order}, last_updated_ledger {order}, pool_id {order} \
+             SELECT lp.pool_id AS pool_id, lp.asset_a_type AS asset_a_type, \
+                    lp.asset_a_code AS asset_a_code, \
+                    lp.asset_a_issuer_id AS asset_a_issuer_id, \
+                    lp.asset_b_type AS asset_b_type, lp.asset_b_code AS asset_b_code, \
+                    lp.asset_b_issuer_id AS asset_b_issuer_id, lp.fee_bps AS fee_bps, \
+                    lp.last_updated_ledger AS last_updated_ledger \
+             FROM liquidity_pools lp FINAL \
+             WHERE 1 = 1{filters} {keyset} \
+             ORDER BY last_updated_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
          band AS ( \
@@ -1912,7 +1883,6 @@ pub async fn fetch_pool_list(
              lp.fee_bps                                      AS fee_bps, \
              ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
              lp.last_updated_ledger                          AS cursor_ledger, \
-             lp.rank_neg                                     AS rank_neg, \
              toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
              toString(s.reserve_a)                           AS reserve_a, \
@@ -2060,7 +2030,6 @@ pub async fn fetch_pool_list(
                 fee_percent: fee_percent_str(r.fee_bps),
                 created_at_ledger: r.created_at_ledger,
                 cursor_ledger: r.cursor_ledger,
-                rank_neg: r.rank_neg,
                 participant_count: r.participant_count,
                 latest_snapshot_ledger: r.latest_snapshot_ledger,
                 reserve_a: r.reserve_a,
@@ -2524,68 +2493,6 @@ mod decode_smoke {
     /// empty stored code, so a plain column match silently returns only the
     /// credit assets minted under the code `XLM` — a wrong answer that looks
     /// like a right one. Guards the `if(asset_type = 0, 'XLM', code)` alias.
-    /// Task 0485. The pools list orders by ACTIVITY, and for `XLM` the busiest
-    /// pools happen to be the real native ones — so "native came first" proves
-    /// nothing on its own. What the rank adds is the RULE: a `yXLM` pool never
-    /// outranks a native one, however recently it traded.
-    ///
-    /// Falsifiable on this corpus: ordered by activity alone the tiers
-    /// interleave (measured locally: 0, 2, 2, 2, 0, 0, 0, …), so a page that
-    /// is not tier-ordered fails this.
-    #[tokio::test]
-    async fn asset_code_filter_ranks_exact_legs_above_look_alikes() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping LP ranking smoke");
-            return;
-        };
-        let params = ResolvedPoolListParams {
-            limit: 25,
-            cursor: None,
-            asset_a_code: None,
-            asset_a_issuer: None,
-            asset_b_code: None,
-            asset_b_issuer: None,
-            pool_id_hex: None,
-            asset_codes: vec!["XLM".to_string()],
-        };
-        let pools = fetch_pool_list(&ch, &params, Direction::Next)
-            .await
-            .expect("filtered list decodes");
-        if pools.len() < 2 {
-            eprintln!("fewer than 2 XLM pools in this CH — ranking not exercised");
-            return;
-        }
-
-        // A pool's tier is its BEST leg — the needle only has to be satisfied
-        // once, which is the same rule `asset_codes_rank` applies in SQL.
-        use crate::common::asset_match;
-        let tier_of = |p: &PoolRow| {
-            let a = asset_match::tier(
-                "xlm",
-                asset_match::shown_code_of(p.asset_a_type, p.asset_a_code.as_deref()),
-            );
-            let b = asset_match::tier(
-                "xlm",
-                asset_match::shown_code_of(p.asset_b_type, p.asset_b_code.as_deref()),
-            );
-            a.min(b)
-        };
-
-        let mut worst = 0;
-        for p in &pools {
-            let tier = tier_of(p);
-            assert!(
-                tier >= worst,
-                "pool {} (legs {:?} / {:?}) is tier {tier} but a tier-{worst} \
-                 pool already came before it — the page is ordered by activity \
-                 alone, so a look-alike outranks a real XLM pool",
-                p.pool_id_hex,
-                p.asset_a_code,
-                p.asset_b_code
-            );
-            worst = tier;
-        }
-    }
 
     #[tokio::test]
     async fn asset_code_filter_finds_native_xlm() {
