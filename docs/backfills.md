@@ -695,10 +695,25 @@ compute `pool_id`/`plane_id`/leg surrogates.
    run it through a one-off generator built on `parse_new_pair` +
    `factory_pair_registry_row` (mirror `gen_pool_registry_backfill`, task
    0374). 235 pairs measured 2026-09-02; idempotent.
-   **Closure check, two layers, both free:** per factory the vendor's own
-   monotone counter — `max(new_pairs_length) == count()` — plus the
-   base32Decode set reconciliation from the 0374 section, `pool_kind = 1`
-   both times.
+   **MANDATORY corroboration leg (review #447):** this pass is events-only
+   — instance storage is not in `soroban_events` — so without it the
+   backfill accepts exactly what the live writer's gate exists to refuse
+   (a forged `new_pair` emitted after the 2026-09-02 measurement would
+   land permanently, and its own gapless 1..k counter passes the closure
+   check). The generator must therefore RPC-read every pair's instance
+   (`getLedgerEntries`, ~235 reads): DataKey 4 must equal the corpus
+   emitter and the instance must exist — the same cross-check the stage
+   e2e performs offline. A pair failing it is refused loudly, never
+   written.
+   **Closure check, three layers:** per factory the vendor's own monotone
+   counter — `max(new_pairs_length) == count()`; the base32Decode set
+   reconciliation from the 0374 section (`pool_kind = 1` both times); and
+   one EXTERNAL anchor (the first two compare us with ourselves and are
+   blind to tail truncation — max and count shrink together): RPC each
+   LIVING factory's own `all_pairs_length` and require our per-factory max
+   to equal it. Guard every chq harvest with a `DB::Exception` grep on the
+   output — chq exits 0 even on a server error, so a truncated corpus
+   otherwise self-certifies.
 2. **Reserve history** — `sync` events carry ABSOLUTE reserves and the
    local e2e proved them value-identical to instance state on every one of
    1,563 (pair, ledger) keys, both directions — so history comes from
@@ -709,11 +724,19 @@ compute `pool_id`/`plane_id`/leg surrogates.
 surrogate`. Idempotent under the RMT key.
    **Check:** re-run the bidirectional sync↔rows comparison per partition —
    compared == equal, both remainders zero.
-3. **Declarations (`pool_instance_state`) need NO history pass** — it is a
-   current-state table; the live writer refreshes a pair on its next
-   activity. The one gap: `total_shares` of DORMANT pairs stays 0 until
-   touched — an optional one-shot RPC pass over the registry closes it
-   (235 reads), or accept the lag.
+3. **Declarations (`pool_instance_state`) — pass 1 emits them too**
+   (review #447 amendment; the previous "no history pass needed" wording
+   contradicted the ADR 0058 read rule quoted in the 0374 section: reserve
+   reads keep only rows whose plane matches the pool's own declaration, so
+   a DORMANT pair with no declaration row — 21 pairs of the three dead
+   factories alone never trade again — would have its ENTIRE sync-derived
+   reserve history invisible forever). The rows are free from the same
+   corpus: `plane_id = share_token_id =` the pair's own surrogate,
+   `derived_at_ledger =` the registration ledger. The live writer then
+   refreshes active pairs on their next activity. The one remaining gap:
+   `total_shares` of dormant pairs stays 0 until touched — the pass-1 RPC
+   leg already reads each instance, so record the live `TotalSupply` from
+   the same response instead of leaving the false zero.
 
 ## Config-factory (Phoenix-family) pool passes (task 0518, third adapter)
 
@@ -739,6 +762,12 @@ full re-parse.
    mutable, and one real pool (`CAZ6W4WH…`, 25,873 events traded to
    63.77M) is already delisted from it while its history stands. A
    registry seeded from `query_pools()` alone silently loses that pool.
+   The ⊆ check alone is tail-blind (a pool both delisted AND missing from
+   a truncated harvest is invisible to it), so pin the expected count too:
+   **14 registrations as of 2026-09-03** — the harvest must reproduce at
+   least that many, and any new ones must be newer than ledger 64,030,567.
+   Guard the chq harvest with a `DB::Exception` grep (chq exits 0 on
+   server errors).
 2. **Reserve history** — one-off Rust pass over the **harvested activity
    ledgers**: `SELECT DISTINCT ledger_sequence FROM soroban_events WHERE
 contract_id IN (the 14 pool surrogates)` — 195,637 ledgers / 2.04M
@@ -751,11 +780,21 @@ contract_id IN (the 14 pool surrogates)` — 195,637 ledgers / 2.04M
    the live writer's overlap window — same rule as the pair family's
    sync↔state anti-test, with raw ledgers as the second source.
 3. **`total_shares` caveat (family-specific, recorded in the task):** the
-   declaration row carries a config-write-time snapshot only — the live
+   declaration row's value is STRUCTURALLY 0 for this family (the supply
+   key never co-occurs with a post-creation CONFIG write) — the live
    supply is the share token's own tracked supply (separate SEP-41
    contract on the generic token pipeline). Do not "fix" it with a
    per-op writer: `pool_instance_state` is RMT whole-row on `pool_id`, and
    a config-less row would clobber `share_token_id` to 0.
+4. **Standing live cross-check (review #447):** this is the ONE family
+   with no event oracle (the pair family has `sync`, the router family the
+   deposit⇄mint detector), so a pool-WASM upgrade re-purposing the u32
+   keys would corrupt reserves silently. Two cheap defenses, per release
+   or on a cadence: (a) RPC-read every pool `query_pools()` still lists
+   (13 today) and compare reserves against our latest `pool_state_changes`
+   row; (b) watch `executable_update` events (already ingested, task 0320)
+   on the registered pools — an upgrade of a registered pool warrants
+   re-running (a) immediately.
 
 ## Event-name backfill (task 0517) — in-DB, per partition
 

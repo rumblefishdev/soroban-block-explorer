@@ -206,9 +206,11 @@ Derived explorer entities:
   discriminant verbatim ("0" = XYK). The share token is a SEPARATE
   contract (like Aquarius, unlike Soroswap): `pool_instance_state` rows
   stage only on CONFIG writes, `share_token_id` from CONFIG, and
-  `total_shares` there is a config-write-time snapshot — the live supply
-  is the share token's own tracked supply on the generic token pipeline
-  (a per-op row would clobber the RMT whole-row key).
+  `total_shares` there is STRUCTURALLY 0 forever for this family (the
+  supply key never co-occurs with a post-creation CONFIG write) — the live
+  supply is the share token's own tracked supply on the generic token
+  pipeline (a per-op row would clobber the RMT whole-row key). A reader
+  must never render that 0 as a measured value.
 - `pool_state_changes` — Soroban pool reserves, ONE row per
   `(pool, plane, ledger)` (the plane is in the key so a forged plane write
   cannot evict a genuine row — see the DDL comment),

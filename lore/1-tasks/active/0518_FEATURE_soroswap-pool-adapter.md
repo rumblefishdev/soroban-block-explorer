@@ -310,3 +310,59 @@ instance entry fetched via `getLedgerEntries` and read by our key scheme
 and the vec-wrap key shape confirmed live. All three families now have a
 chain-RPC verification leg (router: 26/26 reserves in 0374; config-factory:
 `query_pools` + raw creation ledger).
+
+## Deep multi-agent review of PR #447 + all findings executed (2026-09-05)
+
+Six sequential agents (correctness, simplify, devil, prod-readiness,
+security, architect) over the full branch diff + 1-2-hop dependents, with a
+judge pass (dedup, adversarial re-verification of every P2 in code,
+ADR-quote test on downgrades, pattern-generalization grep). Verdict:
+**APPROVE WITH CHANGES**; architecture **BETTER** (the 4a seam passed the
+deletion test — the third family cost 2 production files instead of ~15).
+All findings were then executed:
+
+- **M1 (P2, three agents converged independently):** the config-factory
+  arm bound nothing to the event's EMITTER (the family has no back-pointer
+  to check), so a second emitter co-claiming a genuine pool inside its
+  creation ledger would stage a duplicate registry row at the same RMT
+  version — nondeterministic `deployment_id`. An agent's attempted
+  downgrade via the shape-not-brand rule FAILED the quote test (that rule
+  sanctions self-description; this corrupts a genuine pool's attribution).
+  Fixed: conflicting emitters for one pool now refuse BOTH loudly;
+  identical duplicates collapse to one row; cross test added; the module's
+  forgery analysis now names all three shapes.
+- **Pair-gate hardening:** the registration gate now also compares the
+  event's legs against the pair instance's OWN token_0/token_1 (claim vs
+  ledger-authenticated authority) — mismatch refuses.
+- **Runbook (executed before the deploy window can run the passes):**
+  Soroswap pass 1 gained a MANDATORY RPC corroboration leg (events-only
+  backfill accepted what the live gate refuses) and pass 1 now emits the
+  `pool_instance_state` declarations too (the old "no history pass" text
+  contradicted the ADR 0058 read rule — dormant pairs' whole reserve
+  history would be invisible); closure gained an EXTERNAL anchor per
+  family (live `all_pairs_length` per factory; pinned count 14 for the
+  config family) + a `DB::Exception` grep on every chq harvest (chq exits
+  0 on server errors — a truncated corpus self-certifies); the config
+  family gained a standing live cross-check (per-release RPC reserve
+  comparison + executable_update watch) as the one family with no event
+  oracle.
+- **Wording/comments:** "config-write-time snapshot" → "structurally 0
+  forever" (code, schema overview, runbook, init.sql column comment);
+  init.sql's fee_bps/pool_type_raw comments now describe all three
+  families; instance-refusal logs no longer overclaim ("pair write
+  refused" → "pair instance row refused (reserve row already staged)").
+- **Dedup:** shared `parse_reserve_pair`/`parse_supply` beside
+  `parse_reserves`; new `xdr_parser::meta::for_each_tx_meta` (exhaustive
+  V0/V1/V2, same philosophy as `ledger_changes`) adopted by the five
+  raw-ledger tests in this PR — the two PRE-EXISTING production unrolls
+  (`envelope.rs`, `ledger.rs`) and older test files are left for the 0525
+  convention pass (minimal-diff rule).
+- **Deferred to the next stage.rs touch (architect, sanctioned by the
+  0485/0525 precedent):** extract the ~620-line pool staging block into
+  `persist/stage/pools.rs` as a pure move — recorded here so 0525 inherits
+  it as a step.
+
+Review checklist per the task template:
+
+- [x] **Docs updated** — `docs/architecture/{database-schema,indexing-pipeline,xdr-parsing}/*-overview.md` + `docs/backfills.md` updated in this PR (ADR 0032)
+- [x] **API types regenerated** — N/A: no `crates/api/**`, `Cargo.{toml,lock}` or `libs/api-types/**` paths in the diff (verified by --name-only)
