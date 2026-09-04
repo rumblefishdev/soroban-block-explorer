@@ -746,10 +746,9 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
               LEFT JOIN (SELECT contract_id, name, symbol FROM soroban_contract_metadata FINAL) m \
                   ON m.contract_id = sc.contract_id",
             format!(
-                " AND ({matches} \
+                " AND (position({SHOWN}, lower(?)) > 0 \
                    OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
-                   OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)",
-                matches = format!("position({SHOWN}, lower(?)) > 0")
+                   OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)"
             ),
         )
     } else {
