@@ -300,3 +300,13 @@ fee_bps=50, pool_type_raw="0"`, `pool_id` equal to the contract payload
 - Operational note for the deploy-window backfill: the NEWEST 64k S3
   partition can lag (observed 63,505/64,000 files — the runner skips it
   with a warn); slices must stay behind the last complete partition.
+
+### RPC leg for the pair family too (2026-09-03)
+
+Owner asked every family to carry a live-RPC check. Two most-active pairs:
+`get_reserves` + `total_supply` invoked on the contract vs the pair's raw
+instance entry fetched via `getLedgerEntries` and read by our key scheme
+(u32 2/3, VEC-wrapped `TotalSupply`) — **6/6 values equal to the unit**,
+and the vec-wrap key shape confirmed live. All three families now have a
+chain-RPC verification leg (router: 26/26 reserves in 0374; config-factory:
+`query_pools` + raw creation ledger).
