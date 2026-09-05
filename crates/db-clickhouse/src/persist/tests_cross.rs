@@ -3939,16 +3939,38 @@ fn config_pool_write(
 }
 
 #[cfg(test)]
+/// An emitter's own membership-list write — stage 1 of the registration
+/// gate.
+#[cfg(test)]
+fn address_list(
+    owner: &str,
+    members: &[&str],
+) -> xdr_parser::pool_config_factory::ExtractedAddressListWrite {
+    xdr_parser::pool_config_factory::ExtractedAddressListWrite {
+        owner: owner.into(),
+        members: members.iter().map(|m| m.to_string()).collect(),
+        ledger_sequence: 10,
+    }
+}
+
+#[cfg(test)]
 fn stage_config_pool(
     ledger: &ExtractedLedger,
     tx: &ExtractedTransaction,
     events: &[(String, Vec<ExtractedEvent>)],
     pools: &[xdr_parser::pool_config_factory::ExtractedConfigPool],
+    lists: &[xdr_parser::pool_config_factory::ExtractedAddressListWrite],
 ) -> stage::StagedLedger {
     let writes: Vec<xdr_parser::pool_family::PoolFamilyWrite> = pools
         .iter()
         .cloned()
         .map(xdr_parser::pool_family::PoolFamilyWrite::ConfigPool)
+        .chain(
+            lists
+                .iter()
+                .cloned()
+                .map(xdr_parser::pool_family::PoolFamilyWrite::AddressList),
+        )
         .collect();
     stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
@@ -3994,7 +4016,8 @@ fn a_corroborated_liquidity_pool_registers_with_the_pools_own_config() {
     // The creation transaction writes config, zero reserves and zero shares.
     let pools = [config_pool_write(true, Some(("0", "0")), Some("0"), true)];
 
-    let staged = stage_config_pool(&ledger, &tx, &events, &pools);
+    let lists = [address_list(CFG_FACTORY, &[CFG_POOL])];
+    let staged = stage_config_pool(&ledger, &tx, &events, &pools, &lists);
 
     let row = staged
         .pool_rows
@@ -4042,7 +4065,8 @@ fn unconfigured_or_touched_liquidity_pools_are_refused() {
     )];
     // Reserves only, no CONFIG — the shape never fully declared itself.
     let unconfigured = [config_pool_write(false, Some(("1", "2")), None, true)];
-    let staged = stage_config_pool(&ledger, &tx, &events, &unconfigured);
+    let lists = [address_list(CFG_FACTORY, &[CFG_POOL])];
+    let staged = stage_config_pool(&ledger, &tx, &events, &unconfigured, &lists);
     assert!(staged.pool_rows.iter().all(|r| r.pool_kind == 0));
 
     // Full CONFIG but the instance was only TOUCHED, not created.
@@ -4056,7 +4080,7 @@ fn unconfigured_or_touched_liquidity_pools_are_refused() {
         )],
     )];
     let touched = [config_pool_write(true, None, None, false)];
-    let staged2 = stage_config_pool(&ledger, &tx2, &events2, &touched);
+    let staged2 = stage_config_pool(&ledger, &tx2, &events2, &touched, &lists);
     assert!(staged2.pool_rows.iter().all(|r| r.pool_kind == 0));
 }
 
@@ -4075,7 +4099,7 @@ fn a_config_pool_operation_stages_reserves_without_clobbering_the_declaration() 
         false,
     )];
 
-    let staged = stage_config_pool(&ledger, &tx, &[], &pools);
+    let staged = stage_config_pool(&ledger, &tx, &[], &pools, &[]);
 
     let state = staged
         .pool_state_change_rows
@@ -4094,14 +4118,23 @@ fn a_config_pool_operation_stages_reserves_without_clobbering_the_declaration() 
     );
 }
 
-/// The third forgery shape (review #447): a second emitter co-claiming a
-/// GENUINE pool inside its creation ledger. No pool-side check can
-/// arbitrate it (this family has no back-pointer), and both rows would
-/// carry the same RMT version — so BOTH registrations must refuse.
+/// The third forgery shape (review #447), against the TWO-STAGE gate.
+///
+/// Stage 1 (membership list, pointwise): an event-only co-claimer is
+/// refused alone and the GENUINE registration survives. Stage 2
+/// (conflict): an attacker who also writes the pool into his OWN list
+/// leaves two corroborated claimants — no ledger fact arbitrates them, so
+/// BOTH refuse rather than let the RMT version tie pick one.
 #[test]
-fn conflicting_emitters_for_one_config_pool_refuse_both() {
+fn config_pool_gate_is_pointwise_first_and_refuses_both_on_true_conflict() {
     const ATTACKER: &str = "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O";
     let ledger = synthetic_ledger();
+    // The pool itself is genuine: created, full CONFIG — the gate the
+    // attacker piggybacks on.
+    let pools = [config_pool_write(true, Some(("0", "0")), Some("0"), true)];
+
+    // Stage 1: attacker emits but records nothing in his own storage —
+    // refused alone, the genuine row STAGES with the genuine attribution.
     let tx = synthetic_tx(0x89);
     let events = vec![(
         tx.hash.clone(),
@@ -4110,28 +4143,54 @@ fn conflicting_emitters_for_one_config_pool_refuse_both() {
             liquidity_pool_created_event(&tx.hash, ATTACKER, CFG_POOL),
         ],
     )];
-    // The pool itself is genuine: created, full CONFIG — the gate the
-    // attacker piggybacks on.
-    let pools = [config_pool_write(true, Some(("0", "0")), Some("0"), true)];
-    let staged = stage_config_pool(&ledger, &tx, &events, &pools);
-    assert!(
-        staged.pool_rows.iter().all(|r| r.pool_kind == 0),
-        "conflicting emitters must refuse BOTH rows — a nondeterministic \
-         deployment_id is worse than a loud gap"
+    let genuine_list = [address_list(CFG_FACTORY, &[CFG_POOL])];
+    let staged = stage_config_pool(&ledger, &tx, &events, &pools, &genuine_list);
+    let rows: Vec<_> = staged
+        .pool_rows
+        .iter()
+        .filter(|r| r.pool_kind == 1)
+        .collect();
+    assert_eq!(rows.len(), 1, "the genuine registration survives pointwise");
+    assert_eq!(
+        rows[0].deployment_id,
+        ids::contract_id(CFG_FACTORY),
+        "attribution is the emitter that corroborated in its own storage"
     );
 
-    // An identical duplicate from ONE emitter collapses to a single row.
+    // Stage 2: the attacker also writes the pool into HIS own list — two
+    // corroborated claimants, refuse BOTH.
     let tx2 = synthetic_tx(0x8a);
     let events2 = vec![(
         tx2.hash.clone(),
         vec![
             liquidity_pool_created_event(&tx2.hash, CFG_FACTORY, CFG_POOL),
-            liquidity_pool_created_event(&tx2.hash, CFG_FACTORY, CFG_POOL),
+            liquidity_pool_created_event(&tx2.hash, ATTACKER, CFG_POOL),
         ],
     )];
-    let staged2 = stage_config_pool(&ledger, &tx2, &events2, &pools);
+    let both_lists = [
+        address_list(CFG_FACTORY, &[CFG_POOL]),
+        address_list(ATTACKER, &[CFG_POOL]),
+    ];
+    let staged2 = stage_config_pool(&ledger, &tx2, &events2, &pools, &both_lists);
+    assert!(
+        staged2.pool_rows.iter().all(|r| r.pool_kind == 0),
+        "two corroborated claimants must refuse BOTH rows — a nondeterministic \
+         deployment_id is worse than a loud gap"
+    );
+
+    // An identical duplicate from ONE corroborated emitter collapses to a
+    // single row.
+    let tx3 = synthetic_tx(0x8b);
+    let events3 = vec![(
+        tx3.hash.clone(),
+        vec![
+            liquidity_pool_created_event(&tx3.hash, CFG_FACTORY, CFG_POOL),
+            liquidity_pool_created_event(&tx3.hash, CFG_FACTORY, CFG_POOL),
+        ],
+    )];
+    let staged3 = stage_config_pool(&ledger, &tx3, &events3, &pools, &genuine_list);
     assert_eq!(
-        staged2
+        staged3
             .pool_rows
             .iter()
             .filter(|r| r.pool_kind == 1)

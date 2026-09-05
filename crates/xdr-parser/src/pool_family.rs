@@ -7,7 +7,7 @@
 //! (extraction here, staging in `db-clickhouse`), not a new field threaded
 //! through every pipeline struct in between.
 
-use crate::pool_config_factory::{self, ExtractedConfigPool};
+use crate::pool_config_factory::{self, ExtractedAddressListWrite, ExtractedConfigPool};
 use crate::pool_pair_factory::{self, ExtractedFactoryPair};
 use crate::pool_state::{self, ExtractedPlanePoolData, ExtractedPoolInstance};
 use crate::types::ExtractedLedgerEntryChange;
@@ -28,6 +28,10 @@ pub enum PoolFamilyWrite {
     /// Config-factory family: the pool's own keyed persistent entries —
     /// `CONFIG` (declaration) plus u32-keyed reserves and TotalShares.
     ConfigPool(ExtractedConfigPool),
+    /// Config-factory family: an emitter's own address-list write — the
+    /// membership-list half of that family's registration gate (the
+    /// emitter must record the announced pool in storage IT owns).
+    AddressList(ExtractedAddressListWrite),
 }
 
 /// Extract every family's pool state writes from one transaction's
@@ -54,6 +58,11 @@ pub fn extract_pool_family_writes(changes: &[ExtractedLedgerEntryChange]) -> Vec
         pool_config_factory::extract_config_pools(changes)
             .into_iter()
             .map(PoolFamilyWrite::ConfigPool),
+    );
+    out.extend(
+        pool_config_factory::extract_address_list_writes(changes)
+            .into_iter()
+            .map(PoolFamilyWrite::AddressList),
     );
     out
 }

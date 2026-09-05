@@ -754,9 +754,11 @@ full re-parse.
    ledgers** (the full population, listed in
    `crates/db-clickhouse/tests/config_pool_stage_real_e2e.rs`; harvest
    query in `crates/xdr-parser/tests/config_pool_real_corpus.rs`). One-off
-   generator on `extract_config_pools` + `config_pool_registry_row`:
-   registry rows AND the `pool_instance_state` declarations (share token)
-   come from the same 14 files.
+   generator driving `extract_pool_family_writes` + the STAGING gate
+   (never the row builder directly — the two-stage registration gate,
+   membership list + conflict, must hold for the backfill exactly as it
+   does live): registry rows AND the `pool_instance_state` declarations
+   (share token) come from the same 14 files.
    **Closure check:** live `query_pools()` on the factory must be a
    **SUBSET of ours — never set-equality**: the factory's vector is
    mutable, and one real pool (`CAZ6W4WH…`, 25,873 events traded to

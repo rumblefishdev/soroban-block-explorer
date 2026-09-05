@@ -18,7 +18,9 @@
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::stage;
 use stellar_xdr::{LedgerCloseMetaBatch, Limits, ReadXdr};
-use xdr_parser::pool_config_factory::{detect_config_pool_registrations, extract_config_pools};
+use xdr_parser::pool_config_factory::{
+    detect_config_pool_registrations, extract_address_list_writes, extract_config_pools,
+};
 use xdr_parser::types::{ExtractedLedger, ExtractedTransaction};
 
 #[test]
@@ -45,6 +47,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             LedgerCloseMetaBatch::from_xdr(&bytes, Limits::none()).expect("a LedgerCloseMetaBatch");
 
         let mut pools = Vec::new();
+        let mut lists = Vec::new();
         let mut events: Vec<(String, Vec<xdr_parser::types::ExtractedEvent>)> = Vec::new();
         let mut txs: Vec<ExtractedTransaction> = Vec::new();
         let mut seq_out = 0u32;
@@ -53,6 +56,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
                 let hash = format!("{i:064x}");
                 let changes = xdr_parser::extract_ledger_entry_changes(meta, &hash, seq, 0);
                 pools.extend(extract_config_pools(&changes));
+                lists.extend(extract_address_list_writes(&changes));
                 events.push((
                     hash.clone(),
                     xdr_parser::extract_events(meta, &hash, seq, 0),
@@ -97,6 +101,18 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
                 "ledger {seq_out}: creation writes the zero reserve pair"
             );
             assert_ne!(config.token_a, config.token_b, "distinct legs");
+            // The membership-list anchor, on real history: the EMITTER
+            // recorded the pool in its own storage in the registering
+            // ledger — the fact the two-stage gate's pointwise half rests
+            // on, checked here across every factory-wasm generation.
+            assert!(
+                lists
+                    .iter()
+                    .any(|l| l.owner == reg.factory && l.members.contains(&reg.pool)),
+                "ledger {seq_out}: the emitter did not record pool {} in its own \
+                 address list — the membership-list gate assumption breaks",
+                reg.pool
+            );
         }
 
         let ledger = ExtractedLedger {
@@ -114,6 +130,12 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             .iter()
             .cloned()
             .map(xdr_parser::pool_family::PoolFamilyWrite::ConfigPool)
+            .chain(
+                lists
+                    .iter()
+                    .cloned()
+                    .map(xdr_parser::pool_family::PoolFamilyWrite::AddressList),
+            )
             .collect();
         let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
             ledger: &ledger,

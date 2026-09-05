@@ -1080,12 +1080,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let mut pool_instances: Vec<&xdr_parser::pool_state::ExtractedPoolInstance> = Vec::new();
     let mut factory_pairs: Vec<&xdr_parser::pool_pair_factory::ExtractedFactoryPair> = Vec::new();
     let mut config_pools: Vec<&xdr_parser::pool_config_factory::ExtractedConfigPool> = Vec::new();
+    let mut address_lists: Vec<&xdr_parser::pool_config_factory::ExtractedAddressListWrite> =
+        Vec::new();
     for write in pool_family_writes {
         match write {
             PoolFamilyWrite::RouterPlane(w) => plane_pool_data.push(w),
             PoolFamilyWrite::RouterPool(w) => pool_instances.push(w),
             PoolFamilyWrite::FactoryPair(w) => factory_pairs.push(w),
             PoolFamilyWrite::ConfigPool(w) => config_pools.push(w),
+            PoolFamilyWrite::AddressList(w) => address_lists.push(w),
         }
     }
 
@@ -1252,10 +1255,23 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // shape has no CONFIG to decode; and a second emitter co-claiming a
     // GENUINE pool inside its creation ledger — the one shape the pool-side
     // checks cannot arbitrate, because this family has no back-pointer and
-    // both rows would carry the same RMT version — is refused for BOTH
-    // emitters below (review #447): with 14 registrations in all of
-    // history, a refused genuine one is loud and backfillable, while a
-    // nondeterministic `deployment_id` would be silent and permanent.
+    // both rows would carry the same RMT version — meets a TWO-STAGE gate
+    // (review #447):
+    //
+    // 1. Membership list, POINTWISE: the emitter must have written the
+    //    named pool into an address list in storage the EMITTER owns, this
+    //    ledger (the genuine factory appends each pool to its own pools
+    //    vector in the creation tx — read from raw meta). An event-only
+    //    forgery dies here and the genuine registration SURVIVES.
+    // 2. Conflict, BOTH refused: address-list content is still just data —
+    //    a determined attacker can copy the pool's address into his own
+    //    list — so if more than one emitter survives stage 1, every
+    //    registration for that pool refuses loudly. With 14 registrations
+    //    in all of history, a refused genuine one is loud and
+    //    backfillable, while a nondeterministic `deployment_id` would be
+    //    silent and permanent. (The cryptographic anchor — the pool
+    //    address's deployer preimage — is NOT in the ledger meta; probed
+    //    2026-09-05.)
     let declared_config: HashMap<&str, (Option<&PoolConfig>, bool)> = {
         let mut m: HashMap<&str, (Option<&PoolConfig>, bool)> = HashMap::new();
         for cp in &config_pools {
@@ -1267,7 +1283,37 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
         m
     };
-    let config_regs = xdr_parser::pool_config_factory::detect_config_pool_registrations(events);
+    // Stage-1 lookup: which pools did each emitter record in its OWN
+    // storage this ledger?
+    let listed_by_owner: HashMap<&str, HashSet<&str>> = {
+        let mut m: HashMap<&str, HashSet<&str>> = HashMap::new();
+        for al in &address_lists {
+            m.entry(al.owner.as_str())
+                .or_default()
+                .extend(al.members.iter().map(String::as_str));
+        }
+        m
+    };
+    let config_regs: Vec<_> =
+        xdr_parser::pool_config_factory::detect_config_pool_registrations(events)
+            .into_iter()
+            .filter(|reg| {
+                let listed = listed_by_owner
+                    .get(reg.factory.as_str())
+                    .is_some_and(|pools| pools.contains(reg.pool.as_str()));
+                if !listed {
+                    tracing::warn!(
+                        ledger_sequence = ledger.sequence,
+                        pool = %reg.pool,
+                        emitter = %reg.factory,
+                        "create/liquidity_pool registration refused — the emitter \
+                         did not record the named pool in its own storage this \
+                         ledger (an event-only claim)"
+                    );
+                }
+                listed
+            })
+            .collect();
     let mut config_emitters: HashMap<&str, Vec<&str>> = HashMap::new();
     for reg in &config_regs {
         config_emitters

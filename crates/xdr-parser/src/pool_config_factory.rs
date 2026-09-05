@@ -27,8 +27,12 @@
 //! shape (which IS a member of the family, per 0516's shape-not-brand
 //! rule). The third forgery shape — a second emitter co-claiming a GENUINE
 //! pool inside its creation ledger, which no pool-side check can arbitrate
-//! without a back-pointer — is closed at staging: conflicting emitters for
-//! one pool refuse BOTH registrations loudly (review #447).
+//! without a back-pointer — meets a TWO-STAGE gate at staging (review
+//! #447): the emitter must also have recorded the pool in an address list
+//! in storage the EMITTER owns (see [`extract_address_list_writes`] — an
+//! event-only claim dies pointwise and the genuine registration survives),
+//! and if more than one emitter corroborates, every registration for that
+//! pool refuses loudly.
 //!
 //! Recognition of per-operation state (no CONFIG in a swap tx) rests on the
 //! RESERVE PAIR: the same contract writing both `u32(1)` and `u32(2)` as
@@ -302,6 +306,79 @@ pub fn extract_config_pools(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
     out
 }
 
+/// One contract's write of an ADDRESS LIST into its own storage — the
+/// membership-list side of the config-factory registration gate.
+///
+/// The genuine factory appends each new pool to a pools vector in its OWN
+/// persistent storage in the creation transaction (read verbatim from
+/// mainnet, ledger 64,030,567: key `u32(2)`, value a vec of pool
+/// addresses). The sieve is deliberately KEY-AGNOSTIC — any
+/// created/updated persistent entry whose value is a non-empty vec of
+/// addresses — so a factory-wasm generation that moves the key still
+/// corroborates; the stage e2e proves the shape on the family's whole
+/// registration population.
+///
+/// What this anchors and what it does not: a registration event is
+/// believed only when its EMITTER also recorded the named pool in storage
+/// the emitter owns — an event-only forgery dies right there, pointwise.
+/// It is NOT a discriminator against a determined attacker who writes the
+/// pool's address into his own list too (addresses are just data): that
+/// case leaves two corroborated claimants and falls to the staging
+/// conflict rule, which refuses both loudly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedAddressListWrite {
+    /// The contract that owns the entry — ledger-authenticated.
+    pub owner: String,
+    /// The list's members (C…/G… strkeys), verbatim.
+    pub members: Vec<String>,
+    pub ledger_sequence: u32,
+}
+
+/// Extract address-list writes from one transaction's ledger-entry
+/// changes. Same change-type filter as every sibling: only
+/// `created`/`updated`/`restored` carry a post-image.
+pub fn extract_address_list_writes(
+    changes: &[ExtractedLedgerEntryChange],
+) -> Vec<ExtractedAddressListWrite> {
+    let mut out = Vec::new();
+    for change in changes {
+        if change.entry_type != "contract_data" {
+            continue;
+        }
+        if !matches!(
+            change.change_type.as_str(),
+            "created" | "updated" | "restored"
+        ) {
+            continue;
+        }
+        let Some(owner) = change.key.get("contract").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(val) = change.data.as_ref().and_then(|d| d.get("val")) else {
+            continue;
+        };
+        let Some(elems) = typed(val, "vec").and_then(Value::as_array) else {
+            continue;
+        };
+        if elems.is_empty() {
+            continue;
+        }
+        let members: Option<Vec<String>> = elems
+            .iter()
+            .map(|e| address(e).map(str::to_string))
+            .collect();
+        // ALL elements must be addresses — a mixed vec is some other
+        // structure, not a membership list.
+        let Some(members) = members else { continue };
+        out.push(ExtractedAddressListWrite {
+            owner: owner.to_string(),
+            members,
+            ledger_sequence: change.ledger_sequence,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,6 +598,49 @@ mod tests {
             ),
         ];
         assert_eq!(extract_config_pools(&changes), vec![]);
+    }
+
+    #[test]
+    fn extracts_the_factorys_own_pools_vector() {
+        // Real shape from the creation ledger 64,030,567: the factory's
+        // u32(2) entry is a vec of pool addresses ending with the newborn.
+        const FACTORY: &str = "CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI";
+        let changes = vec![change(
+            FACTORY,
+            json!({"type": "u32", "value": 2}),
+            json!({"type": "vec", "value": [
+                {"type": "address",
+                 "value": "CBHCRSVX3ZZ7EGTSYMKPEFGZNWRVCSESQR3UABET4MIW52N4EVU6BIZX"},
+                {"type": "address", "value": POOL}
+            ]}),
+            "updated",
+        )];
+        let got = extract_address_list_writes(&changes);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].owner, FACTORY);
+        assert_eq!(got[0].members.len(), 2);
+        assert_eq!(got[0].members[1], POOL);
+    }
+
+    #[test]
+    fn mixed_or_empty_vecs_are_not_membership_lists() {
+        let mixed = vec![change(
+            POOL,
+            json!({"type": "u32", "value": 7}),
+            json!({"type": "vec", "value": [
+                {"type": "address", "value": POOL},
+                {"type": "u32", "value": 1}
+            ]}),
+            "updated",
+        )];
+        assert_eq!(extract_address_list_writes(&mixed), vec![]);
+        let empty = vec![change(
+            POOL,
+            json!({"type": "u32", "value": 7}),
+            json!({"type": "vec", "value": []}),
+            "updated",
+        )];
+        assert_eq!(extract_address_list_writes(&empty), vec![]);
     }
 
     #[test]

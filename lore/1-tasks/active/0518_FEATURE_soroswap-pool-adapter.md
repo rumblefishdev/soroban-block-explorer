@@ -366,3 +366,30 @@ Review checklist per the task template:
 
 - [x] **Docs updated** — `docs/architecture/{database-schema,indexing-pipeline,xdr-parsing}/*-overview.md` + `docs/backfills.md` updated in this PR (ADR 0032)
 - [x] **API types regenerated** — N/A: no `crates/api/**`, `Cargo.{toml,lock}` or `libs/api-types/**` paths in the diff (verified by --name-only)
+
+### Gate upgrade to TWO-STAGE (owner request, 2026-09-05): pointwise first
+
+Owner challenged refuse-both: "why refuse both instead of only the invalid
+one?" Probes settled the design space first: the pool address's deployer
+preimage (the cryptographic anchor tying pool → factory) is NOT present in
+the ledger meta (checked on the raw creation ledger — no
+`contract_id_preimage`/salt anywhere, the factory-internal deploy leaves
+no envelope/auth trace); and the factory-list idea alone does NOT
+discriminate (an attacker can copy the pool's address into HIS own list —
+addresses are just data). Hence the two-stage gate:
+
+1. **Membership list, POINTWISE** — the emitter must have written the pool
+   into an address list in storage the EMITTER owns, this ledger (the
+   genuine factory appends each pool to its own pools vector — probed on
+   raw meta, key u32(2), and the sieve is deliberately key-agnostic:
+   `extract_address_list_writes`, new `PoolFamilyWrite::AddressList`
+   variant). An event-only forgery now dies alone and the GENUINE
+   registration survives with the genuine attribution.
+2. **Conflict backstop** — two corroborated claimants (the determined
+   attacker) still refuse BOTH; no ledger fact arbitrates them.
+
+Proven: the membership-list anchor holds on the ENTIRE registration
+population (14/14 ledgers, e2e asserts owner==emitter ∧ list∋pool across
+every factory-wasm generation); 664 tests + all real-ledger suites green.
+Runbook updated: the registration backfill drives the same staging gate,
+never the row builder directly.
