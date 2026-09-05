@@ -14,9 +14,13 @@
 //!   ReserveA/ReserveB (i128), `3` = Admin. Reserves are rewritten per
 //!   swap/provide/withdraw; TotalShares per provide/withdraw.
 //! - The pool's contract instance itself carries NO storage — everything
-//!   lives in the keyed persistent entries. One mainnet factory, 14 pools,
-//!   all XYK (`pool_type` 0); the stable variant shares the key names, so a
-//!   future stable pool flows through unchanged with `pool_type` ≠ 0.
+//!   lives in the keyed persistent entries. SIX factory deployments share
+//!   the event shape on mainnet (five dead early ones with 6 pools, then
+//!   the documented factory with 14 — 20 pools total, all XYK,
+//!   `pool_type` 0); discovery is shape-driven at the emitter level, the
+//!   same rule that surfaced the pair family's dead factories. The stable
+//!   variant shares the key names, so a future stable pool flows through
+//!   unchanged with `pool_type` ≠ 0.
 //!
 //! Unlike the pair-factory family there is NO back-pointer: the pool does
 //! not record its deploying factory anywhere. Registration corroboration is

@@ -393,3 +393,54 @@ population (14/14 ledgers, e2e asserts owner==emitter ∧ list∋pool across
 every factory-wasm generation); 664 tests + all real-ledger suites green.
 Runbook updated: the registration backfill drives the same staging gate,
 never the row builder directly.
+
+## External cross-verification against the sibling registry — and a completeness catch (2026-09-05)
+
+Owner asked to verify our work against the sibling project's tables (same
+ClickHouse, `prices.*`, their registry seeded independently from the
+vendor's API — a genuinely external source). Results, per venue
+(set-compared by address):
+
+- **Aquarius**: theirs 488 ⊂ ours 497 exactly (0 only-theirs; our 9 extra
+  = the UNVERIFIED router-less legacy + newer-than-their-seed).
+- **Soroswap**: theirs 221 ⊂ ours 235 exactly (0 only-theirs; our 14
+  extra = dead-factory pairs + newer-than-their-seed).
+- **Config-factory family: the cross-check CAUGHT A GAP.** They carried 6
+  pools our harvest lacked — five DEAD EARLY factory deployments
+  (50.87M–51.57M, before the documented factory's own initialize) emitted
+  the same registration shape; the first corpus harvest was scoped to the
+  documented factory because the shape-wide query had timed out. Exact
+  materialization of the review's "self-referential closure" finding.
+  Closed the same day: full-history shape-wide sweep in slices (which
+  itself hit the HOURLY READ QUOTA and truncated silently once — the
+  `DB::Exception`-grep rule caught it, second review finding proven live)
+  → definitive population **20 registrations / 6 factory deployments /
+  nothing newer to 65.4M**; the 6 ledgers joined the reg-ledger set and
+  corpus; **20/20 through full staging incl. the two-stage gate — the
+  membership-list anchor holds on the earliest era (50.87M)**; corpus
+  20/20 across 6 factories, sieve FP=0 over 38 raw ledgers; docs/comments
+  corrected 14→20 with the lesson recorded in the runbook.
+- Their seed is STALE in the other direction: they lack `CCPPPTDW…`
+  (newest pool, created 64,030,567) — worth a line in the handoff so they
+  reseed.
+
+Net: on every venue their independently-sourced registry is a strict
+subset of ours, and the one asymmetry it exposed was OUR harvest scoping,
+not the detector (the live shape-driven detector would have caught the
+dead factories all along — the corpus, docs and pinned closure count were
+what lagged).
+
+### Deficit attribution, exact (2026-09-05 follow-up)
+
+- **Soroswap, their 14 missing = vendor counters 201–214** — the 14 newest
+  pairs of the documented factory (ledgers 63.40M–63.80M), nothing else:
+  all 21 dead-factory pairs ARE in their registry (the vendor API lists
+  them). Pure stale seed.
+- **Aquarius, their 9 missing = 6 `concentrated` + 2 `stable` + 1
+  `constant`.** The 6 concentrated are their seeder's DELIBERATE hold-back
+  (their own seed code maps `concentrated` to None pending event-shape
+  verification); the other 3 registered 63.40M–64.00M = newer than their
+  seed (estimate on the boundary).
+- Coherent seed-date estimate across all three venues: their last seed ran
+  around ledger ~63.3–63.4M (Phoenix has 63.29M's pool but not 64.03M's;
+  Soroswap missing starts at 63.40M).

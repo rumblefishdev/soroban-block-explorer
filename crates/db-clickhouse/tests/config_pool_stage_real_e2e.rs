@@ -8,12 +8,16 @@
 //! Skipped when `CONFIG_POOL_REG_LEDGERS` is unset — a directory of raw
 //! `LedgerCloseMetaBatch` files named `<seq>.xdr`, fetched straight from the
 //! public archive over HTTPS (no AWS tooling; the recipe in
-//! `pair_factory_stage_real_e2e` works verbatim). The family has 14
-//! registrations in ALL of history (harvested 2026-09-03), so the shipped
-//! run covers every single one — the whole population, not picks:
-//! 51,572,026 / 51,572,030 / 51,572,101 / 51,927,948 / 53,853,219 /
-//! 53,853,220 / 53,955,603 / 54,517,368 / 54,953,243 / 54,953,245 /
-//! 54,953,247 / 54,953,248 / 63,293,708 / 64,030,567.
+//! `pair_factory_stage_real_e2e` works verbatim). The family has 20
+//! registrations in ALL of history across SIX factory deployments — five
+//! dead early ones with 6 pools (caught 2026-09-05 by cross-checking the
+//! sibling project's registry; the first shape-wide harvest was scoped to
+//! the documented factory) plus the documented factory with 14 — so the
+//! shipped run covers every single one, the whole population, not picks:
+//! 50,875,676 / 50,885,571 / 51,567,723 / 51,569,423 / 51,569,903 /
+//! 51,571,828 / 51,572,026 / 51,572,030 / 51,572,101 / 51,927,948 /
+//! 53,853,219 / 53,853,220 / 53,955,603 / 54,517,368 / 54,953,243 /
+//! 54,953,245 / 54,953,247 / 54,953,248 / 63,293,708 / 64,030,567.
 
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::stage;

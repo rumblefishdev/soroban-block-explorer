@@ -711,7 +711,13 @@ compute `pool_id`/`plane_id`/leg surrogates.
    one EXTERNAL anchor (the first two compare us with ourselves and are
    blind to tail truncation — max and count shrink together): RPC each
    LIVING factory's own `all_pairs_length` and require our per-factory max
-   to equal it. Guard every chq harvest with a `DB::Exception` grep on the
+   to equal it. A fourth layer is free while both projects share one
+   ClickHouse: set-compare against the sibling registry
+   (`SELECT contract_id FROM prices.pool_registry WHERE venue='soroswap'`)
+   — an INDEPENDENTLY-SOURCED set (vendor API seed); expect theirs ⊆ ours
+   and INVESTIGATE any only-theirs address (this exact check caught the
+   config family's dead early factories on 2026-09-05). Their seed is a
+   snapshot, so only-ours entries are normal (stale seed). Guard every chq harvest with a `DB::Exception` grep on the
    output — chq exits 0 even on a server error, so a truncated corpus
    otherwise self-certifies.
 2. **Reserve history** — `sync` events carry ABSOLUTE reserves and the
@@ -766,10 +772,17 @@ full re-parse.
    registry seeded from `query_pools()` alone silently loses that pool.
    The ⊆ check alone is tail-blind (a pool both delisted AND missing from
    a truncated harvest is invisible to it), so pin the expected count too:
-   **14 registrations as of 2026-09-03** — the harvest must reproduce at
-   least that many, and any new ones must be newer than ledger 64,030,567.
-   Guard the chq harvest with a `DB::Exception` grep (chq exits 0 on
-   server errors).
+   **20 registrations across 6 factory deployments as of 2026-09-05** —
+   the harvest must reproduce at least that many, and any new ones must be
+   newer than ledger 64,030,567. (The count was 14 for one day: the first
+   harvest was scoped to the documented factory; the cross-check against
+   the sibling project's independently-seeded `prices.pool_registry`
+   surfaced the five dead early deployments' 6 pools — proof the external
+   anchor earns its place. The full-history shape-wide sweep also hit the
+   hourly read quota mid-run and truncated SILENTLY, which is exactly why
+   every closure layer here demands the `DB::Exception` grep AND an
+   external anchor.) Guard the chq harvest with a `DB::Exception` grep
+   (chq exits 0 on server errors).
 2. **Reserve history** — one-off Rust pass over the **harvested activity
    ledgers**: `SELECT DISTINCT ledger_sequence FROM soroban_events WHERE
 contract_id IN (the 14 pool surrogates)` — 195,637 ledgers / 2.04M

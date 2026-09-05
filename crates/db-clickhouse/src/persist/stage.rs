@@ -1266,7 +1266,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // 2. Conflict, BOTH refused: address-list content is still just data —
     //    a determined attacker can copy the pool's address into his own
     //    list — so if more than one emitter survives stage 1, every
-    //    registration for that pool refuses loudly. With 14 registrations
+    //    registration for that pool refuses loudly. With 20 registrations
     //    in all of history, a refused genuine one is loud and
     //    backfillable, while a nondeterministic `deployment_id` would be
     //    silent and permanent. (The cryptographic anchor — the pool
