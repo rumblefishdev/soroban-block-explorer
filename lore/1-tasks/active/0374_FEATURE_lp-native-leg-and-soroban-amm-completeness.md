@@ -2645,3 +2645,49 @@ The guard needed a guard of its own: `a.asset_type IN (0, 1)` reads TRUE for an
 unmatched LEFT JOIN, because the column default is 0 and 0 is `native`. The same
 trap ate one of my measurement queries an hour earlier. It is `a.id != 0 AND
 a.asset_type IN (0, 1)` now — the existing `known` column tests exactly that.
+
+## W6 — the Soroban activity feed: what it would take (2026-09-09)
+
+Investigated before building. The feed IS possible and the data is richer than
+`pool_state_changes` suggested — but it is a two-vendor event decoder, not a
+table wiring.
+
+**First, a correction to my own earlier measurement.** I concluded "pool
+contracts emit no events" from a query joining `soroban_events.contract_id`
+(an `Int64` surrogate) against a strkey `String`. ClickHouse matched nothing and
+I read that as absence. Joined on the surrogate, the events are there.
+
+### What exists
+
+`soroban_events` carries `transaction_id`, so hash, source account and timestamp
+all join through `transactions` — everything the classic feed shows. And
+`data_xdr` is JSON despite the name (the contract-events endpoint already parses
+it that way), so the amounts need no XDR decoding.
+
+Measured over ledgers > 64,000,000:
+
+| shape                                  | events  | contracts | payload                                                                            |
+| -------------------------------------- | ------- | --------- | ---------------------------------------------------------------------------------- |
+| `[swap, vec[tokenA, tokenB], account]` | 150,930 | 96        | `amount_0_in/out`, `amount_1_in/out`, `to`                                         |
+| bare `[swap]`                          | 15,699  | 53        | `amount0`, `amount1`, `liquidity`, `sender`, `recipient`, `sqrt_price_x96`, `tick` |
+
+The second is a CONCENTRATED-liquidity pool — `sqrt_price_x96` and `tick` are
+the signature — and its amounts are SIGNED rather than split into in/out. So the
+two families do not share a decoder, and the concentrated one is ranking item 6,
+which was deliberately scheduled last.
+
+### What it needs
+
+1. Address the pool by its own contract surrogate. `plane_id` is that only for
+   the pair-factory family (89 of the 149 actively-swapping contracts match it);
+   the rest need `soroban_contracts` looked up by the pool's C-address, which
+   the API already has.
+2. A decoder per vendor shape, mapping to the existing signed `amount_a` /
+   `amount_b` convention (positive = entered the pool).
+3. Keyset pagination on `(ledger_sequence, transaction_id, event_index)`.
+4. The `sync` events (2,479) are reserve updates, not user actions — they belong
+   to the chart's series, not the activity list.
+
+Comparable in size to the reserves, shares and participants work put together.
+Not started; recorded so the next session begins from the measurement rather
+than from `pool_state_changes`.
