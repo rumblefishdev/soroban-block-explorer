@@ -270,8 +270,74 @@ readable in `ledger_entry_changes`.
 `wasm_hash IS NULL`, on the reasoning that no WASM means a SAC. An external-ref
 contract also has no `wasm_hash`, and is the _most_ upgradeable kind there is:
 its owner re-points the whole fleet at once. The honest interim value is `None`
-(no chip), but telling an external ref apart from a SAC needs a stored marker,
-which we do not have. Same decision as gap 1.
+(no chip).
+
+Unlike gap 1 this one is cheap to close: `is_sac` is already selected in the
+same row (`queries.rs:493`), so "no hash **and** SAC" can be told apart from
+"no hash **and not** SAC" without storing anything new. The first keeps its
+hard `Some(false)`; the second stops guessing. That also makes external-ref
+contracts default to silence rather than to a false claim, which buys time for
+the model decision.
+
+**What the null-hash population actually is** (measured on production
+2026-09-10, so the fix is not argued from a wrong premise). Of 148,970
+contracts: 144,908 carry a hash, 4,008 are SACs, and **54** have no hash and
+are not SACs. Those 54 are all Pass-2 stubs — `deployed_at_ledger = 0`, every
+identity column NULL.
+
+They are **not** deploys we missed. Our floor is ledger 50,457,424, closing
+2024-02-20 17:00:10 — the protocol-20 vote itself — so no Soroban contract can
+predate our indexing. Three of the 54 were probed against mainnet by building
+the instance `LedgerKey` by hand and calling `getLedgerEntries`: none has an
+instance on chain, while a control contract returns one. At least two are
+deterministic SAC addresses of classic assets carrying `sac_deployed = 0` in
+`asset_sac` — addresses that exist by derivation and get referenced, but where
+no contract was ever deployed. Only three of the 54 appear in any event or
+operation at all.
+
+So the damage today is 0.04% of rows, mostly addresses with nothing behind
+them. The reason to fix the inference is not those 54 — it is that every
+external-ref contract lands in exactly that bucket.
+
+**Gap 2 is closed** (`map_upgradeable` now takes `is_sac`). A SAC keeps its
+hard `Some(false)`; anything else without a hash returns `None` and the chip
+stays off. Two tests, one per population.
+
+### The stub mechanism itself, measured
+
+Chasing gap 2 turned up something larger, and it is not a protocol-28 problem
+at all. Pass-2 writes an FK stub for every contract merely _referenced_ by an
+op or event, and the stage is batch-local — it suppresses a stub only for
+contracts seen in the same batch, never for ones already in the table. On
+production:
+
+|                                                 | rows    |
+| ----------------------------------------------- | ------- |
+| rows in `soroban_contracts`                     | 186,999 |
+| distinct contracts                              | 148,981 |
+| stub rows (`wasm_uploaded_at_ledger = 0`)       | 37,950  |
+| contracts holding BOTH a real row and stub rows | 35,509  |
+
+So ~37,900 of the 37,950 stub rows carry no information the table does not
+already have. RMT resolves them on merge — version 0 loses — but prod RMT
+tables are not merged to one part (task 0420), so they persist as duplicates,
+which is exactly the read trap this schema documents.
+
+They are not inert either: `fetch_contract_list` selects `WHERE 1` with no
+stub filter, so the 54 stub-only rows appear in the public contracts list as
+contracts, and `network/queries.rs:103` counts them.
+
+Why the mechanism exists, before anyone deletes it: the surrogate id is
+`hash64(strkey)` — **irreversible**. Without a row carrying the text, a stored
+id can never be rendered as a `C…` address. And one read path,
+`nfts/queries.rs:678`, uses an **INNER JOIN** on `soroban_contracts`, so a
+missing row does not blank a column — it drops the NFT row from the response
+entirely. "Just stop writing stubs" silently loses data there.
+
+The clean shape is to split the two meanings: a small id→StrKey lookup table
+that joins keep using, and `soroban_contracts` holding only contracts actually
+observed to exist. Separate task — it is neither caused by nor blocking
+protocol 28.
 
 **Checked and clear:** `token_metadata.rs` compares with `==` against
 `StellarAsset`, so an external ref correctly falls through as non-SAC.

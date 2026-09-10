@@ -490,7 +490,7 @@ pub async fn fetch_contract(
     let sac_asset = sac_assets?.remove(&r.id);
     Ok(Some(ContractRow {
         sac_asset,
-        upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.upgradeable),
+        upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.is_sac, r.upgradeable),
         id: r.id,
         contract_id: r.contract_id,
         wasm_hash: r.wasm_hash,
@@ -507,14 +507,23 @@ pub async fn fetch_contract(
 }
 
 /// Task 0327 — map the tri-state Int8 from `fetch_contract` into `upgradeable`:
-/// - no WASM (SAC / `wasm_hash IS NULL`) → `Some(false)` (cannot self-upgrade),
-///   regardless of the join (SAC has no metadata row).
+/// - SAC → `Some(false)` (cannot self-upgrade), regardless of the join: its
+///   implementation is native to the host, so there is no code to swap.
 /// - `1` → `Some(true)` (self-upgradeable), `0` → `Some(false)` (frozen).
 /// - `-1` → `None` (Unknown: no metadata row, or a row predating task 0327 →
 ///   the frontend renders no chip).
-fn map_upgradeable(has_wasm: bool, code: i8) -> Option<bool> {
+///
+/// Task 0548 — "no WASM" alone used to mean `Some(false)`, on the reasoning
+/// that a missing hash means SAC. It does not. A row can also lack one because
+/// it is a Pass-2 lookup stub (no deploy ever observed), and from protocol 28
+/// because the contract runs code owned by ANOTHER contract (CAP-85) — the
+/// most upgradeable kind there is, since its owner re-points the whole fleet
+/// at once. Both are "we do not know", and that must not render as a
+/// confident "cannot upgrade". `is_sac` is read from the executable type on
+/// the instance, so it answers the question directly instead of inferring it.
+fn map_upgradeable(has_wasm: bool, is_sac: bool, code: i8) -> Option<bool> {
     if !has_wasm {
-        return Some(false);
+        return is_sac.then_some(false);
     }
     match code {
         1 => Some(true),
@@ -1167,14 +1176,29 @@ mod tests {
 
     #[test]
     fn map_upgradeable_three_state() {
-        // SAC / no WASM → Immutable regardless of the join code.
-        assert_eq!(map_upgradeable(false, -1), Some(false));
-        assert_eq!(map_upgradeable(false, 1), Some(false));
+        // SAC → Immutable regardless of the join code: nothing to swap.
+        assert_eq!(map_upgradeable(false, true, -1), Some(false));
+        assert_eq!(map_upgradeable(false, true, 1), Some(false));
         // WASM present: 1 → upgradeable, 0 → frozen.
-        assert_eq!(map_upgradeable(true, 1), Some(true));
-        assert_eq!(map_upgradeable(true, 0), Some(false));
+        assert_eq!(map_upgradeable(true, false, 1), Some(true));
+        assert_eq!(map_upgradeable(true, false, 0), Some(false));
         // WASM present, -1 (no metadata row / pre-0327 key absent) → Unknown.
-        assert_eq!(map_upgradeable(true, -1), None);
+        assert_eq!(map_upgradeable(true, false, -1), None);
+    }
+
+    /// Task 0548 — the case that used to answer a confident "cannot upgrade"
+    /// about a contract we know nothing about. Covers both populations: a
+    /// Pass-2 lookup stub (no deploy observed) and, from protocol 28, a
+    /// contract whose code is owned by another contract.
+    #[test]
+    fn no_wasm_and_not_a_sac_is_unknown_not_immutable() {
+        assert_eq!(map_upgradeable(false, false, -1), None);
+        assert_eq!(
+            map_upgradeable(false, false, 1),
+            None,
+            "an executable we never resolved cannot be reported as frozen or as \
+             upgradeable — the chip must stay off"
+        );
     }
 
     fn event_row(event_type: i16, topics_xdr: &str, data_xdr: &str) -> EventChRow {
