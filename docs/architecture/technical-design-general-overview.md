@@ -860,6 +860,18 @@ structure, we update the pinned `stellar-xdr` Rust crate version; the frontend c
 typed API responses via OpenAPI-generated TS client (task 0096). Protocol
 upgrades are infrequent and well-announced in advance.
 
+Bumping the crate is necessary but **not sufficient**, and both halves have their
+own failure mode:
+
+1. The Galexie image ships a captive core pinned to a protocol. Left behind, it
+   keeps following consensus but stops exporting to S3 — silently, with no error.
+2. New XDR union arms that our code reads through JSON rather than through a Rust
+   enum are invisible to the compiler. An exhaustive `match` fails the build; a
+   string comparison against a decoded topic just stops matching and returns
+   nothing.
+
+Both are re-checked per upgrade rather than assumed.
+
 **Open-source re-deployability:** the full CDK stack is public; Stellar or any third party
 can fork the repository and deploy the entire system in a fresh AWS account.
 

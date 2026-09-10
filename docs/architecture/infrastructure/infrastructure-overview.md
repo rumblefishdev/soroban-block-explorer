@@ -748,7 +748,9 @@ The source design documents specific operational recovery assumptions:
 - failed ledger files remain in S3 and can be replayed by re-triggering the Lambda
 - schema migrations run before new Lambda code deployment in the CI/CD pipeline
 - protocol upgrades are handled by bumping the pinned `stellar-xdr` Rust crate
-  (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md)); the frontend consumes
+  (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md)) **and** the
+  pinned Galexie image, whose captive core is tied to a protocol and stops
+  exporting to S3 without erroring if it is left behind; the frontend consumes
   typed API responses via OpenAPI-generated TS client (task 0096).
 
 These assumptions connect runtime infrastructure directly to safe ingestion operations.

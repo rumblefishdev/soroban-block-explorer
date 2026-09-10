@@ -66,6 +66,23 @@ upgrade, not an outage" — this task is that process firing for the first time.
   contract instance carries its own `wasm_hash` — see Future Work.
 - **CAP-86 — sparse map host functions.** Host functions only, no XDR change.
   No impact here.
+- **A fourth XDR change, not attributed to any of the three CAPs above.** A
+  diff of the `.x` sources (`stellar-xdr` v27.0 → v28.0) shows the whole wire
+  change lives in exactly two files, and it carries one arm the CAP write-ups do
+  not mention: **`SCV_EXECUTABLE_TAG = 22`** on `SCValType`, carrying an
+  `SCString executable_tag`. It is the read side of CAP-85 — a contract names
+  which executable of the owner it wants — but it lands on the `ScVal` match,
+  not the `ContractExecutable` one, so it is a separate break site (see Blast
+  radius). Also in the diff, wire-neutral: `SCBytes`/`SCString`/`SCSymbol`
+  typedefs were moved earlier in the file, and `rentFeeCharged`'s comment was
+  corrected — it is part of `totalRefundableResourceFeeCharged`, not the
+  non-refundable one. We read neither field, so no exposure.
+- **Not in protocol 28, despite being in the file:**
+  `SC_ADDRESS_TYPE_MUXED_CONTRACT` sits behind `#ifdef CAP_0084_MUXED_CONTRACT`
+  in v28.0 and is not compiled into the release. Do not plan for it here.
+- **Verified against the wire format, not the announcement:**
+  `LedgerCloseMeta` in v28.0 still switches on `v0`/`v1`/`v2` only — the "no new
+  container version" claim above is confirmed at the source, not inferred.
 
 ### Blast radius in this workspace
 
@@ -82,8 +99,18 @@ silently rendering the wrong thing:
 (`crates/xdr-parser/src/token_metadata.rs:87` compares with `==` against
 `StellarAsset` and is unaffected.)
 
+**Plus a fourth site for the new `ScVal` arm.** `scval_to_typed_json`
+(`crates/xdr-parser/src/scval.rs`, the `ScVal` match ending at
+`ScVal::LedgerKeyNonce`) has no `_ =>` arm, so `SCV_EXECUTABLE_TAG` also fails
+the build there — the same loud failure, but a site the CAP-85 write-up does not
+point at. The other `ScVal` matches (`ledger_value.rs`, `nft.rs`, `sac.rs`,
+`token_metadata.rs`) carry `_ =>` fallbacks and compile silently — checked by
+hand afterwards, and they are narrow shape matchers (balance keys, metadata
+maps) that an executable tag can never reach. The compiler-invisible damage
+turned out to be elsewhere entirely; see "What the compiler could NOT tell us".
+
 Unlike 26→27, no module reshuffle is expected: the `curr`/`next` split was
-already removed in 27, so this should be a pin bump plus the three match arms.
+already removed in 27, so this should be a pin bump plus the new match arms.
 
 Not affected: Soroban RPC is SDF-public (`mainnet.sorobanrpc.com`,
 `DEFAULT_SOROBAN_RPC_URLS`, `crates/enrichment-shared/src/nft_token_uri/client.rs:43`) — SDF upgrades it. No
@@ -95,6 +122,25 @@ Not affected: Soroban RPC is SDF-public (`mainnet.sorobanrpc.com`,
 ### Step 1 — Galexie image (infra; must land before 2026-09-16 17:00 UTC)
 
 `stellar/stellar-galexie:28.0.1` was published 2026-08-27 (28.0.0 on 2026-08-14).
+Confirmed at Docker Hub on 2026-09-10: 28.0.1 is still the newest release tag,
+it is also what `latest` points at, and its (single, linux/amd64) source digest
+is `sha256:1d511631693274eba3f44e23c9411c12c877f573816ae506804f611694dcf01b`.
+
+Two things worth knowing before pinning:
+
+- **Do not pin a newer digest just because one exists.** Hub also carries
+  commit-SHA tags pushed after the release (`51e846a` 08-28, `11ffa48` 09-03,
+  `2aa7c4a` 09-09). Those are master builds, not releases. 28.0.1 is the tag.
+- **What is actually inside the image.** `docker/Dockerfile` takes the core
+  version as a build arg; the release workflow at tag `galexie-v28.0.1` sets
+  `STELLAR_CORE_VERSION: 28.0.1-3508.947aad841.noble`. So the image ships core
+  28.0.1 even though the core v28.0.1 GitHub release was published 2026-09-01,
+  after the image was built — the Debian package landed first. Core 28.0.1 over
+  28.0.0 is three stability fixes (query-message dedup, skipping background tx
+  signature verification for unauthenticated peers, clamped tx-set fee sums),
+  none of them protocol behaviour. The proto-28 support itself came with
+  Galexie 28.0.0 / core 28.0.0.
+
 Mirror it into ECR, read the **landed ECR digest back**, and pin that:
 
 - `galexieImageTag` in `infra/envs/production.json:24`
@@ -138,22 +184,147 @@ Deploy compute after the vote window; watch `production-galexie-ingestion-lag`
 (the alarm 0367 fixed: SQS `NumberOfMessagesSent`, 5-min window,
 `treatMissingData: BREACHING`) and the DLQ depth across 17:00 UTC.
 
+## Progress — Step 2 done on 2026-09-10, six days ahead of the vote
+
+Branch `ops/0548_protocol-28-upgrade-readiness`. `stellar-xdr` is at 28.0.0 and
+`cargo check --workspace --all-targets` is green.
+
+**The compiler's own list of break sites, which is four, not three.** The first
+build against 28.0.0 failed with exactly:
+
+| Site                                      | Missing arm                          |
+| ----------------------------------------- | ------------------------------------ |
+| `crates/xdr-parser/src/scval.rs:16`       | `ScVal::ExecutableTag(_)`            |
+| `crates/xdr-parser/src/scval.rs:76`       | `ContractExecutable::ExternalRef(_)` |
+| `crates/xdr-parser/src/operation.rs:834`  | `ContractExecutable::ExternalRef(_)` |
+| `crates/xdr-parser/src/invocation.rs:557` | `ContractExecutable::ExternalRef(_)` |
+
+Nothing downstream broke — the other six crates that use `stellar-xdr` compiled
+untouched, and no module reshuffle happened, as expected.
+
+**How the new arms render.** `{"type":"external_ref","owner":<C… StrKey>,"tag":<string>}`
+and `{"type":"executable_tag","value":<string>}`. Deliberately NOT folded into
+`wasm` with a borrowed or zeroed hash: a consumer has to be able to tell a
+contract that carries its own code from one that points at somebody else's.
+
+**Tests.** `crates/xdr-parser/tests/protocol_28_arms.rs` (5 tests) plus one
+inline test each in `operation.rs` and `invocation.rs` for their private
+renderers. The suite is 420 + 5 passing, `cargo fmt` and `clippy` clean.
+
+**The positive control is real chain data, not a hand-built value.** Testnet
+ledger 4,601,991, pulled from `soroban-testnet.stellar.org` via `getLedgers` on
+2026-09-10 and committed as
+`crates/xdr-parser/tests/fixtures/testnet_p28_ledger_4601991.b64` (66 KB). It
+decodes through `extract_ledger` and reports `protocol_version = 28`. Testnet
+carried no empty-tx-set ledger to capture — 40 consecutive ledgers scanned, the
+smallest still 50 KB of meta — so CAP-83 is covered by a constructed
+`StellarValueExt::EmptyTxSet` round-trip instead, which is the arm that fails to
+decode under 27.
+
+**Traced downstream, one finding.** `extract_wasm_hash`
+(`crates/xdr-parser/src/state.rs:367`) reads `executable.hash`, so an
+external-ref contract yields `wasm_hash = None`. The deployment row is still
+written (`contract_type = Other`), so nothing silently vanishes — but the code
+hash will read as empty with no explanation of why. That is the display half of
+the CAP-85 item already in Future Work, not a new defect.
+
+**Not done here:** the Galexie image (Step 1), the deploy (Step 4), and the
+sibling `prices` repo. All three are the user's.
+
+**Tests extracted to siblings.** `operation.rs` 1,707 → 848 lines and
+`invocation.rs` 1,606 → 571, with 859 and 1,035 lines of tests moved into
+`operation_tests.rs` / `invocation_tests.rs` via the `#[path]` form `event.rs`
+already uses. `operation.rs` is still ~48 lines over the limit; splitting it by
+topic is separate work.
+
+## What the compiler could NOT tell us
+
+The bump makes the decode safe. It does not make the SEMANTICS right, and the
+two are not the same thing: every place we read an executable out of **decoded
+JSON** rather than out of a Rust enum kept compiling and quietly changed
+meaning. Both gaps below are the same shape — a positive claim that is now
+wrong, not a missing value.
+
+**Gap 1 — an external-ref upgrade leaves the stored hash stale.**
+`update_current_contract_executable_ref` emits the SAME `executable_update`
+event as a Wasm upgrade (stated in CAP-85 itself), with the new executable as
+`vec[Symbol("ExternalRef"), map{owner, tag}]`, and a contract may move freely
+between a direct Wasm hash and a reference.
+`extract_executable_update_new_wasm_hash` (`crates/xdr-parser/src/event.rs`)
+tests for `Symbol("Wasm")` and returns `None` for anything else, so the caller
+in `persist/stage.rs` skips the row and `soroban_contracts.wasm_hash` keeps the
+hash from BEFORE the upgrade. That is the stale-hash defect of 0320/0326,
+reappearing through a door the compiler cannot watch. Pinned by a test in
+`event_tests.rs` and documented on the function; not fixed, because what the
+column should hold for a fleet member is a data-model decision.
+
+The hash is not lost, for whatever we decide: CAP-85 guarantees the owner keeps
+a persistent contract-data entry, keyed by the executable tag, whose value is
+the 32-byte hash of a real `ContractCode`. That key is an `SCV_EXECUTABLE_TAG`
+value — which the new `ScVal` arm now decodes, so those entries are already
+readable in `ledger_entry_changes`.
+
+**Gap 2 — the upgradeable chip will assert the opposite of the truth.**
+`map_upgradeable` (`crates/api/src/contracts/queries.rs:515`) returns
+`Some(false)` — a positive "cannot self-upgrade" — for any contract with
+`wasm_hash IS NULL`, on the reasoning that no WASM means a SAC. An external-ref
+contract also has no `wasm_hash`, and is the _most_ upgradeable kind there is:
+its owner re-points the whole fleet at once. The honest interim value is `None`
+(no chip), but telling an external ref apart from a SAC needs a stored marker,
+which we do not have. Same decision as gap 1.
+
+**Checked and clear:** `token_metadata.rs` compares with `==` against
+`StellarAsset`, so an external ref correctly falls through as non-SAC.
+`op_source.rs` reads the contract-id preimage, not the executable.
+`extract_wasm_hash` yields `None` but still writes the deployment row, so no
+contract disappears. The frontend never renders an executable type — the string
+does not appear outside generated code. `contract_data_balance` and the other
+`_ =>` arms in `ledger_value.rs` match balance-key shapes, which an executable
+tag can never be.
+
+**Thread 10 — the sibling `prices` repo: yes, affected, and it is worse than a
+bump.** `rumblefishdev/stellar-prices-api` on `master` pins
+`stellar-xdr = "=27.0.0"` (an exact pin) and takes `xdr-parser` as a git
+dependency on THIS repo's `develop` branch, locked at rev `d61b359f`. So:
+
+1. The 26→27 bump that 0368 left open there DID land — they are on 27.0.0. That
+   follow-up can be closed as done.
+2. They need the same 27→28 bump before the vote, or their decode fails exactly
+   as ours would have.
+3. Once our bump reaches `develop`, their exact `=27.0.0` and our `^28` cannot
+   coexist in one graph. Their lockfile hides this until someone runs
+   `cargo update` or rebuilds the lock — then their build stops resolving. The
+   two bumps have to be coordinated, not sequenced arbitrarily.
+
 ## Acceptance Criteria
 
 - [ ] `galexieImageTag` pinned to the Galexie 28.0.1 ECR digest, read back from
       ECR (not copied from Docker Hub)
 - [ ] GitHub env `GALEXIE_IMAGE_DIGEST` updated (production + staging)
 - [ ] Galexie 28.0.1 live in prod, S3 exports flowing, before 2026-09-16 17:00 UTC
-- [ ] Workspace `stellar-xdr` = 28; `cargo build --workspace --all-targets` green
-- [ ] `ContractExecutable::ExternalRef` handled at all three render sites, with a
-      test per site; no fallback that mimics `wasm`
-- [ ] A testnet proto-28 ledger decodes clean through `deserialize_batch`
+- [x] Workspace `stellar-xdr` = 28; `cargo check --workspace --all-targets` green
+      (2026-09-10)
+- [x] `ContractExecutable::ExternalRef` handled at all render sites, with a test
+      per site; no fallback that mimics `wasm`. **Four sites, not three** — the
+      fourth is `ScVal::ExecutableTag` in `scval.rs`
+- [x] A testnet proto-28 ledger decodes clean — ledger 4,601,991, committed as a
+      fixture and asserted to report `protocol_version = 28`
 - [ ] Post-vote: indexer decodes mainnet proto-28 ledgers, DLQ stays empty,
       ingestion-lag alarm quiet
-- [ ] **Docs updated** — TBD at PR time; expected `N/A` (no change to schema,
-      endpoints, pipeline steps or topology as described in
-      `docs/architecture/**`), same reasoning as 0367/0368
-- [ ] **API types regenerated** — required, `Cargo.{toml,lock}` change
+- [ ] **Decision needed** — what `wasm_hash` and the upgradeable chip should say
+      for an external-ref contract (gaps 1 and 2 above). Not a Sep-16 blocker;
+      bites the first time a mainnet contract uses CAP-85
+- [ ] Sibling `prices` repo bumped in step with this one — its exact `=27.0.0`
+      pin cannot coexist with our `^28` once `develop` moves
+- [x] **Docs updated** — the expected `N/A` turned out to be wrong. Two
+      architecture docs stated that a protocol upgrade is handled by bumping the
+      `stellar-xdr` pin, full stop. Our own two incidents disprove that, so both
+      now name the Galexie half and the compiler-invisible half:
+      `technical-design-general-overview.md`,
+      `infrastructure/infrastructure-overview.md`. Schema, endpoints, pipeline
+      steps and topology are unchanged — those stay `N/A`
+- [x] **API types regenerated** — ran clean; `openapi.json` came back byte-identical,
+      so the bump changes no API surface
 
 ## Future Work
 
