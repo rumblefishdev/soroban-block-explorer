@@ -28,6 +28,66 @@ fn ignores_non_executable_update_event() {
     assert_eq!(extract_executable_update_new_wasm_hash(&topics), None);
 }
 
+/// Protocol 28 / CAP-85: an upgrade can now point the contract at code owned
+/// by ANOTHER contract, and it emits the very same `executable_update` event.
+///
+/// The topic shape is given by the CAP:
+/// `SCVec([SCSymbol("ExternalRef"), SCMap([(owner, SCAddress), (tag, SCString)])])`.
+///
+/// This asserts what we do TODAY, which is nothing: no hash comes back, so the
+/// caller skips the row and `soroban_contracts.wasm_hash` keeps the hash the
+/// contract ran BEFORE the upgrade. That is stale-hash again — the defect tasks
+/// 0320/0326 fixed — arriving through a door the compiler cannot see, because
+/// the topics are JSON by then, not a Rust enum. Locked down here so the gap is
+/// a visible, named behaviour rather than a silent one; closing it needs a
+/// decision on what the column should hold for a fleet member.
+#[test]
+fn external_ref_upgrade_yields_no_hash_today_which_leaves_the_stored_one_stale() {
+    let external_ref = ScVal::Vec(Some(
+        vec![
+            ScVal::Symbol(ScSymbol::try_from(b"ExternalRef".to_vec()).unwrap()),
+            ScVal::Map(Some(
+                vec![
+                    ScMapEntry {
+                        key: ScVal::Symbol(ScSymbol::try_from(b"owner".to_vec()).unwrap()),
+                        val: ScVal::Address(ScAddress::Contract(ContractId(Hash([0x11; 32])))),
+                    },
+                    ScMapEntry {
+                        key: ScVal::Symbol(ScSymbol::try_from(b"tag".to_vec()).unwrap()),
+                        val: ScVal::String(ScString::try_from(b"fleet-v2".to_vec()).unwrap()),
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+            )),
+        ]
+        .try_into()
+        .unwrap(),
+    ));
+
+    let topics = json!([
+        crate::scval::scval_to_typed_json(&ScVal::Symbol(
+            ScSymbol::try_from(b"executable_update".to_vec()).unwrap()
+        )),
+        crate::scval::scval_to_typed_json(&ScVal::Vec(Some(
+            vec![
+                ScVal::Symbol(ScSymbol::try_from(b"Wasm".to_vec()).unwrap()),
+                ScVal::Bytes(ScBytes::try_from(vec![0xAA; 32]).unwrap()),
+            ]
+            .try_into()
+            .unwrap(),
+        ))),
+        crate::scval::scval_to_typed_json(&external_ref),
+    ]);
+
+    assert_eq!(
+        extract_executable_update_new_wasm_hash(&topics),
+        None,
+        "if this ever starts returning a hash, the ExternalRef handling landed \
+         and this test should be rewritten to assert the new behaviour"
+    );
+}
+
 #[test]
 fn ignores_non_wasm_executable() {
     // Defensive: a StellarAsset (SAC) executable carries no wasm hash.

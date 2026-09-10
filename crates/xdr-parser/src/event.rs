@@ -190,6 +190,16 @@ fn extract_single_event(
 /// 32-byte hash, or `None` if the shape doesn't match — wrong topic name,
 /// a non-`Wasm` executable (e.g. a SAC `StellarAsset`, which never upgrades),
 /// or a hash that isn't exactly 32 bytes.
+///
+/// **Known gap since protocol 28 (CAP-85).** `update_current_contract_executable_ref`
+/// emits this same event with the new executable as
+/// `vec[Symbol("ExternalRef"), map{owner, tag}]`, and a contract may move
+/// freely between a direct Wasm hash and a reference. Such an upgrade returns
+/// `None` here, so the caller skips it and the stored `wasm_hash` stays at the
+/// pre-upgrade value — stale, silently. The real hash is reachable (the owner
+/// keeps a persistent entry, keyed by the executable tag, holding it), but what
+/// the column should say for a fleet member is a data-model decision, not a
+/// parser one. `event_tests.rs` pins the current behaviour.
 pub fn extract_executable_update_new_wasm_hash(topics: &Value) -> Option<[u8; 32]> {
     let arr = topics.as_array()?;
     // topic[0] is the event-name symbol.
