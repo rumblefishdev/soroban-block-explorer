@@ -520,6 +520,21 @@ export type ContractDetailResponse = {
   contract_type_name?: string | null;
   deployed_at_ledger?: number | null;
   deployer?: string | null;
+  /**
+   * Task 0548 / CAP-85 (protocol 28): the contract this one borrows its code
+   * from, and the tag naming which of that owner's executables it runs. Both
+   * `null` for every contract that carries its own executable.
+   *
+   * When they are set, `wasm_hash` above is the hash the reference resolves
+   * to at the time of the request — the code the contract genuinely runs,
+   * which is what the protocol's own `get_address_executable` reports too.
+   * It is NOT stored against this contract: the owner can re-point the whole
+   * fleet without a single ledger change touching it, so a stored copy would
+   * go quietly out of date. Read these two to tell "runs its own code" from
+   * "runs someone else's".
+   */
+  executable_owner?: string | null;
+  executable_tag?: string | null;
   is_sac: boolean;
   sac_asset?: null | SacAsset;
   stats: ContractStats;

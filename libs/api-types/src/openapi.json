@@ -2588,6 +2588,13 @@
           "deployer": {
             "type": ["string", "null"]
           },
+          "executable_owner": {
+            "type": ["string", "null"],
+            "description": "Task 0548 / CAP-85 (protocol 28): the contract this one borrows its code\nfrom, and the tag naming which of that owner's executables it runs. Both\n`null` for every contract that carries its own executable.\n\nWhen they are set, `wasm_hash` above is the hash the reference resolves\nto at the time of the request — the code the contract genuinely runs,\nwhich is what the protocol's own `get_address_executable` reports too.\nIt is NOT stored against this contract: the owner can re-point the whole\nfleet without a single ledger change touching it, so a stored copy would\ngo quietly out of date. Read these two to tell \"runs its own code\" from\n\"runs someone else's\"."
+          },
+          "executable_tag": {
+            "type": ["string", "null"]
+          },
           "is_sac": {
             "type": "boolean"
           },

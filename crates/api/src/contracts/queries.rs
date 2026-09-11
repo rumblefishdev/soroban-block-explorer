@@ -33,7 +33,7 @@ use serde::Deserialize;
 
 use domain::ContractEventType;
 
-use crate::common::ch::{millis_to_utc, resolve_accounts};
+use crate::common::ch::{millis_to_utc, resolve_accounts, resolve_contracts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
@@ -76,6 +76,13 @@ pub struct ContractRow {
     pub sac_asset: Option<SacAsset>,
     /// Task 0327 — contract mutability, 3-state (`None` = Unknown).
     pub upgradeable: Option<bool>,
+    /// Task 0548 / CAP-85 — set only when this contract runs code owned by
+    /// another contract. `wasm_hash` above then carries the hash that
+    /// reference RESOLVES to, so every consumer that wants "the code this
+    /// contract runs" keeps working; these two say where it came from, so a
+    /// consumer that needs to tell the two apart still can.
+    pub executable_owner: Option<String>,
+    pub executable_tag: Option<String>,
 }
 
 #[derive(Debug)]
@@ -436,6 +443,13 @@ struct ContractHeaderChRow {
     // 1 = self-upgradeable, 0 = frozen, -1 = Unknown (no key / no row). See the
     // SQL expression in `fetch_contract` and `map_upgradeable`.
     upgradeable: i8,
+    // Task 0548 / CAP-85 — the reference this contract carries INSTEAD of its
+    // own hash, exactly as the instance states it, plus what that reference
+    // resolves to right now. The resolution is done here, at read time,
+    // precisely because it can change without anything touching this row.
+    executable_owner_id: Option<i64>,
+    executable_tag: Option<String>,
+    referenced_wasm_hash: Option<String>,
 }
 
 pub async fn fetch_contract(
@@ -453,6 +467,13 @@ pub async fn fetch_contract(
     //      tables (`soroban_contracts`, `accounts`), so CH names the result
     //      column `sc.id`, which the `clickhouse` row deserialiser can't match
     //      to the `ContractHeaderChRow.id` field → "schema mismatch".
+    //   3. (task 0548) `contract_executable_refs` joins through a subquery whose
+    //      hash is `toNullable(argMax(...))`. A LEFT JOIN miss fills each column
+    //      with its TYPE's default, and only a Nullable type defaults to NULL —
+    //      a bare FixedString(32) would come back as 32 zero bytes, a value that
+    //      looks like a hash. And no `max(ledger) AS ledger` beside it: that alias
+    //      shadows the column inside `argMax` and ClickHouse rejects the whole
+    //      query (Code 184) — which is exactly how it shipped the first time.
     let row = client
         .query(
             "SELECT \
@@ -465,9 +486,16 @@ pub async fn fetch_contract(
                 sc.contract_type                       AS contract_type, \
                 sc.is_sac                              AS is_sac, \
                 toInt8(if(JSONHas(wim.metadata, 'upgradeable'), \
-                          JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable \
+                          JSONExtractBool(wim.metadata, 'upgradeable'), -1)) AS upgradeable, \
+                sc.executable_owner_id                 AS executable_owner_id, \
+                sc.executable_tag                      AS executable_tag, \
+                lower(hex(ref.wasm_hash)) AS referenced_wasm_hash \
              FROM soroban_contracts sc FINAL \
              LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
+             LEFT JOIN ( \
+                SELECT owner_id, tag, toNullable(argMax(wasm_hash, ledger)) AS wasm_hash \
+                FROM contract_executable_refs GROUP BY owner_id, tag \
+             ) ref ON ref.owner_id = sc.executable_owner_id AND ref.tag = sc.executable_tag \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
@@ -482,18 +510,32 @@ pub async fn fetch_contract(
     // non-SAC, so the pair goes out together rather than one after the other
     // (task 0446).
     let sac_ids: Vec<i64> = r.is_sac.then_some(r.id).into_iter().collect();
-    let (accounts, sac_assets) = tokio::join!(
+    // Task 0548 — the executable owner is itself a deployed contract, so its
+    // StrKey resolves through the same surrogate lookup as the deployer, in the
+    // same round trip.
+    let (accounts, sac_assets, owners) = tokio::join!(
         resolve_accounts(client, r.deployer_id.into_iter().collect()),
         fetch_sac_assets(client, &sac_ids),
+        resolve_contracts(client, r.executable_owner_id.into_iter().collect()),
     );
     let accounts = accounts?;
     let sac_asset = sac_assets?.remove(&r.id);
+    let owners = owners?;
+    // CAP-85: a fleet member states no hash of its own, so the code it runs is
+    // whatever its reference resolves to RIGHT NOW. `or` (not `or_else` on the
+    // reference) keeps a contract's own hash winning if both are somehow set —
+    // the instance is the authority on which kind it is.
+    let runs_wasm_hash = r.wasm_hash.clone().or(r.referenced_wasm_hash);
     Ok(Some(ContractRow {
         sac_asset,
         upgradeable: map_upgradeable(r.wasm_hash.is_some(), r.is_sac, r.upgradeable),
+        executable_owner: r
+            .executable_owner_id
+            .and_then(|id| owners.get(&id).cloned()),
+        executable_tag: r.executable_tag,
         id: r.id,
         contract_id: r.contract_id,
-        wasm_hash: r.wasm_hash,
+        wasm_hash: runs_wasm_hash,
         wasm_uploaded_at_ledger: r.wasm_uploaded_at_ledger,
         deployer: r
             .deployer_id
@@ -755,12 +797,23 @@ pub async fn fetch_wasm_interface(
 ) -> Result<Option<InterfaceRow>, clickhouse::error::Error> {
     let row = client
         .query(
+            // Task 0548 — `wasm_hash` here answers "which code do I fetch and
+            // decompile", so for a CAP-85 fleet member it must be the hash its
+            // reference resolves to. Reporting NULL would tell the reader the
+            // contract has no code, when it has code owned by someone else.
+            // The interface metadata follows the same resolved hash: a fleet
+            // member's ABI is the ABI of the code it actually runs.
             "SELECT \
                 sc.contract_id, \
-                lower(hex(sc.wasm_hash))        AS wasm_hash, \
+                lower(hex(coalesce(sc.wasm_hash, ref.wasm_hash))) AS wasm_hash, \
                 ifNull(wim.metadata, '')        AS metadata \
              FROM soroban_contracts sc FINAL \
-             LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
+             LEFT JOIN ( \
+                SELECT owner_id, tag, toNullable(argMax(wasm_hash, ledger)) AS wasm_hash \
+                FROM contract_executable_refs GROUP BY owner_id, tag \
+             ) ref ON ref.owner_id = sc.executable_owner_id AND ref.tag = sc.executable_tag \
+             LEFT JOIN wasm_interface_metadata wim \
+                ON wim.wasm_hash = coalesce(sc.wasm_hash, ref.wasm_hash) \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
@@ -1160,6 +1213,10 @@ pub async fn fetch_events(
         })
         .collect())
 }
+
+#[cfg(test)]
+#[path = "queries_ch_tests.rs"]
+mod ch_tests;
 
 #[cfg(test)]
 mod tests {
