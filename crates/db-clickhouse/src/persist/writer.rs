@@ -159,6 +159,7 @@ struct TableInserts {
     wasm: Option<Insert<WasmInterfaceMetadataRow>>,
     contracts: Option<Insert<SorobanContractRow>>,
     metadata: Option<Insert<SorobanContractMetadataRow>>,
+    executable_refs: Option<Insert<ContractExecutableRefRow>>,
     transactions: Option<Insert<TransactionRow>>,
     hash_index: Option<Insert<TransactionHashIndexRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
@@ -343,6 +344,7 @@ impl PartitionWriter {
             wasm_rows,
             contract_rows,
             metadata_rows,
+            executable_ref_rows,
             transaction_rows,
             hash_index_rows,
             participant_rows,
@@ -402,6 +404,13 @@ impl PartitionWriter {
             &mut self.inserts.metadata,
             "soroban_contract_metadata",
             &metadata_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.executable_refs,
+            "contract_executable_refs",
+            &executable_ref_rows,
         )
         .await?;
         write_rows(
@@ -607,6 +616,7 @@ impl PartitionWriter {
             wasm,
             contracts,
             metadata,
+            executable_refs,
             transactions,
             hash_index,
             participants,
@@ -637,6 +647,7 @@ impl PartitionWriter {
         end(wasm).await?;
         end(contracts).await?;
         end(metadata).await?;
+        end(executable_refs).await?;
         end(transactions).await?;
         end(hash_index).await?;
         end(participants).await?;

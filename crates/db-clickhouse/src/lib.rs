@@ -182,10 +182,12 @@ mod tests {
         // `transaction_memos` (memo per transaction, from the envelope) and
         // `soroban_event_ops` (operation attribution per event, the side table
         // `soroban_events` cannot take). 35 → 38.
+        // task 0548: added `contract_executable_refs` — what an owner's
+        // executable tag points at (CAP-85). 38 → 39.
         assert_eq!(
             stmts.len(),
-            38,
-            "expected 34 tables + 2 materialized views + 1 dictionary, got {}",
+            39,
+            "expected 35 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );
     }

@@ -46,6 +46,9 @@ pub struct ParseOutput {
     /// instance-storage `METADATA`, for the `soroban_contract_metadata` side
     /// table (task 0297). SACs already excluded by the producer.
     pub contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata>,
+    /// CAP-85 (task 0548) — `(owner, tag) → wasm_hash` mappings written by
+    /// owner contracts this batch. Empty before protocol 28.
+    pub executable_ref_targets: Vec<xdr_parser::executable_ref::ExtractedExecutableRefTarget>,
     /// Per-holder Soroban token balances from `ContractData` `Balance(Address)`
     /// ledger entries, persisted into the unified `balances` table (task 0331; the
     /// field name is leftover Option-A naming — no `soroban_token_balances` table exists).
@@ -293,6 +296,9 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         .collect();
 
     let mut all_contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata> = Vec::new();
+    let mut all_executable_ref_targets: Vec<
+        xdr_parser::executable_ref::ExtractedExecutableRefTarget,
+    > = Vec::new();
     let mut all_soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance> = Vec::new();
     let mut all_pool_family_writes: Vec<xdr_parser::pool_family::PoolFamilyWrite> = Vec::new();
     for (_tx_hash, tx_source, changes) in &all_ledger_entry_changes {
@@ -325,6 +331,9 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         all_lp_positions.extend(lp_pos);
 
         all_contract_metadata_writes.extend(xdr_parser::extract_contract_metadata_writes(changes));
+        all_executable_ref_targets.extend(
+            xdr_parser::executable_ref::extract_executable_ref_targets(changes),
+        );
         all_soroban_token_balances.extend(xdr_parser::extract_soroban_token_balances(changes));
     }
 
@@ -388,6 +397,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         nft_events,
         lp_positions: all_lp_positions,
         contract_metadata_writes: all_contract_metadata_writes,
+        executable_ref_targets: all_executable_ref_targets,
         soroban_token_balances: all_soroban_token_balances,
         // Plane writes and instance images pass through unfolded: staging
         // owns the one fold per destination table

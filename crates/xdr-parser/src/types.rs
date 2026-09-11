@@ -381,6 +381,11 @@ pub struct ExtractedSorobanBalance {
 pub struct ExtractedContractDeployment {
     pub contract_id: String,
     pub wasm_hash: Option<String>,
+    /// CAP-85 (protocol 28): set when the instance names another
+    /// contract's executable instead of carrying a hash of its own, in
+    /// which case `wasm_hash` is `None` and the hash is resolved through
+    /// `(owner, tag)` at read time. `None` for every pre-28 shape.
+    pub executable_ref: Option<crate::executable_ref::ExecutableRef>,
     pub deployer_account: Option<String>,
     pub deployed_at_ledger: u32,
     /// Explorer-synthetic classification (ADR 0031). Maps to

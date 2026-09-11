@@ -9,7 +9,9 @@ fn extracts_new_wasm_hash_from_executable_update_topics() {
         r#"[{"type":"sym","value":"executable_update"},{"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"i4n3TxyvZkB6DzwJPtmvBXoW5c9VvuVtd56kVKbDCxw="}]},{"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"VYJ7NLoW/zBUeWZF4L0xpQ6HGUzBI9zdjg8i56LMnZg="}]}]"#,
     )
     .unwrap();
-    let got = extract_executable_update_new_wasm_hash(&topics).expect("new wasm hash");
+    let Some(ExecutableUpdate::Wasm(got)) = extract_executable_update(&topics) else {
+        panic!("a Wasm upgrade must decode as one");
+    };
     let got_hex: String = got.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
         got_hex,
@@ -25,7 +27,7 @@ fn ignores_non_executable_update_event() {
         r#"[{"type":"sym","value":"transfer"},{"type":"address","value":"GAHWFCCYCDSSEYZRVV4446KBDP6X2JR2T56TG4OGANS3AS3NCILOCGU5"}]"#,
     )
     .unwrap();
-    assert_eq!(extract_executable_update_new_wasm_hash(&topics), None);
+    assert_eq!(extract_executable_update(&topics), None);
 }
 
 /// Protocol 28 / CAP-85: an upgrade can now point the contract at code owned
@@ -34,15 +36,13 @@ fn ignores_non_executable_update_event() {
 /// The topic shape is given by the CAP:
 /// `SCVec([SCSymbol("ExternalRef"), SCMap([(owner, SCAddress), (tag, SCString)])])`.
 ///
-/// This asserts what we do TODAY, which is nothing: no hash comes back, so the
-/// caller skips the row and `soroban_contracts.wasm_hash` keeps the hash the
-/// contract ran BEFORE the upgrade. That is stale-hash again — the defect tasks
-/// 0320/0326 fixed — arriving through a door the compiler cannot see, because
-/// the topics are JSON by then, not a Rust enum. Locked down here so the gap is
-/// a visible, named behaviour rather than a silent one; closing it needs a
-/// decision on what the column should hold for a fleet member.
+/// The reference has to come back INTACT, because the writer clears
+/// `wasm_hash` on it. Reading this as "nothing happened" is what would leave
+/// the contract serving the hash it ran BEFORE the upgrade — the stale-hash
+/// defect of tasks 0320/0326, reached through a door the compiler cannot
+/// watch, since the topics are JSON by this point rather than a Rust enum.
 #[test]
-fn external_ref_upgrade_yields_no_hash_today_which_leaves_the_stored_one_stale() {
+fn an_external_ref_upgrade_decodes_to_the_reference_it_sets() {
     let external_ref = ScVal::Vec(Some(
         vec![
             ScVal::Symbol(ScSymbol::try_from(b"ExternalRef".to_vec()).unwrap()),
@@ -80,12 +80,15 @@ fn external_ref_upgrade_yields_no_hash_today_which_leaves_the_stored_one_stale()
         crate::scval::scval_to_typed_json(&external_ref),
     ]);
 
-    assert_eq!(
-        extract_executable_update_new_wasm_hash(&topics),
-        None,
-        "if this ever starts returning a hash, the ExternalRef handling landed \
-         and this test should be rewritten to assert the new behaviour"
+    let Some(ExecutableUpdate::ExternalRef { owner, tag }) = extract_executable_update(&topics)
+    else {
+        panic!("an ExternalRef upgrade must decode as one, not as `None`");
+    };
+    assert!(
+        owner.starts_with('C'),
+        "owner is a contract StrKey: {owner}"
     );
+    assert_eq!(tag, "fleet-v2");
 }
 
 #[test]
@@ -95,7 +98,7 @@ fn ignores_non_wasm_executable() {
         r#"[{"type":"sym","value":"executable_update"},{"type":"vec","value":[{"type":"sym","value":"StellarAsset"}]},{"type":"vec","value":[{"type":"sym","value":"StellarAsset"}]}]"#,
     )
     .unwrap();
-    assert_eq!(extract_executable_update_new_wasm_hash(&topics), None);
+    assert_eq!(extract_executable_update(&topics), None);
 }
 
 /// Round-trip through the REAL `scval_to_typed_json` encoder (not a
@@ -122,8 +125,8 @@ fn extracts_new_hash_via_real_scval_encoding() {
         scval_to_typed_json(&exec(0x99)),
     ]);
     assert_eq!(
-        extract_executable_update_new_wasm_hash(&topics),
-        Some([0x99u8; 32])
+        extract_executable_update(&topics),
+        Some(ExecutableUpdate::Wasm([0x99u8; 32]))
     );
 }
 

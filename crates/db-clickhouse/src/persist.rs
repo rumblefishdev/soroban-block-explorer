@@ -36,7 +36,7 @@ use domain::{ContractEventType, ContractType};
 // ClassificationCache` stays a valid path for callers + integration tests that
 // don't depend on `domain` directly (task 0283).
 pub use domain::ClassificationCache;
-use xdr_parser::event::extract_executable_update_new_wasm_hash;
+use xdr_parser::event::extract_executable_update;
 use xdr_parser::types::{
     ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
     ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
@@ -88,6 +88,7 @@ pub async fn persist_ledger_clickhouse(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_metadata_writes: &[xdr_parser::ExtractedContractMetadata],
+    executable_ref_targets: &[xdr_parser::executable_ref::ExtractedExecutableRefTarget],
     soroban_token_balances: &[xdr_parser::ExtractedSorobanBalance],
     pool_family_writes: &[xdr_parser::pool_family::PoolFamilyWrite],
     sac_overrides: &[SacOverride],
@@ -142,6 +143,7 @@ pub async fn persist_ledger_clickhouse(
         nft_events,
         lp_positions,
         contract_metadata_writes,
+        executable_ref_targets,
         soroban_token_balances,
         pool_family_writes,
         // ADR 0051: `build_balance_rows` keys contract-held SAC balances onto the
@@ -509,7 +511,7 @@ async fn fetch_prior_contract_rows(
         // non-diagnostic, host-emitted SYSTEM events with a parseable new hash.
         .filter(|ev| !matches!(ev.source, EventSource::Diagnostic))
         .filter(|ev| ev.event_type == ContractEventType::System)
-        .filter(|ev| extract_executable_update_new_wasm_hash(&ev.topics).is_some())
+        .filter(|ev| extract_executable_update(&ev.topics).is_some())
         .filter_map(|ev| ev.contract_id.as_deref())
         .collect();
     want.sort_unstable();
@@ -582,6 +584,7 @@ mod tests {
         let res = persist_ledger_clickhouse(
             &client,
             &ledger,
+            &[],
             &[],
             &[],
             &[],
