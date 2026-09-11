@@ -252,8 +252,9 @@ ledgers
        ├─ soroban_event_ops (partitioned)        # op attribution per event (0541)
        └─ soroban_invocations_appearances (partitioned)
 
-soroban_contracts
+soroban_contracts                           # contracts OBSERVED being deployed (0548)
   ├─ wasm_interface_metadata
+  ├─ contract_executable_refs               # (owner, tag) -> wasm_hash, CAP-85 (0548)
   ├─ soroban_events_appearances
   ├─ soroban_invocations_appearances
   ├─ assets
@@ -807,6 +808,8 @@ CREATE TABLE soroban_contracts (
     deployed_at_ledger      BIGINT,
     contract_type           SMALLINT,                                       -- ADR 0031, nullable
     is_sac                  BOOLEAN     NOT NULL DEFAULT false,
+    executable_owner_id     BIGINT      REFERENCES soroban_contracts(id),   -- CAP-85 / 0548
+    executable_tag          TEXT,                                           -- CAP-85 / 0548
     name                    VARCHAR(256),                                   -- ADR 0042; legacy/empirically empty — on-chain token name lives in instance-storage METADATA, see task 0297
     search_vector           TSVECTOR GENERATED ALWAYS AS (
                                 to_tsvector('simple', COALESCE(name, '') || ' ' || contract_id)
@@ -819,6 +822,50 @@ CREATE INDEX idx_contracts_wasm   ON soroban_contracts (wasm_hash) WHERE wasm_ha
 CREATE INDEX idx_contracts_search ON soroban_contracts USING GIN (search_vector);
 CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern_ops);
 ```
+
+> **No placeholder contract rows (task 0548).** `soroban_contracts` gets a row
+> only when a deployment or an executable update is observed. It used to receive
+> a NULL-identity "stub" for every contract merely referenced by an op, event or
+> invocation: 41,030 such rows on production, 40,976 of them shadowing a real
+> deployment row, and 54 addresses with nothing on chain in the public contracts
+> list. A surrogate for an address that never had a contract now resolves to
+> nothing; the transaction page takes that address from the archive block.
+
+> **Executable kind (task 0548, protocol 28).** From CAP-85 a contract's code
+> can be a _reference_ to an entry owned by another contract, so `wasm_hash` is
+> no longer the only way a contract has code. The three kinds are read off the
+> columns, with no enum to keep in sync:
+>
+> | condition                         | kind                                                        |
+> | --------------------------------- | ----------------------------------------------------------- |
+> | `is_sac`                          | native host implementation — there is no code entry to hash |
+> | `wasm_hash IS NOT NULL`           | carries its own code                                        |
+> | `executable_owner_id IS NOT NULL` | runs the owner's code (a "fleet member")                    |
+> | none of the above                 | unknown — a Pass-2 lookup row, no deploy observed           |
+>
+> The hash a reference resolves to is **not** stored on the contract. It lives
+> in `contract_executable_refs`, keyed `(owner_id, tag)` — the composite is the
+> key, since a tag is unique only within its owner, exactly as an asset code is
+> only meaningful with its issuer. The owner re-points one entry and every
+> member of the fleet changes code, with no ledger change touching those member
+> rows at all; a copy held against each member would therefore go stale with
+> nothing to invalidate it (the defect class of tasks 0320/0326). The API
+> resolves it with a join at read time, which is also what the protocol's own
+> `get_address_executable` reports.
+>
+> The owner is a **contract**, not an account: the hash is read out of the
+> owner's contract-data storage, and only contracts have any. It is held as the usual contract surrogate, like `deployer_id`; the owner is
+> itself a deployed contract, so its own row resolves the address. The XDR field is a bare `SCAddress` and so could
+> name an account, but the host rejects such a reference at creation, so one
+> cannot reach a ledger.
+>
+> One row per `(owner, tag)` **per ledger**: an owner may re-point the same tag
+> twice in a single ledger, and the row is versioned by ledger, so two
+> same-ledger rows would be indistinguishable to the merge. The parser collapses
+> them in chain-application order before they are written.
+>
+> No backfill exists or can exist: references are impossible before the
+> protocol-28 vote, so the table is complete from its first row.
 
 > **On-chain token metadata (task 0297, ClickHouse).** `name` / `symbol` /
 > `decimals` for Soroban tokens are on-ledger in the contract's instance storage

@@ -245,6 +245,9 @@ JSON** rather than out of a Rust enum kept compiling and quietly changed
 meaning. Both gaps below are the same shape — a positive claim that is now
 wrong, not a missing value.
 
+**Both gaps are now closed, by the model below.** Kept here because the
+reasoning is the argument for that model, not a historical note.
+
 **Gap 1 — an external-ref upgrade leaves the stored hash stale.**
 `update_current_contract_executable_ref` emits the SAME `executable_update`
 event as a Wasm upgrade (stated in CAP-85 itself), with the new executable as
@@ -302,6 +305,263 @@ external-ref contract lands in exactly that bucket.
 **Gap 2 is closed** (`map_upgradeable` now takes `is_sac`). A SAC keeps its
 hard `Some(false)`; anything else without a hash returns `None` and the chip
 stays off. Two tests, one per population.
+
+### The model that closed them (option C, chosen 2026-09-10)
+
+Three facts, three homes, each written by the ledger change that actually
+changes it:
+
+| Fact                          | Where                                                                        | Changes when                        |
+| ----------------------------- | ---------------------------------------------------------------------------- | ----------------------------------- |
+| which kind of executable      | derived from `is_sac` / `wasm_hash` / `executable_owner_id` — no enum column | the contract is created or upgraded |
+| the reference it states       | `soroban_contracts.executable_owner_id` + `executable_tag`                   | as above                            |
+| what that reference points at | `contract_executable_refs (owner_id, tag) → wasm_hash`                       | the OWNER writes its entry          |
+
+"which code does this contract run" is then a join at read time. That is also
+what the protocol itself answers: CAP-85 has `get_address_executable` resolve
+the reference and return the real hash, explicitly rejecting returning the
+reference because it "would not be helpful" to a caller who cannot resolve it.
+
+The rejected alternative was storing the resolved hash on each member. It reads
+the same but writes catastrophically: one owner write would force a rewrite of
+every member, and an interrupted rewrite leaves half a fleet on each hash with
+nothing to say which is right. `(owner_id, tag)` is the key because a tag is
+unique only within its owner — the same shape as `(asset_code, issuer)` for a
+classic asset.
+
+What landed:
+
+- `crates/xdr-parser/src/executable_ref.rs` — reads the reference off an
+  instance, and lifts `(owner, tag) → hash` out of the owner's contract-data
+  entries (the key is protocol 28's new `SCV_EXECUTABLE_TAG` `ScVal`, which is
+  why the pin bump had to come first). 7 tests.
+- `event.rs` — `extract_executable_update_new_wasm_hash` became
+  `extract_executable_update`, returning `Wasm(hash) | ExternalRef{owner, tag}`.
+  The old signature could not express the second arm, which is exactly how the
+  gap stayed invisible.
+- `build_wasm_upgrade_rows` — each arm CLEARS what the other sets, so a
+  contract moving either direction cannot keep a hash or a reference it no
+  longer has. Two tests, one per direction.
+- Read path — the contract detail and the decompiler/interface query both
+  resolve through `argMax(wasm_hash, ledger)` (no `FINAL` on the RMT), and the
+  DTO carries `executable_owner` + `executable_tag` so a consumer can still
+  tell own code from borrowed.
+- A LEFT JOIN miss in ClickHouse fills a `FixedString(32)` with **zeros, not
+  NULL**, so the resolution is guarded on `ref.ledger != 0`. Without it a SAC
+  would have been handed a hash of 64 zeros — a value that looks like a hash
+  and is not.
+
+**Two decisions taken after review (2026-09-10).**
+
+- The owner was briefly stored as the `C…` StrKey, then reverted to the
+  usual surrogate (`executable_owner_id`, like `deployer_id`) on review: the
+  owner is itself a deployed contract, so its own row resolves the address,
+  and the text column was an exception to the repo convention with no
+  remaining correctness reason once that was clear. The refs table keys on
+  `(owner_id, tag)` to match.
+- `contract_addresses` splits the id → StrKey dictionary out of
+  `soroban_contracts` (the S3 option). Pass-2 no longer writes placeholder
+  contract rows at all: an address we have only seen mentioned gets a
+  dictionary row and nothing else. That removes the fourth "unknown" executable
+  kind — it was never a legal state of a contract, only an artefact of one
+  table meaning two things — and takes the phantom rows out of the public
+  contracts list and the network count. Every join that wanted only a StrKey
+  (`resolve_contracts`, and the joins in accounts / assets / nfts / liquidity
+  pools) now reads the dictionary; the accounts one also drops its `FINAL`,
+  since a dictionary row is byte-identical per id and an unmerged duplicate
+  cannot double a balance leg.
+
+Re-measured on production while writing this: 39,342 placeholder rows, up from
+37,950 earlier the same day — they accumulate continuously. Verified that none
+of them carries identity data (`wasm_hash` / `is_sac` / `deployer_id` all NULL
+across all 39,342), so the `wasm_uploaded_at_ledger = 0` sentinel is a safe
+predicate for the one-off cleanup.
+
+**What writes to `soroban_contracts`, and what can overwrite a real row**
+(traced 2026-09-11, because a placeholder was suspected of clobbering real
+contracts). The table is a ReplacingMergeTree, so nothing is updated in place:
+a newer-version row replaces the WHOLE row at merge.
+
+- **Placeholders cannot overwrite a real contract.** They are written at version
+  0 and a real row's version is its deploy ledger. Measured in one snapshot:
+  41,010 placeholder rows — 36,246 contracts holding both a placeholder and a
+  real row (pure duplicates), 54 holding only a placeholder (addresses merely
+  mentioned). None of the placeholder rows carries identity data.
+- **The WASM upgrade path does overwrite, on purpose.** It clones the prior row,
+  changes the executable, and writes it at the upgrade ledger. 132 contracts on
+  production have two real versions (maximum two). Because it clones, the new
+  `executable_owner_id` / `executable_tag` columns ride along automatically.
+- **`contract_type_rebuild` rewrites the whole table and swaps it in.** Its
+  `INSERT … SELECT` named the columns explicitly and had not been told about
+  the two new ones. Probed on a throwaway ClickHouse 26.3 database: the short
+  list fails with `NUMBER_OF_COLUMNS_DOESNT_MATCH` before the `EXCHANGE`, so the
+  failure mode was a broken operator command, not lost data. Fixed, and guarded
+  by `staging_select_passes_every_column_through`, which reads the column list
+  off the same row struct the writer uses.
+- The other five `INSERT INTO soroban_contracts` found by grep are all test
+  fixtures, each after its file's `#[cfg(test)]`.
+
+**Cross-table review, 2026-09-11 — do the two defects found here exist elsewhere?**
+
+_Same-ledger version ties._ ClickHouse's documented rule: on equal version,
+"the most recent inserted row will remain" — physical insert order, not chain
+order — and deduplication happens only at a merge, which is not guaranteed.
+So every ledger-versioned table needs the writer to fold same-key rows before
+insert. Checked on `develop`:
+
+| table                                                                 | same-ledger tie handled by                           | verdict                                                                                                                                                        |
+| --------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `liquidity_pools`, `lp_positions`, `balances`, `nfts`, `nfts_pending` | `>=` watermark compare in the stage map              | correct (later wins)                                                                                                                                           |
+| `pool_state_changes`, `pool_instance_state`                           | `fold::keep_last_by_key`                             | correct, with corpus evidence in the comment                                                                                                                   |
+| `accounts`                                                            | per-field fold (`merge_account_state_overrides`)     | correct                                                                                                                                                        |
+| `account_entry_state`                                                 | map insert, last wins                                | correct                                                                                                                                                        |
+| `assets`                                                              | version-less, identity-only rows                     | harmless                                                                                                                                                       |
+| **`soroban_contract_metadata`**                                       | **nothing** — one row per change, `version` = ledger | **same defect**: two METADATA writes for one contract in one ledger leave the survivor to insert order. Unmeasured on production (read quota). Not fixed here. |
+
+`contract_executable_refs` now folds with the same shared helper rather than a
+hand-rolled map.
+
+_Rows from a mere mention._ Only two writers do it. `soroban_contracts` Pass-2
+stubs are removed by this task. `accounts` has the same shape by design: every
+transaction participant gets an `accounts` row, and one never observed as an
+`AccountEntry` change is a skeleton (`sequence_number = 0`) —
+`backfill-runner/src/bootstrap.rs` exists to fill those from RPC. Different
+consequence (a participant usually IS a live account, and `last_seen_ledger` is
+an activity fact), so not the same defect, but the same question applies to a
+payment towards an account that does not exist. Not changed here.
+
+**Correction to the address/deployment split.** It was argued as removing
+duplicate writes. It does not: `contract_addresses` gets a row for every
+address seen in every batch, the same volume the stubs had, just no longer
+disguised as contracts. What it genuinely buys is narrower — the transaction
+page resolves contract surrogates through it, and for the 54 addresses with no
+contract behind them (53 of them invocation targets, 0 of 54 with a live
+instance on mainnet) no row means `unwrap_or_default()`, an empty address.
+Whether to keep it is open (D5).
+
+**Who actually translates a contract surrogate back into a StrKey, and why
+the answer differs per reader (traced 2026-09-11).** Surrogates exist because
+`soroban_contracts`, `accounts` and `transactions` are each referenced by 6–8
+downstream tables, and ClickHouse joins and groups on an `Int64` in one CPU
+operation where a 56-character StrKey costs a variable-length compare
+(`persist/ids.rs`). The price is that every reader needing the text must look
+it up. The readers, and what each one is really asking:
+
+| endpoint                                         | reader                                                                                                | question it asks                         | may it see a non-contract address?                                                    |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------- |
+| `/transactions/{hash}`                           | `fetch_operations`, `fetch_event_appearances`, `fetch_invocation_appearances` via `resolve_contracts` | "what address did this row name"         | **yes** — a call to an address with nothing behind it is a fact about the transaction |
+| `/liquidity-pools`, `/liquidity-pools/{pool_id}` | SAC mirror of a pool leg                                                                              | "is there a DEPLOYED SAC for this asset" | **no** — `PoolAssetLeg.contract_id` is documented as `None` without a deployed mirror |
+| `/accounts/{account_id}`                         | `BALANCES_SQL`, token contract of a balance                                                           | "what address is this token"             | tokens are always deployed, so no difference                                          |
+| asset list search                                | `build_list_seek_sql`, token contract → metadata                                                      | same                                     | same                                                                                  |
+| NFT list                                         | `FROM soroban_contracts` directly, not a join                                                         | "which NFT contract"                     | NFT contracts are always deployed; untouched                                          |
+
+The split had pointed the pool joins at `contract_addresses`. Because
+`asset_sac` also carries the surrogate of UN-deployed SACs, and the dictionary
+knows every address seen, the pool leg would have started returning a contract
+address for a SAC that does not exist on chain — against the documented API
+contract. No visible change in the current frontend (`legHref` only reaches
+`contract_id` when a leg lacks code and issuer, which classic and native legs
+never do), but a real contract break for any other consumer. Restored to
+`soroban_contracts`, with the reason written at both join sites.
+
+**The read-path SQL did not run at all as first written (found 2026-09-11).**
+Rust compiled it as a string and nothing ever executed it. Run against the
+real `init.sql` definitions on a throwaway local ClickHouse 26.3 database,
+both `fetch_contract` and `fetch_wasm_interface` failed on every contract
+with `Code 184`: the refs subquery selected `argMax(wasm_hash, ledger) AS
+wasm_hash, max(ledger) AS ledger`, and the alias `ledger` shadowed the column
+inside `argMax`, which ClickHouse reads as an aggregate inside an aggregate.
+Deployed, every contract detail page and every decompiler request would have
+returned 500.
+
+The fix also removed the `ref.ledger != 0` sentinel, which was the other smell:
+the subquery now returns `toNullable(argMax(wasm_hash, ledger))`. A LEFT JOIN
+miss fills a column with its type's default, which is NULL only for a Nullable
+type — so a miss is honestly NULL without leaning on "ledger 0 cannot exist",
+and `coalesce(sc.wasm_hash, ref.wasm_hash)` replaces the guarded `if`.
+Re-verified on the same seeded tables: own-code contract → its hash, SAC →
+NULL, fleet member → the NEWER of two refs rows, fleet member whose tag has no
+row → NULL (not 32 zero bytes); the decompiler query resolves the ABI through
+the referenced hash. A CH-backed regression test for these two queries does
+not exist yet and is proposed, not written.
+
+**D5, the concrete case.** `CDUQMUE7GNZRQLFF2OSK3577OVBKO2QHXTUTLMNGEHZVPGJCGTL57RAO`
+has no contract row, no live instance on mainnet, and is not a SAC. Failed
+transaction `d5b29b00178940cb73a2c0ad6e803693ede33d3a2c9672ffa12e0e9460fc3078`
+(ledger 58,541,598) called it. On `/transactions/{hash}` the frontend builds
+the operation headline from the DB-sourced `operations[].contract_id`
+(`web/src/pages/transaction-detail/shared/humanizeOp.ts`), which resolves
+through `resolve_contracts`. With a row for the address: "Called fn() on
+CDUQ…". Without one the API returns `null`, and the headline silently drops
+the address. The heavy call tree still shows it as text when the public-archive
+fetch succeeds; when that fetch is unavailable, the address is gone from the
+page entirely. The `soroban_invocations` / `soroban_events` light lists are
+fallback-only (`[]` whenever the archive fetch succeeds), so they are not the
+argument.
+
+**A ClickHouse regression test now guards the contract-detail SQL.**
+`crates/api/src/contracts/queries_ch_tests.rs` creates a throwaway database,
+applies the real schema with `db_clickhouse::apply_init_sql`, seeds an
+own-code contract, a SAC, a fleet member with two targets for its tag, and a
+fleet member whose tag has no target, then runs `fetch_contract` and
+`fetch_wasm_interface` and asserts every resolved hash, owner, tag and ABI.
+Gated on `CH_URL` like the other DB-backed tests in the crate. Proven against
+the defect it exists for: with the `max(ledger) AS ledger` alias put back, it
+fails with `Code: 184 ... ILLEGAL_AGGREGATION` (exit 101); restored
+byte-for-byte, it passes again.
+
+**D5 correction: the transaction page is mostly archive-sourced.**
+`get_transaction` runs the DB operations query and the public-archive fetch in
+parallel; the archive block (`heavy`) carries each operation's full parser
+details, including `"contractId"` as text (`xdr-parser/src/operation.rs`). The
+DB appearance lists are only a fallback for when the archive fetch fails. The
+one place the address still comes from the DB is the operation headline:
+`humanizeOp.ts` reads `functionName` from `heavy` but the address from
+`light.contract_id`. Reading `heavy.details.contractId` there instead removes
+the transaction page's need for any surrogate-to-StrKey lookup in the normal
+case, which takes away the last concrete argument for `contract_addresses`.
+
+**Side finding, not protocol 28: 138 deployed SACs are flagged as not deployed.**
+Found while checking whether pool legs could derive their SAC address
+(`derive_sac_strkey`, ADR 0051) instead of joining `asset_sac` →
+`soroban_contracts`. On production, `asset_sac.sac_deployed` never over-claims
+(0 flagged deployed without a deployment row) but under-claims for **138**:
+all are `is_sac = true` deployment rows, all deployed between ledgers
+58,628,632 and 62,803,627, each with exactly one `asset_sac` row. The
+mechanism is visible on `develop` in `persist/stage.rs`: the deployment path
+writes the deployed facet only when the deploy's asset identity resolved in the
+same batch (`let Some(sac) = &dep.sac_asset else { continue }`), while the
+override path for an address that emits events writes `deployed = 0`. Why the
+identity failed to resolve in that window, and why it stopped after
+62,803,627, is not proven.
+
+Consequence, read from code rather than seen on a live page: the assets API
+takes the link from this flag, so those 138 SACs render as unlinked and "not
+deployed" on the asset pages. It also means the pool join cannot simply be
+swapped for the flag — that would drop the address for the same 138. The
+principled direction is the one ADR 0051 already takes for the address itself:
+derive, don't copy. Deployment is a fact of `soroban_contracts`, keyed by an id
+that is itself derivable from `code:issuer`; the flag is a denormalised copy
+that has drifted. Not fixed here; belongs with `0452` (reserved SAC
+visibility) or `0503` (the completeness audit).
+
+**D5 decided 2026-09-11: one table (option B).** `contract_addresses` is
+removed again; `soroban_contracts` is the only home for contracts, written on a
+deployment or an executable update and never on a mere mention. Readers that
+resolve a surrogate go back to it. The transaction page's operation headline now
+reads the called contract from the archive block (`heavy.details.contractId`)
+and keeps the DB value only as the degraded-mode fallback, so an address with no
+contract behind it still renders when the archive is reachable.
+
+**D6 is not a new task.** `0503_OPS_exhaustive-completeness-audit-against-network-state`
+already owns this defect class: its "In-ledger ordering audit (2026-08-19)"
+table verifies the fold at every state-table emit site — and
+`soroban_contract_metadata` is simply missing from it. The finding belongs
+there as one more row.
+
+**Not deployable until the DDL runs.** Two metadata-only `ALTER`s on
+`soroban_contracts` plus the new table, and they must land BEFORE the code that
+writes them or the driver rejects the inserts client-side (task 0310).
 
 ### The stub mechanism itself, measured
 
