@@ -372,6 +372,55 @@ could inject a frame. **Zero occurrences in 309 355 024 contract events in one
 partition** — never attempted, worth knowing before someone relies on the tree
 as proof of anything.
 
+### The reject inventory of the full-range backfill (2026-09-13)
+
+The 0540 backfill decoded every token event from the ingest floor to L₀ with
+today's decoder, and its completion gate proved that every event is either an
+edge or a counted reject (29 of 29 partitions close to the unit — see 0540,
+"Completion gate 7 passed on the full range"). So the rejects are no longer an
+estimate; they are the complete list of what the decoder refuses on the whole
+range. It is this task's step-1 input.
+
+| Cause                        | Events    | What it means                                                             |
+| ---------------------------- | --------- | ------------------------------------------------------------------------- |
+| `unrecognised_topics`        | 6 010     | a token verb in a topic shape the decoder does not know                   |
+| `unrecognised_payload`       | 1 617     | a known topic shape with a data payload it does not know                  |
+| `emitter_not_sac`            | 139       | a labelled event whose emitter is not the asset's SAC — the spoofing gate |
+| `no_emitter`, `no_operation` | 0         |                                                                           |
+| **total**                    | **7 766** | in 6 964 ledgers                                                          |
+
+Counted from the worker logs (`token events rejected by the asset_transfers
+decoder`, one line per ledger), deduplicated per ledger because the workers'
+ranges overlapped: 7 250 log lines for 6 964 distinct ledgers. Cross-checked against the database on two slices where both
+sides were known: 5 = 5 in five Protocol 21 ledgers, 885 = 885 on
+64 000 000–64 128 000.
+
+Shapes already located:
+
+- The five Protocol 21 rejects (ledgers 52 510 752, 52 510 759, 52 558 370,
+  52 570 526, 52 570 585) are all `transfer`, all `unrecognised_topics`, from two
+  emitters that exist in neither `soroban_contracts` nor `assets`.
+- **175 events spell the verb in upper or mixed case** — `TRANSFER` 160 (three
+  partitions, one emitter per partition), `MINT` 6, `Mint` 6, `Clawback` 3.
+  `token_verb` matches case-insensitively, so they enter the decoder. The gate
+  arithmetic does not separate how many of them decoded from how many were
+  rejected. A SAC always emits lowercase and symbols are case-sensitive on
+  chain, so matching them at all is a policy choice this task owns.
+
+**The question the list has to answer is whether any of it is value we drop.**
+Rejects are 0.00014% of 5.475 bn events, but volume is not the measure — one
+rejected event can be a real movement missing from an account page. The method
+exists and needs no new tooling: for every rejected event's transaction, run the
+ledger-state witness (`operation_balance_deltas`, as `value_flow_oracle.rs`
+does) on the archive file. A holder whose balance changed in that asset with no
+edge is a decoder gap to fix; no balance change is a correct reject. Group by
+emitter first — the per-partition counts suggest a few emitters carry most of it.
+
+**The input is preserved on the box** as `~/bf-540/rejects-2026-09-13.log`
+(7 250 lines, extracted from `~/bf-540/w{0,1,2,3}.log` with the colour codes
+stripped). It is the only per-ledger record of the rejects: ClickHouse stores only
+what was accepted, so the ledger numbers cannot be recovered from the database.
+
 ### What this task now owns
 
 1. **One definition of a token movement**, in `domain`, used by `nft.rs`,
