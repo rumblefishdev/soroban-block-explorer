@@ -261,8 +261,14 @@ CREATE TABLE IF NOT EXISTS soroban_contracts (
     -- The owner is the usual `cityhash64(StrKey)` surrogate, consistent with
     -- `deployer_id`. The owner is itself a deployed contract, so its own row
     -- here resolves the StrKey for display.
-    executable_owner_id      Nullable(Int64),
-    executable_tag           Nullable(String),
+    --
+    -- `DEFAULT NULL` is load-bearing, not redundant: clickhouse-rs 0.15 rejects
+    -- an insert client-side when the table has a column the row struct lacks
+    -- and that column has no DEFAULT — `Nullable` alone does not count. Without
+    -- it, adding these columns to production stops every insert from the
+    -- indexer build still running, until it is replaced (task 0548 incident).
+    executable_owner_id      Nullable(Int64) DEFAULT NULL,
+    executable_tag           Nullable(String) DEFAULT NULL,
     -- `name` DROPPED (task 0304): dead since 0297 (no writer, reader-less,
     -- 0/148663 populated in prod). Prod `ALTER … DROP COLUMN name` pending.
     -- 0344: tx-detail resolves surrogate `id` -> `contract_id`, but `id` is not

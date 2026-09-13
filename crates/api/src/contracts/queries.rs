@@ -473,7 +473,8 @@ pub async fn fetch_contract(
     //      a bare FixedString(32) would come back as 32 zero bytes, a value that
     //      looks like a hash. And no `max(ledger) AS ledger` beside it: that alias
     //      shadows the column inside `argMax` and ClickHouse rejects the whole
-    //      query (Code 184) — which is exactly how it shipped the first time.
+    //      query (Code 184). The first draft did exactly that and never ran;
+    //      `queries_ch_tests.rs` now executes this SQL against the real schema.
     let row = client
         .query(
             "SELECT \
