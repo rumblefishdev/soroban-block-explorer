@@ -418,8 +418,68 @@ emitter first — the per-partition counts suggest a few emitters carry most of 
 
 **The input is preserved on the box** as `~/bf-540/rejects-2026-09-13.log`
 (7 250 lines, extracted from `~/bf-540/w{0,1,2,3}.log` with the colour codes
-stripped). It is the only per-ledger record of the rejects: ClickHouse stores only
-what was accepted, so the ledger numbers cannot be recovered from the database.
+stripped). It is the only per-ledger record of the rejects. The rejected events
+themselves are in `soroban_events`, and the ledger list is what makes finding
+them there a cheap query (next section).
+
+### What the rejects are — every event located, the value-bearing ones witnessed (2026-09-13)
+
+**All 7 766 found in the database.** Given the ledger list from the log, a
+rejected event is a token-verb row in `soroban_events` with no `asset_transfers`
+row at the same `(ledger_sequence, application_order, event_index)`. Run per
+partition with both sides restricted to the listed ledgers, the anti-join
+returned exactly the log's count in every one of the 23 partitions that carry
+rejects. The list is what keeps that join small.
+
+**Grouped by (emitter, shape):** 307 groups from 209 emitters. Each group was
+then put through the ledger-state witness (`operation_balance_deltas`, the same
+comparison as `value_flow_oracle.rs`) on its archive files: one transaction per
+group, three for groups of 50 or more (341 transactions, 338 ledgers), and then
+**every** transaction of the groups where a balance could be involved (971
+transactions, 914 ledgers). The witness also listed which storage keys of the
+rejected emitter the transaction changed, which is what separates a token from
+a contract that only announces one.
+
+| Class                                       | Events    | Emitters | What the witness shows                                                                                                                                                                          | Verdict                           |
+| ------------------------------------------- | --------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| Concentrated-liquidity positions            | 3 698     | 129      | 1-topic `mint` / `burn` with `{amount, amount0, amount1, owner, …}`; the emitter's storage changes `Position` / `Tick` keys, never a balance                                                    | correct reject                    |
+| NFT ownership                               | 2 105     | 22       | mostly `["transfer", u32 id]` → `address` (no sender); storage changes `Token(id)` / `Owner` / `Item` keys                                                                                      | **non-fungible movement dropped** |
+| Fungible, balance moved with no edge        | **230**   | 24       | a `Balance(Address)` entry with an `i128` changed for the event's own holder — confirmed on **all 230**, not a sample; 28 holders (27 `G…`, 1 `C…`), ledgers 57 848 386 – 64 240 682            | **value dropped**                 |
+| Balance-like storage the reader cannot read | 692       | 11       | a `Balance` key changed, but its value is not a bare `i128` (lending receipts `{mint_amount u128, mint_tokens}`) or the key has no holder (a game contract's `mint` with `map{}` / `void` data) | not proven either way             |
+| Emitter holds no balance                    | 1 041     | 24       | bridge announcements (`vec[string, i128, remote address…]`), a BTC-bridge `mint` restating a deposit, 138 of the 139 `emitter_not_sac` labels, the 160 upper-case `TRANSFER`s                   | correct reject                    |
+| **total**                                   | **7 766** | 209      |                                                                                                                                                                                                 |                                   |
+
+The 230 by shape: `["mint"/"burn", address]` with `vec[i128, i128]` data (215;
+the decoder takes a scalar or a map, never a vector), a 1-topic
+`["mint"/"burn"]` with a bare `i128` (11; the holder is in no topic and no
+payload, only in storage), a 1-topic `["mint"]` with `vec[address, i128]` (2),
+a 1-topic `["transfer"]` with `vec[from, to, amount]` (1), and one
+`emitter_not_sac`: a bespoke token labelling its own transfer
+`"USDC:GA5ZSE…"`. The gate is right that it is not USDC; dropping it also drops
+the token's real movement.
+
+**Answers to the questions this section raised above:**
+
+- **Is any of it value the index drops?** Yes: 230 fungible movements, witnessed
+  one by one, plus 2 105 NFT ownership changes. 692 stay open because the
+  reader cannot see the storage layout. The rest (4 739) is correctly refused.
+- **The 175 mixed-case verbs:** 169 were rejected (`TRANSFER` 160, all one
+  bridge contract; `MINT` 6; `Mint` 3). The other 6 (`Mint` 3, `Clawback` 3)
+  decoded into edges. The policy question stays with step 2, but it affects
+  nine events at most.
+
+**Found on the side — a token that moves without an event.** In all three sampled
+transactions of the upper-case `TRANSFER` group, a bespoke token
+(`CB32ILGARL45X7IW6ROE24VPHSVRHDDQQ7GC2L67LYGB4AGZ2LU3565Z`) changed a contract's
+`Balance(Address)` entry with no token event at all, and the bridge's
+`TRANSFER` carries that same amount each time. Not a reject, so not in this list — a
+movement no event-based index can see, and only the ledger reader catches it.
+
+**Reproducibility.** The analysis ran as scratch scripts, not committed: the
+anti-join above, a grouping by `(emitter, verb + topic types, data type or map
+keys)`, and a witness binary built against `xdr-parser` at `71f1536a`
+that prints, per transaction, the edges, the witness differences and the
+emitter's changed storage keys. The ledger list is re-derivable from the log.
 
 ### What this task now owns
 
