@@ -438,16 +438,19 @@ group, three for groups of 50 or more (341 transactions, 338 ledgers), and then
 **every** transaction of the groups where a balance could be involved (971
 transactions, 914 ledgers). The witness also listed which storage keys of the
 rejected emitter the transaction changed, which is what separates a token from
-a contract that only announces one.
+a contract that only announces one — and, for the 692 events whose balance
+entries it could not value at first, dumped each entry's before and after.
 
-| Class                                       | Events    | Emitters | What the witness shows                                                                                                                                                                          | Verdict                           |
-| ------------------------------------------- | --------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| Concentrated-liquidity positions            | 3 698     | 129      | 1-topic `mint` / `burn` with `{amount, amount0, amount1, owner, …}`; the emitter's storage changes `Position` / `Tick` keys, never a balance                                                    | correct reject                    |
-| NFT ownership                               | 2 105     | 22       | mostly `["transfer", u32 id]` → `address` (no sender); storage changes `Token(id)` / `Owner` / `Item` keys                                                                                      | **non-fungible movement dropped** |
-| Fungible, balance moved with no edge        | **230**   | 24       | a `Balance(Address)` entry with an `i128` changed for the event's own holder — confirmed on **all 230**, not a sample; 28 holders (27 `G…`, 1 `C…`), ledgers 57 848 386 – 64 240 682            | **value dropped**                 |
-| Balance-like storage the reader cannot read | 692       | 11       | a `Balance` key changed, but its value is not a bare `i128` (lending receipts `{mint_amount u128, mint_tokens}`) or the key has no holder (a game contract's `mint` with `map{}` / `void` data) | not proven either way             |
-| Emitter holds no balance                    | 1 041     | 24       | bridge announcements (`vec[string, i128, remote address…]`), a BTC-bridge `mint` restating a deposit, 138 of the 139 `emitter_not_sac` labels, the 160 upper-case `TRANSFER`s                   | correct reject                    |
-| **total**                                   | **7 766** | 209      |                                                                                                                                                                                                 |                                   |
+| Class                                | Events    | Emitters | What the witness shows                                                                                                                                                                              | Verdict                                                                       |
+| ------------------------------------ | --------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Concentrated-liquidity positions     | 3 698     | 129      | 1-topic `mint` / `burn` with `{amount, amount0, amount1, owner, …}`; the emitter's storage changes `Position` / `Tick` keys, never a balance                                                        | correct reject                                                                |
+| NFT ownership                        | 2 105     | 22       | mostly `["transfer", u32 id]` → `address` (no sender); storage changes `Token(id)` / `Owner` / `Item` keys                                                                                          | **non-fungible movement dropped**                                             |
+| Fungible, balance moved with no edge | **230**   | 24       | a `Balance(Address)` `i128` entry of the emitter changed with no matching edge — confirmed on **all 230**, not a sample; 28 holders (27 `G…`, 1 `C…`), ledgers 57 848 386 – 64 240 682              | **value dropped**                                                             |
+| Non-standard balance layouts         | 5         | 3        | a pass token whose `Balance(Address)` is a `u64` of 1 beside an `Expiry` (3 mints); prediction-market outcome shares keyed `Balance(market, holder, outcome)` (2 burns)                             | **value dropped**; the second has no single-asset identity to record it under |
+| Restated lending mints               | 218       | 6        | `["mint", address]` with `{mint_amount, mint_tokens}` beside a standard `mint` from the same contract; the `Balance(Address)` change equals that accepted edge in every one of the 218 transactions | correct reject                                                                |
+| Game cards                           | 469       | 2        | `mint` / `burn` naming only the owner, data `map{}` or `void`; every one of the 469 transactions changes the owner's card-id list (`OwnerOwnedCardIds`) — the id exists only in storage             | item ownership the event cannot name                                          |
+| Emitter holds no balance             | 1 041     | 24       | bridge announcements (`vec[string, i128, remote address…]`), a BTC-bridge `mint` keyed by the deposit's hash, 138 of the 139 `emitter_not_sac` labels, the 160 upper-case `TRANSFER`s               | correct reject                                                                |
+| **total**                            | **7 766** | 209      |                                                                                                                                                                                                     |                                                                               |
 
 The 230 by shape: `["mint"/"burn", address]` with `vec[i128, i128]` data (215;
 the decoder takes a scalar or a map, never a vector), a 1-topic
@@ -460,9 +463,11 @@ the token's real movement.
 
 **Answers to the questions this section raised above:**
 
-- **Is any of it value the index drops?** Yes: 230 fungible movements, witnessed
-  one by one, plus 2 105 NFT ownership changes. 692 stay open because the
-  reader cannot see the storage layout. The rest (4 739) is correctly refused.
+- **Is any of it value the index drops?** Yes: 230 fungible movements witnessed
+  one by one, 5 more in non-standard balance layouts, and 2 105 NFT ownership
+  changes. 469 game-card changes are ownership too, but the event names no id,
+  so no event decoder can record them. The remaining 4 957 are correctly
+  refused. Nothing is left unclassified.
 - **The 175 mixed-case verbs:** 169 were rejected (`TRANSFER` 160, all one
   bridge contract; `MINT` 6; `Mint` 3). The other 6 (`Mint` 3, `Clawback` 3)
   decoded into edges. The policy question stays with step 2, but it affects
@@ -479,7 +484,7 @@ movement no event-based index can see, and only the ledger reader catches it.
 anti-join above, a grouping by `(emitter, verb + topic types, data type or map
 keys)`, and a witness binary built against `xdr-parser` at `71f1536a`
 that prints, per transaction, the edges, the witness differences and the
-emitter's changed storage keys. The ledger list is re-derivable from the log.
+emitter's changed storage keys, with their before and after values on request. The ledger list is re-derivable from the log.
 
 ### What this task now owns
 
