@@ -1000,6 +1000,35 @@ Operational notes from the run, for whoever repeats it:
   range first. `SELECT 1` is no probe for that quota: it reads no bytes and
   passes while every real read is refused.
 
+### The floor removed, the old column dropped, both in production (2026-09-13)
+
+**`net_settled` dropped.** `ALTER TABLE operation_asset_appearances DROP COLUMN
+net_settled` ran on production after gate 7 passed. The column held ~394 M values
+in ledgers 63 699 653 – 64 317 018, written by the indexer before this task's
+deploy; no code on `develop` declared or read it. Three columns that were never
+written ran in the same window under task 0374 (`liquidity_pools.share_token_id`,
+all 0; `liquidity_pool_snapshots.tvl` / `volume` / `fee_revenue`, all NULL).
+Checked afterwards: none of the five columns exists in `system.columns`, no
+mutation on the three tables is pending, the indexer kept writing at the tip.
+
+**The floor removed, not lowered** (commit c66d1ecb). `VALUE_FLOW_FLOOR_LEDGER`
+and its pinning test are gone; `balance_changes` is a plain array in the DTO,
+OpenAPI and the generated types, and the cell has two states (`0` and signed
+amounts) instead of three. Lowering it to the ingest floor would have been a
+constant that no transaction can ever sit below — the account list reads
+`transactions`, which starts at the same floor — so it bought nothing but a
+branch. What replaces it as the invariant is `docs/backfills.md` rule 6: a pass
+that adds transactions writes `asset_transfers` in the same pass.
+
+**Deployed** the same evening, API first, then the web bundle:
+
+| Check                         | Result                                                                                                                                                                                                                                         |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Explorer-production-Compute` | `UPDATE_COMPLETE` 19:23 UTC; only the API function changed, indexer and enrichment code untouched                                                                                                                                              |
+| Lambda `Errors`               | 0 for API, indexer and enrichment from 13:00 to 19:30 UTC (covers the DROPs and the deploy); indexer ~325 invocations / 30 min, steady                                                                                                         |
+| Web bundle                    | Turnstile site key present; the account chunk's balance cell starts at `changes.length === 0`, no null branch                                                                                                                                  |
+| Account page, clean browser   | An account whose latest transactions sit below the old floor (last one at ledger 62 000 014) shows **−1.59998 XLM** and **+0.1 XLM** — the same net the index holds for those two transactions; before the removal both rendered "Not indexed" |
+
 ### Design decisions
 
 #### From plan
