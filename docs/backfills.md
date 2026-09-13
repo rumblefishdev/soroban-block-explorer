@@ -246,6 +246,18 @@ lesson generalises: **any** version-less RMT table where a parse can emit more
 than one row per key is exposed to the same silent corruption, and the bad rows
 survive until someone rewrites them.
 
+### 6. A pass that adds transactions must write `asset_transfers` in the same pass
+
+The account page draws an empty `balance_changes` as a measured `0`, because
+`asset_transfers` covers every indexed transaction (task 0540, proven on the
+whole ingested range). Until that was proven a ledger floor in the API answered
+"not indexed" below the backfilled range; it has been removed, so **nothing in
+code guards this any more**. A pass that indexes transactions the table does not
+cover — a re-parse below the ingest floor, a gap refill — would make every such
+transaction show "no change" when nobody looked. Include `asset_transfers` (and
+its companions `soroban_event_ops`, `transaction_memos`) in that pass, then run
+the completion gate on the new range before anyone reads it.
+
 ---
 
 ## Indexer: stop it, or not?

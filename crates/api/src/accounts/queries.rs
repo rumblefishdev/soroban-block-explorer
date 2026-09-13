@@ -26,9 +26,7 @@ use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use super::balance_changes::{
-    BalanceChange, TxKey, VALUE_FLOW_FLOOR_LEDGER, fetch_balance_changes,
-};
+use super::balance_changes::{BalanceChange, TxKey, fetch_balance_changes};
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql};
 use crate::transactions::dto::TxListCursor;
@@ -100,12 +98,10 @@ pub struct AccountTxRow {
     /// Net per-asset balance change FOR THIS ACCOUNT (task 0540), in the order
     /// the movements happened on the chain.
     ///
-    /// `None` = **not indexed**: the transaction is below
-    /// [`VALUE_FLOW_FLOOR_LEDGER`], where `asset_transfers` holds no rows at
-    /// all. `Some([])` = indexed, and this account's balances did not change.
-    /// The two must never render alike — an absent measurement drawn as a zero
-    /// is a value we did not measure.
-    pub balance_changes: Option<Vec<BalanceChange>>,
+    /// Empty = this account's balances did not change. `asset_transfers`
+    /// covers every indexed transaction (proven on the whole range, task 0540
+    /// gate 7), so an empty list is a measurement, not a gap.
+    pub balance_changes: Vec<BalanceChange>,
 }
 
 /// `assets.asset_type` SMALLINT → its own domain's label (task 0496).
@@ -721,12 +717,9 @@ pub async fn fetch_transactions(
     // Step 2b: this account's per-asset balance change for the same page
     // (task 0540). Keyed on `(ledger_sequence, application_order)` — the
     // `asset_transfers` sort-key prefix, and the reason step 2 above is what
-    // this hangs off rather than a second driver seek. Only transactions AT OR
-    // ABOVE the floor are asked for: below it the table is empty, and asking
-    // would return "nothing moved" for every one of them.
+    // this hangs off rather than a second driver seek.
     let flow_keys: Vec<TxKey> = page_rows
         .iter()
-        .filter(|r| r.ledger_sequence >= VALUE_FLOW_FLOOR_LEDGER)
         .map(|r| TxKey {
             ledger_sequence: r.ledger_sequence,
             application_order: r.application_order,
@@ -774,13 +767,10 @@ pub async fn fetch_transactions(
             operation_types,
             created_at: millis_to_utc(row.created_at),
             // Absent from the map means "moved nothing", which is a real
-            // measurement — but only above the floor. Below it there is no
-            // measurement at all, and `None` says so.
-            balance_changes: (row.ledger_sequence >= VALUE_FLOW_FLOOR_LEDGER).then(|| {
-                flows
-                    .remove(&(row.ledger_sequence, row.application_order))
-                    .unwrap_or_default()
-            }),
+            // measurement: `asset_transfers` covers every indexed transaction.
+            balance_changes: flows
+                .remove(&(row.ledger_sequence, row.application_order))
+                .unwrap_or_default(),
         });
     }
     Ok(out)
