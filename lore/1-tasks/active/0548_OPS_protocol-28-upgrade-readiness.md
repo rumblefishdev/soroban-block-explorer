@@ -561,7 +561,74 @@ there as one more row.
 
 **Not deployable until the DDL runs.** Two metadata-only `ALTER`s on
 `soroban_contracts` plus the new table, and they must land BEFORE the code that
-writes them or the driver rejects the inserts client-side (task 0310).
+writes them or the driver rejects the inserts client-side (task 0310). The
+columns MUST carry `DEFAULT NULL` — the first version of this paragraph said
+"before the code" and nothing about a default, and that caused the incident
+below. Done on production 2026-09-11; the statements as they now stand:
+
+```sql
+ALTER TABLE soroban_contracts ADD COLUMN IF NOT EXISTS executable_owner_id Nullable(Int64) DEFAULT NULL;
+ALTER TABLE soroban_contracts ADD COLUMN IF NOT EXISTS executable_tag Nullable(String) DEFAULT NULL;
+-- contract_executable_refs: CREATE TABLE verbatim from init.sql
+```
+
+### Incident 2026-09-11 — the column DDL froze ingestion for 31 minutes
+
+**Impact.** No ledger persisted from 15:05:28 to 15:36:49 UTC; the site served
+data up to ~31 min stale; ingestion caught up at 15:45. Nothing was lost or
+duplicated (verified below). `production-indexer-ch-write-failures` paged at
+15:06, `production-ingestion-backlog-age` at 15:12; both back to OK by 15:56.
+
+**Cause.** The two `ADD COLUMN`s ran as `Nullable(...)` with no `DEFAULT`,
+ahead of this branch's deploy. The indexer build still running in production
+writes `SorobanContractRow` without the new fields, and clickhouse-rs 0.15
+validates the row struct against `DESCRIBE TABLE` before every insert: a
+table column the struct lacks must have a default (`Default`, `Materialized`
+or `Alias` — `row_metadata.rs`), and `Nullable` alone is not one. Every insert
+failed client-side with `schema mismatch … the following non-default columns
+are missing: executable_owner_id, executable_tag`; the reconcile failed, the
+doorbell was redelivered, and the same failure repeated.
+
+**Why the first fix did not unstick it.** `MODIFY COLUMN … DEFAULT NULL` on
+both columns (15:22) corrected the table, but the driver caches the
+`DESCRIBE` result per client, and the client lives for the whole Lambda
+execution environment (`crates/indexer/src/main.rs`). A reported batch-item
+failure is not a crash, so Lambda never reset the environment; per the AWS
+execution-environment docs only a crash or timeout does, otherwise
+environments are recycled "every few hours". A no-op
+`aws lambda update-function-configuration --region eu-central-1 --description …`
+at 15:36:47 brought a new environment: new `DESCRIBE` at 15:36:51, zero
+errors from it, catch-up at ~0.9 ledgers/s against the network's ~0.18
+(estimate from ~5.5 s closes), i.e. the lag shrank ~4 s per second.
+
+**Why it was missed.** Task 0310 recorded this driver rule, but framed it
+around DROPPING columns ("deploy + ALTER + recycle are one window"); for an
+ADD, "column before code" was taken to be safe on its own. The statements were
+never checked against the struct running in production, only against this
+branch's struct, which names both columns and so passes. `init.sql` had no
+default either, so the DDL matched the repository and looked right.
+
+**Verification that nothing was damaged** (production, read-only, 2026-09-11):
+
+| check                                                     | result                                                                                                                                                                                              |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ledgers` 64,379,000 – 64,380,287                         | 1,288 rows = 1,288 distinct = the range: no gap, no duplicate                                                                                                                                       |
+| `transactions` in the stall range 64,379,862 – 64,380,287 | 158,204 rows = 158,204 distinct = `sum(transaction_count)` from the ledger headers                                                                                                                  |
+| partial writes from the failed attempts                   | no new part in `accounts`, `soroban_contracts`, `transactions` during the stall; first retried ledger holds one row per key (`accounts` 30/30, `account_entry_state` 27/27, `transactions` 343/343) |
+| enrichment                                                | publish runs only after a successful persist (`handler/mod.rs`); queue empty                                                                                                                        |
+| the DDL itself                                            | metadata-only: 0 mutations; new columns NULL everywhere; new table empty                                                                                                                            |
+| DLQ `production-ledger-processor-dlq`                     | 0 — the stall ended before any doorbell reached `maxReceiveCount`                                                                                                                                   |
+
+The recovery was clean for the reason task 0241 designed for: the reconcile
+resumes from `max(sequence)` and the `ledgers` row is written last, so a
+failed attempt leaves nothing that counts as persisted.
+
+**What changes.** Every `ADD COLUMN` carries an explicit `DEFAULT` (for a
+`Nullable`, `DEFAULT NULL`), so "column first, code later" is actually safe;
+any `ALTER` on a table the indexer writes is checked against the struct
+running in production before it is handed over, and is followed by the
+environment recycle above. `init.sql` now declares the default, and the rule
+is written into `docs/deployment.md` next to the existing DDL gotcha.
 
 ### The stub mechanism itself, measured
 
@@ -640,6 +707,9 @@ dependency on THIS repo's `develop` branch, locked at rev `d61b359f`. So:
 - [ ] **Decision needed** — what `wasm_hash` and the upgradeable chip should say
       for an external-ref contract (gaps 1 and 2 above). Not a Sep-16 blocker;
       bites the first time a mainnet contract uses CAP-85
+- [x] Production schema for this branch in place — both `soroban_contracts`
+      columns with `DEFAULT NULL`, `contract_executable_refs` created
+      (2026-09-11; see the incident above)
 - [ ] Sibling `prices` repo bumped in step with this one — its exact `=27.0.0`
       pin cannot coexist with our `^28` once `develop` moves
 - [x] **Docs updated** — the expected `N/A` turned out to be wrong. Two
