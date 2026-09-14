@@ -3,7 +3,7 @@ id: '0052'
 title: 'Testnet as a second environment and pre-mainnet staging tier'
 status: proposed
 deciders: [stkrolikiewicz]
-related_tasks: []
+related_tasks: ['0553']
 related_adrs: ['0009', '0047']
 tags: [testnet, environments, staging, branch-model, clickhouse, ci-cd, infra]
 links:
@@ -18,6 +18,12 @@ history:
       `testnet` database on the shared `ch-prod-01` node (prices-tenant pattern);
       branch = environment (develop → testnet → master); testnet doubles as the
       functional staging tier that replaces the removed us-east-1 staging fossil.
+  - date: '2026-09-14'
+    status: proposed
+    who: stkrolikiewicz
+    note: >
+      Implementation task 0553 filed from the Implementation section. Status
+      stays proposed until it ships.
 ---
 
 # ADR 0052: Testnet as a second environment and pre-mainnet staging tier
