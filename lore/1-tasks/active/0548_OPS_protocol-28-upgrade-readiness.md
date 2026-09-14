@@ -716,6 +716,21 @@ repair would have reopened them). Both rebuilds now copy with `* REPLACE (…)`.
 Two ClickHouse-backed tests plant the columns, run the real swap and read
 them back; both fail against the previous SQL and pass against the new.
 
+**Fixed after an automated PR review (same day).** CAP-85 references were
+folded per transaction only, so two re-points of one tag in two transactions
+of one ledger tied on version; `build_executable_ref_rows` now folds across
+the ledger. The upgrade prefetch now fails closed: its error aborts the ledger
+before the commit marker and the reconcile retries, instead of skipping an
+upgrade that nothing would ever recover.
+
+Declined from that review, each for a stated reason: resolving the reference
+outside the 45-second response cache (every mutable contract field, including
+a plain Wasm upgrade, already carries that TTL); a throwaway database per
+repair test (the crate's CH tests share one database by convention); giving
+the backfill sink a prior-row prefetch and classifying fleet members by the
+code they run (both already listed below as follow-ups, not regressions of
+this branch).
+
 **Recorded in `docs/deployment.md`:** after a protocol vote the rollback floor
 is the first build carrying the matching `stellar-xdr` pin. For this vote that
 is commit `840f2b58` — the bump alone, which decodes protocol 28 and inserts
@@ -723,8 +738,6 @@ cleanly against the production schema.
 
 **Open from the review, not blocking the vote:**
 
-- CAP-85 references are folded per transaction, not per ledger, so two
-  re-points of one tag inside one ledger tie on version.
 - A non-UTF-8 tag is stored as the literal `"<invalid-utf8>"` and becomes a
   key; `asset_code.rs` (task 0359) already rejected that policy.
 - The contract-detail query joins the refs subquery unconditionally

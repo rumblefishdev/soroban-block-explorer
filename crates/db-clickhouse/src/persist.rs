@@ -123,6 +123,8 @@ pub async fn persist_ledger_clickhouse(
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
     // here would otherwise orphan contract-held balances under their surrogate key.
     let sac_classic = sac_classic?;
+    // Fail closed here too: a skipped upgrade row has no recovery pass.
+    let prior_contract_rows = prior_contract_rows?;
     // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
     // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
     // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
@@ -494,14 +496,16 @@ async fn query_contract_verdicts(
 /// written as, so no projection DTO is needed — the upgrade build just clones it
 /// and overrides the three columns the upgrade changes.
 ///
-/// Gated + fail-open: no `executable_update` event in the ledger (≈always) →
-/// **no round trip**, empty map. Any query failure → empty map + `warn!`, and the
-/// upgrade row is not emitted this ledger. Nothing recovers it: the
-/// `wasm-upgrade-backfill` pass was removed in task 0425.
+/// Gated: no `executable_update` event in the ledger (≈always) → **no round
+/// trip**, empty map. Fail-closed on a query failure, unlike the verdict
+/// prefetches: those have a batch pass that repairs a skipped verdict, while a
+/// skipped upgrade row is lost for good (`wasm-upgrade-backfill` was removed in
+/// task 0425). The error aborts the ledger before its commit marker, so the
+/// reconcile retries it.
 async fn fetch_prior_contract_rows(
     client: &Client,
     events: &[(String, Vec<ExtractedEvent>)],
-) -> HashMap<String, rows::SorobanContractRow> {
+) -> Result<HashMap<String, rows::SorobanContractRow>, clickhouse::error::Error> {
     let mut want: Vec<&str> = events
         .iter()
         .flat_map(|(_, evs)| evs.iter())
@@ -517,7 +521,7 @@ async fn fetch_prior_contract_rows(
     want.sort_unstable();
     want.dedup();
     if want.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
 
     // `want` are `C…` StrKeys from parser output (base32, no quote chars).
@@ -533,23 +537,14 @@ async fn fetch_prior_contract_rows(
     let sql =
         format!("SELECT ?fields FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})");
 
-    match client
+    let rows = client
         .query(&sql)
         .fetch_all::<rows::SorobanContractRow>()
-        .await
-    {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|r| (r.contract_id.clone(), r))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "0320 live: prior contract-row prefetch failed — upgrade row skipped this ledger, not recovered"
-            );
-            HashMap::new()
-        }
-    }
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.contract_id.clone(), r))
+        .collect())
 }
 
 #[cfg(test)]

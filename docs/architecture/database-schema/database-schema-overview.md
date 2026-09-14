@@ -836,12 +836,12 @@ CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern
 > no longer the only way a contract has code. The three kinds are read off the
 > columns, with no enum to keep in sync:
 >
-> | condition                         | kind                                                        |
-> | --------------------------------- | ----------------------------------------------------------- |
-> | `is_sac`                          | native host implementation — there is no code entry to hash |
-> | `wasm_hash IS NOT NULL`           | carries its own code                                        |
-> | `executable_owner_id IS NOT NULL` | runs the owner's code (a "fleet member")                    |
-> | none of the above                 | unknown — a Pass-2 lookup row, no deploy observed           |
+> | condition                         | kind                                                                                                                                  |
+> | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+> | `is_sac`                          | native host implementation — there is no code entry to hash                                                                           |
+> | `wasm_hash IS NOT NULL`           | carries its own code                                                                                                                  |
+> | `executable_owner_id IS NOT NULL` | runs the owner's code (a "fleet member")                                                                                              |
+> | none of the above                 | not a contract kind: a pre-0548 placeholder row, no longer written, removed by the cleanup `DELETE WHERE wasm_uploaded_at_ledger = 0` |
 >
 > The hash a reference resolves to is **not** stored on the contract. It lives
 > in `contract_executable_refs`, keyed `(owner_id, tag)` — the composite is the
@@ -861,8 +861,10 @@ CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern
 >
 > One row per `(owner, tag)` **per ledger**: an owner may re-point the same tag
 > twice in a single ledger, and the row is versioned by ledger, so two
-> same-ledger rows would be indistinguishable to the merge. The parser collapses
-> them in chain-application order before they are written.
+> same-ledger rows would be indistinguishable to the merge. The parser folds
+> each transaction on its own, so the writer (`build_executable_ref_rows`) folds
+> again across the whole ledger, in application order, and writes only the value
+> the ledger ended on.
 >
 > No backfill exists or can exist: references are impossible before the
 > protocol-28 vote, so the table is complete from its first row.

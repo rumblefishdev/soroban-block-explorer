@@ -558,7 +558,7 @@ pub async fn fetch_contract(
 ///
 /// Task 0548 — "no WASM" alone used to mean `Some(false)`, on the reasoning
 /// that a missing hash means SAC. It does not. A row can also lack one because
-/// it is a Pass-2 lookup stub (no deploy ever observed), and from protocol 28
+/// it is a pre-0548 placeholder row (no deploy ever observed), and from protocol 28
 /// because the contract runs code owned by ANOTHER contract (CAP-85) — the
 /// most upgradeable kind there is, since its owner re-points the whole fleet
 /// at once. Both are "we do not know", and that must not render as a
@@ -1246,7 +1246,7 @@ mod tests {
 
     /// Task 0548 — the case that used to answer a confident "cannot upgrade"
     /// about a contract we know nothing about. Covers both populations: a
-    /// Pass-2 lookup stub (no deploy observed) and, from protocol 28, a
+    /// pre-0548 placeholder row (no deploy observed) and, from protocol 28, a
     /// contract whose code is owned by another contract.
     #[test]
     fn no_wasm_and_not_a_sac_is_unknown_not_immutable() {

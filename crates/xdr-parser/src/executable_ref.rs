@@ -88,8 +88,10 @@ pub fn external_ref_from_instance(data: &Value) -> Option<ExecutableRef> {
 /// ledger. ClickHouse keeps the most recently INSERTED row on a version tie,
 /// which is physical insert order, not chain order, and only at a merge that
 /// may never come. Folding here with the shared `fold::keep_last_by_key` — the
-/// same helper the pool-state tables use for the same reason — makes the
-/// survivor the value the ledger actually ended on.
+/// same helper the pool-state tables use for the same reason — collapses the
+/// writes inside the `changes` it is given. The caller passes one transaction
+/// at a time, so the writer (`build_executable_ref_rows`) folds again across
+/// the whole ledger.
 pub fn extract_executable_ref_targets(
     changes: &[ExtractedLedgerEntryChange],
 ) -> Vec<ExtractedExecutableRefTarget> {

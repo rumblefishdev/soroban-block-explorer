@@ -507,10 +507,16 @@ pub fn build_metadata_rows(
 /// exactly 32 bytes is dropped rather than padded: the protocol will not let
 /// such an entry be written, so seeing one means we misread it, and a padded
 /// hash would join against the wrong code.
+///
+/// Folded here, across the whole ledger: the parser folds each transaction's
+/// changes on its own, so two re-points of one tag in two transactions of the
+/// same ledger arrive as two rows with the same `ledger` version, and the
+/// ReplacingMergeTree would keep whichever was inserted last. `targets` is in
+/// application order, so the last one is the value the ledger ended on.
 pub fn build_executable_ref_rows(
     targets: &[ExtractedExecutableRefTarget],
 ) -> Vec<ContractExecutableRefRow> {
-    targets
+    let rows = targets
         .iter()
         .filter_map(|t| {
             let hash: [u8; 32] = hex::decode(&t.wasm_hash).ok()?.try_into().ok()?;
@@ -521,7 +527,10 @@ pub fn build_executable_ref_rows(
                 ledger: i64::from(t.ledger_sequence),
             })
         })
-        .collect()
+        .collect();
+    xdr_parser::fold::keep_last_by_key(rows, |r: &ContractExecutableRefRow| {
+        (r.owner_id, r.tag.clone(), r.ledger)
+    })
 }
 
 /// Map parser-extracted Soroban token balances to unified `balances` rows
@@ -3761,3 +3770,7 @@ mod balance_tests {
         assert_eq!(extract_event_signature(&empty), None);
     }
 }
+
+#[cfg(test)]
+#[path = "stage_executable_ref_tests.rs"]
+mod executable_ref_tests;
