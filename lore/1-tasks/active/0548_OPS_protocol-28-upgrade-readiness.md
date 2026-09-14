@@ -758,6 +758,46 @@ wasm_uploaded_at_ledger = 0`) must run after the new indexer is live — the
   prior-row map, pre-existing); classification of fleet members by the code
   they run.
 
+### Deploy 2026-09-14 — straight from `develop`, ahead of the vote
+
+PR #456 merged into `develop` at 10:10 UTC. Because of the vote, this range was
+deployed from `develop` without a release to `master`, from an operator laptop
+with the `make` targets (release PR #453 stays open to bring `master` in line).
+
+**Timeline (UTC):**
+
+| time        | step                                                                                                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 10:33       | `make deploy-production-compute` from a checkout that was on an unrelated feature branch, not `develop` — the build log shows `stellar-xdr v27.0.0`                                         |
+| 10:38–11:05 | indexer failed every reconcile: `schema mismatch: While processing struct OperationAssetAppearanceRow: database schema has no column named net_settled` (production had dropped it in 0540) |
+| 11:05       | redeploy from a detached `origin/develop` checkout (`ba3575e3`, `stellar-xdr v28.0.0`); a first attempt died on an expired deploy token after the 9-minute build, before touching AWS       |
+| 11:09       | `make deploy-production-web` from the same checkout; bundle `index-D24z7fBn.js` carries the new contract-page code; arming check passed                                                     |
+| 11:11       | indexer caught up; ledgers 64,423,000 – 64,423,832: 833 rows = 833 distinct = the range; DLQ 0; no ERROR after 11:05:30                                                                     |
+| 11:15–11:16 | `make deploy-production-ingestion`; ECS task definition `production-galexie-live:8` with `@sha256:1d511631…`, rollout COMPLETED; Galexie resumed at ledger 64,423,880 (tip + 1)             |
+| 11:16–11:26 | captive core waited for the history archives to publish checkpoint 64,423,935 (`Missing HAS for ledger 64423935` from every archive), then downloaded 35 buckets                            |
+| 11:29       | placeholder cleanup `ALTER TABLE soroban_contracts DELETE WHERE wasm_uploaded_at_ledger = 0` (mutation `mutation_919560`) — done, 0 such rows left                                          |
+
+**Why the wrong-branch deploy did no damage to data.** The old indexer rejected
+every insert client-side on the missing column, so it wrote nothing; the
+reconcile resumed from `max(sequence)` once the right build was live. The
+lesson is operational, not in code: a laptop deploy builds whatever is checked
+out, so the checkout step (`git switch --detach origin/develop` and a check
+that `Cargo.toml` pins `stellar-xdr = "28"`) is part of the deploy, not a
+preamble to it. Pre-vote rollback floor for Compute is `840f2b58`.
+
+**Placeholder cleanup, measured.** Before: 46,494 rows at version 0 across
+37,771 contract ids, 0 of them carrying a hash, deployer, type, SAC flag or
+executable reference; the new indexer wrote none after 11:05:30. After:
+`soroban_contracts` holds 150,164 rows for 150,029 contracts (the difference
+is unmerged upgrade versions). The mutation rewrote 6 parts: 15.13 MiB /
+196,658 rows before, 11.81 MiB / 150,161 rows after, so ~3.3 MiB on disk is
+released once the old parts expire. The 54 ids that had only a placeholder
+row are gone from the contracts list and the network count, as D5 intended.
+
+**Not yet confirmed at the time of writing:** Galexie exporting new ledgers to
+S3 after its catch-up (the ingestion-lag alarm fired at 11:23 as expected for
+the restart window).
+
 ## Acceptance Criteria
 
 - [x] `galexieImageTag` pinned to the Galexie 28.0.1 ECR digest, read back from
