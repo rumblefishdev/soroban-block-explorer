@@ -134,13 +134,14 @@ touching the same entity, where the writer must keep chain-application order.
 
 (b) audited across the full schema:
 
-| class                                    | tables                                                                                                                                                                                                 | verdict                                                                                                                                                                                                                                                                                                                             |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| state (final-state-per-ledger semantics) | `accounts`, `balances`, `account_entry_state`, `soroban_contracts`, `liquidity_pools`, `lp_positions`, `nfts`, `nfts_pending`                                                                          | every writer folds per key with LAST-wins in tx/op application order before insert (each verified at its emit site); chain order comes from processing txs in ledger order and changes in meta order. Regression tests exist for balances, signers, merge-then-recreate; MISSING for accounts/lp/pools/nfts folds — listed as a gap |
-| fact with order column                   | `transactions` (application_order), `operations_appearances` (application_order), `soroban_events` (event_index), `nft_ownership(+_pending)` (event_order), `lp_operation_amounts` (application_order) | key distinguishes intra-ledger order — two real events cannot collapse                                                                                                                                                                                                                                                              |
-| fact with per-tx aggregation             | `operation_asset_appearances` (`net_settled` computed per (tx, asset) BEFORE insert — `amount_by_tx_asset`)                                                                                            | collapse impossible by construction; the value is a per-tx net, not per-op                                                                                                                                                                                                                                                          |
-| presence (collapse intended)             | `transaction_participants`, `operation_pools`, `soroban_invocations_appearances`, `operation_asset_appearances` (presence half)                                                                        | one row per (entity, tx) is the SEMANTIC — no order needed                                                                                                                                                                                                                                                                          |
-| snapshot-per-ledger                      | `liquidity_pool_snapshots` (pool, ledger; no version)                                                                                                                                                  | several pool ops in one ledger emit rows under one key; RMT keeps the last inserted = last in apply order = end-of-ledger state, which IS the table's meaning. Deterministic under one code version; cross-run divergence falls under mechanism (a)                                                                                 |
+| class                                    | tables                                                                                                                                                                                                 | verdict                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| state (final-state-per-ledger semantics) | `accounts`, `balances`, `account_entry_state`, `soroban_contracts`, `liquidity_pools`, `lp_positions`, `nfts`, `nfts_pending`                                                                          | every writer folds per key with LAST-wins in tx/op application order before insert (each verified at its emit site); chain order comes from processing txs in ledger order and changes in meta order. Regression tests exist for balances, signers, merge-then-recreate; MISSING for accounts/lp/pools/nfts folds — listed as a gap                                                                                                                                        |
+| state, NOT folded (found 2026-09-11)     | `soroban_contract_metadata`                                                                                                                                                                            | one row per METADATA write with `version` = ledger, and no fold before insert (`extract_contract_metadata_writes` → `build_metadata_rows`). Two writes for one contract in one ledger leave the survivor to physical insert order: on a version tie ClickHouse keeps the most recently inserted row, and only at a merge. Fix: `fold::keep_last_by_key` on `(contract_id, version)`, as the pool-state tables do. Unmeasured on production. Found while auditing task 0548 |
+| fact with order column                   | `transactions` (application_order), `operations_appearances` (application_order), `soroban_events` (event_index), `nft_ownership(+_pending)` (event_order), `lp_operation_amounts` (application_order) | key distinguishes intra-ledger order — two real events cannot collapse                                                                                                                                                                                                                                                                                                                                                                                                     |
+| fact with per-tx aggregation             | `operation_asset_appearances` (`net_settled` computed per (tx, asset) BEFORE insert — `amount_by_tx_asset`)                                                                                            | collapse impossible by construction; the value is a per-tx net, not per-op                                                                                                                                                                                                                                                                                                                                                                                                 |
+| presence (collapse intended)             | `transaction_participants`, `operation_pools`, `soroban_invocations_appearances`, `operation_asset_appearances` (presence half)                                                                        | one row per (entity, tx) is the SEMANTIC — no order needed                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| snapshot-per-ledger                      | `liquidity_pool_snapshots` (pool, ledger; no version)                                                                                                                                                  | several pool ops in one ledger emit rows under one key; RMT keeps the last inserted = last in apply order = end-of-ledger state, which IS the table's meaning. Deterministic under one code version; cross-run divergence falls under mechanism (a)                                                                                                                                                                                                                        |
 
 **Fact tables measured for between-run divergence too (2026-08-19):** the
 version-less fact tables cannot tie (no version column) but CAN hold
@@ -157,7 +158,7 @@ version of this probe belongs to this audit's recurring run.
 its entire content.)
 
 Verdict for (b): **no table can lose or misorder an intra-ledger sequence
-today.** The residual risk is untested folds (state-table column above) and any
+today**, with one exception found 2026-09-11: `soroban_contract_metadata` (row above). The residual risk is untested folds (state-table column above) and any
 FUTURE writer added without an order column — both are review-time checks.
 
 Mechanism (a) has no in-schema defence and never will without lying about
@@ -260,3 +261,45 @@ Two consequences the audit must own:
 - [ ] Re-runnable by someone who was not here — documented invocation
 - [ ] **Docs updated** — `docs/backfills.md` gains the audit as a procedure
 - [ ] **API types** — N/A
+
+## SAC deployed-facet drift (added 2026-09-11, found in task 0548)
+
+`asset_sac.sac_deployed` never over-claims — 0 facets are flagged deployed
+without a `soroban_contracts` deployment row — but it under-claims for **138**
+SACs. Every one is an `is_sac = true` deployment row, deployed between ledgers
+58,628,632 and 62,803,627, with exactly one `asset_sac` row.
+
+Mechanism on `develop` (`crates/db-clickhouse/src/persist/stage.rs`): the
+deployment path writes the deployed facet only when the deploy's asset identity
+resolved in the same batch (`let Some(sac) = &dep.sac_asset else { continue }`),
+while the override path for an address that emits events writes
+`deployed = 0`. Why identity resolution failed in that window, and why it
+stopped after 62,803,627, is unproven.
+
+Consequence, read from code rather than seen on a live page: the assets API
+takes the SAC link from this flag (`map_item`), so those 138 render as unlinked
+and "not deployed". It also blocks deriving pool-leg SAC addresses from
+`code:issuer` gated on the flag — the same 138 would lose their address.
+
+Probe (read-only, runs under the `dev_read` quota):
+
+```sql
+SELECT countIf(dep AND NOT has_row) AS flagged_deployed_without_row,
+       countIf(NOT dep AND has_row) AS row_but_flagged_undeployed,
+       countIf(dep) AS flagged_deployed,
+       count() AS sac_facets
+FROM (
+  SELECT id, dep,
+         id IN (SELECT id FROM soroban_contracts WHERE wasm_uploaded_at_ledger > 0) AS has_row
+  FROM (
+    SELECT sac_contract_id AS id, toBool(max(sac_deployed)) AS dep
+    FROM asset_sac WHERE sac_contract_id != 0 GROUP BY sac_contract_id
+  )
+);
+```
+
+Baseline 2026-09-11: `0 / 138 / 3,868 / 313,347`.
+
+Direction: derive, don't copy. Deployment is a fact of `soroban_contracts`,
+keyed by an id that is itself derivable from `code:issuer` (ADR 0051); the flag
+is a denormalised copy of it that has drifted.
