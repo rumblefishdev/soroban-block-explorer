@@ -207,6 +207,8 @@ impl PartitionWriterHandle {
             // backwards-compat shim with empty overrides; this is
             // the production wire-up the PR #186 description called
             // out as a follow-up.
+            // Mirrored in `tests/redecode_diff.rs` (rollout gate 7b), which re-runs
+            // this exact staging on archive files — change both together.
             let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
                 &db_clickhouse::persist::stage::StageInputs {
                     ledger: &parsed.ledger,

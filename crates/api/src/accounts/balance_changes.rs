@@ -42,42 +42,22 @@
 //! as `0`. The piece's own identity is NOT in this table; `nfts` /
 //! `nft_ownership` are the source for "which piece".
 //!
-//! Separately, and far more consequential today: below
-//! [`VALUE_FLOW_FLOOR_LEDGER`] the table holds NO rows at all, which looks
-//! exactly like a transaction that moved nothing. The API therefore returns
-//! `None` (not an empty list) for those transactions, so the frontend can say
-//! "not indexed" instead of drawing a zero that is not a measurement.
+//! An empty list, by contrast, is always a measurement: this account's
+//! balances did not change. That holds because `asset_transfers` covers every
+//! indexed transaction — proven on the whole ingested range by task 0540's
+//! completion gate (every token event an edge or a counted reject, archive
+//! re-decodes identical, 4 621 per-account sums equal raw ledger state). Until
+//! that gate passed, a ledger floor made the API answer "not indexed" below the
+//! backfilled range; it was removed once the range was complete. **The
+//! invariant it guarded is now a rule for backfills, not code:** a pass that
+//! adds transactions must write `asset_transfers` in the same pass
+//! (`docs/backfills.md`), or an empty list here would claim a measurement
+//! nobody made.
 
 use std::collections::{BTreeSet, HashMap};
 
 use clickhouse::Row;
 use serde::Deserialize;
-
-/// First ledger `asset_transfers` covers. Below it the table is empty because
-/// nothing has been written yet, NOT because nothing moved, so the API reports
-/// "not indexed" rather than a balance change of zero.
-///
-/// It started at the deploy ledger 64 317 019 (`production-2026.09.07-1`),
-/// where the live indexer began writing. It now sits at the start of the
-/// archive partition covering the last two weeks before that deploy: a
-/// dedicated backfill worker filled `64 128 000 .. 64 317 019` out of order,
-/// ahead of the three workers walking up from the ingest floor, because the
-/// newest ledgers are the ones an account page is most often asked about and
-/// they would otherwise have arrived last.
-///
-/// **The value may only move to a range the backfill has provably covered.**
-/// Lowering it ahead of the data turns "not indexed" into a measured zero,
-/// which is the one failure this constant exists to prevent.
-///
-/// It drops to the ingest floor (50 457 424) once the historical backfill of
-/// `50 457 424 .. 64 317 019` passes its coverage gate, and stays there for
-/// good: 78.85% of chain history predates the ingest floor and no re-parse can
-/// reach it.
-///
-/// ponytail: a `const`, not config — the only way to change it is a deploy
-/// either way (env vars come from the CDK compute stack), so an env read would
-/// buy nothing. Promote it if it ever has to move without one.
-pub const VALUE_FLOW_FLOOR_LEDGER: i64 = 64_128_000;
 
 /// One asset's net movement for the account in context, on one transaction.
 /// Position in the vector is the order the movement happened on the chain —

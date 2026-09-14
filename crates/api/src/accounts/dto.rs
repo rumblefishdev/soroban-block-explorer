@@ -234,18 +234,15 @@ pub struct AccountTransactionItem {
     /// amount would compare quantities that are not comparable. Chain order is
     /// a fact; render it as given.
     ///
-    /// **`null` means NOT INDEXED, never "nothing moved".** The per-transfer
-    /// index starts at ledger 64 317 019 (it drops to the ingest floor once the
-    /// historical backfill lands); below that there is no data, and a client
-    /// that draws `null` as `0` is showing a value nobody measured. An empty
-    /// ARRAY is the real "nothing changed" — the transaction is indexed and
-    /// this account's balances came out unchanged (a round-trip arbitrage, an
-    /// offer placed, a failed transaction, a payment to self).
+    /// Always present. An empty array means this account's balances came out
+    /// unchanged (a round-trip arbitrage, an offer placed, a failed
+    /// transaction, a payment to self): the per-transfer index covers every
+    /// transaction this API returns.
     ///
     /// Assets whose net change is exactly zero are omitted: under this name an
     /// asset that did not change is not a balance change. The gross movement
     /// behind a net figure is not carried here.
-    pub balance_changes: Option<Vec<AccountBalanceChange>>,
+    pub balance_changes: Vec<AccountBalanceChange>,
 }
 /// Keyset cursor for the accounts list — sorts on `last_seen_ledger` with the
 /// surrogate `id` as the unique tiebreak. Serialized (base64/JSON) into the

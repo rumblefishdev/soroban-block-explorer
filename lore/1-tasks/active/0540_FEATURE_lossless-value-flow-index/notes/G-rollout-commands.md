@@ -400,7 +400,7 @@ FROM (
     SELECT intDiv(ledger_sequence, 500000) AS p,
            count() AS ev, 0 AS at
     FROM soroban_events
-    WHERE signature IN ('transfer','mint','burn','clawback') AND event_type = 1
+    WHERE lower(signature) IN ('transfer','mint','burn','clawback') AND event_type = 1
     GROUP BY p
     UNION ALL
     SELECT intDiv(ledger_sequence, 500000) AS p, 0,
@@ -414,6 +414,14 @@ GROUP BY p ORDER BY p
 `soroban_events` carries unmerged duplicates too, so compare
 `uniqExact((transaction_id, event_index))` there (its own key) if `diff` is not ~0 before
 reading anything into it. Gate 7b (archive re-decode diff) and 7c (T11) follow.
+
+Run 2026-09-13 on the full range — see README "Completion gate 7 passed on the
+full range". Three corrections to the query above, learned there: count with
+`lower(signature)` (the decoder matches verbs case-insensitively; a case-sensitive
+filter misses 175 events and reads them as rejects); a whole-partition
+`uniqExact` exceeds the per-query memory cap, so compare `count()` under `FINAL`
+per partition instead; and the reject counters to subtract come from the worker
+logs deduplicated per ledger, since overlapping worker ranges log a ledger twice.
 
 ## Rollback at any point up to step 7
 

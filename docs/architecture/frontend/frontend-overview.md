@@ -532,18 +532,21 @@ expanding on hover. It is account-relative by construction (the same transaction
 opened from another account shows different numbers), which is why it appears
 here and on no other transaction table.
 
-The `balance_changes` field takes three values and the cell must keep them apart:
+The `balance_changes` field is always present, and both of its values are
+measurements:
 
-| Field     | Means                                    | Renders        |
-| --------- | ---------------------------------------- | -------------- |
-| `null`    | below the index floor — **not measured** | `Not indexed`  |
-| `[]`      | measured; this account's balances held   | `0`            |
-| non-empty | measured; these assets moved             | signed amounts |
+| Field     | Means                        | Renders        |
+| --------- | ---------------------------- | -------------- |
+| `[]`      | this account's balances held | `0`            |
+| non-empty | these assets moved           | signed amounts |
 
-`null` is never drawn as `0`. The per-transfer index starts at ledger 64 317 019
-(it drops to the ingest floor once the historical backfill lands), and below it
-`asset_transfers` is empty — which looks exactly like a transaction that moved
-nothing. Drawing that as a zero would put a figure on screen that nobody measured.
+An empty list can be drawn as a measured `0` because the per-transfer index
+covers every indexed transaction — proven on the whole ingested range by task
+0540's completion gate. Until that gate passed, the field was `null` below a
+ledger floor and the cell said `Not indexed`; both were removed once the range
+was complete. Any future pass that adds transactions must write `asset_transfers`
+in the same pass (`docs/backfills.md`), or this `0` would become a figure nobody
+measured.
 
 An `amount` of `null` inside an entry is also not zero: it is a NON-FUNGIBLE
 movement, where no amount exists by nature. The cell renders the signed count of

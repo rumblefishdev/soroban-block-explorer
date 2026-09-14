@@ -853,6 +853,182 @@ the start of that window as soon as it does. The overlap this creates with the
 worker that will later cover the same ledgers costs nothing: the write is
 idempotent under the row key, proven on a deliberate re-run.
 
+### The recent window, filled out of order and shipped (2026-09-09)
+
+The three workers walking up from the ingest floor reach the newest ledgers
+last, and those are the ones an account page is most often asked about. A
+fourth worker took `64 128 000 .. 64 317 019` — the archive partition boundary
+below the fourteen-day mark, so the alignment the loop performs anyway bought
+extra history for nothing — while the other three carried on untouched. Their
+ranges overlap it, so one of them will re-do the slice later at a cost of about
+4% of its remaining work; the re-run is lossless under the row key, which had
+already been proven deliberately.
+
+**Coverage proven, not assumed.** Over the window: **zero** ledgers carrying a
+token event without its edges, and **84 859 840 token events against
+84 859 392 distinct edges**. The difference of **448** matched the worker's own
+reject counters to the unit — every one of them `unrecognised_topics`. That is
+the completion gate's own arithmetic, closed exactly on a real 85 M-event
+window before it runs on the full range: events minus counted rejects equals
+edges, with nothing unexplained in between.
+
+Also verified before the floor moved, so the upper edge could not hide a hole:
+the `ledgers` table is continuous above the deploy ledger with none missing, and
+no ledger above it carries a token event without its edges. The worker's range
+meets the live block at exactly one overlapping ledger.
+
+**Shipped by a manual deploy, not a tag** (task owner). `make -C infra
+deploy-production-compute` then `deploy-production-web`, run from the `develop`
+worktree — the main checkout sat on an unrelated feature branch and would have
+shipped the wrong code. Two consequences worth recording. The deploy carried
+the **whole read path for the first time**, not just the floor: the
+balance-change API and its cell had never been on production, and the assets
+list's holder ordering rode along. And production now runs code ahead of
+`master`, which the next release has to reconcile or its diff will appear to
+ship what is already live.
+
+Verified after: the API function and the SPA bundle both updated within a
+minute of each other, the account-page chunk contains the column, zero Lambda
+errors across the deploy window, ingest lag in seconds, and the column's own
+arithmetic reproduced against production for a bridged-in asset later deposited
+into an automated market maker — two bridge mints as positive rows, two
+two-sided deposits as negative pairs, and one swap that nets both ways in a
+single transaction.
+
+### Completion gate 7 passed on the full range (2026-09-13)
+
+All three layers, on the finished backfill: four workers, each ending on its own
+`GOTOWE` over its whole range.
+
+**7a — every token event is an edge or a counted reject, per partition.** All 29
+partitions (`intDiv(ledger_sequence, 500000)` 100–128, floor to L₀) close to the
+unit: **5 475 097 558 token events against 5 475 089 792 edges**, both counted with
+`FINAL`. The difference, **7 766**, equals the rejects in the worker logs,
+deduplicated per ledger because overlapping ranges log a ledger twice:
+`unrecognised_topics` 6 010, `unrecognised_payload` 1 617, `emitter_not_sac` 139,
+`no_emitter` and `no_operation` 0. The per-partition closure is the sharp part: an
+event lost without a logged reason leaves its own partition open. The `ledgers`
+table is continuous from the floor to the tip (13 951 541 ledgers, none missing).
+
+Two traps, both hit on the way:
+
+- `soroban_events.signature` keeps the symbol verbatim, while the decoder matches
+  token verbs case-insensitively (`token_verb`, `eq_ignore_ascii_case`). Counting
+  with `signature IN ('transfer','mint','burn','clawback')` misses 175 events
+  spelled `TRANSFER` (160), `MINT` (6), `Mint` (6) and `Clawback` (3), which then
+  read as 175 unexplained rejects — per partition, the gap equalled the
+  case-variant count exactly. Count with `lower(signature)`. Whether a
+  non-lowercase verb should decode at all is a trust-policy question for 0542; a
+  SAC always emits lowercase.
+- A whole-partition `uniqExact` over the sort key exceeds the per-query memory
+  cap. `count()` with `FINAL` streams and fits.
+
+Size at completion: `asset_transfers` **5.52 bn rows, 43.44 GiB** (8.45 B/row, raw
+parts including unmerged duplicates and the live tail), inside both estimates
+(4.59–6.35 bn rows, 41–49 GB).
+
+**7b — the table equals a fresh decode of the archive, byte for byte.**
+`crates/backfill-runner/tests/redecode_diff.rs` runs the backfill's own per-ledger
+path (`parse_ledger` → `prepare_with_sac_overrides` with the targeted-write
+inputs) on raw archive files and writes the three tables as TSV in the column
+order of `SELECT … FINAL … FORMAT TSV`. On 45 ledgers — the oracle's 30 epoch
+ledgers and 3 edge cases, the 5 reject ledgers, and one ledger each for a
+case-variant verb, a muxed destination, a muxed source, a NULL-amount movement, a
+`text_hex` memo, a claimable-balance endpoint and the backfill/live boundary
+ledger 64 317 019 — `asset_transfers` (18 517 rows), `transaction_memos` (755) and
+`soroban_event_ops` (18 794) are **identical to production** (equal sha256). The
+sample exercised what it names: muxed ids on both sides, a NULL amount, a
+`text_hex` memo, 2 967 `B`, 3 394 `L` and 160 `C` endpoints, all four verbs; the
+boundary ledger, written by both the backfill and the live indexer, matched too.
+The decoder is the same on both sides, so this proves the write path, not the
+decoder. The harness needs `STELLAR_NETWORK_PASSPHRASE` and absolute cache paths
+(cargo runs integration tests from the package directory).
+
+**7c — per-account sums equal raw ledger state (T11).** For 20 accounts created
+after the floor, every (account, asset) pair: edges in − edges out − fee leg ==
+the balance read with RPC `getLedgerEntries` and decoded by the official
+`stellar xdr` CLI — `AccountEntry`, `TrustLineEntry`, and for bespoke tokens the
+persistent `ContractData` keyed `Vec[Symbol("Balance"), Address]` holding an
+`i128`, the layout the ledger reader already relies on (400 of 400 sampled holder
+entries of the two tokens used sat under that key). **4 621 pairs, all exact.**
+
+| Accounts                                                                                                                                                                                                                                       | Covers                                                                                                                                                                                                          | Pairs | RPC ledger |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ---------- |
+| `GDYYRX3NVXB3WU4CRJIFRHUAYYDJVK572NCIMXUVF52SQFLLLZSU53BX`, `GCDDDAHALHBVITLP42KS5M5RON2MEDC6AHOULSC6EEU27UMJSHZSFJYU`, `GDKFRCA66NQSDODH4HK2BHENYKJKVV33CRP33EDOMCGGMZIZLS7B7I2W`                                                             | merged, one of them created and merged six times; every transaction fee-bumped; 1 949 edges netting to zero in every asset                                                                                      | 40    | 64 408 610 |
+| `GAQUUJPPZNSV5TET6DG2I73UEF7GKJP5LGLPABQQSFQVKGPTCX6OEMNA`, `GADEE6SN7XOU732RNIDNP4BZH4FG2MOME2DWMA7UYKBOQUMXLJFXTYCN`, `GBVJNKNPR3PMURROXMKLM3ZKTKISS3FYM3NNS26KHU4UVHO37W5FDKJ4`                                                             | clawback subjects: 36–80 k clawbacks and 420–460 k edges each                                                                                                                                                   | 23    | 64 408 949 |
+| `GD26W2HVRM7DS7VVAMPZVMV7WEFP7SLWQLPUNX7SFM525MIS223WCEUB`, `GDYPQUMNWTYVTZJIN2FYMKBSEHUSMKU7H2254JPRCTRUQ2SW3NQX3SPC`, `GDP73K5XSZ7B6MPQZBHKVTBGU2QDMMUQUPBWE57ATJZJRIBHEI7CVWQG`                                                             | claimable-balance endpoints; the first carries **186 236 515 edges** over 747 assets                                                                                                                            | 1 883 | 64 408 949 |
+| `GAON23LEC5MNOXF6GPNGKZT2456H6KKTJZS3SW22NE2AO3Q6AOKXBDXF`, `GAV4FNC74K2SD3TYZDOXSYHAC5FI3LZ53LHLSWHH4OPS32L3T6LXMSLP`, `GA3VTARHH7IGI4UDFZBV3N7ZPCSS3NWYYXY42F3R4MV5ABITVGY2TKFW`                                                             | classic-pool counterparties, 1 796 and 802 assets on the first two; fee bumps mixed with own fees; Soroban refunds                                                                                              | 2 657 | 64 408 949 |
+| `GAUAICHEQTIKMN2D3KKRSQMB4NRJEFLWD32TBJZXKLQQYCGWNL7B7T3Q`, `GAEYMOFVVKQ2ALN573SRQY6FERDSBCBT3MCMSSIXN2UGNRIAKTKWYB7N`, `GA3ECAIHY5EZXSO6NI2FLYE3HLKGH3OFVN56PAYR37HMM5CZBIEG4GMJ`                                                             | contract counterparties; Soroban refunds                                                                                                                                                                        | 6     | 64 408 949 |
+| `GAT52S3LSPWEYTZVGE3G7NDZALJX4KELKTO4JSZLQFNBURWLUEYGANS3`                                                                                                                                                                                     | muxed destination (the plan expected none after the floor)                                                                                                                                                      | 1     | 64 408 949 |
+| `GCQM5CVSGJPFNJGN5ZUPFI5PSBI2KU6Z7AAUPGRQO6BLYALAQ7KBCM3J`, `GCKCNT4TXHISNNBIPUVOJ6VJYKPJYNJLF2IIP2P3EIZIUBSQYSRRY37U`, `GAFZO5Q7EHV3P4L6MLDJIHD2OLMN5DL4PSEH4MCX5EOVAJSZYUR2FUVD`, `GDZMVZ3TC7KHOUXAIRXFGRRYTIJJBYLO2GTRTCWKV3OZUUL4LXSVBJZA` | bespoke-token holders (`CCA2ZJP5BVRXYTQH4FAGHCAUMRYCXVC4CRYC2NXHWMR7TIVX36U7F5HR`, `CBOOCGZSVRSZFRE4U2NWR2B4RXYVJWRCBTGOUD2JPI2TDJPWMTJX7FZP`); fully sponsored reserves, three at 0 XLM with the entry present | 11    | 64 409 509 |
+
+One pair closes only with an input the window cannot hold. `GAON23…`'s XLM
+differed by **+991 590 692** stroops — exactly its XLM balance at the end of
+ledger 50 457 423, read from the `fee_processing` state image of its first
+transaction in the floor ledger's archive file. That account existed before the
+floor (the seq_num of that incarnation dates its creation to ledger 47 945 836),
+was merged and re-created at 57 065 207: the merge's outflow is in the window,
+the pre-floor inflow is not.
+
+Two corrections to T11's rule, both measured rather than argued:
+
+1. **The fee leg comes from the protocol's `fee` events, not from
+   `transactions`.** `transactions` stores the inner source and not the fee
+   source, so `Σ fee_charged WHERE source_id = A` charges a sponsor's payment to
+   the inner account and misses a self-bump. The `fee` events (native SAC,
+   topics `["fee", payer]`, refunds as negative amounts) name the payer; on the
+   accounts mixing bumped and own transactions only they close (one account:
+   5 366 606 stroops off with the table, exact with the events). For an account
+   with no bumped transaction both agree — `fee_charged` is already net of the
+   Soroban refund.
+2. **"Younger than the floor" means the first incarnation.** `seq_num >> 32` dates
+   only the current one, and a merge followed by re-creation resets it; a
+   `create_account` targeting the account after the floor does not prove it
+   either. Require that no edge precedes the current creation ledger (0 for the
+   four bespoke-token holders).
+
+Not yet delivered: T11 asks for a runnable check in `tests/`. The measurement ran
+as scratch scripts (`chq` aggregates, RPC, CLI).
+
+Operational notes from the run, for whoever repeats it:
+
+- Aggregate per (account, asset) on the server. Exporting edge rows is not viable
+  for heavy accounts — one produced tens of millions of edges inside a
+  3.5 M-ledger span and a 17.6 GB local file before it was stopped.
+- A `fee`-event scan reads `topics_xdr` for every fee event in its range and
+  exhausted `dev_read`'s 2 TiB/h byte quota within the hour. Narrow the ledger
+  range first. `SELECT 1` is no probe for that quota: it reads no bytes and
+  passes while every real read is refused.
+
+### The floor removed, the old column dropped, both in production (2026-09-13)
+
+**`net_settled` dropped.** `ALTER TABLE operation_asset_appearances DROP COLUMN
+net_settled` ran on production after gate 7 passed. The column held ~394 M values
+in ledgers 63 699 653 – 64 317 018, written by the indexer before this task's
+deploy; no code on `develop` declared or read it. Three columns that were never
+written ran in the same window under task 0374 (`liquidity_pools.share_token_id`,
+all 0; `liquidity_pool_snapshots.tvl` / `volume` / `fee_revenue`, all NULL).
+Checked afterwards: none of the five columns exists in `system.columns`, no
+mutation on the three tables is pending, the indexer kept writing at the tip.
+
+**The floor removed, not lowered** (commit c66d1ecb). `VALUE_FLOW_FLOOR_LEDGER`
+and its pinning test are gone; `balance_changes` is a plain array in the DTO,
+OpenAPI and the generated types, and the cell has two states (`0` and signed
+amounts) instead of three. Lowering it to the ingest floor would have been a
+constant that no transaction can ever sit below — the account list reads
+`transactions`, which starts at the same floor — so it bought nothing but a
+branch. What replaces it as the invariant is `docs/backfills.md` rule 6: a pass
+that adds transactions writes `asset_transfers` in the same pass.
+
+**Deployed** the same evening, API first, then the web bundle:
+
+| Check                         | Result                                                                                                                                                                                                                                         |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Explorer-production-Compute` | `UPDATE_COMPLETE` 19:23 UTC; only the API function changed, indexer and enrichment code untouched                                                                                                                                              |
+| Lambda `Errors`               | 0 for API, indexer and enrichment from 13:00 to 19:30 UTC (covers the DROPs and the deploy); indexer ~325 invocations / 30 min, steady                                                                                                         |
+| Web bundle                    | Turnstile site key present; the account chunk's balance cell starts at `changes.length === 0`, no null branch                                                                                                                                  |
+| Account page, clean browser   | An account whose latest transactions sit below the old floor (last one at ledger 62 000 014) shows **−1.59998 XLM** and **+0.1 XLM** — the same net the index holds for those two transactions; before the removal both rendered "Not indexed" |
+
 ### Design decisions
 
 #### From plan
