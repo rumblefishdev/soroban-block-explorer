@@ -689,11 +689,68 @@ dependency on THIS repo's `develop` branch, locked at rev `d61b359f`. So:
    `cargo update` or rebuilds the lock — then their build stops resolving. The
    two bumps have to be coordinated, not sequenced arbitrarily.
 
+### Deep review of PR #456 (2026-09-14) — two regressions fixed before deploy
+
+A multi-lens review (correctness, simplify, security, devil's advocate,
+production data, architecture, pattern generalisation, then an independent
+judge) returned REQUEST CHANGES. Verdict and evidence are summarised here; the
+two blocking defects are fixed on this branch.
+
+**Fixed — the live upgrade prefetch failed on every call.**
+`fetch_prior_contract_rows` still selected the 8 pre-0548 columns into the now
+10-field `SorobanContractRow`; clickhouse-rs rejects the length mismatch
+client-side, the error was logged as a warning and swallowed, and every
+`executable_update` (Wasm and CAP-85 reference alike) was skipped. On
+production that is 24 upgrades in the last 7 days (~3.4/day, 7-day average),
+with no alarm and no recovery job — `wasm-upgrade-backfill`, which the log line
+promised, was removed in task 0425. CI on the PR head was red on
+`g9_verdict_routing_e2e` for exactly this; the test passes on the merge base.
+Now `SELECT ?fields`, so the struct is the only column list.
+
+**Fixed — `repair-tier1` silently reset columns before its table swap.** Its
+staging INSERTs named the columns by hand, so every column added later was
+filled from its DEFAULT and the EXCHANGE replaced the live values:
+`executable_owner_id` / `executable_tag` (new here), and `lp_positions.closed_at_ledger`
+(pre-existing; 779 of 112,385 production positions are closed and the next
+repair would have reopened them). Both rebuilds now copy with `* REPLACE (…)`.
+Two ClickHouse-backed tests plant the columns, run the real swap and read
+them back; both fail against the previous SQL and pass against the new.
+
+**Recorded in `docs/deployment.md`:** after a protocol vote the rollback floor
+is the first build carrying the matching `stellar-xdr` pin. For this vote that
+is commit `840f2b58` — the bump alone, which decodes protocol 28 and inserts
+cleanly against the production schema.
+
+**Open from the review, not blocking the vote:**
+
+- CAP-85 references are folded per transaction, not per ledger, so two
+  re-points of one tag inside one ledger tie on version.
+- A non-UTF-8 tag is stored as the literal `"<invalid-utf8>"` and becomes a
+  key; `asset_code.rs` (task 0359) already rejected that policy.
+- The contract-detail query joins the refs subquery unconditionally
+  (production: ~45 → ~130 MiB per request with an empty table); the two copies
+  of that subquery resolve the hash in two different ways.
+- The new contract-detail ClickHouse test never runs in CI (it gates on
+  `CH_URL`; CI sets `CLICKHOUSE_URL`).
+- The testnet fixture test cannot tell stellar-xdr 28 from 27 — the fixture
+  decodes with the v26 CLI and carries no protocol-28 arm. The constructed
+  round-trip tests are the real gates.
+- The placeholder-row cleanup (`ALTER TABLE soroban_contracts DELETE WHERE
+wasm_uploaded_at_ledger = 0`) must run after the new indexer is live — the
+  running build adds ~2,450 such rows a day — and is not yet an operator step.
+- Filtering the transaction list by a never-deployed contract address now
+  returns an empty page (a consequence of D5 not recorded there).
+- Follow-ups outside this PR: a typed executable enum instead of string-matched
+  JSON; `backfill-runner`'s sink applies no executable updates at all (empty
+  prior-row map, pre-existing); classification of fleet members by the code
+  they run.
+
 ## Acceptance Criteria
 
 - [ ] `galexieImageTag` pinned to the Galexie 28.0.1 ECR digest, read back from
       ECR (not copied from Docker Hub)
-- [ ] GitHub env `GALEXIE_IMAGE_DIGEST` updated (production + staging)
+- [x] ~~GitHub env `GALEXIE_IMAGE_DIGEST` updated~~ — not needed: nothing reads
+      it since task 0390 (`docs/deployment.md`, Galexie recipe)
 - [ ] Galexie 28.0.1 live in prod, S3 exports flowing, before 2026-09-16 17:00 UTC
 - [x] Workspace `stellar-xdr` = 28; `cargo check --workspace --all-targets` green
       (2026-09-10)
@@ -701,7 +758,9 @@ dependency on THIS repo's `develop` branch, locked at rev `d61b359f`. So:
       per site; no fallback that mimics `wasm`. **Four sites, not three** — the
       fourth is `ScVal::ExecutableTag` in `scval.rs`
 - [x] A testnet proto-28 ledger decodes clean — ledger 4,601,991, committed as a
-      fixture and asserted to report `protocol_version = 28`
+      fixture and asserted to report `protocol_version = 28`. Weaker than it
+      reads: the fixture also decodes under stellar-xdr 26 (review 2026-09-14);
+      the constructed-arm round-trips are what fail under 27
 - [ ] Post-vote: indexer decodes mainnet proto-28 ledgers, DLQ stays empty,
       ingestion-lag alarm quiet
 - [ ] **Decision needed** — what `wasm_hash` and the upgradeable chip should say
@@ -719,8 +778,10 @@ dependency on THIS repo's `develop` branch, locked at rev `d61b359f`. So:
       `technical-design-general-overview.md`,
       `infrastructure/infrastructure-overview.md`. Schema, endpoints, pipeline
       steps and topology are unchanged — those stay `N/A`
-- [x] **API types regenerated** — ran clean; `openapi.json` came back byte-identical,
-      so the bump changes no API surface
+- [x] **API types regenerated** — the pin bump alone left `openapi.json`
+      byte-identical; the executable-reference model then added
+      `executable_owner` / `executable_tag` to `ContractDetailResponse`,
+      regenerated with it
 
 ## Future Work
 

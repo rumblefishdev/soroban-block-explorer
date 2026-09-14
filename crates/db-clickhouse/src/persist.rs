@@ -496,8 +496,8 @@ async fn query_contract_verdicts(
 ///
 /// Gated + fail-open: no `executable_update` event in the ledger (≈always) →
 /// **no round trip**, empty map. Any query failure → empty map + `warn!`, and the
-/// upgrade row is simply not emitted this ledger; the in-CH `wasm-upgrade-backfill`
-/// maintenance pass recovers it.
+/// upgrade row is not emitted this ledger. Nothing recovers it: the
+/// `wasm-upgrade-backfill` pass was removed in task 0425.
 async fn fetch_prior_contract_rows(
     client: &Client,
     events: &[(String, Vec<ExtractedEvent>)],
@@ -526,14 +526,12 @@ async fn fetch_prior_contract_rows(
         .map(|c| format!("'{c}'"))
         .collect::<Vec<_>>()
         .join(", ");
-    // Column order MUST match `rows::SorobanContractRow` field order (RowBinary is
-    // positional). No `name` — dropped by task 0304 (selecting it was Code 47
-    // UNKNOWN_IDENTIFIER on prod, killing every 0320 prefetch; lore-0392).
-    let sql = format!(
-        "SELECT id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, \
-                deployed_at_ledger, contract_type, is_sac \
-         FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})"
-    );
+    // `?fields` expands to `rows::SorobanContractRow`'s own column list. A
+    // hand-typed list broke this prefetch twice, silently each time: a dropped
+    // column still selected (Code 47, lore-0392) and two added columns not
+    // selected (the driver rejects the length mismatch, task 0548).
+    let sql =
+        format!("SELECT ?fields FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})");
 
     match client
         .query(&sql)
@@ -547,7 +545,7 @@ async fn fetch_prior_contract_rows(
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                "0320 live: prior contract-row prefetch failed — upgrade row skipped this ledger, wasm-upgrade-backfill recovers"
+                "0320 live: prior contract-row prefetch failed — upgrade row skipped this ledger, not recovered"
             );
             HashMap::new()
         }

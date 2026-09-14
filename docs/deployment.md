@@ -582,6 +582,15 @@ Terraform, run from a laptop, gated behind `terraform plan` flags:
   `deploy-production-ingestion`.
 - **Machine:** `ansible-playbook … --tags app` from a good checkout; data
   restore is Borg (see infra-hetzner DR).
+- **After a protocol vote, "the previous code" has a floor.** Every build
+  before the `stellar-xdr` bump for the new protocol fails to decode its
+  ledgers — the indexer dead-letters (task 0368), the API loses the archive
+  block of new transactions, and `backfill-runner` cannot re-ingest the
+  range. Roll Compute and `backfill-runner` back no further than the first
+  build carrying the matching `stellar-xdr` pin, and never roll Galexie back
+  past the vote (a pre-vote core stops exporting, task 0367). Before each
+  vote, record which commit is that floor, so a rollback does not have to
+  work it out under pressure.
 
 ---
 
