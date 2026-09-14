@@ -794,9 +794,23 @@ is unmerged upgrade versions). The mutation rewrote 6 parts: 15.13 MiB /
 released once the old parts expire. The 54 ids that had only a placeholder
 row are gone from the contracts list and the network count, as D5 intended.
 
-**Not yet confirmed at the time of writing:** Galexie exporting new ledgers to
-S3 after its catch-up (the ingestion-lag alarm fired at 11:23 as expected for
-the restart window).
+**Galexie export confirmed (12:12 UTC).** The restart took 56 minutes from
+rollout to a caught-up tip, not the ~20 the plan budgeted:
+
+| time        | step                                                                                                                                |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 11:26–11:41 | buckets downloaded and applied                                                                                                      |
+| 11:54–12:01 | export resumed, tip reached 64,424,255                                                                                              |
+| 12:01–12:08 | catch-up to checkpoint 64,424,319 stalled: archives SDF 1 and SDF 2 failed on `ledger-03d707ff.xdr.gz`, SDF 3 served it at 12:05:33 |
+| 12:09–12:12 | tip moved again; lag 1,050 s → 58 s                                                                                                 |
+
+Checked after catch-up: `ledgers` 64,423,000 – 64,424,482 is 1,483 rows =
+1,483 distinct = the range, so neither the wrong-branch window nor the Galexie
+gap left a hole or a duplicate. `production-galexie-ingestion-lag` back to OK at
+12:11, `production-indexer-ch-write-failures` OK, DLQ 0, no indexer ERROR in the
+25 minutes to 12:13. `production-ingestion-backlog-age` fired at 12:00 on the
+doorbells queued during the catch-up (oldest ~18 min); the queue had 0 visible
+messages at 12:13.
 
 ## Acceptance Criteria
 
@@ -809,7 +823,9 @@ the restart window).
       the pre-vote rollback target
 - [x] ~~GitHub env `GALEXIE_IMAGE_DIGEST` updated~~ — not needed: nothing reads
       it since task 0390 (`docs/deployment.md`, Galexie recipe)
-- [ ] Galexie 28.0.1 live in prod, S3 exports flowing, before 2026-09-16 17:00 UTC
+- [x] Galexie 28.0.1 live in prod, S3 exports flowing, before 2026-09-16 17:00 UTC
+      — rolled out 2026-09-14 11:16 UTC, tip caught up at 12:12 UTC, ledgers
+      contiguous across the restart gap (see the deploy section)
 - [x] Workspace `stellar-xdr` = 28; `cargo check --workspace --all-targets` green
       (2026-09-10)
 - [x] `ContractExecutable::ExternalRef` handled at all render sites, with a test
