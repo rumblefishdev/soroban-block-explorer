@@ -760,8 +760,13 @@ wasm_uploaded_at_ledger = 0`) must run after the new indexer is live — the
 
 ## Acceptance Criteria
 
-- [ ] `galexieImageTag` pinned to the Galexie 28.0.1 ECR digest, read back from
-      ECR (not copied from Docker Hub)
+- [x] `galexieImageTag` pinned to the Galexie 28.0.1 ECR digest, read back from
+      ECR (not copied from Docker Hub) — mirrored 2026-09-14 by pulling the Hub
+      digest `--platform linux/amd64`; ECR `describe-images` and
+      `batch-get-image` both report `sha256:1d511631…dcf01b` for tag `28.0.1`,
+      identical to the Hub digest this time (single-architecture manifest, not
+      rewritten on push). The 27.0.0 image `sha256:91eae7af…` stays in ECR as
+      the pre-vote rollback target
 - [x] ~~GitHub env `GALEXIE_IMAGE_DIGEST` updated~~ — not needed: nothing reads
       it since task 0390 (`docs/deployment.md`, Galexie recipe)
 - [ ] Galexie 28.0.1 live in prod, S3 exports flowing, before 2026-09-16 17:00 UTC

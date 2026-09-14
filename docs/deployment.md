@@ -455,12 +455,13 @@ Bump procedure — **pull → tag → push → sha**:
      --query 'imageDetails[0].imageDigest' --output text
    ```
 
-   > ⚠️ **This is NOT the Docker Hub digest.** Docker Hub serves a multi-arch
-   > manifest list; pushing to ECR rewrites the manifest, so the two digests
-   > differ. The 27.0.0 pin is Hub `sha256:81a9e829…` but ECR
-   > `sha256:91eae7af…` — and it is the **ECR** one that belongs in
-   > `production.json`. Copying the Hub digest across yields an image ECS
-   > cannot pull.
+   > ⚠️ **Pin the digest ECR reports, never the Docker Hub one.** When Hub
+   > serves a multi-arch manifest list, pushing to ECR rewrites the manifest
+   > and the two digests differ: the 27.0.0 pin is Hub `sha256:81a9e829…` but
+   > ECR `sha256:91eae7af…`, and copying the Hub digest across yields an image
+   > ECS cannot pull. A single-architecture image pulled by digest keeps its
+   > digest (28.0.1: `sha256:1d511631…` on both), so the two may also match —
+   > which is why the rule is "read it back", not "expect a difference".
 
 3. **Roll the ECS task:**
 
