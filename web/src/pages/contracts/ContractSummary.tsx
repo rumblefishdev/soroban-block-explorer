@@ -126,10 +126,44 @@ export function ContractSummary({
             ]}
           />
         )}
+        {/* Task 0548 — CAP-85 "externally managed" executable: the code is
+            the owner's `tag` entry, so the hash below is the one it resolves
+            to now, not code this contract carries. */}
+        {contract.executable_owner && (
+          <SummaryRow
+            cells={[
+              {
+                label: 'Executable',
+                value: (
+                  <Stack
+                    direction="row"
+                    spacing={0.75}
+                    alignItems="center"
+                    sx={{ flexWrap: 'wrap' }}
+                  >
+                    <span>Managed by</span>
+                    <IdentifierDisplay
+                      value={contract.executable_owner}
+                      type="contract"
+                      href={routes.contract(contract.executable_owner)}
+                    />
+                    {contract.executable_tag != null && (
+                      <span>
+                        · tag <code>{contract.executable_tag}</code>
+                      </span>
+                    )}
+                  </Stack>
+                ),
+              },
+            ]}
+          />
+        )}
         <SummaryRow
           cells={[
             {
-              label: 'WASM hash',
+              label: contract.executable_owner
+                ? 'WASM hash (resolved)'
+                : 'WASM hash',
               value: contract.wasm_hash ? (
                 <IdentifierWithCopy
                   value={contract.wasm_hash}
