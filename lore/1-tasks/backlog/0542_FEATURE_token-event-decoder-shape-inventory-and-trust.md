@@ -42,6 +42,17 @@ history:
       paths with three different trust policies, and every consumer assumed
       one topic shape per verb. 0540 fixed the two symptoms that reach
       `asset_transfers`; the rest is here.
+  - date: 2026-09-10
+    status: backlog
+    who: karolkow
+    note: >
+      Measured how many contracts publish event declarations, since the
+      canonical-source finding rested on an unquantified "not every contract
+      publishes one". 761 of 763 wasm hashes resolved against mainnet: 24.8%
+      of a universe sample declare events, 35.3% of token contracts, but only
+      12.2% of non-SAC token-event VOLUME — and non-SAC is 0.098% of that
+      volume. Adoption rises 32% to 69% across the emitter median upload
+      ledger. Bounds steps 1 and 6 rather than changing them.
 ---
 
 # Token-event decoder — shape inventory, trust policy, re-runnability
@@ -350,6 +361,72 @@ read the moment its declaration says where the sender sits.
 
 Not every contract publishes one, so the label rule stays as the fallback for
 those that do not — but it stops being the primary source for those that do.
+
+### How many contracts actually publish one — measured 2026-09-10
+
+The paragraph above ends on "not every contract publishes one" without saying
+how many do. Measured against mainnet, since the declaration is not in our
+schema: 763 wasm hashes resolved through the official CLI
+(`stellar contract info interface --output json`, CLI 26.0.0), counting
+`event_v0` entries in the returned spec. 761 of 763 resolved; the two failures
+carry no spec section at all.
+
+| population                                      | hashes | declare events | weighted by contracts |
+| ----------------------------------------------- | ------ | -------------- | --------------------- |
+| universe sample (300 of 4 976 stored hashes)    | 298    | **24.8%**      | **12.4%**             |
+| token contracts — every `Nft` + `Fungible` hash | 516    | **35.3%**      | **19.4%**             |
+| — `Fungible`                                    | 420    | 34.8%          | 19.0%                 |
+| — `Nft`                                         | 96     | 37.5%          | 31.6%                 |
+
+**The number that decides the step is smaller.** Over the contracts that
+actually emit a token event — one partition (`intDiv(ledger_sequence,500000) =
+128`), non-SAC emitters only, which is exactly the population this task guesses
+about: **69 hashes, 161 897 events**. Half the CODE declares (35 hashes,
+50.7%), but only **12.2% of the EVENTS** do: the three largest emitters
+(91 243 + 24 440 + 18 213 events, 82% of the volume) declare nothing.
+
+Two findings make the declaration worth reading anyway:
+
+- **Every one of the 35 that declares, declares a token verb.** No case of "has
+  event declarations, but not the ones needed" — the set of declared names
+  always intersects `transfer` / `mint` / `burn` / `clawback`.
+- **The declaration carries the missing field verbatim.** A live example:
+  `name: "Burn"`, `prefix_topics: ["burn"]`, params `from address
+location: topic_list` and `amount i128 location: data`, `data_format: map`.
+  That `location` is the field every open question in this task runs into.
+
+**Adoption is rising, not flat.** Split the same 69 emitter hashes at their
+median upload ledger: the older half declares in **11 of 34 (32%)**
+(ledgers 50 688 706 .. 63 035 973), the newer half in **24 of 35 (69%)**
+(63 099 147 .. 64 347 339).
+
+**Scale check that bounds the whole step.** That partition holds 165 924 064
+token events; the non-SAC emitters above are 161 897 of them — **0.098%**.
+Everything else is a SAC, whose shape is protocol, not a guess. So the
+declaration would resolve ~12% of ~0.1% of today's traffic. The step is cheap
+(`contract.rs` already reads the section and drops the entry on one line, and
+`wasm_interface_metadata` is already populated per hash) — it is not urgent.
+
+**Method caveats, so the numbers can be re-derived rather than trusted:**
+
+- The CLI resolves by CONTRACT address, so it returns the contract's CURRENT
+  wasm, while the hash keying the row may be older ([[0320]]). Checked against
+  the stored `metadata.functions` for the same hash: 40 of 41 comparable
+  emitter hashes have an identical function set; one had been upgraded
+  (6 events). Drift is negligible in this population, not zero.
+- The universe sample is 300 hashes ordered by `cityHash64(wasm_hash)` —
+  deterministic and reproducible, not a statistical random sample.
+- 201 of the first-pass fetches returned HTTP 429 and were re-fetched serially
+  across three endpoints. Final coverage 761/763.
+- The stored-metadata cross-check covered 41 of 69 hashes: rows whose JSON
+  carries a newline break a TSV round trip. The uncovered 28 were not checked.
+
+**What this does to the plan.** Step 1's declared-versus-emitted comparison is
+worth building, but it cannot be the gate on its own at today's adoption — the
+label rule stays primary for the volume and the declaration becomes the
+authority wherever it exists. Step 6's `i128` resolution inherits the same
+bound: it resolves from the declaration where there is one, and needs the
+legacy-decoder evidence path for the rest.
 
 ### The trace view colours by label, with no emitter check (2026-09-09)
 
