@@ -987,8 +987,21 @@ Two corrections to T11's rule, both measured rather than argued:
    either. Require that no edge precedes the current creation ledger (0 for the
    four bespoke-token holders).
 
-Not yet delivered: T11 asks for a runnable check in `tests/`. The measurement ran
-as scratch scripts (`chq` aggregates, RPC, CLI).
+**Runnable since 2026-09-14:** `crates/backfill-runner/tests/account_reconciliation.rs`,
+gated on a production ClickHouse client certificate (`T11_CH_CERT`, `T11_CH_KEY`)
+and skipped without one. It encodes both corrections: the fee leg from the
+`fee` events of the listed accounts' own transactions, and the incarnation
+guard — edges and fees before the current creation ledger must net to zero in
+every asset, or the test fails naming the account. The network is read first and
+ClickHouse bounded at that ledger; a pair that moved during the run is reported
+apart from a mismatch. The 13 September measurement had been scratch scripts.
+
+First run, at RPC ledger 64 422 960: **19 accounts, 2 825 pairs, 187 763 002
+edges, 0 moved, 0 failures**, 132 s. The pair count is the earlier 4 621 minus
+`GAON23…`'s 1 796, the account left out of the list for predating the floor.
+One false start: the first run died on `Code: 164` (`READONLY`) — the
+read-only user cannot set `join_use_nulls`, so the asset lookup tells a missing
+`assets` row from native by an explicit `found` marker instead.
 
 Operational notes from the run, for whoever repeats it:
 
@@ -1125,14 +1138,17 @@ event_pos_in_op)`, all NOT NULL; `event_index` is an ordinary column
       problem and nobody browsing an account can act on it. Measured: all 8 such
       events today are one emitter restating its own mint, 7 of 7 accompanied by
       a conforming `{amount}` mint in the same transaction
-- [ ] **End-to-end account reconciliation** (task owner, 2026-09-05): for a
+- [x] **End-to-end account reconciliation** (task owner, 2026-09-05): for a
       handful of accounts younger than the ingest floor, each chosen for a
       different edge case (DEX path payments with repeated identical transfers,
       classic LP deposit/withdraw, claimable balances, Soroban SAC + bespoke
       token, muxed destination if any, merge, clawback), the signed sum of their
       `asset_transfers` rows minus XLM fees equals their current per-asset
       balance read as raw XDR via RPC `getLedgerEntries` — bit-exact, every
-      asset type. Runnable from `tests/`; accounts and ledger recorded here
+      asset type. Runnable from `tests/`; accounts and ledger recorded here —
+      measured 2026-09-13 (20 accounts, 4 621 pairs), runnable as
+      `backfill-runner/tests/account_reconciliation.rs` and passing 2026-09-14
+      (19 accounts, 2 825 pairs, RPC ledger 64 422 960)
 - [x] Direction visible on the account page in production — deployed
       2026-09-08 and read off the live page, not off a row count. Account
       `GCKBNEKI…` shows all three states at once: `+1 NFT #44 XLEND` (ledger
