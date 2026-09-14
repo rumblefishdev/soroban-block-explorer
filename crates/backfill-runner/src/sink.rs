@@ -226,6 +226,7 @@ impl PartitionWriterHandle {
                     nft_events: &parsed.nft_events,
                     lp_positions: &parsed.lp_positions,
                     contract_metadata_writes: &parsed.contract_metadata_writes,
+                    executable_ref_targets: &parsed.executable_ref_targets,
                     // Task 0331 — backfill reprocesses ledger ContractData
                     // changes through the shared `process.rs`, so this is
                     // populated for free: the historical-balance seed pass is
@@ -247,9 +248,10 @@ impl PartitionWriterHandle {
                     // `nft-reclassify`, not inline.
                     prior_wasm_verdicts: &std::collections::HashMap::new(),
                     prior_contract_verdicts: &std::collections::HashMap::new(),
-                    // Task 0320 live WASM-upgrade rewrite is live-indexer-only;
-                    // the backfill recovers stale hashes via the dedicated
-                    // `wasm-upgrade-backfill` pass, so pass an empty map here.
+                    // Task 0320 live WASM-upgrade rewrite is live-indexer-only.
+                    // With an empty map no executable update (Wasm or CAP-85
+                    // reference) is applied on this path, and nothing recovers
+                    // it: `wasm-upgrade-backfill` was removed in task 0425.
                     prior_contract_rows: &std::collections::HashMap::new(),
                     asset_transfers: &parsed.asset_transfers,
                 },

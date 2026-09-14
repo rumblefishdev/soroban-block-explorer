@@ -1,4 +1,4 @@
-import { Box, Card, Stack, Typography } from '@mui/material';
+import { Box, Card, Stack, Tooltip, Typography } from '@mui/material';
 import {
   Chip,
   DetailErrorState,
@@ -134,6 +134,18 @@ export default function ContractDetailPage() {
               Label states exactly what the WASM import scan proves ("self-
               upgrade path present/absent"), not the broader "immutable" — a
               static scan can't see proxy/delegate or renounced-admin patterns. */}
+          {/* Task 0548 — CAP-85: the code is set by another contract, so the
+              self-upgrade scan does not apply (upgradeable is null here). */}
+          {contract.data?.executable_owner && (
+            <Tooltip
+              title="Code is set by another contract. Changing it there changes every contract that uses the same tag."
+              describeChild
+            >
+              <span>
+                <Chip size="md" color="neutral" label="Externally managed" />
+              </span>
+            </Tooltip>
+          )}
           {contract.data?.upgradeable != null && (
             <Chip
               size="md"

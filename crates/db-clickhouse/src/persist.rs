@@ -36,7 +36,7 @@ use domain::{ContractEventType, ContractType};
 // ClassificationCache` stays a valid path for callers + integration tests that
 // don't depend on `domain` directly (task 0283).
 pub use domain::ClassificationCache;
-use xdr_parser::event::extract_executable_update_new_wasm_hash;
+use xdr_parser::event::extract_executable_update;
 use xdr_parser::types::{
     ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
     ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
@@ -88,6 +88,7 @@ pub async fn persist_ledger_clickhouse(
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
     contract_metadata_writes: &[xdr_parser::ExtractedContractMetadata],
+    executable_ref_targets: &[xdr_parser::executable_ref::ExtractedExecutableRefTarget],
     soroban_token_balances: &[xdr_parser::ExtractedSorobanBalance],
     pool_family_writes: &[xdr_parser::pool_family::PoolFamilyWrite],
     sac_overrides: &[SacOverride],
@@ -122,6 +123,8 @@ pub async fn persist_ledger_clickhouse(
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
     // here would otherwise orphan contract-held balances under their surrogate key.
     let sac_classic = sac_classic?;
+    // Fail closed here too: a skipped upgrade row has no recovery pass.
+    let prior_contract_rows = prior_contract_rows?;
     // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
     // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
     // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
@@ -142,6 +145,7 @@ pub async fn persist_ledger_clickhouse(
         nft_events,
         lp_positions,
         contract_metadata_writes,
+        executable_ref_targets,
         soroban_token_balances,
         pool_family_writes,
         // ADR 0051: `build_balance_rows` keys contract-held SAC balances onto the
@@ -492,14 +496,16 @@ async fn query_contract_verdicts(
 /// written as, so no projection DTO is needed — the upgrade build just clones it
 /// and overrides the three columns the upgrade changes.
 ///
-/// Gated + fail-open: no `executable_update` event in the ledger (≈always) →
-/// **no round trip**, empty map. Any query failure → empty map + `warn!`, and the
-/// upgrade row is simply not emitted this ledger; the in-CH `wasm-upgrade-backfill`
-/// maintenance pass recovers it.
+/// Gated: no `executable_update` event in the ledger (≈always) → **no round
+/// trip**, empty map. Fail-closed on a query failure, unlike the verdict
+/// prefetches: those have a batch pass that repairs a skipped verdict, while a
+/// skipped upgrade row is lost for good (`wasm-upgrade-backfill` was removed in
+/// task 0425). The error aborts the ledger before its commit marker, so the
+/// reconcile retries it.
 async fn fetch_prior_contract_rows(
     client: &Client,
     events: &[(String, Vec<ExtractedEvent>)],
-) -> HashMap<String, rows::SorobanContractRow> {
+) -> Result<HashMap<String, rows::SorobanContractRow>, clickhouse::error::Error> {
     let mut want: Vec<&str> = events
         .iter()
         .flat_map(|(_, evs)| evs.iter())
@@ -509,13 +515,13 @@ async fn fetch_prior_contract_rows(
         // non-diagnostic, host-emitted SYSTEM events with a parseable new hash.
         .filter(|ev| !matches!(ev.source, EventSource::Diagnostic))
         .filter(|ev| ev.event_type == ContractEventType::System)
-        .filter(|ev| extract_executable_update_new_wasm_hash(&ev.topics).is_some())
+        .filter(|ev| extract_executable_update(&ev.topics).is_some())
         .filter_map(|ev| ev.contract_id.as_deref())
         .collect();
     want.sort_unstable();
     want.dedup();
     if want.is_empty() {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
 
     // `want` are `C…` StrKeys from parser output (base32, no quote chars).
@@ -524,32 +530,21 @@ async fn fetch_prior_contract_rows(
         .map(|c| format!("'{c}'"))
         .collect::<Vec<_>>()
         .join(", ");
-    // Column order MUST match `rows::SorobanContractRow` field order (RowBinary is
-    // positional). No `name` — dropped by task 0304 (selecting it was Code 47
-    // UNKNOWN_IDENTIFIER on prod, killing every 0320 prefetch; lore-0392).
-    let sql = format!(
-        "SELECT id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, \
-                deployed_at_ledger, contract_type, is_sac \
-         FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})"
-    );
+    // `?fields` expands to `rows::SorobanContractRow`'s own column list. A
+    // hand-typed list broke this prefetch twice, silently each time: a dropped
+    // column still selected (Code 47, lore-0392) and two added columns not
+    // selected (the driver rejects the length mismatch, task 0548).
+    let sql =
+        format!("SELECT ?fields FROM soroban_contracts FINAL WHERE contract_id IN ({in_list})");
 
-    match client
+    let rows = client
         .query(&sql)
         .fetch_all::<rows::SorobanContractRow>()
-        .await
-    {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|r| (r.contract_id.clone(), r))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "0320 live: prior contract-row prefetch failed — upgrade row skipped this ledger, wasm-upgrade-backfill recovers"
-            );
-            HashMap::new()
-        }
-    }
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.contract_id.clone(), r))
+        .collect())
 }
 
 #[cfg(test)]
@@ -582,6 +577,7 @@ mod tests {
         let res = persist_ledger_clickhouse(
             &client,
             &ledger,
+            &[],
             &[],
             &[],
             &[],

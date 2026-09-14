@@ -80,6 +80,16 @@ pub fn scval_to_typed_json(v: &ScVal) -> Value {
                 stellar_xdr::ContractExecutable::StellarAsset => {
                     json!({ "type": "stellar_asset" })
                 }
+                // CAP-85 (protocol 28): the code lives in ANOTHER contract, so
+                // there is no own `wasm_hash` to report. Named as its own type
+                // rather than folded into `wasm` with a borrowed hash — a
+                // consumer must be able to tell "runs its own code" from "points
+                // at someone else's".
+                stellar_xdr::ContractExecutable::ExternalRef(r) => json!({
+                    "type": "external_ref",
+                    "owner": r.executable_owner.to_string(),
+                    "tag": std::str::from_utf8(r.tag.0.as_slice()).unwrap_or("<invalid-utf8>"),
+                }),
             };
             // `storage` used to be DROPPED here, which made every fact a
             // contract keeps about itself (share tokens, planes, the METADATA
@@ -102,6 +112,13 @@ pub fn scval_to_typed_json(v: &ScVal) -> Value {
         }
         ScVal::LedgerKeyContractInstance => ("ledger_key_contract_instance", json!(null)),
         ScVal::LedgerKeyNonce(k) => ("ledger_key_nonce", json!(k.nonce)),
+        // CAP-85 (protocol 28): names which of the owner's executables an
+        // external-ref contract runs. A plain UTF-8 string, same treatment as
+        // `String`/`Symbol` above.
+        ScVal::ExecutableTag(s) => (
+            "executable_tag",
+            json!(std::str::from_utf8(s.0.as_slice()).unwrap_or("<invalid-utf8>")),
+        ),
     };
     json!({ "type": type_name, "value": value })
 }

@@ -760,7 +760,7 @@ pub async fn fetch_pool_by_id(
                      FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
                  ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
                        AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
-                 LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
+                 /* 0548: deployed-only ON PURPOSE. PoolAssetLeg.contract_id is documented as None for a leg without a DEPLOYED SAC mirror, and asset_sac also carries surrogates of un-deployed SACs, so this reads soroban_contracts, which holds only contracts observed being deployed. */ LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
                  LEFT JOIN ( \
                      SELECT asset_type, asset_code, issuer_id, contract_id, \
                             argMax(icon_url, version) AS icon_url \
@@ -1846,7 +1846,7 @@ pub async fn fetch_pool_list(
                  GROUP BY asset_type, asset_code, issuer_id, contract_id \
              ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
                    AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
-             LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
+             /* 0548: deployed-only ON PURPOSE. PoolAssetLeg.contract_id is documented as None for a leg without a DEPLOYED SAC mirror, and asset_sac also carries surrogates of un-deployed SACs, so this reads soroban_contracts, which holds only contracts observed being deployed. */ LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
              LEFT JOIN ( \
                  SELECT asset_type, asset_code, issuer_id, contract_id, \
                         argMax(icon_url, version) AS icon_url \

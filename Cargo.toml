@@ -37,7 +37,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 clickhouse = "=0.15.0"
 
 # Stellar XDR
-stellar-xdr = { version = "27" }
+stellar-xdr = { version = "28" }
 
 # Encoding
 base64 = "0.22"
