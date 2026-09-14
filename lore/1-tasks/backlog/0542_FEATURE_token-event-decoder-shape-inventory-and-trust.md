@@ -60,7 +60,7 @@ history:
 ## Summary
 
 Thread 99 interpretation decision (2026-09-07):
-[NFT interpretation policy](../active/0540_FEATURE_lossless-value-flow-index/notes/T-nft-interpretation-policy.md).
+[NFT interpretation policy](../archive/0540_FEATURE_lossless-value-flow-index/notes/T-nft-interpretation-policy.md).
 Distinguish declared amount, NFT identity and unresolved payload; use
 event-specific, historical-version evidence rather than integer signedness
 or today's name-only contract classification. Measured 2026-09-07 (policy
@@ -71,7 +71,7 @@ backfill (task owner, thread 114 A). Implementation is step 6 below.
 
 Post-merge 0540 correction (2026-09-07): unsigned scalar NFT IDs no longer
 become fungible amounts. The reproducible exploit and limits are recorded in
-[0540's regression note](../active/0540_FEATURE_lossless-value-flow-index/notes/S-nft-amount-regression.md).
+[0540's regression note](../archive/0540_FEATURE_lossless-value-flow-index/notes/S-nft-amount-regression.md).
 **Still required before claiming NFT-safe numeric aggregation:** resolve
 bespoke i128 token-ID ambiguity consistently for live and historical replay.
 The existing NFT classifier is not yet part of the value-flow decision, and

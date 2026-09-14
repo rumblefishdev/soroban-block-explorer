@@ -772,9 +772,15 @@ Design notes (every figure measured — lore task 0540 and its research note):
   and is deliberately not applied; it can be added per column later via
   `ALTER … MODIFY COLUMN` after the driver-vs-`DESCRIBE` check on a local
   instance (task 0310).
-- **Backfill**: one from-S3 re-parse with `--only asset_transfers,transaction_memos,soroban_event_ops`
-  — additive, no Tier-1 column touched, rollback is `DROP TABLE`. Coverage is
-  proven three ways before the column ships (README 0540, rollout gate 7).
+- **Coverage**: the table holds every token movement from the ingest floor on,
+  filled by one from-S3 re-parse with `--only asset_transfers,transaction_memos,soroban_event_ops`
+  (additive, no Tier-1 column touched) and proven three ways — per-partition
+  counts against `soroban_events`, a byte-for-byte re-decode of archive ledgers,
+  and account sums against network state (`backfill-runner/tests/redecode_diff.rs`,
+  `…/account_reconciliation.rs`; README 0540, rollout gate 7). The account page
+  therefore reads an empty list as a measured "nothing moved". Keeping that true
+  is a backfill rule: any pass that adds transactions writes `asset_transfers` in
+  the same pass (`docs/backfills.md` §6).
 
 ### 4.5.5 Transaction Memos (task 0540)
 

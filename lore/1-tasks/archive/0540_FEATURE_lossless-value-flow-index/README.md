@@ -2,7 +2,7 @@
 id: '0540'
 title: 'FEATURE: lossless value-flow index — per-transfer edges replacing the net-settled aggregate'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks:
   [
@@ -16,6 +16,9 @@ related_tasks:
     '0541',
     '0542',
     '0543',
+    '0549',
+    '0551',
+    '0552',
   ]
 tags:
   [
@@ -82,6 +85,19 @@ history:
       transaction-list aggregate, so the runbook's drop-then-deploy order
       would have 500'd every transaction list. Steps 5-7 (binary, backfill,
       gates) remain.
+  - date: '2026-09-14'
+    status: completed
+    who: karolkow
+    note: >
+      Done. Backfill over 50 457 424 .. 64 317 019 with gate 7 passing on the
+      full range (2026-09-13): 7a 29/29 partitions exact (5.475 bn events,
+      7 766 counted rejects), 7b 45 archive ledgers byte-identical, 7c 20
+      accounts / 4 621 pairs exact. Read floor removed and deployed, the five
+      unwritten columns dropped, zero Lambda errors. T11 made runnable
+      (backfill-runner/tests/account_reconciliation.rs) and re-passed: 19
+      accounts, 2 825 pairs. Every acceptance criterion checked; two rollout
+      deviations recorded (drop deferred, column behind a floor). Follow-ups:
+      0541, 0542, 0543, 0549, 0551, 0552.
 ---
 
 # Lossless value-flow index
@@ -1071,6 +1087,23 @@ All in "What is settled" and "Review by a second pass" above.
 6. **T11 deferred to rollout gate 7**, not written blind: it needs
    `asset_transfers` rows and RPC ledger state, neither of which exists before
    the backfill. A check that cannot run is not a check.
+7. **The column shipped behind a read floor, not after the full gate.** The
+   plan held the column until gate 7 passed on the whole range; it shipped on
+   2026-09-08 with "Not indexed" below the covered range and the floor lowered
+   as coverage was proven, so the newest ledgers were visible days earlier and
+   no partial figure was ever drawn.
+8. **The floor was removed, not lowered to the ingest floor** (task owner,
+   2026-09-13): `transactions` starts at the same floor, so a constant nothing
+   can sit below bought only a branch. The invariant moved to a backfill rule
+   (`docs/backfills.md` §6).
+9. **T11's rule corrected twice by measurement**: the fee leg comes from `fee`
+   events, not `transactions` (which stores no payer — follow-up 0549), and an
+   account qualifies only if its first incarnation is inside the window,
+   enforced as "edges and fees before the current creation ledger net to zero".
+10. **The runnable T11 lives in `backfill-runner/tests`**, beside gate 7b's
+    re-decode: that crate already carries the mTLS client, the RPC client
+    dependencies and the XDR types, and the check belongs with the gate it
+    closes rather than with the API.
 
 **Broken/modified tests:** `net_settled_real_corpus.rs` —
 `path_payment_two_accounts_net_not_gross` now expects ten rows (three pools ×
@@ -1081,10 +1114,16 @@ intentional: the fixtures did not change, the reader stopped being blind.
 
 ## Acceptance Criteria
 
-- [ ] Edge table exists, keyed so that identical transfers in one operation stay
-      distinct rows — verified against the measured cases, not by argument
-- [ ] Sort key is `(ledger_sequence, application_order, op_index,
-event_pos_in_op)`, all NOT NULL; `event_index` is an ordinary column
+- [x] Edge table exists, keyed so that identical transfers in one operation stay
+      distinct rows — verified against the measured cases, not by argument.
+      Gate 7a (2026-09-13): in all 29 partitions the distinct
+      `(ledger, application_order, op_index, event_pos_in_op)` keys equal the
+      token events in `soroban_events` minus the counted rejects, so no two
+      events collapsed onto one row over the whole range
+- [x] Sort key is `(ledger_sequence, application_order, op_index,
+event_pos_in_op)`, all NOT NULL; `event_index` is an ordinary column —
+      read from production `system.tables` / `system.columns` 2026-09-14:
+      that sorting key, all four `Int16`/`Int64`, none `Nullable`
 - [x] `TransactionMeta::V4` confirmed across the ingested range — 30 archive
       ledgers spread over it, protocols 20–27, V4 only (2026-09-05, research
       note §10); the live path is Protocol 23+ Galexie, V4 by construction
@@ -1106,12 +1145,22 @@ event_pos_in_op)`, all NOT NULL; `event_index` is an ordinary column
       10 + the named edge cases + T11's ledgers), files fetched to a cache, skip
       when absent; run on demand after the backfill and on any parser change.
       No flag column, no UI state
-- [ ] `from_muxed_id` / `to_muxed_id` filled from the envelope, and
+- [x] `from_muxed_id` / `to_muxed_id` filled from the envelope, and
       `transaction_memos` written by the same pass; both proven against the
-      archive on a sampled range
-- [ ] Phase-1 backfill covers the full ingested range, with coverage **proven**
-      against an independent source, not inferred from a row count
-- [ ] Rollout per the sequence in the map's T08: tables created on prod
+      archive on a sampled range — gate 7b (2026-09-13): 45 archive ledgers
+      including a muxed destination, a muxed source and a `text_hex` memo,
+      `asset_transfers` and `transaction_memos` identical to production by sha256
+- [x] Phase-1 backfill covers the full ingested range, with coverage **proven**
+      against an independent source, not inferred from a row count — gate 7
+      (2026-09-13): 7a counts per partition, 7b against the archive, 7c against
+      network state; 7c runnable and re-passed 2026-09-14
+- [x] Rollout per the sequence in the map's T08, **with two recorded
+      deviations**: the `DROP COLUMN` did not ride the deploy window — defaults
+      first, drop after the backfills (task owner, option B, 2026-09-07; dropped
+      2026-09-13); and the column shipped on 2026-09-08 before the full-range
+      gate, behind a read floor that rendered "Not indexed" below the covered
+      range, so no partial figure was ever shown; the floor was removed only
+      after gate 7 passed (2026-09-13). As planned: tables created on prod
       **before** the indexer deploy (driver validates the struct against
       `DESCRIBE`); indexer deploy in its **own window** with the
       `DROP COLUMN net_settled` `ALTER`; backfill floor → deploy ledger with the
@@ -1156,7 +1205,7 @@ event_pos_in_op)`, all NOT NULL; `event_index` is an ordinary column
       MEASURED `0` on a Manage Sell Offer, and signed amounts with US
       grouping. A `Clawback` renders as an outflow (`−1 436.3560918 ICE`) —
       the one verb never exercised on live data before the deploy
-- [ ] **Docs updated** — `docs/architecture/database-schema/**`,
+- [x] **Docs updated** — `docs/architecture/database-schema/**`,
       `indexing-pipeline/**`, `xdr-parsing/**`, `frontend/**` per ADR 0032.
       Read half (2026-09-07): `database-schema/database-schema-overview.md`
       UPDATED (the read path and its measured cost);
@@ -1165,4 +1214,24 @@ event_pos_in_op)`, all NOT NULL; `event_index` is an ordinary column
       UPDATED (§6.7 the column, §6.3 why it is not on the global list);
       `indexing-pipeline/**` **N/A — the read half writes nothing**;
       `xdr-parsing/**` **N/A — no parser change; the decode shipped with the
-      write half**. Write half's own entries stay open until the backfill
+      write half**. Write half (`36f15603`): `database-schema-overview.md`
+      UPDATED (the three tables), `indexing-pipeline-overview.md` UPDATED (the
+      edge decode in `parse_ledger`), `xdr-parsing-overview.md` UPDATED (§5.8).
+      Completion (2026-09-13/14): `frontend-overview.md` UPDATED (the field is
+      always present, floor removed); `database-schema-overview.md` UPDATED
+      (coverage proven, the backfill rule that keeps it true).
+
+## Future Work
+
+Each item is a backlog task; none gates this one.
+
+- **0541** — fold `soroban_event_ops` into two columns on `soroban_events`.
+- **0542** — one definition of a token movement; its reject classification
+  (2026-09-13) found 230 + 5 fungible movements and 2 105 NFT ownership changes
+  the decoder drops.
+- **0543** — read prerequisites: `L…` / `B…` endpoints as StrKeys,
+  contract-authored rows marked, staging oracle, the dead `net_settled` chain.
+- **0549** — store the fee payer on `transactions`.
+- **0551** — the backfill safeguards that live only in a shell wrapper (map T12).
+- **0552** — name the pool behind a liquidity movement on the transaction detail
+  (map T13).
