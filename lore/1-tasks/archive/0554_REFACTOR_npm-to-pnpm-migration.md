@@ -291,6 +291,58 @@ worktree with main parked on another branch.
   single-run differences of seconds are noise. The first pnpm run (cold
   store cache) installed in 11–13 s.
 
+## Outcome in Numbers
+
+All figures measured in this task; nothing here is an estimate.
+
+**Speed**
+
+| What                                    | npm                       | pnpm       |
+| --------------------------------------- | ------------------------- | ---------- |
+| Provision a new worktree                | 3 min 12 s (clone script) | 14 s       |
+| CI install, TypeScript job              | 36 s                      | 7 s        |
+| CI install, API types job               | 51 s                      | 5 s        |
+| CI API types job total                  | 1 min 44 s                | 1 min 8 s  |
+| First install on a machine (cold store) | not measured              | 1 min 31 s |
+
+**Correctness — failure classes removed**
+
+- Worktrees typechecked against the main checkout's `libs/` (another branch);
+  ~25 phantom TypeScript errors blocked every commit. Now each worktree
+  resolves `@rumblefish/*` to its own `libs/` (proven with main parked on
+  another branch).
+- `npm ci` through a symlinked `node_modules` emptied the main checkout's
+  tree (1123 → 0 packages). No symlink exists any more.
+- `deploy-production.yml` cached root `node_modules` only — a cache hit would
+  have restored half a pnpm tree (decision 8).
+- Undeclared imports that worked by hoisting now fail loudly (strict linker).
+
+**Security**
+
+| What                           | npm                      | pnpm                                          |
+| ------------------------------ | ------------------------ | --------------------------------------------- |
+| Dependency install scripts run | all 5 flagged packages   | 3 allow-listed (`@swc/core`, `esbuild`, `nx`) |
+| Package-manager version        | whatever the machine had | 10.34.5, sha512-pinned, 0 of 31 advisories    |
+| CI setup action                | —                        | pinned to a commit SHA                        |
+
+**Size**
+
+| What                              | Before                      | After                    |
+| --------------------------------- | --------------------------- | ------------------------ |
+| Lockfile                          | 656 KB / 18 470 lines       | 403 KB / 11 073 lines    |
+| Repo code (excl. lockfiles, lore) | 27 files: +165 / −316 lines | —                        |
+| Worktree clone script removed     | 54 lines                    | 0                        |
+| `worktree-hooks` skill removed    | 131 lines                   | 6-line rule in CLAUDE.md |
+
+**Unchanged (proof of no regression)**: web build 59/59 files byte-identical;
+`cdk.out` byte-identical; resolved versions identical except one build-tool
+transitive (`brace-expansion` 2.0.3 → 2.1.1).
+
+**Not gained**: CI TypeScript job total 9 min 23 s → 9 min 14 s (noise —
+~7 min is lint/build/test); per-worktree disk saving not measured (the APFS
+clone was already cheap). **Cost**: every developer needs pnpm; existing
+checkouts need one manual `pnpm install`.
+
 ## Issues Encountered
 
 - **First verification run failed on a full disk, not on the migration.**
