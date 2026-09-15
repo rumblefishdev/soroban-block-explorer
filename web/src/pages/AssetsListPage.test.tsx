@@ -1,6 +1,7 @@
 import type { AssetItem, PaginatedAssetItem } from '@rumblefish/api-types';
 import { screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
+import { useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../test-utils.js';
@@ -140,6 +141,39 @@ describe('AssetsListPage', () => {
       const lastFilters = calls[calls.length - 1]?.[1];
       expect(lastFilters?.['filter[code]']).toBe('USDC');
     });
+  });
+
+  // Task 0534. As a filter, a qualified pair is a guaranteed empty page (no
+  // asset code is 58+ characters long), so the list opens the asset instead.
+  it('a pasted CODE:ISSUER opens that asset instead of filtering', async () => {
+    const issuer = 'GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q';
+    function Location() {
+      return <output data-testid="location">{useLocation().pathname}</output>;
+    }
+    mockOk([]);
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <>
+        <AssetsListPage />
+        <Location />
+      </>,
+      { initialEntries: ['/assets'] }
+    );
+
+    await user.click(screen.getByPlaceholderText(/search by asset code/i));
+    await user.paste(`USDT0:${issuer}`);
+
+    await vi.waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        `/assets/USDT0-${issuer}`
+      )
+    );
+    // The pair never reaches the API as a code filter.
+    const codes = assetsHookMock.useAssetsList.mock.calls.map(
+      ([, filters]) => filters?.['filter[code]']
+    );
+    expect(codes.every((c) => c === undefined)).toBe(true);
   });
 
   it('selecting Soroban clears an active "Has SAC" filter (mutually exclusive)', async () => {

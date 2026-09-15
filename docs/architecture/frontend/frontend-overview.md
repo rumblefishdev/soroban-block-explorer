@@ -629,6 +629,12 @@ List of all known assets (native XLM, classic credit assets, SACs, and Soroban-n
   the honest `?`
 - Filters - type chips (All types, Classic credit, Soroban) + a separate "Has SAC"
   property toggle, asset code search
+- **A pasted `CODE:ISSUER` or `CODE-ISSUER` opens that asset** instead of
+  filtering (`codeIssuerRoute`, task 0534). The pair names exactly one asset,
+  and as `filter[code]` — a substring match against the displayed code, name
+  and symbol — it could never match, so the list would come back empty.
+  Anything that is not a pair still filters. The issuer is shape-checked, not
+  CRC-checked: a typo lands on the asset page's not-found state.
 - Cursor-based pagination controls
 
 Expanded behavior:
