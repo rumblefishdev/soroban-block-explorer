@@ -9,6 +9,7 @@
 //! | closure (ours 0, gone) | ~22.2M classic + 2.3M native | checkpoint | checkpoint |
 //! | ghost (ours >0, gone) | ~1.04M native + ~2k classic | checkpoint | checkpoint |
 //! | self-heal (snapshot newer) | ~25k | the entry's own ledger | 0 |
+//! | `claimable_balance_holdings`, same four kinds (task 0210, [`claimable`]) | not yet measured | as above | as above |
 //! | `account_entry_state` full seed | every live account | the entry's own ledger | — |
 //! | `assets` / `accounts` dimension stubs | the referenced ids we lack | entry ledger | — |
 //!
@@ -66,6 +67,7 @@ use std::path::Path;
 use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::snapshot::archive::PUBNET_ARCHIVE;
+use crate::snapshot::claimable;
 use crate::snapshot::network_state::{self, NetworkState};
 use crate::snapshot::report::Report;
 use crate::snapshot::verdict;
@@ -93,6 +95,7 @@ struct Corrections {
     entry_states: Vec<AccountEntryStateRow>,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
+    claimable: claimable::ClaimableCorrections,
     /// One line per row this run zeroes while it still held a positive amount
     /// — the anomaly report, and the only pre-image of what `--execute` takes
     /// away. It belongs to what the run produced, like the four row sets.
@@ -218,7 +221,7 @@ fn slice_sql(from: i128, to: i128) -> String {
 }
 
 /// The slice boundaries, covering the i64 key space exactly once.
-fn key_slices() -> impl Iterator<Item = (i128, i128)> {
+pub(crate) fn key_slices() -> impl Iterator<Item = (i128, i128)> {
     let lo = i128::from(i64::MIN);
     let hi = i128::from(i64::MAX);
     let step = (hi - lo + 1) / KEY_SLICES;
@@ -378,6 +381,10 @@ async fn build_corrections(
             referenced_holders.insert(*id);
         }
     }
+    // Pass 2b: `claimable_balance_holdings`, before the stubs its assets need.
+    out.claimable =
+        claimable::build_corrections(sink, state, checkpoint, report, &mut referenced_assets)
+            .await?;
 
     // Pass 3: dimension stubs — a seeded balance whose asset or holder has no
     // dimension row would render as a broken join, i.e. a new lie replacing an
@@ -626,6 +633,15 @@ pub async fn seed_command(
 
     let (list, mut state, source_report) =
         network_state::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;
+    let coverage = claimable::writer_coverage(
+        claimable::first_writer_tombstone(sink).await?,
+        list.checkpoint_ledger,
+    );
+    if let (true, Err(why)) = (execute, &coverage) {
+        return Err(BackfillError::Incomplete(format!(
+            "refusing --execute: {why}"
+        )));
+    }
 
     // One directory per checkpoint, so a run never overwrites the record of an
     // earlier one — `ghosts.tsv` is the only pre-image of what a run zeroed.
@@ -686,6 +702,11 @@ pub async fn seed_command(
     // the same run, but never silently.
     std::fs::write(artifacts.join("ghosts.tsv"), corr.ghosts.join("\n") + "\n")
         .map_err(|e| BackfillError::Incomplete(format!("write ghosts: {e}")))?;
+    std::fs::write(
+        artifacts.join("claimable_ghosts.tsv"),
+        corr.claimable.ghosts.join("\n") + "\n",
+    )
+    .map_err(|e| BackfillError::Incomplete(format!("write claimable ghosts: {e}")))?;
 
     // The summary IS the four-way comparison — the same twelve buckets per
     // population the report renders, from one `Report`, plus
@@ -723,7 +744,7 @@ pub async fn seed_command(
         .await?;
 
     let summary = format!(
-        "checkpoint {}\n{}{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
+        "checkpoint {}\n{}{}{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
          contract-held classic rows  {:>12}\n    \
          type-3 Soroban rows         {:>12}\n    \
          snapshot pool shares        {:>12}  (our side: lp_positions)\n\
@@ -744,6 +765,7 @@ pub async fn seed_command(
         report
             .native
             .render("NATIVE XLM holdings (AccountEntry, not a trustline)", true),
+        claimable::render_summary(&report, &corr.claimable, &coverage),
         report.render_missing_histogram(),
         excluded_contract,
         excluded_type3,
@@ -781,6 +803,7 @@ pub async fn seed_command(
         insert_chunked(sink, "assets", &corr.asset_stubs).await?;
         insert_chunked(sink, "accounts", &corr.account_stubs).await?;
         insert_chunked(sink, "balances", &corr.balances).await?;
+        insert_chunked(sink, claimable::TABLE, &corr.claimable.rows).await?;
         insert_chunked(sink, "account_entry_state", &corr.entry_states).await?;
         println!("  inserts done.");
     } else {

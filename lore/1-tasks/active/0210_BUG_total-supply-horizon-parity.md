@@ -658,6 +658,35 @@ verdicts. `Ghost` → closure is correct for this table and must never reach
   (`writer.rs::write_rows`). Same effect, stated mechanism fixed in the work list.
 - **Docs:** `database-schema-overview.md` §3 + §4.17.1,
   `indexing-pipeline-overview.md` (claimable balances paragraph). API: no change.
+- **Not stored, decided (2026-09-15):** claimants, predicates and sponsor of an
+  open balance. Supply loses nothing, and the gap is reversible without an S3
+  re-parse — the checkpoint carries whole entries. Add when a reader exists.
+
+### Progress — item 3 written, not yet run (2026-09-15)
+
+- `snapshot-seed` now also compares and corrects `claimable_balance_holdings`
+  (`backfill-runner/src/snapshot/claimable.rs`), reusing `verdict` and
+  `correction` unchanged.
+- **Keyed by balance alone** on the network side: a dead bucket record carries
+  only the id. The asset sits beside the live holding; a live network balance
+  under a different asset is left unmatched, so ours closes and the network's is
+  inserted under its real asset.
+- **Writer coverage is checked from the data, not from deploy notes.** Claims
+  happen in practically every ledger, so the table's first tombstone marks when
+  the writer started. `--execute` refuses a checkpoint older than it, or a table
+  with no tombstone; the dry-run prints the check instead.
+- **Snapshot floor** `MIN_LIVE_CLAIMABLE = 100_000` — an estimate ~9× under the
+  ~920k balances still open from after our floor. Re-set from the first dry-run.
+- **Key agreement proven:** the snapshot's surrogate for the mainnet AVLX balance
+  equals production's `asset_transfers.from_id` (1,280,410,223,283,636,341).
+  Both new SQL statements run on a throwaway ClickHouse 26.3 (`min` over an empty
+  set returns 0, hence the `count()`).
+- Credit assets of inserted balances go through the existing stub pass. Ghosts go
+  to `claimable_ghosts.tsv`. Runbook: `docs/backfills.md`.
+- **Precondition:** the table must exist on production before any
+  `snapshot-seed` run, balances-only runs included — the command now reads it.
+- `seed.rs` is now 814 lines (was 791), just over the size limit; no inline tests
+  to extract. Candidate split: the dump writers (~90 lines).
 
 ## Context
 

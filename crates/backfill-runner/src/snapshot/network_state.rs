@@ -147,6 +147,14 @@ enum NetFact {
         pool_id: [u8; 32],
         entry: NetHolding,
     },
+    /// A claimable balance (task 0210), keyed by its `B…` surrogate alone: a
+    /// DEAD record carries only the balance id, no asset, so the asset cannot
+    /// be part of the key. `asset` is `None` exactly for a dead record.
+    ClaimableBalance {
+        holder_id: i64,
+        asset: Option<(i64, Option<(String, String)>)>,
+        entry: NetHolding,
+    },
 }
 
 /// Everything an `AccountEntry` carries beyond its native balance: identity for
@@ -179,6 +187,11 @@ pub struct NetworkState {
     pub trustlines: std::collections::HashMap<HoldingKey, NetHolding>,
     /// Pool shares, kept separate — see [`NetFact::PoolShare`].
     pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), NetHolding>,
+    /// Claimable balances by `B…` surrogate, for `claimable_balance_holdings`.
+    pub claimable_balances: std::collections::HashMap<i64, NetHolding>,
+    /// `B…` surrogate → asset surrogate, for every LIVE claimable balance. Kept
+    /// beside the holding rather than in it because a dead record has no asset.
+    pub claimable_assets: std::collections::HashMap<i64, i64>,
     /// Per-account identity, signers and thresholds, for `account_entry_state`.
     pub account_details: std::collections::HashMap<i64, AccountDetail>,
     /// asset surrogate → `(code, issuer strkey)`, for `assets` dimension stubs.
@@ -256,6 +269,28 @@ impl NetworkState {
                     &mut self.superseded,
                 );
             }
+            NetFact::ClaimableBalance {
+                holder_id,
+                asset,
+                entry,
+            } => {
+                // Same first-wins rule for the asset as for the holding, or an
+                // older record could re-key a live balance.
+                if !self.claimable_balances.contains_key(&holder_id)
+                    && let Some((asset_id, identity)) = asset
+                {
+                    self.claimable_assets.insert(holder_id, asset_id);
+                    if let Some(identity) = identity {
+                        self.asset_registry.entry(asset_id).or_insert(identity);
+                    }
+                }
+                first_wins(
+                    &mut self.claimable_balances,
+                    holder_id,
+                    entry,
+                    &mut self.superseded,
+                );
+            }
         }
     }
 
@@ -287,6 +322,31 @@ impl NetworkState {
     }
     pub fn live_pool_shares(&self) -> usize {
         self.pool_shares.values().filter(|e| e.live).count()
+    }
+    pub fn live_claimable_balances(&self) -> usize {
+        self.claimable_balances.values().filter(|e| e.live).count()
+    }
+}
+
+/// `B…` surrogate of a claimable balance id — the writer's `ids::address_id`
+/// over the same StrKey rendering, so snapshot and table keys meet.
+fn claimable_holder_id(id: &stellar_xdr::ClaimableBalanceId) -> i64 {
+    ids::address_id(&stellar_xdr::ScAddress::ClaimableBalance(id.clone()).to_string())
+}
+
+/// Asset surrogate and, for a credit asset, its `(code, issuer)` identity.
+/// Spelled like the writer's `build_claimable_balance_rows`.
+fn claimable_asset(asset: &stellar_xdr::Asset) -> (i64, Option<(String, String)>) {
+    use stellar_xdr::Asset as A;
+    let credit = |code: &[u8], issuer: &stellar_xdr::AccountId| {
+        let code = xdr_parser::asset_code::asset_code_str(code);
+        let issuer = issuer.to_string();
+        (ids::credit_asset_id(&code, &issuer), Some((code, issuer)))
+    };
+    match asset {
+        A::Native => (ids::NATIVE_ASSET_ID, None),
+        A::CreditAlphanum4(a) => credit(a.asset_code.as_slice(), &a.issuer),
+        A::CreditAlphanum12(a) => credit(a.asset_code.as_slice(), &a.issuer),
     }
 }
 
@@ -417,6 +477,11 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
                     (_, None) => None,
                 }
             }
+            D::ClaimableBalance(cb) => Some(NetFact::ClaimableBalance {
+                holder_id: claimable_holder_id(&cb.balance_id),
+                asset: Some(claimable_asset(&cb.asset)),
+                entry: NetHolding::live(e.last_modified_ledger_seq, cb.amount),
+            }),
             _ => None,
         },
         SnapshotRecord::Dead(k) => match k.as_ref() {
@@ -443,6 +508,11 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
                     (_, None) => None,
                 }
             }
+            K::ClaimableBalance(cb) => Some(NetFact::ClaimableBalance {
+                holder_id: claimable_holder_id(&cb.balance_id),
+                asset: None,
+                entry: NetHolding::dead(),
+            }),
             _ => None,
         },
     }
@@ -511,12 +581,25 @@ pub(crate) async fn open_snapshot(
     const MIN_BUCKETS: usize = 10;
     const MIN_LIVE_ACCOUNTS: usize = 5_000_000;
     const MIN_LIVE_TRUSTLINES: usize = 15_000_000;
+    // Claimable balances (task 0210) have their own floor because their own
+    // classifier arm can regress alone, and every open balance of ours would
+    // then read as gone. Not yet measured on a full pass: ~920k balances were
+    // created after our floor and are still open (a 1/64 sample of
+    // `asset_transfers`, 2026-09-15), and the network holds at least those.
+    // The floor sits ~9x under that estimate. Re-set it from the first dry-run.
+    const MIN_LIVE_CLAIMABLE: usize = 100_000;
     let (accounts, trustlines) = (state.live_accounts(), state.live_trustlines());
-    if n_buckets < MIN_BUCKETS || accounts < MIN_LIVE_ACCOUNTS || trustlines < MIN_LIVE_TRUSTLINES {
+    let claimable = state.live_claimable_balances();
+    if n_buckets < MIN_BUCKETS
+        || accounts < MIN_LIVE_ACCOUNTS
+        || trustlines < MIN_LIVE_TRUSTLINES
+        || claimable < MIN_LIVE_CLAIMABLE
+    {
         return Err(BackfillError::Incomplete(format!(
             "snapshot looks short: {n_buckets} buckets, {accounts} live accounts, \
-             {trustlines} live trustlines (floors {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / \
-             {MIN_LIVE_TRUSTLINES}) — refusing to read the gap as network-wide closures"
+             {trustlines} live trustlines, {claimable} live claimable balances (floors \
+             {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / {MIN_LIVE_TRUSTLINES} / \
+             {MIN_LIVE_CLAIMABLE}) — refusing to read the gap as network-wide closures"
         )));
     }
 
@@ -563,12 +646,18 @@ pub fn report_state(state: &NetworkState, checkpoint_ledger: u32, secs: f64) -> 
     );
     let _ = writeln!(
         out,
+        "  claimable    {:>10} {:>15}",
+        state.live_claimable_balances(),
+        state.claimable_balances.len() - state.live_claimable_balances()
+    );
+    let _ = writeln!(
+        out,
         "\n  {} records superseded by a newer one for the same key",
         state.superseded
     );
     let _ = writeln!(
         out,
-        "  {} records of entry types this comparison does not model          (offers, contract data, TTL, claimable balances, …)",
+        "  {} records of entry types this comparison does not model          (offers, contract data, TTL, …)",
         state.unmodelled
     );
     // Printed only when non-zero, and loudly: the protocol forbids a native
