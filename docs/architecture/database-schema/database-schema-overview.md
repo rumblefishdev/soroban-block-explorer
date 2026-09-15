@@ -252,8 +252,9 @@ ledgers
        ├─ soroban_event_ops (partitioned)        # op attribution per event (0541)
        └─ soroban_invocations_appearances (partitioned)
 
-soroban_contracts
+soroban_contracts                           # contracts OBSERVED being deployed (0548)
   ├─ wasm_interface_metadata
+  ├─ contract_executable_refs               # (owner, tag) -> wasm_hash, CAP-85 (0548)
   ├─ soroban_events_appearances
   ├─ soroban_invocations_appearances
   ├─ assets
@@ -751,7 +752,19 @@ Design notes (every figure measured — lore task 0540 and its research note):
   id is a one-way hash, a comparison key only, until a side table is built
   (follow-up, from `soroban_events`, no S3 pass needed).
 - **Reads must be `FINAL` or `GROUP BY`** — this table sums, and an unmerged
-  RMT duplicate doubles a balance change on screen.
+  RMT duplicate doubles a balance change on screen. The account page's read
+  (`api::accounts::balance_changes`) groups on the full sort key, then sums
+  `to − from` per (transaction, asset) for the account in context; `to − from`
+  rather than a first-match branch, so a transfer to self cancels to zero
+  instead of reading as income. Measured on production, 25-transaction page:
+  **20 ms / 13 824 rows** for the transfer read, **44 ms / 268 k rows** for the
+  asset-identity read beside it (`assets.id` carries no skip index, so that leg
+  is a scan; joining `soroban_contracts` through `assets.contract_id` instead of
+  through the shared surrogate made it run twice — 209 ms / 2.5 M rows). `assets.id`
+  carries no skip index of its own; adding the bloom that `accounts` and
+  `soroban_contracts` already have would make that leg a seek too, but it needs
+  a production `ALTER` and the read is correct without it, so it is recorded as
+  an optional follow-up rather than folded into this change.
 - **Storage**: ~5.47 bn rows at 7.6–8.9 B/row (ZSTD(3) everywhere; the schema
   otherwise inherits LZ4 by default). `index_granularity = 512` so the
   account-page read touches ~14 k rows, not ~147 k (outages 0243/0386 were this
@@ -759,9 +772,15 @@ Design notes (every figure measured — lore task 0540 and its research note):
   and is deliberately not applied; it can be added per column later via
   `ALTER … MODIFY COLUMN` after the driver-vs-`DESCRIBE` check on a local
   instance (task 0310).
-- **Backfill**: one from-S3 re-parse with `--only asset_transfers,transaction_memos,soroban_event_ops`
-  — additive, no Tier-1 column touched, rollback is `DROP TABLE`. Coverage is
-  proven three ways before the column ships (README 0540, rollout gate 7).
+- **Coverage**: the table holds every token movement from the ingest floor on,
+  filled by one from-S3 re-parse with `--only asset_transfers,transaction_memos,soroban_event_ops`
+  (additive, no Tier-1 column touched) and proven three ways — per-partition
+  counts against `soroban_events`, a byte-for-byte re-decode of archive ledgers,
+  and account sums against network state (`backfill-runner/tests/redecode_diff.rs`,
+  `…/account_reconciliation.rs`; README 0540, rollout gate 7). The account page
+  therefore reads an empty list as a measured "nothing moved". Keeping that true
+  is a backfill rule: any pass that adds transactions writes `asset_transfers` in
+  the same pass (`docs/backfills.md` §6).
 
 ### 4.5.5 Transaction Memos (task 0540)
 
@@ -795,6 +814,8 @@ CREATE TABLE soroban_contracts (
     deployed_at_ledger      BIGINT,
     contract_type           SMALLINT,                                       -- ADR 0031, nullable
     is_sac                  BOOLEAN     NOT NULL DEFAULT false,
+    executable_owner_id     BIGINT      REFERENCES soroban_contracts(id),   -- CAP-85 / 0548
+    executable_tag          TEXT,                                           -- CAP-85 / 0548
     name                    VARCHAR(256),                                   -- ADR 0042; legacy/empirically empty — on-chain token name lives in instance-storage METADATA, see task 0297
     search_vector           TSVECTOR GENERATED ALWAYS AS (
                                 to_tsvector('simple', COALESCE(name, '') || ' ' || contract_id)
@@ -807,6 +828,52 @@ CREATE INDEX idx_contracts_wasm   ON soroban_contracts (wasm_hash) WHERE wasm_ha
 CREATE INDEX idx_contracts_search ON soroban_contracts USING GIN (search_vector);
 CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern_ops);
 ```
+
+> **No placeholder contract rows (task 0548).** `soroban_contracts` gets a row
+> only when a deployment or an executable update is observed. It used to receive
+> a NULL-identity "stub" for every contract merely referenced by an op, event or
+> invocation: 41,030 such rows on production, 40,976 of them shadowing a real
+> deployment row, and 54 addresses with nothing on chain in the public contracts
+> list. A surrogate for an address that never had a contract now resolves to
+> nothing; the transaction page takes that address from the archive block.
+
+> **Executable kind (task 0548, protocol 28).** From CAP-85 a contract's code
+> can be a _reference_ to an entry owned by another contract, so `wasm_hash` is
+> no longer the only way a contract has code. The three kinds are read off the
+> columns, with no enum to keep in sync:
+>
+> | condition                         | kind                                                                                                                                  |
+> | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+> | `is_sac`                          | native host implementation — there is no code entry to hash                                                                           |
+> | `wasm_hash IS NOT NULL`           | carries its own code                                                                                                                  |
+> | `executable_owner_id IS NOT NULL` | runs the owner's code (a "fleet member")                                                                                              |
+> | none of the above                 | not a contract kind: a pre-0548 placeholder row, no longer written, removed by the cleanup `DELETE WHERE wasm_uploaded_at_ledger = 0` |
+>
+> The hash a reference resolves to is **not** stored on the contract. It lives
+> in `contract_executable_refs`, keyed `(owner_id, tag)` — the composite is the
+> key, since a tag is unique only within its owner, exactly as an asset code is
+> only meaningful with its issuer. The owner re-points one entry and every
+> member of the fleet changes code, with no ledger change touching those member
+> rows at all; a copy held against each member would therefore go stale with
+> nothing to invalidate it (the defect class of tasks 0320/0326). The API
+> resolves it with a join at read time, which is also what the protocol's own
+> `get_address_executable` reports.
+>
+> The owner is a **contract**, not an account: the hash is read out of the
+> owner's contract-data storage, and only contracts have any. It is held as the usual contract surrogate, like `deployer_id`; the owner is
+> itself a deployed contract, so its own row resolves the address. The XDR field is a bare `SCAddress` and so could
+> name an account, but the host rejects such a reference at creation, so one
+> cannot reach a ledger.
+>
+> One row per `(owner, tag)` **per ledger**: an owner may re-point the same tag
+> twice in a single ledger, and the row is versioned by ledger, so two
+> same-ledger rows would be indistinguishable to the merge. The parser folds
+> each transaction on its own, so the writer (`build_executable_ref_rows`) folds
+> again across the whole ledger, in application order, and writes only the value
+> the ledger ended on.
+>
+> No backfill exists or can exist: references are impossible before the
+> protocol-28 vote, so the table is complete from its first row.
 
 > **On-chain token metadata (task 0297, ClickHouse).** `name` / `symbol` /
 > `decimals` for Soroban tokens are on-ledger in the contract's instance storage

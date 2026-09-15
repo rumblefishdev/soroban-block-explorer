@@ -77,6 +77,33 @@ impl TargetedTables {
         "asset_transfers",
         "transaction_memos",
         "soroban_event_ops",
+        // Task 0518 — the three pool tables, so a full-range targeted
+        // re-parse carries the pool families' whole history (and the classic
+        // `legs` migration) in the SAME descent instead of owing a second one.
+        //
+        // None carries a Tier-1 MIN-semantics column, which is the condition
+        // that actually matters here: `pool_state_changes` is version-less
+        // RMT keyed by the row's own ledger, and both others version on a
+        // "when we last saw it" ledger where MAX is the correct answer — so a
+        // re-parsed historical row LOSES to a newer live one, as it should.
+        //
+        // `liquidity_pools` is the one that is NOT droppable (it holds the
+        // classic pools too), so its rollback is a 3 MiB table copy rather
+        // than a DROP. It earns the seat: the re-parse puts its soroban rows
+        // through the live two-stage registration gate, which the in-DB
+        // registry generators structurally cannot do (instance storage is not
+        // in `soroban_events`, so they need a hand-rolled duplicate guard
+        // instead of corroboration).
+        //
+        // MEASURED tie-break caveat, why the run owes an `OPTIMIZE ... FINAL`
+        // on `liquidity_pools`: a re-parsed row ties on version with the row
+        // the original ingest wrote for the same last-change ledger. On a tie
+        // a merge keeps the LAST INSERTED row — the backfill's, correctly —
+        // but until that merge runs both rows are live, and a read's
+        // `argMax(..., last_updated_ledger)` picks arbitrarily between them.
+        "pool_state_changes",
+        "pool_instance_state",
+        "liquidity_pools",
     ];
     /// Parse a comma-separated list; rejects unknown or duplicate names.
     pub fn parse(spec: &str) -> Result<Self, String> {
@@ -132,6 +159,7 @@ struct TableInserts {
     wasm: Option<Insert<WasmInterfaceMetadataRow>>,
     contracts: Option<Insert<SorobanContractRow>>,
     metadata: Option<Insert<SorobanContractMetadataRow>>,
+    executable_refs: Option<Insert<ContractExecutableRefRow>>,
     transactions: Option<Insert<TransactionRow>>,
     hash_index: Option<Insert<TransactionHashIndexRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
@@ -262,6 +290,33 @@ impl PartitionWriter {
                     )
                     .await?
                 }
+                "pool_state_changes" => {
+                    write_rows(
+                        &self.client,
+                        &mut self.inserts.pool_state_changes,
+                        "pool_state_changes",
+                        &staged.pool_state_change_rows,
+                    )
+                    .await?
+                }
+                "pool_instance_state" => {
+                    write_rows(
+                        &self.client,
+                        &mut self.inserts.pool_instance_state,
+                        "pool_instance_state",
+                        &staged.pool_instance_state_rows,
+                    )
+                    .await?
+                }
+                "liquidity_pools" => {
+                    write_rows(
+                        &self.client,
+                        &mut self.inserts.pools,
+                        "liquidity_pools",
+                        &staged.pool_rows,
+                    )
+                    .await?
+                }
                 other => {
                     return Err(SchemaError::Staging(format!(
                         "targeted write: table {other} is not targetable"
@@ -289,6 +344,7 @@ impl PartitionWriter {
             wasm_rows,
             contract_rows,
             metadata_rows,
+            executable_ref_rows,
             transaction_rows,
             hash_index_rows,
             participant_rows,
@@ -348,6 +404,13 @@ impl PartitionWriter {
             &mut self.inserts.metadata,
             "soroban_contract_metadata",
             &metadata_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.executable_refs,
+            "contract_executable_refs",
+            &executable_ref_rows,
         )
         .await?;
         write_rows(
@@ -553,6 +616,7 @@ impl PartitionWriter {
             wasm,
             contracts,
             metadata,
+            executable_refs,
             transactions,
             hash_index,
             participants,
@@ -583,6 +647,7 @@ impl PartitionWriter {
         end(wasm).await?;
         end(contracts).await?;
         end(metadata).await?;
+        end(executable_refs).await?;
         end(transactions).await?;
         end(hash_index).await?;
         end(participants).await?;

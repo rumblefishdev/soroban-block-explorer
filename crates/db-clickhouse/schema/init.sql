@@ -208,8 +208,8 @@ FROM accounts FINAL;
 
 -- soroban_contracts: same hybrid pattern as accounts.
 -- `wasm_uploaded_at_ledger` is the version slot; `DEFAULT 0` is the
--- stub-row sentinel (Pass 2 stub-rowing for referenced-but-not-deployed
--- contracts in mid-stream backfill ranges).
+-- stub-row sentinel. Pass-2 stub rows (written for contracts merely
+-- referenced) are no longer written (task 0548); legacy ones remain until cleaned up.
 -- NAMING TRAP (task 0398) — `contract_id` means two different things:
 --   * HERE (and in `soroban_contract_metadata`) it is a `String`: the real
 --     `C…` StrKey.
@@ -223,6 +223,18 @@ FROM accounts FINAL;
 -- are byte-identical) — not redundancy. Renaming was costed and deferred to
 -- task 0418: the ALTER is metadata-only, but the call sites are 85 in
 -- `stage.rs` + 21 in `crates/api`.
+-- READ TRAP (measured 2026-09-08) — `LIMIT 1 BY id` is the cheap dedup this
+-- schema recommends for the surrogate-to-StrKey lookup, and it is exact for
+-- `contract_id`, which every version of a row carries identically (task 0344).
+-- It is NOT safe for any other column. The stub rows above are real rows with
+-- `contract_type`/`wasm_hash`/`deployer_id` all NULL, so "pick any one version"
+-- can pick a stub: the largest NFT collection on production holds three rows —
+-- one complete (`contract_type = 2`) and two stubs — where `FINAL` answers `2`
+-- and `LIMIT 1 BY id` answers NULL. Read anything but `contract_id` with
+-- `FINAL` (the engine versions on `wasm_uploaded_at_ledger`, so the complete
+-- row wins over a stub's `0`), or with `argMax(col, wasm_uploaded_at_ledger)`.
+-- No current reader is wrong — `contracts/queries.rs` uses `FINAL` — this is
+-- here so the next one is not.
 CREATE TABLE IF NOT EXISTS soroban_contracts (
     id                       Int64,
     contract_id              String,
@@ -232,6 +244,31 @@ CREATE TABLE IF NOT EXISTS soroban_contracts (
     deployed_at_ledger       Nullable(Int64),
     contract_type            Nullable(Int16),
     is_sac                   Bool,
+    -- CAP-85 / task 0548 — the contract runs code owned by ANOTHER contract,
+    -- so the instance carries no hash of its own and `wasm_hash` stays NULL.
+    -- What it carries instead is this reference, exactly as the instance
+    -- states it. The hash it currently resolves to lives in
+    -- `contract_executable_refs` and is joined at read time, NEVER copied
+    -- here: the owner re-points one entry and the whole fleet's code changes
+    -- without a single ledger change touching these rows, so a copy would go
+    -- stale with nothing to invalidate it (the 0320/0326 defect class).
+    --
+    -- The three executable kinds are readable off the columns, no enum needed:
+    --   is_sac                       → native host implementation, no code entry
+    --   wasm_hash IS NOT NULL        → carries its own code
+    --   executable_owner_id NOT NULL → runs the owner's code
+    --
+    -- The owner is the usual `cityhash64(StrKey)` surrogate, consistent with
+    -- `deployer_id`. The owner is itself a deployed contract, so its own row
+    -- here resolves the StrKey for display.
+    --
+    -- `DEFAULT NULL` is load-bearing, not redundant: clickhouse-rs 0.15 rejects
+    -- an insert client-side when the table has a column the row struct lacks
+    -- and that column has no DEFAULT — `Nullable` alone does not count. Without
+    -- it, adding these columns to production stops every insert from the
+    -- indexer build still running, until it is replaced (task 0548 incident).
+    executable_owner_id      Nullable(Int64) DEFAULT NULL,
+    executable_tag           Nullable(String) DEFAULT NULL,
     -- `name` DROPPED (task 0304): dead since 0297 (no writer, reader-less,
     -- 0/148663 populated in prod). Prod `ALTER … DROP COLUMN name` pending.
     -- 0344: tx-detail resolves surrogate `id` -> `contract_id`, but `id` is not
@@ -241,6 +278,32 @@ CREATE TABLE IF NOT EXISTS soroban_contracts (
 )
 ENGINE = ReplacingMergeTree(wasm_uploaded_at_ledger)
 ORDER BY (contract_id);
+
+-- contract_executable_refs: what an owner's executable tag currently points at
+-- (CAP-85, protocol 28 — task 0548). One row per `(owner, tag)`; the owner
+-- writes it as an ordinary persistent contract-data entry whose KEY is an
+-- `SCV_EXECUTABLE_TAG` value, so it reaches us as a normal entry change.
+--
+-- This is the ONLY place a fleet member's code hash is recorded. Members store
+-- the reference, not the answer, so re-pointing a fleet is one row here instead
+-- of a rewrite of every member — and no member row can be left behind holding a
+-- hash the chain no longer agrees with.
+--
+-- RMT versioned on `ledger` (latest write wins). Reads need `FINAL` or
+-- `argMax(wasm_hash, ledger)`: parts are not merged to one on this cluster, so
+-- an un-FINAL read can pick a superseded target. The protocol forbids deleting
+-- these entries, so there is no tombstone case — only appearance and re-point.
+--
+-- No backfill exists or can exist: external references are impossible before
+-- the protocol-28 vote, so this table is complete from its first row.
+CREATE TABLE IF NOT EXISTS contract_executable_refs (
+    owner_id   Int64,
+    tag        String,
+    wasm_hash  FixedString(32),
+    ledger     Int64
+)
+ENGINE = ReplacingMergeTree(ledger)
+ORDER BY (owner_id, tag);
 
 -- On-chain Soroban token metadata (name/symbol/decimals) read from the
 -- contract's instance-storage `Symbol("METADATA")` struct. Per-contract,

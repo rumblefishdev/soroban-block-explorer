@@ -48,6 +48,7 @@ use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::asset_appearances::AssetRef;
+use xdr_parser::executable_ref::ExtractedExecutableRefTarget;
 use xdr_parser::scval;
 use xdr_parser::types::{
     EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
@@ -58,7 +59,7 @@ use xdr_parser::types::{
 use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
 
-use xdr_parser::event::extract_executable_update_new_wasm_hash;
+use xdr_parser::event::{ExecutableUpdate, extract_executable_update};
 use xdr_parser::pool_config_factory::PoolConfig;
 use xdr_parser::pool_family::PoolFamilyWrite;
 
@@ -223,6 +224,10 @@ pub struct StagedLedger {
     /// [`prepare_with_sac_overrides`] via [`build_metadata_rows`] from the
     /// `StageInputs.contract_metadata_writes` slice.
     pub metadata_rows: Vec<SorobanContractMetadataRow>,
+    /// `contract_executable_refs` rows (CAP-85, task 0548) — what an owner's
+    /// executable tag points at as of this ledger. A fleet re-point is ONE row
+    /// here, never a rewrite of the members that follow it.
+    pub executable_ref_rows: Vec<ContractExecutableRefRow>,
     pub transaction_rows: Vec<TransactionRow>,
     pub hash_index_rows: Vec<TransactionHashIndexRow>,
     pub participant_rows: Vec<TransactionParticipantRow>,
@@ -301,6 +306,8 @@ pub struct StageInputs<'a> {
     /// `metadata_rows` via [`build_metadata_rows`] inside
     /// [`prepare_with_sac_overrides`]. Empty `&[]` for legacy callers.
     pub contract_metadata_writes: &'a [ExtractedContractMetadata],
+    /// CAP-85 (task 0548) — see [`StagedLedger::executable_ref_rows`].
+    pub executable_ref_targets: &'a [ExtractedExecutableRefTarget],
     /// Per-holder Soroban token (type-3) balances from `ContractData`
     /// `Balance(Address)` entries (task 0331). Threaded to the unified
     /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
@@ -377,6 +384,7 @@ pub fn prepare(
         nft_events,
         lp_positions,
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         pool_family_writes: &[],
         soroban_token_balances: &[],
         sac_classic: &HashMap::new(),
@@ -431,7 +439,7 @@ pub fn build_wasm_upgrade_rows(
                 continue;
             };
             // `extract_…` returns `Some` only for a well-formed executable_update.
-            let Some(new_hash) = extract_executable_update_new_wasm_hash(&ev.topics) else {
+            let Some(update) = extract_executable_update(&ev.topics) else {
                 continue;
             };
             // Skip-on-miss: without the prior row we cannot carry identity
@@ -446,7 +454,24 @@ pub fn build_wasm_upgrade_rows(
             // read-back row — matching the backfill SQL, which also passes
             // `is_sac` through (no upgrader is a mislabeled SAC on current data).
             let mut row = prior_row.clone();
-            row.wasm_hash = Some(new_hash);
+            // Task 0548 — the two arms are mutually exclusive by construction:
+            // a contract either carries its own code or points at someone
+            // else's, and CAP-85 lets it move between the two in either
+            // direction. So each arm must CLEAR what the other set, or a
+            // contract that moved to a reference would keep serving the hash it
+            // ran before the upgrade — stale, with nothing to reveal it.
+            match update {
+                ExecutableUpdate::Wasm(new_hash) => {
+                    row.wasm_hash = Some(new_hash);
+                    row.executable_owner_id = None;
+                    row.executable_tag = None;
+                }
+                ExecutableUpdate::ExternalRef { owner, tag } => {
+                    row.wasm_hash = None;
+                    row.executable_owner_id = Some(ids::contract_id(&owner));
+                    row.executable_tag = Some(tag);
+                }
+            }
             row.wasm_uploaded_at_ledger = ledger_sequence;
             by_contract.insert(addr.to_string(), row);
         }
@@ -472,6 +497,40 @@ pub fn build_metadata_rows(
             version: i64::from(w.ledger),
         })
         .collect()
+}
+
+/// Map parser-extracted executable-reference targets to
+/// `contract_executable_refs` rows (CAP-85, task 0548).
+///
+/// The hex hash the parser produces is decoded back to 32 raw bytes here to
+/// match `wasm_hash` elsewhere in the schema. A target whose hash is not
+/// exactly 32 bytes is dropped rather than padded: the protocol will not let
+/// such an entry be written, so seeing one means we misread it, and a padded
+/// hash would join against the wrong code.
+///
+/// Folded here, across the whole ledger: the parser folds each transaction's
+/// changes on its own, so two re-points of one tag in two transactions of the
+/// same ledger arrive as two rows with the same `ledger` version, and the
+/// ReplacingMergeTree would keep whichever was inserted last. `targets` is in
+/// application order, so the last one is the value the ledger ended on.
+pub fn build_executable_ref_rows(
+    targets: &[ExtractedExecutableRefTarget],
+) -> Vec<ContractExecutableRefRow> {
+    let rows = targets
+        .iter()
+        .filter_map(|t| {
+            let hash: [u8; 32] = hex::decode(&t.wasm_hash).ok()?.try_into().ok()?;
+            Some(ContractExecutableRefRow {
+                owner_id: ids::contract_id(&t.owner),
+                tag: t.tag.clone(),
+                wasm_hash: hash,
+                ledger: i64::from(t.ledger_sequence),
+            })
+        })
+        .collect();
+    xdr_parser::fold::keep_last_by_key(rows, |r: &ContractExecutableRefRow| {
+        (r.owner_id, r.tag.clone(), r.ledger)
+    })
 }
 
 /// Map parser-extracted Soroban token balances to unified `balances` rows
@@ -567,6 +626,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         nft_events,
         lp_positions,
         contract_metadata_writes,
+        executable_ref_targets,
         soroban_token_balances,
         pool_family_writes,
         sac_classic,
@@ -934,6 +994,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             deployed_at_ledger: Some(deployed),
             contract_type: Some(contract_type as i16),
             is_sac: dep.is_sac,
+            executable_owner_id: dep
+                .executable_ref
+                .as_ref()
+                .map(|r| ids::contract_id(&r.owner)),
+            executable_tag: dep.executable_ref.as_ref().map(|r| r.tag.clone()),
         });
     }
 
@@ -944,6 +1009,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // `soroban_contracts.name` write path was removed with Postgres in task
     // 0244; the dead-column DROP is task 0304 / 0310.)
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
+    out.executable_ref_rows = build_executable_ref_rows(executable_ref_targets);
     // `sac_map` (seeded above with this-ledger SAC carriers, before the value
     // reduction) re-keys a contract-held SAC balance onto its wrapped
     // classic/native asset.
@@ -2489,81 +2555,19 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     out.account_entry_state_rows
         .extend(entry_state_dedup.into_values());
 
-    // ---- soroban_contracts Pass 2 stub-rowing ----
-    {
-        let mut emitted: HashSet<&str> = HashSet::new();
-        for cid in &contract_seen {
-            emitted.insert(cid.as_str());
-        }
-        // Task 0323 — suppress the Pass-2 FK stub for SAC-override contracts.
-        // `sac_overrides` are crypto-proven un-deployed SACs (modelled as
-        // ASSETS, not contracts) plus deployed SACs that emit this ledger
-        // (already carrying a real deploy row). Neither should get an
-        // `is_sac=false` stub: un-deployed SACs get an `assets` row instead,
-        // and for a deployed SAC a stub at `wasm_uploaded_at_ledger=0` could
-        // clobber its real deploy row on the equal-version RMT merge.
-        for ov in sac_overrides {
-            emitted.insert(ov.contract_id.as_str());
-        }
-
-        let mut referenced: HashSet<String> = HashSet::new();
-        for (_, ops) in operations {
-            for op in ops {
-                if let Some(c) = OpTyped::from_details(op.op_type, &op.details).contract_id {
-                    referenced.insert(c);
-                }
-            }
-        }
-        for (_, evs) in events {
-            for ev in evs {
-                if is_diagnostic(ev.source) {
-                    continue;
-                }
-                if let Some(c) = &ev.contract_id {
-                    referenced.insert(c.clone());
-                }
-            }
-        }
-        for (_, invs) in invocations {
-            for inv in invs {
-                if let Some(c) = &inv.contract_id {
-                    referenced.insert(c.clone());
-                }
-                if let Some(caller) = &inv.caller_account
-                    && caller.starts_with('C')
-                {
-                    referenced.insert(caller.clone());
-                }
-            }
-        }
-        for a in assets {
-            if let Some(c) = &a.contract_id {
-                referenced.insert(c.clone());
-            }
-        }
-        for n in nfts {
-            referenced.insert(n.contract_id.clone());
-        }
-        for ev in nft_events {
-            referenced.insert(ev.contract_id.clone());
-        }
-
-        for cid in &referenced {
-            if emitted.contains(cid.as_str()) {
-                continue;
-            }
-            out.contract_rows.push(SorobanContractRow {
-                id: ids::contract_id(cid),
-                contract_id: cid.clone(),
-                wasm_hash: None,
-                wasm_uploaded_at_ledger: 0,
-                deployer_id: None,
-                deployed_at_ledger: None,
-                contract_type: None,
-                is_sac: false,
-            });
-        }
-    }
+    // ---- no placeholder contract rows (task 0548) ----
+    //
+    // `soroban_contracts` used to receive a "Pass 2 stub" for every contract
+    // merely referenced by an op, event or invocation: identity columns NULL,
+    // version 0. The stage is batch-local, so it could not tell a contract it
+    // had already written in an earlier batch — production held 41,030 such rows,
+    // 40,976 of them shadowing a real deployment row, and 54 addresses with nothing
+    // on chain showed up in the public contracts list. A row is now written only
+    // when a deployment or an executable update is observed.
+    //
+    // The trade-off is deliberate: a read that turns a surrogate back into a
+    // StrKey gets nothing for an address that never had a contract. The
+    // transaction page takes that address from the archive block instead.
 
     // ---- Task 0320 live path: WASM-upgrade row rewrites ----
     // Appended last (after deploy / SAC-override / skeleton rows) so a contract
@@ -3766,3 +3770,7 @@ mod balance_tests {
         assert_eq!(extract_event_signature(&empty), None);
     }
 }
+
+#[cfg(test)]
+#[path = "stage_executable_ref_tests.rs"]
+mod executable_ref_tests;

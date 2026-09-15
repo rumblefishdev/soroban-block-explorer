@@ -18,8 +18,8 @@
       "dependsOn": ["extract-openapi"],
       "options": {
         "commands": [
-          "npx openapi-ts -f openapi-ts.config.ts",
-          "npx prettier --write src/openapi.json src/generated"
+          "pnpm exec openapi-ts -f openapi-ts.config.ts",
+          "pnpm exec prettier --write src/openapi.json src/generated"
         ],
         "cwd": "libs/api-types",
         "parallel": false

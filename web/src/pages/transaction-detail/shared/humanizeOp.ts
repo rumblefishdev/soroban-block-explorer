@@ -217,8 +217,13 @@ export function humanizeOp(
       const details = detailsObj(heavy);
       // The parser emits camelCase keys (`functionName`), not snake_case.
       const fn = detStr(details, 'functionName');
-      if (fn != null && light.contract_id != null) {
-        return `Called ${fn}() on ${shortId(light.contract_id)}`;
+      // The archive block carries the called contract as text. The DB field is
+      // only a surrogate resolved against `soroban_contracts`, which holds no row
+      // for an address with nothing behind it (task 0548) — so prefer the
+      // archive and keep the DB value as the degraded-mode fallback.
+      const contract = detStr(details, 'contractId') ?? light.contract_id;
+      if (fn != null && contract != null) {
+        return `Called ${fn}() on ${shortId(contract)}`;
       }
       if (fn != null) return `Called ${fn}()`;
       // Deploy/upload variants carry no functionName — the discriminator says
@@ -228,8 +233,8 @@ export function humanizeOp(
         hostFnType === 'createContract' ||
         hostFnType === 'createContractV2'
       ) {
-        return light.contract_id != null
-          ? `Deployed contract ${shortId(light.contract_id)}`
+        return contract != null
+          ? `Deployed contract ${shortId(contract)}`
           : 'Deployed a contract';
       }
       if (hostFnType === 'uploadContractWasm') {
@@ -240,8 +245,8 @@ export function humanizeOp(
             )} bytes)`
           : 'Uploaded contract code';
       }
-      if (light.contract_id != null) {
-        return `Invoked contract ${shortId(light.contract_id)}`;
+      if (contract != null) {
+        return `Invoked contract ${shortId(contract)}`;
       }
       break;
     }

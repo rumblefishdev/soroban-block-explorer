@@ -26,6 +26,7 @@ use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
 
+use super::balance_changes::{BalanceChange, TxKey, fetch_balance_changes};
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql};
 use crate::transactions::dto::TxListCursor;
@@ -94,6 +95,13 @@ pub struct AccountTxRow {
     pub has_soroban: bool,
     pub operation_types: Vec<String>,
     pub created_at: DateTime<Utc>,
+    /// Net per-asset balance change FOR THIS ACCOUNT (task 0540), in the order
+    /// the movements happened on the chain.
+    ///
+    /// Empty = this account's balances did not change. `asset_transfers`
+    /// covers every indexed transaction (proven on the whole range, task 0540
+    /// gate 7), so an empty list is a measurement, not a gap.
+    pub balance_changes: Vec<BalanceChange>,
 }
 
 /// `assets.asset_type` SMALLINT → its own domain's label (task 0496).
@@ -706,10 +714,26 @@ pub async fn fetch_transactions(
     let page_rows = page_rows?;
     let aggregates = aggregates?;
 
+    // Step 2b: this account's per-asset balance change for the same page
+    // (task 0540). Keyed on `(ledger_sequence, application_order)` — the
+    // `asset_transfers` sort-key prefix, and the reason step 2 above is what
+    // this hangs off rather than a second driver seek.
+    let flow_keys: Vec<TxKey> = page_rows
+        .iter()
+        .map(|r| TxKey {
+            ledger_sequence: r.ledger_sequence,
+            application_order: r.application_order,
+            transaction_id: r.id,
+        })
+        .collect();
+
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … ON src.id = t.source_id` (task 0345).
-    let accounts =
-        resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()).await?;
+    // Independent of the balance-change read — overlap the round-trips.
+    let (accounts, mut flows) = tokio::try_join!(
+        resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()),
+        fetch_balance_changes(client, account_id, &flow_keys),
+    )?;
 
     // Step 3: index page rows by id (a re-ingested tx collapses — values are
     // immutable), then emit in the driver's keyset order, merging
@@ -742,57 +766,16 @@ pub async fn fetch_transactions(
             has_soroban: row.has_soroban,
             operation_types,
             created_at: millis_to_utc(row.created_at),
+            // Absent from the map means "moved nothing", which is a real
+            // measurement: `asset_transfers` covers every indexed transaction.
+            balance_changes: flows
+                .remove(&(row.ledger_sequence, row.application_order))
+                .unwrap_or_default(),
         });
     }
     Ok(out)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The account-detail read must select on the LIFECYCLE column, never on
-    /// the amount. `amount != 0` cannot tell "holds nothing" from "the
-    /// trustline is gone" — it was the defect behind issue #377, and it is a
-    /// one-word regression away, so the predicate is pinned here rather than
-    /// left to review. Asserted against the SQL itself, no ClickHouse needed.
-    #[test]
-    fn balances_are_selected_by_lifecycle_not_by_amount() {
-        assert!(
-            BALANCES_SQL.contains("b.closed_at_ledger = 0"),
-            "the balances read must filter on the lifecycle column"
-        );
-        assert!(
-            !BALANCES_SQL.contains("b.amount != 0"),
-            "`amount != 0` hides every zero-balance trustline the account holds"
-        );
-        // A zero-amount row that is still open has to survive the predicate,
-        // which is only true if `amount` is absent from the WHERE clause
-        // entirely — a combined `amount != 0 OR ...` would pass the check above.
-        let where_clause = BALANCES_SQL
-            .split("WHERE")
-            .nth(1)
-            .expect("the read has a WHERE clause");
-        assert!(
-            !where_clause.contains("amount"),
-            "no amount predicate belongs in this WHERE clause: {where_clause}"
-        );
-    }
-
-    /// The old version of this test pinned the XDR legend onto family values
-    /// and thereby froze bug 0496 in place: it asserted 3 = `pool_share`, so
-    /// every Soroban holding rendered as a liquidity-pool share and the test
-    /// was green. A parity test is only as good as the enum it picks.
-    #[test]
-    fn asset_type_name_speaks_the_family_vocabulary() {
-        assert_eq!(asset_type_name(0).as_deref(), Some("native"));
-        assert_eq!(asset_type_name(1).as_deref(), Some("classic_credit"));
-        assert_eq!(
-            asset_type_name(3).as_deref(),
-            Some("soroban"),
-            "3 is AssetFamily::Soroban here, never the XDR pool_share"
-        );
-        assert_eq!(asset_type_name(2), None, "2 (sac) is retired — ADR 0051");
-        assert_eq!(asset_type_name(99), None);
-    }
-}
+#[path = "queries_tests.rs"]
+mod tests;

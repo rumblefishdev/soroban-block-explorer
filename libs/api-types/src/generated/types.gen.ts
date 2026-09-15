@@ -70,6 +70,71 @@ export type AccountBalance = {
   type: number;
 };
 
+/**
+ * One asset's net balance change for the account whose page this is
+ * (task 0540). Relative to that account by construction: the same
+ * transaction seen from another account carries different numbers.
+ */
+export type AccountBalanceChange = {
+  /**
+   * SIGNED raw amount as an `Int128` string: positive received, negative
+   * spent. Scale by `decimals`.
+   *
+   * **`null` is not zero.** It means a NON-FUNGIBLE movement, where no
+   * amount exists by nature — the event carries a token id, not a value.
+   * The piece changed hands; rendering `0` would say it did not. See
+   * `nft_delta`, and `nfts` / `nft_ownership` for which piece it was (this
+   * field's source does not carry the token id).
+   */
+  amount?: string | null;
+  /**
+   * Asset identity the client can link to — `"native"`, `"CODE-ISSUER"`, or
+   * a bespoke Soroban token's `C…` contract StrKey.
+   *
+   * **Empty means there is no page for this asset**: render the code as
+   * plain text, never as a link. That happens when a token has no `assets`
+   * row, which is a different question from whether its contract exists —
+   * every deployed contract has a StrKey, but `/assets/{id}` answers only
+   * for registered assets.
+   *
+   * A NON-FUNGIBLE entry always carries its contract StrKey even when
+   * `/assets` would 404, because its destination is the NFT pages, which
+   * are keyed on the contract.
+   */
+  asset: string;
+  /**
+   * Display code (`"USDC"`, or a bespoke token's on-chain symbol).
+   * `null` for native — render as XLM — and for a token with no symbol.
+   */
+  asset_code?: string | null;
+  /**
+   * Display decimals — 7 for native/classic/SAC, on-chain `METADATA` for a
+   * bespoke Soroban token.
+   */
+  decimals: number;
+  /**
+   * Signed count of non-fungible pieces moved (`+1` received, `−1` sent);
+   * `0` for an ordinary fungible asset. Non-zero exactly when `amount` is
+   * `null`.
+   */
+  nft_delta: number;
+  /**
+   * WHICH piece moved — the contract-defined token id (`"44"`), so the
+   * client can link to that NFT rather than to its whole collection.
+   *
+   * A transaction that moved SEVERAL pieces yields several entries, one per
+   * piece, each with its own id — so each NFT is listed and linked
+   * separately rather than lumped into a count.
+   *
+   * `null` whenever naming the pieces would be a guess: a fungible asset, a
+   * collection whose ownership rows are not indexed, or a set whose size
+   * does not match the number of pieces this account moved (somebody else
+   * moved pieces to the same owner in the same transaction). Link to the
+   * collection in that case; do not invent an id.
+   */
+  token_id?: string | null;
+};
+
 export type AccountDetailResponse = {
   account_id: string;
   balances: Array<AccountBalance>;
@@ -162,6 +227,26 @@ export type AccountTransactionItem = {
    * 1-based position in ledger.
    */
   application_order: number;
+  /**
+   * What this transaction did to THIS account's balances, in the order the
+   * movements happened on the chain. Account-relative, which is why no other
+   * list endpoint carries it.
+   *
+   * The order is NOT a ranking. Assets have different decimals and different
+   * prices, and no price exists anywhere in this system, so sorting by
+   * amount would compare quantities that are not comparable. Chain order is
+   * a fact; render it as given.
+   *
+   * Always present. An empty array means this account's balances came out
+   * unchanged (a round-trip arbitrage, an offer placed, a failed
+   * transaction, a payment to self): the per-transfer index covers every
+   * transaction this API returns.
+   *
+   * Assets whose net change is exactly zero are omitted: under this name an
+   * asset that did not change is not a balance change. The gross movement
+   * behind a net figure is not carried here.
+   */
+  balance_changes: Array<AccountBalanceChange>;
   created_at: string;
   /**
    * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so
@@ -432,6 +517,21 @@ export type ContractDetailResponse = {
   contract_type_name?: string | null;
   deployed_at_ledger?: number | null;
   deployer?: string | null;
+  /**
+   * Task 0548 / CAP-85 (protocol 28): the contract this one borrows its code
+   * from, and the tag naming which of that owner's executables it runs. Both
+   * `null` for every contract that carries its own executable.
+   *
+   * When they are set, `wasm_hash` above is the hash the reference resolves
+   * to at the time of the request — the code the contract genuinely runs,
+   * which is what the protocol's own `get_address_executable` reports too.
+   * It is NOT stored against this contract: the owner can re-point the whole
+   * fleet without a single ledger change touching it, so a stored copy would
+   * go quietly out of date. Read these two to tell "runs its own code" from
+   * "runs someone else's".
+   */
+  executable_owner?: string | null;
+  executable_tag?: string | null;
   is_sac: boolean;
   sac_asset?: null | SacAsset;
   stats: ContractStats;
@@ -1259,6 +1359,26 @@ export type PaginatedAccountTransactionItem = {
      * 1-based position in ledger.
      */
     application_order: number;
+    /**
+     * What this transaction did to THIS account's balances, in the order the
+     * movements happened on the chain. Account-relative, which is why no other
+     * list endpoint carries it.
+     *
+     * The order is NOT a ranking. Assets have different decimals and different
+     * prices, and no price exists anywhere in this system, so sorting by
+     * amount would compare quantities that are not comparable. Chain order is
+     * a fact; render it as given.
+     *
+     * Always present. An empty array means this account's balances came out
+     * unchanged (a round-trip arbitrage, an offer placed, a failed
+     * transaction, a payment to self): the per-transfer index covers every
+     * transaction this API returns.
+     *
+     * Assets whose net change is exactly zero are omitted: under this name an
+     * asset that did not change is not a balance change. The gross movement
+     * behind a net figure is not carried here.
+     */
+    balance_changes: Array<AccountBalanceChange>;
     created_at: string;
     /**
      * Fee charged, in raw stroops. Native (XLM) is always 7 decimals, so

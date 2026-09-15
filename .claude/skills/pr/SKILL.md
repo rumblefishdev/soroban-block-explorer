@@ -61,8 +61,8 @@ Check if `develop` branch exists (local or remote). If yes, use `develop`. Other
 Before pushing, run format and verify checks:
 
 ```bash
-npm run -s format:staged
-npm run -s verify:staged
+pnpm run -s format:staged
+pnpm run -s verify:staged
 ```
 
 If checks fail, fix the issues and amend the commit before proceeding.

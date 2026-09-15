@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@rumblefish/api-types": "*",
-    "@rumblefish/soroban-block-explorer-ui": "*",
+    "@rumblefish/api-types": "workspace:*",
+    "@rumblefish/soroban-block-explorer-ui": "workspace:*",
     "tslib": "^2.3.0"
   },
   "nx": {
@@ -27,7 +27,7 @@
         ]
       },
       "e2e": {
-        "command": "npx playwright test",
+        "command": "pnpm exec playwright test",
         "options": {
           "cwd": "web"
         },

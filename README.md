@@ -17,10 +17,10 @@ it to the planned product architecture:
 
 ```bash
 nvm use
-npm install
-npm run lint
-npm run build
-npm run typecheck
+pnpm install
+pnpm run lint
+pnpm run build
+pnpm run typecheck
 ```
 
 ## Workspace Layout
@@ -72,7 +72,7 @@ AWS infrastructure is managed with CDK (TypeScript) in `infra/`.
 Bootstrap CDK on the AWS account (once per account + region):
 
 ```bash
-npm run infra:bootstrap
+pnpm run infra:bootstrap
 ```
 
 ### Deploying
@@ -100,5 +100,5 @@ make -C infra deploy-production            # deploy ALL stacks (see gotchas in t
 
 > There is **no staging environment**. AWS staging was retired by task 0249,
 > and the `deploy-staging.yml` / `scripts/staging-deploy.sh` fossils by 0390.
-> `npm run infra:*:staging` and any `make deploy-staging*` target are **dead**
+> `pnpm run infra:*:staging` and any `make deploy-staging*` target are **dead**
 > — they reference targets that no longer exist. Do not use them.

@@ -32,7 +32,7 @@ export interface CicdStackProps extends cdk.StackProps {
  * Staging deploy role removed in task 0239 — staging was retired by 0249
  * and is not redeployed in eu-central-1.
  *
- * Deployed once per AWS account via: `npx cdk --app "node dist/bin/cicd.js" deploy`
+ * Deployed once per AWS account via: `pnpm exec cdk --app "node dist/bin/cicd.js" deploy`
  */
 export class CicdStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: CicdStackProps) {
