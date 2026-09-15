@@ -1,0 +1,10 @@
+packages:
+  - libs/*
+  - infra
+  - web
+
+# Dependency install scripts run only for these; pnpm blocks the rest.
+onlyBuiltDependencies:
+  - '@swc/core'
+  - esbuild
+  - nx

@@ -154,7 +154,7 @@ Extract the production AWS account ID from `infra/envs/production.json`
 ```bash
 aws sts get-caller-identity     # confirm it matches <account-id>
 cd infra
-npx cdk bootstrap aws://<account-id>/eu-central-1
+pnpm exec cdk bootstrap aws://<account-id>/eu-central-1
 ```
 
 Expected: a single `CDKToolkit` stack `CREATE_COMPLETE` in

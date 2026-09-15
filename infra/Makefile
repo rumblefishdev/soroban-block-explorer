@@ -2,18 +2,18 @@ PRODUCTION_APP := node dist/bin/production.js
 CICD_APP := node dist/bin/cicd.js
 
 build:
-	cd .. && npx nx build @rumblefish/soroban-block-explorer-aws-cdk
+	cd .. && pnpm nx build @rumblefish/soroban-block-explorer-aws-cdk
 
 # --- Production ---
 
 synth-production: build
-	npx cdk --app "$(PRODUCTION_APP)" synth
+	pnpm exec cdk --app "$(PRODUCTION_APP)" synth
 
 # --strict: without it cdk diff silently hides entries containing
 # non-ASCII characters, so a clean-looking diff is not proof of a clean
 # diff (measured during the 0312 investigation).
 diff-production: build
-	npx cdk --app "$(PRODUCTION_APP)" diff --strict
+	pnpm exec cdk --app "$(PRODUCTION_APP)" diff --strict
 
 # Deploying --all ships EVERY pending delta, including changes parked by
 # other tasks: 0312's undeployed CloudflareBootstrap slim-down sat in
@@ -21,84 +21,84 @@ diff-production: build
 # have shipped it silently as a stowaway. So: show the full diff first,
 # then require a literal "yes". Non-interactive bypass: FORCE=1.
 deploy-production: build
-	npx cdk --app "$(PRODUCTION_APP)" diff --strict
+	pnpm exec cdk --app "$(PRODUCTION_APP)" diff --strict
 	@if [ "$(FORCE)" != "1" ]; then \
 		printf '\nThe deploy is --all: EVERY delta above ships now, parked or not.\nType yes to continue: '; \
 		read ans; [ "$$ans" = "yes" ] || { echo "aborted — nothing deployed"; exit 1; }; \
 	fi
-	npx cdk --app "$(PRODUCTION_APP)" deploy --all --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy --all --require-approval broadening
 
 destroy-production: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy --all --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy --all --force
 
 deploy-production-network: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Network --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Network --require-approval broadening
 
 destroy-production-network: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Network --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Network --force
 
 deploy-production-ledger-bucket: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-LedgerBucket --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-LedgerBucket --require-approval broadening
 
 destroy-production-ledger-bucket: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-LedgerBucket --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-LedgerBucket --force
 
 deploy-production-compute: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Compute --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Compute --require-approval broadening
 
 destroy-production-compute: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Compute --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Compute --force
 
 deploy-production-ingestion: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Ingestion --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Ingestion --require-approval broadening
 
 destroy-production-ingestion: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Ingestion --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Ingestion --force
 
 deploy-production-delivery: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Delivery --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Delivery --require-approval broadening
 
 destroy-production-delivery: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Delivery --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Delivery --force
 
 deploy-production-apigateway: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-ApiGateway --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-ApiGateway --require-approval broadening
 
 destroy-production-apigateway: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-ApiGateway --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-ApiGateway --force
 
 deploy-production-observability: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Observability --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-Observability --require-approval broadening
 
 destroy-production-observability: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Observability --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-Observability --force
 
 deploy-production-cloudwatch: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-CloudWatch --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-CloudWatch --require-approval broadening
 
 destroy-production-cloudwatch: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudWatch --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudWatch --force
 
 synth-production-hetzner-dns: build
-	npx cdk --app "$(PRODUCTION_APP)" synth Explorer-production-HetznerDns
+	pnpm exec cdk --app "$(PRODUCTION_APP)" synth Explorer-production-HetznerDns
 
 diff-production-hetzner-dns: build
-	npx cdk --app "$(PRODUCTION_APP)" diff Explorer-production-HetznerDns
+	pnpm exec cdk --app "$(PRODUCTION_APP)" diff Explorer-production-HetznerDns
 
 deploy-production-hetzner-dns: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-HetznerDns --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-HetznerDns --require-approval broadening
 
 destroy-production-hetzner-dns: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
 
 # --- Cloudflare bootstrap (TF-state bucket for infra/cloudflare/) ---
 # Requires "provisionCloudflareBootstrap": true in envs/production.json.
 
 deploy-production-cloudflare-bootstrap: build
-	npx cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-CloudflareBootstrap --require-approval broadening
+	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-CloudflareBootstrap --require-approval broadening
 
 destroy-production-cloudflare-bootstrap: build
-	npx cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudflareBootstrap --force
+	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudflareBootstrap --force
 
 # --- Frontend SPA (build + S3 sync + CloudFront invalidation) ---
 # Requires Explorer-production-Delivery already deployed (make deploy-production-delivery).
@@ -108,7 +108,7 @@ destroy-production-cloudflare-bootstrap: build
 build-production-web:
 	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json) \
-		npx nx build @rumblefish/soroban-block-explorer-web
+		pnpm nx build @rumblefish/soroban-block-explorer-web
 	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json); \
 		AUTH=$$(jq -r '.enableAuthLayer // false' infra/envs/production.json); \
 		if [ "$$AUTH" = "true" ] && [ -n "$$KEY" ]; then \
@@ -134,15 +134,15 @@ deploy-production-web: build-production-web
 # --- CI/CD (shared, deploy once per account) ---
 
 deploy-cicd: build
-	npx cdk --app "$(CICD_APP)" deploy --require-approval broadening
+	pnpm exec cdk --app "$(CICD_APP)" deploy --require-approval broadening
 
 destroy-cicd: build
-	npx cdk --app "$(CICD_APP)" destroy --all --force
+	pnpm exec cdk --app "$(CICD_APP)" destroy --all --force
 
 diff-cicd: build
-	npx cdk --app "$(CICD_APP)" diff
+	pnpm exec cdk --app "$(CICD_APP)" diff
 
 # --- Shared ---
 
 bootstrap:
-	npx cdk bootstrap
+	pnpm exec cdk bootstrap

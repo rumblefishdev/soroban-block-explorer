@@ -31,8 +31,10 @@ change — this is a package-manager swap, not a dependency upgrade.
 
 ## Status: Active
 
-**Current state:** scope mapped, decisions taken (below), implementation not
-started. Pending: fate of task 0532.
+**Current state:** Steps 1–5 done (swap, call sites, CI, hooks, docs); web
+build and `cdk synth` byte-identical to npm. Step 6: TS checks, e2e and
+`check-generated` green; fresh-worktree test pending.
+Task 0532 (worktree provisioning) absorbed here and archived as superseded.
 
 ## Context
 
@@ -113,24 +115,27 @@ worktree with main parked on another branch.
 
 ## Acceptance Criteria
 
-- [ ] `pnpm install --frozen-lockfile` succeeds on a clean clone; no
-      `package-lock.json` left
-- [ ] Resolved versions unchanged — `cdk synth` templates identical to the npm
-      baseline; web build output identical or every difference explained
-- [ ] `nx run-many -t lint build typecheck test` green; web e2e green;
-      `api-types:check-generated` green
-- [ ] CI workflows (`ci.yml`, `deploy-production.yml`, `deploy-board.yml`) use
+- [x] `pnpm install --frozen-lockfile` succeeds from an empty `node_modules`;
+      no `package-lock.json` left
+- [x] Resolved versions unchanged — `cdk synth` output identical to the npm
+      baseline; web build output identical (one transitive build-tool bump,
+      decision 5)
+- [x] `nx run-many -t lint build typecheck test` green for the 4 TS projects;
+      web e2e green; `api-types:check-generated` green. `rust:*` targets not
+      run locally (no Rust change beyond a doc comment; pre-push clippy + CI)
+- [x] CI workflows (`ci.yml`, `deploy-production.yml`, `deploy-board.yml`) use
       pnpm; no `npm ci` / `cache: npm` remains
 - [ ] A new worktree gets its own `node_modules`; `@rumblefish/*` resolve to
       the worktree's `libs/`, proven with main parked on a different branch
 - [ ] A new worktree rejects a deliberately malformed staged file (hooks run)
-- [ ] No `npx` / `npm ci` / `npm run` left in repo-owned scripts, hooks, CI,
-      docs (vendored `.agents/skills/**` excluded)
-- [ ] **Docs updated** — `docs/deployment.md` (build prerequisites);
+- [x] No `npx` / `npm ci` / `npm run` left in repo-owned scripts, hooks, CI,
+      docs (Nx-generated agent config excluded, decision 12)
+- [x] **Docs updated** — `docs/deployment.md` (build prerequisites, `cdk`
+      invocation), `docs/runbooks/live-tail-cutover.md`;
       `docs/architecture/**` N/A — tooling only, system shape unchanged
-- [ ] **API types regenerated** — N/A — no change under `crates/api/**`,
-      `Cargo.{toml,lock}`; `libs/api-types/project.json` command changes
-      only, `check-generated` proves output unchanged
+- [x] **API types regenerated** — N/A — `crates/api/**` change is a doc
+      comment only; `libs/api-types/project.json` command change proven by a
+      green `check-generated` (generated output unchanged)
 
 ## Design Decisions
 
@@ -160,6 +165,103 @@ worktree with main parked on another branch.
 
 ### Emerged
 
+5. **One transitive version moved: `brace-expansion` 2.0.3 → 2.1.1.**
+   `pnpm import` re-resolved `filelist` → `minimatch@5.1.9` →
+   `brace-expansion@^2.0.1` and deduplicated it with the 2.1.1 `glob` already
+   used. Build tooling only, inside semver range; accepted rather than pinned
+   with an override.
+6. **Build allow-list is `@swc/core`, `esbuild`, `nx` only.** npm's lockfile
+   also flagged `core-js-pure` (bundled inside `cargo-lambda-cdk`, so pnpm
+   never installs it separately) and `fsevents@2.3.3` (no install script in
+   its manifest). Neither needs an entry.
+7. **Root `package.json` scripts call bare `nx`, not `pnpm nx`.** `pnpm run`
+   puts `node_modules/.bin` on `PATH`, so there is no registry fallback to
+   avoid there; `pnpm exec` / `pnpm nx` is used everywhere a script is not run
+   through `pnpm run` (hooks, Makefile, CI, `project.json`, docs).
+8. **`deploy-production.yml` loses its `node_modules` cache.** It cached the
+   root `node_modules` only; under pnpm each workspace package (`web/`,
+   `infra/`, `libs/*`) has its own, so a cache hit would restore half a tree
+   and skip the install. `setup-node` now caches the pnpm store and the install
+   always runs (link-only on a warm store).
+9. **`pnpm/action-setup` pinned to a commit SHA** (`0977fd9…`, v6.0.10,
+   released 2026-08-03, no advisories) — same safety-over-recency rule as
+   decision 4; the repo already SHA-pins `Swatinem/rust-cache`.
+10. **`pnpm-lock.yaml` replaces `package-lock.json` in `.prettierignore`.**
+    Without it lint-staged's `nx format:write --files` would rewrite the
+    lockfile on every dependency commit.
+11. **`post-checkout` does not auto-repair an npm-era symlinked
+    `node_modules`; it prints the one-line repair.** Moving a directory out
+    from under a checkout inside a hook is surprising; the repair is
+    documented in the `worktree-hooks` skill too.
+12. **Codex/Nx-generated agent config left untouched.** `.agents/skills/**`,
+    `.codex/config.toml` (`npx` for the Nx MCP server), `.nx/nxw.js` and the
+    Nx boilerplate in `AGENTS.md`/`CLAUDE.md` are generated by Nx tooling and
+    are not repo-owned scripts.
+13. **Hooks hand over to the checkout's own script (scope widened on
+    request).** Each `.husky/{pre-commit,pre-push,post-checkout}` starts with
+    `own="$(git rev-parse --show-toplevel)/.husky/$(basename "$0")"` and
+    `exec`s it unless `[ "$0" -ef "$own" ]`; a branch without that hook exits 0.
+    Changing the worktree `hooksPath` instead is impossible: `.husky/_` is
+    generated and absent in a fresh worktree, so no hook of its own could run
+    to create it. Probe-tested: main copy → own copy runs with arguments;
+    main-checkout relative invocation → runs itself; absent hook → exit 0;
+    exit code 7 propagates. Bootstrap limit: live only after the main
+    checkout is on a branch containing it.
+
+## Implementation Notes
+
+- **Step 1 baseline (npm):** `web` build output (59 files, sha256 list),
+  `cdk synth` of `dist/bin/production.js` run directly with
+  `CDK_CONTEXT_JSON='{"aws:cdk:bundling-stacks":[]}'` (no Rust bundling, no
+  AWS calls), and the set of 1130 `name@version` pairs from
+  `package-lock.json`.
+- **Step 2 swap:** `pnpm import` (21 s), then
+  `pnpm install --frozen-lockfile` (1 min 31 s, cold store). The pinned
+  10.34.5 ran even though the shell's `pnpm` was 10.13.1 —
+  `managePackageManagerVersions` confirmed.
+- **Version proof:** 1105 packages in `pnpm-lock.yaml`. Of 25 pairs present
+  only in the npm set, 24 are `inBundle` (shipped inside `aws-cdk-lib` /
+  `cargo-lambda-cdk` tarballs, which pnpm does not list); the 25th is
+  decision 5.
+- **Output proof:** after the swap, `web` build output is byte-identical
+  (all 59 sha256 match) and the full `cdk.out` directory is byte-identical
+  to the npm baseline.
+- **Step 3–5 call sites:** `pnpm exec <bin>` verified to resolve the same
+  binaries from each package directory (`openapi-ts` 0.97.0 and `prettier`
+  2.8.8 from `libs/api-types`, `cdk` 2.1116.0 from `infra`, `playwright`
+  1.62.1 and `vite` 7.3.3 from `web`). `tools/scripts/worktree-node-modules.sh`
+  removed (copy in the main checkout's `.trash/`).
+
+- **Step 6 verification:** `nx run-many -t lint build typecheck test
+--skip-nx-cache` for api-types, ui, aws-cdk, web — green (ui 86 tests, web
+  369, aws-cdk 5; lint 0 errors). Web e2e 3/3. `check-generated` green.
+
+## Issues Encountered
+
+- **First verification run failed on a full disk, not on the migration.**
+  The volume hit 191 MiB free (sibling worktrees' `target/` dirs: 15, 10,
+  6.8 GB …). Cargo and the nx cache hit `ENOSPC`, and 19 web tests timed out
+  (5 s) while sharing the machine with a workspace build and a concurrent
+  `cargo clippy`. Rerun alone after space was freed: 369/369.
+
+- **Worktree clone is not ~20 s.** `tools/scripts/worktree-node-modules.sh`
+  took 3 min 12 s to provision this worktree before the baseline could be
+  taken (the symlinked tree resolved `@rumblefish/*` into the main checkout,
+  parked on another branch).
+- **`git mv` cannot target `.trash/` outside the worktree.** Lockfile copied
+  to the main checkout's `.trash/`, then `git rm`.
+- **Worktrees run the main checkout's hook scripts, not their own.** Worktree
+  `core.hooksPath` is the main checkout's absolute `.husky/_`; husky's `h`
+  wrapper runs `$(dirname "$(dirname "$0")")/<hook>`, i.e. the main checkout's
+  `.husky/<hook>`. Every worktree's commit gate is therefore coupled to the
+  branch the main checkout is parked on — the same coupling 0532 recorded for
+  `node_modules`. Consequence here: the new `post-checkout`/`pre-commit` go
+  live in worktrees only once the main checkout is on a branch containing
+  them. Fixed in this task — decision 13.
+- **Local AWS/CDK guard hook blocked a file-editing script** because its source
+  text contained `cdk`. Nothing was executed; the same text edits were made
+  with the editor tool instead.
+
 ## Notes
 
 - Version landscape on 2026-09-15 (npm registry dist-tags): `latest-10`
@@ -170,5 +272,4 @@ worktree with main parked on another branch.
   high-severity advisories fixed in 10.34.x (lockfile integrity bypass,
   path traversal on install, lifecycle-script allow-list bypass). pnpm 10
   honours `packageManager` and switches to the pinned version itself
-  (`managePackageManagerVersions`, default on) — to be confirmed with
-  `pnpm -v` inside the repo during Step 2.
+  (`managePackageManagerVersions`, default on) — confirmed in Step 2.

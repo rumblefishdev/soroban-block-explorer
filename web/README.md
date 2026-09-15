@@ -13,10 +13,10 @@ React SPA for the Soroban Block Explorer frontend.
 ## Development
 
 ```bash
-npx nx dev @rumblefish/soroban-block-explorer-web   # dev server on localhost:4200
-npx nx build @rumblefish/soroban-block-explorer-web  # production build to dist/
-npx nx lint @rumblefish/soroban-block-explorer-web
-npx nx typecheck @rumblefish/soroban-block-explorer-web
+pnpm nx dev @rumblefish/soroban-block-explorer-web   # dev server on localhost:4200
+pnpm nx build @rumblefish/soroban-block-explorer-web  # production build to dist/
+pnpm nx lint @rumblefish/soroban-block-explorer-web
+pnpm nx typecheck @rumblefish/soroban-block-explorer-web
 ```
 
 ## Structure
@@ -49,7 +49,7 @@ The frontend reads `VITE_API_BASE_URL` from `import.meta.env`. Vite loads
 - `.env.development` (committed) — used by `vite dev`; points at `http://localhost:9000`.
 - `.env.local` / `.env.development.local` (gitignored) — personal overrides.
 - **Staging and production builds** — `VITE_API_BASE_URL` is injected by CI/CD
-  at build time (e.g. `VITE_API_BASE_URL=https://api.example.com npx nx build`).
+  at build time (e.g. `VITE_API_BASE_URL=https://api.example.com pnpm nx build`).
   No staging/production URL is committed to the repo; the deployment pipeline
   owns those values.
 

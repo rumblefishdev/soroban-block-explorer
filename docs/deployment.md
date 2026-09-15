@@ -73,7 +73,7 @@ environment (`eu-central-1`). Its leftovers were removed by task 0390:
 `.github/workflows/deploy-staging.yml` (it pointed at `bin/staging.js` and
 `envs/staging.json`, both long gone) and `scripts/staging-deploy.sh` with the
 `staging-*` git-tag trigger behind it (ADR 0009, now superseded).
-`npm run infra:{deploy,diff,synth}:staging` and any `make deploy-staging*`
+`pnpm run infra:{deploy,diff,synth}:staging` and any `make deploy-staging*`
 target **do not exist** and error immediately.
 
 If you find a `staging` command in an old README or your shell history, it is
@@ -193,7 +193,7 @@ optional. The role itself is defined in
   ```
   Region is read from `infra/envs/production.json → awsRegion`
   (`eu-central-1`); you do not pass `--region`.
-- Node `22.22.0` (`.nvmrc`) + `npm ci` at the repo root.
+- Node `22.22.0` (`.nvmrc`) + `pnpm install --frozen-lockfile` at the repo root (pnpm version pinned by `packageManager` in `package.json`).
 - **Rust toolchain + `cargo-lambda` + `zig`** — the API / indexer /
   enrichment Lambdas are Rust, cross-compiled at CDK synth time. Without
   these, `deploy-production-compute` fails at build:
@@ -341,7 +341,7 @@ Frontend **content** is separate: `deploy-production-web`
   `--exclusively`:
   ```bash
   make -C infra build     # compile CDK first
-  cd infra && npx cdk --app "node dist/bin/production.js" \
+  cd infra && pnpm exec cdk --app "node dist/bin/production.js" \
       deploy Explorer-production-CloudWatch --exclusively --require-approval broadening
   ```
   (Real lesson: shipping a CloudWatch-only alarm change without

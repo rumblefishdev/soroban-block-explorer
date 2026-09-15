@@ -1,11 +1,11 @@
 ---
 name: worktree-hooks
-description: Make husky pre-commit/pre-push hooks run in a git worktree — never bypass with --no-verify. Use before committing or pushing from a worktree, and whenever a hook fails with "Could not find Nx modules" / "Have you run npm install?" / lint-staged errors. The fix is to provision node_modules, not to skip the gate.
+description: Make husky pre-commit/pre-push hooks run in a git worktree — never bypass with --no-verify. Use before committing or pushing from a worktree, and whenever a hook fails with "Could not find Nx modules" / "Have you run pnpm install?" / lint-staged errors. The fix is to provision node_modules, not to skip the gate.
 ---
 
 # /worktree-hooks — never bypass the commit gate in a worktree
 
-Fresh git worktrees have **no `node_modules`**, so husky hooks blow up:
+A worktree without `node_modules` makes husky hooks blow up:
 
 ```
 NX   Could not find Nx modules at "…/worktree".
@@ -28,7 +28,7 @@ is **FORBIDDEN**. It pushes unformatted or broken code straight to `develop`
 
 ## What the hooks gate (why bypass is dangerous)
 
-- `.husky/pre-commit` → `npx lint-staged && npm run -s verify:staged`
+- `.husky/pre-commit` → `pnpm exec lint-staged && pnpm run -s verify:staged`
   - `lint-staged`: `rustfmt` on `*.rs`, `nx format:write --files` (prettier) on
     everything else.
   - `verify:staged`: `tools/scripts/run-affected-checks.mjs staged` → lint /
@@ -40,60 +40,43 @@ Skipping these = prettier drift, type errors, and clippy warnings on `develop`.
 
 ## Fix: provision node_modules in the worktree
 
-### One command
+```bash
+pnpm install --frozen-lockfile
+```
+
+`.husky/post-checkout` runs this on every branch checkout that finds no
+`node_modules`, so a new worktree normally arrives provisioned. pnpm links from
+its global store: each worktree gets its own real tree, and `@rumblefish/*`
+resolve to **that worktree's** `libs/`.
+
+### An npm-era worktree still carries a symlinked node_modules
+
+Worktrees created before the pnpm migration may have `node_modules` as a
+symlink to the main checkout. Through it, `@rumblefish/*` resolve to the MAIN
+checkout's `libs/` — whatever branch main is parked on — and the typecheck
+reports errors in files your branch never touched. Repair:
 
 ```bash
-sh tools/scripts/worktree-node-modules.sh
+mv node_modules "$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')/.trash/node_modules.$$"
+pnpm install --frozen-lockfile
 ```
 
-Clones the main checkout's `node_modules` — ~20 s, ~30 MB of disk, and it
-verifies the result before returning. Idempotent, and it repairs a worktree
-that already carries the broken symlink shape below. Falls back to `npm ci`
-when the lockfile differs from main's.
-
-### Never symlink node_modules — this is the bug that keeps coming back
-
-`ln -s "$MAIN/node_modules" node_modules` looks like the cheap answer and was
-this skill's own advice until it was traced. It is wrong, and it fails in a way
-that points at innocent files.
-
-npm workspaces (`workspaces: ["libs/*", "infra", "web"]`) materialise each
-workspace package as a symlink inside `node_modules/@rumblefish/`, **relative to
-node_modules' own location**:
-
-```
-node_modules/@rumblefish/soroban-block-explorer-ui -> ../../libs/ui
-```
-
-Resolve that through a symlinked `node_modules` and `../../` lands in the MAIN
-checkout. So the worktree's `web` compiles against **main's** `libs/ui` and
-`libs/api-types` — whatever branch main happens to be parked on. The symptom is
-~25 TypeScript errors in files your branch never touched, blocking every commit
-including lore-only ones, with nothing wrong in your diff. The repo has no
-`paths` mapping in `tsconfig.base.json`, so `node_modules` is the only
-resolution route and there is no second opinion to catch it.
-
-A real directory fixes it because the same relative symlink then resolves inside
-the worktree. On APFS `cp -c` is a copy-on-write clone, so a real directory
-costs neither the 1 GB nor the minutes an install would:
-
-| Shape           | Disk   | Time    | Workspace packages resolve to  |
-| --------------- | ------ | ------- | ------------------------------ |
-| `ln -s` to main | 0      | instant | **MAIN's libs — wrong branch** |
-| `npm ci`        | 1 GB   | minutes | worktree's libs                |
-| `cp -Rpc` clone | ~30 MB | ~20 s   | worktree's libs                |
-
-Check any worktree by hand:
+Check any worktree by hand — the path must start with the worktree's own root:
 
 ```bash
-cd node_modules/@rumblefish/soroban-block-explorer-ui && pwd -P
+cd web/node_modules/@rumblefish/soroban-block-explorer-ui && pwd -P
 ```
 
-The path must start with the worktree's own root. If it starts with the main
-checkout, the layout is the broken one and every typecheck in that worktree is
-lying to you.
+### Hook scripts come from the main checkout
 
-### 3. Commit / push normally — hooks now run
+A worktree's `core.hooksPath` points at the main checkout's `.husky/_`, and
+husky's wrapper runs the hook script next to it — so git starts the **main
+checkout's** `.husky/*` script. Each hook's first lines hand over to the
+worktree's own copy (`exec sh -e "$own"`), so the gate that runs is the one on
+the branch being committed. That hand-over only exists once the main checkout
+sits on a branch that has it; before that, worktrees run main's scripts as-is.
+
+## Commit / push normally — hooks now run
 
 ```bash
 git commit -m "type(lore-NNNN): …"   # NO --no-verify
@@ -112,9 +95,9 @@ pushed files and push a fix commit if anything is flagged:
 
 ```bash
 # prettier
-npx nx format:check --files <file...>            # exit 0 = clean
+pnpm nx format:check --files <file...>            # exit 0 = clean
 # build/lint/typecheck impact
-npx nx show projects --affected --files <file...>  # []  = nothing to check
+pnpm nx show projects --affected --files <file...>  # []  = nothing to check
 # rust
 git diff <base>..HEAD --name-only | grep -q '\.rs$' && \
   SQLX_OFFLINE=true cargo clippy --all-targets -- -D warnings

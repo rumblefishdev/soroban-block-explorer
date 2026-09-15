@@ -50,7 +50,8 @@ jobs:
               # crates/ emit site. A Rust-only rename must re-run it.
               - 'crates/**'
               - 'package.json'
-              - 'package-lock.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
               - 'tsconfig*.json'
               - 'nx.json'
               - '.github/workflows/ci.yml'
@@ -60,7 +61,8 @@ jobs:
               - 'Cargo.lock'
               - 'libs/api-types/**'
               - 'package.json'
-              - 'package-lock.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
               - '.github/workflows/ci.yml'
 
   typescript:
@@ -75,14 +77,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
-      - run: npx nx format:check --all
-      - run: npx nx run-many -t lint build typecheck test
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm nx format:check --all
+      - run: pnpm nx run-many -t lint build typecheck test
 
       # Browser regression for the account page (issue #377, task 0463). The
       # three assertions there are the ones jsdom cannot make — real history
@@ -95,8 +98,8 @@ jobs:
       #
       # The API is intercepted inside the tests (page.route), so this needs no
       # ClickHouse certificate and no network beyond the browser download.
-      - run: npx playwright install --with-deps chromium
-      - run: npx nx run @rumblefish/soroban-block-explorer-web:e2e
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm nx run @rumblefish/soroban-block-explorer-web:e2e
 
       # The release tag → deploy scope mapping. Cheap, and the only guard on
       # the case that matters: a plain `production-*` tag must stay
@@ -114,16 +117,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: ci-rust
-      - run: npm ci
-      - run: npx nx run @rumblefish/api-types:check-generated
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm nx run @rumblefish/api-types:check-generated
 
   # Formatting is compile-free, so it runs as its own tiny job (~30s) instead
   # of sitting behind clippy/test/lambda in the main rust job. Fast red on the

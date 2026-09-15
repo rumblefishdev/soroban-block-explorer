@@ -4,7 +4,7 @@ coverage
 target
 .trash
 Cargo.lock
-package-lock.json
+pnpm-lock.yaml
 crates/
 .nx
 AGENTS.md
