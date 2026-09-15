@@ -173,6 +173,8 @@ Derived explorer entities:
   11,639 rows are in that state today and the share grows with pubnet merge churn. Liveness
   comes from the native holding's `closed_at_ledger` (ADR 0055); an aggregate over this table
   ALONE ("how many accounts are multisig?") silently counts dead accounts
+- `claimable_balance_holdings` — `balances`' twin for value held by a claimable balance, one row
+  per `B…` balance (task 0210, §4.17.1)
 - `balance_aggregates` (+ refreshable MV) — pre-computed per-`asset_id` `total_supply` (`sum`) /
   `holder_count` (`countIf(amount > 0)`) over `balances`
 - `asset_aggregates` / `soroban_token_supply` — **DROPPED (task 0331)**. Classic supply/holders now
@@ -265,6 +267,8 @@ liquidity_pools                       # classic (pool_kind=0) + soroban AMM (poo
   ├─ lp_positions                             # classic only
   ├─ pool_state_changes (partitioned)         # soroban reserves, one row per (pool, ledger)
   └─ pool_instance_state                      # soroban pool's own declaration: plane + share token
+
+claimable_balance_holdings                  # value held by a B… balance, balances' shape (0210)
 
 accounts
   ├─ account_balances_current
@@ -1661,6 +1665,42 @@ Design notes:
 - native rows leave `asset_code` / `issuer_id` NULL; `ck_abc_native` closes the
   NULL-in-UNIQUE loophole and the pair of partial unique indexes ensures exactly one
   row per logical asset per account
+
+### 4.17.1 Claimable Balance Holdings (task 0210)
+
+```sql
+CREATE TABLE claimable_balance_holdings (
+    holder_id           Int64,   -- ids::address_id of the B… StrKey
+    asset_id            Int64,
+    amount              Int128,  -- stroops
+    last_updated_ledger Int64,
+    closed_at_ledger    Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+ORDER BY (holder_id, asset_id);
+```
+
+Purpose:
+
+- the value a `ClaimableBalanceEntry` holds — part of an asset's supply that no
+  account or trustline carries
+
+Design notes:
+
+- exactly `balances`' columns; the writer inserts the same `BalanceRow` into both,
+  and a unit test fails if the two column lists drift
+- kept out of `balances` by the ADR 0056 amendment (2026-09-15): mass churn
+  (~800k balances per 100k ledgers) and every `balances` reader assuming the holder
+  is an account or a contract
+- written from entry changes, never from `asset_transfers` edges; the claim
+  tombstone takes its asset from the removal's `state` pre-image; folded per
+  balance across the ledger (ADR 0057 decision 6)
+- `holder_id` equals the `asset_transfers` endpoint surrogate for the same `B…`,
+  which is what the reconciliation against edges joins on
+- tombstones are kept; never add a TTL (it resurrects claimed balances). Cleanup
+  conditions are in the `init.sql` comment
+- not yet read by `balance_aggregates` — `total_supply` gains it in task 0210
+  work list item 4
 
 ### 4.18 ~~Account Balance History~~ (dropped)
 

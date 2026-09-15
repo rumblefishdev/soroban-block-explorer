@@ -48,6 +48,7 @@ use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::asset_appearances::AssetRef;
+use xdr_parser::claimable_balance::ExtractedClaimableBalance;
 use xdr_parser::executable_ref::ExtractedExecutableRefTarget;
 use xdr_parser::scval;
 use xdr_parser::types::{
@@ -269,6 +270,10 @@ pub struct StagedLedger {
     /// balances are appended straight from `account_states` (single-write — the
     /// legacy `account_balances_current` staging was removed).
     pub unified_balance_rows: Vec<BalanceRow>,
+    /// Task 0210 — `claimable_balance_holdings`, `balances`' twin for value held
+    /// by a claimable balance. Built by
+    /// [`super::claimable_balances::build_claimable_balance_rows`].
+    pub claimable_balance_rows: Vec<BalanceRow>,
     /// Task 0540 — one row per token movement → `asset_transfers`. Built in
     /// [`prepare_with_sac_overrides`] by [`super::value_flow::build_value_flow_rows`]
     /// from `StageInputs.asset_transfers` (the parser's decoded edges).
@@ -313,6 +318,9 @@ pub struct StageInputs<'a> {
     /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
     /// legacy callers.
     pub soroban_token_balances: &'a [ExtractedSorobanBalance],
+    /// Task 0210 — see [`StagedLedger::claimable_balance_rows`]. Empty `&[]` for
+    /// legacy callers.
+    pub claimable_balances: &'a [ExtractedClaimableBalance],
     /// Every family's pool state writes behind ONE seam (task 0518,
     /// decision 4a): router-family plane `PoolData` (the fungible reserve
     /// source, task 0374 step 7) and pool instances (the STATE source for
@@ -387,6 +395,7 @@ pub fn prepare(
         executable_ref_targets: &[],
         pool_family_writes: &[],
         soroban_token_balances: &[],
+        claimable_balances: &[],
         sac_classic: &HashMap::new(),
         sac_overrides: &[],
         prior_wasm_verdicts: &HashMap::new(),
@@ -628,6 +637,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         contract_metadata_writes,
         executable_ref_targets,
         soroban_token_balances,
+        claimable_balances,
         pool_family_writes,
         sac_classic,
         sac_overrides,
@@ -1010,6 +1020,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // 0244; the dead-column DROP is task 0304 / 0310.)
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
     out.executable_ref_rows = build_executable_ref_rows(executable_ref_targets);
+    out.claimable_balance_rows =
+        super::claimable_balances::build_claimable_balance_rows(claimable_balances);
     // `sac_map` (seeded above with this-ledger SAC carriers, before the value
     // reduction) re-keys a contract-held SAC balance onto its wrapped
     // classic/native asset.

@@ -453,6 +453,16 @@ regardless of indexer lag; live ingest supersedes it on catch-up
 (`ReplacingMergeTree` by `last_updated_ledger`). CH-only, idempotent, `--dry-run`
 supported.
 
+**Claimable balances (task 0210).** Value parked in a `ClaimableBalanceEntry`
+belongs to no account, so the unified `balances` never saw it. The shared parse
+path now reads those entries (`xdr_parser::claimable_balance`) into
+`claimable_balance_holdings`, one row per balance, live and in backfill alike. A
+removal carries only the key, so its tombstone takes the asset from the `state`
+pre-image the protocol emits ahead of it; rows are folded per balance across the
+whole ledger before insert. Balances that predate the writer and never change
+again are absent until the checkpoint seed covers them (task 0210, work list
+item 3).
+
 The historical gap for these event-driven presence rows — the live hook only
 writes them for new ledgers, and event-derived asset presence never existed for
 any verb — was closed by the **`soroban-token-flow-backfill`** one-shot pass (task

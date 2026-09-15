@@ -585,6 +585,58 @@ ENGINE = ReplacingMergeTree(last_updated_ledger)
 -- periodic full-recompute scan either way, so it doesn't need asset_id-first.
 ORDER BY (holder_id, asset_id);
 
+-- Claimable balances as holdings (task 0210, ADR 0056 amendment 2026-09-15).
+-- Value that sits in a `ClaimableBalanceEntry` belongs to no account yet, so
+-- `balances` cannot hold it, but it is part of the asset's supply. One row per
+-- balance: `holder_id` = `ids::address_id` of the `B…` StrKey (the same
+-- surrogate as `asset_transfers.{from,to}_id` with kind `B`, which is what the
+-- oracle joins on), `asset_id` = its asset, `amount` raw like `balances`.
+-- Written from `ClaimableBalanceEntry` changes, never from transfer edges: a
+-- sum of edges keeps every dropped edge forever, an entry row is exact and a
+-- checkpoint can correct it.
+--
+-- Why not rows in `balances`: every reader of `balances` assumes the holder is
+-- an account or a contract, and `holder_id` is a one-way hash. `snapshot-seed`
+-- would find no account or trustline for a `B…` holder and write it to zero
+-- as a ghost, and `holder_count` would count it. Churn is the other reason:
+-- ~800k balances created per 100k ledgers, 0 removed in their creating ledger,
+-- 96% within a week (production, 2026-09-15).
+--
+-- Lifecycle is `balances`' (ADR 0055): a claimed or clawed-back balance writes
+-- `amount = 0`, `closed_at_ledger = <ledger>` at that ledger's version. The
+-- writer folds per balance id across the whole ledger, last change in
+-- application order wins (ADR 0057 decision 6): a create and a claim in one
+-- ledger share a version, and an unfolded pair would leave the survivor to
+-- insert order.
+--
+-- Tombstones are kept, for now. The seed writes only balances open at its
+-- checkpoint, so history never enters and rows accumulate from the writer
+-- deploy on (~46 M a year at the current rate, estimate). NEVER add a TTL: a
+-- tombstone deleted while the live row sits in an unmerged part resurrects a
+-- claimed balance. The safe cleanup deletes every version of keys closed more
+-- than N ledgers ago (a balance id hashes its creating operation and never
+-- recurs), but it deletes rows, so it needs an ADR 0057 amendment first.
+-- Revisit when this table passes half of `balances` in rows or the
+-- `balance_aggregates_mv` refresh slows.
+--
+-- Joins the snapshot reconciliation (ADR 0057 decision 5). A ledger that never
+-- reaches the writer leaves a claimed balance live or a created one missing,
+-- and only the checkpoint comparison sees that.
+--
+-- PROD: created by hand BEFORE any writer ships, verbatim from the statement
+-- below. The insert opens on a table's first row (`writer.rs::write_rows`), and
+-- claimable balances change in almost every ledger (~8 created per ledger), so
+-- a missing table fails nearly every ledger's persist and stalls ingestion.
+CREATE TABLE IF NOT EXISTS claimable_balance_holdings (
+    holder_id           Int64,
+    asset_id            Int64,
+    amount              Int128,
+    last_updated_ledger Int64,
+    closed_at_ledger    Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+ORDER BY (holder_id, asset_id);
+
 -- Refreshable MV that recomputes `balance_aggregates` from `balances` (defined
 -- above — the source table MUST exist before this CREATE). Full recompute + atomic
 -- EXCHANGE, so reads need no FINAL.

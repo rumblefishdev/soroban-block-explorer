@@ -55,6 +55,7 @@ fn main() {
                 account_states: &parsed.account_states,
                 liquidity_pools: &parsed.liquidity_pools,
                 pool_snapshots: &parsed.pool_snapshots,
+                claimable_balances: &parsed.claimable_balances,
                 pool_family_writes: &parsed.pool_family_writes,
                 assets: &parsed.assets,
                 nfts: &parsed.nfts,

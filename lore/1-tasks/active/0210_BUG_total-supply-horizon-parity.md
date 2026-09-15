@@ -613,8 +613,9 @@ verdicts. `Ghost` → closure is correct for this table and must never reach
 
 1. DDL for the table (`holder_id`, `asset_id`, `amount`, `last_updated_ledger`,
    `closed_at_ledger`; RMT on `last_updated_ledger`), created before any writer
-   ships — `PartitionWriter` opens every insert handle, so a missing table
-   stops all ingestion, not just this one.
+   ships — the insert opens on a table's first row (`writer.rs::write_rows`),
+   and claimable balances change in almost every ledger, so a missing table
+   fails nearly every ledger's persist and stalls ingestion.
 2. Writer from `ClaimableBalanceEntry` changes, in the shared stage so live
    ingest and `backfill-runner` write identical rows. Fold per balance id across
    the whole ledger, last in application order wins (ADR 0057 decision 6),
@@ -625,6 +626,38 @@ verdicts. `Ghost` → closure is correct for this table and must never reach
    unchanged.
 5. Verification: seed dry-run comparison clean; oracle against `asset_transfers`
    between two checkpoints; `docs/architecture/**` schema and pipeline docs.
+
+### Progress — items 1 and 2 done (2026-09-15)
+
+- **Table** `claimable_balance_holdings` in `init.sql`, columns identical to
+  `balances`. Applied to a throwaway local ClickHouse 26.3 database, and the whole
+  `init.sql` through the real splitter (`apply_init_sql`). Not yet on production.
+- **Parser** `xdr_parser::claimable_balance::extract_claimable_balances`, per
+  transaction. A removal carries only the key, so its tombstone takes the asset
+  from the `state` pre-image; a removal with no pre-image is logged and dropped.
+- **Staging** `persist::claimable_balances::build_claimable_balance_rows`
+  reuses `BalanceRow` (no new struct) and folds per `(holder, asset, ledger)`
+  across the ledger. Writer slot drained before the `ledgers` commit marker.
+  Live indexer and `backfill-runner` share the path. Not targetable with
+  `--only`.
+- **Real chain, not only constructed meta.** Mainnet claim tx `23273fda…c7b8`
+  (ledger 64,438,024) committed as `tests/fixtures/corpus/claimable_balance_claim.b64`:
+  all three removals are preceded by their `state` pre-image, and the extracted
+  assets (AVLX, MAKER, MAKER on operations 1, 4, 5) match production
+  `asset_transfers`, which decodes the same claims from events. The AVLX
+  balance's `holder_id` equals production's `asset_transfers.from_id`
+  (1,280,410,223,283,636,341) — the oracle join holds.
+- **Write path end to end.** `tests/claimable_balance_holdings_e2e.rs` persists a
+  create and a later claim through `persist_ledger_clickhouse` and reads one
+  tombstone back with `FINAL`. Proven against its defect: with the writer's
+  `end(...)` for this table removed, it fails (`left: []`).
+- **Tests:** xdr-parser 438 unit + 2 real-corpus, db-clickhouse 149 unit, all
+  green; `cargo clippy --workspace --all-targets -D warnings` and `cargo fmt`
+  clean.
+- **Correction:** the insert opens on a table's first row, not up front
+  (`writer.rs::write_rows`). Same effect, stated mechanism fixed in the work list.
+- **Docs:** `database-schema-overview.md` §3 + §4.17.1,
+  `indexing-pipeline-overview.md` (claimable balances paragraph). API: no change.
 
 ## Context
 

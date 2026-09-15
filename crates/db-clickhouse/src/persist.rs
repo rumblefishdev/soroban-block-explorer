@@ -48,6 +48,7 @@ use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
 use crate::SchemaError;
 
+pub mod claimable_balances;
 pub mod enrichment;
 pub mod ids;
 pub mod rows;
@@ -90,6 +91,7 @@ pub async fn persist_ledger_clickhouse(
     contract_metadata_writes: &[xdr_parser::ExtractedContractMetadata],
     executable_ref_targets: &[xdr_parser::executable_ref::ExtractedExecutableRefTarget],
     soroban_token_balances: &[xdr_parser::ExtractedSorobanBalance],
+    claimable_balances: &[xdr_parser::claimable_balance::ExtractedClaimableBalance],
     pool_family_writes: &[xdr_parser::pool_family::PoolFamilyWrite],
     sac_overrides: &[SacOverride],
     asset_transfers: &[xdr_parser::ExtractedAssetTransfer],
@@ -147,6 +149,7 @@ pub async fn persist_ledger_clickhouse(
         contract_metadata_writes,
         executable_ref_targets,
         soroban_token_balances,
+        claimable_balances,
         pool_family_writes,
         // ADR 0051: `build_balance_rows` keys contract-held SAC balances onto the
         // wrapped classic/native asset (the SAC has no `assets` row) via this map.
@@ -577,6 +580,7 @@ mod tests {
         let res = persist_ledger_clickhouse(
             &client,
             &ledger,
+            &[],
             &[],
             &[],
             &[],

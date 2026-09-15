@@ -188,6 +188,8 @@ struct TableInserts {
     /// Unified per-holder balances — ALL asset types (task 0331 Option A). The
     /// legacy `account_balances_current` insert was removed (single-write).
     unified_balances: Option<Insert<BalanceRow>>,
+    /// Task 0210 — `balances`' twin for value held by a claimable balance.
+    claimable_balance_holdings: Option<Insert<BalanceRow>>,
     /// Task 0540 / 0541 — the value-flow tables.
     asset_transfers: Option<Insert<AssetTransferRow>>,
     transaction_memos: Option<Insert<TransactionMemoRow>>,
@@ -366,6 +368,7 @@ impl PartitionWriter {
             nft_pending_rows,
             nft_ownership_pending_rows,
             unified_balance_rows,
+            claimable_balance_rows,
             asset_transfer_rows,
             transaction_memo_rows,
             event_op_rows,
@@ -561,6 +564,13 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
+            &mut self.inserts.claimable_balance_holdings,
+            "claimable_balance_holdings",
+            &claimable_balance_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
             &mut self.inserts.asset_transfers,
             "asset_transfers",
             &asset_transfer_rows,
@@ -638,6 +648,7 @@ impl PartitionWriter {
             nfts_pending,
             nft_ownership_pending,
             unified_balances,
+            claimable_balance_holdings,
             asset_transfers,
             transaction_memos,
             event_ops,
@@ -675,6 +686,7 @@ impl PartitionWriter {
         end(nfts_pending).await?;
         end(nft_ownership_pending).await?;
         end(unified_balances).await?;
+        end(claimable_balance_holdings).await?;
         end(asset_transfers).await?;
         end(transaction_memos).await?;
         end(event_ops).await?;
