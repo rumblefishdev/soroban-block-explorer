@@ -189,27 +189,45 @@ async fn insert_verdicts(
 
 /// Build the staging table: passthrough every column, override `contract_type`
 /// only for non-SAC contracts whose WASM resolved to Nft/Fungible.
+///
+/// "Every column" is load-bearing. The staging table is created
+/// `AS soroban_contracts`, so it always has every column of the live table, and
+/// this `INSERT … SELECT` names none — ClickHouse matches by position and
+/// rejects a short list outright. When task 0548 added `executable_owner_id` /
+/// `executable_tag`, this list still had eight expressions for ten columns, and
+/// the rebuild would have stopped with `NUMBER_OF_COLUMNS_DOESNT_MATCH` before
+/// the `EXCHANGE` (probed on a throwaway ClickHouse 26.3 database: the error,
+/// and zero rows in staging). Loud, not lossy — but an operator command broken
+/// by a schema change nobody connected to it. Any column added to that table
+/// must be added here too; `staging_select_passes_every_column_through` fails
+/// if it is not.
 async fn build_staging(
     client: &ClickhouseClient,
     staging: &str,
     verdict_tbl: &str,
 ) -> Result<(), BackfillError> {
-    let sql = format!(
-        "INSERT INTO {staging} \
-         SELECT \
-           sc.id, sc.contract_id, sc.wasm_hash, sc.wasm_uploaded_at_ledger, \
-           sc.deployer_id, sc.deployed_at_ledger, \
-           if(NOT sc.is_sac AND v.verdict IN (2, 3), v.verdict, sc.contract_type) AS contract_type, \
-           sc.is_sac \
-         FROM soroban_contracts AS sc FINAL \
-         LEFT JOIN {verdict_tbl} AS v ON v.wasm_hash = sc.wasm_hash"
-    );
+    let sql = staging_insert_sql(staging, verdict_tbl);
     client
         .query(&sql)
         .execute()
         .await
         .map_err(BackfillError::Ch)?;
     Ok(())
+}
+
+/// The staging `INSERT … SELECT`. Split out so a unit test can hold it against
+/// the table's real column list — see `staging_select_passes_every_column_through`.
+fn staging_insert_sql(staging: &str, verdict_tbl: &str) -> String {
+    format!(
+        "INSERT INTO {staging} \
+         SELECT \
+           sc.id, sc.contract_id, sc.wasm_hash, sc.wasm_uploaded_at_ledger, \
+           sc.deployer_id, sc.deployed_at_ledger, \
+           if(NOT sc.is_sac AND v.verdict IN (2, 3), v.verdict, sc.contract_type) AS contract_type, \
+           sc.is_sac, sc.executable_owner_id, sc.executable_tag \
+         FROM soroban_contracts AS sc FINAL \
+         LEFT JOIN {verdict_tbl} AS v ON v.wasm_hash = sc.wasm_hash"
+    )
 }
 
 /// Count contracts whose `contract_type` actually changes to Nft / Fungible.
@@ -297,6 +315,65 @@ async fn assets_type3_count(client: &ClickhouseClient) -> Result<u64, BackfillEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The staging table is `CREATE TABLE … AS soroban_contracts` and then
+    /// `EXCHANGE`d over the live one, so this SELECT must name every column the
+    /// table has, in order. Task 0548 added two columns to the table and this
+    /// list silently fell behind; the guard reads the columns off the SAME row
+    /// struct the writer uses, so the next added column fails here instead of
+    /// breaking an operator's rebuild on production.
+    #[test]
+    fn staging_select_passes_every_column_through() {
+        use clickhouse::Row as _;
+        let sql = staging_insert_sql("staging", "verdicts");
+        let select = sql
+            .split("SELECT")
+            .nth(1)
+            .and_then(|rest| rest.split(" FROM ").next())
+            .expect("an INSERT … SELECT … FROM");
+
+        // Split on TOP-LEVEL commas only: the `contract_type` override is an
+        // `if(…, …, …)` whose own commas are not column separators.
+        let mut exprs: Vec<String> = Vec::new();
+        let (mut depth, mut cur) = (0i32, String::new());
+        for ch in select.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    exprs.push(std::mem::take(&mut cur));
+                    continue;
+                }
+                _ => {}
+            }
+            cur.push(ch);
+        }
+        exprs.push(cur);
+
+        let selected: Vec<String> = exprs
+            .iter()
+            .map(|expr| {
+                let expr = expr.trim();
+                // `… AS name` names the column; otherwise it is `sc.name`.
+                expr.rsplit(" AS ")
+                    .next()
+                    .unwrap_or(expr)
+                    .trim_start_matches("sc.")
+                    .trim()
+                    .to_string()
+            })
+            .collect();
+
+        let table: Vec<String> = db_clickhouse::persist::rows::SorobanContractRow::COLUMN_NAMES
+            .iter()
+            .map(|c| (*c).to_string())
+            .collect();
+
+        assert_eq!(
+            selected, table,
+            "the rebuild SELECT must list every soroban_contracts column in table order"
+        );
+    }
 
     /// End-to-end against a real ClickHouse — exercises the whole pipeline the
     /// operators actually run (classify → staging → EXCHANGE swap → assets

@@ -210,14 +210,12 @@ async fn rebuild_lp_positions(
 
     // OperationType::LiquidityPoolDeposit = 22 (see
     // crates/domain/src/enums/operation_type.rs).
+    // `lp.* REPLACE`, not a column list: the staging table is a copy of the live
+    // one, and a hand-typed list silently resets every column added after it
+    // was written (`closed_at_ledger`, ADR 0055) before the EXCHANGE.
     let insert_sql = format!(
-        "INSERT INTO {staging} (pool_id, account_id, shares, first_deposit_ledger, last_updated_ledger)
-         SELECT
-             lp.pool_id,
-             lp.account_id,
-             lp.shares,
-             ifNull(m.min_ledger, lp.first_deposit_ledger) AS first_deposit_ledger,
-             lp.last_updated_ledger
+        "INSERT INTO {staging}
+         SELECT lp.* REPLACE (ifNull(m.min_ledger, lp.first_deposit_ledger) AS first_deposit_ledger)
            FROM lp_positions AS lp FINAL
            LEFT JOIN (
              SELECT
@@ -324,17 +322,16 @@ async fn rebuild_soroban_contracts(
     // ILLEGAL_AGGREGATION when the projected alias shadows the raw
     // column name (the parser resolves the WHERE reference against
     // the projection list and sees an aggregate there).
+    //
+    // `sc.* REPLACE`, not a column list — same reason as `rebuild_lp_positions`:
+    // a hand-typed list silently NULLed `executable_owner_id` / `executable_tag`
+    // (task 0548) before the EXCHANGE.
     let insert_sql = format!(
-        "INSERT INTO {staging} (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, contract_type, is_sac)
-         SELECT
-             sc.id,
-             sc.contract_id,
-             sc.wasm_hash,
-             sc.wasm_uploaded_at_ledger,
-             ifNull(d.deployer_id_rebuilt, sc.deployer_id) AS deployer_id,
-             ifNull(d.deployed_at_ledger_rebuilt, sc.deployed_at_ledger) AS deployed_at_ledger,
-             sc.contract_type,
-             sc.is_sac
+        "INSERT INTO {staging}
+         SELECT sc.* REPLACE (
+                    ifNull(d.deployer_id_rebuilt, sc.deployer_id) AS deployer_id,
+                    ifNull(d.deployed_at_ledger_rebuilt, sc.deployed_at_ledger) AS deployed_at_ledger
+                )
            FROM soroban_contracts AS sc FINAL
            LEFT JOIN (
              SELECT
@@ -640,3 +637,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "repair_tier1_columns_tests.rs"]
+mod columns_tests;

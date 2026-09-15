@@ -2231,7 +2231,8 @@
           "operation_count",
           "has_soroban",
           "operation_types",
-          "created_at"
+          "created_at",
+          "balance_changes"
         ],
         "properties": {
           "application_order": {
@@ -2240,11 +2241,11 @@
             "description": "1-based position in ledger."
           },
           "balance_changes": {
-            "type": ["array", "null"],
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/AccountBalanceChange"
             },
-            "description": "What this transaction did to THIS account's balances, in the order the\nmovements happened on the chain. Account-relative, which is why no other\nlist endpoint carries it.\n\nThe order is NOT a ranking. Assets have different decimals and different\nprices, and no price exists anywhere in this system, so sorting by\namount would compare quantities that are not comparable. Chain order is\na fact; render it as given.\n\n**`null` means NOT INDEXED, never \"nothing moved\".** The per-transfer\nindex starts at ledger 64 317 019 (it drops to the ingest floor once the\nhistorical backfill lands); below that there is no data, and a client\nthat draws `null` as `0` is showing a value nobody measured. An empty\nARRAY is the real \"nothing changed\" — the transaction is indexed and\nthis account's balances came out unchanged (a round-trip arbitrage, an\noffer placed, a failed transaction, a payment to self).\n\nAssets whose net change is exactly zero are omitted: under this name an\nasset that did not change is not a balance change. The gross movement\nbehind a net figure is not carried here."
+            "description": "What this transaction did to THIS account's balances, in the order the\nmovements happened on the chain. Account-relative, which is why no other\nlist endpoint carries it.\n\nThe order is NOT a ranking. Assets have different decimals and different\nprices, and no price exists anywhere in this system, so sorting by\namount would compare quantities that are not comparable. Chain order is\na fact; render it as given.\n\nAlways present. An empty array means this account's balances came out\nunchanged (a round-trip arbitrage, an offer placed, a failed\ntransaction, a payment to self): the per-transfer index covers every\ntransaction this API returns.\n\nAssets whose net change is exactly zero are omitted: under this name an\nasset that did not change is not a balance change. The gross movement\nbehind a net figure is not carried here."
           },
           "created_at": {
             "type": "string",
@@ -2563,6 +2564,13 @@
             "format": "int64"
           },
           "deployer": {
+            "type": ["string", "null"]
+          },
+          "executable_owner": {
+            "type": ["string", "null"],
+            "description": "Task 0548 / CAP-85 (protocol 28): the contract this one borrows its code\nfrom, and the tag naming which of that owner's executables it runs. Both\n`null` for every contract that carries its own executable.\n\nWhen they are set, `wasm_hash` above is the hash the reference resolves\nto at the time of the request — the code the contract genuinely runs,\nwhich is what the protocol's own `get_address_executable` reports too.\nIt is NOT stored against this contract: the owner can re-point the whole\nfleet without a single ledger change touching it, so a stored copy would\ngo quietly out of date. Read these two to tell \"runs its own code\" from\n\"runs someone else's\"."
+          },
+          "executable_tag": {
             "type": ["string", "null"]
           },
           "is_sac": {
@@ -3624,7 +3632,8 @@
                 "operation_count",
                 "has_soroban",
                 "operation_types",
-                "created_at"
+                "created_at",
+                "balance_changes"
               ],
               "properties": {
                 "application_order": {
@@ -3633,11 +3642,11 @@
                   "description": "1-based position in ledger."
                 },
                 "balance_changes": {
-                  "type": ["array", "null"],
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/AccountBalanceChange"
                   },
-                  "description": "What this transaction did to THIS account's balances, in the order the\nmovements happened on the chain. Account-relative, which is why no other\nlist endpoint carries it.\n\nThe order is NOT a ranking. Assets have different decimals and different\nprices, and no price exists anywhere in this system, so sorting by\namount would compare quantities that are not comparable. Chain order is\na fact; render it as given.\n\n**`null` means NOT INDEXED, never \"nothing moved\".** The per-transfer\nindex starts at ledger 64 317 019 (it drops to the ingest floor once the\nhistorical backfill lands); below that there is no data, and a client\nthat draws `null` as `0` is showing a value nobody measured. An empty\nARRAY is the real \"nothing changed\" — the transaction is indexed and\nthis account's balances came out unchanged (a round-trip arbitrage, an\noffer placed, a failed transaction, a payment to self).\n\nAssets whose net change is exactly zero are omitted: under this name an\nasset that did not change is not a balance change. The gross movement\nbehind a net figure is not carried here."
+                  "description": "What this transaction did to THIS account's balances, in the order the\nmovements happened on the chain. Account-relative, which is why no other\nlist endpoint carries it.\n\nThe order is NOT a ranking. Assets have different decimals and different\nprices, and no price exists anywhere in this system, so sorting by\namount would compare quantities that are not comparable. Chain order is\na fact; render it as given.\n\nAlways present. An empty array means this account's balances came out\nunchanged (a round-trip arbitrage, an offer placed, a failed\ntransaction, a payment to self): the per-transfer index covers every\ntransaction this API returns.\n\nAssets whose net change is exactly zero are omitted: under this name an\nasset that did not change is not a balance change. The gross movement\nbehind a net figure is not carried here."
                 },
                 "created_at": {
                   "type": "string",

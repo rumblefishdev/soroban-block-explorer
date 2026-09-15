@@ -211,6 +211,29 @@ describe('humanizeOp', () => {
     ).toBe('Uploaded contract code (24,576 bytes)');
   });
 
+  it('takes the called contract from the archive block when the DB has no row for it', () => {
+    // Task 0548: an address with no contract behind it has no soroban_contracts
+    // row, so the DB-resolved contract_id is null — the archive still names it.
+    const op = light({ type_name: 'INVOKE_HOST_FUNCTION' });
+    const h = heavy({
+      functionName: 'swap',
+      contractId: 'CDUQMUE7GNZRQLFF2OSK3577OVBKO2QHXTUTLMNGEHZVPGJCGTL57RAO',
+    });
+    expect(humanizeOp(op, h)).toBe('Called swap() on CDUQ…7RAO');
+  });
+
+  it('prefers the archive contractId over the DB value when both are present', () => {
+    const op = light({
+      type_name: 'INVOKE_HOST_FUNCTION',
+      contract_id: 'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA',
+    });
+    const h = heavy({
+      functionName: 'plant',
+      contractId: 'CDUQMUE7GNZRQLFF2OSK3577OVBKO2QHXTUTLMNGEHZVPGJCGTL57RAO',
+    });
+    expect(humanizeOp(op, h)).toBe('Called plant() on CDUQ…7RAO');
+  });
+
   it('groups thousands in headline amounts (US grouping)', () => {
     const op = light({
       type_name: 'PAYMENT',

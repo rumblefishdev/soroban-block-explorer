@@ -62,6 +62,7 @@ fn parse_ledger_surfaces_pool_state() {
                 nft_events: &parsed.nft_events,
                 lp_positions: &parsed.lp_positions,
                 contract_metadata_writes: &parsed.contract_metadata_writes,
+                executable_ref_targets: &[],
                 soroban_token_balances: &parsed.soroban_token_balances,
                 pool_family_writes: &parsed.pool_family_writes,
                 sac_classic: &std::collections::HashMap::new(),

@@ -24,23 +24,12 @@ function change(
 }
 
 describe('BalanceChangeCell', () => {
-  it('says "not indexed" below the floor instead of drawing a zero', () => {
-    // `null` means the transfer index does not cover this transaction — a gap
-    // in what we have looked at, not a measurement that nothing moved. Drawing
-    // it as `0` would put a figure on screen nobody measured.
-    renderWithProviders(<BalanceChangeCell changes={null} />);
-
-    expect(screen.getByText('Not indexed')).toBeInTheDocument();
-    expect(screen.queryByText('0')).not.toBeInTheDocument();
-  });
-
   it('draws a MEASURED zero when the account came out level', () => {
-    // The counterpart: indexed, and this account's balances did not change —
-    // an offer placed, a round-trip that netted out, a payment to self.
+    // Indexed, and this account's balances did not change — an offer placed,
+    // a round-trip that netted out, a payment to self.
     renderWithProviders(<BalanceChangeCell changes={[]} />);
 
     expect(screen.getByText('0')).toBeInTheDocument();
-    expect(screen.queryByText('Not indexed')).not.toBeInTheDocument();
   });
 
   it('signs the amount, scales it, and keeps US grouping', () => {

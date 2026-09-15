@@ -2,11 +2,13 @@ import { Stack } from '@mui/material';
 import type { ListAssetsData } from '@rumblefish/api-types';
 import { useCursorPagination } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import { PAGE_SIZE, useAssetsList, usePagedRows } from '../api/index.js';
 
 import { AssetFilters } from './assets/AssetFilters.js';
 import { ASSET_COLUMN_COUNT, AssetsTable } from './assets/AssetsTable.js';
+import { codeIssuerRoute } from './assets/codeIssuerRoute.js';
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 
@@ -44,9 +46,16 @@ export default function AssetsListPage() {
     goPrev
   );
 
+  const navigate = useNavigate();
+  // A pasted `CODE:ISSUER` names one asset: open it rather than filter by a
+  // needle no asset code can contain (task 0534).
   const handleSearchChange = useCallback(
-    (value: string) => setFilter('code', value || null),
-    [setFilter]
+    (value: string) => {
+      const target = codeIssuerRoute(value);
+      if (target) void navigate(target);
+      else setFilter('code', value || null);
+    },
+    [navigate, setFilter]
   );
   // Soroban ⇄ "Has SAC" are mutually exclusive (ADR 0051). Each conflicting
   // transition is ONE atomic URL update (`setFilters`) so last-click wins and

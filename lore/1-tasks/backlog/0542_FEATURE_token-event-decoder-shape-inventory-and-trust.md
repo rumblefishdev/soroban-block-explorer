@@ -42,6 +42,17 @@ history:
       paths with three different trust policies, and every consumer assumed
       one topic shape per verb. 0540 fixed the two symptoms that reach
       `asset_transfers`; the rest is here.
+  - date: 2026-09-10
+    status: backlog
+    who: karolkow
+    note: >
+      Measured how many contracts publish event declarations, since the
+      canonical-source finding rested on an unquantified "not every contract
+      publishes one". 761 of 763 wasm hashes resolved against mainnet: 24.8%
+      of a universe sample declare events, 35.3% of token contracts, but only
+      12.2% of non-SAC token-event VOLUME — and non-SAC is 0.098% of that
+      volume. Adoption rises 32% to 69% across the emitter median upload
+      ledger. Bounds steps 1 and 6 rather than changing them.
 ---
 
 # Token-event decoder — shape inventory, trust policy, re-runnability
@@ -49,7 +60,7 @@ history:
 ## Summary
 
 Thread 99 interpretation decision (2026-09-07):
-[NFT interpretation policy](../active/0540_FEATURE_lossless-value-flow-index/notes/T-nft-interpretation-policy.md).
+[NFT interpretation policy](../archive/0540_FEATURE_lossless-value-flow-index/notes/T-nft-interpretation-policy.md).
 Distinguish declared amount, NFT identity and unresolved payload; use
 event-specific, historical-version evidence rather than integer signedness
 or today's name-only contract classification. Measured 2026-09-07 (policy
@@ -60,7 +71,7 @@ backfill (task owner, thread 114 A). Implementation is step 6 below.
 
 Post-merge 0540 correction (2026-09-07): unsigned scalar NFT IDs no longer
 become fungible amounts. The reproducible exploit and limits are recorded in
-[0540's regression note](../active/0540_FEATURE_lossless-value-flow-index/notes/S-nft-amount-regression.md).
+[0540's regression note](../archive/0540_FEATURE_lossless-value-flow-index/notes/S-nft-amount-regression.md).
 **Still required before claiming NFT-safe numeric aggregation:** resolve
 bespoke i128 token-ID ambiguity consistently for live and historical replay.
 The existing NFT classifier is not yet part of the value-flow decision, and
@@ -351,6 +362,72 @@ read the moment its declaration says where the sender sits.
 Not every contract publishes one, so the label rule stays as the fallback for
 those that do not — but it stops being the primary source for those that do.
 
+### How many contracts actually publish one — measured 2026-09-10
+
+The paragraph above ends on "not every contract publishes one" without saying
+how many do. Measured against mainnet, since the declaration is not in our
+schema: 763 wasm hashes resolved through the official CLI
+(`stellar contract info interface --output json`, CLI 26.0.0), counting
+`event_v0` entries in the returned spec. 761 of 763 resolved; the two failures
+carry no spec section at all.
+
+| population                                      | hashes | declare events | weighted by contracts |
+| ----------------------------------------------- | ------ | -------------- | --------------------- |
+| universe sample (300 of 4 976 stored hashes)    | 298    | **24.8%**      | **12.4%**             |
+| token contracts — every `Nft` + `Fungible` hash | 516    | **35.3%**      | **19.4%**             |
+| — `Fungible`                                    | 420    | 34.8%          | 19.0%                 |
+| — `Nft`                                         | 96     | 37.5%          | 31.6%                 |
+
+**The number that decides the step is smaller.** Over the contracts that
+actually emit a token event — one partition (`intDiv(ledger_sequence,500000) =
+128`), non-SAC emitters only, which is exactly the population this task guesses
+about: **69 hashes, 161 897 events**. Half the CODE declares (35 hashes,
+50.7%), but only **12.2% of the EVENTS** do: the three largest emitters
+(91 243 + 24 440 + 18 213 events, 82% of the volume) declare nothing.
+
+Two findings make the declaration worth reading anyway:
+
+- **Every one of the 35 that declares, declares a token verb.** No case of "has
+  event declarations, but not the ones needed" — the set of declared names
+  always intersects `transfer` / `mint` / `burn` / `clawback`.
+- **The declaration carries the missing field verbatim.** A live example:
+  `name: "Burn"`, `prefix_topics: ["burn"]`, params `from address
+location: topic_list` and `amount i128 location: data`, `data_format: map`.
+  That `location` is the field every open question in this task runs into.
+
+**Adoption is rising, not flat.** Split the same 69 emitter hashes at their
+median upload ledger: the older half declares in **11 of 34 (32%)**
+(ledgers 50 688 706 .. 63 035 973), the newer half in **24 of 35 (69%)**
+(63 099 147 .. 64 347 339).
+
+**Scale check that bounds the whole step.** That partition holds 165 924 064
+token events; the non-SAC emitters above are 161 897 of them — **0.098%**.
+Everything else is a SAC, whose shape is protocol, not a guess. So the
+declaration would resolve ~12% of ~0.1% of today's traffic. The step is cheap
+(`contract.rs` already reads the section and drops the entry on one line, and
+`wasm_interface_metadata` is already populated per hash) — it is not urgent.
+
+**Method caveats, so the numbers can be re-derived rather than trusted:**
+
+- The CLI resolves by CONTRACT address, so it returns the contract's CURRENT
+  wasm, while the hash keying the row may be older ([[0320]]). Checked against
+  the stored `metadata.functions` for the same hash: 40 of 41 comparable
+  emitter hashes have an identical function set; one had been upgraded
+  (6 events). Drift is negligible in this population, not zero.
+- The universe sample is 300 hashes ordered by `cityHash64(wasm_hash)` —
+  deterministic and reproducible, not a statistical random sample.
+- 201 of the first-pass fetches returned HTTP 429 and were re-fetched serially
+  across three endpoints. Final coverage 761/763.
+- The stored-metadata cross-check covered 41 of 69 hashes: rows whose JSON
+  carries a newline break a TSV round trip. The uncovered 28 were not checked.
+
+**What this does to the plan.** Step 1's declared-versus-emitted comparison is
+worth building, but it cannot be the gate on its own at today's adoption — the
+label rule stays primary for the volume and the declaration becomes the
+authority wherever it exists. Step 6's `i128` resolution inherits the same
+bound: it resolves from the declaration where there is one, and needs the
+legacy-decoder evidence path for the rest.
+
 ### The trace view colours by label, with no emitter check (2026-09-09)
 
 Same disease on a second surface. `ExecutionTrace.tsx` paints a row from
@@ -371,6 +448,120 @@ diagnostic from a contract event, so a contract emitting a `fn_call` symbol
 could inject a frame. **Zero occurrences in 309 355 024 contract events in one
 partition** — never attempted, worth knowing before someone relies on the tree
 as proof of anything.
+
+### The reject inventory of the full-range backfill (2026-09-13)
+
+The 0540 backfill decoded every token event from the ingest floor to L₀ with
+today's decoder, and its completion gate proved that every event is either an
+edge or a counted reject (29 of 29 partitions close to the unit — see 0540,
+"Completion gate 7 passed on the full range"). So the rejects are no longer an
+estimate; they are the complete list of what the decoder refuses on the whole
+range. It is this task's step-1 input.
+
+| Cause                        | Events    | What it means                                                             |
+| ---------------------------- | --------- | ------------------------------------------------------------------------- |
+| `unrecognised_topics`        | 6 010     | a token verb in a topic shape the decoder does not know                   |
+| `unrecognised_payload`       | 1 617     | a known topic shape with a data payload it does not know                  |
+| `emitter_not_sac`            | 139       | a labelled event whose emitter is not the asset's SAC — the spoofing gate |
+| `no_emitter`, `no_operation` | 0         |                                                                           |
+| **total**                    | **7 766** | in 6 964 ledgers                                                          |
+
+Counted from the worker logs (`token events rejected by the asset_transfers
+decoder`, one line per ledger), deduplicated per ledger because the workers'
+ranges overlapped: 7 250 log lines for 6 964 distinct ledgers. Cross-checked against the database on two slices where both
+sides were known: 5 = 5 in five Protocol 21 ledgers, 885 = 885 on
+64 000 000–64 128 000.
+
+Shapes already located:
+
+- The five Protocol 21 rejects (ledgers 52 510 752, 52 510 759, 52 558 370,
+  52 570 526, 52 570 585) are all `transfer`, all `unrecognised_topics`, from two
+  emitters that exist in neither `soroban_contracts` nor `assets`.
+- **175 events spell the verb in upper or mixed case** — `TRANSFER` 160 (three
+  partitions, one emitter per partition), `MINT` 6, `Mint` 6, `Clawback` 3.
+  `token_verb` matches case-insensitively, so they enter the decoder. The gate
+  arithmetic does not separate how many of them decoded from how many were
+  rejected. A SAC always emits lowercase and symbols are case-sensitive on
+  chain, so matching them at all is a policy choice this task owns.
+
+**The question the list has to answer is whether any of it is value we drop.**
+Rejects are 0.00014% of 5.475 bn events, but volume is not the measure — one
+rejected event can be a real movement missing from an account page. The method
+exists and needs no new tooling: for every rejected event's transaction, run the
+ledger-state witness (`operation_balance_deltas`, as `value_flow_oracle.rs`
+does) on the archive file. A holder whose balance changed in that asset with no
+edge is a decoder gap to fix; no balance change is a correct reject. Group by
+emitter first — the per-partition counts suggest a few emitters carry most of it.
+
+**The input is preserved on the box** as `~/bf-540/rejects-2026-09-13.log`
+(7 250 lines, extracted from `~/bf-540/w{0,1,2,3}.log` with the colour codes
+stripped). It is the only per-ledger record of the rejects. The rejected events
+themselves are in `soroban_events`, and the ledger list is what makes finding
+them there a cheap query (next section).
+
+### What the rejects are — every event located, the value-bearing ones witnessed (2026-09-13)
+
+**All 7 766 found in the database.** Given the ledger list from the log, a
+rejected event is a token-verb row in `soroban_events` with no `asset_transfers`
+row at the same `(ledger_sequence, application_order, event_index)`. Run per
+partition with both sides restricted to the listed ledgers, the anti-join
+returned exactly the log's count in every one of the 23 partitions that carry
+rejects. The list is what keeps that join small.
+
+**Grouped by (emitter, shape):** 307 groups from 209 emitters. Each group was
+then put through the ledger-state witness (`operation_balance_deltas`, the same
+comparison as `value_flow_oracle.rs`) on its archive files: one transaction per
+group, three for groups of 50 or more (341 transactions, 338 ledgers), and then
+**every** transaction of the groups where a balance could be involved (971
+transactions, 914 ledgers). The witness also listed which storage keys of the
+rejected emitter the transaction changed, which is what separates a token from
+a contract that only announces one — and, for the 692 events whose balance
+entries it could not value at first, dumped each entry's before and after.
+
+| Class                                | Events    | Emitters | What the witness shows                                                                                                                                                                              | Verdict                                                                       |
+| ------------------------------------ | --------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Concentrated-liquidity positions     | 3 698     | 129      | 1-topic `mint` / `burn` with `{amount, amount0, amount1, owner, …}`; the emitter's storage changes `Position` / `Tick` keys, never a balance                                                        | correct reject                                                                |
+| NFT ownership                        | 2 105     | 22       | mostly `["transfer", u32 id]` → `address` (no sender); storage changes `Token(id)` / `Owner` / `Item` keys                                                                                          | **non-fungible movement dropped**                                             |
+| Fungible, balance moved with no edge | **230**   | 24       | a `Balance(Address)` `i128` entry of the emitter changed with no matching edge — confirmed on **all 230**, not a sample; 28 holders (27 `G…`, 1 `C…`), ledgers 57 848 386 – 64 240 682              | **value dropped**                                                             |
+| Non-standard balance layouts         | 5         | 3        | a pass token whose `Balance(Address)` is a `u64` of 1 beside an `Expiry` (3 mints); prediction-market outcome shares keyed `Balance(market, holder, outcome)` (2 burns)                             | **value dropped**; the second has no single-asset identity to record it under |
+| Restated lending mints               | 218       | 6        | `["mint", address]` with `{mint_amount, mint_tokens}` beside a standard `mint` from the same contract; the `Balance(Address)` change equals that accepted edge in every one of the 218 transactions | correct reject                                                                |
+| Game cards                           | 469       | 2        | `mint` / `burn` naming only the owner, data `map{}` or `void`; every one of the 469 transactions changes the owner's card-id list (`OwnerOwnedCardIds`) — the id exists only in storage             | item ownership the event cannot name                                          |
+| Emitter holds no balance             | 1 041     | 24       | bridge announcements (`vec[string, i128, remote address…]`), a BTC-bridge `mint` keyed by the deposit's hash, 138 of the 139 `emitter_not_sac` labels, the 160 upper-case `TRANSFER`s               | correct reject                                                                |
+| **total**                            | **7 766** | 209      |                                                                                                                                                                                                     |                                                                               |
+
+The 230 by shape: `["mint"/"burn", address]` with `vec[i128, i128]` data (215;
+the decoder takes a scalar or a map, never a vector), a 1-topic
+`["mint"/"burn"]` with a bare `i128` (11; the holder is in no topic and no
+payload, only in storage), a 1-topic `["mint"]` with `vec[address, i128]` (2),
+a 1-topic `["transfer"]` with `vec[from, to, amount]` (1), and one
+`emitter_not_sac`: a bespoke token labelling its own transfer
+`"USDC:GA5ZSE…"`. The gate is right that it is not USDC; dropping it also drops
+the token's real movement.
+
+**Answers to the questions this section raised above:**
+
+- **Is any of it value the index drops?** Yes: 230 fungible movements witnessed
+  one by one, 5 more in non-standard balance layouts, and 2 105 NFT ownership
+  changes. 469 game-card changes are ownership too, but the event names no id,
+  so no event decoder can record them. The remaining 4 957 are correctly
+  refused. Nothing is left unclassified.
+- **The 175 mixed-case verbs:** 169 were rejected (`TRANSFER` 160, all one
+  bridge contract; `MINT` 6; `Mint` 3). The other 6 (`Mint` 3, `Clawback` 3)
+  decoded into edges. The policy question stays with step 2, but it affects
+  nine events at most.
+
+**Found on the side — a token that moves without an event.** In all three sampled
+transactions of the upper-case `TRANSFER` group, a bespoke token
+(`CB32ILGARL45X7IW6ROE24VPHSVRHDDQQ7GC2L67LYGB4AGZ2LU3565Z`) changed a contract's
+`Balance(Address)` entry with no token event at all, and the bridge's
+`TRANSFER` carries that same amount each time. Not a reject, so not in this list — a
+movement no event-based index can see, and only the ledger reader catches it.
+
+**Reproducibility.** The analysis ran as scratch scripts, not committed: the
+anti-join above, a grouping by `(emitter, verb + topic types, data type or map
+keys)`, and a witness binary built against `xdr-parser` at `71f1536a`
+that prints, per transaction, the edges, the witness differences and the
+emitter's changed storage keys, with their before and after values on request. The ledger list is re-derivable from the log.
 
 ### What this task now owns
 

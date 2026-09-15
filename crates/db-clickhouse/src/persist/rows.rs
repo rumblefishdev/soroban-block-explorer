@@ -183,6 +183,27 @@ pub struct SorobanContractRow {
     pub deployed_at_ledger: Option<i64>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    /// CAP-85 / task 0548 — the owner whose storage holds this contract's code,
+    /// and the tag naming which of its executables. Both `None` for every
+    /// pre-protocol-28 shape. The hash they resolve to lives in
+    /// [`ContractExecutableRefRow`] and is joined at read; copying it here is
+    /// what would let a fleet member go stale unnoticed.
+    pub executable_owner_id: Option<i64>,
+    pub executable_tag: Option<String>,
+}
+
+/// `contract_executable_refs` — what an owner's tag currently points at.
+/// RMT(`ledger`); one row per `(owner_id, tag)`.
+///
+/// Written from the owner's own persistent contract-data entry, so a re-point
+/// arrives as an ordinary entry change and costs exactly one row — no rewrite
+/// of the fleet it governs.
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
+pub struct ContractExecutableRefRow {
+    pub owner_id: i64,
+    pub tag: String,
+    pub wasm_hash: [u8; 32],
+    pub ledger: i64,
 }
 
 /// `soroban_contract_metadata` — on-chain Soroban token metadata

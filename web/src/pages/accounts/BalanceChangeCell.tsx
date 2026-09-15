@@ -37,17 +37,13 @@ function Muted({
  * this column exists here and nowhere else. Its predecessor put a number with no
  * account behind it on the global list, and that is exactly what made it wrong.
  *
- * Three states the API keeps apart, and so must this cell:
+ * Two states, both measurements — the per-transfer index covers every
+ * transaction the API lists:
  *
  * | `changes`  | Means                                    | Renders        |
  * | ---------- | ---------------------------------------- | -------------- |
- * | `null`     | below the index floor — NOT MEASURED      | `Not indexed`  |
- * | `[]`       | measured; NO TOKEN moved for this account | `0`            |
- * | non-empty  | measured; these assets moved              | signed amounts |
- *
- * `null` must never fall through to `0`: it is the difference between "nothing
- * moved" and "we have not looked yet", and drawing the second as the first
- * shows a value nobody measured.
+ * | `[]`       | NO TOKEN moved for this account           | `0`            |
+ * | non-empty  | these assets moved                        | signed amounts |
  *
  * `[]` does not claim the XLM balance held: a fee is charged whatever happens,
  * and the fee is the column next door. This column is about tokens that moved.
@@ -60,26 +56,15 @@ function Muted({
 export function BalanceChangeCell({
   changes,
 }: {
-  changes: AccountBalanceChange[] | null | undefined;
+  changes: AccountBalanceChange[];
 }) {
-  if (changes == null) {
-    // No ledger number in the copy: the floor DROPS when the historical
-    // backfill passes its coverage gate, and prose repeating today's value
-    // would quietly become false with nothing tying the two together.
-    return (
-      <Tooltip title="Per-transfer values are not indexed this far back yet.">
-        <Muted>Not indexed</Muted>
-      </Tooltip>
-    );
-  }
-
   // A MEASURED zero: the transaction is indexed and NO TOKEN MOVED for this
   // account — an offer placed, a round-trip that netted out, a payment to
   // self. It does NOT claim the XLM balance held: the fee is charged whatever
   // happens, and the fee lives in its own column beside this one. Dimmed,
   // because most transactions on an account's list move no tokens and full
   // contrast would shout over the rows that did. NOT a dash: a dash means
-  // "missing", which is what `Not indexed` above already says.
+  // "missing", and this is a measurement.
   if (changes.length === 0) {
     return <Muted>0</Muted>;
   }

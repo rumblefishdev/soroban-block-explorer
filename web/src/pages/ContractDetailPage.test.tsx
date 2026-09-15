@@ -140,3 +140,29 @@ describe('ContractDetailPage header face (task 0472)', () => {
     ).toBeNull();
   });
 });
+
+// Task 0548 — a CAP-85 fleet member runs code set by another contract. The
+// header must say so instead of looking like a contract with its own code.
+describe('ContractDetailPage externally managed executable (task 0548)', () => {
+  const OWNER = 'CBGVOLVXQ4XJZC6F4CQKWNKA4VL36VYVVSMV2RJD3QFYVI6RCJFJDDOF';
+
+  it('shows the Externally managed chip when the contract has an owner', () => {
+    mockOk(
+      makeContract({
+        wasm_hash: 'bb'.repeat(32),
+        executable_owner: OWNER,
+        executable_tag: 'fleet-v2',
+      })
+    );
+    renderPage();
+
+    expect(screen.getByText('Externally managed')).toBeInTheDocument();
+  });
+
+  it('shows no such chip for a contract that carries its own code', () => {
+    mockOk(makeContract({ wasm_hash: 'aa'.repeat(32) }));
+    renderPage();
+
+    expect(screen.queryByText('Externally managed')).toBeNull();
+  });
+});

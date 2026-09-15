@@ -240,6 +240,36 @@ Frontend **content** is separate: `deploy-production-web`
 
 ### Gotchas — read before you deploy
 
+- **Any `ALTER` on a table the indexer writes can stop ingestion — even an
+  ADD.** clickhouse-rs 0.15 checks the row struct against `DESCRIBE TABLE`
+  before every insert: a table column the struct does not name must have a
+  `DEFAULT` (`Nullable` alone does not count), and a struct field must exist in
+  the table. The indexer running in production is the OLD build, so:
+
+  - **`ADD COLUMN` always with an explicit `DEFAULT`**, for a nullable column
+    `DEFAULT NULL`. Then "column first, code later" is safe. Without it, every insert
+    from the running indexer fails until the new build ships (task 0548: 31
+    minutes of frozen ingestion).
+  - **`DROP COLUMN` of a no-DEFAULT column** only together with the build that
+    stopped writing it (task 0310, and the Soroban-AMM gotcha below).
+  - **Before handing over the DDL**, run it on a local ClickHouse and insert
+    with the struct from the commit that is deployed, not from the branch.
+  - **After the `ALTER`, recycle the indexer's execution environment.** The
+    driver caches `DESCRIBE` for the life of the environment, and a failed
+    insert does not reset it, so even a corrected schema keeps failing until
+    Lambda replaces it. A no-op configuration change does that:
+
+    ```bash
+    aws lambda update-function-configuration --region eu-central-1 \
+      --function-name production-soroban-explorer-indexer \
+      --description "recycle: refresh cached ClickHouse schema $(date -u +%FT%TZ)"
+    ```
+
+    Pass `--region` — the function lives in `eu-central-1`, and a shell
+    defaulting elsewhere answers `ResourceNotFoundException`. Confirm with a
+    fresh `DESCRIBE` in `system.query_log` and `max(sequence)` on `ledgers`
+    advancing. A `make deploy-production-compute` recycles too.
+
 - **Soroban-AMM (task 0374): DDL BEFORE the indexer, or ingest stops.** The
   clickhouse-rs 0.15 client refuses an insert when the target table still has
   a no-DEFAULT column the row struct dropped, or is missing entirely — a
@@ -455,12 +485,13 @@ Bump procedure — **pull → tag → push → sha**:
      --query 'imageDetails[0].imageDigest' --output text
    ```
 
-   > ⚠️ **This is NOT the Docker Hub digest.** Docker Hub serves a multi-arch
-   > manifest list; pushing to ECR rewrites the manifest, so the two digests
-   > differ. The 27.0.0 pin is Hub `sha256:81a9e829…` but ECR
-   > `sha256:91eae7af…` — and it is the **ECR** one that belongs in
-   > `production.json`. Copying the Hub digest across yields an image ECS
-   > cannot pull.
+   > ⚠️ **Pin the digest ECR reports, never the Docker Hub one.** When Hub
+   > serves a multi-arch manifest list, pushing to ECR rewrites the manifest
+   > and the two digests differ: the 27.0.0 pin is Hub `sha256:81a9e829…` but
+   > ECR `sha256:91eae7af…`, and copying the Hub digest across yields an image
+   > ECS cannot pull. A single-architecture image pulled by digest keeps its
+   > digest (28.0.1: `sha256:1d511631…` on both), so the two may also match —
+   > which is why the rule is "read it back", not "expect a difference".
 
 3. **Roll the ECS task:**
 
@@ -582,6 +613,15 @@ Terraform, run from a laptop, gated behind `terraform plan` flags:
   `deploy-production-ingestion`.
 - **Machine:** `ansible-playbook … --tags app` from a good checkout; data
   restore is Borg (see infra-hetzner DR).
+- **After a protocol vote, "the previous code" has a floor.** Every build
+  before the `stellar-xdr` bump for the new protocol fails to decode its
+  ledgers — the indexer dead-letters (task 0368), the API loses the archive
+  block of new transactions, and `backfill-runner` cannot re-ingest the
+  range. Roll Compute and `backfill-runner` back no further than the first
+  build carrying the matching `stellar-xdr` pin, and never roll Galexie back
+  past the vote (a pre-vote core stops exporting, task 0367). Before each
+  vote, record which commit is that floor, so a rollback does not have to
+  work it out under pressure.
 
 ---
 
