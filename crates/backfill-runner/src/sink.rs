@@ -173,32 +173,29 @@ impl PartitionWriterHandle {
         let pw = &mut self.writer;
         {
             let parsed = indexer::handler::process::parse_ledger(meta);
-            // ADR 0051 — re-key contract-held type-0/1 balances onto their
-            // wrapped classic/native asset_id, same as the live indexer and
-            // RPC `balance-seed`. The fetch guards on empty balances, so
-            // ledgers with no SAC/token balances skip the query.
+            // ADR 0051 — re-key contract-held type-0/1 balances, and soroban
+            // pool legs, onto their wrapped classic/native asset_id, same as
+            // the live indexer and RPC `balance-seed`. Ledgers with neither
+            // skip the query.
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
             //
-            // Skipped entirely under the targeted write (`--only`): the map's
-            // ONLY consumer is `build_balance_rows` (the `balances` table),
-            // which is not targetable — `TargetedTables::TARGETABLE` is a
-            // closed list and none of its four tables reads `sac_classic`
-            // (`asset_transfers` resolves a SAC through
-            // `event_asset_surrogate`, not this map). So the query would be a
-            // per-ledger round-trip bought for nothing — 13.16M of them
-            // across the run. If a future targetable table needs the map,
-            // this branch must key on the table list, not on `targeted`.
-            let sac_classic = if targeted {
-                std::collections::HashMap::new()
+            // Under the targeted write (`--only`) balances are not written
+            // (`balances` is not targetable), so only a pool registration asks
+            // for the map. Skipping it there entirely was the bug: the
+            // registry re-parse wrote every SAC leg back onto its surrogate —
+            // 1,084 such legs became 1,452 after one run (task 0374).
+            let needed = if targeted {
+                db_clickhouse::persist::stage::registers_soroban_pools(&parsed.events)
             } else {
-                db_clickhouse::persist::fetch_sac_classic_map(
-                    pw.client(),
+                db_clickhouse::persist::sac_classic_map_needed(
                     &parsed.soroban_token_balances,
+                    &parsed.events,
                 )
-                .await?
             };
+            let sac_classic =
+                db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
             // Task 0220 — switch to the `_with_sac_overrides` entry
             // point so the CH writer flips `is_sac=true,
             // contract_type=Token` on pre-existing SAC skeleton

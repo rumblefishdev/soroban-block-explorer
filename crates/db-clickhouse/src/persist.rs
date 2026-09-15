@@ -121,7 +121,10 @@ pub async fn persist_ledger_clickhouse(
         fetch_prior_contract_rows(client, events),
         // task 0331 + ADR 0051: SAC contract-held balances key by the SAC
         // surrogate; re-map them onto the wrapped classic/native asset id below.
-        fetch_sac_classic_map(client, soroban_token_balances),
+        fetch_sac_classic_map(
+            client,
+            sac_classic_map_needed(soroban_token_balances, events)
+        ),
     );
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
     // here would otherwise orphan contract-held balances under their surrogate key.
@@ -269,6 +272,21 @@ async fn fetch_prior_wasm_verdicts(
     }
 }
 
+/// Whether a ledger needs the SAC → classic map: it has a contract-held token
+/// balance to re-key, OR it registers a soroban pool, whose legs key on the
+/// same map.
+///
+/// The second arm is what went missing. Gating on balances alone left a pool
+/// registered in a ledger with no token balance change keyed on its SAC
+/// surrogate — the orphan defect task 0374's repair runbook exists for — so the
+/// live writer kept producing it after the fix.
+pub fn sac_classic_map_needed(
+    soroban_token_balances: &[ExtractedSorobanBalance],
+    events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
+) -> bool {
+    !soroban_token_balances.is_empty() || stage::registers_soroban_pools(events)
+}
+
 /// One AGGREGATED row of the `fetch_sac_classic_map` query (a projection, not the
 /// `asset_sac` table shape): a SAC's contract surrogate + the classic/native
 /// identity it wraps.
@@ -286,14 +304,13 @@ struct SacClassicRow {
 /// wraps (see [`stage::build_balance_rows`]). `asset_sac` is one row per
 /// SAC-having asset (~31k at mainnet scale), so the whole map loads at once — far
 /// simpler than a reverse `IN`-list over the non-key `sac_contract_id` column.
-/// Skips the query when there are no soroban balances to re-key. On error the map
-/// is empty (SAC balances keep their surrogate key — orphaned but never wrong; a
-/// re-run recovers).
+/// Skips the query when the ledger has nothing to re-key — see
+/// [`sac_classic_map_needed`] for what counts.
 pub async fn fetch_sac_classic_map(
     client: &Client,
-    soroban_token_balances: &[ExtractedSorobanBalance],
+    needed: bool,
 ) -> Result<HashMap<i64, i64>, clickhouse::error::Error> {
-    if soroban_token_balances.is_empty() {
+    if !needed {
         return Ok(HashMap::new());
     }
     // `asset_sac` is an AggregatingMergeTree: `sac_contract_id` / `sac_deployed` are

@@ -182,7 +182,8 @@ pub async fn execute(
     // `build_balance_rows` keys contract-held SAC balances onto the wrapped
     // classic/native asset id (ADR 0051: a SAC is a facet, no `assets` row of its
     // own) via this map; type-3 tokens are absent and keep their own surrogate.
-    let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(client, &balances).await?;
+    let sac_classic =
+        db_clickhouse::persist::fetch_sac_classic_map(client, !balances.is_empty()).await?;
     let balance_rows = build_balance_rows(&balances, &sac_classic);
 
     if dry_run {

@@ -2800,6 +2800,14 @@ fn pool_leg_token_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 {
         .unwrap_or_else(|| ids::asset_id(domain::AssetFamily::Soroban as i16, "", 0, contract))
 }
 
+/// Whether this ledger's events register any soroban pool, in any of the three
+/// families — i.e. whether [`pool_leg_token_id`] will be asked for a leg.
+pub fn registers_soroban_pools(events: &[(String, Vec<ExtractedEvent>)]) -> bool {
+    !xdr_parser::pool_router::detect_pool_registrations(events).is_empty()
+        || !xdr_parser::pool_pair_factory::detect_pair_registrations(events).is_empty()
+        || !xdr_parser::pool_config_factory::detect_config_pool_registrations(events).is_empty()
+}
+
 fn factory_pair_registry_row(
     reg: &xdr_parser::pool_pair_factory::PairRegistration,
     ledger_sequence: i64,
