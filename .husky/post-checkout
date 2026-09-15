@@ -9,7 +9,7 @@ own="$(git rev-parse --show-toplevel)/.husky/$(basename "$0")"
 # and get skipped — unformatted code then fails CI 12 min later. Install on
 # checkout so the gate always runs. pnpm links from its global store, so this
 # is a real per-worktree tree: `@rumblefish/*` resolve to THIS checkout's libs/.
-# See .claude/skills/worktree-hooks.
+# Never bypass hooks with --no-verify — see "Git Hooks" in CLAUDE.md.
 
 # $3 == 1 → branch checkout (incl. `git worktree add`); 0 → file checkout. Only
 # act on branch checkouts so a `git checkout -- file` never touches node_modules.

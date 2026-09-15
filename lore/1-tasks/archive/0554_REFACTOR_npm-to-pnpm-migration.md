@@ -2,7 +2,7 @@
 id: '0554'
 title: 'REFACTOR: migrate the JS workspace from npm to pnpm — lockfile, CI, hooks, per-worktree installs'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0532']
 tags: [tooling, dx, worktree, ci, effort-medium, priority-medium]
@@ -16,6 +16,16 @@ history:
       manifest, 3 CI workflows, 3 husky hooks, `npx` call sites (root
       scripts, infra Makefile, api-types codegen, web e2e), docs, and the
       worktree `node_modules` provisioning that pnpm's store makes obsolete.
+  - date: '2026-09-15'
+    status: completed
+    who: karolkow
+    note: >
+      Migrated to pnpm 10.34.5 (hash-pinned). Web build and cdk synth
+      byte-identical to npm; all 9 acceptance criteria met; first develop CI
+      run on pnpm green (install 36 s → 7 s, TypeScript job unchanged at
+      ~9 min). 32 files, 14 design decisions (10 emerged). Hooks now hand over
+      to the checkout's own script; the worktree-hooks skill was removed and
+      its no-bypass rule moved to CLAUDE.md. Task 0532 absorbed.
 ---
 
 # Migrate the JS workspace from npm to pnpm
@@ -29,13 +39,12 @@ clone provisioning hack and the class of bugs where a worktree silently
 typechecks against the main checkout's `libs/`. Package versions must not
 change — this is a package-manager swap, not a dependency upgrade.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** all steps done and every acceptance criterion met locally
-(implementation commit `aef8b641`). Remaining: the first CI run on `develop`
-proves the rewritten workflows; the first release proves
-`deploy-production.yml`.
-Task 0532 (worktree provisioning) absorbed here and archived as superseded.
+**Current state:** done. Implementation commit `aef8b641`; first `develop` CI
+run on pnpm green (run 34974114893). Not yet exercised: `deploy-production.yml`
+— its first release is the proof. Task 0532 (worktree provisioning) absorbed
+here and archived as superseded.
 
 ## Context
 
@@ -208,6 +217,14 @@ worktree with main parked on another branch.
     main-checkout relative invocation → runs itself; absent hook → exit 0;
     exit code 7 propagates. Bootstrap limit: live only after the main
     checkout is on a branch containing it.
+14. **`worktree-hooks` skill removed; its rule moved to `CLAUDE.md`
+    ("Git Hooks — never bypass").** After the migration the skill held one
+    durable rule (never `--no-verify`) and three things already covered
+    elsewhere: installing `node_modules` (done by `post-checkout`), repairing
+    an npm-era symlink (printed by `post-checkout`), and where hook scripts
+    come from (decision 13, hook comments). `CLAUDE.md` is always loaded; a
+    skill only when matched. Supersedes the "keeps the skill" part of
+    decisions 2 and 11. Copy in the main checkout's `.trash/`.
 
 ## Implementation Notes
 
@@ -233,8 +250,8 @@ worktree with main parked on another branch.
   1.62.1 and `vite` 7.3.3 from `web`). `tools/scripts/worktree-node-modules.sh`
   removed (copy in the main checkout's `.trash/`).
 
-- **Step 6 verification:** `nx run-many -t lint build typecheck test
---skip-nx-cache` for api-types, ui, aws-cdk, web — green (ui 86 tests, web
+- **Step 6 verification:** `nx run-many -t lint build typecheck test` with
+  `--skip-nx-cache` for api-types, ui, aws-cdk, web — green (ui 86 tests, web
   369, aws-cdk 5; lint 0 errors). Web e2e 3/3. `check-generated` green.
 - **Commit gate:** the pre-commit hook ran lint, typecheck and test for all
   5 projects, `rust` included (`cargo check`, `clippy`, `test --workspace`) —
@@ -253,6 +270,26 @@ worktree with main parked on another branch.
     (`unclosed delimiter`), exit 1, nothing committed, lint-staged restored
     the index.
     Temporary worktree moved to the main checkout's `.trash/`, pruned.
+- **CI on `develop`, npm vs pnpm** (GitHub Actions step timings; npm = run
+  34955451285 at `d0be0d88`, pnpm = run 34974114893 at `e1322eef`, store
+  cache warm):
+
+  | Step                                 | npm        | pnpm       |
+  | ------------------------------------ | ---------- | ---------- |
+  | install (TypeScript job)             | 36 s       | 7 s        |
+  | install (API types job)              | 51 s       | 5 s        |
+  | `format:check`                       | 29 s       | 32 s       |
+  | `run-many lint build typecheck test` | 422 s      | 431 s      |
+  | Playwright browser install           | 47 s       | 37 s       |
+  | e2e                                  | 12 s       | 16 s       |
+  | **TypeScript job total**             | 9 min 23 s | 9 min 14 s |
+  | **API types job total**              | 1 min 44 s | 1 min 8 s  |
+
+  Install is 5–10× faster; the TypeScript job total is unchanged because
+  ~7 min of it is lint/build/test, which the package manager does not touch.
+  The six preceding npm runs of that job ranged 7 min 15 s – 11 min 31 s, so
+  single-run differences of seconds are noise. The first pnpm run (cold
+  store cache) installed in 11–13 s.
 
 ## Issues Encountered
 

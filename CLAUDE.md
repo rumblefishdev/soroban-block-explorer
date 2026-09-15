@@ -34,6 +34,15 @@ committed. Move files to the **main checkout's** `.trash/`, never a worktree's:
 removing a merged or abandoned worktree deletes its trash with it, and the
 policy is then satisfied in letter while the file is gone.
 
+## Git Hooks — never bypass
+
+**`git commit` / `git push` with `--no-verify` (or `-n`) is FORBIDDEN.** The
+husky hooks (lint-staged, affected lint/typecheck/build/test, clippy) are the
+only gate before code lands on `develop`. A hook failing because tooling is
+missing — e.g. no `node_modules` in a worktree — is fixed with `pnpm install`,
+then the commit or push is re-run with hooks on. A real failure is fixed in
+the diff, not silenced.
+
 ## Task-Gated Development
 
 **Writing code without an active task is FORBIDDEN.**
