@@ -1823,3 +1823,50 @@ it holds raw units, so `reserves` keeps one meaning; it matches our table in
 family — concentrated pools already use storage because they never write the
 plane. Current code uses three layouts: `ReserveA`/`ReserveB` (383 pools),
 `Reserves` (85), `Reserve0`/`Reserve1` (46).
+
+### Decision C′ measured across every code version (2026-09-15)
+
+Before changing the parser: which storage keys hold reserves in EVERY code
+version router-family pools have run, not only the current ones. Code
+versions come from `executable_update` topics (old and new hash per upgrade)
+plus the original code of never-upgraded pools.
+
+- **58** code versions ran on router pools in the ingested range (1,537
+  upgrades, 403 pools upgraded).
+- **55** versions: one raw archive ledger each in which a pool on that
+  version changed reserves, decoded — every one wrote its reserves into its
+  own instance storage. **3** versions (`D3A1C7B6`, `419DD5F0`, `45435508`)
+  saw only administrative events while pools ran them: no reserve change, so
+  nothing to read.
+- Exactly three layouts in all history, no fourth: `ReserveA` + `ReserveB`
+  (constant, elastic; later versions add `ReservesSyncLedger`), `Reserves`
+  (stable, a vector, with or without `Decimals` / `Precision` /
+  `PrecisionMul`), `Reserve0` + `Reserve1` (concentrated).
+- **Raw units in every version — the decisive check.** The 8 mixed-decimal
+  stable pools, every version each wrote reserves on: 23 samples; storage raw
+  and plane = storage × `PrecisionMul` in 21, both zero in 2, exceptions 0.
+  For equal-decimal pools plane = storage in every sample.
+- A suspected gap (trades on version `3ECB29BB` with no reserve rows) was a
+  sampling artefact: all six rows exist with exact values.
+
+Parser rules this fixes:
+
+1. Read `ReserveA`+`ReserveB` or `Reserves` from the pool's instance write. A
+   missing key emits no row — never a zero: administrative operations rewrite
+   the instance too.
+2. Emit only when the reserves changed between the instance pre-image and the
+   post-image (both are in ledger meta) or the instance was created. Otherwise
+   every reward or config operation adds a row with unchanged numbers.
+3. `plane_id` = the plane the pool declares in its own instance (the
+   concentrated arm already does this), so a corrected row REPLACES the old
+   one under the same key instead of standing beside it.
+4. The plane stays as a cross-check, not a source: plane = storage ×
+   `PrecisionMul` (1 where absent) held in every sample, so a mismatch is a
+   signal of changed contract semantics.
+
+Rollout: parser first (live), then the history of the 8 affected pools — 821
+rows in 726 ledgers across 60 archive partitions. A range re-parse would fetch
+~60 partitions (~800 GB) for ~1 GB of ledgers, so the backfill is a list pass
+over those 726 ledgers through the same parse+stage path (option A, decided
+2026-09-15), never an in-DB division. No DDL, no indexer pause. Verify by
+re-running the three-source comparison: expected 514 / 514.
