@@ -3343,6 +3343,27 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
     assert_eq!(staged.event_rows.len(), 1, "the raw event still lands");
 }
 
+/// The SAC map re-keys pool legs as well as balances, so a ledger that
+/// registers a pool must load it even with no token balance change. Gating on
+/// balances alone kept writing SAC-keyed legs after the fix (task 0374).
+#[test]
+fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
+    let router = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
+    let pool = "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O";
+    let router_ledger = vec![(
+        "tx".to_string(),
+        vec![add_pool_event("tx", router, pool, EventSource::TxLevel)],
+    )];
+    let pair_ledger = vec![(
+        "tx".to_string(),
+        vec![new_pair_event("tx", SORO_FACTORY, SORO_PAIR)],
+    )];
+
+    assert!(crate::persist::sac_classic_map_needed(&[], &router_ledger));
+    assert!(crate::persist::sac_classic_map_needed(&[], &pair_ledger));
+    assert!(!crate::persist::sac_classic_map_needed(&[], &[]));
+}
+
 /// Build an `add_pool` event for `pool`, emitted by `router`, from the
 /// mainnet-verbatim payload shape.
 #[cfg(test)]

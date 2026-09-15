@@ -1110,8 +1110,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             // the input to the surrogates and nowhere else.
             //
             // Classic legs are ASSET surrogates (`pool_leg_asset_id` — the
-            // same key `lp_operation_amounts` joins on), NOT contract
-            // surrogates like a soroban row's; `pool_kind` says which space.
+            // same key `lp_operation_amounts` joins on). A soroban row's legs
+            // are asset surrogates too, so both kinds join `assets.id` alike.
             legs: vec![
                 ids::pool_leg_asset_id(
                     a_type as i16,
@@ -2783,6 +2783,14 @@ fn parse_supply(raw: Option<&str>) -> Result<i128, ()> {
 /// Both callers key the same asset identically because they are the same
 /// function. They were two copies, which had already drifted cosmetically (one
 /// spelled the family `3`, the other named the enum).
+/// Whether this ledger's events register any soroban pool, in any of the three
+/// families — i.e. whether [`contract_token_asset_id`] will be asked for a leg.
+pub fn registers_soroban_pools(events: &[(String, Vec<ExtractedEvent>)]) -> bool {
+    !xdr_parser::pool_router::detect_pool_registrations(events).is_empty()
+        || !xdr_parser::pool_pair_factory::detect_pair_registrations(events).is_empty()
+        || !xdr_parser::pool_config_factory::detect_config_pool_registrations(events).is_empty()
+}
+
 #[inline]
 fn contract_token_asset_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 {
     let contract = ids::contract_id(token);
