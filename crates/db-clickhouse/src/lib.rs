@@ -184,9 +184,11 @@ mod tests {
         // `soroban_events` cannot take). 35 → 38.
         // task 0548: added `contract_executable_refs` — what an owner's
         // executable tag points at (CAP-85). 38 → 39.
+        // task 0210: added `claimable_balance_holdings` — `balances`' twin for
+        // value held by a claimable balance. 39 → 40.
         assert_eq!(
             stmts.len(),
-            39,
+            40,
             "expected 35 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );

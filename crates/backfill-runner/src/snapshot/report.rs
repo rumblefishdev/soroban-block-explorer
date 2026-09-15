@@ -412,6 +412,8 @@ pub(crate) fn key_line(
 pub(crate) struct Report {
     pub(crate) classic: Tally,
     pub(crate) native: Tally,
+    /// `claimable_balance_holdings` (task 0210), counted by `snapshot::claimable`.
+    pub(crate) claimable: Tally,
     /// The checkpoint every verdict is judged against. It has nothing to do
     /// with sampling, which is where it used to live.
     checkpoint: u32,
@@ -423,6 +425,7 @@ impl Report {
         Self {
             classic: Tally::default(),
             native: Tally::default(),
+            claimable: Tally::default(),
             samples: Samples::new(),
             checkpoint,
         }

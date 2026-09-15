@@ -613,8 +613,9 @@ verdicts. `Ghost` → closure is correct for this table and must never reach
 
 1. DDL for the table (`holder_id`, `asset_id`, `amount`, `last_updated_ledger`,
    `closed_at_ledger`; RMT on `last_updated_ledger`), created before any writer
-   ships — `PartitionWriter` opens every insert handle, so a missing table
-   stops all ingestion, not just this one.
+   ships — the insert opens on a table's first row (`writer.rs::write_rows`),
+   and claimable balances change in almost every ledger, so a missing table
+   fails nearly every ledger's persist and stalls ingestion.
 2. Writer from `ClaimableBalanceEntry` changes, in the shared stage so live
    ingest and `backfill-runner` write identical rows. Fold per balance id across
    the whole ledger, last in application order wins (ADR 0057 decision 6),
@@ -625,6 +626,67 @@ verdicts. `Ghost` → closure is correct for this table and must never reach
    unchanged.
 5. Verification: seed dry-run comparison clean; oracle against `asset_transfers`
    between two checkpoints; `docs/architecture/**` schema and pipeline docs.
+
+### Progress — items 1 and 2 done (2026-09-15)
+
+- **Table** `claimable_balance_holdings` in `init.sql`, columns identical to
+  `balances`. Applied to a throwaway local ClickHouse 26.3 database, and the whole
+  `init.sql` through the real splitter (`apply_init_sql`). Not yet on production.
+- **Parser** `xdr_parser::claimable_balance::extract_claimable_balances`, per
+  transaction. A removal carries only the key, so its tombstone takes the asset
+  from the `state` pre-image; a removal with no pre-image is logged and dropped.
+- **Staging** `persist::claimable_balances::build_claimable_balance_rows`
+  reuses `BalanceRow` (no new struct) and folds per `(holder, asset, ledger)`
+  across the ledger. Writer slot drained before the `ledgers` commit marker.
+  Live indexer and `backfill-runner` share the path. Not targetable with
+  `--only`.
+- **Real chain, not only constructed meta.** Mainnet claim tx `23273fda…c7b8`
+  (ledger 64,438,024) committed as `tests/fixtures/corpus/claimable_balance_claim.b64`:
+  all three removals are preceded by their `state` pre-image, and the extracted
+  assets (AVLX, MAKER, MAKER on operations 1, 4, 5) match production
+  `asset_transfers`, which decodes the same claims from events. The AVLX
+  balance's `holder_id` equals production's `asset_transfers.from_id`
+  (1,280,410,223,283,636,341) — the oracle join holds.
+- **Write path end to end.** `tests/claimable_balance_holdings_e2e.rs` persists a
+  create and a later claim through `persist_ledger_clickhouse` and reads one
+  tombstone back with `FINAL`. Proven against its defect: with the writer's
+  `end(...)` for this table removed, it fails (`left: []`).
+- **Tests:** xdr-parser 438 unit + 2 real-corpus, db-clickhouse 149 unit, all
+  green; `cargo clippy --workspace --all-targets -D warnings` and `cargo fmt`
+  clean.
+- **Correction:** the insert opens on a table's first row, not up front
+  (`writer.rs::write_rows`). Same effect, stated mechanism fixed in the work list.
+- **Docs:** `database-schema-overview.md` §3 + §4.17.1,
+  `indexing-pipeline-overview.md` (claimable balances paragraph). API: no change.
+- **Not stored, decided (2026-09-15):** claimants, predicates and sponsor of an
+  open balance. Supply loses nothing, and the gap is reversible without an S3
+  re-parse — the checkpoint carries whole entries. Add when a reader exists.
+
+### Progress — item 3 written, not yet run (2026-09-15)
+
+- `snapshot-seed` now also compares and corrects `claimable_balance_holdings`
+  (`backfill-runner/src/snapshot/claimable.rs`), reusing `verdict` and
+  `correction` unchanged.
+- **Keyed by balance alone** on the network side: a dead bucket record carries
+  only the id. The asset sits beside the live holding; a live network balance
+  under a different asset is left unmatched, so ours closes and the network's is
+  inserted under its real asset.
+- **Writer coverage is checked from the data, not from deploy notes.** Claims
+  happen in practically every ledger, so the table's first tombstone marks when
+  the writer started. `--execute` refuses a checkpoint older than it, or a table
+  with no tombstone; the dry-run prints the check instead.
+- **Snapshot floor** `MIN_LIVE_CLAIMABLE = 100_000` — an estimate ~9× under the
+  ~920k balances still open from after our floor. Re-set from the first dry-run.
+- **Key agreement proven:** the snapshot's surrogate for the mainnet AVLX balance
+  equals production's `asset_transfers.from_id` (1,280,410,223,283,636,341).
+  Both new SQL statements run on a throwaway ClickHouse 26.3 (`min` over an empty
+  set returns 0, hence the `count()`).
+- Credit assets of inserted balances go through the existing stub pass. Ghosts go
+  to `claimable_ghosts.tsv`. Runbook: `docs/backfills.md`.
+- **Precondition:** the table must exist on production before any
+  `snapshot-seed` run, balances-only runs included — the command now reads it.
+- `seed.rs` is now 814 lines (was 791), just over the size limit; no inline tests
+  to extract. Candidate split: the dump writers (~90 lines).
 
 ## Context
 

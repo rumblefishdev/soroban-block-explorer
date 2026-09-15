@@ -64,6 +64,7 @@ fn parse_ledger_surfaces_pool_state() {
                 contract_metadata_writes: &parsed.contract_metadata_writes,
                 executable_ref_targets: &[],
                 soroban_token_balances: &parsed.soroban_token_balances,
+                claimable_balances: &parsed.claimable_balances,
                 pool_family_writes: &parsed.pool_family_writes,
                 sac_classic: &std::collections::HashMap::new(),
                 sac_overrides: &parsed.sac_overrides,

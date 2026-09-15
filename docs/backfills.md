@@ -466,9 +466,9 @@ hand-exported-TSV transport were removed in the 2026-08-20 review;
 the seed's dry-run IS the four-way comparison — a separate `snapshot-compare`
 carried the same decode and the same verdict behind its own counting shell.)
 
-| Subcommand                                      | What it does                                                                                                                                                                                                                                             | Writes                                                                          |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                      | What it does                                                                                                                                                                                                                                             | Writes                                                                                                        |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
 **The decision table.** Every one of our rows falls into exactly one verdict,
 and the verdict alone decides what (if anything) is written. Read the report's
@@ -587,6 +587,15 @@ halves).
    are classified newer-than-checkpoint and left alone), so the dry-run's
    `summary.txt` is a close estimate of the execute's counts, never a
    contradiction of them.
+
+**Claimable balances (task 0210) follow the same contract, and the tool
+enforces it.** The seed also compares and corrects `claimable_balance_holdings`,
+so that table must exist before the command runs at all. `--execute` refuses
+unless the table's first claim tombstone is at or before the checkpoint: claims
+happen in practically every ledger, so that tombstone marks when the writer
+started, and an older checkpoint would seed balances claimed in between as
+live. The dry-run prints the same check in `summary.txt` instead of refusing.
+Ghosts for this table go to `claimable_ghosts.tsv`.
 
 **`--execute` never decodes the checkpoint the dry-run reviewed — expect that,
 and read `summary.txt` accordingly.** Checkpoints publish every 64 ledgers
