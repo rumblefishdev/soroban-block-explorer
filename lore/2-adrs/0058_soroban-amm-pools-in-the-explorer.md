@@ -83,6 +83,16 @@ ledger apply order. Two on-chain layouts feed one table:
   the plane holds their `PoolData` only at registration (discovered by a
   bidirectional anti-test against `update_reserves` events).
 
+**Amended 2026-09-15 (decision C′, task 0374): every router pool's reserves
+now come from its OWN instance.** The plane's `PoolData` turned out to be a
+quote-input sheet: a stable pool writes `Reserves × PrecisionMul` there, so
+the six non-empty mixed-decimal stable pools stored one leg 10× or 10^11×
+too large. Measured before switching: 508 of 514 pools have identical
+storage and plane values; storage holds raw units in every one of 58 code
+versions; three reserve layouts exist in all history. Rows stage when an
+instance write moved the reserves; the plane stays a logged cross-check. This
+also applies the owner-is-authority rule of §4 to reserves.
+
 **The grain decision was REVERSED once, deliberately (2026-08-30), before
 any production DDL existed.** The first design kept every intra-ledger write
 (up to 12/ledger measured) and therefore needed an `application_order` key

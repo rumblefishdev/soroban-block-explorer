@@ -278,9 +278,9 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
 **Soroban AMM pools** (ADR 0058, task 0374) ride the same pass with no extra
 step: `parse_ledger()`'s event sweep detects router `add_pool` registrations
 (`detect_pool_registrations`) and its ledger-entry-change walk extracts pool
-state (`extract_plane_pool_data` for fungible pools' plane `PoolData`,
-`extract_pool_instances` for pool instances — concentrated reserves +
-`TokenShare` / `Plane` / `Router`). Staging turns these into
+state (`extract_pool_instances` for pool instances — reserves in raw units +
+`TokenShare` / `Plane` / `Router`; `extract_plane_pool_data` for the plane's
+`PoolData`, now a cross-check only). Staging turns these into
 `liquidity_pools` rows (`pool_kind = 1`, whole-row registration — never
 partially updated on the RMT), `pool_state_changes` rows (one per
 `(pool, ledger)`) and `pool_instance_state` rows (side table, `asset_sac`
@@ -316,11 +316,15 @@ names its pool in a payload the emitter chooses freely:
   its `pool_instance_state` row stages ONLY when the transaction wrote
   CONFIG: the table is RMT whole-row on `pool_id`, and a config-less
   TotalShares write would clobber `share_token_id` to 0.
-- **Both reserve writers are folded together** before insert. The plane arm
-  and the concentrated-instance arm can each emit a row for the same
-  `(pool, ledger)`, and the parser-side folds cannot see each other; a
-  version-less RMT would then keep an arbitrary intra-ledger image. The fold
-  is the cross-writer twin of `dedup_final_pool_snapshots` (lore 0356).
+- **Router reserves come from the pool's own instance, only when they moved**
+  (decision C′, task 0374). The plane's `PoolData` is the deployment's
+  quote-input sheet: a stable pool writes `Reserves × PrecisionMul` there,
+  which overstated one leg of every non-empty mixed-decimal stable pool. A row
+  stages when an instance write changed the reserves against its pre-image
+  (or created the pool) — reward and config calls rewrite the instance too.
+  The plane row is compared against storage × `PrecisionMul` and a mismatch
+  is logged as a warning. The per-ledger fold keeps the last instance image,
+  the twin of `dedup_final_pool_snapshots` (lore 0356).
 
 The historical 15-step PG flow (atomic per-ledger `BEGIN/COMMIT`) was removed with
 Postgres (task 0244); its ordering rationale is preserved in

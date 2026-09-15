@@ -3304,9 +3304,11 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
             plane: Some("CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY".into()),
             router: Some(router.to_string()),
             reserves: Vec::new(),
+            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
@@ -3390,9 +3392,11 @@ fn pool_instance_declaring(
             plane: Some("CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY".into()),
             router: Some(router.into()),
             reserves: Vec::new(),
+            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     }
 }
 
@@ -3471,9 +3475,11 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
             plane: Some(PLANE.into()),
             router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
             reserves: vec!["777".into(), "888".into()],
+            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
@@ -3692,6 +3698,146 @@ fn prepare_ignores_a_registration_from_the_diagnostic_container() {
     );
 }
 
+#[cfg(test)]
+fn stage_router_writes(writes: &[xdr_parser::pool_family::PoolFamilyWrite]) -> stage::StagedLedger {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x51);
+    stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        executable_ref_targets: &[],
+        soroban_token_balances: &[],
+        pool_family_writes: writes,
+        sac_classic: &std::collections::HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+        asset_transfers: &[],
+    })
+    .expect("prepare")
+}
+
+#[cfg(test)]
+const C_PRIME_POOL: &str = "CCI5UGNCHE5PBINLZKSFFCMBUVJYWYDPKDZS54JD6TGJBA7MCG3YXNT5";
+#[cfg(test)]
+const C_PRIME_PLANE: &str = "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY";
+
+#[cfg(test)]
+fn c_prime_plane_write() -> xdr_parser::pool_family::PoolFamilyWrite {
+    // The plane row of mixed-decimal stable pool CCI5UGNC at 64,393,803:
+    // second leg × PrecisionMul (10^11).
+    xdr_parser::pool_family::PoolFamilyWrite::RouterPlane(
+        xdr_parser::pool_state::ExtractedPlanePoolData {
+            data: xdr_parser::pool_state::PlanePoolData {
+                plane: C_PRIME_PLANE.into(),
+                pool: C_PRIME_POOL.into(),
+                reserves: vec!["22168059846400376042".into(), "8287758700000000000".into()],
+            },
+            ledger_sequence: 10,
+        },
+    )
+}
+
+#[cfg(test)]
+fn c_prime_instance(reserves_changed: bool) -> xdr_parser::pool_family::PoolFamilyWrite {
+    xdr_parser::pool_family::PoolFamilyWrite::RouterPool(
+        xdr_parser::pool_state::ExtractedPoolInstance {
+            state: xdr_parser::pool_state::PoolInstanceState {
+                pool: C_PRIME_POOL.into(),
+                token_share: None,
+                total_shares: None,
+                plane: Some(C_PRIME_PLANE.into()),
+                router: None,
+                // The same pool's own storage in the same ledger: raw units.
+                reserves: vec!["22168059846400376042".into(), "82877587".into()],
+                precision_mul: Vec::new(),
+            },
+            ledger_sequence: 10,
+            created: false,
+            reserves_changed,
+        },
+    )
+}
+
+/// Decision C′ (task 0374): a mixed-decimal stable pool stages the RAW units
+/// from its own storage, under the plane it declares — never the plane row's
+/// normalised figure.
+#[test]
+fn router_reserves_come_from_the_pools_own_storage() {
+    let staged = stage_router_writes(&[c_prime_plane_write(), c_prime_instance(true)]);
+    assert_eq!(staged.pool_state_change_rows.len(), 1);
+    let row = &staged.pool_state_change_rows[0];
+    assert_eq!(row.reserves, vec![22168059846400376042i128, 82877587]);
+    assert_eq!(row.plane_id, ids::contract_id(C_PRIME_PLANE));
+}
+
+/// The plane is a quote-input sheet, not a reserve source: its write alone
+/// stages nothing.
+#[test]
+fn a_plane_write_alone_stages_no_reserve_row() {
+    let staged = stage_router_writes(&[c_prime_plane_write()]);
+    assert!(staged.pool_state_change_rows.is_empty());
+}
+
+/// Rule 2 of decision C′: an instance rewrite that leaves the reserves where
+/// they were (a reward or config call) is not a reserve event — but what the
+/// pool declares about itself still lands.
+#[test]
+fn an_instance_rewrite_with_unchanged_reserves_stages_no_reserve_row() {
+    let staged = stage_router_writes(&[c_prime_instance(false)]);
+    assert!(staged.pool_state_change_rows.is_empty());
+    assert_eq!(staged.pool_instance_state_rows.len(), 1);
+}
+
+/// Real figures of CCI5UGNC at 64,393,803: the plane carries the second leg
+/// × 10^11; storage is raw. Equal-decimal pools have no multiplier.
+#[test]
+fn the_plane_cross_check_accepts_the_measured_relation_and_nothing_else() {
+    let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let storage = v(&["22168059846400376042", "82877587"]);
+    assert!(stage::plane_row_agrees_with_storage(
+        &v(&["22168059846400376042", "8287758700000000000"]),
+        &storage,
+        &v(&["1", "100000000000"]),
+    ));
+    assert!(stage::plane_row_agrees_with_storage(
+        &storage,
+        &storage,
+        &[]
+    ));
+    assert!(!stage::plane_row_agrees_with_storage(
+        &v(&["22168059846400376042", "8287758700000000001"]),
+        &storage,
+        &v(&["1", "100000000000"]),
+    ));
+    assert!(!stage::plane_row_agrees_with_storage(
+        &v(&["1"]),
+        &storage,
+        &[]
+    ));
+    // A plane vector may carry a per-tick tail past the legs (readers slice by
+    // leg count); the tail is not a disagreement.
+    assert!(stage::plane_row_agrees_with_storage(
+        &v(&["22168059846400376042", "82877587", "0", "0"]),
+        &storage,
+        &[],
+    ));
+}
+
 #[test]
 fn prepare_stages_plane_writes_and_instance_share_tokens() {
     // Real values end to end: the plane write and instance from registration
@@ -3721,10 +3867,14 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             total_shares: None,
             plane: Some(PLANE.into()),
             router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
-            reserves: Vec::new(),
+            // Decision C′: the constant pool's own `ReserveA`/`ReserveB` —
+            // equal to its plane row, as for every constant pool measured.
+            reserves: vec!["100000000000".into(), "30617317".into()],
+            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     };
     // A concentrated-style instance (no share token) stages its PLANE, with
     // the structural share_token_id = 0.
@@ -3738,9 +3888,11 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             // Real values from the hot-ledger probe: concentrated reserves
             // ride the INSTANCE, and must stage a snapshot row.
             reserves: vec!["4112908590".into(), "250000000000".into()],
+            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
@@ -3778,7 +3930,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
     assert_eq!(
         staged.pool_state_change_rows.len(),
         2,
-        "one plane-sourced (fungible) + one instance-sourced (concentrated)"
+        "one per pool, both from the pool's own storage (fungible + concentrated)"
     );
     // Rows are distinguished by their reserve VALUES — the (pool, ledger)
     // grain carries no intra-ledger fields any more (parse-time collapse).
@@ -3791,7 +3943,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         .pool_state_change_rows
         .iter()
         .find(|r| r.reserves == vec![100000000000i128, 30617317i128])
-        .expect("fungible snapshot from the plane");
+        .expect("fungible snapshot from the pool's own storage");
     assert_eq!(snap.plane_id, ids::contract_id(PLANE));
     assert_ne!(
         conc_snap.pool_id, snap.pool_id,
