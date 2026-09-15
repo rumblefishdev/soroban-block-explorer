@@ -4,17 +4,20 @@
 //! shape, never by address (planes are per-deployment — router B writes to
 //! its own):
 //!
-//! 1. **Plane `PoolData`** — the deployment's scoreboard, one entry per pool,
-//!    updated on every pool action. Key `[Symbol("PoolData"), Address(pool)]`,
-//!    value a map of `reserves` (vec of u128), `pool_type` (symbol) and
-//!    `init_args`. This is THE reserve source for the whole timeline (T4;
-//!    event arithmetic failed its oracle 6/49, the plane piloted 80/80).
+//! 1. **Plane `PoolData`** — the deployment's quote-input sheet, one entry
+//!    per pool. Key `[Symbol("PoolData"), Address(pool)]`, value a map of
+//!    `reserves` (vec of u128), `pool_type` (symbol) and `init_args`. NOT a
+//!    reserve source any more (decision C′, task 0374): a stable pool writes
+//!    `Reserves × PrecisionMul` there — the units its swap math runs in —
+//!    which overstated one leg by 10× or 10^11× for the six non-empty
+//!    mixed-decimal stable pools. Kept only as a cross-check.
 //! 2. **Pool instance storage** — written in the SAME transaction as
-//!    `add_pool`, and on later config changes. Carries `TokenShare` (the
+//!    `add_pool`, and on every later operation. Carries `TokenShare` (the
 //!    share token, as state — the fundamental source that demoted the
 //!    deposit⇄mint rule to a cross-check), `Plane`, `Router`, the token list
-//!    and mirror reserves. A concentrated pool has NO `TokenShare` key —
-//!    structurally, matching `share_id()` returning the pool itself.
+//!    and THE reserves, in raw units (T4's "plane state == reserves" held only
+//!    where the multiplier is 1). A concentrated pool has NO `TokenShare`
+//!    key — structurally, matching `share_id()` returning the pool itself.
 //!
 //! Values stay RAW (u128 as strings, verbatim symbols): scaling and
 //! vocabulary-folding are read-time concerns. The plane spells the constant
@@ -73,15 +76,16 @@ pub struct PoolInstanceState {
     pub plane: Option<String>,
     /// The registering router, as the pool itself records it.
     pub router: Option<String>,
-    /// Per-operation reserves for a CONCENTRATED pool (`Reserve0`/`Reserve1`
-    /// in instance storage). Concentrated pools do NOT update the plane per
-    /// operation — measured on a hot ledger: 8 instance writes, zero plane
-    /// writes for the busiest concentrated pool — so for them the instance IS
-    /// the reserve stream, refining T4's claim (whose pilot predates the
-    /// first concentrated pool). Empty for fungible pools: their `ReserveA/B`
-    /// mirror is a corroborator only, the plane is their source, and staging
-    /// both would duplicate snapshot rows.
+    /// The pool's reserves in raw token units, in leg order, from whichever
+    /// layout its code uses (`ReserveA`/`ReserveB`, `Reserves`,
+    /// `Reserve0`/`Reserve1` — the only three in all 58 versions measured).
+    /// Empty when the write carries no reserve key: administrative calls
+    /// rewrite the instance too, and absence must never become zeros.
     pub reserves: Vec<String>,
+    /// `PrecisionMul` — per-leg multiplier a stable pool applies before
+    /// writing its plane row. Empty where absent (every non-stable layout and
+    /// older stable code), which means × 1. Used only to cross-check the plane.
+    pub precision_mul: Vec<String>,
 }
 
 /// Decode the pool-relevant slice of an instance-storage list (house typed
@@ -120,16 +124,18 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
     let router = get("Router");
     let addr = |v: &Value| address(v).map(str::to_string);
     let u128s = |v: &Value| typed_str(v, "u128").map(str::to_string);
-    // Reserve0/Reserve1 is the CONCENTRATED layout; fungible pools use
-    // ReserveA/ReserveB, deliberately not read here — the plane is their
-    // source, and reading both would double-write snapshots.
-    let reserves = match (
-        get("Reserve0").and_then(u128s),
-        get("Reserve1").and_then(u128s),
-    ) {
-        (Some(r0), Some(r1)) => vec![r0, r1],
-        _ => Vec::new(),
-    };
+    // Decision C′ (task 0374): the pool's own storage is the reserve source
+    // for the whole family. Three layouts exist in every code version pools
+    // have run (58 measured): `ReserveA`/`ReserveB` (constant, elastic),
+    // `Reserves` (stable, one entry per leg) and `Reserve0`/`Reserve1`
+    // (concentrated). All hold RAW token units; the plane row of a stable
+    // pool carries `Reserves × PrecisionMul` instead. No key → no reserves,
+    // never zeros: administrative calls rewrite the instance too.
+    let pair = |a: &str, b: &str| Some(vec![get(a).and_then(u128s)?, get(b).and_then(u128s)?]);
+    let reserves = pair("ReserveA", "ReserveB")
+        .or_else(|| get("Reserves").and_then(raw_u128_vec))
+        .or_else(|| pair("Reserve0", "Reserve1"))
+        .unwrap_or_default();
     Some(PoolInstanceState {
         pool: pool.to_string(),
         token_share: get("TokenShare").and_then(&addr),
@@ -137,6 +143,9 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
         plane: addr(plane),
         router: router.and_then(&addr),
         reserves,
+        precision_mul: get("PrecisionMul")
+            .and_then(raw_u128_vec)
+            .unwrap_or_default(),
     })
 }
 
@@ -150,7 +159,7 @@ pub struct ExtractedPlanePoolData {
 }
 
 /// Extract plane `PoolData` writes from a transaction's ledger-entry changes
-/// (task 0374, step 7 — the reserve source, T4).
+/// (task 0374, step 7). Since decision C′ a cross-check input, not a source.
 ///
 /// Mirrors `extract_soroban_token_balances`: only `created`/`updated`/
 /// `restored` carry a value; the `state` pre-image is skipped (same-ledger
@@ -201,6 +210,9 @@ pub struct ExtractedPoolInstance {
     /// instance is always a creation — while an attacker inducing a same-ledger
     /// instance write on an existing victim pool can only produce an update.
     pub created: bool,
+    /// The reserves differ from the instance's pre-image in this transaction,
+    /// or there is no pre-image to compare (a creation or a restore).
+    pub reserves_changed: bool,
 }
 
 /// Extract router-family pool instances from ledger-entry changes.
@@ -214,13 +226,18 @@ pub fn extract_pool_instances(
     changes: &[ExtractedLedgerEntryChange],
 ) -> Vec<ExtractedPoolInstance> {
     let mut out = Vec::new();
+    // The `state` pre-image precedes its `updated` post-image within a
+    // transaction; keeping its reserves lets rule 2 of decision C′ tell a
+    // reserve move from an administrative rewrite of the same instance.
+    let mut pre_image: std::collections::HashMap<&str, Vec<String>> =
+        std::collections::HashMap::new();
     for change in changes {
         if change.entry_type != "contract_data" {
             continue;
         }
         if !matches!(
             change.change_type.as_str(),
-            "created" | "updated" | "restored"
+            "created" | "updated" | "restored" | "state"
         ) {
             continue;
         }
@@ -247,13 +264,22 @@ pub fn extract_pool_instances(
         else {
             continue;
         };
-        if let Some(state) = parse_pool_instance(pool, storage) {
-            out.push(ExtractedPoolInstance {
-                state,
-                ledger_sequence: change.ledger_sequence,
-                created: change.change_type == "created",
-            });
+        let Some(state) = parse_pool_instance(pool, storage) else {
+            continue;
+        };
+        if change.change_type == "state" {
+            pre_image.insert(pool, state.reserves);
+            continue;
         }
+        let reserves_changed = pre_image
+            .remove(pool)
+            .is_none_or(|before| before != state.reserves);
+        out.push(ExtractedPoolInstance {
+            state,
+            ledger_sequence: change.ledger_sequence,
+            created: change.change_type == "created",
+            reserves_changed,
+        });
     }
     out
 }
@@ -419,6 +445,123 @@ mod tests {
             Some("5"),
             "TotalShares rides the same entry — raw u128, no scaling"
         );
+    }
+
+    /// Decision C′ (task 0374): a fungible pool's reserves are read from its
+    /// OWN instance. Verbatim keys of mixed-decimal stable pool `CCI5UGNC…`
+    /// read via `getLedgerEntries` on 2026-09-14 (last modified 64 393 803):
+    /// storage holds RAW units, while its plane row carried the second leg
+    /// × `PrecisionMul` (8287758700000000000) — the figure we used to store.
+    #[test]
+    fn a_stable_pool_reports_raw_reserves_from_its_own_storage() {
+        let storage = json!([
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Decimals"}]},
+             "value": {"type": "vec", "value": [{"type": "u32", "value": 18}, {"type": "u32", "value": 7}]}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Plane"}]},
+             "value": {"type": "address", "value": "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "PrecisionMul"}]},
+             "value": {"type": "vec", "value": [{"type": "u128", "value": "1"}, {"type": "u128", "value": "100000000000"}]}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Reserves"}]},
+             "value": {"type": "vec", "value": [{"type": "u128", "value": "22168059846400376042"}, {"type": "u128", "value": "82877587"}]}}
+        ]);
+        let got = parse_pool_instance(
+            "CCI5UGNCHE5PBINLZKSFFCMBUVJYWYDPKDZS54JD6TGJBA7MCG3YXNT5",
+            &storage,
+        )
+        .unwrap();
+        assert_eq!(
+            got.reserves,
+            vec!["22168059846400376042", "82877587"],
+            "raw token units, never the plane's normalised figure"
+        );
+        assert_eq!(got.precision_mul, vec!["1", "100000000000"]);
+    }
+
+    /// Verbatim keys of constant pool `CDDLTOOD…` (last modified 63 116 736):
+    /// the two-key layout, equal to the plane row for this pool.
+    #[test]
+    fn a_constant_pool_reports_reserves_from_its_own_storage() {
+        let storage = json!([
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Plane"}]},
+             "value": {"type": "address", "value": "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "ProtocolFeeA"}]}, "value": {"type": "u128", "value": "1434978"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "ReserveA"}]}, "value": {"type": "u128", "value": "5560272127"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "ReserveB"}]}, "value": {"type": "u128", "value": "9066888378507"}}
+        ]);
+        let got = parse_pool_instance(
+            "CDDLTOODRYTIJE4KPS4BIIXWPLVMSIYVG7GE4W7MG2UBQ3QCCET4SUFA",
+            &storage,
+        )
+        .unwrap();
+        assert_eq!(got.reserves, vec!["5560272127", "9066888378507"]);
+    }
+
+    /// An instance write that carries no reserve key (an older layout written
+    /// by an administrative call) reports NO reserves — never zeros.
+    #[test]
+    fn an_instance_without_reserve_keys_reports_no_reserves() {
+        let storage = json!([
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Plane"}]},
+             "value": {"type": "address", "value": "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "FeeFraction"}]}, "value": {"type": "u32", "value": 30}}
+        ]);
+        let got = parse_pool_instance("CPOOL", &storage).unwrap();
+        assert!(got.reserves.is_empty());
+    }
+
+    fn instance_change(change_type: &str, reserve_a: &str, fee: u32) -> ExtractedLedgerEntryChange {
+        let storage = json!([
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "FeeFraction"}]}, "value": {"type": "u32", "value": fee}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "Plane"}]},
+             "value": {"type": "address", "value": "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY"}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "ReserveA"}]}, "value": {"type": "u128", "value": reserve_a}},
+            {"key": {"type": "vec", "value": [{"type": "sym", "value": "ReserveB"}]}, "value": {"type": "u128", "value": "500"}}
+        ]);
+        let key = json!({"type": "ledger_key_contract_instance"});
+        ExtractedLedgerEntryChange {
+            transaction_hash: "ab".repeat(32),
+            change_type: change_type.to_string(),
+            entry_type: "contract_data".to_string(),
+            key: json!({"contract": "CPOOL", "key": key, "durability": "persistent"}),
+            data: Some(json!({
+                "contract": "CPOOL", "key": key, "durability": "persistent",
+                "val": {"type": "contract_instance", "value": {"storage": storage}}
+            })),
+            change_index: 0,
+            operation_index: Some(0),
+            ledger_sequence: 64_400_000,
+            created_at: 1_789_000_000,
+            token_metadata: None,
+        }
+    }
+
+    /// Rule 2 of decision C′: every administrative or reward call rewrites
+    /// the instance; only a write that MOVES the reserves is a reserve event.
+    #[test]
+    fn an_instance_rewrite_with_unchanged_reserves_is_not_a_reserve_change() {
+        let got = extract_pool_instances(&[
+            instance_change("state", "100", 30),
+            instance_change("updated", "100", 10),
+        ]);
+        assert_eq!(got.len(), 1, "the declaration still flows");
+        assert!(!got[0].reserves_changed);
+    }
+
+    #[test]
+    fn an_instance_rewrite_that_moves_the_reserves_is_a_change() {
+        let got = extract_pool_instances(&[
+            instance_change("state", "100", 30),
+            instance_change("updated", "101", 30),
+        ]);
+        assert!(got[0].reserves_changed);
+    }
+
+    /// No pre-image to compare: a creation always counts, so a pool's first
+    /// reserves are never lost.
+    #[test]
+    fn a_created_instance_is_a_reserve_change() {
+        let got = extract_pool_instances(&[instance_change("created", "100", 30)]);
+        assert!(got[0].reserves_changed);
     }
 
     /// An instance with no `Plane` is not of this family — the plane is the

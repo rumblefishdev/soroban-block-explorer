@@ -1444,47 +1444,56 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // Pool state from ledger entries (task 0374, step 7): plane writes are
-    // THE reserve source; instance writes are the STATE source for share
-    // tokens (the deposit⇄mint detector remains only as a cross-check, per
-    // the same reasoning that demoted update_reserves in T4). Unparseable
-    // coordinates are refused loudly — a silent skip is a pool going dark.
+    // Pool state from ledger entries (task 0374, step 7; decision C′): the
+    // pool's OWN instance is the reserve source for the whole router family
+    // and the STATE source for share tokens. The plane row is a quote-input
+    // sheet — a stable pool writes `Reserves × PrecisionMul` there — so it
+    // is no longer staged as reserves. Unparseable coordinates are refused
+    // loudly — a silent skip is a pool going dark.
     //
     // Rows accumulate in locals and land in `out` FOLDED (one per key) — the
     // single dedup home for both soroban state tables (decision karolkow
     // 2026-09-01: fold in stage, symmetric for both, no parser-side pre-fold).
     let mut pool_state_rows: Vec<PoolStateChangeRow> = Vec::new();
     let mut instance_state_rows: Vec<PoolInstanceStateRow> = Vec::new();
-    for pw in plane_pool_data {
-        let Some(pool_id) = ids::contract_payload(&pw.data.pool) else {
-            tracing::error!(
-                ledger_sequence = pw.ledger_sequence,
-                pool = %pw.data.pool,
-                "plane write refused: pool address is not a valid C… strkey"
-            );
+    // Cross-check only (decision C′ rule 4): compare the LAST plane row with
+    // the LAST instance image of the same (pool, ledger) — intra-ledger
+    // intermediates legitimately differ.
+    let last_plane: HashMap<(&str, u32), &xdr_parser::pool_state::PlanePoolData> = plane_pool_data
+        .iter()
+        .map(|pw| ((pw.data.pool.as_str(), pw.ledger_sequence), &pw.data))
+        .collect();
+    let last_instance: HashMap<(&str, u32), &xdr_parser::pool_state::PoolInstanceState> =
+        pool_instances
+            .iter()
+            .map(|i| ((i.state.pool.as_str(), i.ledger_sequence), &i.state))
+            .collect();
+    for ((pool, ledger), inst) in &last_instance {
+        let Some(plane) = last_plane.get(&(*pool, *ledger)) else {
             continue;
         };
-        let Some(reserves) = parse_reserves(&pw.data.reserves) else {
-            tracing::error!(
-                ledger_sequence = pw.ledger_sequence,
-                pool = %pw.data.pool,
-                "plane write refused: non-numeric reserve — a snapshot is missing"
-            );
+        if inst.reserves.is_empty() || inst.plane.as_deref() != Some(plane.plane.as_str()) {
             continue;
-        };
-        pool_state_rows.push(PoolStateChangeRow {
-            pool_id,
-            ledger_sequence: i64::from(pw.ledger_sequence),
-            reserves,
-            plane_id: ids::contract_id(&pw.data.plane),
-        });
+        }
+        if !plane_row_agrees_with_storage(&plane.reserves, &inst.reserves, &inst.precision_mul) {
+            tracing::warn!(
+                ledger_sequence = ledger,
+                pool = %pool,
+                plane_reserves = ?plane.reserves,
+                storage_reserves = ?inst.reserves,
+                precision_mul = ?inst.precision_mul,
+                "plane row disagrees with the pool's own storage × PrecisionMul — \
+                 the contract's plane semantics may have changed"
+            );
+        }
     }
     for inst in pool_instances {
-        // A concentrated pool's per-operation reserves live in its INSTANCE
-        // (Reserve0/Reserve1) — the plane is not updated per op for them
-        // (measured; T4 refined). Fungible instances carry no `reserves`
-        // here by construction, so no double-write against the plane rows.
-        if !inst.state.reserves.is_empty() {
+        // Every router pool's reserves live in its INSTANCE (`ReserveA/B`,
+        // `Reserves`, `Reserve0/1`, raw units). A row is staged only when a
+        // write MOVED them (or created the pool): reward and config calls
+        // rewrite the instance too, and must not add rows with unchanged
+        // numbers.
+        if !inst.state.reserves.is_empty() && inst.reserves_changed {
             match (
                 ids::contract_payload(&inst.state.pool),
                 parse_reserves(&inst.state.reserves),
@@ -2701,10 +2710,10 @@ fn is_diagnostic(src: EventSource) -> bool {
 
 /// Collapse `pool_state_changes` to ONE row per (pool, plane, ledger) — the
 /// cross-writer twin of `dedup_final_pool_snapshots` (lore-0356), via the
-/// shared `keep_last_by_key` fold. This is the ONLY fold on this vector: the
-/// plane arm and the concentrated-instance arm can collide on a pool's
-/// registration ledger, and emitting both would leave the surviving row to a
-/// version-less `ReplacingMergeTree` — the hazard backfills.md rule 4 names.
+/// shared `keep_last_by_key` fold. This is the ONLY fold on this vector: a
+/// pool's instance is rewritten several times in one busy ledger, and
+/// emitting every image would leave the surviving row to a version-less
+/// `ReplacingMergeTree` — the hazard backfills.md rule 4 names.
 ///
 /// `plane_id` is IN the key (three-lens review, 2026-09-01): a forged plane
 /// entry naming a real pool would otherwise EVICT the pool's genuine row at
@@ -2737,10 +2746,32 @@ fn fold_pool_instance_state(rows: Vec<PoolInstanceStateRow>) -> Vec<PoolInstance
     xdr_parser::fold::keep_last_by_key(rows, |r| (r.pool_id, r.derived_at_ledger))
 }
 
+/// Decision C′ cross-check: a router pool's plane row must equal its own
+/// stored reserves × `PrecisionMul` (× 1 where the key is absent). Held in
+/// every sample across all code versions; a disagreement means the contract's
+/// plane semantics changed and the pool deserves a look. Only the legs are
+/// compared: a plane vector may carry a per-tick tail past them.
+pub(crate) fn plane_row_agrees_with_storage(
+    plane: &[String],
+    storage: &[String],
+    precision_mul: &[String],
+) -> bool {
+    let parse = |x: &String| x.parse::<u128>().ok();
+    plane.len() >= storage.len()
+        && (precision_mul.is_empty() || precision_mul.len() == storage.len())
+        && storage.iter().enumerate().all(|(i, raw)| {
+            let mul = precision_mul.get(i).map_or(Some(1), parse);
+            match (parse(raw), mul, parse(&plane[i])) {
+                (Some(r), Some(m), Some(p)) => r.checked_mul(m) == Some(p),
+                _ => false,
+            }
+        })
+}
+
 /// Raw decimal reserve strings → `i128`, all-or-nothing: one unparseable
 /// element refuses the whole vector, because a partial reserve set is a
-/// snapshot lying about its own arity. Shared by the plane and the
-/// concentrated-instance arm.
+/// snapshot lying about its own arity. Used by the router-family instance
+/// arm.
 fn parse_reserves(raw: &[String]) -> Option<Vec<i128>> {
     raw.iter().map(|r| r.parse::<i128>().ok()).collect()
 }

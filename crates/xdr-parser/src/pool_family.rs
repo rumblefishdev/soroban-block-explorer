@@ -16,11 +16,11 @@ use crate::types::ExtractedLedgerEntryChange;
 /// ledger-entry changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PoolFamilyWrite {
-    /// Router family: a plane `PoolData` write — the reserve source for
-    /// fungible pools (the plane mirrors no reserves for concentrated ones).
+    /// Router family: a plane `PoolData` write — a cross-check against the
+    /// pool's own storage only (decision C′); stages no reserve row.
     RouterPlane(ExtractedPlanePoolData),
-    /// Router family: the pool's own instance — the STATE source for its
-    /// share-token / plane / router declarations (and concentrated reserves).
+    /// Router family: the pool's own instance — the source of its reserves
+    /// and of its share-token / plane / router declarations.
     RouterPool(ExtractedPoolInstance),
     /// Pair-factory family: the pair's own instance is reserves, declaration
     /// (leg tokens + deploying factory) and LP-token supply in one entry.
