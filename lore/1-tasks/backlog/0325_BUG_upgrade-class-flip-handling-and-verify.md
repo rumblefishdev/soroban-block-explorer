@@ -1,16 +1,17 @@
 ---
 id: '0325'
-title: 'BUG: handle (rare) class flip on WASM upgrade — reclassify + NFT quarantine promote/drop, and verify it is real not a parse artifact'
+title: "BUG: a code-derived row must follow the contract's CURRENT code — class flips on WASM upgrade (contract type, NFT quarantine, soroban pools)"
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0320', '0283']
+related_tasks: ['0320', '0283', '0374', '0518']
 tags:
   [
     soroban,
     classification,
     clickhouse,
     executable_update,
+    liquidity-pools,
     phase-future,
     effort-small,
     priority-low,
@@ -25,6 +26,16 @@ history:
       it deliberately does NOT handle the rare case where an upgrade CHANGES the
       contract's class. Measured: 2 of 4,691 upgrades changed class, both on one
       contract. Deferred here.
+  - date: 2026-09-15
+    status: backlog
+    who: karolkow
+    note: >
+      Widened to the general rule. A registered soroban pool was found whose
+      code had been replaced by non-pool code 20 months earlier while the
+      registry still presented it as a pool (0374 production verification).
+      Re-measured over every upgrade: 9 of 5,296 changed what the contract is,
+      across 6 contracts; exactly one derived row misrepresents its contract
+      today. Decided to extend this task rather than file alongside it.
 ---
 
 # BUG: class flip on WASM upgrade — handle + verify it is real
@@ -74,3 +85,81 @@ contract-interface extraction bug that would fabricate spurious flips.
 - [ ] Confirmed whether the CDCN2D4O flip is real or an interface-extraction bug
 - [ ] If real: upgrade that flips class re-runs quarantine promote/drop correctly
 - [ ] Invariant covers contract_type, not only wasm_hash
+
+## Widened scope (2026-09-15) — every code-derived row follows the current code
+
+### The class of bug
+
+We classify a contract from its code at one moment — a pool by its storage
+shape at registration, a token or NFT by its interface — and write rows that
+assert that identity. A WASM upgrade can later make the contract something
+else. Nothing re-examines the row, so it keeps asserting an identity the
+contract no longer has. It is silent: no error, no gap, a plausible row.
+
+### The case that surfaced it
+
+Registered config-family pool `CAZ6W4WHVGQBGURYTUOLCUOOHW6VQGAAPSPCD72VEDZMBBPY7H43AYEC`:
+pool code replaced at ledger 54,515,539 (2024-11-22) by code exposing a
+staking interface (`bond`, `unbond`, `distribute_rewards`); replaced again at
+63,767,534 (2026-08-02) by code exposing `mint_redeem_sweep` / `sweep`, in the
+transaction that moved its balances out. The pool registry and its last
+reserve row still present it as a funded pool. Full timeline in task 0374,
+"Production verification of the write path".
+
+### Measurement over all upgrades (2026-09-15, prod CH)
+
+`executable_update` topics carry the old and the new code hash
+(`[sym executable_update, [Wasm, bytes old], [Wasm, bytes new]]`), so every
+transition is measurable without RPC. Shape of each code from
+`wasm_interface_metadata` function names — an approximation, not the
+classifier: token = `balance` + `transfer` + `decimals`, NFT = `owner_of`,
+pool = `get_reserves` or `query_pool_info`.
+
+- **5,296** upgrades in the ingested range, **1,756** contracts; every code
+  hash involved has an interface row (0 unknown).
+- **9** upgrades changed the shape, across **6** contracts:
+
+| Contract    | Transition                             | Misrepresented in our tables today?                     |
+| ----------- | -------------------------------------- | ------------------------------------------------------- |
+| `CAZ6W4WH…` | pool → other                           | **yes** — soroban pool registry                         |
+| `CB7LJOYL…` | other → pool                           | no — never registered, not shown                        |
+| `CDCN2D4O…` | other → token → other                  | no — net back to Other (the original case of this task) |
+| `CAVK536D…` | NFT with token functions ↔ NFT without | no — still NFT (`contract_type = 2`)                    |
+| `CAELDSOB…` | NFT with token functions → NFT without | no — still NFT                                          |
+
+Scale of exposure among registered pools: 403 of 514 router-family pools and
+14 of 20 config-family pools have been upgraded at least once; pair-family
+pools never. A scan of all 769 registered pools' CURRENT code for their
+family's pool function flags exactly one — `CAZ6W4WH…` — so the check has no
+false positives on the current population.
+
+Query shape (per partition to respect the per-query cap):
+
+```sql
+SELECT contract_id, ledger_sequence,
+       hex(base64Decode(JSONExtractString(topics_xdr, 2, 'value', 2, 'value'))) AS old_hash,
+       hex(base64Decode(JSONExtractString(topics_xdr, 3, 'value', 2, 'value'))) AS new_hash
+FROM soroban_events
+WHERE intDiv(ledger_sequence, 500000) = {P} AND signature = 'executable_update'
+```
+
+then shape both hashes through `wasm_interface_metadata`.
+
+### Decisions (karolkow, 2026-09-15)
+
+- **Never delete** the derived row or its history: both are true about the
+  past. What changes is the claim about the present.
+- **Soroban pools:** a registered pool whose current code lacks its family's
+  pool interface renders as "no longer an active pool since <upgrade ledger>";
+  current reserves and value are hidden, history is kept up to that ledger.
+  Derivable at read time from `soroban_contracts` (current hash) +
+  `wasm_interface_metadata`; no schema change, no RPC.
+- **Contract type / NFT quarantine:** the original scope above stands.
+- **Standing invariant:** run the transition scan each release; any new
+  shape-changing upgrade of a contract that has derived rows is investigated.
+
+## Acceptance Criteria (widened)
+
+- [ ] Pools: the read half applies the "no longer an active pool" rule; `CAZ6W4WH…` renders accordingly
+- [ ] The transition scan exists as a runnable check (runbook or harness) and is part of the release routine
+- [ ] Every table holding a code-derived identity is listed with how it follows the current code (pools, `soroban_contracts.contract_type`, NFT tables, soroban `assets`)
