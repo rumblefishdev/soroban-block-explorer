@@ -249,8 +249,9 @@ worktree with main parked on another branch.
     resolve (`pwd -P`) inside the new worktree's `libs/`;
   - `nx typecheck` for web green in the new worktree;
   - `git commit` of a staged `fn broken( {` with `core.hooksPath` set to
-    another checkout's `.husky/_`: rejected by rustfmt (`unclosed
-  delimiter`), exit 1, nothing committed, lint-staged restored the index.
+    another checkout's `.husky/_`: rejected by rustfmt
+    (`unclosed delimiter`), exit 1, nothing committed, lint-staged restored
+    the index.
     Temporary worktree moved to the main checkout's `.trash/`, pruned.
 
 ## Issues Encountered
@@ -275,6 +276,13 @@ worktree with main parked on another branch.
   `node_modules`. Consequence here: the new `post-checkout`/`pre-commit` go
   live in worktrees only once the main checkout is on a branch containing
   them. Fixed in this task — decision 13.
+- **First `develop` CI run red on `format:check` — this task file.** A
+  backticked span wrapped across two lines inside a list item makes
+  prettier 2.8.8 non-idempotent: each pass shifts the continuation line's
+  indent, so the lint-staged pass at commit and the CI check disagree.
+  Fixed by keeping the span on one line. Every pnpm step (action-setup,
+  store cache, `pnpm install --frozen-lockfile`, `check-generated`) was
+  green in that run; Deploy Board green.
 - **Local AWS/CDK guard hook blocked a file-editing script** because its source
   text contained `cdk`. Nothing was executed; the same text edits were made
   with the editor tool instead.
