@@ -1657,14 +1657,14 @@ inline so each figure can be reproduced.
 
 ### Registry closure — every layer passes
 
-| Layer                              | Method                                                                                                                                                          | Result                                                                                                                                                                                                                                                                                                                                                    |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Router, chain events               | `signature = 'add_pool'`, per partition 100-128 (`intDiv(ledger_sequence, 500000)`), pool address from `data_xdr` value 1, both directions against the registry | 514 announced ↔ 514 registered; 0 missing, 0 extra, 0 announced twice, 0 emitter ≠ `deployment_id`, 0 event `pool_type` ≠ `pool_type_raw`; 10 emitting routers                                                                                                                                                                                            |
-| Router, vendor catalogue           | the vendor's external pools API, paginated, against the pools of the documented router (`CBQDHNBF…`)                                                            | stated count 353 = ours 353. Pagination yields 343 distinct addresses (10 rows repeat, 10 never appear — identical over four passes); the 10 unseen are in the `add_pool` set and answer RPC. On the 343: 0 not ours, 0 `pool_type` mismatches, 0 fee mismatches, 0 leg mismatches (order included; legs mapped id → address through `soroban_contracts`) |
-| Pair-factory, contract enumeration | RPC `all_pairs_length` + `all_pairs(n)` on each of the 4 deploying factories                                                                                    | set-equal per factory: 214 / 11 / 6 / 4                                                                                                                                                                                                                                                                                                                   |
-| Config-factory, contract listing   | RPC `query_pools` on each of the 6 factory deployments                                                                                                          | listed ⊆ ours on all 6; the only unlisted pool of ours is `CAZ6W4WH…` (delisted — see below)                                                                                                                                                                                                                                                              |
-| Sibling registry                   | `prices.pool_registry` set-compare                                                                                                                              | only-theirs = 0 for all three venues (488 / 221 / 19)                                                                                                                                                                                                                                                                                                     |
-| Coverage                           | registry pool ∈ `pool_instance_state` and ∈ `pool_state_changes`                                                                                                | 514/514, 235/235, 20/20                                                                                                                                                                                                                                                                                                                                   |
+| Layer                              | Method                                                                                                                                                          | Result                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Router, chain events               | `signature = 'add_pool'`, per partition 100-128 (`intDiv(ledger_sequence, 500000)`), pool address from `data_xdr` value 1, both directions against the registry | 514 announced ↔ 514 registered; 0 missing, 0 extra, 0 announced twice, 0 emitter ≠ `deployment_id`, 0 event `pool_type` ≠ `pool_type_raw`; 10 emitting routers                                                                                                                                              |
+| Router, vendor catalogue           | the vendor's external pools API, paginated, against the pools of the documented router (`CBQDHNBF…`)                                                            | stated count 353 = ours 353. Its paging exposed 343 distinct addresses over four passes; the other 10 are in the `add_pool` set and answer RPC. On the 343: 0 not ours, 0 `pool_type` mismatches, 0 fee mismatches, 0 leg mismatches (order included; legs mapped id → address through `soroban_contracts`) |
+| Pair-factory, contract enumeration | RPC `all_pairs_length` + `all_pairs(n)` on each of the 4 deploying factories                                                                                    | set-equal per factory: 214 / 11 / 6 / 4                                                                                                                                                                                                                                                                     |
+| Config-factory, contract listing   | RPC `query_pools` on each of the 6 factory deployments                                                                                                          | listed ⊆ ours on all 6; the only unlisted pool of ours is `CAZ6W4WH…` (delisted — see below)                                                                                                                                                                                                                |
+| Sibling registry                   | `prices.pool_registry` set-compare                                                                                                                              | only-theirs = 0 for all three venues (488 / 221 / 19)                                                                                                                                                                                                                                                       |
+| Coverage                           | registry pool ∈ `pool_instance_state` and ∈ `pool_state_changes`                                                                                                | 514/514, 235/235, 20/20                                                                                                                                                                                                                                                                                     |
 
 `pool_type_raw` is correct per family, verified four ways: the writer
 (`stage.rs` — pair family writes it empty because the pair contract has no
@@ -1689,12 +1689,17 @@ declared plane. Sweep ran over ledgers 64,410,119 → 64,410,190; the 18 pools
 that changed state inside that window and 1 transient RPC failure were
 re-simulated ledger-aware and all matched.
 
-| Outcome                                           | Pools   |
-| ------------------------------------------------- | ------- |
-| exact                                             | **758** |
-| mixed-decimal stable pool, one leg scaled by 10^k | 6       |
-| one leg diverges after a pool upgrade             | 4       |
-| pool contract replaced, holds nothing             | 1       |
+| Outcome                                                      | Pools   |
+| ------------------------------------------------------------ | ------- |
+| exact                                                        | **758** |
+| mixed-decimal stable pool, one leg scaled by 10^k (defect 1) | 6       |
+| unsynced balance — our row equals the pool's STORED reserves | 4       |
+| code replaced by non-pool code (defect 2)                    | 1       |
+
+`get_reserves()` is a computed view, not a storage read, on the upgraded
+router WASMs: it returns token balance minus unclaimed protocol fee (exact on
+8 of 8 legs checked). The "exact" count therefore compares against the
+contract's live view; the storage comparison below is the stricter one.
 
 **Defect 1 — mixed-decimal stable pools store NORMALISED reserves.** Every
 non-empty router-family stable pool whose tokens differ in decimals (6 of 6)
@@ -1708,25 +1713,39 @@ applying each token's own decimals to these rows overstates one leg by 10× or
 10^11×. Pools: `CA262ONR…`, `CA27UTMX…`, `CCI5UGNC…`, `CCYMZTOJ…`,
 `CDCSXULB…`, `CD5WJYPF…`.
 
-**Defect 2 — four upgraded pools diverge on one leg.** `CBI5I254…`,
-`CB6GYGGZ…`, `CDDLTOOD…` (constant) and `CCRULRY3…` (stable, equal
-decimals). Each was upgraded in the 62.23M–62.34M window (`commit_upgrade` /
-`apply_upgrade` / `executable_update`); after the last row we hold, the
-pool's own events are `claim_protocol_fee`, `enable_emergency_mode`, or
-nothing at all, and no `update_reserves` follows. Our newest row equals the
-last trade exactly — the divergence enters without a plane update. Root cause
-(protocol-fee accounting of the upgraded WASM vs the plane figure) is
-inferred from the event sequence, not yet proven.
+**Not a defect — four pools whose live balance runs ahead of their stored
+reserves.** `CBI5I254…`, `CB6GYGGZ…`, `CCRULRY3…` hold a time-rebasing token
+(`yUSDT` "Tether USD with yield from AAVE", `yTIME` "Time Rebased Token") whose
+balance grows with no transaction at all — one leg was re-read a day apart
+and had grown with zero events in between; three of the four pools are in
+emergency mode and do not trade, so nothing re-syncs them. `CDDLTOOD…`
+received 19 direct XLM transfers after its last trade summing to exactly the
+gap (2,005,041). In both cases the pool's OWN instance storage
+(`ReserveA`/`ReserveB`, read via `getLedgerEntries`) equals our row to the
+unit, so the table matches what the ledger stores; the difference is balance
+the pool has not yet absorbed (`ReservesSyncLedger`). No indexer can record a
+time-rebasing balance continuously — it is computed at read time, never
+written. The read may say "as of ledger X".
 
-**Defect 3 — a replaced config-family pool shows false reserves.**
-`CAZ6W4WH…`: our newest row (54,514,504) says 263,512,715,771 /
-131,948,815,702. The contract's WASM was replaced at 54,515,539 and again at
-63,767,534; the current code exposes `install` and `mint_redeem_sweep`, not
-the pool interface, and both leg tokens report `balance(pool) = 0`. No row
-was written after the replacement (the writer did not decode garbage), but the
-latest-row read now presents a drained contract as a funded pool. Its 25,871
-events end at 54,515,539 — earlier notes placing trading "to 63.77M" counted
-the second upgrade event.
+**Defect 2 — a registered pool whose code was replaced by non-pool code.**
+`CAZ6W4WH…` (config family, documented factory). Timeline from
+`executable_update` topics, which carry the old and new code hash:
+
+| Ledger (UTC)                  | Event                                                                                                                                                                                                                                              |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 51,572,101 (2024-05-07)       | registered                                                                                                                                                                                                                                         |
+| 54,514,504 (2024-11-22 13:29) | last pool activity; our newest reserve row                                                                                                                                                                                                         |
+| 54,515,539 (2024-11-22 15:14) | pool code replaced by code exposing `bond`, `unbond`, `distribute_rewards`, `query_staked` (a staking interface), submitted by the account behind 61 upgrades of this factory's pools                                                              |
+| 54,515,539 → 63,767,534       | no activity; the address holds exactly our last reserves                                                                                                                                                                                           |
+| 63,767,534 (2026-08-02 17:10) | code replaced again (`install`, `mint_redeem_sweep`, `redeem_held_sweep`, `sweep`) by a single-use account; the same transaction moves both balances out, plus the liquidity of a second registered pool on the same pair (`CD5XNKK3…`, now 0 / 0) |
+
+The balances moved out equal our last row to the unit (263,512,715,771 /
+131,948,815,702). So the NUMBERS were true until 2026-08-02; the IDENTITY
+("this is a pool") has been false since 2024-11-22. No row was written after
+the first replacement — the writer decoded nothing wrong; the registry simply
+outlived the code that justified it. Authorisation of either replacement is
+not determinable from our data (a transaction's source need not be its
+authoriser). Our rows for `CD5XNKK3…` are correct (0 / 0 matches the chain).
 
 Upgrades are common, so this class is live: 403 of 514 router pools (1,537
 `executable_update` events) and 14 of 20 config pools (63) have been
@@ -1751,17 +1770,56 @@ of 769 pools.
 
 Open, in order of user impact:
 
-1. Mixed-decimal stable pools (defect 1) — decide where denormalisation lives
-   (writer, from token decimals, or the read) before the read half renders
-   amounts.
-2. Replaced contracts (defect 3) — a registered pool whose WASM no longer
-   exposes the pool interface must not render its last reserve row as
-   current. Candidate signal: `executable_update` on a registered pool
-   followed by no further reserve rows.
-3. Post-upgrade divergence (defect 2) — prove the mechanism, then decide
-   whether the reserve source for upgraded router pools changes.
-4. The read half must not render the structural `0` total shares as a value
+1. Defect 1 — **DECIDED (karolkow, 2026-09-15): C′, read router-family
+   reserves from the pool's own storage** (see "Root cause of defect 1"
+   below). Before changing the parser, measure the reserve-key layouts of
+   every historical router-pool code version, not just the current ones.
+2. Defect 2 — a registered pool whose current code lacks its family's pool
+   interface must not render current reserves; history stays. **Carried by
+   task 0325** (widened on 2026-09-15 to "every code-derived row must match
+   the contract's current code"), where the measurement over all upgrades
+   lives.
+3. The read half must not render the structural `0` total shares as a value
    for concentrated and config-family pools; the chain has a figure for both.
-5. Historical reserves remain checked only by the decoder-parity test of the
+4. Historical reserves remain checked only by the decoder-parity test of the
    backfill session (same code on both sides); checkpoint snapshots are the
    only independent history oracle and have not been run for these tables.
+5. Read-half labels: `protocol_labels.rs` on the read-half branch predates
+   the pair and config families. Brand only deployments the vendor documents;
+   a shape-matching contract from any other deployment stays unlabelled.
+
+### Root cause of defect 1 — the plane is a quote-input sheet, not a balance sheet (2026-09-14)
+
+Three sources read for all **514** router-family pools at the same moment:
+the pool's own instance storage (`getLedgerEntries`), its plane row
+(`plane.get([pool])`, simulated), and our newest row.
+
+| Pool type                                 | Pools | Pool storage vs plane row            | Our table                           |
+| ----------------------------------------- | ----- | ------------------------------------ | ----------------------------------- |
+| constant                                  | 380   | identical                            | matches                             |
+| elastic                                   | 3     | identical                            | matches                             |
+| stable, no `PrecisionMul` (older code)    | 38    | identical                            | matches                             |
+| stable, `PrecisionMul` all 1              | 39    | identical                            | matches                             |
+| **stable, `PrecisionMul` ≠ 1, non-empty** | **6** | **plane = storage × `PrecisionMul`** | **scaled**                          |
+| stable, `PrecisionMul` ≠ 1, empty         | 2     | identical (zero)                     | matches                             |
+| concentrated                              | 46    | pool does not write the plane        | matches (already read from storage) |
+
+Four pools first looked off; re-read ledger-aware, three matched and one had
+traded after the storage read. So our table equals the pool's own storage in
+**508 of 514**; the six are exactly the non-empty pools whose stable math
+carries a multiplier. A stable pool's instance holds `Reserves` (raw units),
+`Decimals` and `PrecisionMul`; its plane row holds `pool_type`, the
+stableswap parameters (fee, amplification ramp) and `Reserves ×
+PrecisionMul` — precisely the inputs a swap quote needs, in the units the
+invariant is computed in. No standard governs the plane; the vendor's source
+is not public, so "normalised on purpose" is inferred from that structure. The
+error was ours: T4's "plane state == reserves" was generalised from a sample
+that did not include these six.
+
+Why storage is the fundamental source, not a read-time divide: the pool is
+the ledger-authenticated owner of its instance (ADR 0058's authority rule);
+it holds raw units, so `reserves` keeps one meaning; it matches our table in
+508 of 514 pools, so the switch changes no correct value; and it unifies the
+family — concentrated pools already use storage because they never write the
+plane. Current code uses three layouts: `ReserveA`/`ReserveB` (383 pools),
+`Reserves` (85), `Reserve0`/`Reserve1` (46).
