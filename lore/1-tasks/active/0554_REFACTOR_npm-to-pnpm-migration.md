@@ -31,9 +31,10 @@ change — this is a package-manager swap, not a dependency upgrade.
 
 ## Status: Active
 
-**Current state:** Steps 1–5 done (swap, call sites, CI, hooks, docs); web
-build and `cdk synth` byte-identical to npm. Step 6: TS checks, e2e and
-`check-generated` green; fresh-worktree test pending.
+**Current state:** all steps done and every acceptance criterion met locally
+(implementation commit `aef8b641`). Remaining: the first CI run on `develop`
+proves the rewritten workflows; the first release proves
+`deploy-production.yml`.
 Task 0532 (worktree provisioning) absorbed here and archived as superseded.
 
 ## Context
@@ -125,9 +126,9 @@ worktree with main parked on another branch.
       run locally (no Rust change beyond a doc comment; pre-push clippy + CI)
 - [x] CI workflows (`ci.yml`, `deploy-production.yml`, `deploy-board.yml`) use
       pnpm; no `npm ci` / `cache: npm` remains
-- [ ] A new worktree gets its own `node_modules`; `@rumblefish/*` resolve to
+- [x] A new worktree gets its own `node_modules`; `@rumblefish/*` resolve to
       the worktree's `libs/`, proven with main parked on a different branch
-- [ ] A new worktree rejects a deliberately malformed staged file (hooks run)
+- [x] A new worktree rejects a deliberately malformed staged file (hooks run)
 - [x] No `npx` / `npm ci` / `npm run` left in repo-owned scripts, hooks, CI,
       docs (Nx-generated agent config excluded, decision 12)
 - [x] **Docs updated** — `docs/deployment.md` (build prerequisites, `cdk`
@@ -235,6 +236,22 @@ worktree with main parked on another branch.
 - **Step 6 verification:** `nx run-many -t lint build typecheck test
 --skip-nx-cache` for api-types, ui, aws-cdk, web — green (ui 86 tests, web
   369, aws-cdk 5; lint 0 errors). Web e2e 3/3. `check-generated` green.
+- **Commit gate:** the pre-commit hook ran lint, typecheck and test for all
+  5 projects, `rust` included (`cargo check`, `clippy`, `test --workspace`) —
+  green, 5 min 4 s on a cold worktree `target/`.
+- **Fresh worktree** (`git worktree add --detach` at `aef8b641`, hooks off
+  during the add; main checkout parked on
+  `feat/0374_lp-native-leg-and-soroban-amm-completeness`):
+  - `post-checkout` started from another checkout's copy, as a main
+    checkout's would be: handed over, ran `pnpm install` — **14 s** on a warm
+    store (npm-era clone script: 3 min 12 s);
+  - `web/node_modules/@rumblefish/{soroban-block-explorer-ui,api-types}`
+    resolve (`pwd -P`) inside the new worktree's `libs/`;
+  - `nx typecheck` for web green in the new worktree;
+  - `git commit` of a staged `fn broken( {` with `core.hooksPath` set to
+    another checkout's `.husky/_`: rejected by rustfmt (`unclosed
+  delimiter`), exit 1, nothing committed, lint-staged restored the index.
+    Temporary worktree moved to the main checkout's `.trash/`, pruned.
 
 ## Issues Encountered
 
