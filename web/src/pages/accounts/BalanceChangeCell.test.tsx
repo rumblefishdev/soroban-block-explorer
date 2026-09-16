@@ -1,5 +1,6 @@
 import type { AccountBalanceChange } from '@rumblefish/api-types';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
+import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../test-utils.js';
@@ -75,7 +76,7 @@ describe('BalanceChangeCell', () => {
   it('lists every piece of a bulk move separately, each with its own link', () => {
     // A transaction moving three pieces arrives as three entries, one per
     // piece. The cell shows the first and collapses the rest into `+N`; the
-    // tooltip carries all of them, each linking to its own NFT — so no piece
+    // popover carries all of them, each linking to its own NFT — so no piece
     // is reachable only as part of a count.
     renderWithProviders(
       <BalanceChangeCell
@@ -93,6 +94,47 @@ describe('BalanceChangeCell', () => {
 
     expect(screen.getByText('+1 NFT #101')).toBeInTheDocument();
     expect(screen.getByText('+2')).toBeInTheDocument();
+  });
+
+  it('opens the collapsed movements from the keyboard and returns focus', async () => {
+    // The `+N` list used to be a hover tooltip: its links sat in a portal Tab
+    // never reached, and a row whose first entry is unlinkable had nothing
+    // focusable to open it. Here the first entry is exactly that case.
+    const user = userEvent.setup();
+    renderWithProviders(
+      <BalanceChangeCell
+        changes={[
+          change({ asset: '', asset_code: 'SOMETOKEN', amount: '5' }),
+          ...['102', '103'].map((token_id) =>
+            change({
+              asset: NFT_CONTRACT,
+              asset_code: 'TALKMP25',
+              amount: null,
+              nft_delta: 1,
+              token_id,
+            })
+          ),
+        ]}
+      />
+    );
+
+    await user.tab();
+    const more = screen.getByRole('button', {
+      name: '+2 more balance changes',
+    });
+    expect(more).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+    await user.tab();
+    const pieces = screen.getAllByRole('link', { name: 'TALKMP25' });
+    expect(pieces.map((link) => link.getAttribute('href'))).toEqual([
+      `/nfts/${NFT_CONTRACT}/102`,
+      `/nfts/${NFT_CONTRACT}/103`,
+    ]);
+    expect(pieces[0]).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(more).toHaveFocus());
   });
 
   it('falls back to the collection when the piece cannot be named', () => {
