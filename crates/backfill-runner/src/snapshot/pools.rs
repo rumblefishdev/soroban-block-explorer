@@ -28,11 +28,6 @@ use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::snapshot::network_state::{NetworkState, classic_asset};
 
-/// Our side's floor: fewer classic pools than this means a wrong database, and
-/// every network pool would then read as missing. 52,974 on production,
-/// 2026-09-16.
-const MIN_OUR_POOLS: usize = 20_000;
-
 #[derive(Default)]
 pub(crate) struct PoolCorrections {
     pub(crate) pool_rows: Vec<LiquidityPoolRow>,
@@ -118,13 +113,6 @@ pub(crate) async fn build_corrections(
         .fetch::<OurNewest>()?;
     while let Some(row) = cursor.next().await? {
         ours.insert(row.pool_id, row);
-    }
-    if ours.len() < MIN_OUR_POOLS {
-        return Err(BackfillError::Incomplete(format!(
-            "our pool snapshot read returned {} pools, expected at least {MIN_OUR_POOLS} — \
-             every network pool would read as missing (wrong database?)",
-            ours.len()
-        )));
     }
     println!("  read our newest snapshot of {} pools", ours.len());
 

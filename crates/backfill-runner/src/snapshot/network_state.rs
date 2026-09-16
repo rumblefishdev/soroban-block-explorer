@@ -610,26 +610,23 @@ pub(crate) async fn open_snapshot(
     // created after our floor and are still open (a 1/64 sample of
     // `asset_transfers`, 2026-09-15), and the network holds at least those.
     // The floor sits ~9x under that estimate. Re-set it from the first dry-run.
+    // The damage it prevents does not undo itself: the closures version on the
+    // checkpoint, above the entries' own ledgers, so a corrected re-run cannot
+    // reopen them. Classic pools get no floor — the seed only inserts them, so a
+    // short read under-inserts and harms nothing.
     const MIN_LIVE_CLAIMABLE: usize = 100_000;
-    // Classic pools (task 0210): 40,417 pools hold reserves by our own newest
-    // snapshots (production, 2026-09-16), and every one of them is a live entry.
-    // A short pool read only under-inserts, but it would also report live pools
-    // as gone, so it gets the same guard.
-    const MIN_LIVE_POOLS: usize = 20_000;
     let (accounts, trustlines) = (state.live_accounts(), state.live_trustlines());
-    let (claimable, pools) = (state.live_claimable_balances(), state.live_pools());
+    let claimable = state.live_claimable_balances();
     if n_buckets < MIN_BUCKETS
         || accounts < MIN_LIVE_ACCOUNTS
         || trustlines < MIN_LIVE_TRUSTLINES
         || claimable < MIN_LIVE_CLAIMABLE
-        || pools < MIN_LIVE_POOLS
     {
         return Err(BackfillError::Incomplete(format!(
             "snapshot looks short: {n_buckets} buckets, {accounts} live accounts, \
-             {trustlines} live trustlines, {claimable} live claimable balances, {pools} live \
-             pools (floors {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / {MIN_LIVE_TRUSTLINES} / \
-             {MIN_LIVE_CLAIMABLE} / {MIN_LIVE_POOLS}) — refusing to read the gap as \
-             network-wide closures"
+             {trustlines} live trustlines, {claimable} live claimable balances (floors \
+             {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / {MIN_LIVE_TRUSTLINES} / \
+             {MIN_LIVE_CLAIMABLE}) — refusing to read the gap as network-wide closures"
         )));
     }
 

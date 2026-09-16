@@ -773,8 +773,10 @@ reserve_b)` per pool × 10^7, joined through `liquidity_pools.legs`, classic
   versioned on the entry's `lastModifiedLedgerSeq` — insert-only, so a newer
   live row always wins and no coverage check is needed. Pools the network
   removed while ours still hold reserves are listed in `pools_gone.tsv`, not
-  corrected (0 today by our data). Floors: 20,000 live pools in the snapshot,
-  20,000 pools on our side.
+  corrected (0 today by our data). No read floors for pools (removed
+  2026-09-17): an insert-only pass harms nothing on a short read, and a wrong
+  database already fails the balances floors earlier in the run. Claimable
+  balances keep theirs — a short read there closes open balances for good.
   - **One builder.** Classic pool rows moved out of `stage.rs` into
     `persist/classic_pools.rs`; staging and the seed both call it, and the seed
     feeds it the checkpoint entry as a `state` change
