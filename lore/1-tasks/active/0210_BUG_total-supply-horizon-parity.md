@@ -124,7 +124,7 @@ history:
       Measurements and the rejected options are in the 2026-09-15 section.
 ---
 
-# BUG: `assets.total_supply` Horizon parity — extend MVP sum to 4 sources
+# BUG: `assets.total_supply` sums all four sources — the XLM identity closes
 
 ## Summary
 
