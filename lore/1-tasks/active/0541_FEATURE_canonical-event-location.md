@@ -2,18 +2,11 @@
 id: '0541'
 title: 'FEATURE: locate every Soroban event by its canonical identity — soroban_events keyed by (ledger, tx position, operation, event in operation)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0453', '0457', '0540', '0182', '0538', '0374']
 tags:
-  [
-    'clickhouse',
-    'indexer',
-    'xdr-parsing',
-    'phase-future',
-    'effort-medium',
-    'priority-medium',
-  ]
+  ['clickhouse', 'indexer', 'xdr-parsing', 'effort-medium', 'priority-medium']
 links:
   - crates/db-clickhouse/schema/init.sql
   - crates/xdr-parser/src/event.rs
@@ -48,6 +41,13 @@ history:
       table is its source and is dropped afterwards. The "micro-backend
       removed" criterion was wrong and is replaced. First table of the
       natural-key programme in 0538.
+  - date: 2026-09-16
+    status: active
+    who: karolkow
+    note: >
+      Promoted. First step: prove `soroban_event_ops` covers every
+      non-diagnostic `soroban_events` row, partition by partition, before it
+      becomes the source of the new sort key.
 ---
 
 # soroban_event_ops
