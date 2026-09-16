@@ -352,3 +352,178 @@ LedgerCloseMetaBatch`), stage per transaction: protocols 20, 21, 22 (ledgers
   `post_tx_apply_fee_processing`. No transaction carries more than one refund.
 - The pre-23 id (`AfterTx`) is taken from stellar-rpc's source; no live rpc
   retains those ledgers, so it is not confirmed by an rpc answer.
+
+**Official sources (checked 2026-09-16).**
+
+- CAP-67 (`stellar-protocol/core/cap-0067.md`, "New Events for Representing
+  Fees"): the charge is always `BEFORE_ALL_TXS`; a refund is emitted only when
+  non-zero, `AFTER_TX` before protocol 23 and `AFTER_ALL_TXS` from 23. It also
+  says future protocols may add more fee events following the same stage
+  pattern — the reason the live writer must use the parsed stage, not this
+  position rule.
+- stellar-core `src/transactions/TransactionFrame.cpp`: the refund stage is
+  chosen from the ledger header's version at apply time
+  (`protocolVersionStartsFrom(... V_23)`), before that ledger's upgrades are
+  applied — which is why the upgrade ledger 58,762,517 still carries `after_tx`.
+- stellar-docs OpenRPC `getEvents`: `id` is "based on the TOID format" (SEP-35)
+  plus a 10-digit event index. The docs do not describe the fee sentinels, and
+  SEP-35 counts operations from 1 while rpc counts them from 0; the only full
+  statement of the id is stellar-rpc's `internal/db/event.go`.
+
+**Further checks.**
+
+- Every event id, not only fees: 8 ledgers inside the rpc window (including 3
+  with `system` events), 7,365 rpc events = 7,365 ids derived from our tables,
+  same transaction for each. Per-operation events use `application_order`,
+  `op_index` (0-based) and `event_pos_in_op` directly.
+- Every transaction has exactly one charge: 4,181,443,104 charge events =
+  4,181,443,104 transactions below ledger 64,440,000, equal in every partition.
+  So a charge's counter is always `application_order − 1`; only refunds need a
+  per-ledger rank.
+- Archive meta across the whole ingested range: one refund-heavy ledger per
+  64k-ledger archive partition plus the three upgrade ledgers — 248 ledgers,
+  50,490,188–64,451,818, protocols 20–27 (30/45/71/15/25/26/17/19), 104,454
+  transactions, 27,512 refunds. For every transaction: `application_order`
+  equals its position in `tx_processing`; the tx-level events are only
+  native-XLM `fee`, at most two; the charge is `before_all_txs`; the refund's
+  stage follows the ledger rule; amounts and positions equal our rows.
+  0 anomalies.
+
+## Design — `soroban_events` keyed by the canonical location (2026-09-16)
+
+### Table
+
+```sql
+CREATE TABLE soroban_events_staging_canonical
+(
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    transaction_index  UInt32,  -- rpc id: 1..N; 0 = before all txs; 1048575 = after all txs
+    operation_index    UInt16,  -- rpc id: 0-based; 4095 = after the transaction's operations
+    event_index        UInt32,  -- rpc id: position in the operation; fee events: stage counter
+    application_order  Int16,   -- the transaction the event belongs to (joins `transactions`)
+    event_type         Int16,
+    signature          LowCardinality(Nullable(String)),
+    topics_xdr         String CODEC(ZSTD(3)),
+    data_xdr           String CODEC(ZSTD(3))
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, transaction_index, operation_index, event_index);
+```
+
+- Dropped: `transaction_id` (50.48 GiB) and the flat `event_index` (4.69 GiB).
+- `application_order` stays although it repeats `transaction_index` for every
+  operation event: a refund settled after all transactions carries the
+  sentinel in its id, and only this column says which transaction it refunds.
+  The transaction page filters on it for every row alike.
+- The sort key within a contract is execution order, fee charges first and
+  end-of-ledger refunds last — the contract event list pages on it directly.
+
+| row                         | `transaction_index` | `operation_index` | `event_index`                   |
+| --------------------------- | ------------------- | ----------------- | ------------------------------- |
+| operation event             | `application_order` | `op_index`        | `event_pos_in_op`               |
+| fee charge (position 0)     | 0                   | 0                 | `application_order − 1`         |
+| refund, ledger ≤ 58,762,517 | `application_order` | 4095              | 0                               |
+| refund, ledger ≥ 58,762,518 | 1048575             | 0                 | rank among the ledger's refunds |
+
+### Fill — per 20k-ledger slice, in ClickHouse, no S3
+
+```sql
+INSERT INTO soroban_events_staging_canonical
+SELECT
+    e.contract_id,
+    e.ledger_sequence,
+    toUInt32(multiIf(o.has_op = 1, t.application_order,
+                     e.event_index = 0, 0,
+                     e.ledger_sequence >= 58762518, 1048575,
+                     t.application_order)),
+    toUInt16(multiIf(o.has_op = 1, o.op_index,
+                     e.event_index = 0, 0,
+                     e.ledger_sequence >= 58762518, 0,
+                     4095)),
+    toUInt32(multiIf(o.has_op = 1, o.event_pos_in_op,
+                     e.event_index = 0, t.application_order - 1,
+                     e.ledger_sequence >= 58762518, r.refund_rank,
+                     0)),
+    t.application_order,
+    e.event_type, e.signature, e.topics_xdr, e.data_xdr
+FROM soroban_events AS e
+INNER JOIN (SELECT id, application_order FROM transactions
+            WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS t
+    ON t.id = e.transaction_id
+LEFT JOIN (SELECT ledger_sequence, application_order, event_index,
+                  any(op_index) AS op_index, any(event_pos_in_op) AS event_pos_in_op,
+                  toUInt8(1) AS has_op
+           FROM soroban_event_ops
+           WHERE ledger_sequence >= {A} AND ledger_sequence < {B}
+           GROUP BY ledger_sequence, application_order, event_index) AS o
+    ON o.ledger_sequence = e.ledger_sequence
+   AND o.application_order = t.application_order
+   AND o.event_index = e.event_index
+LEFT JOIN (SELECT f.ledger_sequence, f.transaction_id,
+                  toUInt32(row_number() OVER (PARTITION BY f.ledger_sequence
+                                              ORDER BY ft.application_order) - 1) AS refund_rank
+           FROM soroban_events AS f
+           INNER JOIN (SELECT id, application_order FROM transactions
+                       WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS ft
+               ON ft.id = f.transaction_id
+           WHERE f.ledger_sequence >= {A} AND f.ledger_sequence < {B}
+             AND f.contract_id = -6164601581949826601   -- native SAC
+             AND f.signature = 'fee' AND f.event_index = 1) AS r
+    ON r.ledger_sequence = e.ledger_sequence AND r.transaction_id = e.transaction_id
+WHERE e.ledger_sequence >= {A} AND e.ledger_sequence < {B};
+```
+
+"No op row" is the fee test, never the event name (coverage section above).
+The `GROUP BY` collapses the side table's duplicate copies.
+
+Dry run of this SELECT (read-only, 2026-09-16):
+
+| slice                 | rows      | distinct new keys | distinct old keys | before all | after tx | after all |
+| --------------------- | --------- | ----------------- | ----------------- | ---------- | -------- | --------- |
+| 64,000,000–64,005,000 | 4,887,885 | 4,887,885         | 4,887,885         | 1,738,003  | 0        | 685,689   |
+| 56,000,000–56,010,000 | 6,251,653 | 6,251,653         | 6,251,653         | 2,772,663  | 42,554   | 0         |
+| 58,760,000–58,765,000 | 2,937,803 | 2,937,803         | 2,937,803         | 1,102,737  | 177,896  | 54,687    |
+
+No key collisions; the boundary slice carries both refund kinds. The ids this
+exact SQL produces for the 8 rpc-window ledgers: 7,365 of 7,365 equal to
+`getEvents`, same transaction.
+
+### Gates
+
+1. Before each INSERT (read-only): distinct new keys = distinct old keys for
+   the slice — a collision would be silently merged away by the engine.
+2. After the fill, per partition: distinct rows equal to the old table;
+   `transaction_index = 0` rows equal the partition's transactions; `4095`
+   only below 58,762,518, `1048575` only from it.
+3. Ids read back from the new table match `getEvents` on recent ledgers.
+
+### Live writer
+
+Staging computes the id from the parsed event, not from the rule above:
+operation events from `op_index` / `event_pos_in_op`; tx-level events from
+their `stage`, with per-ledger counters for `BeforeAllTxs` / `AfterAllTxs` and
+a per-transaction counter for `AfterTx`, walked in application order. A future
+protocol that adds stage events stays correct. A tx-level event without a
+stage (V3 meta — absent from the archive and from live ingest) is a staging
+error, never a guessed id. `soroban_event_ops` writes stop.
+
+### Readers (same PR)
+
+| reader                                       | change                                                                                                                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| contract events (`contracts/queries.rs`)     | order and cursor on the new key; transaction resolved by `(ledger_sequence, application_order)`; wire carries the rpc `id` instead of `transaction_id` (the frontend does not read it) |
+| contract stats `recent_events`               | none (contract + ledger)                                                                                                                                                               |
+| transactions filtered by contract (arm)      | arm yields `(ledger_sequence, application_order)`, mapped to the id through the `transactions` key until 0538 moves the driver to positions                                            |
+| transaction detail `fetch_event_appearances` | filter `(ledger_sequence, application_order)`                                                                                                                                          |
+| `balance_seed` (backfill-runner)             | reads `contract_id` / topics / data only; test fixtures' column lists                                                                                                                  |
+
+API types regenerated; architecture docs (schema, pipeline, xdr parsing);
+`init.sql` comment on the table rewritten; `docs/backfills.md` gets the fill.
+
+### Space
+
+Built alongside the old table: ~185 GiB by column arithmetic (236 GiB − 55 GiB
+dropped + the new integer columns, estimate) against 368.72 GiB free.
+Measured on the first filled partition before the rest.
