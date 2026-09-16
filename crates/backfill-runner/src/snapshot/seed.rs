@@ -10,6 +10,7 @@
 //! | ghost (ours >0, gone) | ~1.04M native + ~2k classic | checkpoint | checkpoint |
 //! | self-heal (snapshot newer) | ~25k | the entry's own ledger | 0 |
 //! | `claimable_balance_holdings`, same four kinds (task 0210, [`claimable`]) | not yet measured | as above | as above |
+//! | classic pools missing or stale on our side: `liquidity_pools` + `liquidity_pool_snapshots`, insert-only (task 0210, [`pools`]) | not yet measured | the entry's own ledger | — |
 //! | `account_entry_state` full seed | every live account | the entry's own ledger | — |
 //! | `assets` / `accounts` dimension stubs | the referenced ids we lack | entry ledger | — |
 //!
@@ -534,7 +535,11 @@ async fn refuse_if_read_only(sink: &Sink) -> Result<(), BackfillError> {
 
 /// The seed. Without `--execute`: reads its inputs from ClickHouse, decodes
 /// the snapshot, folds, writes artifacts, inserts NOTHING. With `--execute`:
-/// additionally inserts the four row sets.
+/// additionally inserts every correction the summary lists.
+///
+/// Order: everything that needs only the checkpoint ledger or ClickHouse —
+/// write identity, writer coverage, the dimension id sets — runs BEFORE the
+/// ~5-minute bucket download, so a refusal costs seconds.
 pub async fn seed_command(
     sink: &Sink,
     artifacts_root: &Path,
@@ -548,8 +553,7 @@ pub async fn seed_command(
         refuse_if_read_only(sink).await?;
     }
 
-    let (list, mut state, source_report) =
-        network_state::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;
+    let list = network_state::latest_checkpoint().await?;
     let coverage = claimable::writer_coverage(
         claimable::first_writer_tombstone(sink).await?,
         list.checkpoint_ledger,
@@ -559,27 +563,6 @@ pub async fn seed_command(
             "refusing --execute: {why}"
         )));
     }
-
-    // One directory per checkpoint, so a run never overwrites the record of an
-    // earlier one — `ghosts.tsv` is the only pre-image of what a run zeroed.
-    let artifacts = &artifacts_root.join(list.checkpoint_ledger.to_string());
-    std::fs::create_dir_all(artifacts)
-        .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", artifacts.display())))?;
-    println!("  artifacts → {}", artifacts.display());
-
-    // Provenance artifact: the exact bucket list this run decoded. The archive
-    // is content-addressed, so this manifest alone identifies the identical
-    // snapshot later (the LP-merge pass will need exactly that).
-    let manifest = serde_json::json!({
-        "checkpoint_ledger": list.checkpoint_ledger,
-        "archive": PUBNET_ARCHIVE,
-        "buckets": list.hashes,
-    });
-    std::fs::write(
-        artifacts.join("manifest.json"),
-        serde_json::to_string_pretty(&manifest).expect("static json"),
-    )
-    .map_err(|e| BackfillError::Incomplete(format!("write manifest: {e}")))?;
 
     let known_assets = fetch_id_set(sink, "assets").await?;
     let known_accounts = fetch_id_set(sink, "accounts").await?;
@@ -604,6 +587,31 @@ pub async fn seed_command(
         )));
     }
 
+    // One directory per checkpoint, so a run never overwrites the record of an
+    // earlier one — `ghosts.tsv` is the only pre-image of what a run zeroed.
+    let artifacts = &artifacts_root.join(list.checkpoint_ledger.to_string());
+    std::fs::create_dir_all(artifacts)
+        .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", artifacts.display())))?;
+    println!("  artifacts → {}", artifacts.display());
+
+    // Provenance artifact: the exact bucket list this run decoded. The archive
+    // is content-addressed, so this manifest alone identifies the identical
+    // snapshot later (the LP-merge pass will need exactly that).
+    let manifest = serde_json::json!({
+        "checkpoint_ledger": list.checkpoint_ledger,
+        "archive": PUBNET_ARCHIVE,
+        "buckets": list.hashes,
+    });
+    std::fs::write(
+        artifacts.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).expect("static json"),
+    )
+    .map_err(|e| BackfillError::Incomplete(format!("write manifest: {e}")))?;
+
+    let (mut state, source_report) =
+        network_state::open_snapshot(&list, if execute { " [EXECUTE]" } else { " [dry-run]" })
+            .await?;
+
     let mut report = Report::new(list.checkpoint_ledger);
     let corr = build_corrections(
         sink,
@@ -615,24 +623,20 @@ pub async fn seed_command(
     )
     .await?;
 
-    // The ghost list is the anomaly REPORT the policy demands — corrected in
-    // the same run, but never silently.
-    std::fs::write(artifacts.join("ghosts.tsv"), corr.ghosts.join("\n") + "\n")
-        .map_err(|e| BackfillError::Incomplete(format!("write ghosts: {e}")))?;
-    std::fs::write(
-        artifacts.join("claimable_ghosts.tsv"),
-        corr.claimable.ghosts.join("\n") + "\n",
-    )
-    .map_err(|e| BackfillError::Incomplete(format!("write claimable ghosts: {e}")))?;
-    std::fs::write(
-        artifacts.join("pools_gone.tsv"),
-        corr.pools.gone_with_reserves.join("\n") + "\n",
-    )
-    .map_err(|e| BackfillError::Incomplete(format!("write pools_gone: {e}")))?;
+    // The anomaly REPORTS the policy demands — corrected (or, for pools,
+    // only listed) in the same run, but never silently.
+    for (file, lines) in [
+        ("ghosts.tsv", &corr.ghosts),
+        ("claimable_ghosts.tsv", &corr.claimable.ghosts),
+        ("pools_gone.tsv", &corr.pools.gone_with_reserves),
+    ] {
+        std::fs::write(artifacts.join(file), lines.join("\n") + "\n")
+            .map_err(|e| BackfillError::Incomplete(format!("write {file}: {e}")))?;
+    }
 
-    // The summary IS the four-way comparison — the same twelve buckets per
-    // population the report renders, from one `Report`, plus
-    // what this run would insert. An operator signs off on one document.
+    // The summary IS the comparison — the verdict buckets per population the
+    // report renders, from one `Report`, plus every row this run would insert,
+    // table by table in one block. An operator signs off on one document.
     report.write_dumps(&artifacts.join("dumps"))?;
     dumps::write_correction_dumps(
         &artifacts.join("dumps"),
@@ -677,10 +681,13 @@ pub async fn seed_command(
          type-3 Soroban rows         {:>12}\n    \
          snapshot pool shares        {:>12}  (our side: lp_positions)\n\
          \n  CORRECTIONS{}\n    \
-         balances rows         {:>12}\n    \
-         account_entry_state   {:>12}\n    \
-         asset stubs           {:>12}\n    \
-         account stubs         {:>12}\n\
+         balances                     {:>12}\n    \
+         claimable_balance_holdings   {:>12}\n    \
+         liquidity_pools              {:>12}\n    \
+         liquidity_pool_snapshots     {:>12}\n    \
+         account_entry_state          {:>12}\n    \
+         assets (stubs)               {:>12}\n    \
+         accounts (stubs)             {:>12}\n\
          \n  UNRESOLVED REFERENCES (must be 0 for the first two)\n    \
          assets a seeded balance points at  {:>12}\n    \
          holders a seeded balance is for    {:>12}\n    \
@@ -693,7 +700,7 @@ pub async fn seed_command(
         report
             .native
             .render("NATIVE XLM holdings (AccountEntry, not a trustline)", true),
-        claimable::render_summary(&report, &corr.claimable, &coverage),
+        claimable::render_summary(&report, &coverage),
         pools::render_summary(&corr.pools),
         report.render_missing_histogram(),
         excluded_contract,
@@ -705,6 +712,9 @@ pub async fn seed_command(
             " — dry-run, nothing inserted"
         },
         corr.balances.len(),
+        corr.claimable.rows.len(),
+        corr.pools.pool_rows.len(),
+        corr.pools.snapshot_rows.len(),
         corr.entry_states.len(),
         corr.asset_stubs.len(),
         corr.account_stubs.len(),

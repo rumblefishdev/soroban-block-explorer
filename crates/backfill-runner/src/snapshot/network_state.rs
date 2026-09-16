@@ -541,23 +541,28 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
     }
 }
 
-/// Resolve a bucket list and fold every bucket into a deduplicated
-/// [`NetworkState`]: build the HTTP client, take the freshest
-/// checkpoint, stream all 21 buckets, print the distinct-entry report.
+/// The freshest checkpoint the archive advertises — one small manifest, so the
+/// seed can check everything that depends only on the checkpoint ledger before
+/// it downloads the buckets.
 ///
-/// The checkpoint is always the freshest the archive advertises. That is
-/// complete by construction — stellar-core writes the `.well-known` manifest
+/// Complete by construction — stellar-core writes the `.well-known` manifest
 /// LAST, as an atomic commit point, and discards a failed publication rather
 /// than exposing half of it.
+pub(crate) async fn latest_checkpoint() -> Result<BucketList, BackfillError> {
+    fetch_bucket_list(&archive_client()?, PUBNET_ARCHIVE).await
+}
+
+/// Fold every bucket of `list` into a deduplicated [`NetworkState`]: stream all
+/// 21 buckets, print the distinct-entry report.
 ///
 /// Memory is the distinct-entry count, not the record count: ~124M records
 /// collapse onto the accounts + trustlines the network actually holds.
 pub(crate) async fn open_snapshot(
+    list: &BucketList,
     label: &str,
-) -> Result<(BucketList, NetworkState, String), BackfillError> {
+) -> Result<(NetworkState, String), BackfillError> {
     let started = std::time::Instant::now();
     let http = archive_client()?;
-    let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
     let n_buckets = list.hashes.len();
     println!(
         "checkpoint ledger {} — {n_buckets} buckets{label}",
@@ -637,7 +642,7 @@ pub(crate) async fn open_snapshot(
     );
     println!("{source_report}");
 
-    Ok((list, state, source_report))
+    Ok((state, source_report))
 }
 
 /// DISTINCT-entry report after first-wins, printed before our rows are folded

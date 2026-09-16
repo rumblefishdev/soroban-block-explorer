@@ -163,19 +163,10 @@ pub(crate) async fn build_corrections(
 }
 
 /// The claimable balance block of `summary.txt`.
-pub(crate) fn render_summary(
-    report: &Report,
-    corr: &ClaimableCorrections,
-    coverage: &Result<(), String>,
-) -> String {
+pub(crate) fn render_summary(report: &Report, coverage: &Result<(), String>) -> String {
     let mut out = report
         .claimable
         .render("CLAIMABLE BALANCES (ClaimableBalanceEntry)", false);
-    let _ = writeln!(
-        out,
-        "    corrections to {TABLE:<26} {:>12}",
-        corr.rows.len()
-    );
     match coverage {
         Ok(()) => out.push_str("    writer coverage: checkpoint is covered\n"),
         Err(why) => {

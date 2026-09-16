@@ -174,12 +174,6 @@ pub(crate) fn render_summary(corr: &PoolCorrections) -> String {
     );
     let _ = writeln!(
         out,
-        "    snapshot rows / pool rows to insert   {:>12} / {}",
-        corr.snapshot_rows.len(),
-        corr.pool_rows.len()
-    );
-    let _ = writeln!(
-        out,
         "    gone from the network, reserves ours  {:>12}  (reported only: pools_gone.tsv)",
         corr.gone_with_reserves.len()
     );
