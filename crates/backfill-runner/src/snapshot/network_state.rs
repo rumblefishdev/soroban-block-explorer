@@ -281,12 +281,10 @@ impl NetworkState {
                 asset,
                 entry,
             } => {
-                // Only the newest record registers its asset, like the detail
-                // of an account above.
+                // An asset id hashes its code and issuer, so any record of it
+                // registers the same identity.
                 let asset_id = asset.map(|(asset_id, identity)| {
-                    if !self.claimable_balances.contains_key(&holder_id)
-                        && let Some(identity) = identity
-                    {
+                    if let Some(identity) = identity {
                         self.asset_registry.entry(asset_id).or_insert(identity);
                     }
                     asset_id
