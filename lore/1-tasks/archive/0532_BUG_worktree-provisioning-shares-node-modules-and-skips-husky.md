@@ -2,9 +2,9 @@
 id: '0532'
 title: 'Worktree provisioning symlinks node_modules and skips husky — typechecks the wrong branch, and no pre-commit gate'
 type: BUG
-status: backlog
+status: superseded
 related_adr: []
-related_tasks: ['0528']
+related_tasks: ['0528', '0554']
 tags: ['tooling', 'dx', 'worktree', 'ci', 'effort-small']
 links: []
 history:
@@ -19,6 +19,14 @@ history:
       another branch's API types. Separately `.husky/_` is not created, so the
       pre-commit gate silently does not run: a file with unclosed Rust
       delimiters committed cleanly.
+  - date: '2026-09-15'
+    status: superseded
+    who: karolkow
+    by: ['0554']
+    note: >
+      Absorbed by the npm → pnpm migration. Per-worktree `pnpm install`
+      replaces the symlinked `node_modules` (defect 1) and runs husky's
+      `prepare` (defect 2). All four acceptance criteria carried into 0554.
 ---
 
 # Worktree provisioning shares node_modules and skips husky

@@ -139,20 +139,17 @@ jobs:
             echo "$scope"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      # No node_modules cache: pnpm gives each workspace package (web/, infra/,
+      # libs/*) its own node_modules, so caching the root directory alone would
+      # restore half a tree. setup-node caches the pnpm store instead, which
+      # turns the install into linking.
       - uses: actions/setup-node@v4
-        id: setup-node
         with:
           node-version-file: .nvmrc
-          cache: npm
-      - name: Cache node_modules
-        id: cache-node-modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.setup-node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+          cache: pnpm
       - name: Install dependencies
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       # The Rust/CDK steps are gated off for `-web` (stacks == ''): a
       # content-only sync has no use for an 11-minute Lambda build, and the
       # price is only that a `-web` run leaves no drift record — every other
@@ -183,7 +180,7 @@ jobs:
           aws-region: eu-central-1
       - name: Build CDK app
         if: steps.plan.outputs.stacks != ''
-        run: npx nx build @rumblefish/soroban-block-explorer-aws-cdk
+        run: pnpm nx build @rumblefish/soroban-block-explorer-aws-cdk
       # ALL stacks, not just the selected ones. This step is the release's
       # drift record: a delta parked in a stack this tag does not deploy shows
       # up here, at release time, in front of whoever cut the tag. Never add
@@ -198,11 +195,11 @@ jobs:
       - name: cdk diff — every stack, deployed or not
         if: steps.plan.outputs.stacks != ''
         run: |
-          cd infra && npx cdk --app "node dist/bin/production.js" diff --strict
+          cd infra && pnpm exec cdk --app "node dist/bin/production.js" diff --strict
       - name: CDK deploy
         if: steps.plan.outputs.stacks != ''
         run: |
-          cd infra && npx cdk --app cdk.out \
+          cd infra && pnpm exec cdk --app cdk.out \
             deploy ${{ steps.plan.outputs.stacks }} ${{ steps.plan.outputs.exclusively }} \
             --require-approval never
         env:

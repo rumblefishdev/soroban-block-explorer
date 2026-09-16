@@ -155,7 +155,17 @@ fn column_order_soroban_contracts() {
             "deployed_at_ledger",
             "contract_type",
             "is_sac",
+            "executable_owner_id",
+            "executable_tag",
         ],
+    );
+}
+
+#[test]
+fn column_order_contract_executable_refs() {
+    assert_columns::<ContractExecutableRefRow>(
+        "contract_executable_refs",
+        &["owner_id", "tag", "wasm_hash", "ledger"],
     );
 }
 
@@ -1317,8 +1327,11 @@ fn prepare_is_deterministic_across_runs() {
     assert_eq!(a.ledger_rows[0].sequence, b.ledger_rows[0].sequence);
 }
 
+/// Task 0548 — a contract we have only ever SEEN MENTIONED gets no
+/// `soroban_contracts` row at all. Claiming a deployment we never observed is
+/// what put 54 addresses with nothing behind them into the public contracts list.
 #[test]
-fn prepare_emits_stub_soroban_contract_rows_for_referenced_only() {
+fn a_merely_referenced_contract_gets_no_contract_row() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x70);
     let referenced_contract = "C".to_string() + &"E".repeat(55);
@@ -1356,16 +1369,17 @@ fn prepare_emits_stub_soroban_contract_rows_for_referenced_only() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.contract_rows.len(), 1);
-    let row = &staged.contract_rows[0];
-    assert_eq!(row.contract_id, referenced_contract);
-    assert_eq!(row.id, ids::contract_id(&referenced_contract));
-    assert_eq!(row.wasm_uploaded_at_ledger, 0);
-    assert!(row.wasm_hash.is_none());
-    assert!(!row.is_sac);
+    assert!(
+        staged.contract_rows.is_empty(),
+        "we never saw it deployed, so we must not say it was"
+    );
 
-    // FK from event references the same id.
-    assert_eq!(staged.event_rows[0].contract_id, row.id);
+    // The event keeps its surrogate; there is simply no contract row to
+    // resolve it against, which is the accepted trade-off.
+    assert_eq!(
+        staged.event_rows[0].contract_id,
+        ids::contract_id(&referenced_contract)
+    );
 }
 
 #[test]
@@ -1375,6 +1389,7 @@ fn prepare_does_not_duplicate_when_contract_both_deployed_and_referenced() {
     let contract = "C".to_string() + &"7".repeat(55);
 
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: None,
         deployer_account: None,
@@ -1526,6 +1541,7 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
 
     let iface = nft_classified_interface(&wasm_hex);
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: Some(wasm_hex.clone()),
         deployer_account: None,
@@ -1595,6 +1611,7 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
     // No interface in THIS ledger — the upload happened earlier. The verdict
     // comes only from the pre-fetched cross-ledger map (keyed by raw hash).
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: Some(wasm_hex.clone()),
         deployer_account: None,
@@ -1624,6 +1641,7 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -1662,6 +1680,7 @@ fn prepare_emits_soroban_asset_row_for_fungible_contract() {
     let wasm_hex = "33".repeat(32);
     let iface = fungible_classified_interface(&wasm_hex);
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: Some(wasm_hex.clone()),
         deployer_account: None,
@@ -1711,6 +1730,7 @@ fn prepare_no_soroban_asset_row_for_nft_contract() {
     let wasm_hex = "44".repeat(32);
     let iface = nft_classified_interface(&wasm_hex);
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: Some(wasm_hex.clone()),
         deployer_account: None,
@@ -1785,6 +1805,7 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -1828,6 +1849,7 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -1873,6 +1895,7 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         nft_events: std::slice::from_ref(&ev),
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -1903,6 +1926,7 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
     let wasm_hex = "11".repeat(32);
 
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: Some(wasm_hex.clone()),
         deployer_account: None,
@@ -1930,6 +1954,7 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -1960,6 +1985,7 @@ fn prepare_keeps_other_when_no_prior_verdict() {
     let wasm_hex = "11".repeat(32);
 
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: Some(wasm_hex.clone()),
         deployer_account: None,
@@ -1985,6 +2011,7 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -2016,6 +2043,7 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
 
     let iface = fungible_classified_interface(&wasm_hex);
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: Some(wasm_hex.clone()),
         deployer_account: None,
@@ -2139,6 +2167,7 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -2218,6 +2247,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
 
     let xlm_sac = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: xlm_sac.to_string(),
         wasm_hash: None,
         deployer_account: None,
@@ -2247,6 +2277,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -2326,6 +2357,7 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[],
         sac_classic: &std::collections::HashMap::new(),
@@ -2377,6 +2409,24 @@ fn executable_update_event(contract: &str) -> ExtractedEvent {
     }
 }
 
+/// The CAP-85 shape of the same event: the new executable is
+/// `vec[Symbol("ExternalRef"), map{owner, tag}]`, per the CAP.
+fn external_ref_update_event(contract: &str, owner: &str, tag: &str) -> ExtractedEvent {
+    let mut ev = executable_update_event(contract);
+    ev.topics = serde_json::json!([
+        {"type":"sym","value":"executable_update"},
+        {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"ERERERERERERERERERERERERERERERERERERERERERE="}]},
+        {"type":"vec","value":[
+            {"type":"sym","value":"ExternalRef"},
+            {"type":"map","value":[
+                {"key":{"type":"sym","value":"owner"},"value":{"type":"address","value":owner}},
+                {"key":{"type":"sym","value":"tag"},"value":{"type":"string","value":tag}}
+            ]}
+        ]}
+    ]);
+    ev
+}
+
 /// A prior `soroban_contracts` row for the upgrade-prefetch map. Only the
 /// identity columns are meaningful here; `wasm_hash` / `wasm_uploaded_at_ledger`
 /// are the pre-upgrade values that `build_wasm_upgrade_rows` overrides.
@@ -2396,6 +2446,8 @@ fn prior_contract_row(
         deployed_at_ledger,
         contract_type,
         is_sac,
+        executable_owner_id: None,
+        executable_tag: None,
     }
 }
 
@@ -2424,6 +2476,64 @@ fn build_wasm_upgrade_rows_carries_identity_and_overrides_hash() {
     assert_eq!(r.deployed_at_ledger, Some(100), "deploy ledger carried");
     assert_eq!(r.contract_type, Some(1), "verdict carried (no flip)");
     assert!(!r.is_sac);
+}
+
+/// Task 0548 / CAP-85 — the same event can hand the contract's code to another
+/// contract. The row must then STOP claiming a hash of its own: leaving the
+/// pre-upgrade one in place is precisely the stale hash 0320/0326 fixed, and it
+/// would be worse than a blank, because the detail page and the decompiler
+/// would both serve real-looking code the contract no longer runs.
+#[test]
+fn an_external_ref_upgrade_clears_the_hash_and_records_the_reference() {
+    let addr = "C".to_string() + &"U".repeat(55);
+    let owner = "C".to_string() + &"O".repeat(55);
+    let events = vec![(
+        "abcd".to_string(),
+        vec![external_ref_update_event(&addr, &owner, "fleet-v2")],
+    )];
+
+    let mut prior = std::collections::HashMap::new();
+    prior.insert(
+        addr.clone(),
+        prior_contract_row(&addr, Some(7), Some(100), Some(1), false),
+    );
+
+    let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
+
+    assert_eq!(rows.len(), 1);
+    let r = &rows[0];
+    assert_eq!(
+        r.wasm_hash, None,
+        "the instance states no hash of its own any more"
+    );
+    assert_eq!(r.executable_owner_id, Some(ids::contract_id(&owner)));
+    assert_eq!(r.executable_tag.as_deref(), Some("fleet-v2"));
+    assert_eq!(r.wasm_uploaded_at_ledger, 555);
+    assert_eq!(r.deployer_id, Some(7), "identity still carried forward");
+}
+
+/// The reverse move, which CAP-85 also allows: a fleet member takes its own
+/// code back. The reference has to go, or the read path would keep resolving
+/// through an owner this contract no longer follows.
+#[test]
+fn a_wasm_upgrade_clears_a_previously_set_reference() {
+    let addr = "C".to_string() + &"U".repeat(55);
+    let events = vec![("abcd".to_string(), vec![executable_update_event(&addr)])];
+
+    let mut prior_row = prior_contract_row(&addr, Some(7), Some(100), Some(1), false);
+    prior_row.wasm_hash = None;
+    prior_row.executable_owner_id = Some(42);
+    prior_row.executable_tag = Some("fleet-v1".to_string());
+    let mut prior = std::collections::HashMap::new();
+    prior.insert(addr.clone(), prior_row);
+
+    let rows = stage::build_wasm_upgrade_rows(&events, &prior, 555);
+
+    assert_eq!(rows.len(), 1);
+    let r = &rows[0];
+    assert_eq!(r.wasm_hash, Some([0x22u8; 32]));
+    assert_eq!(r.executable_owner_id, None, "the reference must not linger");
+    assert_eq!(r.executable_tag, None);
 }
 
 #[test]
@@ -2911,6 +3021,7 @@ fn same_ledger_nft_owner_flip_keeps_the_last_owner() {
     let wasm_hex = "22".repeat(32);
     let iface = nft_classified_interface(&wasm_hex);
     let dep = ExtractedContractDeployment {
+        executable_ref: None,
         contract_id: contract.clone(),
         wasm_hash: Some(wasm_hex.clone()),
         deployer_account: None,
@@ -3196,6 +3307,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
@@ -3214,6 +3326,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[xdr_parser::pool_family::PoolFamilyWrite::RouterPool(
             instance.clone(),
@@ -3281,6 +3394,7 @@ fn pool_instance_declaring(
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     }
 }
 
@@ -3312,6 +3426,7 @@ fn stage_registration(
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &writes,
         sac_classic: &std::collections::HashMap::new(),
@@ -3361,6 +3476,7 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
@@ -3379,6 +3495,7 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[
             xdr_parser::pool_family::PoolFamilyWrite::RouterPlane(plane_write.clone()),
@@ -3578,6 +3695,110 @@ fn prepare_ignores_a_registration_from_the_diagnostic_container() {
     );
 }
 
+#[cfg(test)]
+fn stage_router_writes(writes: &[xdr_parser::pool_family::PoolFamilyWrite]) -> stage::StagedLedger {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x51);
+    stage::prepare_with_sac_overrides(&stage::StageInputs {
+        ledger: &ledger,
+        transactions: std::slice::from_ref(&tx),
+        operations: &[(tx.hash.clone(), vec![])],
+        events: &[],
+        invocations: &[],
+        contract_interfaces: &[],
+        contract_deployments: &[],
+        account_states: &[],
+        liquidity_pools: &[],
+        pool_snapshots: &[],
+        assets: &[],
+        nfts: &[],
+        nft_events: &[],
+        lp_positions: &[],
+        contract_metadata_writes: &[],
+        executable_ref_targets: &[],
+        soroban_token_balances: &[],
+        pool_family_writes: writes,
+        sac_classic: &std::collections::HashMap::new(),
+        sac_overrides: &[],
+        prior_wasm_verdicts: &std::collections::HashMap::new(),
+        prior_contract_verdicts: &std::collections::HashMap::new(),
+        prior_contract_rows: &std::collections::HashMap::new(),
+        asset_transfers: &[],
+    })
+    .expect("prepare")
+}
+
+#[cfg(test)]
+const C_PRIME_POOL: &str = "CCI5UGNCHE5PBINLZKSFFCMBUVJYWYDPKDZS54JD6TGJBA7MCG3YXNT5";
+#[cfg(test)]
+const C_PRIME_PLANE: &str = "CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY";
+
+#[cfg(test)]
+fn c_prime_plane_write() -> xdr_parser::pool_family::PoolFamilyWrite {
+    // The plane row of mixed-decimal stable pool CCI5UGNC at 64,393,803:
+    // second leg × PrecisionMul (10^11).
+    xdr_parser::pool_family::PoolFamilyWrite::RouterPlane(
+        xdr_parser::pool_state::ExtractedPlanePoolData {
+            data: xdr_parser::pool_state::PlanePoolData {
+                plane: C_PRIME_PLANE.into(),
+                pool: C_PRIME_POOL.into(),
+                reserves: vec!["22168059846400376042".into(), "8287758700000000000".into()],
+            },
+            ledger_sequence: 10,
+        },
+    )
+}
+
+#[cfg(test)]
+fn c_prime_instance(reserves_changed: bool) -> xdr_parser::pool_family::PoolFamilyWrite {
+    xdr_parser::pool_family::PoolFamilyWrite::RouterPool(
+        xdr_parser::pool_state::ExtractedPoolInstance {
+            state: xdr_parser::pool_state::PoolInstanceState {
+                pool: C_PRIME_POOL.into(),
+                token_share: None,
+                total_shares: None,
+                plane: Some(C_PRIME_PLANE.into()),
+                router: None,
+                // The same pool's own storage in the same ledger: raw units.
+                reserves: vec!["22168059846400376042".into(), "82877587".into()],
+            },
+            ledger_sequence: 10,
+            created: false,
+            reserves_changed,
+        },
+    )
+}
+
+/// Decision C′ (task 0374): a mixed-decimal stable pool stages the RAW units
+/// from its own storage, under the plane it declares — never the plane row's
+/// normalised figure.
+#[test]
+fn router_reserves_come_from_the_pools_own_storage() {
+    let staged = stage_router_writes(&[c_prime_plane_write(), c_prime_instance(true)]);
+    assert_eq!(staged.pool_state_change_rows.len(), 1);
+    let row = &staged.pool_state_change_rows[0];
+    assert_eq!(row.reserves, vec![22168059846400376042i128, 82877587]);
+    assert_eq!(row.plane_id, ids::contract_id(C_PRIME_PLANE));
+}
+
+/// The plane is a quote-input sheet, not a reserve source: its write alone
+/// stages nothing.
+#[test]
+fn a_plane_write_alone_stages_no_reserve_row() {
+    let staged = stage_router_writes(&[c_prime_plane_write()]);
+    assert!(staged.pool_state_change_rows.is_empty());
+}
+
+/// Rule 2 of decision C′: an instance rewrite that leaves the reserves where
+/// they were (a reward or config call) is not a reserve event — but what the
+/// pool declares about itself still lands.
+#[test]
+fn an_instance_rewrite_with_unchanged_reserves_stages_no_reserve_row() {
+    let staged = stage_router_writes(&[c_prime_instance(false)]);
+    assert!(staged.pool_state_change_rows.is_empty());
+    assert_eq!(staged.pool_instance_state_rows.len(), 1);
+}
+
 #[test]
 fn prepare_stages_plane_writes_and_instance_share_tokens() {
     // Real values end to end: the plane write and instance from registration
@@ -3607,10 +3828,13 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             total_shares: None,
             plane: Some(PLANE.into()),
             router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
-            reserves: Vec::new(),
+            // Decision C′: the constant pool's own `ReserveA`/`ReserveB` —
+            // equal to its plane row, as for every constant pool measured.
+            reserves: vec!["100000000000".into(), "30617317".into()],
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     };
     // A concentrated-style instance (no share token) stages its PLANE, with
     // the structural share_token_id = 0.
@@ -3627,6 +3851,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         },
         ledger_sequence: 10,
         created: true,
+        reserves_changed: true,
     };
 
     let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
@@ -3645,6 +3870,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &[
             xdr_parser::pool_family::PoolFamilyWrite::RouterPlane(plane_write.clone()),
@@ -3663,7 +3889,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
     assert_eq!(
         staged.pool_state_change_rows.len(),
         2,
-        "one plane-sourced (fungible) + one instance-sourced (concentrated)"
+        "one per pool, both from the pool's own storage (fungible + concentrated)"
     );
     // Rows are distinguished by their reserve VALUES — the (pool, ledger)
     // grain carries no intra-ledger fields any more (parse-time collapse).
@@ -3676,7 +3902,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         .pool_state_change_rows
         .iter()
         .find(|r| r.reserves == vec![100000000000i128, 30617317i128])
-        .expect("fungible snapshot from the plane");
+        .expect("fungible snapshot from the pool's own storage");
     assert_eq!(snap.plane_id, ids::contract_id(PLANE));
     assert_ne!(
         conc_snap.pool_id, snap.pool_id,
@@ -3796,6 +4022,7 @@ fn stage_factory_pair(
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &writes,
         sac_classic: &std::collections::HashMap::new(),
@@ -4027,6 +4254,7 @@ fn stage_config_pool(
         nft_events: &[],
         lp_positions: &[],
         contract_metadata_writes: &[],
+        executable_ref_targets: &[],
         soroban_token_balances: &[],
         pool_family_writes: &writes,
         sac_classic: &std::collections::HashMap::new(),

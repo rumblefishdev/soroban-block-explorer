@@ -100,11 +100,12 @@
       "Bash(cargo test:*)",
       "Bash(cargo clippy:*)",
       "Bash(cargo check:*)",
-      "Bash(npx nx run @rumblefish/api-types:check-generated:*)",
-      "Bash(npx nx run @rumblefish/api-types:generate:*)"
+      "Bash(pnpm nx run @rumblefish/api-types:check-generated:*)",
+      "Bash(pnpm nx run @rumblefish/api-types:generate:*)"
     ],
     "deny": [],
     "ask": [
+      "Bash(pnpm:*)",
       "Bash(npm:*)",
       "Bash(npx:*)",
       "Bash(node:*)",

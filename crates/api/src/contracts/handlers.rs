@@ -167,6 +167,8 @@ pub async fn get_contract(
     let response = Arc::new(ContractDetailResponse {
         contract_id: contract.contract_id,
         wasm_hash: contract.wasm_hash,
+        executable_owner: contract.executable_owner,
+        executable_tag: contract.executable_tag,
         wasm_uploaded_at_ledger: contract.wasm_uploaded_at_ledger,
         deployer: contract.deployer,
         deployed_at_ledger: contract.deployed_at_ledger,

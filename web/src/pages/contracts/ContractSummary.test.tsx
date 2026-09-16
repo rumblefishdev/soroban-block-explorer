@@ -82,3 +82,40 @@ describe('ContractSummary SAC asset row (task 0472)', () => {
     expect(screen.queryByText('Issuer')).toBeNull();
   });
 });
+
+describe('ContractSummary externally managed executable (task 0548)', () => {
+  const OWNER = 'CBGVOLVXQ4XJZC6F4CQKWNKA4VL36VYVVSMV2RJD3QFYVI6RCJFJDDOF';
+
+  it('names the owner and tag, and labels the hash as resolved', () => {
+    renderWithProviders(
+      <ContractSummary
+        contract={makeContract({
+          wasm_hash: 'bb'.repeat(32),
+          executable_owner: OWNER,
+          executable_tag: 'fleet-v2',
+        })}
+      />
+    );
+
+    expect(screen.getByText('Executable')).toBeInTheDocument();
+    expect(screen.getByText('Managed by')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^CBGV/ })).toHaveAttribute(
+      'href',
+      routes.contract(OWNER)
+    );
+    expect(screen.getByText('fleet-v2')).toBeInTheDocument();
+    expect(screen.getByText('WASM hash (resolved)')).toBeInTheDocument();
+  });
+
+  it('keeps the plain WASM hash label and no Executable row for own code', () => {
+    renderWithProviders(
+      <ContractSummary
+        contract={makeContract({ wasm_hash: 'aa'.repeat(32) })}
+      />
+    );
+
+    expect(screen.getByText('WASM hash')).toBeInTheDocument();
+    expect(screen.queryByText('Executable')).toBeNull();
+    expect(screen.queryByText('WASM hash (resolved)')).toBeNull();
+  });
+});

@@ -672,25 +672,27 @@ decoded by two sibling modules:
   its corpus oracle in `tests/`, because instance state is the primary source.
   Verified against the full mainnet population: 497/497 registrations decode,
   0 false positives on a 307-event all-signatures negative corpus.
-- **`pool_state.rs`** — reserves from ledger-entry changes, two layouts:
-  `parse_plane_pool_data` reads the deployment's shared plane contract's
-  `PoolData[pool]` entries (fungible pools; reserves vector VERBATIM);
+- **`pool_state.rs`** — reserves from ledger-entry changes:
   `parse_pool_instance` reads a pool instance's `TokenShare` / `Plane` /
-  `Router` keys plus `Reserve0`/`Reserve1` — `Plane` is the key that makes it a
-  pool, while `Router` is absent on an older contract version (five of the ten
-  live deployments, measured on chain) and is therefore optional (concentrated pools keep reserves
-  on their own instance — the plane holds their `PoolData` only at
-  registration). Extraction mirrors the token-balance extractors: state
-  images from created/updated/restored changes only. Verified by a
-  bidirectional anti-test against the routers' own `update_reserves` events
-  (0 missing, 0 foreign captures, last-write-per-ledger values 17/17).
+  `Router` keys plus its reserves in raw units from whichever of the three
+  layouts its code uses (`ReserveA`/`ReserveB`, `Reserves`,
+  `Reserve0`/`Reserve1` — the only three across all 58 code versions pools have
+  run) and `PrecisionMul`. `Plane` is the key that makes it a pool, while
+  `Router` is absent on an older contract version (five of the ten live
+  deployments, measured on chain) and is therefore optional.
+  `extract_pool_instances` compares each post-image with its `state`
+  pre-image and flags whether the reserves moved.
+  `parse_plane_pool_data` still reads the plane's `PoolData[pool]`, but only
+  to notice an instance layout whose reserve keys we do not read (decision
+  C′): the plane carries `Reserves × PrecisionMul`, the units a stable pool's
+  swap math runs in.
 
 Note the asymmetry between the two, which the storage contract depends on:
 `parse_pool_instance` keys on the entry's OWNER (the pool contract itself), so
 a pool can only ever describe itself, while `parse_plane_pool_data` takes the
 pool identity from the entry's KEY PAYLOAD and uses the owner only as the
-`plane` attribution. That is why the plane's claim is authoritative for
-reserves only once a read pairs it with the plane the pool itself declares.
+`plane` attribution. That asymmetry is one reason reserves are now read from
+the owner-keyed side, where no third party can publish them.
 
 Both feed `persist::stage`, which writes the `liquidity_pools` registry rows
 (`pool_kind = 1`), `pool_state_changes` and `pool_instance_state` (see the

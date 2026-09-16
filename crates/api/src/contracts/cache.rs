@@ -42,6 +42,8 @@ mod tests {
         ContractDetailResponse {
             contract_id: contract_id.to_string(),
             wasm_hash: None,
+            executable_owner: None,
+            executable_tag: None,
             wasm_uploaded_at_ledger: None,
             deployer: None,
             deployed_at_ledger: None,

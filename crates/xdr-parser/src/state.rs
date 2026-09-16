@@ -107,6 +107,7 @@ pub fn extract_contract_deployments(
         deployments.push(ExtractedContractDeployment {
             contract_id,
             wasm_hash,
+            executable_ref: crate::executable_ref::external_ref_from_instance(data),
             deployer_account,
             deployed_at_ledger: change.ledger_sequence,
             contract_type,
@@ -2731,6 +2732,7 @@ mod tests {
         // the SAC handle rides in `sac_contract_id` (+ `sac_deployed = true`),
         // NOT a separate `asset_type`; the key `contract_id` stays unset.
         let deployments = vec![ExtractedContractDeployment {
+            executable_ref: None,
             contract_id: "CSAC456".into(),
             wasm_hash: None,
             deployer_account: None,
@@ -2762,6 +2764,7 @@ mod tests {
         // ADR 0051: a SAC deploy wrapping native XLM folds onto the native
         // (type=0) row — NULL code/issuer, SAC handle in `sac_contract_id`.
         let deployments = vec![ExtractedContractDeployment {
+            executable_ref: None,
             contract_id: "CXLM_SAC".into(),
             wasm_hash: None,
             deployer_account: None,
@@ -2787,6 +2790,7 @@ mod tests {
         // batch (replay from mid-ledger). No asset row produced —
         // better to lose one row than fabricate identity.
         let deployments = vec![ExtractedContractDeployment {
+            executable_ref: None,
             contract_id: "CORPHAN".into(),
             wasm_hash: None,
             deployer_account: None,
@@ -2805,6 +2809,7 @@ mod tests {
         // No matching interface in this batch → skip; late-WASM bridge
         // in persist layer handles reclassification/backfill.
         let deployments = vec![ExtractedContractDeployment {
+            executable_ref: None,
             contract_id: "CABC123".into(),
             wasm_hash: Some("aa".repeat(32)),
             deployer_account: None,
@@ -2823,6 +2828,7 @@ mod tests {
         // SEP-0041 surface → ContractClassification::Fungible → Soroban asset row.
         let wasm = "aa".repeat(32);
         let deployments = vec![ExtractedContractDeployment {
+            executable_ref: None,
             contract_id: "CFUN001".into(),
             wasm_hash: Some(wasm.clone()),
             deployer_account: None,
@@ -2849,6 +2855,7 @@ mod tests {
         // NFT-classified contracts live in the `nfts` table, not `assets`.
         let wasm = "bb".repeat(32);
         let deployments = vec![ExtractedContractDeployment {
+            executable_ref: None,
             contract_id: "CNFT002".into(),
             wasm_hash: Some(wasm.clone()),
             deployer_account: None,
@@ -2869,6 +2876,7 @@ mod tests {
         // may promote it via reclassify_contracts_from_wasm.
         let wasm = "cc".repeat(32);
         let deployments = vec![ExtractedContractDeployment {
+            executable_ref: None,
             contract_id: "COTH003".into(),
             wasm_hash: Some(wasm.clone()),
             deployer_account: None,
@@ -2890,6 +2898,7 @@ mod tests {
         // behaviour: the contract goes to `nfts` filter — NOT `assets`.
         let wasm = "dd".repeat(32);
         let deployments = vec![ExtractedContractDeployment {
+            executable_ref: None,
             contract_id: "CDUAL04".into(),
             wasm_hash: Some(wasm.clone()),
             deployer_account: None,
@@ -2909,6 +2918,7 @@ mod tests {
         let wasm = "ee".repeat(32);
         let deployments = vec![
             ExtractedContractDeployment {
+                executable_ref: None,
                 contract_id: "CSAC005".into(),
                 wasm_hash: None,
                 deployer_account: None,
@@ -2921,6 +2931,7 @@ mod tests {
                 }),
             },
             ExtractedContractDeployment {
+                executable_ref: None,
                 contract_id: "CFUN006".into(),
                 wasm_hash: Some(wasm.clone()),
                 deployer_account: None,

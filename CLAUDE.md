@@ -34,6 +34,15 @@ committed. Move files to the **main checkout's** `.trash/`, never a worktree's:
 removing a merged or abandoned worktree deletes its trash with it, and the
 policy is then satisfied in letter while the file is gone.
 
+## Git Hooks — never bypass
+
+**`git commit` / `git push` with `--no-verify` (or `-n`) is FORBIDDEN.** The
+husky hooks (lint-staged, affected lint/typecheck/build/test, clippy) are the
+only gate before code lands on `develop`. A hook failing because tooling is
+missing — e.g. no `node_modules` in a worktree — is fixed with `pnpm install`,
+then the commit or push is re-run with hooks on. A real failure is fixed in
+the diff, not silenced.
+
 ## Task-Gated Development
 
 **Writing code without an active task is FORBIDDEN.**
@@ -51,7 +60,7 @@ be regenerated before commit (CI gate `API types freshness`):
 Command:
 
 ```bash
-npx nx run @rumblefish/api-types:generate
+pnpm nx run @rumblefish/api-types:generate
 ```
 
 This runs `cargo run -p api --bin extract_openapi > libs/api-types/src/openapi.json`
@@ -86,7 +95,7 @@ per-layer deep-dives (`infra/README.md`, `infra-hetzner/README.md`,
 
 | Guide | Read before… | Non-obvious constraint it encodes |
 |-------|--------------|-----------------------------------|
-| [`docs/deployment.md`](./docs/deployment.md) | shipping anything | Production is the only environment and **every deploy is manual** from a laptop. The `staging` CI path is dead — `make deploy-staging` / `npm run infra:*:staging` do not exist. |
+| [`docs/deployment.md`](./docs/deployment.md) | shipping anything | Production is the only environment and **every deploy is manual** from a laptop. The `staging` CI path is dead — `make deploy-staging` / `pnpm run infra:*:staging` do not exist. |
 | [`docs/backfills.md`](./docs/backfills.md) | any backfill / re-parse | **`repair-tier1` is mandatory** after a parallel or `--reindex` run — RMT cannot express MIN semantics, so 12 Tier-1 columns corrupt silently. Some subcommands require the indexer stopped (`EXCHANGE TABLES` is the dividing line). |
 | [`docs/backups.md`](./docs/backups.md) | backups / restore | After a restore the Lambdas **will not re-deliver** the rolled-back range — the gap must be re-ingested with `backfill-runner`. |
 

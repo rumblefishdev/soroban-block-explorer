@@ -2,9 +2,21 @@
 id: '0210'
 title: 'BUG: assets.total_supply Horizon parity — extend MVP sum to 4 sources'
 type: BUG
-status: backlog
-related_adr: ['0043']
-related_tasks: ['0194', '0197', '0331', '0339', '0323']
+status: active
+related_adr: ['0043', '0055', '0056', '0057']
+related_tasks:
+  [
+    '0194',
+    '0197',
+    '0331',
+    '0339',
+    '0323',
+    '0499',
+    '0504',
+    '0515',
+    '0523',
+    '0540',
+  ]
 tags:
   [priority-high, effort-medium, layer-indexer, layer-xdr-parsing, correctness]
 milestone: 2
@@ -87,6 +99,29 @@ history:
       ingestion path, the naive MV edit costs 3.7x per refresh, and the planned
       synthetic-`balances` mechanism would corrupt `holder_count`. See the
       2026-09-03 section in the body.
+  - date: '2026-09-14'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Data audit on production: do the tables we already hold cover #2 and #3?
+      #3 yes. Every classic pool changed since the floor has snapshots and a
+      complete `legs`, so it is a query with no backfill; pools unchanged since
+      the floor are absent because there was no floor seed. #2 no.
+      `asset_transfers` holds exact claimable-balance flows but not the stock:
+      15% of first-week payouts were created before the floor, and the XLM flow
+      nets to −3,406.68. First run of the XLM identity: 110,054 XLM unexplained
+      out of 105.4 bn. Both gaps close with one checkpoint read, not an S3
+      backfill. See the 2026-09-14 section in the body.
+  - date: '2026-09-15'
+    status: active
+    who: karolkow
+    note: >
+      Promoted, scoped to claimable balances first; classic LP reserves are a
+      later stage. The 2026-09-14 plan item 2 (stock = seed + net `B` edges
+      from `asset_transfers`) is replaced: the stock comes from
+      `ClaimableBalanceEntry` changes in a dedicated table shaped like
+      `balances`, joined to the snapshot reconciliation per ADR 0057.
+      Measurements and the rejected options are in the 2026-09-15 section.
 ---
 
 # BUG: `assets.total_supply` Horizon parity — extend MVP sum to 4 sources
@@ -338,6 +373,258 @@ exceptions as "TTL-archived tail + true rebasing" — neither mentions LP reserv
 or claimable balances, which are the entire measured gap:
 `crates/db-clickhouse/schema/init.sql` (the `soroban_token_supply` tombstone) and
 `crates/api/src/assets/queries.rs` (the `total_supply` header comment).
+
+## 2026-09-14 (stkrolikiewicz) — data audit: do we already hold what #2 and #3 need?
+
+> Read-only, production, tip ≈ 64,422,963. Question: can claimable balances
+> (#2) and classic LP reserves (#3) be computed exactly from tables we already
+> hold, after last week's schema changes (0540 `asset_transfers`, the 0374/0518
+> pool tables, `legs`, 0547)?
+
+**Answer.** #3 yes, for every pool changed since the ingest floor, with no
+backfill. #2 no: the flows are complete, the stock is not, and no S3 re-parse can
+supply it. Both gaps close with one history-archive checkpoint read, not a
+backfill.
+
+### Source #3 — classic LP reserves are a query over data we hold
+
+| measure                                                        | value           |
+| -------------------------------------------------------------- | --------------- |
+| classic pools in `liquidity_pools`                             | 52,927          |
+| with at least one snapshot / with `legs` filled                | 52,927 / 52,927 |
+| `legs[1]` = pair asset A / `legs[2]` = pair asset B            | 52,927 / 52,925 |
+| Soroban pools, excluded (their reserves are contract balances) | 769             |
+| pools whose first snapshot is the floor ledger 50,457,424      | 77              |
+| alive by newest `total_shares` / dead                          | 40,384 / 12,543 |
+
+- `legs` is complete, so the join can go through it. PR #455 makes it the only
+  option once the pair columns are dropped.
+- The two `legs[2]` exceptions are not wrong legs. Their asset B has **no row in
+  `assets`**: pool `C305DB2D…7252` (PIF) and pool `92415CA8…F1C6` (SUR810).
+  Their reserves would attach to an id no reader resolves. That is an `assets`
+  completeness defect, separate from this task.
+- **There was no pool seed at the floor.** Only 77 pools first appear in the
+  floor ledger itself, so a pool unchanged since the floor has no row anywhere.
+  A re-parse of the ingested range cannot add it: it replays ledgers the pool
+  never appears in. Only a checkpoint bucket list can.
+
+How much it matters per asset, with share = LP reserves / (LP reserves +
+`total_supply`):
+
+| measure                                              | value                 |
+| ---------------------------------------------------- | --------------------- |
+| assets that are a leg of at least one classic pool   | 22,254                |
+| share > 1% / > 10% / > 50%                           | 3,686 / 2,290 / 1,468 |
+| `total_supply` 0 or absent while pools hold reserves | 403                   |
+| XLM in classic pool reserves (11,775 pools hold XLM) | 22,541,446.6982385    |
+
+For 1,468 assets the displayed `total_supply` is less than half of what
+balances and pools hold together. The LP half alone fixes most of the visible
+error, which is an input for re-triaging `priority-high`.
+
+Cost: newest reserves for all 52,927 pools (`argMax` over 328,251,520 snapshot
+rows, joined through `legs`) ran in 1.8–2.8 s at `max_threads = 8`. Inside the
+2-minute refreshable MV that is still 30 runs an hour, so the current-state
+table from §3 above stands.
+
+### Source #2 — claimable balances: flows complete, stock missing
+
+`asset_transfers` rows with a `B` endpoint since the floor (raw, before
+deduplication): 411,756,582 into claimable balances and 413,059,014 out of them,
+about 412 M distinct balances on each side. Claimable balances churn
+constantly, so any stock has to be maintained live.
+
+XLM, deduplicated per balance:
+
+| lifecycle inside the window                   | balances | XLM                |
+| --------------------------------------------- | -------- | ------------------ |
+| created and paid out (in = out, 0 mismatches) | 388,907  | 14,158,299.4681639 |
+| created, still open                           | 759      | 5,845.4485101      |
+| paid out, created before the floor            | 917      | 9,252.1287091      |
+| net flow into claimable balances              |          | −3,406.6801990     |
+
+2 × 388,907 + 759 + 917 = 779,490, which is exactly the deduplicated edge
+count. The edges are exact and only the starting stock is missing, which is why
+a flow-only stock goes negative.
+
+All assets, first 120,960 ledgers after the floor (about a week): 5,127,995
+claimable balances paid out, of which **773,252 (15.1%)** have no creation edge.
+They were created before the floor.
+
+### The XLM identity — first run of the 2026-08-18 acceptance criterion
+
+`totalCoins` and `feePool` come from the header of checkpoint 64,422,847 in the
+SDF history archive (`core_live_001`, which lagged the tip by 116 ledgers).
+`feePool` is rolled forward by Σ `fee_charged` over ledgers 64,422,848–64,422,963,
+assuming `fee_charged` is net of Soroban refunds as 0540's T11 found. The
+holdings were read in one statement with the tip at 64,422,963 before and
+after.
+
+| component, XLM                                        | value                                            |
+| ----------------------------------------------------- | ------------------------------------------------ |
+| `totalCoins`                                          | 105,443,902,087.3472865                          |
+| `feePool` at 64,422,963                               | 10,599,177.9387927                               |
+| Σ `balances`, native (accounts and contracts)         | 105,410,645,562.8546771                          |
+| Σ classic LP reserves, native                         | 22,541,446.6982385                               |
+| residual after balances and LP                        | 115,899.8555782                                  |
+| minus open claimable balances created after the floor | 5,845.4485101                                    |
+| **unexplained**                                       | **110,054.4070681**, 1.04 × 10⁻⁶ of `totalCoins` |
+
+The unexplained part is claimable balances created before the floor and still
+open, pools unchanged since the floor, and TTL-archived native contract
+balances. For XLM, the tables we hold explain everything but about one
+millionth. Credit assets have no such identity, so their claimable-balance gap
+cannot be bounded from our data. `ledgers` stores neither `totalCoins` nor
+`feePool`; both came from the archive.
+
+### What this changes in the plan
+
+1. **#3 is a query, with no backfill.** Classic pools only, joined through
+   `legs`, `Decimal(7)` × 10⁷ to raw units.
+2. ~~**#2 needs no new live ingestion path.** Seed the stock once from a
+   checkpoint (`ClaimableBalanceEntry` from the bucket list), then add the net
+   `B` edges from `asset_transfers` after that checkpoint.~~ **Superseded
+   2026-09-15** — see the next section. backfill-runner's `snapshot` module
+   already reads the buckets, but its classifier handles only `Account` and
+   `Trustline` entries today.
+3. **The same checkpoint read closes the dormant-pool gap** through
+   `LiquidityPoolEntry`.
+4. **Store `totalCoins` and `feePool` per ledger from now on.** The XLM identity
+   then runs continuously, and after steps 2 and 3 its residual should fall to
+   the TTL-archived tail.
+5. **Last week's constraints hold.** Supply additions must never flow through
+   `countIf(amount > 0)`, because 0547 sorts the assets list by `holder_count`.
+   Soroban pools stay out: their reserves are contract balances, and
+   `liquidity_pool_snapshots` is classic-only.
+
+## 2026-09-15 (karolkow) — claimable balances first: decisions
+
+> Read-only production measurements, tip ≈ 64,438,376. Scope of this stage:
+> source #2 only. Classic LP reserves (#3) are a later stage.
+
+### D1 — the stock comes from ledger entries, not from flows
+
+A stock computed as seed + Σ edges inherits every edge the decoder drops or
+duplicates, forever; nothing corrects it (baseline ~150 decoder rejects per
+500,000 ledgers, task 0540). `ClaimableBalanceEntry` changes carry the exact
+amount per row and can be corrected from a checkpoint.
+`xdr_parser::ledger_value` already treats `B…` as a holder
+(`crates/xdr-parser/src/ledger_value.rs`). `asset_transfers` stays as an
+independent oracle.
+
+The two sources agree today, window 64,000,000–64,100,000:
+
+| measure                                          | count     |
+| ------------------------------------------------ | --------- |
+| successful `CreateClaimableBalance`              | 807,439   |
+| `asset_transfers` edges into `B…`                | 807,439   |
+| successful claim (521,438) + clawback (134,400)  | 655,838   |
+| `asset_transfers` edges out of `B…`              | 655,838   |
+| failed `CreateClaimableBalance` (create nothing) | 5,233,111 |
+
+`operations_appearances` is folded — `sum(amount)` is the operation count,
+`count()` is rows (106,979 in this window). That is the likely source of
+0504's ~1.7M-per-two-months figure.
+
+Rejected: checkpoint-only refresh (4.5 GB bucket list per read, always behind);
+RPC on demand (`getLedgerEntries` needs keys, cannot list by asset).
+
+### Is it worth doing — per-asset share, estimate
+
+Net flow into `B…` since the floor per asset against `balance_aggregates`
+(excludes CBs created before the floor, no RMT dedup — an estimate):
+
+| open CB share of supply | assets | classic LP reserves, 2026-09-14 |
+| ----------------------- | ------ | ------------------------------- |
+| > 1%                    | 1,725  | 3,686                           |
+| > 10%                   | 703    | 2,290                           |
+| > 50%                   | 313    | 1,468                           |
+| supply 0 or absent      | 332    | 403                             |
+
+### D2 — a dedicated table shaped like `balances` (not `balances` itself)
+
+Lifecycle, 1/64 sample of balance ids since the floor (×64 = estimate):
+
+| measure                         | sample    | ×64    |
+| ------------------------------- | --------- | ------ |
+| balances since floor            | 6,456,608 | ~413 M |
+| removed in the creating ledger  | 0         | 0      |
+| removed within ≤ 100 ledgers    | 0.6%      |        |
+| removed within ≤ 1 day / 1 week | 58% / 96% |        |
+| open, created after the floor   | 14,396    | ~920 k |
+
+Every balance is a live row plus a tombstone: ~46 M rows/year at the current
+rate (estimate; the 2024 wave, ledgers 52–54 M, ran ~9× faster). Removed
+balances in the window above: 655,838, against 87,271 trustline closures in
+`balances` over the ~116,000 ledgers from 64,322,000 — ~8.7× the tombstone rate
+per ledger. Disk is
+not the constraint (~0.6–0.9 GiB/year estimate at 13.8 B/row measured on
+`balances`; 372 GiB free).
+
+Why not `balances`: every existing reader assumes a holder is an account or a
+contract, and `holder_id` is a one-way hash, so a `B…` row cannot be told apart
+in SQL. Concretely, `snapshot-seed` reads every native/classic row that is not a
+contract (`backfill-runner/src/snapshot/seed.rs`), finds no account or
+trustline for a `B…` holder, classifies it `Ghost`, and writes `amount = 0` at
+the checkpoint (`snapshot/verdict.rs`) — every run would zero the open balances.
+`holder_count` (`countIf(amount > 0)`, the assets-list sort key since 0547)
+would count them. The `cityHash64` in ClickHouse is not the writer's
+CityHash-128 low half (checked on three pools: different values), so no SQL
+exclusion is possible without a new column.
+
+The dedicated table touches no existing reader and leaves `holder_count`
+unchanged. `total_supply` becomes the sum of both tables.
+
+### D3 — the boundary rule, to be recorded as an amendment to ADR 0056
+
+A holding lives outside `balances` only when its lifecycle requires it: mass
+churn, and an id that is never reused, so all versions of a closed key can be
+hard-deleted safely. Claimable balances qualify (the id hashes the creating
+operation). Classic pool reserves do not (low churn; a removed pool's id comes
+back when the same pair is re-created), so the LP stage puts `L…` reserve rows
+in `balances`, not in this table.
+
+### D4 — no tombstone cleanup in this stage
+
+Nothing to clean at the start: the seed writes only balances open at the
+checkpoint, so the ~413 M historical lifecycles never enter the table.
+Tombstones accumulate from the writer deploy on. Recorded in the DDL comment:
+
+- **Never TTL.** Deleting a tombstone while the live row sits in an unmerged
+  part resurrects a claimed balance.
+- A future cleanup is a mutation deleting every version of keys closed more
+  than N ledgers ago. It deletes rows, which ADR 0057's "rows are never
+  deleted" consequence does not allow today, so it needs that amendment first.
+- Trigger to revisit: the table exceeds half of `balances` in rows, or the
+  `balance_aggregates_mv` refresh time degrades.
+
+### D5 — joins the snapshot reconciliation (ADR 0057 decision 5, not optional)
+
+A state table built from ledger changes is only right if every ledger reaches
+its writer. A gap — seed checkpoint older than the writer deploy, a
+`backfill-runner -t` re-ingest that leaves the table out, an indexer outage —
+leaves a claimed balance live forever or misses a created one. The checkpoint
+comparison is what detects and corrects that, so the table joins
+`snapshot-seed` (one flow, the 0523 decision) with its own row stream and
+verdicts. `Ghost` → closure is correct for this table and must never reach
+`balances`. The schedule itself stays with 0503.
+
+### Work list for this stage
+
+1. DDL for the table (`holder_id`, `asset_id`, `amount`, `last_updated_ledger`,
+   `closed_at_ledger`; RMT on `last_updated_ledger`), created before any writer
+   ships — `PartitionWriter` opens every insert handle, so a missing table
+   stops all ingestion, not just this one.
+2. Writer from `ClaimableBalanceEntry` changes, in the shared stage so live
+   ingest and `backfill-runner` write identical rows. Fold per balance id across
+   the whole ledger, last in application order wins (ADR 0057 decision 6),
+   with a regression test for create + claim in one transaction.
+3. `ClaimableBalance` in the snapshot classifier; seed from a checkpoint at or
+   after the writer's first ledger — refused in code otherwise.
+4. `balance_aggregates_mv`: `total_supply` adds this table; `holder_count`
+   unchanged.
+5. Verification: seed dry-run comparison clean; oracle against `asset_transfers`
+   between two checkpoints; `docs/architecture/**` schema and pipeline docs.
 
 ## Context
 

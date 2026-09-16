@@ -183,6 +183,27 @@ pub struct SorobanContractRow {
     pub deployed_at_ledger: Option<i64>,
     pub contract_type: Option<i16>,
     pub is_sac: bool,
+    /// CAP-85 / task 0548 — the owner whose storage holds this contract's code,
+    /// and the tag naming which of its executables. Both `None` for every
+    /// pre-protocol-28 shape. The hash they resolve to lives in
+    /// [`ContractExecutableRefRow`] and is joined at read; copying it here is
+    /// what would let a fleet member go stale unnoticed.
+    pub executable_owner_id: Option<i64>,
+    pub executable_tag: Option<String>,
+}
+
+/// `contract_executable_refs` — what an owner's tag currently points at.
+/// RMT(`ledger`); one row per `(owner_id, tag)`.
+///
+/// Written from the owner's own persistent contract-data entry, so a re-point
+/// arrives as an ordinary entry change and costs exactly one row — no rewrite
+/// of the fleet it governs.
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
+pub struct ContractExecutableRefRow {
+    pub owner_id: i64,
+    pub tag: String,
+    pub wasm_hash: [u8; 32],
+    pub ledger: i64,
 }
 
 /// `soroban_contract_metadata` — on-chain Soroban token metadata
@@ -319,19 +340,22 @@ pub struct LiquidityPoolRow {
 /// duplicated it; an earlier per-write design needed an `application_order`
 /// key component and was collapsed away before any production DDL existed.
 ///
-/// Two on-chain layouts feed it: fungible pools' plane `PoolData` vector
-/// VERBATIM (possibly a per-tick tail — readers slice by the pool's leg
-/// count, never vector length) and concentrated pools' own-instance
-/// `Reserve0`/`Reserve1`.
+/// Router-family rows come from the pool's own instance (`ReserveA/B`,
+/// `Reserves`, `Reserve0/1`, raw units), staged when a write moved them
+/// (decision C′). Rows written before that deploy came from the plane's
+/// `PoolData` — identical in value except for mixed-decimal stable pools,
+/// and possibly carrying a per-tick tail, so readers still slice by the
+/// pool's leg count, never vector length.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct PoolStateChangeRow {
     pub pool_id: [u8; 32],
     pub ledger_sequence: i64,
     pub reserves: Vec<i128>,
-    /// The plane contract that wrote these reserves — the provenance a read
-    /// checks against the pool's own declared plane (review #438). For the
-    /// concentrated arm the pool writes its own reserves, so this carries the
-    /// plane the instance declares.
+    /// The plane the pool declares in its own instance — the key a read
+    /// joins against `pool_instance_state` (review #438). Rows written before
+    /// decision C′ carry the plane that wrote them, which equals the declared
+    /// plane for every stored row (measured 2026-09-15: 773 pool/plane keys,
+    /// 0 off the declared plane), so a re-derived row replaces its old one.
     pub plane_id: i64,
 }
 

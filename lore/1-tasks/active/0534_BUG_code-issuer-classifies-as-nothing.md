@@ -5,7 +5,7 @@ type: BUG
 status: active
 related_adr: []
 related_tasks: ['0485', '0331', '0470']
-tags: [backend, api, search, assets, priority-medium, effort-small]
+tags: [backend, api, frontend, search, assets, priority-medium, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
 history:
@@ -30,6 +30,16 @@ history:
       measurements taken while building it are recorded below for whoever picks
       that work up. What remains is the one defect 0485 does not cover:
       CODE:ISSUER classifying as nothing.
+  - date: 2026-09-14
+    status: active
+    who: stkrolikiewicz
+    note: >
+      SCOPE EXTENDED to the assets list. Its search box sends the text as
+      filter[code], a substring match against the displayed code, name and
+      symbol, and /v1/assets has no issuer filter, so a pasted pair still
+      returned an empty page there after the global-search half shipped on
+      2026-09-07. Fixed in the frontend only: a pair opens that asset's page
+      instead of becoming a filter. No API change.
 ---
 
 # BUG: the canonical `CODE:ISSUER` classifies as nothing
@@ -48,6 +58,9 @@ ends, from opposite directions:
 | `USDT0`                            | impostors first (0485)     |
 | `USDT0:GATISXX…` (SEP / SDK form)  | **empty page** (this task) |
 | `USDT0-GATISXX…` (our route token) | **empty page** (this task) |
+
+The assets list's own search box had the same dead end for a pasted pair. It
+was added to this task on 2026-09-14 — see the dated section below.
 
 ## Context
 
@@ -93,6 +106,51 @@ through the `accounts` `ORDER BY account_id` key as a point seek, never the
       N/A: no new table, endpoint or pipeline step.
 - [x] **API types regenerated** — run; the diff is **empty**, as expected.
       `Classified` is internal and no response shape moved.
+- [x] **Assets list:** a pasted `USDT0:GATISXX…` or `USDT0-GATISXX…` opens
+      `/assets/USDT0-GATISXX…` instead of filtering — `codeIssuerRoute.test.ts`
+      and a page test that also asserts no `filter[code]` request carries the
+      pair — `a pasted CODE:ISSUER opens that asset instead of filtering`
+- [x] **Assets list:** anything that is not a pair still filters by code —
+      `leaves anything that is not a pair to the code filter`; the existing
+      `typing in the code filter drives the next hook call` passes unchanged
+- [x] **Docs updated (list half)** — `frontend-overview.md` §6.8 describes the
+      shortcut. API types N/A: frontend only, no request or response moved.
+
+## 2026-09-14 (stkrolikiewicz) — the assets list had the same dead end
+
+The global-search half shipped on 2026-09-07, and the assets list's own search
+box kept answering a pasted pair with an empty page. The box sends its text as
+`filter[code]`, which `/v1/assets` substring-matches against the displayed
+code, name and symbol. No code is longer than 12 characters and the pair is at
+least 58, so it matches nothing, and the endpoint has no issuer filter to fall
+back on.
+
+The fix is in the frontend only. `codeIssuerRoute` recognises the pair with the
+backend classifier's rule — split on the last `:` or `-`, issuer upper-cased,
+code case kept — and `AssetsListPage` navigates to that asset's page instead of
+setting the filter. Anything that is not a pair filters exactly as before.
+
+## Design Decisions
+
+### From Plan
+
+1. **The global-search half** — the classifier mode and the equality arm, as
+   described under Implementation.
+
+### Emerged
+
+2. **Navigate, not filter.** A qualified pair names one asset, so the list hands
+   the reader straight to it. A backend arm on `/v1/assets` would have returned
+   a one-row list the reader then has to click, and the detail endpoint already
+   resolves `CODE-ISSUER`.
+3. **Shape check, not CRC.** The backend classifier decodes the issuer so a typo
+   can fall back to the substring arm. On the list both outcomes are dead ends
+   of equal cost — a typo lands on the asset page's not-found state instead of
+   an empty list — and a CRC check would need a base32 decoder the frontend has
+   no other use for. Marked with a `ponytail:` comment.
+4. **The global search bar is untouched.** `directRouteFor` could send a pair
+   straight to the asset as well, but that would change the bar's settled
+   behaviour (a one-row results page). Out of scope here.
 
 ## Notes
 

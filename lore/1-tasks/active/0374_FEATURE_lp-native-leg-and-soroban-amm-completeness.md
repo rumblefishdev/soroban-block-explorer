@@ -26,6 +26,19 @@ history:
       Activated. First-protocol scope confirmed reachable from data already in
       `soroban_events`; the backfill is an in-DB INSERT ... SELECT, not an
       S3 re-parse.
+  - date: '2026-09-07'
+    status: active
+    who: karolkow
+    note: >
+      Pool write path DEPLOYED to production — release PR 452 merged
+      (`098bef9d`), tag `production-2026.09.07-1`, one combined window with
+      task 0540. `pool_state_changes` and `pool_instance_state` created and
+      verified byte-identical to init.sql; both take live rows. No indexer
+      pause was needed: the three `liquidity_pool_snapshots` columns the new
+      writer drops were given DEFAULT NULL first (metadata-only), which makes
+      old and new writers simultaneously valid, so the DROPs move to after the
+      backfills and a rollback stays free. Backfills, closure layers and the
+      read half remain.
 ---
 
 # LP completeness
@@ -1450,7 +1463,9 @@ the pre-commit gate, not this branch).
 
 Production verification, in the order now written into the runbooks: DDL →
 indexer → three catch-up backfills → window-closure check → only then the read
-surfaces. Nothing here is verified on production yet.
+surfaces. Nothing here was verified on production when this was written —
+the write path since is: see "Production verification of the write path
+(2026-09-13)" at the end of this file.
 
 ## Soroban ↔ classic read-surface inconsistencies — ranked (karolkow, 2026-09-01)
 
@@ -1629,3 +1644,391 @@ position id; `position_update` is the indexing source. The phrase entered on
 2026-08-29 as an unsourced aside in the read-path commit (a Uniswap-v3
 pattern carried over) and was copied into the ADR the same day. ADR fixed;
 the branch comment corrected in place. Indexing stays deferred to 0516.
+
+## Production verification of the write path (2026-09-13)
+
+State after the backfill (one targeted re-parse over the full ingest range,
+`--only` carrying `liquidity_pools`, `pool_state_changes`,
+`pool_instance_state` — commit `e1d97e0b`) plus the live writer: **769
+soroban pools** — router family 514, pair-factory family 235, config-factory
+family 20. Every oracle below is independent of our decoder unless stated.
+Scripts and raw outputs were scratch artefacts; the query shapes are given
+inline so each figure can be reproduced.
+
+### Registry closure — every layer passes
+
+| Layer                              | Method                                                                                                                                                          | Result                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Router, chain events               | `signature = 'add_pool'`, per partition 100-128 (`intDiv(ledger_sequence, 500000)`), pool address from `data_xdr` value 1, both directions against the registry | 514 announced ↔ 514 registered; 0 missing, 0 extra, 0 announced twice, 0 emitter ≠ `deployment_id`, 0 event `pool_type` ≠ `pool_type_raw`; 10 emitting routers                                                                                                                                              |
+| Router, vendor catalogue           | the vendor's external pools API, paginated, against the pools of the documented router (`CBQDHNBF…`)                                                            | stated count 353 = ours 353. Its paging exposed 343 distinct addresses over four passes; the other 10 are in the `add_pool` set and answer RPC. On the 343: 0 not ours, 0 `pool_type` mismatches, 0 fee mismatches, 0 leg mismatches (order included; legs mapped id → address through `soroban_contracts`) |
+| Pair-factory, contract enumeration | RPC `all_pairs_length` + `all_pairs(n)` on each of the 4 deploying factories                                                                                    | set-equal per factory: 214 / 11 / 6 / 4                                                                                                                                                                                                                                                                     |
+| Config-factory, contract listing   | RPC `query_pools` on each of the 6 factory deployments                                                                                                          | listed ⊆ ours on all 6; the only unlisted pool of ours is `CAZ6W4WH…` (delisted — see below)                                                                                                                                                                                                                |
+| Sibling registry                   | `prices.pool_registry` set-compare                                                                                                                              | only-theirs = 0 for all three venues (488 / 221 / 19)                                                                                                                                                                                                                                                       |
+| Coverage                           | registry pool ∈ `pool_instance_state` and ∈ `pool_state_changes`                                                                                                | 514/514, 235/235, 20/20                                                                                                                                                                                                                                                                                     |
+
+`pool_type_raw` is correct per family, verified four ways: the writer
+(`stage.rs` — pair family writes it empty because the pair contract has no
+type; config family writes the `PairType` discriminant verbatim); the
+contract's own on-chain spec (`PairType { Xyk = 0 }` on the config pool; no
+type in the pair spec); a set-level mapping of the sibling registry's venues
+onto our buckets with no cross-over (router types 488, `"0"` 19, empty 221);
+and the event/API agreement in the table above.
+
+Residual, stated: unknown pair- or config-factory deployments cannot be
+swept by event name yet — the label-convention registration events still
+carry `signature = NULL` (the 0517 in-DB backfill has not run; a probe for
+`new_pair` returned 0 rows in all 29 partitions). The registry itself is not
+factory-scoped (the re-parse detects by shape), so this is a gap in the
+check, not a known gap in the data.
+
+### Current reserves — RPC simulation of every pool (the contract answers from its own storage)
+
+Router `get_reserves`, pair `get_reserves`, config `query_pool_info`,
+compared exactly against the newest `pool_state_changes` row on the pool's
+declared plane. Sweep ran over ledgers 64,410,119 → 64,410,190; the 18 pools
+that changed state inside that window and 1 transient RPC failure were
+re-simulated ledger-aware and all matched.
+
+| Outcome                                                      | Pools   |
+| ------------------------------------------------------------ | ------- |
+| exact                                                        | **758** |
+| mixed-decimal stable pool, one leg scaled by 10^k (defect 1) | 6       |
+| unsynced balance — our row equals the pool's STORED reserves | 4       |
+| code replaced by non-pool code (defect 2)                    | 1       |
+
+`get_reserves()` is a computed view, not a storage read, on the upgraded
+router WASMs: it returns token balance minus unclaimed protocol fee (exact on
+8 of 8 legs checked). The "exact" count therefore compares against the
+contract's live view; the storage comparison below is the stricter one.
+
+**Defect 1 — mixed-decimal stable pools store NORMALISED reserves.** Every
+non-empty router-family stable pool whose tokens differ in decimals (6 of 6)
+has one leg in our table equal to the chain value × 10^(max_decimals −
+token_decimals): ×10 for 6/7-decimal pairs, ×10^11 for 18/7. The other two
+mixed-decimal stable pools match only because both are empty. All share one
+WASM (`f1077e0b…`). The plane carries the stable math's normalised figures;
+`get_reserves()` returns raw token units. This refines the T4 finding
+("plane state == reserves"), which holds for equal-decimal pools only. A read
+applying each token's own decimals to these rows overstates one leg by 10× or
+10^11×. Pools: `CA262ONR…`, `CA27UTMX…`, `CCI5UGNC…`, `CCYMZTOJ…`,
+`CDCSXULB…`, `CD5WJYPF…`.
+
+**Not a defect — four pools whose live balance runs ahead of their stored
+reserves.** `CBI5I254…`, `CB6GYGGZ…`, `CCRULRY3…` hold a time-rebasing token
+(`yUSDT` "Tether USD with yield from AAVE", `yTIME` "Time Rebased Token") whose
+balance grows with no transaction at all — one leg was re-read a day apart
+and had grown with zero events in between; three of the four pools are in
+emergency mode and do not trade, so nothing re-syncs them. `CDDLTOOD…`
+received 19 direct XLM transfers after its last trade summing to exactly the
+gap (2,005,041). In both cases the pool's OWN instance storage
+(`ReserveA`/`ReserveB`, read via `getLedgerEntries`) equals our row to the
+unit, so the table matches what the ledger stores; the difference is balance
+the pool has not yet absorbed (`ReservesSyncLedger`). No indexer can record a
+time-rebasing balance continuously — it is computed at read time, never
+written. The read may say "as of ledger X".
+
+**Defect 2 — a registered pool whose code was replaced by non-pool code.**
+`CAZ6W4WH…` (config family, documented factory). Timeline from
+`executable_update` topics, which carry the old and new code hash:
+
+| Ledger (UTC)                  | Event                                                                                                                                                                                                                                              |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 51,572,101 (2024-05-07)       | registered                                                                                                                                                                                                                                         |
+| 54,514,504 (2024-11-22 13:29) | last pool activity; our newest reserve row                                                                                                                                                                                                         |
+| 54,515,539 (2024-11-22 15:14) | pool code replaced by code exposing `bond`, `unbond`, `distribute_rewards`, `query_staked` (a staking interface), submitted by the account behind 61 upgrades of this factory's pools                                                              |
+| 54,515,539 → 63,767,534       | no activity; the address holds exactly our last reserves                                                                                                                                                                                           |
+| 63,767,534 (2026-08-02 17:10) | code replaced again (`install`, `mint_redeem_sweep`, `redeem_held_sweep`, `sweep`) by a single-use account; the same transaction moves both balances out, plus the liquidity of a second registered pool on the same pair (`CD5XNKK3…`, now 0 / 0) |
+
+The balances moved out equal our last row to the unit (263,512,715,771 /
+131,948,815,702). So the NUMBERS were true until 2026-08-02; the IDENTITY
+("this is a pool") has been false since 2024-11-22. No row was written after
+the first replacement — the writer decoded nothing wrong; the registry simply
+outlived the code that justified it. Authorisation of either replacement is
+not determinable from our data (a transaction's source need not be its
+authoriser). Our rows for `CD5XNKK3…` are correct (0 / 0 matches the chain).
+
+Upgrades are common, so this class is live: 403 of 514 router pools (1,537
+`executable_update` events) and 14 of 20 config pools (63) have been
+upgraded; pair-family pools none. The other 19 config pools still answer the
+pool interface and match exactly.
+
+### Total shares
+
+| Family                                    | Result                                                                                                                                                                                        |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pair (`total_supply` on the pair)         | 235 / 235 exact                                                                                                                                                                               |
+| router, current WASM (`get_total_shares`) | 451 / 451 exact (constant, stable, elastic)                                                                                                                                                   |
+| router, oldest WASM                       | 17 pools lack `get_total_shares`; their share tokens lack `total_supply` — **no RPC oracle**; only a checkpoint snapshot can check them. 11 of the 17 hold exactly `10000000000` in our table |
+| router, concentrated                      | ours `0` (modelled as structural) vs chain `get_total_shares` non-zero on 45 of 46; `share_id()` returns the pool itself                                                                      |
+| config                                    | ours `0` (structural — supply lives on the separate share token) vs chain `asset_lp_share.amount` non-zero on 17; 2 zero on both; 1 not callable (`CAZ6W4WH…`)                                |
+
+### What this settles and what it leaves
+
+Settled: the registry is complete and correctly attributed for all three
+families against independent sources, and current reserves are exact for 758
+of 769 pools.
+
+Open, in order of user impact:
+
+1. Defect 1 — **DECIDED (karolkow, 2026-09-15): C′, read router-family
+   reserves from the pool's own storage** (see "Root cause of defect 1"
+   below). Before changing the parser, measure the reserve-key layouts of
+   every historical router-pool code version, not just the current ones.
+2. Defect 2 — a registered pool whose current code lacks its family's pool
+   interface must not render current reserves; history stays. **Carried by
+   task 0325** (widened on 2026-09-15 to "every code-derived row must match
+   the contract's current code"), where the measurement over all upgrades
+   lives.
+3. The read half must not render the structural `0` total shares as a value
+   for concentrated and config-family pools; the chain has a figure for both.
+4. Historical reserves remain checked only by the decoder-parity test of the
+   backfill session (same code on both sides); checkpoint snapshots are the
+   only independent history oracle and have not been run for these tables.
+5. Read-half labels: `protocol_labels.rs` on the read-half branch predates
+   the pair and config families. Brand only deployments the vendor documents;
+   a shape-matching contract from any other deployment stays unlabelled.
+
+### Root cause of defect 1 — the plane is a quote-input sheet, not a balance sheet (2026-09-14)
+
+Three sources read for all **514** router-family pools at the same moment:
+the pool's own instance storage (`getLedgerEntries`), its plane row
+(`plane.get([pool])`, simulated), and our newest row.
+
+| Pool type                                 | Pools | Pool storage vs plane row            | Our table                           |
+| ----------------------------------------- | ----- | ------------------------------------ | ----------------------------------- |
+| constant                                  | 380   | identical                            | matches                             |
+| elastic                                   | 3     | identical                            | matches                             |
+| stable, no `PrecisionMul` (older code)    | 38    | identical                            | matches                             |
+| stable, `PrecisionMul` all 1              | 39    | identical                            | matches                             |
+| **stable, `PrecisionMul` ≠ 1, non-empty** | **6** | **plane = storage × `PrecisionMul`** | **scaled**                          |
+| stable, `PrecisionMul` ≠ 1, empty         | 2     | identical (zero)                     | matches                             |
+| concentrated                              | 46    | pool does not write the plane        | matches (already read from storage) |
+
+Four pools first looked off; re-read ledger-aware, three matched and one had
+traded after the storage read. So our table equals the pool's own storage in
+**508 of 514**; the six are exactly the non-empty pools whose stable math
+carries a multiplier. A stable pool's instance holds `Reserves` (raw units),
+`Decimals` and `PrecisionMul`; its plane row holds `pool_type`, the
+stableswap parameters (fee, amplification ramp) and `Reserves ×
+PrecisionMul` — precisely the inputs a swap quote needs, in the units the
+invariant is computed in. No standard governs the plane; the vendor's source
+is not public, so "normalised on purpose" is inferred from that structure. The
+error was ours: T4's "plane state == reserves" was generalised from a sample
+that did not include these six.
+
+Why storage is the fundamental source, not a read-time divide: the pool is
+the ledger-authenticated owner of its instance (ADR 0058's authority rule);
+it holds raw units, so `reserves` keeps one meaning; it matches our table in
+508 of 514 pools, so the switch changes no correct value; and it unifies the
+family — concentrated pools already use storage because they never write the
+plane. Current code uses three layouts: `ReserveA`/`ReserveB` (383 pools),
+`Reserves` (85), `Reserve0`/`Reserve1` (46).
+
+### Decision C′ measured across every code version (2026-09-15)
+
+Before changing the parser: which storage keys hold reserves in EVERY code
+version router-family pools have run, not only the current ones. Code
+versions come from `executable_update` topics (old and new hash per upgrade)
+plus the original code of never-upgraded pools.
+
+- **58** code versions ran on router pools in the ingested range (1,537
+  upgrades, 403 pools upgraded).
+- **55** versions: one raw archive ledger each in which a pool on that
+  version changed reserves, decoded — every one wrote its reserves into its
+  own instance storage. **3** versions (`D3A1C7B6`, `419DD5F0`, `45435508`)
+  saw only administrative events while pools ran them: no reserve change, so
+  nothing to read.
+- Exactly three layouts in all history, no fourth: `ReserveA` + `ReserveB`
+  (constant, elastic; later versions add `ReservesSyncLedger`), `Reserves`
+  (stable, a vector, with or without `Decimals` / `Precision` /
+  `PrecisionMul`), `Reserve0` + `Reserve1` (concentrated).
+- **Raw units in every version — the decisive check.** The 8 mixed-decimal
+  stable pools, every version each wrote reserves on: 23 samples; storage raw
+  and plane = storage × `PrecisionMul` in 21, both zero in 2, exceptions 0.
+  For equal-decimal pools plane = storage in every sample.
+- A suspected gap (trades on version `3ECB29BB` with no reserve rows) was a
+  sampling artefact: all six rows exist with exact values.
+
+Parser rules this fixes:
+
+1. Read `ReserveA`+`ReserveB` or `Reserves` from the pool's instance write. A
+   missing key emits no row — never a zero: administrative operations rewrite
+   the instance too.
+2. Emit only when the reserves changed between the instance pre-image and the
+   post-image (both are in ledger meta) or the instance was created. Otherwise
+   every reward or config operation adds a row with unchanged numbers.
+3. `plane_id` = the plane the pool declares in its own instance (the
+   concentrated arm already does this), so a corrected row REPLACES the old
+   one under the same key instead of standing beside it.
+4. The plane stays as a cross-check, not a source: plane = storage ×
+   `PrecisionMul` (1 where absent) held in every sample, so a mismatch is a
+   signal of changed contract semantics.
+
+Rollout: parser first (live), then the history of the 8 affected pools — 821
+rows in 726 ledgers across 60 archive partitions. A range re-parse would fetch
+~60 partitions (~800 GB) for ~1 GB of ledgers, so the backfill is a list pass
+over those 726 ledgers through the same parse+stage path (option A, decided
+2026-09-15), never an in-DB division. No DDL, no indexer pause. Verify by
+re-running the three-source comparison: expected 514 / 514.
+
+### Decision C′ implemented — PR #459 (2026-09-15)
+
+Branch `fix/0374_router-reserves-from-pool-storage`, commit `bbfe3ca5`, PR
+https://github.com/rumblefishdev/soroban-block-explorer/pull/459. Built
+test-first; every new test failed on the old code for the intended reason.
+
+**What changed**
+
+- `pool_state.rs`: `parse_pool_instance` reads reserves from all three
+  layouts in raw units, plus `PrecisionMul`; absent keys give no reserves,
+  never zeros. `extract_pool_instances` pairs each post-image with its `state`
+  pre-image and flags `reserves_changed`.
+- `stage.rs`: the plane arm no longer stages rows; the instance arm stages a
+  row when `reserves_changed`, with `plane_id` = the declared plane. The plane
+  row is compared with storage × `PrecisionMul` on the legs only (a plane
+  vector may carry a per-tick tail) and a mismatch logs a warning. **That
+  cross-check was removed later the same day** — it was wrong 17 times out of
+  17 on a wider corpus; see the two decision sections below.
+- Harness `redecode_pool_state_changes_from_list` (ledger list from a file) —
+  the differential tool and the backfill generator.
+- ADR 0058 amended; indexing-pipeline, xdr-parsing and database-schema
+  overviews, `init.sql` comments and `docs/backfills.md` (list-pass procedure)
+  updated. No schema change.
+
+**Verification**
+
+| Check                                                              | Result                                                                                                      |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| old code over 874 real ledgers vs production rows on those ledgers | 2,627 = 2,627 (the baseline reproduces production)                                                          |
+| new code, pools other than the 8 affected                          | 1,862 / 1,862 identical to production                                                                       |
+| new code, the 8 mixed-decimal pools                                | 754 rows = old ÷ `PrecisionMul`, all; 18 zero rows unchanged                                                |
+| new rows vs pool storage decoded from raw ledgers                  | 23 / 23 exact                                                                                               |
+| rows no longer produced                                            | 11, each an exact repeat of the pool's previous row (plane re-publication, 10 of them in ledger 62,234,220) |
+| rows produced that did not exist before                            | 0                                                                                                           |
+| reserve-moving activity of the 8 pools outside the backfill list   | 10 ledgers (`claim_protocol_fee`, gauge reward claims): 0 rows from the new code                            |
+| stored rows off the pool's declared plane (production)             | 0 of 773 pool/plane keys — re-derived rows replace old ones                                                 |
+| final code vs the verified run                                     | byte-identical output                                                                                       |
+| tests                                                              | xdr-parser 439/439, db-clickhouse 144/144, integration suites green; clippy `-D warnings` and fmt clean     |
+
+Two CH-gated tests fail identically on clean `develop` against the local
+container, which lacks the `executable_owner_id` column
+(`repair_tier1::columns_tests::soroban_contracts_rebuild_keeps_the_executable_reference`,
+`g9_cross_ledger_verdict_routes_nft_events`); `bootstrap::…writes_rows` is
+order-dependent in a full local run and passes on its own.
+
+**Rollout (writer first)**
+
+1. Merge PR #459, deploy Compute.
+2. Insert the re-derived history of the 8 pools — 772 `(pool, plane, ledger)`
+   keys in 726 ledgers, produced by the harness from the merged code
+   (payload SHA-256 `e4bff4c864902749e7a5618f759fa397e80c5bb942327fe5391bd75dbd1b1832`);
+   production holds 821 raw rows for those pools = the same 772 keys plus
+   unmerged duplicates. Then `OPTIMIZE TABLE pool_state_changes FINAL`.
+3. Re-run `cargo test -p backfill-runner --test pool_reserves_reconciliation`
+   — expected afterwards: every pool equals its own storage except
+   `CAZ6W4WH…`, whose code is no longer a pool (task 0325).
+
+### Wide differential of decision C′ + the two sibling families (2026-09-15)
+
+**Differential, 1,565 ledgers.** The previous 874 plus one ledger per router
+pool (all 514) and one per (code version × set of events the pool emitted in
+one transaction) — 457 combinations across the 50 versions that emitted
+anything in range. Function names are not stored, so the event set stands in
+for the called function; calls that emit nothing are not targeted. Base
+`c2fc620c` and the PR, same test harness, same archive files:
+
+| Outcome       | Rows  | Check against production                                                                            |
+| ------------- | ----- | --------------------------------------------------------------------------------------------------- |
+| identical     | 3,116 | —                                                                                                   |
+| value changed | 754   | all in the 8 `PrecisionMul` ≠ 1 pools, each = base ÷ multiplier                                     |
+| dropped       | 160   | all equal the pool's previous production row (true repeats): 156 concentrated, 2 stable, 2 constant |
+| added         | 0     | —                                                                                                   |
+
+**Soroswap-shaped (235) and Phoenix-shaped (20) pools** already read raw
+reserves from their own storage (task 0518). RPC on 2026-09-15: 235/235 and
+19/20 equal our newest row. Repeat rows in production are 0.03% and 0.006%
+(router: 0.4%), so the unchanged-reserves rule adds nothing there.
+
+The twentieth, Phoenix pool `CAZ6W4WH…`, is the silent-freeze failure mode in
+the wild: pool code until 54,514,504; replaced by a staking contract at
+54,515,539 and by a sweep tool at 63,767,534, which wrote `u32(0)` (now an
+address) and `u32(1)` = 0 but not `u32(2)`. The parser drops a half reserve
+pair without `CONFIG` silently (`pool_config_factory.rs` `_ => continue`), so
+our row still shows the pool-era reserves. Phoenix pools: 63 upgrades on 14 of
+20 pools, 7 current code versions; Soroswap: one version, no upgrades.
+
+### Decision (karolkow, 2026-09-15) — an unread reserve write is logged, not alarmed
+
+A storage layout we do not read makes a pool's snapshots stop without a
+trace. Considered: a CloudWatch alarm, a hard error, and a plain `error!`.
+Chosen: the plain `error!`, like every other decoder refusal. No other
+decoding gap pages anyone — alarms cover whether the system is alive — and an
+alarm keyed on these conditions would still miss the silent shapes (a
+concentrated pool has no plane to compare against; a renamed identity key
+makes the write look foreign). A hard error would stop ingestion of every
+ledger for one pool's layout change. Logged now:
+
+- router: the instance was written with no known reserve key while the plane
+  row of the same (pool, ledger) shows non-zero reserves;
+- pair-factory: an instance carrying the identity triple but half a reserve
+  pair (a snapshot carries every key, so this is a layout change).
+
+The config-factory half pair stays loud only with `CONFIG` in the same
+transaction: without the registry the parser cannot tell a pool's lone
+`u32(1)` write from any other contract's u32-keyed entry. Pool `CAZ6W4WH…`
+(above) is exactly that case, so a data-level check against the chain is the
+only thing that sees it.
+
+**Measured on the 1,565-ledger corpus after the change:** rows identical to the
+previous PR run; the two new `error!` lines fired **0** times. The existing
+plane cross-check (`plane row disagrees …`) fired **17** times, all false:
+
+- 13 on mixed-decimal stable pools at early ledgers (58.2M–63.4M) whose
+  instance write carried no `PrecisionMul` key while the plane already held
+  the multiplied figure — the check reads a missing key as × 1. Likely an older
+  code version derived the multiplier without storing it (not verified).
+- 4 on concentrated pools, which DO write plane rows (36 values against the
+  instance's 2) — refuting "concentrated pools do not write the plane" above.
+
+### Decisions (karolkow, 2026-09-15) — drop the plane cross-check; reconcile against the chain on demand
+
+- **Plane × `PrecisionMul` cross-check removed** (the 17 false warnings above).
+  The plane is kept only for the unread-layout `error!`.
+- **`pool_reserves_reconciliation`** (backfill-runner integration test, same
+  shape as `account_reconciliation`): reads every registered Soroban pool's
+  own reserve entries with `getLedgerEntries`, decodes them from XDR itself,
+  bounds ClickHouse at the ledger the RPC answered at, and fails on any pool
+  whose newest `pool_state_changes` row differs. Skips without
+  `POOL_CH_CERT`/`POOL_CH_KEY`; run on demand — after a pool backfill and per
+  release. First run, production, ledger 64,442,966, 1.5 s: **762 of 769
+  equal**; the 7 failures are the 6 non-empty mixed-decimal stable pools
+  (production still holds the plane figure until the C′ backfill) and
+  `CAZ6W4WH…`.
+
+**`CAZ6W4WH…` leaves this task.** The pool whose code was replaced is carried
+by task 0325 ("a code-derived row must follow the contract's CURRENT code"),
+where the decision is now to write the verdict at the code change instead of
+deriving it per read. Until that lands, `pool_reserves_reconciliation` lists
+the pool on every run and its stale reserves stay visible.
+
+### Decision C′ shipped to production (2026-09-16)
+
+- **Deploy:** Compute from `develop` at `9b0f05b6` (PR #459 merge); the indexer
+  Lambda updated 10:49:22 UTC; 0 WARN/ERROR lines in the following minutes.
+  A laptop deploy needs `zig` for `cargo lambda build --arm64` (it had been
+  removed from the machine; `brew install zig` restored it).
+- **Backfill:** ledger list taken 10 min after the deploy (in-flight runs of
+  the old code drained) — unchanged from the morning: 728 ledgers, 774 keys of
+  the 8 pools. Re-derived with the merged parser; checked against production
+  key by key: 758 = production ÷ `PrecisionMul`, 16 zero in both, 0 other, 0
+  keys on either side only. Payload sha256
+  `fb14d1b9e4ed51dc258f46ad0eb95f42bd27ea780ed90d9a2a000b13aefb7ba3` (contains
+  the 772-row payload recorded above plus 2 later rows of `CCYMZTOJ…`).
+  Loaded into a Memory staging table, read back identical, then
+  `INSERT … SELECT`, `OPTIMIZE … PARTITION 11 FINAL` and `… PARTITION 12 FINAL`
+  (the survivor of an unversioned `ReplacingMergeTree` merge is the last
+  inserted row), staging dropped.
+- **Verified after the write:** partitions 11 and 12 merged; 774 raw rows =
+  774 keys for the 8 pools; production rows equal the payload exactly.
+  `pool_reserves_reconciliation` at ledger 64,454,699: **769 of 770 pools equal
+  their own storage**; the one failure is `CAZ6W4WH…` (task 0325).
