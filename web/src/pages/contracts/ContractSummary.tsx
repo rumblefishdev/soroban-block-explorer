@@ -152,10 +152,6 @@ export function ContractSummary({
                         · tag <code>{contract.executable_tag}</code>
                       </span>
                     )}
-                    <span>
-                      · Changing it there changes every contract that uses the
-                      same tag.
-                    </span>
                   </Stack>
                 ),
               },
