@@ -79,8 +79,24 @@ fn stub_asset_ids_meet_the_pool_legs() {
             panic!("not a pool entry");
         };
         let LiquidityPoolEntryBody::LiquidityPoolConstantProduct(cp) = &lp.body;
-        assert_eq!(classic_asset(&cp.params.asset_a).0, pool.legs[0]);
-        assert_eq!(classic_asset(&cp.params.asset_b).0, pool.legs[1]);
+        for (asset, leg) in [
+            (&cp.params.asset_a, pool.legs[0]),
+            (&cp.params.asset_b, pool.legs[1]),
+        ] {
+            let (id, identity) = classic_asset(asset);
+            assert_eq!(id, leg);
+            // The seed's stub for this leg, built like live ingest builds it,
+            // must define the same id (native needs no stub).
+            if let Some((code, issuer)) = identity {
+                let stub = db_clickhouse::persist::rows::AssetRow::staged(
+                    1,
+                    code,
+                    ids::account_id(&issuer),
+                    0,
+                );
+                assert_eq!(stub.id, leg);
+            }
+        }
     }
 }
 

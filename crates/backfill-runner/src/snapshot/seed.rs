@@ -209,13 +209,15 @@ async fn build_corrections(
             continue;
         };
         let issuer_id = ids::account_id(issuer);
-        out.asset_stubs.push(AssetRow {
-            asset_type: 1,
-            asset_code: code.clone(),
-            issuer_id,
-            contract_id: 0,
-            id: *asset_id,
-        });
+        // Built like live ingest builds it, so the id is recomputed from the
+        // identity. An id that disagrees with the referenced one would define
+        // some other asset and leave the reference dangling — count it so.
+        let stub = AssetRow::staged(1, code.clone(), issuer_id, 0);
+        if stub.id != *asset_id {
+            out.dangling.assets += 1;
+            continue;
+        }
+        out.asset_stubs.push(stub);
         referenced_issuers.insert(issuer_id);
     }
     // `union`, not `chain`: an issuer that also holds a balance appears in both
