@@ -283,3 +283,36 @@ the rpc sentinels for fee events, and the API exposes the rpc-format id.
 
 Space: production free 368.72 GiB of 1.72 TiB (backups share the volume); the
 new table is smaller than the 236 GiB it replaces — confirm per partition.
+
+### Coverage of `soroban_event_ops` against `soroban_events` — measured (2026-09-16)
+
+Exact row-by-row join over every ledger below 64,440,000 (50,457,424 onward),
+in 20k-ledger slices (5k where the join exceeded the per-query memory cap):
+`soroban_events` → `transactions` (`id` → `application_order`) → full outer
+join with `soroban_event_ops` on `(ledger_sequence, application_order,
+event_index)`.
+
+| check                                                                             | result                                                     |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| events without their transaction                                                  | 0                                                          |
+| events without an op row that are not a native-XLM fee event                      | 0                                                          |
+| op rows without an event                                                          | 0                                                          |
+| native-XLM fee events (index 0/1, `contract_id` of the native SAC) with an op row | 0                                                          |
+| events without an op row                                                          | 4,974,589,984 — all native-XLM `fee`, `event_index` 0 or 1 |
+| events with an op row                                                             | 5,595,366,384 distinct                                     |
+
+So "has no op row" is exactly "tx-level fee event"; the fill can tell the two
+apart by the join, never by the event name — 39 events named `fee` come from
+another contract's own operation and do have op rows.
+
+**Duplicates in the side table.** 85,970,362 extra rows, every one a byte-equal
+copy (0 keys with differing `op_index` / `event_pos_in_op`): ledgers
+64,128,000–64,317,019 written twice (582 keys three times), plus single
+ledgers 55,077,289 and 59,697,154. `soroban_events` and `transactions` carry no
+duplicates in those ranges. The fill deduplicates on the key; nothing to repair.
+
+Not yet checked against the chain: this proves the two tables agree, both
+written by the same parser. The rpc-id comparison (`getEvents` on a recent
+range) belongs to the swap gate, and must also settle how the fee sentinel is
+derived — the stage is not stored; one real fixture shows index 0 =
+`BeforeAllTxs` charge, index 1 = `AfterAllTxs` refund.
