@@ -74,8 +74,9 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
 
 interface PoolParticipantsProps {
   /** How many providers the pool is KNOWN to have, from the detail response.
-   *  Lets the empty state tell "none" apart from "not listable". */
-  knownParticipants?: number;
+   *  Lets the empty state tell "none" apart from "not listable", and `null`
+   *  (the API cannot count them) apart from both. */
+  knownParticipants?: number | null;
   poolId: string;
 }
 
@@ -126,22 +127,33 @@ export function PoolParticipants({
     // token — past the read-only profile). Saying "no participants" while the
     // strip says 337 would be the same contradiction from the other side, so
     // the section says which of the two it is.
+    //
+    // `null` is a third fact: the API cannot count them either — a
+    // concentrated pool has no share token, its providers hold positions.
+    // "No participants yet" there was false on 45 of 46 such pools.
     const countedButNotListed = (knownParticipants ?? 0) > 0;
-    body = (
-      <EmptyState
-        icon={<GroupIcon />}
-        title={
-          countedButNotListed
-            ? 'Participants not listed'
-            : 'No participants yet'
-        }
-        description={
-          countedButNotListed
-            ? `This pool has ${knownParticipants} liquidity providers. Listing who they are is not indexed yet for this pool type.`
-            : 'This pool currently has no active liquidity providers.'
-        }
-      />
-    );
+    body =
+      knownParticipants === null ? (
+        <EmptyState
+          icon={<GroupIcon />}
+          title="Participants not indexed"
+          description="Who provides liquidity to this pool is not indexed yet for this pool type."
+        />
+      ) : (
+        <EmptyState
+          icon={<GroupIcon />}
+          title={
+            countedButNotListed
+              ? 'Participants not listed'
+              : 'No participants yet'
+          }
+          description={
+            countedButNotListed
+              ? `This pool has ${knownParticipants} liquidity providers. Listing who they are is not indexed yet for this pool type.`
+              : 'This pool currently has no active liquidity providers.'
+          }
+        />
+      );
   } else {
     body = (
       <ExplorerTable

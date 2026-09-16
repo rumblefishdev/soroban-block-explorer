@@ -8,6 +8,7 @@ import {
   legHref,
   poolLabel,
   poolReserves,
+  UNINDEXED_LEG_LABEL,
 } from './helpers.js';
 
 function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
@@ -125,17 +126,20 @@ describe('assetLegLabel', () => {
     ).toBe('CAQC…RZQB');
   });
 
-  it('still throws when NOTHING identifies the leg', () => {
-    expect(() =>
+  // A pool can hold an asset we never recorded. Throwing here blanked the
+  // whole app, because the header and the list render outside any section
+  // error boundary.
+  it('says the asset is unindexed when NOTHING identifies the leg', () => {
+    expect(
       assetLegLabel(
         makeLeg({
           asset_code: null,
           issuer: null,
           contract_id: null,
-          asset_type_name: 'classic_credit',
+          asset_type_name: null,
         })
       )
-    ).toThrow(/nothing identifies/);
+    ).toBe(UNINDEXED_LEG_LABEL);
   });
 });
 

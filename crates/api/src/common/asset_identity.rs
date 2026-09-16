@@ -82,8 +82,16 @@ pub(crate) struct ResolvedAsset {
     /// 2026-09-09, 264 of 304 soroban pool legs, whose real scales run to 18.
     /// Scaling a raw amount by a guessed 7 there is wrong by up to 10^11 and
     /// still looks like a number, which is worse than showing nothing.
+    ///
+    /// Also false past [`MAX_SCALE`]: metadata is published by the contract
+    /// itself, and two live contracts declare 43,224 decimals.
     pub(crate) decimals_known: bool,
 }
+
+/// The largest scale treated as a fact. A `u128` has 39 digits, so no real
+/// token needs more, and a larger value would size string padding and float
+/// powers from contract-published input.
+pub(crate) const MAX_SCALE: u32 = 38;
 
 /// Resolve a bounded set of `asset_transfers.asset_id` surrogates to a link
 /// identity + display code + decimals.
@@ -229,7 +237,7 @@ async fn fetch_identity_rows(
                    default, and `asset_type` 0 is `native` — without the guard \
                    every unknown asset would claim the protocol's 7. */ \
                 toBool((a.id != 0 AND a.asset_type IN (0, 1)) \
-                       OR m.decimals IS NOT NULL) AS decimals_known \
+                       OR ifNull(m.decimals <= {MAX_SCALE}, false)) AS decimals_known \
          FROM (SELECT arrayJoin(CAST([{in_list}] AS Array(Int64))) AS id) ids \
          LEFT JOIN (SELECT id, asset_type, asset_code, issuer_id, contract_id \
                     FROM assets \

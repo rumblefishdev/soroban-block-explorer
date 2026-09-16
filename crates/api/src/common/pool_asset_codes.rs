@@ -12,9 +12,9 @@
 ///
 /// Stellar protocol asset codes are case-sensitive (1–12 ASCII chars, any
 /// case), but the canonical convention is uppercase (USDC, XLM). The
-/// trim+uppercase normalization matches caller intent for a free-text field;
-/// consumers who need exact case-sensitive issuer-disambiguated matching
-/// should use a per-leg `(code, issuer)` mode instead.
+/// trim+uppercase normalization matches caller intent for a free-text field.
+/// No endpoint offers exact, issuer-disambiguated matching: a caller who needs
+/// one asset exactly pastes its pool identifier instead.
 ///
 /// `splitn(2, '/')` caps the result at two: a third slash stays inside the
 /// second needle rather than silently becoming an extra constraint.

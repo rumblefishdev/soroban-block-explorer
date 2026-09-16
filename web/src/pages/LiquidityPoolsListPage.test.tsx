@@ -137,8 +137,8 @@ describe('LiquidityPoolsListPage', () => {
       initialEntries: ['/liquidity-pools'],
     });
 
-    // ~10.4k classic pools are in this state while the backfill runs. A blank
-    // name would read as a pool that holds nothing.
+    // A pool whose legs were never filled must not get a blank name, which
+    // would read as a pool that holds nothing.
     expect(screen.getByText('Composition not indexed')).toBeInTheDocument();
   });
 

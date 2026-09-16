@@ -28,7 +28,8 @@ use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
 use crate::common::asset_identity::{
-    AssetDisplay, ResolvedAsset, resolve_asset_identities, resolve_identities_and_display,
+    AssetDisplay, MAX_SCALE, ResolvedAsset, resolve_asset_identities,
+    resolve_identities_and_display,
 };
 use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
@@ -57,8 +58,8 @@ pub struct PoolRow {
     /// `None` on the list — detail-only, see
     /// [`crate::liquidity_pools::dto::PoolItem::created_at_ledger`].
     pub created_at_ledger: Option<i64>,
-    /// Ledger value the list keyset orders + paginates on. CH keys on the
-    /// native `last_updated_ledger` ("most recently active"), carried here.
+    /// Ledger value the list keyset orders + paginates on: the pool's last
+    /// activity ([`ACTIVITY_LEDGER`]), carried here.
     /// The wire `PoolListCursor.created_at_ledger` slot stays opaque (ADR
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
@@ -111,12 +112,6 @@ pub struct PoolLegRow {
     pub reserve: Option<String>,
 }
 
-/// Turn one pool's stored leg surrogates into the rows the handler finishes.
-///
-/// A surrogate the asset dimension does not know still yields a leg: the pool
-/// genuinely holds that token, and dropping it would silently shorten the pool.
-/// It renders by whatever identity survives — the contract address — which is
-/// the honest answer rather than a missing leg.
 /// Where a pool's per-leg reserves come from, in the source's own units.
 enum Reserves<'a> {
     /// A classic pool's snapshot: exactly two, already scaled.
@@ -157,6 +152,12 @@ impl Reserves<'_> {
     }
 }
 
+/// Turn one pool's stored leg surrogates into the rows the handler finishes.
+///
+/// A surrogate the asset dimension does not know still yields a leg: the pool
+/// genuinely holds that token, and dropping it would silently shorten the pool.
+/// It renders by whatever identity survives — the contract address — which is
+/// the honest answer rather than a missing leg.
 fn leg_rows(
     leg_ids: &[i64],
     identities: &HashMap<i64, ResolvedAsset>,
@@ -396,18 +397,18 @@ pub struct PriceLeg {
     pub issuer: String,
 }
 
-/// Map an LP leg (XDR `AssetType` + code + issuer G-strkey) to its prices
-/// identity. LP legs are classic-only (`LiquidityPoolEntry`), so only
-/// native (0) and credit_alphanum4/12 (1|2) occur; anything else — or a
-/// credit leg missing its code/issuer — is unpriceable by construction.
-pub fn price_leg(asset_type: i16, code: Option<&str>, issuer: Option<&str>) -> PriceLeg {
-    match asset_type {
+/// Map a pool leg (asset FAMILY + code + issuer G-strkey) to its prices
+/// identity. Every caller passes the `assets` family, not the XDR `AssetType`:
+/// native (0) and classic credit (1) price; a soroban token (3) and anything
+/// else — or a credit leg missing its code/issuer — are unpriceable here.
+pub fn price_leg(family: i16, code: Option<&str>, issuer: Option<&str>) -> PriceLeg {
+    match family {
         0 => PriceLeg {
             kind: "native",
             code: "XLM".to_string(),
             issuer: String::new(),
         },
-        1 | 2 => match (code, issuer) {
+        1 => match (code, issuer) {
             (Some(c), Some(i)) if !c.is_empty() && !i.is_empty() => PriceLeg {
                 kind: "credit",
                 code: c.to_string(),
@@ -488,9 +489,6 @@ pub async fn fetch_pool_price_context(
             .collect(),
         fee_bps: r.fee_bps,
         kind: r.pool_kind,
-        // 7 for an asset the dimension does not know — the same default the
-        // identity statement itself applies, and the value every share token
-        // measured on production reports.
         // `None` where nothing established the scale — the chart then prices
         // nothing for that pool rather than plotting a number off by orders of
         // magnitude. Same rule as the per-leg reserve.
@@ -614,9 +612,12 @@ pub async fn fetch_pool_usd_analytics(
         None => (None, None),
     };
     // SQL NULL (no snapshot rows in the window, or no swaps among them) is a
-    // genuine zero-volume day. A row that IS present but unparseable is NOT —
-    // it is an unknown, and must not be reported as "$0.00 traded".
+    // genuine zero-volume day — for a CLASSIC pool, whose snapshots record
+    // volume. A soroban pool has no snapshots and nothing records its volume,
+    // so the same NULL is an unknown there. A row that IS present but
+    // unparseable is an unknown too, and must not be reported as "$0.00 traded".
     let vol24_units = match vol24_raw?.as_deref() {
+        None if ctx.kind == domain::PoolKind::Soroban as i16 => None,
         None => Some(0.0),
         Some(raw) => parse_f64(raw),
     };
@@ -727,9 +728,14 @@ async fn fetch_last_closes(
 /// have to pick a scale up front. Inserting the point is exact at every
 /// magnitude — and this number is the denominator every participant's share
 /// percentage is quoted against, so "close" is not good enough.
+///
+/// `decimals` comes from contract metadata anyone can publish, so it is bounded:
+/// past [`MAX_SCALE`] the scale is not a fact but a hostile or broken value —
+/// two live contracts declare 43,224 — and the pad width below would otherwise
+/// be the attacker's to choose.
 fn scale_decimal_str(raw: &str, decimals: u32) -> Option<String> {
     let digits = raw.strip_prefix('+').unwrap_or(raw);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) || decimals > MAX_SCALE {
         return None;
     }
     let d = decimals as usize;
@@ -815,8 +821,9 @@ fn pool_instance_sql(pool_ids_predicate: &str) -> String {
         "SELECT s.pool_id AS pool_id, \
                 toNullable(toString(s.total_shares)) AS shares_raw, \
                 toNullable(toUInt32(coalesce(m.decimals, 7))) AS shares_decimals, \
-                toNullable(toInt64(ifNull(ba.holder_count, 0))) AS holders \
-         FROM (SELECT pool_id, share_token_id, total_shares \
+                toNullable(greatest(toInt64(ifNull(ba.holder_count, 0)) \
+                                    - ifNull(own.held, 0), 0)) AS holders \
+         FROM (SELECT pool_id, plane_id, share_token_id, total_shares \
                FROM pool_instance_state FINAL \
                WHERE {pool_ids_predicate}) s \
          LEFT JOIN (SELECT id, contract_id FROM soroban_contracts LIMIT 1 BY id) c \
@@ -833,9 +840,33 @@ fn pool_instance_sql(pool_ids_predicate: &str) -> String {
             recompute, so this count is eventually consistent — the assets list \
             already presents it on those terms. */ \
          LEFT JOIN (SELECT asset_id, holder_count FROM balance_aggregates) ba \
-             ON ba.asset_id = s.share_token_id"
+             ON ba.asset_id = s.share_token_id \
+         /* The aggregate counts every positive balance, and the pool's own \
+            contract is one of them: a pair locks its minimum liquidity by \
+            holding its own share token. That is not a provider — measured on \
+            242 of 727 pools with a share token, 2026-09-15. A PK seek on \
+            `(holder_id, asset_id)`, bounded by the same pools. */ \
+         LEFT JOIN (SELECT holder_id, asset_id, \
+                           toInt64(argMax(amount, last_updated_ledger) > 0) AS held \
+                    FROM balances \
+                    WHERE (holder_id, asset_id) IN ( \
+                        SELECT plane_id, share_token_id FROM pool_instance_state FINAL \
+                        WHERE {pool_ids_predicate}) \
+                    GROUP BY holder_id, asset_id) own \
+             ON own.holder_id = s.plane_id AND own.asset_id = s.share_token_id"
     )
 }
+
+/// Keeps only the `pool_state_changes` rows a pool vouches for.
+///
+/// A plane entry names its pool in a key payload any contract can write, so a
+/// row proves nothing on its own: only a row from the plane the pool's own
+/// instance declares is the pool's. A classic pool has no instance row, so no
+/// forged row can stand in for its snapshot either. Every read of soroban
+/// reserves ANDs this in — the list, the detail and the chart — beside its own
+/// `pool_id` bound, which is what keeps each read a key seek.
+const DECLARED_PLANE: &str =
+    "(pool_id, plane_id) IN (SELECT pool_id, plane_id FROM pool_instance_state FINAL)";
 
 /// The chart's per-ledger reserve source, chosen by the pool's KIND.
 ///
@@ -869,15 +900,15 @@ fn chart_reserve_source(ctx: &PoolPriceContext) -> String {
                 FROM pool_state_changes"
             .to_string();
     };
-    let scale = |d: u32| 10f64.powi(d as i32);
+    // Float, not Decimal: `Decimal(38, 0) / 10^d` keeps the dividend's scale 0,
+    // which truncated every reserve to whole units. The series is only ever
+    // read through `toFloat64` for the TVL product, so nothing is lost.
     format!(
         "SELECT ledger_sequence, \
-                toDecimal128(reserves[1], 0) / {a} AS reserve_a, \
-                toDecimal128(reserves[2], 0) / {b} AS reserve_b, \
+                toFloat64(reserves[1]) / 1e{da} AS reserve_a, \
+                toFloat64(reserves[2]) / 1e{db} AS reserve_b, \
                 CAST(NULL, 'Nullable(Decimal128(7))') AS gross_volume_a \
-         FROM pool_state_changes",
-        a = scale(*da),
-        b = scale(*db),
+         FROM pool_state_changes"
     )
 }
 
@@ -982,23 +1013,9 @@ pub async fn fetch_pool_by_id(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
-    // `unhex(?)` appears 5×: the `legs` CTE, the created_at-ledger subquery, the
-    // participant-count subquery, the latest-snapshot subquery, and the outer
-    // WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
-    // detail is single-pool and CH dislikes correlated subqueries. Each `?`
-    // consumes one positional bind; all are the same value, so order is moot.
-    //
-    // `legs` resolves the pool's two `(code, issuer_id)` pairs once; `iss` and
-    // `sac` both fan out from it.
-    //
-    // **Issuer resolution is a restricted `iss` CTE, NOT `accounts FINAL`
-    // joins.** `accounts` is `ORDER BY (account_id)`, so the surrogate `id` is a
-    // non-PK reverse lookup; a plain `LEFT JOIN accounts FINAL` builds the whole
-    // 14M-row table into the hash — and detail does it for BOTH legs, blowing
-    // the 3.73 GiB per-query cap (box-confirmed `Code 241`). Restricting to the
-    // pool's ≤2 issuer ids + `GROUP BY id` (no FINAL — account_id is stable
-    // across RMT versions, `any()` is safe) scans the id column but builds a
-    // ≤2-row hash. Same shape as `fetch_pool_list`'s `iss` CTE.
+    // Every `?` is the same literal pool id (NOT correlated to `lp`): detail is
+    // single-pool and CH dislikes correlated subqueries. The bind list below
+    // names them in order.
     //
     // **Leg identity is resolved in Rust, not joined here.** This used to carry
     // three pair-keyed CTEs — `legs` (the pool's four pair columns), `iss` (a
@@ -1037,8 +1054,10 @@ pub async fn fetch_pool_by_id(
                 toInt16(lp.pool_kind)                AS pool_kind, \
                 lp.legs                              AS legs, \
                 lp.fee_bps                           AS fee_bps, \
+                /* `min` over no rows is 0, not NULL — without `nullIf` a \
+                   soroban pool, which has no snapshots, was created at 0. */ \
                 ifNull( \
-                    (SELECT min(ledger_sequence) FROM liquidity_pool_snapshots \
+                    (SELECT nullIf(min(ledger_sequence), 0) FROM liquidity_pool_snapshots \
                       WHERE pool_id = unhex(?)), \
                     lp.last_updated_ledger)          AS created_at_ledger, \
                 /* A classic pool's providers hold pool-share TRUSTLINES \
@@ -1056,7 +1075,7 @@ pub async fn fetch_pool_by_id(
                 toString(s.total_shares)             AS total_shares, \
                 ifNull(( \
                     SELECT arrayMap(x -> toString(x), argMax(reserves, ledger_sequence)) \
-                    FROM pool_state_changes WHERE pool_id = unhex(?) \
+                    FROM pool_state_changes WHERE pool_id = unhex(?) AND {declared} \
                 ), [])                               AS state_reserves, \
                 inst.shares_raw                      AS instance_shares, \
                 toUInt32(ifNull(inst.shares_decimals, 7)) AS instance_shares_decimals, \
@@ -1082,10 +1101,13 @@ pub async fn fetch_pool_by_id(
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
             inst = pool_instance_sql("pool_id = unhex(?)"),
+            declared = DECLARED_PLANE,
         ))
-        // Seven `?`, all the same pool, in SQL text order: created_at,
+        // Eight `?`, all the same pool, in SQL text order: created_at,
         // participants, the state-change reserves, the snapshot seek, the
-        // ledger seek, the instance-shares join, then the WHERE.
+        // ledger seek, the instance subquery (twice: its shares and the pool's
+        // own-token holding), then the WHERE.
+        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
@@ -1806,7 +1828,7 @@ pub async fn fetch_pool_chart(
                 isNotNull(lps.gross_volume_a) AND isNull(pa_usd) AS unpriced_swap \
              FROM ( \
                  {reserve_source} \
-                 WHERE pool_id = unhex(?) \
+                 WHERE pool_id = unhex(?) {plane_guard} \
                    AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
                    AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
                  ORDER BY ledger_sequence DESC \
@@ -1843,6 +1865,11 @@ pub async fn fetch_pool_chart(
         series_view = series_view,
         carry = MAX_PRICE_CARRY_SECONDS,
         reserve_source = chart_reserve_source(ctx),
+        plane_guard = if ctx.kind == domain::PoolKind::Soroban as i16 {
+            format!("AND {DECLARED_PLANE}")
+        } else {
+            String::new()
+        },
     );
 
     let (chart_leg_a, chart_leg_b) = match priced_pair(ctx) {
@@ -1882,9 +1909,10 @@ pub async fn fetch_pool_chart(
         .collect())
 }
 
-/// SELECT column order MUST match this struct (clickhouse positional decode).
+/// The page itself — which pools, in which order. SELECT column order MUST
+/// match this struct (clickhouse positional decode).
 #[derive(Debug, Row, Deserialize)]
-struct PoolListChRow {
+struct PoolPageChRow {
     pool_id_hex: String,
     /// Verbatim family marker — empty on the pair-factory (and on every
     /// classic row). Read only by [`zero_shares_is_measured`].
@@ -1895,8 +1923,17 @@ struct PoolListChRow {
     /// shared resolver already carries the shapes those joins have to get right.
     legs: Vec<i64>,
     fee_bps: i32,
-    /// `last_updated_ledger` — the list sort/cursor key (see fn doc).
-    cursor_ledger: i64,
+    /// The RMT version — the ledger whose close time `latest_snapshot_at` is.
+    last_updated_ledger: i64,
+    /// [`ACTIVITY_LEDGER`] — the list sort and cursor key.
+    activity_ledger: i64,
+}
+
+/// Everything else a list row shows, for the pools the page already chose.
+/// SELECT column order MUST match this struct.
+#[derive(Debug, Row, Deserialize)]
+struct PoolSideChRow {
+    pool_id_hex: String,
     /// Latest per-leg reserves from `pool_state_changes`, raw and in leg order.
     /// Empty for a classic pool, which has none there.
     state_reserves: Vec<String>,
@@ -1912,38 +1949,6 @@ struct PoolListChRow {
     latest_snapshot_at_ms: Option<i64>,
 }
 
-/// `GET /v1/liquidity-pools` — paginated pool list. Mirrors the PG
-/// `fetch_pool_list` projection, with two CH-specific structural choices
-/// driven by the box-measured read cost (`liquidity_pool_snapshots` = 268 M
-/// rows):
-///
-/// - **Order key = `last_updated_ledger` (NOT `created_at_ledger`).** PG keys
-///   on `created_at_ledger` (pool creation). CH `liquidity_pools` dropped that
-///   column (PR #175); its only in-window proxy — `min(snapshot
-///   ledger_sequence)` — is clamped to the frozen backfill floor (≈ L50.4M)
-///   for every pre-window pool, so it is useless as an order key (mass ties)
-///   *and* would force a full 268 M-row snapshot GROUP BY just to derive it.
-///   `last_updated_ledger` is a native non-NULL column → the list pages the
-///   small `liquidity_pools` table (51 k rows) FIRST, then seeks snapshots /
-///   positions for only the page's ≤ limit+1 pools (`pool_id` is their leading
-///   PK). Box-measured ≈ 55 M rows/page vs ≈ 268 M for the full-scan shape.
-///   The wire `created_at_ledger` field still reports the min-snapshot proxy
-///   (parity with detail); only the *ordering* differs, and the FE does not
-///   consume the list yet, so there is no live ordering regression.
-/// - **No `min_tvl` pre-filter.** It used to exist as a `tvl_pools` CTE doing
-///   a full-scan `argMax(tvl)` over the snapshot column — a column task 0199
-///   established is never written, so it matched nothing. The parameter is
-///   now rejected with 400 at the handler rather than silently returning an
-///   empty page that contradicts the per-row `tvl` this function computes.
-///   Restoring it needs TVL for ALL pools per request (it changes page
-///   membership, so it cannot ride the per-page price lookup) — i.e. the
-///   prices-side identity-keyed materialized series.
-///
-/// Read-cost note for the eventual flag flip: the per-page ≈ 55 M is dominated
-/// by the `accounts` id→strkey issuer resolution (14 M, non-PK reverse lookup)
-/// and the `ledgers` closed_at join; both are bounded and the list is
-/// user-initiated (not polled). The `operations_appearances` projection that
-/// blocks the transactions endpoint does NOT block the list.
 /// The ordering value the list pages on: the pool's LAST ACTIVITY.
 ///
 /// `last_updated_ledger` is the RMT version, and it means two different things.
@@ -1960,10 +1965,33 @@ struct PoolListChRow {
 ///
 /// `greatest` rather than a per-kind branch: a classic pool has no state-change
 /// rows, so the join misses and the column wins; a soroban pool's column is its
-/// registration, which its activity is never earlier than. One expression, one
-/// meaning, no `pool_kind` test.
+/// registration, which its activity is never earlier than.
 const ACTIVITY_LEDGER: &str = "greatest(lp.last_updated_ledger, ifNull(sc.led, 0))";
 
+/// `GET /v1/liquidity-pools` — paginated pool list, ordered by
+/// [`ACTIVITY_LEDGER`] then `pool_id`, keyset-paged on that pair.
+///
+/// **Two queries, on purpose.** The first chooses the page; the second reads
+/// everything else for exactly those pools, by literal id. As one query with
+/// the page as a CTE, ClickHouse re-ran the CTE at every reference — seven of
+/// them — and each run aggregated all of `pool_state_changes` to find the
+/// order: 36.3M rows and 1.54 GiB per page, measured 2026-09-15, against 5.1M
+/// for one run. The extra round trip is the whole price of that.
+///
+/// - The page query reads only the small `liquidity_pools` table plus, unless
+///   the page is classic-only, one `max(ledger_sequence)` per pool of the
+///   state changes (no classic pool has any, so a classic filter skips it).
+/// - Latest-snapshot fields come from `argMax(...) GROUP BY pool_id` over a
+///   bounded `ledger_sequence` band around the page's activity range (±10k):
+///   a bounded seek instead of a per-pool history scan (30M rows, which OOMed
+///   the 4 GB read-only profile as PR #335's `LIMIT 1 BY` sort). NO `FINAL`: a
+///   page pool's latest snapshot is post-#318 single-image, so per-column
+///   `argMax` cannot tear.
+/// - `created_at_ledger` is detail-only: deriving it per page cost more than
+///   the rest of the request together, and nothing renders it here.
+/// - **No `min_tvl` pre-filter.** TVL is computed per page at read, so a
+///   filter on it would change page membership; the handler rejects it with
+///   400 rather than return a page that contradicts its own `tvl` values.
 pub async fn fetch_pool_list(
     client: &clickhouse::Client,
     params: &ResolvedPoolListParams,
@@ -1971,77 +1999,59 @@ pub async fn fetch_pool_list(
 ) -> Result<Vec<PoolRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // Keyset on `(last_updated_ledger, pool_id)`, expanded to scalar
-    // comparisons. The cursor's `created_at_ledger` slot carries
-    // `last_updated_ledger` on the CH path (opaque, ADR 0008). Bounds inlined:
-    // `cursor_ledger` is i64 (no injection); `pool_id_hex` is validated hex.
-    // A tampered/non-hex cursor degrades to "no keyset" (first page).
+    // No classic pool has a state-change row, so a classic-only page orders on
+    // the column alone and skips the only aggregate the page query pays for.
+    // `greatest(x, 0) = x`, so the cursor means the same thing either way.
+    let classic_only = params.pool_kind == Some(domain::PoolKind::Classic);
+    let (act, activity_join) = if classic_only {
+        ("lp.last_updated_ledger", String::new())
+    } else {
+        (
+            ACTIVITY_LEDGER,
+            format!(
+                "LEFT JOIN (SELECT pool_id, max(ledger_sequence) AS led \
+                            FROM pool_state_changes WHERE {DECLARED_PLANE} \
+                            GROUP BY pool_id) sc \
+                     ON sc.pool_id = lp.pool_id"
+            ),
+        )
+    };
+
+    // Keyset on `(activity, pool_id)`, expanded to scalar comparisons. The
+    // cursor's `created_at_ledger` slot carries the activity ledger (opaque,
+    // ADR 0008). Bounds inlined: `cursor_ledger` is i64 (no injection);
+    // `pool_id_hex` is validated hex. A tampered/non-hex cursor degrades to
+    // "no keyset" (first page).
     let keyset = match params.cursor.as_ref() {
         Some(c) if is_hex_pool_id(&c.pool_id_hex) => format!(
             "AND (({act} {op} {cl}) \
                   OR ({act} = {cl} \
                       AND lower(hex(lp.pool_id)) {op} '{ph}'))",
-            act = ACTIVITY_LEDGER,
-            op = op,
             cl = c.created_at_ledger,
             ph = c.pool_id_hex,
         ),
         _ => String::new(),
     };
 
-    // Asset filters are bound (untrusted free-text codes / handler-validated
-    // issuer StrKeys — clickhouse-rs escapes them). Each `?` appears in the
-    // `page` CTE WHERE in this exact push order. Issuer StrKey → surrogate id
-    // resolves via an `accounts` PK seek (`ORDER BY (account_id)`), cheap.
-    // NO relevance ranking anywhere on the pools path, by decision (task
-    // 0485). Measured on production, the first page of
+    // Filters are bound (untrusted free-text codes — clickhouse-rs escapes
+    // them), in push order. NO relevance ranking anywhere on the pools path,
+    // by decision (task 0485). Measured on production, the first page of
     // `filter[asset_codes]=XLM` is already 20 of 25 real native-leg pools —
     // they are the busiest on the network, so activity surfaces them without
-    // a rule. A tier over the legs was built and taken back out: 46 lines of
-    // the densest SQL in the change, for five look-alikes on page one.
+    // a rule.
     let mut binds: Vec<String> = Vec::new();
     let mut filters = String::new();
-    // The per-leg POSITIONAL filters (`filter[asset_a_code]` + its issuer, and
-    // the same for `b`) are gone. They named a leg by its position in a pair,
-    // which a list of two-to-four legs has no equivalent for, and no caller
-    // used them: the frontend's only pool filter is the free-text code box,
-    // and no other client holds a key to this API. The code needle below
-    // answers the same question without pinning a position.
     if let Some(kind) = params.pool_kind {
         filters.push_str(" AND lp.pool_kind = ?");
         binds.push((kind as i16).to_string());
     }
-    // Asset-code needles (0440 / issue #366).
-    //
-    // Substring, not equality: `USD` has to match the `USDC` pools the user can
-    // see on the page. `position` takes the needle literally — no LIKE wildcards
-    // and no regex to escape, so caller free-text cannot widen its own match.
-    // Case-insensitive here rather than `upper()` on the column: same result,
-    // one pass, and it keeps working if the needle ever arrives un-normalized.
-    //
-    // Native legs are stored with an empty code (`asset_type = 0`, code `''`)
-    // while every surface — this list included — renders them as `XLM`. Without
-    // the alias, `XLM` matches none of the 11.7k pools that actually hold native
-    // XLM, and instead returns ~3.7k pools of credit assets someone minted under
-    // the code `XLM` (they exist, including `XLM/XLM` pairs). That is not an
-    // empty result, it is a confident wrong one — so the predicate searches what
-    // the row displays as.
-    //
-    // A pair assigns each needle its OWN leg, in either order, rather than
-    // asking each needle independently whether it matches somewhere. The
-    // difference only shows when the needles overlap, and then it is the whole
-    // answer: `USDC/USDC` means the 72 pools with USDC on both sides, not the
-    // 2 912 with USDC anywhere. Same for a needle that is a prefix of the other
-    // (`USD/USDC`) — one asset must not satisfy both halves of the query.
-    //
-    // The predicate itself lives in `common::pool_asset_codes` because global
-    // search matches pools with the SAME rule (task 0470); two copies would
-    // drift, and the native arm above is exactly where a second one goes wrong.
+    // Asset-code needles (0440 / issue #366), matched through `legs` by the
+    // predicate global search shares (task 0470) — substring, native legs
+    // searchable as `XLM`, and one needle per leg when two are given, so
+    // `USDC/USDC` means both sides and not either.
     //
     // A pool identifier in the same box wins outright: it names one pool, so
-    // it is a point seek on the primary key rather than a scan, and there is
-    // nothing left for a code match to narrow. Before this, the identifier was
-    // matched as a substring of an asset code and the page said "no pools".
+    // it is a point seek on the primary key rather than a scan.
     if let Some(pool_hex) = params.pool_id_hex.as_ref() {
         filters.push_str(" AND lp.pool_id = unhex(?)");
         binds.push(pool_hex.clone());
@@ -2052,72 +2062,55 @@ pub async fn fetch_pool_list(
         binds.extend(clause_binds);
     }
 
-    // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
-    // `ledger_sequence` band around the page's `last_updated_ledger` range (the
-    // `band` CTE, ±10k). Page pools are the most-recently-updated, so their
-    // latest snapshot sits in that band — a bounded seek (~0.5M rows / ~50ms)
-    // instead of a full per-pool history scan (30M rows, which OOMed the 4 GB
-    // read-only profile as PR #335's `LIMIT 1 BY` sort). NO `FINAL`: the band's
-    // max ledger per page pool is recent (post-0356/#318 single-image) so
-    // per-column `argMax` can't tear; only a pool whose latest snapshot predates
-    // #318 (inactive for weeks → deep pages) could, which is accepted.
-    // `created_at_ledger` = `min(ledger_sequence)` in the `cr` subquery (cheap
-    // narrow streaming scan, dup-invariant → no `FINAL`); `l_snap` seeks
-    // `ledgers` by the page's ~20 `last_updated_ledger`s (a full `ledgers` join
-    // built a 26M-row / 3.3 GB hash); `sac`/`asset_sac` prune to the page codes.
-    //
-    // Do NOT rewrite as `ORDER BY ledger_sequence DESC LIMIT 1 BY pool_id`
-    // (PR #335, reverted): `LIMIT 1 BY` is NOT a seek — it fully materialises +
-    // sorts every snapshot of the page's pools (~30M rows for the busiest 20),
-    // OOMing the 4 GB read-only CH profile. A future perf pass must keep the
-    // O(page pools) shape (e.g. `argMax` over a whole-row tuple), not a sort.
-    //
-    // Aggregates wrap in `toNullable(...)` so a no-snapshot pool yields NULL (not
-    // the 0/'' default) on the LEFT JOIN miss — `join_use_nulls` is rejected for
-    // the read-only CH user, so this is the readonly-safe NULL path. (Every
-    // current pool has ≥ 1 snapshot, so this is defensive.) `nullIf(...)` does the
-    // same for the empty-string-sentinel string columns. Native legs
-    // (asset_code = '') are excluded from the SAC join by the `lp.asset_*_code !=
-    // ''` guard so they surface a NULL `contract_id`, matching PG (NULL code → no
-    // SAC match).
-    let sql = format!(
-        "WITH \
-         page AS ( \
-             SELECT lp.pool_id AS pool_id, lp.pool_kind AS pool_kind, \
-                    lp.pool_type_raw AS pool_type_raw, \
-                    lp.legs AS legs, lp.fee_bps AS fee_bps, \
-                    lp.last_updated_ledger AS last_updated_ledger, \
-                    {act} AS activity_ledger, \
-                    ifNull(sc.res, []) AS state_reserves \
-             FROM liquidity_pools lp FINAL \
-             LEFT JOIN (SELECT pool_id, max(ledger_sequence) AS led, \
-                               arrayMap(x -> toString(x), \
-                                        argMax(reserves, ledger_sequence)) AS res \
-                        FROM pool_state_changes GROUP BY pool_id) sc \
-                 ON sc.pool_id = lp.pool_id \
-             WHERE 1 = 1{filters} {keyset} \
-             ORDER BY activity_ledger {order}, pool_id {order} \
-             LIMIT {limit} \
-         ), \
-         /* The band MUST follow whatever the page is ordered by. It used to \
-            read `last_updated_ledger`, which was the same thing — until the \
-            page moved to `activity_ledger`. On a soroban-filtered page the \
-            two diverge by years (the column is the registration), and the \
-            band stretched to 11.4M ledgers: 66.7M rows and 2.95 GiB read \
-            against a 4 GB profile, to find the snapshots soroban pools do \
-            not have. Measured 2026-09-09, before this line was fixed. */ \
-         band AS ( \
-             SELECT min(activity_ledger) - 10000 AS lo, \
-                    max(activity_ledger) + 10000 AS hi FROM page \
-         ) \
-         SELECT \
-             lower(hex(lp.pool_id))                          AS pool_id_hex, \
-             toString(lp.pool_type_raw)                      AS pool_type_raw, \
-             toInt16(lp.pool_kind)                           AS pool_kind, \
-             lp.legs                                         AS legs, \
-             lp.fee_bps                                      AS fee_bps, \
-             lp.activity_ledger                              AS cursor_ledger, \
-             lp.state_reserves                               AS state_reserves, \
+    let page_sql = format!(
+        "SELECT lower(hex(lp.pool_id))       AS pool_id_hex, \
+                toString(lp.pool_type_raw)   AS pool_type_raw, \
+                toInt16(lp.pool_kind)        AS pool_kind, \
+                lp.legs                      AS legs, \
+                lp.fee_bps                   AS fee_bps, \
+                lp.last_updated_ledger       AS last_updated_ledger, \
+                {act}                        AS activity_ledger \
+         FROM liquidity_pools lp FINAL \
+         {activity_join} \
+         WHERE 1 = 1{filters} {keyset} \
+         ORDER BY activity_ledger {order}, lp.pool_id {order} \
+         LIMIT {limit}",
+        limit = params.limit,
+    );
+    let mut query = client.query(&page_sql);
+    for b in &binds {
+        query = query.bind(b.as_str());
+    }
+    let page = query.fetch_all::<PoolPageChRow>().await?;
+    if page.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // The page's ids come back from `lower(hex(...))`, so they are hex by
+    // construction; the filter keeps that a checked fact before they are
+    // inlined.
+    let ids = page
+        .iter()
+        .filter(|p| is_hex_pool_id(&p.pool_id_hex))
+        .map(|p| format!("unhex('{}')", p.pool_id_hex))
+        .collect::<Vec<_>>()
+        .join(",");
+    let ledgers = page
+        .iter()
+        .map(|p| p.last_updated_ledger.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    // The snapshot band MUST follow what the page is ordered by. On a
+    // soroban-filtered page activity and `last_updated_ledger` diverge by
+    // years, and a band on the column stretched to 11.4M ledgers — 66.7M rows
+    // and 2.95 GiB against a 4 GB profile. Measured 2026-09-09.
+    let lo = page.iter().map(|p| p.activity_ledger).min().unwrap_or(0) - 10_000;
+    let hi = page.iter().map(|p| p.activity_ledger).max().unwrap_or(0) + 10_000;
+
+    let side_sql = format!(
+        "SELECT \
+             lower(hex(p.pool_id))                           AS pool_id_hex, \
+             ifNull(sc.res, [])                              AS state_reserves, \
              greatest(toInt64(ifNull(pc.participant_count, 0)), \
                       toInt64(ifNull(inst.holders, 0)))      AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
@@ -2127,7 +2120,13 @@ pub async fn fetch_pool_list(
              inst.shares_raw                                 AS instance_shares, \
              toUInt32(ifNull(inst.shares_decimals, 7))       AS instance_shares_decimals, \
              nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms \
-         FROM page lp \
+         FROM (SELECT toFixedString(arrayJoin([{ids}]), 32) AS pool_id) p \
+         LEFT JOIN ( \
+             SELECT pool_id, arrayMap(x -> toString(x), argMax(reserves, ledger_sequence)) AS res \
+             FROM pool_state_changes \
+             WHERE pool_id IN ({ids}) AND {DECLARED_PLANE} \
+             GROUP BY pool_id \
+         ) sc ON sc.pool_id = p.pool_id \
          LEFT JOIN ( \
              SELECT pool_id, \
                 toNullable(max(ledger_sequence))                  AS latest_ledger_sequence, \
@@ -2135,58 +2134,42 @@ pub async fn fetch_pool_list(
                 argMax(toNullable(reserve_b), ledger_sequence)    AS reserve_b, \
                 argMax(toNullable(total_shares), ledger_sequence) AS total_shares \
              FROM liquidity_pool_snapshots \
-             WHERE pool_id IN (SELECT pool_id FROM page) \
-               AND ledger_sequence BETWEEN (SELECT lo FROM band) AND (SELECT hi FROM band) \
+             WHERE pool_id IN ({ids}) AND ledger_sequence BETWEEN {lo} AND {hi} \
              GROUP BY pool_id \
-         ) s ON s.pool_id = lp.pool_id \
+         ) s ON s.pool_id = p.pool_id \
          LEFT JOIN ( \
              SELECT pool_id, count() AS participant_count FROM lp_positions FINAL \
-             WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
+             WHERE shares > 0 AND pool_id IN ({ids}) \
              GROUP BY pool_id \
-         ) pc ON pc.pool_id = lp.pool_id \
-         LEFT JOIN ({instance_shares}) inst ON inst.pool_id = lp.pool_id \
+         ) pc ON pc.pool_id = p.pool_id \
+         LEFT JOIN ({instance}) inst ON inst.pool_id = p.pool_id \
          /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
-            duplicate rows): without it this LEFT JOIN doubled every page row \
-            whose latest snapshot ledger falls in the duplicated range, doubling \
-            UI rows and breaking keyset pagination. `any(closed_at)` is exact \
-            (measured: closed_at identical across every dup pair). lore-0420 \
-            \
-            The filter is `page.last_updated_ledger` while the join key is \
-            `s.latest_ledger_sequence` — these look mismatched but are the same \
-            set, because a pool's last update always writes a snapshot at that \
-            ledger: measured 52,284 of 52,284 pools with \
-            `last_updated_ledger = max(ledger_sequence)`. If that invariant ever \
-            breaks the join simply misses and `latest_snapshot_at_ms` is null — \
-            degraded, never wrong. */ \
+            duplicate rows); without it this join doubled page rows. lore-0420. \
+            The filter is the page's `last_updated_ledger` while the join key \
+            is the latest snapshot ledger: the same set, because a classic \
+            pool's last update always writes a snapshot at that ledger \
+            (measured 52,284 of 52,284). If that ever breaks, the join misses \
+            and `latest_snapshot_at_ms` is null — degraded, never wrong. */ \
          LEFT JOIN ( \
              SELECT sequence, any(closed_at) AS closed_at FROM ledgers \
-             WHERE sequence IN (SELECT last_updated_ledger FROM page) \
+             WHERE sequence IN ({ledgers}) \
              GROUP BY sequence \
-         ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
-         /* The outer ORDER BY must repeat the CTE's, or the page holds the \
-            right rows in the wrong order and `finalize_page` cuts the cursor \
-            from the wrong last row — pages then overlap. */ \
-         ORDER BY lp.activity_ledger {order}, lp.pool_id {order}",
-        act = ACTIVITY_LEDGER,
-        filters = filters,
-        keyset = keyset,
-        order = order,
-        limit = params.limit,
-        // Bounded to the page, like every other side read here.
-        instance_shares = pool_instance_sql("pool_id IN (SELECT pool_id FROM page)"),
+         ) l_snap ON l_snap.sequence = s.latest_ledger_sequence",
+        instance = pool_instance_sql(&format!("pool_id IN ({ids})")),
     );
-
-    let mut query = client.query(&sql);
-    for b in &binds {
-        query = query.bind(b.as_str());
-    }
-    let rows = query.fetch_all::<PoolListChRow>().await?;
+    let mut side: HashMap<String, PoolSideChRow> = client
+        .query(&side_sql)
+        .fetch_all::<PoolSideChRow>()
+        .await?
+        .into_iter()
+        .map(|r| (r.pool_id_hex.clone(), r))
+        .collect();
 
     // One batched identity resolution for every leg on the page, then the two
     // display extras. Both key on `assets.id`, which is exactly what `legs`
     // stores — so the issuer StrKey arrives with the identity instead of
     // costing its own round trip.
-    let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
+    let leg_ids: BTreeSet<i64> = page.iter().flat_map(|r| r.legs.iter().copied()).collect();
     let (identities, display) = resolve_identities_and_display(client, &leg_ids).await?;
 
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
@@ -2195,7 +2178,7 @@ pub async fn fetch_pool_list(
     // `volume`/`fee_revenue` stay NULL on the list — detail-only semantics.
     // A prices error degrades every row to NULL TVL (error-logged), it does
     // not fail the list: same resilience contract as the detail endpoint.
-    let page_legs: Vec<Vec<PriceLeg>> = rows
+    let page_legs: Vec<Vec<PriceLeg>> = page
         .iter()
         .map(|r| {
             r.legs
@@ -2220,62 +2203,64 @@ pub async fn fetch_pool_list(
         }
     };
 
-    Ok(rows
+    Ok(page
         .into_iter()
         .zip(page_legs)
-        .map(|(r, legs)| {
-            // TVL needs one reserve per leg, and the wire carries exactly two
-            // reserves — so the slice pattern gates it on a two-leg pool rather
-            // than silently pricing the first two legs of a three-leg one. Pools
-            // with more legs are soroban, whose reserves this endpoint does not
-            // read at all, so the arm is unreachable today and stays honest if
-            // that changes.
-            let tvl = match (
-                r.reserve_a.as_deref().and_then(parse_f64),
-                r.reserve_b.as_deref().and_then(parse_f64),
-                legs.as_slice(),
-            ) {
-                (Some(ra), Some(rb), [leg_a, leg_b]) => {
-                    match (closes.get(leg_a).copied(), closes.get(leg_b).copied()) {
-                        (Some(pa), Some(pb)) => Some(usd_str(ra * pa + rb * pb)),
-                        _ => None,
-                    }
-                }
+        .map(|(p, price_legs)| {
+            let s = side.remove(&p.pool_id_hex);
+            let s = s.as_ref();
+            let state_reserves = s.map(|s| s.state_reserves.as_slice()).unwrap_or_default();
+            let reserve_a = s.and_then(|s| s.reserve_a.clone());
+            let reserve_b = s.and_then(|s| s.reserve_b.clone());
+            let legs = leg_rows(
+                &p.legs,
+                &identities,
+                &display,
+                if state_reserves.is_empty() {
+                    Reserves::Pair(reserve_a.as_deref(), reserve_b.as_deref())
+                } else {
+                    Reserves::Raw(state_reserves)
+                },
+            );
+            // TVL prices the LEG reserves, where both kinds' sources are already
+            // reconciled and scaled — the same inputs the detail endpoint uses,
+            // so a pool cannot have a TVL on one page and none on the other. The
+            // slice pattern gates it on a two-leg pool rather than silently
+            // pricing the first two legs of a longer one.
+            let tvl = match (legs.as_slice(), price_legs.as_slice()) {
+                ([ra, rb], [pa, pb]) => match (
+                    ra.reserve.as_deref().and_then(parse_f64),
+                    rb.reserve.as_deref().and_then(parse_f64),
+                    closes.get(pa).copied(),
+                    closes.get(pb).copied(),
+                ) {
+                    (Some(ra), Some(rb), Some(pa), Some(pb)) => Some(usd_str(ra * pa + rb * pb)),
+                    _ => None,
+                },
                 _ => None,
             };
             PoolRow {
-                pool_id_hex: r.pool_id_hex,
-                pool_kind: r.pool_kind,
-                legs: leg_rows(
-                    &r.legs,
-                    &identities,
-                    &display,
-                    if r.state_reserves.is_empty() {
-                        Reserves::Pair(r.reserve_a.as_deref(), r.reserve_b.as_deref())
-                    } else {
-                        Reserves::Raw(&r.state_reserves)
-                    },
-                ),
-                fee_bps: r.fee_bps,
-                fee_percent: fee_percent_str(r.fee_bps),
-                // Detail-only: deriving it per page cost more than the rest
-                // of the request together, and nothing renders it there.
+                pool_id_hex: p.pool_id_hex,
+                pool_kind: p.pool_kind,
+                legs,
+                fee_bps: p.fee_bps,
+                fee_percent: fee_percent_str(p.fee_bps),
                 created_at_ledger: None,
-                cursor_ledger: r.cursor_ledger,
-                participant_count: r.participant_count,
-                latest_snapshot_ledger: r.latest_snapshot_ledger,
-                reserve_a: r.reserve_a,
-                reserve_b: r.reserve_b,
+                cursor_ledger: p.activity_ledger,
+                participant_count: s.map_or(0, |s| s.participant_count),
+                latest_snapshot_ledger: s.and_then(|s| s.latest_snapshot_ledger),
                 total_shares: total_shares_of(
-                    r.total_shares,
-                    r.instance_shares.as_deref(),
-                    r.instance_shares_decimals,
-                    zero_shares_is_measured(r.pool_kind, &r.pool_type_raw),
+                    s.and_then(|s| s.total_shares.clone()),
+                    s.and_then(|s| s.instance_shares.as_deref()),
+                    s.map_or(7, |s| s.instance_shares_decimals),
+                    zero_shares_is_measured(p.pool_kind, &p.pool_type_raw),
                 ),
+                reserve_a,
+                reserve_b,
                 tvl,
                 volume: None,
                 fee_revenue: None,
-                latest_snapshot_at: r.latest_snapshot_at_ms.map(millis_to_utc),
+                latest_snapshot_at: s.and_then(|s| s.latest_snapshot_at_ms).map(millis_to_utc),
             }
         })
         .collect())
@@ -2522,8 +2507,11 @@ mod tests {
         assert_eq!(usdc.code, "USDC");
         assert!(usdc.issuer.starts_with('G'));
 
-        let alphanum12 = price_leg(2, Some("WGUARDIAN"), Some("GABC"));
+        // One family covers both credit lengths; `2` is the retired SAC
+        // family (ADR 0051), which no leg carries.
+        let alphanum12 = price_leg(1, Some("WGUARDIAN"), Some("GABC"));
         assert_eq!(alphanum12.kind, "credit");
+        assert_eq!(price_leg(2, Some("WGUARDIAN"), Some("GABC")).kind, "");
 
         // Unpriceable degradations: missing identity parts or unexpected type
         // must match NO prices row (empty kind), never guess.
@@ -2760,14 +2748,9 @@ mod decode_smoke {
             .expect("chart rows decode");
     }
 
-    /// `filter[asset_code]` is a substring of either leg, not an exact code
-    /// (0440 / issue #366). The regression this guards is the original
-    /// behaviour: `USD` returning nothing while the list is full of `USDC`
-    /// pools. Asserting the returned legs actually contain the needle also
-    /// catches the opposite failure — a predicate that stopped filtering.
-    /// Paging must not repeat a row, which it does the moment the outer
-    /// `ORDER BY` and the paging CTE's disagree: the page then holds the right
-    /// rows in the wrong order and the cursor is cut from the wrong last row.
+    /// Paging must not repeat a row, which it does the moment the page's order
+    /// and the cursor's disagree: the page then holds the right rows in the
+    /// wrong order and the cursor is cut from the wrong last row.
     ///
     /// Invisible to every unit test — the SQL is inline, and one page alone
     /// looks perfectly correct. It took two real pages to see it.
@@ -2825,6 +2808,11 @@ mod decode_smoke {
         );
     }
 
+    /// `filter[asset_code]` is a substring of either leg, not an exact code
+    /// (0440 / issue #366). The regression this guards is the original
+    /// behaviour: `USD` returning nothing while the list is full of `USDC`
+    /// pools. Asserting the returned legs actually contain the needle also
+    /// catches the opposite failure — a predicate that stopped filtering.
     #[tokio::test]
     async fn asset_code_filter_matches_substring() {
         let Some(ch) = client() else {

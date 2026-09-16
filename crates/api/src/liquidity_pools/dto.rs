@@ -81,8 +81,9 @@ pub struct PoolListParams {
     /// are not unique on Stellar, and this filter matches codes, not asset
     /// identity.
     ///
-    /// A pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,
-    /// the one canonical form (task 0264) — and selects that single pool
+    /// A pool IDENTIFIER is also accepted here — a classic pool's `L…` SEP-23
+    /// StrKey or a soroban pool's `C…` contract address — and selects that
+    /// single pool
     /// instead of matching asset codes (task 0470). Previously an identifier
     /// was matched as a substring of an asset code, found nothing, and the
     /// list answered "no pools" about a pool that exists.
@@ -185,17 +186,14 @@ pub struct PoolAssetLeg {
     pub reserve: Option<String>,
 }
 
-/// One pool row returned by the list endpoint. Shape pinned to canonical
-/// SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
-/// in the freshness window come back with `null` for every dynamic field
-/// (`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,
-/// `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
+/// One pool row returned by the list and detail endpoints. A value no source
+/// knows comes back `null` — never a zero — and the frontend says which kind
+/// of absence it is.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolItem {
-    /// SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-    /// 0024; the handler encodes to strkey at the response boundary so
-    /// the wire shape matches the Stellar ecosystem canonical form
-    /// (CAP-38 / SEP-23).
+    /// A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
+    /// address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
+    /// 0024); the handler encodes them by kind at the response boundary.
     pub pool_id: String,
     /// `classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not
     /// decoration: the same 32 bytes render as a SEP-23 `L…` strkey for a
@@ -236,6 +234,9 @@ pub struct PoolItem {
     /// Independent of snapshot freshness either way.
     pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
+    /// A CLASSIC pool's latest snapshot reserves, in leg order; always `null`
+    /// for a soroban pool, which has no snapshot. Read reserves from
+    /// `legs[].reserve`, which carries both kinds and any number of legs.
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
@@ -453,12 +454,15 @@ pub struct PoolActivityItem {
     pub created_at: DateTime<Utc>,
 }
 
-/// Cursor payload for `GET /v1/liquidity-pools` paginated by
-/// `(created_at_ledger DESC, pool_id DESC)`. The `pool_id` half travels
-/// as 64-char lowercase hex; the SQL decodes it back to BYTEA inside the
-/// keyset predicate.
+/// Cursor payload for `GET /v1/liquidity-pools`, paginated by
+/// `(last activity DESC, pool_id DESC)`. The `pool_id` half travels as 64-char
+/// lowercase hex; the SQL decodes it back to bytes inside the keyset predicate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolListCursor {
+    /// The pool's LAST ACTIVITY ledger (`queries::ACTIVITY_LEDGER`), not its
+    /// creation. The name predates the ordering; it is kept because the cursor
+    /// is opaque (ADR 0008) and renaming it would void every cursor a client
+    /// holds at deploy time for no visible gain.
     pub created_at_ledger: i64,
     pub pool_id_hex: String,
 }
@@ -514,8 +518,8 @@ pub struct ChartDataPoint {
 /// `GET /v1/liquidity-pools/:id/chart` response.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartResponse {
-    /// Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
-    /// client supplied in the path.
+    /// Echoed pool ID — `L…` or `C…`, same form the client supplied in the
+    /// path.
     pub pool_id: String,
     pub interval: String,
     pub from: DateTime<Utc>,

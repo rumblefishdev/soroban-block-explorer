@@ -34,7 +34,7 @@ use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -191,8 +191,14 @@ fn map_pool_item(row: PoolRow, network_id: &[u8; 32]) -> PoolItem {
         // Shares outstanding mean somebody holds them. A zero count beside a
         // positive share balance is not a measurement — it is the ingest
         // floor's blind spot wearing a number, on 35% of live classic pools.
+        //
+        // And a soroban pool whose shares are unknown has nothing a zero could
+        // be measured against: a concentrated pool has no share token at all,
+        // its providers hold positions, and "0 providers" there was false on 45
+        // of 46 pools.
         participant_count: match (row.participant_count, row.total_shares.as_deref()) {
             (0, Some(shares)) if shares.parse::<f64>().is_ok_and(|v| v > 0.0) => None,
+            (0, None) if row.pool_kind == domain::PoolKind::Soroban as i16 => None,
             (n, _) => Some(n),
         },
         latest_snapshot_ledger: row.latest_snapshot_ledger,
@@ -293,7 +299,7 @@ pub async fn list_pools(
         pool_id_hex,
     };
 
-    // The CH list keys on `last_updated_ledger` (see
+    // The list keys on the pool's last activity (see
     // `queries::fetch_pool_list`); the sort key travels in
     // `PoolRow::cursor_ledger`.
     let fetched = queries::fetch_pool_list(&state.ch(), &resolved, direction)
@@ -338,7 +344,7 @@ pub async fn list_pools(
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
     ),
     responses(
         (status = 200, description = "Pool detail", body = PoolItem),
@@ -437,7 +443,7 @@ const ALLOWED_EVENTS: [&str; 3] = [
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -478,13 +484,11 @@ pub async fn list_pool_activity(
         // the first two is therefore exact for every pool this endpoint can
         // serve.
         //
-        // A pool with FEWER is not a missing pool: `legs` is still being
-        // backfilled, so a pool that exists can answer with an empty array
-        // today (10,437 of them on production, measured 2026-09-09). Saying
-        // "not found" about it contradicted the detail endpoint, which renders
-        // that same pool one call earlier. It has no amount rows to map, so the
-        // honest answer is an empty page — the same one a pool with no activity
-        // gets.
+        // A pool with FEWER is not a missing pool: a row whose `legs` were
+        // never filled still exists, and saying "not found" about it
+        // contradicted the detail endpoint, which renders that same pool one
+        // call earlier. It has no amount rows to map, so the honest answer is
+        // an empty page — the same one a pool with no activity gets.
         Ok(Some(ids)) => match ids.as_slice() {
             [a, b, ..] => (*a, *b),
             _ => return empty_activity_page(pagination.limit),
@@ -617,7 +621,7 @@ fn interval_seconds(interval: &str) -> i64 {
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ChartParams,
     ),
     responses(

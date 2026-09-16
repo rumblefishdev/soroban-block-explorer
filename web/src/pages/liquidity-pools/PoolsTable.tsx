@@ -123,13 +123,13 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Reserves',
     width: 150,
     cell: (row) => {
-      // Stale pools (no fresh snapshot) come back with null reserves —
-      // render an em-dash rather than "0". A pool whose legs are not indexed
-      // yet gets the same treatment: the amounts cannot be attributed to
-      // anything, so there is nothing honest to label them with.
+      // A pool no source knows any reserve for renders an em-dash rather
+      // than "0". A pool whose legs are not indexed yet gets the same
+      // treatment: the amounts cannot be attributed to anything. The test is
+      // on the LEGS — the classic-only `reserve_a` / `reserve_b` pair is always
+      // null for a Soroban pool, and gating on it hid every Soroban reserve.
       const reserves = poolReserves(row);
-      if (reserves.length === 0) return <Dash />;
-      if (row.reserve_a == null && row.reserve_b == null) return <Dash />;
+      if (reserves.every(({ amount }) => amount == null)) return <Dash />;
       return (
         <Stack spacing={0.5}>
           {reserves.map(({ leg, amount }, i) => (

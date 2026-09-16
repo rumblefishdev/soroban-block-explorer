@@ -67,8 +67,8 @@ describe('isPoolIdentifier', () => {
     expect(isPoolIdentifier('')).toBe(false);
   });
 
-  // `isPoolId` stays narrow on purpose: search uses it to tell a pool from a
-  // contract, and widening it would route every contract to the pool page.
+  // `isPoolId` stays narrow on purpose: an `L…` strkey is always a pool, a
+  // `C…` one only sometimes — widening it would treat every contract as one.
   it('does not widen isPoolId itself', () => {
     expect(isPoolId(VALID_CONTRACT)).toBe(false);
   });

@@ -1101,7 +1101,7 @@
           {
             "name": "filter[asset_code]",
             "in": "query",
-            "description": "Free-text asset filter — case-insensitive substring of any leg's\ndisplayed code (input is trimmed before the query). The needle is\nmatched literally: `%`, `_` and regex metacharacters have no special\nmeaning.\n\nA `/` makes it a **pair** query: `USDC/XLM` requires both codes to be\npresent on TWO DIFFERENT legs, and the typed order does not matter.\nOnly the first `/` splits, so `USDC/XLM/BTC` searches for the literal\nsecond code `XLM/BTC` and therefore matches nothing.\n\nNative legs match on `XLM` even though they store an empty code, so\n`XLM` returns the pools that actually hold native XLM. Note that it\n*also* returns credit assets minted under the code `XLM` — asset codes\nare not unique on Stellar, and this filter matches codes, not asset\nidentity.\n\nA pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,\nthe one canonical form (task 0264) — and selects that single pool\ninstead of matching asset codes (task 0470). Previously an identifier\nwas matched as a substring of an asset code, found nothing, and the\nlist answered \"no pools\" about a pool that exists.",
+            "description": "Free-text asset filter — case-insensitive substring of any leg's\ndisplayed code (input is trimmed before the query). The needle is\nmatched literally: `%`, `_` and regex metacharacters have no special\nmeaning.\n\nA `/` makes it a **pair** query: `USDC/XLM` requires both codes to be\npresent on TWO DIFFERENT legs, and the typed order does not matter.\nOnly the first `/` splits, so `USDC/XLM/BTC` searches for the literal\nsecond code `XLM/BTC` and therefore matches nothing.\n\nNative legs match on `XLM` even though they store an empty code, so\n`XLM` returns the pools that actually hold native XLM. Note that it\n*also* returns credit assets minted under the code `XLM` — asset codes\nare not unique on Stellar, and this filter matches codes, not asset\nidentity.\n\nA pool IDENTIFIER is also accepted here — a classic pool's `L…` SEP-23\nStrKey or a soroban pool's `C…` contract address — and selects that\nsingle pool\ninstead of matching asset codes (task 0470). Previously an identifier\nwas matched as a substring of an asset code, found nothing, and the\nlist answered \"no pools\" about a pool that exists.",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -1168,7 +1168,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "description": "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1229,7 +1229,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "description": "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1318,7 +1318,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "description": "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1404,7 +1404,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "description": "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.",
             "required": true,
             "schema": {
               "type": "string"
@@ -2537,7 +2537,7 @@
           },
           "pool_id": {
             "type": "string",
-            "description": "Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the\nclient supplied in the path."
+            "description": "Echoed pool ID — `L…` or `C…`, same form the client supplied in the\npath."
           },
           "to": {
             "type": "string",
@@ -4284,7 +4284,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+              "description": "One pool row returned by the list and detail endpoints. A value no source\nknows comes back `null` — never a zero — and the frontend says which kind\nof absence it is.",
               "required": ["pool_id", "legs", "fee_bps", "fee_percent"],
               "properties": {
                 "created_at_ledger": {
@@ -4326,14 +4326,15 @@
                 },
                 "pool_id": {
                   "type": "string",
-                  "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
+                  "description": "A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract\naddress (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR\n0024); the handler encodes them by kind at the response boundary."
                 },
                 "pool_kind": {
                   "type": ["string", "null"],
                   "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error. `None` only on schema drift."
                 },
                 "reserve_a": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "A CLASSIC pool's latest snapshot reserves, in leg order; always `null`\nfor a soroban pool, which has no snapshot. Read reserves from\n`legs[].reserve`, which carries both kinds and any number of legs."
                 },
                 "reserve_b": {
                   "type": ["string", "null"]
@@ -4565,7 +4566,7 @@
       },
       "PoolItem": {
         "type": "object",
-        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+        "description": "One pool row returned by the list and detail endpoints. A value no source\nknows comes back `null` — never a zero — and the frontend says which kind\nof absence it is.",
         "required": ["pool_id", "legs", "fee_bps", "fee_percent"],
         "properties": {
           "created_at_ledger": {
@@ -4607,14 +4608,15 @@
           },
           "pool_id": {
             "type": "string",
-            "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
+            "description": "A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract\naddress (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR\n0024); the handler encodes them by kind at the response boundary."
           },
           "pool_kind": {
             "type": ["string", "null"],
             "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error. `None` only on schema drift."
           },
           "reserve_a": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "A CLASSIC pool's latest snapshot reserves, in leg order; always `null`\nfor a soroban pool, which has no snapshot. Read reserves from\n`legs[].reserve`, which carries both kinds and any number of legs."
           },
           "reserve_b": {
             "type": ["string", "null"]

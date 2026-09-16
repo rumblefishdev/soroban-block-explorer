@@ -39,27 +39,22 @@ export function legHref(leg: PoolAssetLeg): string | undefined {
 }
 
 /**
- * The display label for one leg — the app-wide {@link assetDisplayCode} ladder,
- * narrowed to the guarantee a leg carries: SOMETHING always identifies it.
+ * The display label for one leg — the app-wide {@link assetDisplayCode} ladder.
  * Native is named by its type, a classic leg by its code, a soroban leg by its
- * symbol or, failing that, by its own contract address.
- *
- * **Hard-fail on schema drift.** A leg that hits none of those rungs is a
- * broken backend contract, not a nameless token — throw rather than render a
- * `?` placeholder, so the surrounding `SectionErrorBoundary` catches it instead
- * of it leaking into the UI. The throw used to fire for any leg without an
- * `asset_code`, which a soroban token legitimately has none of; it now fires
- * only when nothing at all names the leg.
+ * symbol or, failing that, by its own contract address; a leg none of those
+ * name says so explicitly rather than borrowing a plausible label.
  */
 export function assetLegLabel(leg: PoolAssetLeg): string {
-  const label = assetDisplayCode(leg);
-  if (label != null) return label;
-  throw new Error(
-    `assetLegLabel: nothing identifies this leg (asset_type_name=${
-      leg.asset_type_name ?? 'null'
-    })`
-  );
+  return assetDisplayCode(leg) ?? UNINDEXED_LEG_LABEL;
 }
+
+/**
+ * Shown for a leg whose asset is not in the index. It is not schema drift: a
+ * pool can hold an asset we never recorded (three pools on production,
+ * 2026-09-15). Throwing here reached the root error boundary — the header and
+ * the list render outside any section boundary — and blanked the whole app.
+ */
+export const UNINDEXED_LEG_LABEL = 'Unindexed asset';
 
 /**
  * Shown for a pool whose legs are not in the index yet. An empty name would

@@ -504,8 +504,8 @@ export type ChartResponse = {
   from: string;
   interval: string;
   /**
-   * Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
-   * client supplied in the path.
+   * Echoed pool ID — `L…` or `C…`, same form the client supplied in the
+   * path.
    */
   pool_id: string;
   to: string;
@@ -1881,10 +1881,9 @@ export type PaginatedPoolItem = {
      */
     participant_count?: number | null;
     /**
-     * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-     * 0024; the handler encodes to strkey at the response boundary so
-     * the wire shape matches the Stellar ecosystem canonical form
-     * (CAP-38 / SEP-23).
+     * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
+     * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
+     * 0024); the handler encodes them by kind at the response boundary.
      */
     pool_id: string;
     /**
@@ -1895,6 +1894,11 @@ export type PaginatedPoolItem = {
      * an error. `None` only on schema drift.
      */
     pool_kind?: string | null;
+    /**
+     * A CLASSIC pool's latest snapshot reserves, in leg order; always `null`
+     * for a soroban pool, which has no snapshot. Read reserves from
+     * `legs[].reserve`, which carries both kinds and any number of legs.
+     */
     reserve_a?: string | null;
     reserve_b?: string | null;
     total_shares?: string | null;
@@ -2165,11 +2169,9 @@ export type PoolAssetLeg = {
 export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 
 /**
- * One pool row returned by the list endpoint. Shape pinned to canonical
- * SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
- * in the freshness window come back with `null` for every dynamic field
- * (`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,
- * `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
+ * One pool row returned by the list and detail endpoints. A value no source
+ * knows comes back `null` — never a zero — and the frontend says which kind
+ * of absence it is.
  */
 export type PoolItem = {
   /**
@@ -2220,10 +2222,9 @@ export type PoolItem = {
    */
   participant_count?: number | null;
   /**
-   * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-   * 0024; the handler encodes to strkey at the response boundary so
-   * the wire shape matches the Stellar ecosystem canonical form
-   * (CAP-38 / SEP-23).
+   * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
+   * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
+   * 0024); the handler encodes them by kind at the response boundary.
    */
   pool_id: string;
   /**
@@ -2234,6 +2235,11 @@ export type PoolItem = {
    * an error. `None` only on schema drift.
    */
   pool_kind?: string | null;
+  /**
+   * A CLASSIC pool's latest snapshot reserves, in leg order; always `null`
+   * for a soroban pool, which has no snapshot. Read reserves from
+   * `legs[].reserve`, which carries both kinds and any number of legs.
+   */
   reserve_a?: string | null;
   reserve_b?: string | null;
   total_shares?: string | null;
@@ -3225,8 +3231,9 @@ export type ListPoolsData = {
      * are not unique on Stellar, and this filter matches codes, not asset
      * identity.
      *
-     * A pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,
-     * the one canonical form (task 0264) — and selects that single pool
+     * A pool IDENTIFIER is also accepted here — a classic pool's `L…` SEP-23
+     * StrKey or a soroban pool's `C…` contract address — and selects that
+     * single pool
      * instead of matching asset codes (task 0470). Previously an identifier
      * was matched as a substring of an asset code, found nothing, and the
      * list answered "no pools" about a pool that exists.
@@ -3281,7 +3288,7 @@ export type GetPoolData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
+     * Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.
      */
     pool_id: string;
   };
@@ -3319,7 +3326,7 @@ export type ListPoolActivityData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
+     * Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.
      */
     pool_id: string;
   };
@@ -3372,7 +3379,7 @@ export type GetPoolChartData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
+     * Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.
      */
     pool_id: string;
   };
@@ -3427,7 +3434,7 @@ export type ListParticipantsData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
+     * Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.
      */
     pool_id: string;
   };
