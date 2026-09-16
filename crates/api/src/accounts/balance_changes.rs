@@ -233,24 +233,22 @@ pub async fn fetch_balance_changes(
         // pieces can be named — that is what makes each NFT in a bulk move its
         // own clickable row rather than a `+3 NFT` lump.
         //
-        // The count is the proof, and it is not ceremony: `nft_ownership` is
-        // joined on the new OWNER, so a transaction where somebody else also
-        // moved pieces to that same owner would hand back more ids than this
-        // account moved. When the set size and the movement count disagree the
-        // entry stays collapsed with no id — a coarser answer, never a wrong
-        // one. `nft_delta` also guards the fungible case: one contract emitting
-        // both shapes shares an `asset_id`, so without it a fungible entry
-        // would pick up its non-fungible sibling's ids.
-        let moved = usize::try_from(row.nft_delta.unsigned_abs()).unwrap_or(usize::MAX);
-        let pieces_here = (row.nft_delta != 0)
-            .then(|| {
-                tx_by_pair
-                    .get(&(row.ledger_sequence, row.application_order))
-                    .and_then(|tx| pieces.get(&(row.asset_id, *tx, row.nft_owner)))
+        // Incoming pieces are exactly the set whose new owner is this account.
+        // For an outgoing group, several senders may target the same owner in
+        // one transaction, so keep only pieces whose ownership history names
+        // this account as the previous owner. The final count remains the
+        // proof: incomplete or contradictory history collapses to an unnamed
+        // count rather than guessing a token id.
+        let pieces_here = tx_by_pair
+            .get(&(row.ledger_sequence, row.application_order))
+            .map(|tx| {
+                verified_piece_ids(
+                    &pieces,
+                    (row.asset_id, *tx, row.nft_owner),
+                    row.nft_delta,
+                    account_id,
+                )
             })
-            .flatten()
-            .filter(|tokens| tokens.len() == moved)
-            .cloned()
             .unwrap_or_default();
 
         let entry =
@@ -314,8 +312,42 @@ struct MovedPieceChRow {
     contract_id: i64,
     transaction_id: i64,
     owner_id: Option<i64>,
+    previous_owner_id: Option<i64>,
     /// Every token id this transaction moved to this owner in this collection.
     token_ids: Vec<String>,
+}
+
+type MovedPieces = HashMap<(i64, i64, Option<i64>, Option<i64>), Vec<String>>;
+
+fn verified_piece_ids(
+    pieces: &MovedPieces,
+    (contract_id, transaction_id, owner_id): (i64, i64, Option<i64>),
+    nft_delta: i64,
+    account_id: i64,
+) -> Vec<String> {
+    if nft_delta == 0 {
+        return Vec::new();
+    }
+
+    let mut matched = pieces
+        .iter()
+        .filter(|((contract, transaction, owner, previous_owner), _)| {
+            *contract == contract_id
+                && *transaction == transaction_id
+                && *owner == owner_id
+                && (nft_delta > 0 || *previous_owner == Some(account_id))
+        })
+        .flat_map(|(_, tokens)| tokens.iter().cloned())
+        .collect::<Vec<_>>();
+    matched.sort_unstable();
+    matched.dedup();
+
+    let moved = usize::try_from(nft_delta.unsigned_abs()).unwrap_or(usize::MAX);
+    if matched.len() == moved {
+        matched
+    } else {
+        Vec::new()
+    }
 }
 
 /// Which non-fungible PIECES each `(collection, transaction, new owner)` moved.
@@ -327,16 +359,15 @@ struct MovedPieceChRow {
 /// most that one collection's rows (17 816 for the largest on production;
 /// measured 18 ms / 1 509 rows).
 ///
-/// Grouped by OWNER because that is the only join the data supports: a bulk
-/// transfer writes ten ownership rows that share an owner and carry
-/// `event_order = 0` on every one of them (measured), so nothing pairs a single
-/// piece with a single edge. The owner does pair a SET of pieces with a set of
-/// edges, and the caller checks that set's size against the movement count
-/// before showing any of it.
+/// Grouped by new and previous owner. `event_order` is local to one
+/// `(collection, token, ledger)` timeline, so ten distinct pieces in a bulk
+/// transfer can all carry zero; it cannot pair pieces to edges. The previous
+/// owner still attributes the candidate SET to the sending account, and the
+/// caller checks that set's size against the movement count before showing it.
 async fn resolve_moved_pieces(
     client: &clickhouse::Client,
     lookups: &BTreeSet<(i64, i64)>,
-) -> Result<HashMap<(i64, i64, Option<i64>), Vec<String>>, clickhouse::error::Error> {
+) -> Result<MovedPieces, clickhouse::error::Error> {
     if lookups.is_empty() {
         return Ok(HashMap::new());
     }
@@ -347,20 +378,48 @@ async fn resolve_moved_pieces(
         .into_iter()
         .collect::<Vec<_>>()
         .join(",");
-    let txs = lookups
+    let lookup_tuples = lookups
         .iter()
-        .map(|(_, t)| t.to_string())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
+        .map(|(contract, transaction)| format!("({contract},{transaction})"))
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT contract_id, transaction_id, owner_id, \
+        "WITH \
+         moved AS ( \
+             SELECT contract_id, token_id \
+             FROM nft_ownership \
+             WHERE (contract_id, transaction_id) IN ( \
+                 CAST([{lookup_tuples}] AS Array(Tuple(Int64, Int64))) \
+             ) \
+             GROUP BY contract_id, token_id \
+         ), \
+         history AS ( \
+             SELECT contract_id, token_id, ledger_sequence, event_order, \
+                    any(transaction_id) AS transaction_id, \
+                    any(owner_id)       AS owner_id \
+             FROM nft_ownership \
+             WHERE contract_id IN (CAST([{contracts}] AS Array(Int64))) \
+               AND (contract_id, token_id) IN ( \
+                   SELECT contract_id, token_id FROM moved \
+               ) \
+             GROUP BY contract_id, token_id, ledger_sequence, event_order \
+         ), \
+         with_previous AS ( \
+             SELECT contract_id, token_id, transaction_id, owner_id, \
+                    leadInFrame(owner_id) OVER ( \
+                        PARTITION BY contract_id, token_id \
+                        ORDER BY ledger_sequence DESC, event_order DESC \
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING \
+                    ) AS previous_owner_id \
+             FROM history \
+         ) \
+         SELECT contract_id, transaction_id, owner_id, previous_owner_id, \
                 groupUniqArray(token_id) AS token_ids \
-         FROM nft_ownership \
-         WHERE contract_id IN (CAST([{contracts}] AS Array(Int64))) \
-           AND transaction_id IN (CAST([{txs}] AS Array(Int64))) \
-         GROUP BY contract_id, transaction_id, owner_id"
+         FROM with_previous \
+         WHERE (contract_id, transaction_id) IN ( \
+             CAST([{lookup_tuples}] AS Array(Tuple(Int64, Int64))) \
+         ) \
+         GROUP BY contract_id, transaction_id, owner_id, previous_owner_id"
     );
     Ok(client
         .query(&sql)
@@ -372,7 +431,15 @@ async fn resolve_moved_pieces(
             // Deterministic order: the cell lists these one per line, and a
             // page boundary must not reshuffle them.
             tokens.sort_unstable();
-            ((r.contract_id, r.transaction_id, r.owner_id), tokens)
+            (
+                (
+                    r.contract_id,
+                    r.transaction_id,
+                    r.owner_id,
+                    r.previous_owner_id,
+                ),
+                tokens,
+            )
         })
         .collect())
 }

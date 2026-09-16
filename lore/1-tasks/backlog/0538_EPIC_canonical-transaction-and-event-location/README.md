@@ -89,16 +89,22 @@ hash keep using `transaction_hash_index`.
    the two-column join on the hot list endpoints against today's.
 3. **`soroban_events`** — task 0541 (decided): canonical key, rpc-format ids,
    `soroban_event_ops` dropped.
-4. **Presence tables by saving**: `operation_asset_appearances` (87.68 GiB),
+4. **NFT ownership location** — replace `nft_ownership.event_order` (a local
+   ordinal per `(collection, token, ledger)`, so distinct pieces in one bulk
+   move all commonly carry `0`) with the canonical transaction / operation /
+   event position. That gives `asset_transfers`, `soroban_events` and
+   `nft_ownership` one exact join key and removes the need to infer a sender's
+   pieces from the previous-owner timeline.
+5. **Presence tables by saving**: `operation_asset_appearances` (87.68 GiB),
    `transaction_participants` (81.46), `operations_appearances` (33.00),
    `soroban_invocations_appearances` (8.30), `operation_pools` (4.76),
    `lp_operation_amounts` (4.43). Each: new table, fill from the old one +
    `transactions` (no S3), coverage gate, `EXCHANGE TABLES` with the indexer
    stopped (`docs/backfills.md`), readers switched in the same window.
-5. **Readers**: every list pages on the canonical position — execution order
+6. **Readers**: every list pages on the canonical position — execution order
    inside a ledger, cursor `(ledger_sequence, application_order[, op, event])`.
-6. **`transactions.id`** dropped once nothing joins on it.
-7. **Duplicate hash** (`transactions.hash` + `transaction_hash_index.hash`,
+7. **`transactions.id`** dropped once nothing joins on it.
+8. **Duplicate hash** (`transactions.hash` + `transaction_hash_index.hash`,
    ~275 GiB) — decided from the research question below, not assumed.
 
 **Constraints:** free space 368.72 GiB of 1.72 TiB with backups on the same
@@ -111,6 +117,8 @@ never two copies of two tables at once. Every struct change ships with
 - [ ] ADR adopted; `application_order` means one thing
 - [ ] Partition-level measurement and join benchmark recorded before step 4
 - [ ] No table carries `transaction_id`; `transactions.id` dropped
+- [ ] `nft_ownership` carries the canonical event location; its per-token
+      `event_order` is no longer used as event identity
 - [ ] Every list returns rows in execution order inside a ledger — verified on
       ledger 64 454 000 for contract `CAS3J7GY…` and on one account, one asset
 - [ ] Event ids on the wire match stellar-rpc `getEvents` (sampled)
