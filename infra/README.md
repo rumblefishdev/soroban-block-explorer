@@ -31,7 +31,7 @@ CloudflareBootstrapStack TF-state bucket for infra/cloudflare/
 
 - AWS CLI with a named profile that has deploy rights (`export AWS_PROFILE=…`).
   Region is read from `envs/production.json` (`eu-central-1`) — do not pass `--region`.
-- Node.js 22+ (`.nvmrc`), `npm ci` at the repo root.
+- Node.js 22+ (`.nvmrc`), `pnpm install --frozen-lockfile` at the repo root.
 - Rust toolchain + `cargo-lambda` + `zig` — the API/indexer/enrichment Lambdas
   are Rust, cross-compiled at synth time (`ComputeStack` fails to build without them).
 

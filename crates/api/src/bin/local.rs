@@ -18,7 +18,7 @@
 //! DEV_API_PROXY_TARGET=http://localhost:9100
 //!
 //! # 3. serve the SPA
-//! npx nx run @rumblefish/soroban-block-explorer-web:dev
+//! pnpm nx run @rumblefish/soroban-block-explorer-web:dev
 //! ```
 //!
 //! The browser then only ever talks to `localhost:4200` (same-origin, no

@@ -101,13 +101,13 @@ give and it costs nothing to ship.
 
 **c. Size it.** State which and why, with `file:line`:
 
-| Size             | Means                                                             |
-| ---------------- | ----------------------------------------------------------------- |
-| `one-liner`      | frontend-only or a single query change, no API contract change    |
-| `small`          | crosses layers, needs `npx nx run @rumblefish/api-types:generate` |
-| `large`          | new query shape / schema change / measurement needed first        |
-| `needs-backfill` | historical data must be re-processed — see Step 5                 |
-| `declined`       | we are not doing it                                               |
+| Size             | Means                                                              |
+| ---------------- | ------------------------------------------------------------------ |
+| `one-liner`      | frontend-only or a single query change, no API contract change     |
+| `small`          | crosses layers, needs `pnpm nx run @rumblefish/api-types:generate` |
+| `large`          | new query shape / schema change / measurement needed first         |
+| `needs-backfill` | historical data must be re-processed — see Step 5                  |
+| `declined`       | we are not doing it                                                |
 
 **d. Record it.**
 

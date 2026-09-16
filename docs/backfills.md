@@ -930,11 +930,48 @@ contract_id IN (the pool surrogates)`. Derive that IN-list from the
    with no event oracle (the pair family has `sync`, the router family the
    deposit⇄mint detector), so a pool-WASM upgrade re-purposing the u32
    keys would corrupt reserves silently. Two cheap defenses, per release
-   or on a cadence: (a) RPC-read every pool `query_pools()` still lists
-   (13 today) and compare reserves against our latest `pool_state_changes`
-   row; (b) watch `executable_update` events (already ingested, task 0320)
-   on the registered pools — an upgrade of a registered pool warrants
-   re-running (a) immediately.
+   or on a cadence: (a) `cargo test -p backfill-runner --test
+pool_reserves_reconciliation` (task 0374) reads every Soroban pool's own
+   reserve entries with `getLedgerEntries` and compares them with our newest
+   `pool_state_changes` row — all three families; (b) watch
+   `executable_update` events (already ingested, task 0320) on the registered
+   pools — an upgrade of a registered pool warrants re-running (a)
+   immediately. Pool `CAZ6W4WH…` is the measured case: its code was replaced
+   twice and its reserve keys no longer mean reserves.
+
+## Router reserves from pool storage (task 0374, decision C′) — list pass
+
+Run only AFTER the parser that reads router-family reserves from the pool's
+own instance is deployed (writer first — otherwise the old live code rewrites
+a scaled row the next time an affected pool trades).
+
+**Scope, measured 2026-09-15:** the 8 router-family stable pools whose tokens
+differ in decimals — 772 `(pool, plane, ledger)` keys in 726 ledgers. Every
+other pool's stored rows already equal its own storage (508 of 514 by a
+three-source comparison, and 1,862 of 1,862 unaffected rows identical in a
+before/after re-decode of 874 ledgers), so nothing else is rewritten. Rows
+the plane re-published without a reserve move (11 in that corpus, each equal
+to the pool's previous row) stay in the table and are harmless.
+
+**Why a list, not a range:** the 726 ledgers sit in 60 archive partitions; a
+range re-parse would fetch ~800 GB to decode ~1 GB.
+
+1. Ledger list — every ledger holding a row of those pools:
+   `SELECT DISTINCT ledger_sequence FROM pool_state_changes WHERE pool_id IN (…8 pools…)`.
+   Activity outside it (reward claims, `claim_protocol_fee`) moves no stored
+   reserves and yields no row — checked on all 10 such ledgers.
+2. Fetch those archive files into a directory as `<HEX>--<seq>.xdr.zst`
+   (key scheme in `crates/db-clickhouse/tests/pair_factory_stage_real_e2e.rs`).
+3. Decode through the live parse+stage path:
+   `LEDGER_CACHE_DIR=… REDECODE_OUT_DIR=… REDECODE_LEDGER_LIST=… STELLAR_NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015" cargo test -p backfill-runner --test redecode_diff redecode_pool_state_changes_from_list`,
+   then keep the rows of the 8 pools.
+4. Insert (operator; the SQL is in that test's doc comment), then
+   `OPTIMIZE TABLE pool_state_changes FINAL` — a re-derived row ties on its key
+   with the old one, and until the merge a read may still pick the old image.
+5. **Check:** `cargo test -p backfill-runner
+--test pool_reserves_reconciliation -- --nocapture`. Before this backfill
+   it lists the 6 non-empty pools (one leg × 10 or × 10^11) and `CAZ6W4WH…`
+   (measured 2026-09-15: 762 of 769 equal); after it, only `CAZ6W4WH…`.
 
 ## Event-name backfill (task 0517) — in-DB, per partition
 
