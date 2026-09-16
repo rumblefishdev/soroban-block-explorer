@@ -27,7 +27,7 @@ use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::snapshot::network_state::{NetHolding, NetworkState};
 use crate::snapshot::report::Report;
-use crate::snapshot::seed::{key_slices, slice_sql};
+use crate::snapshot::slices::{key_slices, slice_sql};
 use crate::snapshot::verdict::{self, OurRow, Verdict};
 
 pub(crate) const TABLE: &str = "claimable_balance_holdings";
