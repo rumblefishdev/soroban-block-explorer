@@ -147,6 +147,21 @@ enum NetFact {
         pool_id: [u8; 32],
         entry: NetHolding,
     },
+    /// A claimable balance (task 0210), keyed by its `B…` surrogate alone: a
+    /// DEAD record carries only the balance id, no asset, so the asset cannot
+    /// be part of the key. `asset` is `None` exactly for a dead record.
+    ClaimableBalance {
+        holder_id: i64,
+        asset: Option<(i64, Option<(String, String)>)>,
+        entry: NetHolding,
+    },
+    /// A classic liquidity pool (task 0210). The whole entry is kept — the seed
+    /// builds our pool rows from it through the live extractor. `None` is a
+    /// DEAD record.
+    Pool {
+        pool_id: [u8; 32],
+        entry: Option<Box<stellar_xdr::LedgerEntry>>,
+    },
 }
 
 /// Everything an `AccountEntry` carries beyond its native balance: identity for
@@ -179,6 +194,11 @@ pub struct NetworkState {
     pub trustlines: std::collections::HashMap<HoldingKey, NetHolding>,
     /// Pool shares, kept separate — see [`NetFact::PoolShare`].
     pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), NetHolding>,
+    /// Claimable balances by `B…` surrogate, for `claimable_balance_holdings`,
+    /// with the asset surrogate — `None` for a dead record, which has no asset.
+    pub claimable_balances: std::collections::HashMap<i64, (NetHolding, Option<i64>)>,
+    /// Classic liquidity pools by pool id; `None` for a dead record.
+    pub pools: std::collections::HashMap<[u8; 32], Option<Box<stellar_xdr::LedgerEntry>>>,
     /// Per-account identity, signers and thresholds, for `account_entry_state`.
     pub account_details: std::collections::HashMap<i64, AccountDetail>,
     /// asset surrogate → `(code, issuer strkey)`, for `assets` dimension stubs.
@@ -203,10 +223,10 @@ pub struct NetworkState {
 /// The three maps have different key types, so this is generic — the same rule
 /// applied identically to accounts, trustlines and pool shares, which is the
 /// point: one place to read, one place to get it wrong.
-fn first_wins<K: std::hash::Hash + Eq>(
-    map: &mut std::collections::HashMap<K, NetHolding>,
+fn first_wins<K: std::hash::Hash + Eq, V>(
+    map: &mut std::collections::HashMap<K, V>,
     key: K,
-    value: NetHolding,
+    value: V,
     superseded: &mut u64,
 ) {
     use std::collections::hash_map::Entry;
@@ -256,6 +276,29 @@ impl NetworkState {
                     &mut self.superseded,
                 );
             }
+            NetFact::ClaimableBalance {
+                holder_id,
+                asset,
+                entry,
+            } => {
+                // An asset id hashes its code and issuer, so any record of it
+                // registers the same identity.
+                let asset_id = asset.map(|(asset_id, identity)| {
+                    if let Some(identity) = identity {
+                        self.asset_registry.entry(asset_id).or_insert(identity);
+                    }
+                    asset_id
+                });
+                first_wins(
+                    &mut self.claimable_balances,
+                    holder_id,
+                    (entry, asset_id),
+                    &mut self.superseded,
+                );
+            }
+            NetFact::Pool { pool_id, entry } => {
+                first_wins(&mut self.pools, pool_id, entry, &mut self.superseded);
+            }
         }
     }
 
@@ -287,6 +330,38 @@ impl NetworkState {
     }
     pub fn live_pool_shares(&self) -> usize {
         self.pool_shares.values().filter(|e| e.live).count()
+    }
+    pub fn live_claimable_balances(&self) -> usize {
+        self.claimable_balances
+            .values()
+            .filter(|(e, _)| e.live)
+            .count()
+    }
+    pub fn live_pools(&self) -> usize {
+        self.pools.values().filter(|e| e.is_some()).count()
+    }
+}
+
+/// `B…` surrogate of a claimable balance id — the writer's `ids::address_id`
+/// over the same StrKey rendering, so snapshot and table keys meet.
+fn claimable_holder_id(id: &stellar_xdr::ClaimableBalanceId) -> i64 {
+    ids::address_id(&stellar_xdr::ScAddress::ClaimableBalance(id.clone()).to_string())
+}
+
+/// Asset surrogate and, for a credit asset, its `(code, issuer)` identity, for
+/// a classic `Asset` (claimable balances, pool legs). Spelled like the writer's
+/// `build_claimable_balance_rows` and `ids::pool_leg_asset_id`.
+pub(crate) fn classic_asset(asset: &stellar_xdr::Asset) -> (i64, Option<(String, String)>) {
+    use stellar_xdr::Asset as A;
+    let credit = |code: &[u8], issuer: &stellar_xdr::AccountId| {
+        let code = xdr_parser::asset_code::asset_code_str(code);
+        let issuer = issuer.to_string();
+        (ids::credit_asset_id(&code, &issuer), Some((code, issuer)))
+    };
+    match asset {
+        A::Native => (ids::NATIVE_ASSET_ID, None),
+        A::CreditAlphanum4(a) => credit(a.asset_code.as_slice(), &a.issuer),
+        A::CreditAlphanum12(a) => credit(a.asset_code.as_slice(), &a.issuer),
     }
 }
 
@@ -417,6 +492,15 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
                     (_, None) => None,
                 }
             }
+            D::ClaimableBalance(cb) => Some(NetFact::ClaimableBalance {
+                holder_id: claimable_holder_id(&cb.balance_id),
+                asset: Some(classic_asset(&cb.asset)),
+                entry: NetHolding::live(e.last_modified_ledger_seq, cb.amount),
+            }),
+            D::LiquidityPool(lp) => Some(NetFact::Pool {
+                pool_id: lp.liquidity_pool_id.0.0,
+                entry: Some(e.clone()),
+            }),
             _ => None,
         },
         SnapshotRecord::Dead(k) => match k.as_ref() {
@@ -443,28 +527,42 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
                     (_, None) => None,
                 }
             }
+            K::ClaimableBalance(cb) => Some(NetFact::ClaimableBalance {
+                holder_id: claimable_holder_id(&cb.balance_id),
+                asset: None,
+                entry: NetHolding::dead(),
+            }),
+            K::LiquidityPool(lp) => Some(NetFact::Pool {
+                pool_id: lp.liquidity_pool_id.0.0,
+                entry: None,
+            }),
             _ => None,
         },
     }
 }
 
-/// Resolve a bucket list and fold every bucket into a deduplicated
-/// [`NetworkState`]: build the HTTP client, take the freshest
-/// checkpoint, stream all 21 buckets, print the distinct-entry report.
+/// The freshest checkpoint the archive advertises — one small manifest, so the
+/// seed can check everything that depends only on the checkpoint ledger before
+/// it downloads the buckets.
 ///
-/// The checkpoint is always the freshest the archive advertises. That is
-/// complete by construction — stellar-core writes the `.well-known` manifest
+/// Complete by construction — stellar-core writes the `.well-known` manifest
 /// LAST, as an atomic commit point, and discards a failed publication rather
 /// than exposing half of it.
+pub(crate) async fn latest_checkpoint() -> Result<BucketList, BackfillError> {
+    fetch_bucket_list(&archive_client()?, PUBNET_ARCHIVE).await
+}
+
+/// Fold every bucket of `list` into a deduplicated [`NetworkState`]: stream all
+/// 21 buckets, print the distinct-entry report.
 ///
 /// Memory is the distinct-entry count, not the record count: ~124M records
 /// collapse onto the accounts + trustlines the network actually holds.
 pub(crate) async fn open_snapshot(
+    list: &BucketList,
     label: &str,
-) -> Result<(BucketList, NetworkState, String), BackfillError> {
+) -> Result<(NetworkState, String), BackfillError> {
     let started = std::time::Instant::now();
     let http = archive_client()?;
-    let list = fetch_bucket_list(&http, PUBNET_ARCHIVE).await?;
     let n_buckets = list.hashes.len();
     println!(
         "checkpoint ledger {} — {n_buckets} buckets{label}",
@@ -511,12 +609,29 @@ pub(crate) async fn open_snapshot(
     const MIN_BUCKETS: usize = 10;
     const MIN_LIVE_ACCOUNTS: usize = 5_000_000;
     const MIN_LIVE_TRUSTLINES: usize = 15_000_000;
+    // Claimable balances (task 0210) have their own floor because their own
+    // classifier arm can regress alone, and every open balance of ours would
+    // then read as gone. Not yet measured on a full pass: ~920k balances were
+    // created after our floor and are still open (a 1/64 sample of
+    // `asset_transfers`, 2026-09-15), and the network holds at least those.
+    // The floor sits ~9x under that estimate. Re-set it from the first dry-run.
+    // The damage it prevents does not undo itself: the closures version on the
+    // checkpoint, above the entries' own ledgers, so a corrected re-run cannot
+    // reopen them. Classic pools get no floor — the seed only inserts them, so a
+    // short read under-inserts and harms nothing.
+    const MIN_LIVE_CLAIMABLE: usize = 100_000;
     let (accounts, trustlines) = (state.live_accounts(), state.live_trustlines());
-    if n_buckets < MIN_BUCKETS || accounts < MIN_LIVE_ACCOUNTS || trustlines < MIN_LIVE_TRUSTLINES {
+    let claimable = state.live_claimable_balances();
+    if n_buckets < MIN_BUCKETS
+        || accounts < MIN_LIVE_ACCOUNTS
+        || trustlines < MIN_LIVE_TRUSTLINES
+        || claimable < MIN_LIVE_CLAIMABLE
+    {
         return Err(BackfillError::Incomplete(format!(
             "snapshot looks short: {n_buckets} buckets, {accounts} live accounts, \
-             {trustlines} live trustlines (floors {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / \
-             {MIN_LIVE_TRUSTLINES}) — refusing to read the gap as network-wide closures"
+             {trustlines} live trustlines, {claimable} live claimable balances (floors \
+             {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / {MIN_LIVE_TRUSTLINES} / \
+             {MIN_LIVE_CLAIMABLE}) — refusing to read the gap as network-wide closures"
         )));
     }
 
@@ -527,7 +642,7 @@ pub(crate) async fn open_snapshot(
     );
     println!("{source_report}");
 
-    Ok((list, state, source_report))
+    Ok((state, source_report))
 }
 
 /// DISTINCT-entry report after first-wins, printed before our rows are folded
@@ -563,12 +678,24 @@ pub fn report_state(state: &NetworkState, checkpoint_ledger: u32, secs: f64) -> 
     );
     let _ = writeln!(
         out,
+        "  claimable    {:>10} {:>15}",
+        state.live_claimable_balances(),
+        state.claimable_balances.len() - state.live_claimable_balances()
+    );
+    let _ = writeln!(
+        out,
+        "  pools        {:>10} {:>15}",
+        state.live_pools(),
+        state.pools.len() - state.live_pools()
+    );
+    let _ = writeln!(
+        out,
         "\n  {} records superseded by a newer one for the same key",
         state.superseded
     );
     let _ = writeln!(
         out,
-        "  {} records of entry types this comparison does not model          (offers, contract data, TTL, claimable balances, …)",
+        "  {} records of entry types this comparison does not model          (offers, contract data, TTL, …)",
         state.unmodelled
     );
     // Printed only when non-zero, and loudly: the protocol forbids a native

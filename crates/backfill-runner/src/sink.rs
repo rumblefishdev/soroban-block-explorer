@@ -234,6 +234,9 @@ impl PartitionWriterHandle {
                     // entries never re-emitted in-window stay absent — the
                     // open caveat.)
                     soroban_token_balances: &parsed.soroban_token_balances,
+                    // Task 0210 — same shared extraction, so a re-parse closes
+                    // the claimable balances claimed inside its range.
+                    claimable_balances: &parsed.claimable_balances,
                     // Task 0374 step 7 — pool state rides the shared
                     // `process.rs` extraction exactly like token balances
                     // above, so the historical re-parse emits

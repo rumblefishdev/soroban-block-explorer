@@ -509,8 +509,9 @@ ENGINE = MergeTree
 ORDER BY (asset_id);
 
 -- NOTE: `balance_aggregates_mv` (the refreshable MV that fills this table) is
--- defined AFTER `balances` below — a `CREATE MATERIALIZED VIEW … FROM balances`
--- needs its source table to already exist on a fresh `init.sql` run.
+-- defined AFTER every table it reads — `balances`, `claimable_balance_holdings`,
+-- `liquidity_pools`, `liquidity_pool_snapshots` — because a refreshable MV needs
+-- its sources to exist at CREATE on a fresh `init.sql` run.
 
 -- (tombstone) `soroban_token_supply` was DROPPED — task 0331 Option-A decision.
 -- A per-token authoritative `TotalSupply` key read (76.6% of type-3 tokens expose
@@ -526,7 +527,11 @@ ORDER BY (asset_id);
 -- not the asset) and claimable balances (`ClaimableBalanceEntry` — off the
 -- sender, not yet the receiver), plus the TTL-archived tail and true rebasing.
 -- On USDT0 the first two are the ENTIRE gap: 24.5064194 + 0.3070000 of
--- 2,595,050.05, i.e. 0.001%. An AMM-heavy asset will show far worse. Soroban-DEX
+-- 2,595,050.05, i.e. 0.001%. An AMM-heavy asset will show far worse.
+-- Both LEFT this list in task 0210: `balance_aggregates_mv` sums
+-- `claimable_balance_holdings` and the newest classic pool snapshot alongside
+-- `balances`. Pools unchanged since the ingest floor stay out until the
+-- checkpoint seed inserts their snapshot. Soroban-DEX
 -- pool reserves are NOT in this list — a Soroban pool holds its reserves as a
 -- contract, so ADR 0051 already sums them.
 
@@ -571,6 +576,9 @@ ORDER BY (account_id, asset_type, asset_code, issuer_id);
 -- `DESCRIBE TABLE balances` / `lp_positions`:
 --     ALTER TABLE balances     ADD COLUMN IF NOT EXISTS closed_at_ledger Int64 DEFAULT 0;
 --     ALTER TABLE lp_positions ADD COLUMN IF NOT EXISTS closed_at_ledger Int64 DEFAULT 0;
+-- `claimable_balance_holdings` (below) is written through the same row struct
+-- (`BalanceRow`): every ALTER on this table must run on that one too, or its
+-- inserts fail the driver's column check and every ledger's persist stalls.
 CREATE TABLE IF NOT EXISTS balances (
     holder_id           Int64,
     asset_id            Int64,
@@ -585,18 +593,59 @@ ENGINE = ReplacingMergeTree(last_updated_ledger)
 -- periodic full-recompute scan either way, so it doesn't need asset_id-first.
 ORDER BY (holder_id, asset_id);
 
--- Refreshable MV that recomputes `balance_aggregates` from `balances` (defined
--- above — the source table MUST exist before this CREATE). Full recompute + atomic
--- EXCHANGE, so reads need no FINAL.
-CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
-REFRESH EVERY 2 MINUTE
-TO balance_aggregates AS
-SELECT
-    asset_id,
-    sum(amount)                  AS total_supply,
-    toInt32(countIf(amount > 0)) AS holder_count
-FROM balances FINAL
-GROUP BY asset_id;
+-- Claimable balances as holdings (task 0210, ADR 0056 amendment 2026-09-15).
+-- Value that sits in a `ClaimableBalanceEntry` belongs to no account yet, so
+-- `balances` cannot hold it, but it is part of the asset's supply. One row per
+-- balance: `holder_id` = `ids::address_id` of the `B…` StrKey (the same
+-- surrogate as `asset_transfers.{from,to}_id` with kind `B`, which is what the
+-- oracle joins on), `asset_id` = its asset, `amount` raw like `balances`.
+-- Written from `ClaimableBalanceEntry` changes, never from transfer edges: a
+-- sum of edges keeps every dropped edge forever, an entry row is exact and a
+-- checkpoint can correct it.
+--
+-- Why not rows in `balances`: every reader of `balances` assumes the holder is
+-- an account or a contract, and `holder_id` is a one-way hash. `snapshot-seed`
+-- would find no account or trustline for a `B…` holder and write it to zero
+-- as a ghost, and `holder_count` would count it. Churn is the other reason:
+-- ~800k balances created per 100k ledgers, 0 removed in their creating ledger,
+-- 96% within a week (production, 2026-09-15).
+--
+-- Lifecycle is `balances`' (ADR 0055): a claimed or clawed-back balance writes
+-- `amount = 0`, `closed_at_ledger = <ledger>` at that ledger's version. The
+-- writer folds per balance id across the whole ledger, last change in
+-- application order wins (ADR 0057 decision 6): a create and a claim in one
+-- ledger share a version, and an unfolded pair would leave the survivor to
+-- insert order.
+--
+-- Tombstones are kept, for now. The seed writes only balances open at its
+-- checkpoint, and live ingest adds ~46 M rows a year (estimate). A backfill
+-- re-parse writes this table too (accepted, task 0210): a whole-era `--reindex`
+-- brings every balance since the ingest floor, ~413 M keys (estimate), which the
+-- MV then rescans with FINAL every refresh. NEVER add a TTL: a
+-- tombstone deleted while the live row sits in an unmerged part resurrects a
+-- claimed balance. The safe cleanup deletes every version of keys closed more
+-- than N ledgers ago (a balance id hashes its creating operation and never
+-- recurs), but it deletes rows, so it needs an ADR 0057 amendment first.
+-- Revisit when this table passes half of `balances` in rows or the
+-- `balance_aggregates_mv` refresh slows.
+--
+-- Joins the snapshot reconciliation (ADR 0057 decision 5). A ledger that never
+-- reaches the writer leaves a claimed balance live or a created one missing,
+-- and only the checkpoint comparison sees that.
+--
+-- PROD: created by hand BEFORE any writer ships, verbatim from the statement
+-- below. The insert opens on a table's first row (`writer.rs::write_rows`), and
+-- claimable balances change in almost every ledger (~8 created per ledger), so
+-- a missing table fails nearly every ledger's persist and stalls ingestion.
+CREATE TABLE IF NOT EXISTS claimable_balance_holdings (
+    holder_id           Int64,
+    asset_id            Int64,
+    amount              Int128,
+    last_updated_ledger Int64,
+    closed_at_ledger    Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+ORDER BY (holder_id, asset_id);
 
 CREATE TABLE IF NOT EXISTS nfts (
     contract_id           Int64,
@@ -1284,6 +1333,78 @@ CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (pool_id, ledger_sequence);
+
+-- Refreshable MV that recomputes `balance_aggregates` (task 0293/0331). Every
+-- source it reads is defined ABOVE this statement — a refreshable MV validates
+-- its query at CREATE, which is why it sits after `liquidity_pool_snapshots`.
+-- Full recompute + atomic EXCHANGE, so reads need no FINAL.
+--
+-- Task 0210 — `total_supply` is the value the ledger holds for an asset, from
+-- three sources, each tagged with whether its holder counts in `holder_count`
+-- (the assets-list sort key, task 0547):
+--   * `balances` — accounts and contracts (Soroban pools among them). Holders.
+--   * `claimable_balance_holdings` — value that has left its sender and is not
+--     yet anyone's. Not a holder: nothing holds it on its own account.
+--   * classic pool reserves — the newest `liquidity_pool_snapshots` row per
+--     pool, one leg per asset through `liquidity_pools.legs` (classic pools
+--     only: a Soroban pool's reserves are contract balances, already in
+--     `balances`). A pool holds its reserves on its own account, like a Soroban
+--     pool contract, so it counts as a holder. Snapshots are `Decimal128(7)`
+--     and every classic asset has 7 decimals, so × 10^7 is the raw unit.
+--     `length(legs) = 2` keeps `arrayZip` from failing the whole refresh on a
+--     malformed pool row.
+-- Closed rows carry `amount = 0` everywhere, so they move neither aggregate.
+--
+-- Reserves come from the newest snapshot rather than rows written to
+-- `balances`: the snapshot IS the pool entry's state (same ledger change, one
+-- row per pool per ledger), so a second copy would only drift from it. A pool
+-- unchanged since the ingest floor has no snapshot and is missing here until
+-- `snapshot-seed` inserts one.
+--
+-- PROD: a refreshable MV cannot be ALTERed — DROP and re-CREATE it, and only
+-- AFTER `snapshot-seed` has filled `claimable_balance_holdings`. Between the
+-- writer deploy and that seed the table holds only balances created since the
+-- deploy, and summing it then would publish a supply that is neither the old
+-- number nor the true one.
+-- Create it as the same user as the view it replaces (`SHOW CREATE` names it):
+-- a refresh runs under that user's limits, and one capped at 30 s fails
+-- silently once the scan grows — only `system.view_refreshes.exception` shows
+-- it. Then `SYSTEM REFRESH VIEW` + `SYSTEM WAIT VIEW`, and check
+-- `system.view_refreshes`. `balance_aggregates` keeps its old rows until that
+-- first refresh swaps them. Rolling the claimable balance writer back later
+-- means rolling this view back too, or re-running `snapshot-seed --execute`:
+-- claims made while it was down are never closed otherwise.
+CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
+REFRESH EVERY 2 MINUTE
+TO balance_aggregates AS
+SELECT
+    asset_id,
+    sum(amount)                                    AS total_supply,
+    toInt32(countIf(is_holder = 1 AND amount > 0)) AS holder_count
+FROM (
+    SELECT asset_id, amount, 1 AS is_holder FROM balances FINAL
+    UNION ALL
+    SELECT asset_id, amount, 0 AS is_holder FROM claimable_balance_holdings FINAL
+    UNION ALL
+    SELECT leg.1 AS asset_id, leg.2 AS amount, 1 AS is_holder
+    FROM (
+        SELECT arrayJoin(arrayZip(
+                   p.legs,
+                   [toInt128(s.r.1 * 10000000), toInt128(s.r.2 * 10000000)]
+               )) AS leg
+        FROM (
+            SELECT pool_id, argMax((reserve_a, reserve_b), ledger_sequence) AS r
+            FROM liquidity_pool_snapshots
+            GROUP BY pool_id
+        ) AS s
+        INNER JOIN (
+            SELECT pool_id, legs
+            FROM liquidity_pools FINAL
+            WHERE pool_kind = 0 AND length(legs) = 2
+        ) AS p USING (pool_id)
+    )
+)
+GROUP BY asset_id;
 
 ----------------------------------------------------------------------
 -- Dictionary: hot path for `hash → ledger_sequence` lookups

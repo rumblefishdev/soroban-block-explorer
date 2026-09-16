@@ -425,7 +425,7 @@ async fn count_rows(client: &clickhouse::Client, table: &str, where_clause: &str
 /// Assert there are exactly `expected` rows in `table` matching `where_clause`.
 /// The `balance_aggregates_mv` refreshable MV is the source of every user-facing
 /// `total_supply` / `holder_count`, and the main smoke test can't assert it (2-minute
-/// cadence). This proves it sums correctly: it runs in a THROWAWAY database (the MV
+/// cadence). This proves it sums its three sources correctly: it runs in a THROWAWAY database (the MV
 /// does a FULL recompute of `balances` into `balance_aggregates`, replacing the whole
 /// target — must never touch shared data), forces an immediate refresh, and checks the
 /// result. Gated on `CLICKHOUSE_URL`.
@@ -468,6 +468,46 @@ async fn balance_aggregates_mv_sums_supply_and_holders() {
     .await
     .expect("insert balances");
 
+    // A claimable balance adds supply but is not a holder.
+    cl.query(
+        "INSERT INTO claimable_balance_holdings (holder_id, asset_id, amount, last_updated_ledger) \
+         VALUES (4, ?, 30, 10)",
+    )
+    .bind(asset)
+    .execute()
+    .await
+    .expect("insert claimable balance");
+
+    // A classic pool pairs `asset` with `other`: only its NEWEST snapshot counts,
+    // scaled from Decimal(7) to raw units, and the pool is a holder of both legs.
+    // A Soroban pool over the same legs is ignored — its reserves are contract
+    // balances, already in `balances`.
+    let other: i64 = 434_343;
+    let (classic, soroban) = ("c".repeat(32), "s".repeat(32));
+    cl.query(
+        "INSERT INTO liquidity_pools (pool_id, pool_kind, legs, last_updated_ledger) VALUES \
+         (?, 0, [?, ?], 5), (?, 1, [?, ?], 5)",
+    )
+    .bind(&classic)
+    .bind(asset)
+    .bind(other)
+    .bind(&soroban)
+    .bind(asset)
+    .bind(other)
+    .execute()
+    .await
+    .expect("insert pools");
+    cl.query(
+        "INSERT INTO liquidity_pool_snapshots (pool_id, ledger_sequence, reserve_a, reserve_b, total_shares) \
+         VALUES (?, 5, 1, 2, 1), (?, 9, 0.5, 0.25, 1), (?, 9, 7, 7, 1)",
+    )
+    .bind(&classic)
+    .bind(&classic)
+    .bind(&soroban)
+    .execute()
+    .await
+    .expect("insert snapshots");
+
     // Force the refreshable MV to recompute NOW (vs REFRESH EVERY 2 MINUTE) and wait.
     cl.query("SYSTEM REFRESH VIEW balance_aggregates_mv")
         .execute()
@@ -483,18 +523,29 @@ async fn balance_aggregates_mv_sums_supply_and_holders() {
         total_supply: Option<i128>,
         holder_count: Option<i32>,
     }
-    let agg = cl
-        .query("SELECT total_supply, holder_count FROM balance_aggregates WHERE asset_id = ?")
-        .bind(asset)
-        .fetch_one::<Agg>()
-        .await
-        .expect("aggregate row");
+    let read = |id: i64| {
+        cl.query("SELECT total_supply, holder_count FROM balance_aggregates WHERE asset_id = ?")
+            .bind(id)
+            .fetch_one::<Agg>()
+    };
+    let agg = read(asset).await.expect("aggregate row");
     assert_eq!(
         agg.total_supply,
-        Some(150),
-        "sum(amount) over the 3 balance rows"
+        Some(150 + 30 + 5_000_000),
+        "balances + claimable balance + newest classic reserve_a × 10^7"
     );
-    assert_eq!(agg.holder_count, Some(2), "countIf(amount > 0)");
+    assert_eq!(
+        agg.holder_count,
+        Some(3),
+        "2 positive balances + the classic pool; the claimable balance is not a holder"
+    );
+    let agg = read(other).await.expect("aggregate row for the second leg");
+    assert_eq!(
+        agg.total_supply,
+        Some(2_500_000),
+        "newest classic reserve_b × 10^7"
+    );
+    assert_eq!(agg.holder_count, Some(1), "the classic pool");
 
     base.query(&format!("DROP DATABASE IF EXISTS {db}"))
         .execute()

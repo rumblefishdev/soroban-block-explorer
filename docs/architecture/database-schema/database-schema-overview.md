@@ -173,11 +173,15 @@ Derived explorer entities:
   11,639 rows are in that state today and the share grows with pubnet merge churn. Liveness
   comes from the native holding's `closed_at_ledger` (ADR 0055); an aggregate over this table
   ALONE ("how many accounts are multisig?") silently counts dead accounts
-- `balance_aggregates` (+ refreshable MV) — pre-computed per-`asset_id` `total_supply` (`sum`) /
-  `holder_count` (`countIf(amount > 0)`) over `balances`
+- `claimable_balance_holdings` — `balances`' twin for value held by a claimable balance, one row
+  per `B…` balance (task 0210, §4.17.1)
+- `balance_aggregates` (+ refreshable MV) — pre-computed per-`asset_id` `total_supply` (`sum` over
+  `balances`, `claimable_balance_holdings` and the newest `liquidity_pool_snapshots` row of every
+  classic pool, one leg per asset through `liquidity_pools.legs`, task 0210) / `holder_count`
+  (`countIf(amount > 0)` over accounts, contracts and pools — a claimable balance is not a holder)
 - `asset_aggregates` / `soroban_token_supply` — **DROPPED (task 0331)**. Classic supply/holders now
-  flow through `balance_aggregates` over the unified `balances`; `total_supply = sum(amount)` is the
-  SOLE supply source for ALL asset types (Option A — no per-token `TotalSupply` key read). The
+  flow through `balance_aggregates`; `total_supply` is the sum of `balances`, `claimable_balance_holdings`
+  and classic pool reserves for ALL asset types (Option A — no per-token `TotalSupply` key read). The
   `balances` family is ClickHouse-only (see `clickhouse-pilot.md §4f`); there is no
   `soroban_token_balances` / `soroban_asset_aggregates` (superseded by the unified model on the pivot)
 - `nfts`, `nft_ownership` — NFT registry plus partitioned ownership history
@@ -266,6 +270,8 @@ liquidity_pools                       # classic (pool_kind=0) + soroban AMM (poo
   ├─ lp_positions                             # classic only
   ├─ pool_state_changes (partitioned)         # soroban reserves, one row per (pool, ledger)
   └─ pool_instance_state                      # soroban pool's own declaration: plane + share token
+
+claimable_balance_holdings                  # value held by a B… balance, balances' shape (0210)
 
 accounts
   ├─ account_balances_current
@@ -1265,7 +1271,7 @@ Design notes:
   [ADR 0023](../../../lore/2-adrs/0023_tokens-typed-metadata-columns.md) Part 3
   and supersedes the per-entity S3 hydration sketched under task 0164;
   details-only fields are not persisted at all
-- `total_supply` and `holder_count` are stock fields populated by the **indexer per ledger**, not by enrichment Lambda 2 — both are on-chain-derivable from `account_balances_current` (per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), list-endpoint + on-chain → indexer). After the credit-balance upsert pass, `recompute_asset_aggregates` (`crates/indexer/src/handler/persist/write.rs`) collects every `(asset_code, issuer_id)` pair touched by this ledger and runs a single UPDATE that rewrites `holder_count = COUNT(*) FILTER (WHERE balance > 0)` (active-holder semantics, matching the Stellar ecosystem convention used by StellarExpert / Stellarchain.io) and `total_supply = SUM(balance)` from `account_balances_current`. **MVP scope** — Stellar protocol stores no `AssetEntry` / `AssetSupplyEntry` on-chain, so supply is always derived. Horizon `/assets` aggregates 4 sources (trustlines + claimable_balances + LP reserves + SAC contract holdings); MVP aggregates only trustlines. Drift on heavily-used DeFi assets can be material (~20-50% under-count vs Horizon for USDC w/ heavy Soroswap + SAC use). Full Horizon parity tracked under task 0194 Future Work. Recompute (rather than per-trustline delta) avoids ON-CONFLICT-vs-INSERT introspection on the upsert path; the affected-set is bounded per ledger so the cost stays small. Implementation owned by task 0194 §1b (total_supply) + §1c (holder_count, supersedes blocked task 0135). **Type-3 (bespoke Soroban tokens) — task 0331:** these have no trustlines, so `total_supply` / `holder_count` derive from the unified `balances` table (per-holder `ContractData` `Balance(Address)` ledger STATE — NOT an event-fold, which under-counts vault / rebasing / non-SEP-41-event tokens), aggregated by `balance_aggregates` (`sum(amount)` / `countIf(amount > 0)`). `total_supply = sum(amount)` is the SOLE supply source (Option A — no per-token `TotalSupply` key read; a mint always credits a holder balance, and contract treasuries are summed because holders include `C…`, so the sum equals real supply). RAW `Int128` (scale by `decimals`), distinct from the classic pre-scaled `Decimal128(7)`. SAC contract-held balances (Horizon source #4 for classic parity) ride the same `balances` table — tracked under task 0210 Phase 3 / 0331 follow-up D2.
+- `total_supply` and `holder_count` today come from `balance_aggregates` (ClickHouse refreshable MV, every 2 minutes): `total_supply` sums `balances` (accounts and contracts), `claimable_balance_holdings` and the newest classic pool reserves; `holder_count` counts positive accounts, contracts and classic pools, never claimable balances (task 0210, `init.sql` comment on `balance_aggregates_mv`). The rest of this bullet is the Postgres-era design, kept for history: stock fields populated by the **indexer per ledger**, not by enrichment Lambda 2 — both are on-chain-derivable from `account_balances_current` (per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md), list-endpoint + on-chain → indexer). After the credit-balance upsert pass, `recompute_asset_aggregates` (`crates/indexer/src/handler/persist/write.rs`) collects every `(asset_code, issuer_id)` pair touched by this ledger and runs a single UPDATE that rewrites `holder_count = COUNT(*) FILTER (WHERE balance > 0)` (active-holder semantics, matching the Stellar ecosystem convention used by StellarExpert / Stellarchain.io) and `total_supply = SUM(balance)` from `account_balances_current`. **MVP scope** — Stellar protocol stores no `AssetEntry` / `AssetSupplyEntry` on-chain, so supply is always derived. Horizon `/assets` aggregates 4 sources (trustlines + claimable_balances + LP reserves + SAC contract holdings); MVP aggregates only trustlines. Drift on heavily-used DeFi assets can be material (~20-50% under-count vs Horizon for USDC w/ heavy Soroswap + SAC use). Full Horizon parity tracked under task 0194 Future Work. Recompute (rather than per-trustline delta) avoids ON-CONFLICT-vs-INSERT introspection on the upsert path; the affected-set is bounded per ledger so the cost stays small. Implementation owned by task 0194 §1b (total_supply) + §1c (holder_count, supersedes blocked task 0135). **Type-3 (bespoke Soroban tokens) — task 0331:** these have no trustlines, so `total_supply` / `holder_count` derive from the unified `balances` table (per-holder `ContractData` `Balance(Address)` ledger STATE — NOT an event-fold, which under-counts vault / rebasing / non-SEP-41-event tokens), aggregated by `balance_aggregates` (`sum(amount)` / `countIf(amount > 0)`). `total_supply = sum(amount)` is the SOLE supply source (Option A — no per-token `TotalSupply` key read; a mint always credits a holder balance, and contract treasuries are summed because holders include `C…`, so the sum equals real supply). RAW `Int128` (scale by `decimals`), distinct from the classic pre-scaled `Decimal128(7)`. SAC contract-held balances (Horizon source #4 for classic parity) ride the same `balances` table — tracked under task 0210 Phase 3 / 0331 follow-up D2.
 - `soroban_contracts.contract_type = 'token'` classifies a contract's SEP-41 role
   and is intentionally distinct from this table's name — the two coexist without
   ambiguity now that the table is `assets`
@@ -1662,6 +1668,42 @@ Design notes:
 - native rows leave `asset_code` / `issuer_id` NULL; `ck_abc_native` closes the
   NULL-in-UNIQUE loophole and the pair of partial unique indexes ensures exactly one
   row per logical asset per account
+
+### 4.17.1 Claimable Balance Holdings (task 0210)
+
+```sql
+CREATE TABLE claimable_balance_holdings (
+    holder_id           Int64,   -- ids::address_id of the B… StrKey
+    asset_id            Int64,
+    amount              Int128,  -- stroops
+    last_updated_ledger Int64,
+    closed_at_ledger    Int64 DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(last_updated_ledger)
+ORDER BY (holder_id, asset_id);
+```
+
+Purpose:
+
+- the value a `ClaimableBalanceEntry` holds — part of an asset's supply that no
+  account or trustline carries
+
+Design notes:
+
+- exactly `balances`' columns; the writer inserts the same `BalanceRow` into both,
+  and a unit test fails if the two column lists drift
+- kept out of `balances` by the ADR 0056 amendment (2026-09-15): mass churn
+  (~800k balances per 100k ledgers) and every `balances` reader assuming the holder
+  is an account or a contract
+- written from entry changes, never from `asset_transfers` edges; the claim
+  tombstone takes its asset from the removal's `state` pre-image; folded per
+  balance across the ledger (ADR 0057 decision 6)
+- `holder_id` equals the `asset_transfers` endpoint surrogate for the same `B…`,
+  which is what the reconciliation against edges joins on
+- tombstones are kept; never add a TTL (it resurrects claimed balances). Cleanup
+  conditions are in the `init.sql` comment
+- read by `balance_aggregates` for `total_supply` only — a claimable balance is
+  not a holder
 
 ### 4.18 ~~Account Balance History~~ (dropped)
 

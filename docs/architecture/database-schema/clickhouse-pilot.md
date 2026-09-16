@@ -118,8 +118,8 @@ already cheap. PG snapshot the pilot was sized against:
 CH net schema at the pivot: **17 tables + 1 `Dictionary`** (PG had 18;
 `_sqlx_migrations` dropped). The table above is the PG→CH mirror as of the
 pivot and is deliberately not re-lettered each time a table lands; `init.sql`
-today defines **30 tables, 2 materialized views and 1 dictionary** (counted
-2026-08-18) — it, not this table, is the inventory of record.
+today defines **37 tables, 2 materialized views and 1 dictionary** (counted
+2026-09-16) — it, not this table, is the inventory of record.
 
 ## 4. Deliberate divergences
 
@@ -336,10 +336,12 @@ raw representation. Two objects, none in PG:
 - **`balance_aggregates`** (`asset_id`, `total_supply Nullable(Int128)`,
   `holder_count Nullable(Int32)`) + **`balance_aggregates_mv`**
   (`REFRESH EVERY 2 MINUTE`) — `sum(amount)` / `countIf(amount > 0)` over
-  `balances FINAL`, keyed by the `assets.id` surrogate. One 1:1 read join for ALL
-  asset types. **`total_supply` = `sum(amount)` is the SOLE supply source** — task
-  0331 Option A: a mint always credits a holder balance (often a contract treasury,
-  summed because holders include `C…`), so the sum equals real supply. No per-token
+  `balances FINAL`, keyed by the `assets.id` surrogate. Task 0210 adds
+  `claimable_balance_holdings` (supply only) and the newest classic pool
+  snapshot per leg (supply and holders). One 1:1 read join for ALL
+  asset types. **`total_supply` = the sum of those three sources is the SOLE supply
+  source** — task 0331 Option A: a mint always credits a holding (often a contract
+  treasury, summed because holders include `C…`), so the sum equals real supply. No per-token
   `TotalSupply` key read (it was optional — only ~73% of wasm expose it — and
   seed-only/stale); the narrow residue (TTL-archived tail + true rebasing) is the
   accepted non-100% cost. See README DECISION 2026-06-30.

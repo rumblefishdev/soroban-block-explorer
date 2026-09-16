@@ -80,6 +80,7 @@ fn raw_registration_ledger_stages_the_exact_rows() {
         contract_metadata_writes: &[],
         executable_ref_targets: &[],
         soroban_token_balances: &[],
+        claimable_balances: &[],
         pool_family_writes: &writes,
         sac_classic: &std::collections::HashMap::new(),
         sac_overrides: &[],

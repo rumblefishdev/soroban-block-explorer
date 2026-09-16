@@ -9,6 +9,8 @@
 //! | closure (ours 0, gone) | ~22.2M classic + 2.3M native | checkpoint | checkpoint |
 //! | ghost (ours >0, gone) | ~1.04M native + ~2k classic | checkpoint | checkpoint |
 //! | self-heal (snapshot newer) | ~25k | the entry's own ledger | 0 |
+//! | `claimable_balance_holdings`, same four kinds (task 0210, [`claimable`]) | not yet measured | as above | as above |
+//! | classic pools missing or stale on our side: `liquidity_pools` + `liquidity_pool_snapshots`, insert-only (task 0210, [`pools`]) | not yet measured | the entry's own ledger | — |
 //! | `account_entry_state` full seed | every live account | the entry's own ledger | — |
 //! | `assets` / `accounts` dimension stubs | the referenced ids we lack | entry ledger | — |
 //!
@@ -66,12 +68,16 @@ use std::path::Path;
 use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::snapshot::archive::PUBNET_ARCHIVE;
+use crate::snapshot::balances;
+use crate::snapshot::claimable;
+use crate::snapshot::dumps;
 use crate::snapshot::network_state::{self, NetworkState};
+use crate::snapshot::pools;
 use crate::snapshot::report::Report;
-use crate::snapshot::verdict;
+use crate::snapshot::slices::key_slices;
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
-use db_clickhouse::persist::rows::{AccountEntryStateRow, AccountRow, AssetRow, BalanceRow};
+use db_clickhouse::persist::rows::{AccountEntryStateRow, AccountRow, AssetRow};
 
 /// Insert batch size. RowBinary streams; this only bounds peak buffering.
 const INSERT_CHUNK: usize = 500_000;
@@ -89,14 +95,12 @@ const INSERT_CHUNK: usize = 500_000;
 /// that reference them) must be preserved.
 #[derive(Default)]
 struct Corrections {
-    balances: Vec<BalanceRow>,
+    balances: balances::BalanceCorrections,
     entry_states: Vec<AccountEntryStateRow>,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
-    /// One line per row this run zeroes while it still held a positive amount
-    /// — the anomaly report, and the only pre-image of what `--execute` takes
-    /// away. It belongs to what the run produced, like the four row sets.
-    ghosts: Vec<String>,
+    claimable: claimable::ClaimableCorrections,
+    pools: pools::PoolCorrections,
     dangling: Dangling,
 }
 
@@ -118,119 +122,6 @@ struct Dangling {
     /// blanks the issuer column, it never orphans a balance — and legitimate:
     /// an issuer may merge while trustlines to its asset outlive it.
     issuers: u64,
-}
-
-/// Number of `holder_id` slices. 64 keeps each chunk near the ~760k groups
-/// measured for 1/64 of the key space — two orders under the server's limit.
-const KEY_SLICES: i128 = 64;
-
-/// Floor on the our-rows read. A short
-/// read (wrong database, a dropped key slice) is indistinguishable from a real
-/// one downstream: every missing row becomes an unmatched snapshot entry, i.e.
-/// a phantom network gap the seed would INSERT as a live holding. The real
-/// population measured 48.6M distinct (holder, asset) pairs — sit just under.
-pub(crate) const MIN_OUR_ROWS: u64 = 40_000_000;
-
-/// Stream our deduplicated `balances` in `holder_id` slices, invoking `f` per
-/// row. Like every
-/// other corrective command in this crate, the tool reads its own inputs
-/// through `sink.client()`; there is no manual export step. (A hand-exported
-/// TSV transport existed during the research phase and was removed with the
-/// 2026-08-21 self-read decision: the binary holds the same connection for `--execute`
-/// inserts anyway, and a cursor error propagates loudly where the operator
-/// CLI's exit-0-on-server-error trap did not.)
-///
-/// Errors below [`MIN_OUR_ROWS`] rows: a short read (wrong database,
-/// dropped slice) would silently report our own holdings as a phantom network
-/// gap.
-async fn stream_our_rows(
-    sink: &Sink,
-    mut f: impl FnMut(&verdict::OurRow),
-) -> Result<u64, BackfillError> {
-    let mut seen = 0u64;
-    for (i, (from, to)) in key_slices().enumerate() {
-        // `argMax` collapses the ReplacingMergeTree duplicates the way a read
-        // must: prod tables carry unmerged parts, so a plain SELECT double-counts.
-        let mut cursor = sink
-            .client()
-            .query(&slice_sql(from, to))
-            .fetch::<verdict::OurRow>()?;
-        while let Some(row) = cursor.next().await? {
-            seen += 1;
-            f(&row);
-        }
-        println!("    slice {:>2}/{KEY_SLICES} — {seen} rows so far", i + 1);
-    }
-    if seen < MIN_OUR_ROWS {
-        return Err(BackfillError::Incomplete(format!(
-            "our balances read returned {seen} rows, expected at least {} — a short \
-             read reports our own holdings as a phantom network gap (wrong database?)",
-            MIN_OUR_ROWS
-        )));
-    }
-    Ok(seen)
-}
-
-/// The per-slice read. Its SELECT list is aliased to the FIELD NAMES of
-/// [`verdict::OurRow`], which is what the driver matches on: `clickhouse` 0.15
-/// builds a name-to-field mapping per cursor and returns `SchemaMismatch` on a
-/// count mismatch or an unknown column, so a renamed alias fails the query
-/// rather than shifting a column silently. Decoding is not positional — an
-/// earlier version of this comment said it was, and two reviews built findings
-/// on that sentence.
-fn slice_sql(from: i128, to: i128) -> String {
-    // The aggregates are aliased INSIDE a subquery and renamed outside. Aliasing
-    // `max(last_updated_ledger) AS last_updated_ledger` directly shadows the
-    // column, so the next `argMax(..., last_updated_ledger)` binds the alias and
-    // ClickHouse rejects it: "Aggregate function max(...) is found inside
-    // another aggregate function" (ILLEGAL_AGGREGATION).
-    //
-    // ONE `argMax` over a TUPLE, not one per column. Two independent `argMax`
-    // aggregates resolve a same-version tie independently, so in principle they
-    // could take `amount` from one row and `closed_at_ledger` from another and
-    // hand back a row that exists in no part on disk. Measured, they do not:
-    // over a full key slice (762,955 keys, 19,142 ties argMax actually has to
-    // resolve) the two forms returned identical results, because ClickHouse
-    // keeps the first-encountered maximum and both states walk the same rows in
-    // the same order. That is an implementation property, not a contract, and
-    // the tuple costs nothing — so the guarantee is structural instead.
-    //
-    // Not a repair of the 1,238,583 known ties: every one of those carries
-    // `closed_at_ledger = 0` on BOTH sides (they predate the column), so no
-    // assembly of them can differ from a real row. This closes the shape a
-    // FUTURE tie could take, once the deployed writer's stamps start appearing
-    // at contended versions.
-    format!(
-        "SELECT holder_id, asset_id, tupleElement(best, 1) AS amount, \
-                led AS last_updated_ledger, tupleElement(best, 2) AS closed_at_ledger \
-         FROM ( \
-             SELECT holder_id, \
-                    asset_id, \
-                    argMax((amount, closed_at_ledger), last_updated_ledger) AS best, \
-                    max(last_updated_ledger) AS led \
-             FROM balances \
-             WHERE holder_id BETWEEN {from} AND {to} \
-               AND asset_id IN (SELECT id FROM assets WHERE asset_type IN (0, 1)) \
-               AND holder_id NOT IN (SELECT id FROM soroban_contracts) \
-             GROUP BY holder_id, asset_id \
-         )"
-    )
-}
-
-/// The slice boundaries, covering the i64 key space exactly once.
-fn key_slices() -> impl Iterator<Item = (i128, i128)> {
-    let lo = i128::from(i64::MIN);
-    let hi = i128::from(i64::MAX);
-    let step = (hi - lo + 1) / KEY_SLICES;
-    (0..KEY_SLICES).map(move |s| {
-        let from = lo + s * step;
-        let to = if s == KEY_SLICES - 1 {
-            hi
-        } else {
-            lo + (s + 1) * step - 1
-        };
-        (from, to)
-    })
 }
 
 /// Fetch the set of existing dimension ids straight from ClickHouse — the
@@ -267,64 +158,6 @@ async fn fetch_id_set(sink: &Sink, table: &str) -> Result<HashSet<i64>, Backfill
     Ok(out)
 }
 
-/// Emit the correction one verdict implies. The verdict comes from the REPORT,
-/// which counted and sampled the same row a moment earlier — so the summary an
-/// operator signs off on and the rows `--execute` writes are derived from one
-/// classification, not two.
-///
-/// Within ONE run. Across two runs the populations differ, and the honest
-/// statement of how is worth spelling out, because an earlier version of this
-/// comment claimed more than it could:
-///
-/// - OUR side drifts harmlessly. `--execute` re-reads our rows fresh, like
-///   every corrective command here, and anything the live writer touched since
-///   is absorbed by the `>= checkpoint` guard — those rows are newly LEFT
-///   ALONE, never given a different correction.
-/// - The SNAPSHOT side drifts too, and that half the old comment did not
-///   reason about. Checkpoints publish every 64 ledgers (~5 minutes) while a
-///   full pass takes ~5 (measured: 317 s dry-run, 637 s with the inserts;
-///   the archive download dominates and is network-bound, so earlier runs
-///   measured 909 s on the same code). What separates two runs is therefore a
-///   whole pass PLUS the operator reading `summary.txt`, which is why
-///   `--execute` still always decodes a later checkpoint than the dry-run
-///   reviewed — but the margin is one checkpoint interval, not three.
-///   Holdings the network
-///   created in that window are `missing` in the second run and get INSERTED,
-///   without having appeared in the summary an operator signed off on.
-///
-/// That drift is accepted deliberately (2026-08-21, reaffirmed 2026-08-26).
-/// The rows it adds are real live holdings — the fresher snapshot is the
-/// better input, not a riskier one — and the run is verified by measuring its
-/// OUTCOME against the network (coverage, the 200-account chain probe,
-/// aggregate deltas), which a frozen input would not improve. `manifest.json`
-/// records the checkpoint each run actually used, so the population is always
-/// identifiable after the fact.
-fn fold_our_row(
-    row: &verdict::OurRow,
-    verdict: verdict::Verdict,
-    net: Option<network_state::NetHolding>,
-    checkpoint: u32,
-    out: &mut Corrections,
-) {
-    use verdict::Verdict as V;
-    if verdict == V::Ghost {
-        out.ghosts.push(format!(
-            "{}\t{}\t{}\t{}",
-            row.holder_id, row.asset_id, row.amount, row.last_updated_ledger
-        ));
-    }
-    let Some(c) = verdict::correction(verdict, net.as_ref(), checkpoint) else {
-        return;
-    };
-    out.balances.push(BalanceRow {
-        holder_id: row.holder_id,
-        asset_id: row.asset_id,
-        amount: c.amount,
-        last_updated_ledger: c.last_updated_ledger,
-        closed_at_ledger: c.closed_at_ledger,
-    });
-}
-
 /// Build every correction. Deterministic function of (snapshot state, our
 /// rows as read, dimension id sets) — a re-run against the same inputs
 /// produces identical rows and RMT collapses them.
@@ -338,46 +171,24 @@ async fn build_corrections(
 ) -> Result<Corrections, BackfillError> {
     let mut out = Corrections::default();
 
-    // Pass 1: our rows → the report classifies, counts and samples; the verdict
-    // it hands back drives the correction. One classification, two outputs.
-    println!("\n  streaming our balances in {KEY_SLICES} key slices…");
-    let rows_read = stream_our_rows(sink, |row| {
-        let (v, net) = report.observe(row, state);
-        fold_our_row(row, v, net, checkpoint, &mut out);
-    })
-    .await?;
-    println!("  folded {rows_read} of our rows");
-
-    // Pass 2: unmatched live snapshot entries → missing-holding inserts.
+    // Passes 1 and 2: `balances` against the snapshot's accounts and trustlines.
     let mut referenced_assets: HashSet<i64> = HashSet::new();
     let mut referenced_holders: HashSet<i64> = HashSet::new();
-    for (key, e) in &state.trustlines {
-        if e.live && !e.matched {
-            report.observe_missing_trustline(key, e, state);
-            out.balances.push(BalanceRow {
-                holder_id: key.holder_id,
-                asset_id: key.asset_id,
-                amount: i128::from(e.balance),
-                last_updated_ledger: i64::from(e.ledger),
-                closed_at_ledger: 0,
-            });
-            referenced_assets.insert(key.asset_id);
-            referenced_holders.insert(key.holder_id);
-        }
-    }
-    for (id, e) in &state.accounts {
-        if e.live && !e.matched {
-            report.observe_missing_account(*id, e, state);
-            out.balances.push(BalanceRow {
-                holder_id: *id,
-                asset_id: ids::NATIVE_ASSET_ID,
-                amount: i128::from(e.balance),
-                last_updated_ledger: i64::from(e.ledger),
-                closed_at_ledger: 0,
-            });
-            referenced_holders.insert(*id);
-        }
-    }
+    out.balances = balances::build_corrections(
+        sink,
+        state,
+        checkpoint,
+        report,
+        &mut referenced_assets,
+        &mut referenced_holders,
+    )
+    .await?;
+    // Pass 2b: `claimable_balance_holdings`, before the stubs its assets need.
+    out.claimable =
+        claimable::build_corrections(sink, state, checkpoint, report, &mut referenced_assets)
+            .await?;
+    // Pass 2c: classic pools with no current snapshot of ours, same reason.
+    out.pools = pools::build_corrections(sink, state, checkpoint, &mut referenced_assets).await?;
 
     // Pass 3: dimension stubs — a seeded balance whose asset or holder has no
     // dimension row would render as a broken join, i.e. a new lie replacing an
@@ -398,13 +209,15 @@ async fn build_corrections(
             continue;
         };
         let issuer_id = ids::account_id(issuer);
-        out.asset_stubs.push(AssetRow {
-            asset_type: 1,
-            asset_code: code.clone(),
-            issuer_id,
-            contract_id: 0,
-            id: *asset_id,
-        });
+        // Built like live ingest builds it, so the id is recomputed from the
+        // identity. An id that disagrees with the referenced one would define
+        // some other asset and leave the reference dangling — count it so.
+        let stub = AssetRow::staged(1, code.clone(), issuer_id, 0);
+        if stub.id != *asset_id {
+            out.dangling.assets += 1;
+            continue;
+        }
+        out.asset_stubs.push(stub);
         referenced_issuers.insert(issuer_id);
     }
     // `union`, not `chain`: an issuer that also holds a balance appears in both
@@ -471,100 +284,6 @@ async fn build_corrections(
     Ok(out)
 }
 
-/// Cap on the two row sets too large to dump whole. Truncation is always
-/// stated in the file itself — a dump that silently stops reads as a complete
-/// one to whoever audits it.
-const DUMP_CAP: usize = 5_000;
-
-/// Write `lines` to `dir/name`, capped, with the cut recorded in the file.
-fn write_dump(
-    dir: &Path,
-    name: &str,
-    total: usize,
-    lines: impl Iterator<Item = String>,
-) -> Result<(), BackfillError> {
-    let mut out: Vec<String> = lines.collect();
-    if total > out.len() {
-        out.push(format!("# TRUNCATED — {} of {total} rows shown", out.len()));
-    }
-    let path = dir.join(name);
-    std::fs::write(&path, out.join("\n") + "\n")
-        .map_err(|e| BackfillError::Incomplete(format!("write {}: {e}", path.display())))?;
-    println!(
-        "    wrote {} of {total} rows -> {}",
-        out.len(),
-        path.display()
-    );
-    Ok(())
-}
-
-/// Dump the three row sets the verdict samples never covered: the ones that
-/// invent an ENTITY rather than restate a holding. A wrong amount on a real
-/// asset is visible to anyone who looks the asset up; an asset that does not
-/// exist on chain is not, because nobody knows to look for it. Asset stubs are
-/// therefore dumped WHOLE — they are the smallest set and the only one that
-/// writes a new row into a dimension table.
-///
-/// The two capped dumps take an ARBITRARY prefix, not the deterministic
-/// bottom-k the verdict samples use: both vectors are built by iterating a
-/// `HashMap`, whose order is per-process, so these files are not comparable
-/// across runs. They exist to be eyeballed and chain-checked, not diffed.
-fn write_correction_dumps(
-    dir: &Path,
-    corr: &Corrections,
-    state: &NetworkState,
-) -> Result<(), BackfillError> {
-    write_dump(
-        dir,
-        "asset_stubs.tsv",
-        corr.asset_stubs.len(),
-        corr.asset_stubs.iter().map(|a| {
-            // The registry issuer is the StrKey the surrogate was derived from;
-            // printing both lets an audit recompute `credit_asset_id` offline.
-            let issuer = state
-                .asset_registry
-                .get(&a.id)
-                .map_or("?", |(_, issuer)| issuer.as_str());
-            format!("{}\t{}\t{}\t{}", a.asset_code, issuer, a.id, a.issuer_id)
-        }),
-    )?;
-    write_dump(
-        dir,
-        "account_stubs.tsv",
-        corr.account_stubs.len(),
-        corr.account_stubs
-            .iter()
-            .take(DUMP_CAP)
-            .map(|a| format!("{}\t{}\t{}", a.account_id, a.id, a.first_seen_ledger)),
-    )?;
-    write_dump(
-        dir,
-        "entry_states.tsv",
-        corr.entry_states.len(),
-        corr.entry_states.iter().take(DUMP_CAP).map(|s| {
-            // The StrKey, not the surrogate: a signer set is audited by asking
-            // the chain for the account, which needs the G-address.
-            let who = state
-                .account_details
-                .get(&s.account_id)
-                .map_or("?", |d| d.strkey.as_str());
-            format!(
-                "{who}\t{}/{}/{}/{}\t{}\t{}",
-                s.master_weight,
-                s.threshold_low,
-                s.threshold_med,
-                s.threshold_high,
-                s.signer_keys.join(","),
-                s.signer_weights
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        }),
-    )
-}
-
 async fn insert_chunked<T>(sink: &Sink, table: &str, rows: &[T]) -> Result<(), BackfillError>
 where
     T: clickhouse::Row + clickhouse::RowOwned + serde::Serialize,
@@ -610,7 +329,11 @@ async fn refuse_if_read_only(sink: &Sink) -> Result<(), BackfillError> {
 
 /// The seed. Without `--execute`: reads its inputs from ClickHouse, decodes
 /// the snapshot, folds, writes artifacts, inserts NOTHING. With `--execute`:
-/// additionally inserts the four row sets.
+/// additionally inserts every correction the summary lists.
+///
+/// Order: everything that needs only the checkpoint ledger or ClickHouse —
+/// write identity, writer coverage, the dimension id sets — runs BEFORE the
+/// ~5-minute bucket download, so a refusal costs seconds.
 pub async fn seed_command(
     sink: &Sink,
     artifacts_root: &Path,
@@ -624,29 +347,16 @@ pub async fn seed_command(
         refuse_if_read_only(sink).await?;
     }
 
-    let (list, mut state, source_report) =
-        network_state::open_snapshot(if execute { " [EXECUTE]" } else { " [dry-run]" }).await?;
-
-    // One directory per checkpoint, so a run never overwrites the record of an
-    // earlier one — `ghosts.tsv` is the only pre-image of what a run zeroed.
-    let artifacts = &artifacts_root.join(list.checkpoint_ledger.to_string());
-    std::fs::create_dir_all(artifacts)
-        .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", artifacts.display())))?;
-    println!("  artifacts → {}", artifacts.display());
-
-    // Provenance artifact: the exact bucket list this run decoded. The archive
-    // is content-addressed, so this manifest alone identifies the identical
-    // snapshot later (the LP-merge pass will need exactly that).
-    let manifest = serde_json::json!({
-        "checkpoint_ledger": list.checkpoint_ledger,
-        "archive": PUBNET_ARCHIVE,
-        "buckets": list.hashes,
-    });
-    std::fs::write(
-        artifacts.join("manifest.json"),
-        serde_json::to_string_pretty(&manifest).expect("static json"),
-    )
-    .map_err(|e| BackfillError::Incomplete(format!("write manifest: {e}")))?;
+    let list = network_state::latest_checkpoint().await?;
+    let coverage = claimable::writer_coverage(
+        claimable::first_writer_tombstone(sink).await?,
+        list.checkpoint_ledger,
+    );
+    if let (true, Err(why)) = (execute, &coverage) {
+        return Err(BackfillError::Incomplete(format!(
+            "refusing --execute: {why}"
+        )));
+    }
 
     let known_assets = fetch_id_set(sink, "assets").await?;
     let known_accounts = fetch_id_set(sink, "accounts").await?;
@@ -671,6 +381,31 @@ pub async fn seed_command(
         )));
     }
 
+    // One directory per checkpoint, so a run never overwrites the record of an
+    // earlier one — `ghosts.tsv` is the only pre-image of what a run zeroed.
+    let artifacts = &artifacts_root.join(list.checkpoint_ledger.to_string());
+    std::fs::create_dir_all(artifacts)
+        .map_err(|e| BackfillError::Incomplete(format!("mkdir {}: {e}", artifacts.display())))?;
+    println!("  artifacts → {}", artifacts.display());
+
+    // Provenance artifact: the exact bucket list this run decoded. The archive
+    // is content-addressed, so this manifest alone identifies the identical
+    // snapshot later (the LP-merge pass will need exactly that).
+    let manifest = serde_json::json!({
+        "checkpoint_ledger": list.checkpoint_ledger,
+        "archive": PUBNET_ARCHIVE,
+        "buckets": list.hashes,
+    });
+    std::fs::write(
+        artifacts.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).expect("static json"),
+    )
+    .map_err(|e| BackfillError::Incomplete(format!("write manifest: {e}")))?;
+
+    let (mut state, source_report) =
+        network_state::open_snapshot(&list, if execute { " [EXECUTE]" } else { " [dry-run]" })
+            .await?;
+
     let mut report = Report::new(list.checkpoint_ledger);
     let corr = build_corrections(
         sink,
@@ -682,56 +417,43 @@ pub async fn seed_command(
     )
     .await?;
 
-    // The ghost list is the anomaly REPORT the policy demands — corrected in
-    // the same run, but never silently.
-    std::fs::write(artifacts.join("ghosts.tsv"), corr.ghosts.join("\n") + "\n")
-        .map_err(|e| BackfillError::Incomplete(format!("write ghosts: {e}")))?;
+    // The anomaly REPORTS the policy demands — corrected (or, for pools,
+    // only listed) in the same run, but never silently.
+    for (file, lines) in [
+        ("ghosts.tsv", &corr.balances.ghosts),
+        ("claimable_ghosts.tsv", &corr.claimable.ghosts),
+        ("pools_gone.tsv", &corr.pools.gone_with_reserves),
+    ] {
+        std::fs::write(artifacts.join(file), lines.join("\n") + "\n")
+            .map_err(|e| BackfillError::Incomplete(format!("write {file}: {e}")))?;
+    }
 
-    // The summary IS the four-way comparison — the same twelve buckets per
-    // population the report renders, from one `Report`, plus
-    // what this run would insert. An operator signs off on one document.
+    // The summary IS the comparison — the verdict buckets per population the
+    // report renders, from one `Report`, plus every row this run would insert,
+    // table by table in one block. An operator signs off on one document.
     report.write_dumps(&artifacts.join("dumps"))?;
-    write_correction_dumps(&artifacts.join("dumps"), &corr, &state)?;
-    // Excluded on purpose — reported so the pass never reads as exhaustive
-    // when it is not. Contract-held classic balances live in the SAC's
-    // `ContractData`, not a trustline, so the snapshot's trustline set would
-    // call every one of them a phantom; type-3 is the same reason, different
-    // entry type; pool shares are the same ledger entry type but live in
-    // `lp_positions` on our side (ADR 0056 merges them).
-    // `uniqExact`, not `count()`: production tables carry unmerged
-    // ReplacingMergeTree parts, so a raw row count is 2-3x the number of
-    // holdings (measured 182,370 rows over 70,347 keys). The compared
-    // population is counted per KEY — see `slice_sql`'s GROUP BY — and a
-    // report that mixes the two bases invites exactly the comparison its
-    // reader will make.
-    let excluded_contract: u64 = sink
-        .client()
-        .query(
-            "SELECT uniqExact((holder_id, asset_id)) FROM balances \
-             WHERE asset_id IN (SELECT id FROM assets WHERE asset_type IN (0, 1)) \
-               AND holder_id IN (SELECT id FROM soroban_contracts)",
-        )
-        .fetch_one()
-        .await?;
-    let excluded_type3: u64 = sink
-        .client()
-        .query(
-            "SELECT uniqExact((holder_id, asset_id)) FROM balances \
-             WHERE asset_id IN (SELECT id FROM assets WHERE asset_type = 3)",
-        )
-        .fetch_one()
-        .await?;
+    dumps::write_correction_dumps(
+        &artifacts.join("dumps"),
+        &corr.asset_stubs,
+        &corr.account_stubs,
+        &corr.entry_states,
+        &state,
+    )?;
+    let (excluded_contract, excluded_type3) = balances::excluded_counts(sink).await?;
 
     let summary = format!(
-        "checkpoint {}\n{}{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
+        "checkpoint {}\n{}{}{}{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
          contract-held classic rows  {:>12}\n    \
          type-3 Soroban rows         {:>12}\n    \
          snapshot pool shares        {:>12}  (our side: lp_positions)\n\
          \n  CORRECTIONS{}\n    \
-         balances rows         {:>12}\n    \
-         account_entry_state   {:>12}\n    \
-         asset stubs           {:>12}\n    \
-         account stubs         {:>12}\n\
+         balances                     {:>12}\n    \
+         claimable_balance_holdings   {:>12}\n    \
+         liquidity_pools              {:>12}\n    \
+         liquidity_pool_snapshots     {:>12}\n    \
+         account_entry_state          {:>12}\n    \
+         assets (stubs)               {:>12}\n    \
+         accounts (stubs)             {:>12}\n\
          \n  UNRESOLVED REFERENCES (must be 0 for the first two)\n    \
          assets a seeded balance points at  {:>12}\n    \
          holders a seeded balance is for    {:>12}\n    \
@@ -744,6 +466,8 @@ pub async fn seed_command(
         report
             .native
             .render("NATIVE XLM holdings (AccountEntry, not a trustline)", true),
+        claimable::render_summary(&report, &coverage),
+        pools::render_summary(&corr.pools),
         report.render_missing_histogram(),
         excluded_contract,
         excluded_type3,
@@ -753,7 +477,10 @@ pub async fn seed_command(
         } else {
             " — dry-run, nothing inserted"
         },
-        corr.balances.len(),
+        corr.balances.rows.len(),
+        corr.claimable.rows.len(),
+        corr.pools.pool_rows.len(),
+        corr.pools.snapshot_rows.len(),
         corr.entry_states.len(),
         corr.asset_stubs.len(),
         corr.account_stubs.len(),
@@ -780,7 +507,10 @@ pub async fn seed_command(
         println!("  inserting…");
         insert_chunked(sink, "assets", &corr.asset_stubs).await?;
         insert_chunked(sink, "accounts", &corr.account_stubs).await?;
-        insert_chunked(sink, "balances", &corr.balances).await?;
+        insert_chunked(sink, "liquidity_pools", &corr.pools.pool_rows).await?;
+        insert_chunked(sink, "liquidity_pool_snapshots", &corr.pools.snapshot_rows).await?;
+        insert_chunked(sink, "balances", &corr.balances.rows).await?;
+        insert_chunked(sink, claimable::TABLE, &corr.claimable.rows).await?;
         insert_chunked(sink, "account_entry_state", &corr.entry_states).await?;
         println!("  inserts done.");
     } else {

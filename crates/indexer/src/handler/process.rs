@@ -53,6 +53,10 @@ pub struct ParseOutput {
     /// ledger entries, persisted into the unified `balances` table (task 0331; the
     /// field name is leftover Option-A naming — no `soroban_token_balances` table exists).
     pub soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance>,
+    /// Claimable balances as holdings, from `ClaimableBalanceEntry` changes, for
+    /// `claimable_balance_holdings` (task 0210). Folded per transaction here,
+    /// across the ledger at staging.
+    pub claimable_balances: Vec<xdr_parser::claimable_balance::ExtractedClaimableBalance>,
     /// Every pool family's state writes behind one seam (task 0518,
     /// decision 4a) — staging partitions by variant.
     pub pool_family_writes: Vec<xdr_parser::pool_family::PoolFamilyWrite>,
@@ -300,6 +304,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         xdr_parser::executable_ref::ExtractedExecutableRefTarget,
     > = Vec::new();
     let mut all_soroban_token_balances: Vec<xdr_parser::ExtractedSorobanBalance> = Vec::new();
+    let mut all_claimable_balances: Vec<xdr_parser::claimable_balance::ExtractedClaimableBalance> =
+        Vec::new();
     let mut all_pool_family_writes: Vec<xdr_parser::pool_family::PoolFamilyWrite> = Vec::new();
     for (_tx_hash, tx_source, changes) in &all_ledger_entry_changes {
         let deployments = xdr_parser::extract_contract_deployments(
@@ -335,6 +341,9 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
             xdr_parser::executable_ref::extract_executable_ref_targets(changes),
         );
         all_soroban_token_balances.extend(xdr_parser::extract_soroban_token_balances(changes));
+        all_claimable_balances.extend(xdr_parser::claimable_balance::extract_claimable_balances(
+            changes,
+        ));
     }
 
     all_assets.push(xdr_parser::native_asset_singleton());
@@ -399,6 +408,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         contract_metadata_writes: all_contract_metadata_writes,
         executable_ref_targets: all_executable_ref_targets,
         soroban_token_balances: all_soroban_token_balances,
+        claimable_balances: all_claimable_balances,
         // Plane writes and instance images pass through unfolded: staging
         // owns the one fold per destination table
         // (`fold_pool_state_changes` / `fold_pool_instance_state`).
