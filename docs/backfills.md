@@ -911,11 +911,14 @@ contract_id IN (the pool surrogates)`. Derive that IN-list from the
    with no event oracle (the pair family has `sync`, the router family the
    deposit⇄mint detector), so a pool-WASM upgrade re-purposing the u32
    keys would corrupt reserves silently. Two cheap defenses, per release
-   or on a cadence: (a) RPC-read every pool `query_pools()` still lists
-   (13 today) and compare reserves against our latest `pool_state_changes`
-   row; (b) watch `executable_update` events (already ingested, task 0320)
-   on the registered pools — an upgrade of a registered pool warrants
-   re-running (a) immediately.
+   or on a cadence: (a) `cargo test -p backfill-runner --test
+   pool_reserves_reconciliation` (task 0374) reads every Soroban pool's own
+   reserve entries with `getLedgerEntries` and compares them with our newest
+   `pool_state_changes` row — all three families; (b) watch
+   `executable_update` events (already ingested, task 0320) on the registered
+   pools — an upgrade of a registered pool warrants re-running (a)
+   immediately. Pool `CAZ6W4WH…` is the measured case: its code was replaced
+   twice and its reserve keys no longer mean reserves.
 
 ## Router reserves from pool storage (task 0374, decision C′) — list pass
 
@@ -946,9 +949,10 @@ range re-parse would fetch ~800 GB to decode ~1 GB.
 4. Insert (operator; the SQL is in that test's doc comment), then
    `OPTIMIZE TABLE pool_state_changes FINAL` — a re-derived row ties on its key
    with the old one, and until the merge a read may still pick the old image.
-5. **Check:** re-run the three-source comparison (pool storage via
-   `getLedgerEntries`, plane row, our newest row) over all router pools —
-   expected: our table equals pool storage for every pool.
+5. **Check:** `cargo test -p backfill-runner
+   --test pool_reserves_reconciliation -- --nocapture`. Before this backfill
+   it lists the 6 non-empty pools (one leg × 10 or × 10^11) and `CAZ6W4WH…`
+   (measured 2026-09-15: 762 of 769 equal); after it, only `CAZ6W4WH…`.
 
 ## Event-name backfill (task 0517) — in-DB, per partition
 

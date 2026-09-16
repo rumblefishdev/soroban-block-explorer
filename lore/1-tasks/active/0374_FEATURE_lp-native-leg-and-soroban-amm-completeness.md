@@ -1823,3 +1823,86 @@ it holds raw units, so `reserves` keeps one meaning; it matches our table in
 family — concentrated pools already use storage because they never write the
 plane. Current code uses three layouts: `ReserveA`/`ReserveB` (383 pools),
 `Reserves` (85), `Reserve0`/`Reserve1` (46).
+
+### Wide differential of decision C′ + the two sibling families (2026-09-15)
+
+**Differential, 1,565 ledgers.** The previous 874 plus one ledger per router
+pool (all 514) and one per (code version × set of events the pool emitted in
+one transaction) — 457 combinations across the 50 versions that emitted
+anything in range. Function names are not stored, so the event set stands in
+for the called function; calls that emit nothing are not targeted. Base
+`c2fc620c` and the PR, same test harness, same archive files:
+
+| Outcome                              | Rows  | Check against production                                    |
+| ------------------------------------ | ----- | ----------------------------------------------------------- |
+| identical                            | 3,116 | —                                                           |
+| value changed                        | 754   | all in the 8 `PrecisionMul` ≠ 1 pools, each = base ÷ multiplier |
+| dropped                              | 160   | all equal the pool's previous production row (true repeats): 156 concentrated, 2 stable, 2 constant |
+| added                                | 0     | —                                                           |
+
+**Soroswap-shaped (235) and Phoenix-shaped (20) pools** already read raw
+reserves from their own storage (task 0518). RPC on 2026-09-15: 235/235 and
+19/20 equal our newest row. Repeat rows in production are 0.03% and 0.006%
+(router: 0.4%), so the unchanged-reserves rule adds nothing there.
+
+The twentieth, Phoenix pool `CAZ6W4WH…`, is the silent-freeze failure mode in
+the wild: pool code until 54,514,504; replaced by a staking contract at
+54,515,539 and by a sweep tool at 63,767,534, which wrote `u32(0)` (now an
+address) and `u32(1)` = 0 but not `u32(2)`. The parser drops a half reserve
+pair without `CONFIG` silently (`pool_config_factory.rs` `_ => continue`), so
+our row still shows the pool-era reserves. Phoenix pools: 63 upgrades on 14 of
+20 pools, 7 current code versions; Soroswap: one version, no upgrades.
+
+### Decision (karolkow, 2026-09-15) — an unread reserve write is logged, not alarmed
+
+A storage layout we do not read makes a pool's snapshots stop without a
+trace. Considered: a CloudWatch alarm, a hard error, and a plain `error!`.
+Chosen: the plain `error!`, like every other decoder refusal. No other
+decoding gap pages anyone — alarms cover whether the system is alive — and an
+alarm keyed on these conditions would still miss the silent shapes (a
+concentrated pool has no plane to compare against; a renamed identity key
+makes the write look foreign). A hard error would stop ingestion of every
+ledger for one pool's layout change. Logged now:
+
+- router: the instance was written with no known reserve key while the plane
+  row of the same (pool, ledger) shows non-zero reserves;
+- pair-factory: an instance carrying the identity triple but half a reserve
+  pair (a snapshot carries every key, so this is a layout change).
+
+The config-factory half pair stays loud only with `CONFIG` in the same
+transaction: without the registry the parser cannot tell a pool's lone
+`u32(1)` write from any other contract's u32-keyed entry. Pool `CAZ6W4WH…`
+(above) is exactly that case, so a data-level check against the chain is the
+only thing that sees it.
+
+**Measured on the 1,565-ledger corpus after the change:** rows identical to the
+previous PR run; the two new `error!` lines fired **0** times. The existing
+plane cross-check (`plane row disagrees …`) fired **17** times, all false:
+
+- 13 on mixed-decimal stable pools at early ledgers (58.2M–63.4M) whose
+  instance write carried no `PrecisionMul` key while the plane already held
+  the multiplied figure — the check reads a missing key as × 1. Likely an older
+  code version derived the multiplier without storing it (not verified).
+- 4 on concentrated pools, which DO write plane rows (36 values against the
+  instance's 2) — refuting "concentrated pools do not write the plane" above.
+
+### Decisions (karolkow, 2026-09-15) — drop the plane cross-check; reconcile against the chain on demand
+
+- **Plane × `PrecisionMul` cross-check removed** (the 17 false warnings above).
+  The plane is kept only for the unread-layout `error!`.
+- **`pool_reserves_reconciliation`** (backfill-runner integration test, same
+  shape as `account_reconciliation`): reads every registered Soroban pool's
+  own reserve entries with `getLedgerEntries`, decodes them from XDR itself,
+  bounds ClickHouse at the ledger the RPC answered at, and fails on any pool
+  whose newest `pool_state_changes` row differs. Skips without
+  `POOL_CH_CERT`/`POOL_CH_KEY`; run on demand — after a pool backfill and per
+  release. First run, production, ledger 64,442,966, 1.5 s: **762 of 769
+  equal**; the 7 failures are the 6 non-empty mixed-decimal stable pools
+  (production still holds the plane figure until the C′ backfill) and
+  `CAZ6W4WH…`.
+
+**`CAZ6W4WH…` leaves this task.** The pool whose code was replaced is carried
+by task 0325 ("a code-derived row must follow the contract's CURRENT code"),
+where the decision is now to write the verdict at the code change instead of
+deriving it per read. Until that lands, `pool_reserves_reconciliation` lists
+the pool on every run and its stale reserves stay visible.

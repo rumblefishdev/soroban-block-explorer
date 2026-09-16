@@ -412,6 +412,10 @@ fn redecode_pool_state_changes_from_list() {
         eprintln!("SKIP: set REDECODE_LEDGER_LIST");
         return;
     };
+    // A backfill pass must show the writes it refused, same as the indexer.
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .try_init();
     let seqs: Vec<u32> = fs::read_to_string(&list)
         .expect("read REDECODE_LEDGER_LIST")
         .lines()
