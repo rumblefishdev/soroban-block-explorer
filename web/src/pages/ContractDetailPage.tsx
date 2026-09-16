@@ -1,4 +1,4 @@
-import { Box, Card, Stack, Tooltip, Typography } from '@mui/material';
+import { Box, Card, Stack, Typography } from '@mui/material';
 import {
   Chip,
   DetailErrorState,
@@ -135,16 +135,11 @@ export default function ContractDetailPage() {
               upgrade path present/absent"), not the broader "immutable" — a
               static scan can't see proxy/delegate or renounced-admin patterns. */}
           {/* Task 0548 — CAP-85: the code is set by another contract, so the
-              self-upgrade scan does not apply (upgradeable is null here). */}
+              self-upgrade scan does not apply (upgradeable is null here). The
+              consequence is spelled out in the summary's Executable row, as
+              text: a hover tooltip here was unreachable by keyboard. */}
           {contract.data?.executable_owner && (
-            <Tooltip
-              title="Code is set by another contract. Changing it there changes every contract that uses the same tag."
-              describeChild
-            >
-              <span>
-                <Chip size="md" color="neutral" label="Externally managed" />
-              </span>
-            </Tooltip>
+            <Chip size="md" color="neutral" label="Externally managed" />
           )}
           {contract.data?.upgradeable != null && (
             <Chip

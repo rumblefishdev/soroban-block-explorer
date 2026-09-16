@@ -157,6 +157,10 @@ describe('ContractDetailPage externally managed executable (task 0548)', () => {
     renderPage();
 
     expect(screen.getByText('Externally managed')).toBeInTheDocument();
+    // The consequence is visible text, not a hover-only tooltip.
+    expect(
+      screen.getByText(/changes every contract that uses the same tag/)
+    ).toBeVisible();
   });
 
   it('shows no such chip for a contract that carries its own code', () => {
