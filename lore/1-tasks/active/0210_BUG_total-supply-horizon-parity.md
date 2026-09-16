@@ -1050,3 +1050,19 @@ SELECT
 A sponsorship change rewrites a balance without an edge; it keeps asset and
 amount, so none of the counts moves. A non-zero count is a writer defect:
 stop, do not seed.
+
+### Seed structure after review (2026-09-17)
+
+- **Stubs kept.** A stub is the `assets` / `accounts` row live ingest would
+  write for the same identity; without it the seeded supply sits in
+  `balance_aggregates` under an id no reader resolves (production already has
+  two pool legs like that). Stubs are built with `AssetRow::staged`, and a stub
+  whose id disagrees with the reference counts as dangling, which `--execute`
+  refuses.
+- **Preconditions before the download.** Writer coverage and the dimension id
+  floors run after one manifest read, not after the ~5-minute bucket decode.
+- **One module per compared table:** `snapshot/balances.rs` (moved out of
+  `seed.rs`), `claimable.rs`, `pools.rs`, sharing `snapshot/slices.rs`.
+  `seed.rs` (519 lines) keeps orchestration: preconditions, stubs, entry state,
+  artifacts, inserts. `summary.txt` lists every table's corrections in one
+  block.
