@@ -25,6 +25,13 @@ history:
       (production-2026.09.16-1). Each finding was verified against the code
       before it was accepted; the documentation-only findings landed directly
       on develop, these five change behaviour and go through a PR.
+  - date: '2026-09-16'
+    status: active
+    who: karolkow
+    note: >
+      Steps 1 and 2 (the `+N` popover and the visible external-management
+      sentence) declined in review after a local walkthrough and reverted
+      (7cfdbf76, ecfe59ea); both UI elements stay as they were. Steps 3–5 kept.
 ---
 
 # BUG: release review follow-ups
@@ -39,8 +46,9 @@ leaves an out-of-date `node_modules` in place.
 
 ## Status: Active
 
-**Current state:** all five steps implemented and tested on branch
-`fix/0559_release-review-follow-ups`; PR open, not deployed.
+**Current state:** steps 3–5 implemented and tested on branch
+`fix/0559_release-review-follow-ups`; steps 1 and 2 declined in review and
+reverted. PR open, not deployed.
 
 ## Context
 
@@ -92,11 +100,10 @@ first; install when out of date.
 
 ## Acceptance Criteria
 
-- [x] `+N` opens a keyboard-reachable list of every change with the same
-      rendering; test covers opening by keyboard (Tab to `+2` on a row whose
-      first entry is unlinkable → Enter → Tab lands on the first piece link →
-      Escape returns focus)
-- [x] The external-management warning is visible without hover
+- [ ] ~~`+N` opens a keyboard-reachable list of every change~~ — declined in
+      review 2026-09-16, reverted; the hover tooltip stays
+- [ ] ~~The external-management warning is visible without hover~~ — declined
+      in review 2026-09-16, reverted; the chip tooltip stays
 - [x] The assets-list cursor encodes the rank the key query sorted by; test
       covers a hydration value that differs from the key value
 - [x] A known reserve key with an unreadable value logs an error naming the
@@ -110,6 +117,7 @@ first; install when out of date.
 
 ## Implementation Notes
 
+- **Steps 1 and 2 — reverted** (7cfdbf76, ecfe59ea); recorded as built.
 - **Step 1** — `web/src/pages/accounts/BalanceChangeCell.tsx`: `+N` is a
   `Link component="button"` (`aria-label="+N more balance changes"`,
   `aria-expanded`, `aria-controls`) opening a MUI `Popover`. The `inverted`
