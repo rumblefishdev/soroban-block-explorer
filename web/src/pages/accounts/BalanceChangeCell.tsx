@@ -1,22 +1,28 @@
-import { Box, Link, Popover, Stack, Typography } from '@mui/material';
+import { Box, Link, Stack, Tooltip, Typography } from '@mui/material';
 import type { AccountBalanceChange } from '@rumblefish/api-types';
 import {
   contentLinkSx,
   formatAmount,
   scaleByDecimals,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { type ReactNode, useId, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
 import { isNativeAssetString, NATIVE_ASSET_CODE } from '../assets/assetType.js';
 
 /** The dimmed weight this cell uses for everything that is not a movement. */
-function Muted({ children }: { children: ReactNode }) {
+function Muted({
+  children,
+  variant = 'bodySmRegular',
+}: {
+  children: ReactNode;
+  variant?: 'bodySmRegular' | 'bodyXsRegular';
+}) {
   return (
     <Typography
       component="span"
-      variant="bodySmRegular"
+      variant={variant}
       sx={(theme) => ({ color: theme.palette.text.tertiary })}
     >
       {children}
@@ -52,9 +58,6 @@ export function BalanceChangeCell({
 }: {
   changes: AccountBalanceChange[];
 }) {
-  const [listAnchor, setListAnchor] = useState<HTMLElement | null>(null);
-  const listId = useId();
-
   // A MEASURED zero: the transaction is indexed and NO TOKEN MOVED for this
   // account — an offer placed, a round-trip that netted out, a payment to
   // self. It does NOT claim the XLM balance held: the fee is charged whatever
@@ -68,63 +71,42 @@ export function BalanceChangeCell({
 
   const [first] = changes;
   const others = changes.length - 1;
-
-  // The column shows the FIRST movement and collapses the rest into `+N`, a
-  // button that opens every movement in a popover. The order is the chain's
-  // own — the API returns each transaction's assets in the order their
-  // movements occurred — and is rendered as given: assets have different
-  // decimals and different prices, and no price exists anywhere here, so any
-  // ranking by amount would compare quantities that are not comparable.
-  //
-  // A button and a popover, not a hover tooltip: a tooltip's links live in a
-  // portal Tab never reaches, and a row whose first entry has no link had
-  // nothing focusable to open it at all. The popover moves focus in and gives
-  // it back on close.
-  return (
+  const cell = (
     <Box sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 0.5 }}>
       <ChangeAmount change={first} />
       <AssetLink change={first} />
-      {others > 0 && (
-        <>
-          <Link
-            component="button"
-            type="button"
-            variant="bodyXsRegular"
-            aria-label={`+${others} more balance changes`}
-            aria-haspopup="true"
-            aria-expanded={listAnchor !== null}
-            aria-controls={listAnchor ? listId : undefined}
-            onClick={(event) => setListAnchor(event.currentTarget)}
-            sx={(theme) => ({
-              color: theme.palette.text.tertiary,
-              verticalAlign: 'baseline',
-            })}
-          >
-            +{others}
-          </Link>
-          <Popover
-            id={listId}
-            open={listAnchor !== null}
-            anchorEl={listAnchor}
-            onClose={() => setListAnchor(null)}
-            anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-          >
-            <Stack spacing={0.25} sx={{ px: 1.5, py: 1 }}>
-              {changes.map((change, i) => (
-                // Index, not the asset: an entry with no link identity carries
-                // an EMPTY asset, and two such tokens in one transaction would
-                // collide on any content-derived key. The list is a fixed,
-                // non-reorderable render of one API response, so the index is
-                // stable for its lifetime.
-                <span key={i}>
-                  <ChangeAmount change={change} /> <AssetLink change={change} />
-                </span>
-              ))}
-            </Stack>
-          </Popover>
-        </>
-      )}
+      {others > 0 && <Muted variant="bodyXsRegular">+{others}</Muted>}
     </Box>
+  );
+  if (others === 0) return cell;
+
+  // The column shows the FIRST movement and collapses the rest into `+N`,
+  // which expands on hover. The order is the chain's own — the API returns each
+  // transaction's assets in the order their movements occurred — and is
+  // rendered as given: assets have different decimals and different prices, and
+  // no price exists anywhere here, so any ranking by amount would compare
+  // quantities that are not comparable. Tooltip links inherit the inverted
+  // surface's text colour; the page accent goes unreadable there.
+  return (
+    <Tooltip
+      title={
+        <Stack spacing={0.25}>
+          {changes.map((change, i) => (
+            // Index, not the asset: an entry with no link identity carries an
+            // EMPTY asset, and two such tokens in one transaction would
+            // collide on any content-derived key. The list is a fixed,
+            // non-reorderable render of one API response, so the index is
+            // stable for its lifetime.
+            <span key={i}>
+              <ChangeAmount change={change} inverted />{' '}
+              <AssetLink change={change} inverted />
+            </span>
+          ))}
+        </Stack>
+      }
+    >
+      {cell}
+    </Tooltip>
   );
 }
 
@@ -139,7 +121,13 @@ export function BalanceChangeCell({
  * the single piece that moved it is shown too (`+1 NFT #44`); where it could
  * not, the count stands alone rather than guessing an id.
  */
-function ChangeAmount({ change }: { change: AccountBalanceChange }) {
+function ChangeAmount({
+  change,
+  inverted = false,
+}: {
+  change: AccountBalanceChange;
+  inverted?: boolean;
+}) {
   // `nft_delta`, not `amount == null` — the same signal `AssetLink` uses. The
   // two are equal by the read's own grouping, and reading one field in both
   // places means a slip in that invariant cannot show a number here while
@@ -159,7 +147,11 @@ function ChangeAmount({ change }: { change: AccountBalanceChange }) {
       component="span"
       variant="bodySmRegular"
       sx={(theme) => ({
-        color: negative ? theme.palette.text.error : theme.palette.text.success,
+        color: inverted
+          ? 'inherit'
+          : negative
+          ? theme.palette.text.error
+          : theme.palette.text.success,
       })}
     >
       {negative ? '−' : '+'}
@@ -195,14 +187,22 @@ function ChangeAmount({ change }: { change: AccountBalanceChange }) {
  * this cell owes (task 0535) is the underline, and `contentLinkSx` is where
  * that lives — so the affordance is shared even though the component is not.
  */
-function AssetLink({ change }: { change: AccountBalanceChange }) {
+function AssetLink({
+  change,
+  inverted = false,
+}: {
+  change: AccountBalanceChange;
+  inverted?: boolean;
+}) {
   const label = assetLabel(change);
   if (!change.asset) {
     return (
       <Typography
         component="span"
         variant="bodySmRegular"
-        sx={(theme) => ({ color: theme.palette.text.tertiary })}
+        sx={(theme) => ({
+          color: inverted ? 'inherit' : theme.palette.text.tertiary,
+        })}
       >
         {label}
       </Typography>
@@ -224,9 +224,10 @@ function AssetLink({ change }: { change: AccountBalanceChange }) {
       component={RouterLink}
       to={href}
       variant="bodySmRegular"
+      underline={inverted ? 'always' : undefined}
       sx={(theme) => ({
-        color: theme.palette.surface.primaryMainAlt,
-        ...contentLinkSx(theme),
+        color: inverted ? 'inherit' : theme.palette.surface.primaryMainAlt,
+        ...(inverted ? {} : contentLinkSx(theme)),
       })}
     >
       {label}
