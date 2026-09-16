@@ -1,6 +1,6 @@
 ---
 id: '0210'
-title: 'BUG: assets.total_supply Horizon parity — extend MVP sum to 4 sources'
+title: 'BUG: assets.total_supply sums all four sources — the XLM identity closes'
 type: BUG
 status: active
 related_adr: ['0043', '0055', '0056', '0057']
@@ -124,7 +124,7 @@ history:
       Measurements and the rejected options are in the 2026-09-15 section.
 ---
 
-# BUG: `assets.total_supply` Horizon parity — extend MVP sum to 4 sources
+# BUG: `assets.total_supply` sums all four sources — the XLM identity closes
 
 ## Summary
 
@@ -787,6 +787,15 @@ reserve_b)` per pool × 10^7, joined through `liquidity_pools.legs`, classic
   - How many pools this adds is unknown until the first dry-run.
 - **Separate PR:** pool shares into `balances` (ADR 0056, tasks 0499/0493).
 
+> **Superseded (2026-09-16) — the original plan, kept as history.** Context,
+> Scope and Implementation Plan below predate the dated sections above and must
+> not be followed: the PostgreSQL `recompute_asset_aggregates` path is dead
+> (supply is `balance_aggregates_mv` in ClickHouse), no `claimable_balances`
+> table ever existed (D2 built `claimable_balance_holdings`), and Horizon is not
+> the oracle (2026-08-18: the `total_coins` identity; raw XDR or the checkpoint
+> snapshot for non-native assets). The Acceptance Criteria and Future Work below
+> were rewritten on 2026-09-16 to match the current design.
+
 ## Context
 
 ### The four sources Horizon aggregates
@@ -893,29 +902,38 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
 
 ## Acceptance Criteria
 
+_Rewritten 2026-09-16: the earlier per-ledger PostgreSQL overhead target and
+the Horizon parity snapshot no longer describe how supply is computed or
+proven._
+
 - [~] Supply sums all 4 sources. **Trustlines + SAC/contract holdings DONE via 0331**
-  (`sum(balances)` over the unified model — the dead `recompute_asset_aggregates`
-  is superseded); **claimable + native-LP reserves remain**.
+  (`sum(balances)` over the unified model); **claimable balances**
+  (`claimable_balance_holdings` + its `balance_aggregates_mv` branch, work list
+  above) and **classic pool reserves** (the MV branch over the newest
+  `liquidity_pool_snapshots` row per pool, 2026-09-16 decisions) remain.
 - [x] SAC contract holdings path — DONE via **0331 + ADR 0051** (contract-held type-0/1
       re-key; state-based, no separate aggregation table needed).
-- [ ] Per-ledger overhead measured. Target: < +10% over post-0194 baseline.
-      0194 measured +4% baseline; new ceiling +14%.
-- [ ] External-source parity snapshot committed to `docs/audits/`. Sample
-      ≥ 20 assets, drift < 1% on ≥ 95% of them, every outlier explained
-      (issuer-held excluded? SAC entry not yet tracked?).
+- [ ] The XLM identity closes: on a sampled ledger, `total_coins` minus the
+      indexed XLM sum equals `fee_pool` (see "The reconciliation identity").
+- [ ] Non-native assets that hold value in claimable balances or classic pools
+      are cross-checked against raw XDR or the checkpoint snapshot (task 0502) — never Horizon.
+- [ ] `balance_aggregates_mv` refresh time measured with both new branches
+      (baseline 1.9 s; estimate: roughly doubles).
 - [ ] Docs updated: `docs/architecture/database-schema/database-schema-overview.md`
-      §4.10 Assets (total_supply now 4-source aggregate);
-      `docs/architecture/xdr-parsing/` if new SAC parsing lands;
-      `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md`
-      §5.2 step 14 if recompute shape changes substantially.
+      (the `total_supply` sources, `claimable_balance_holdings`);
+      `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` (the
+      claimable-balance writer and the snapshot seed);
+      `docs/architecture/xdr-parsing/` for the `ClaimableBalanceEntry` decode.
 - [ ] ADR 0043 cross-checked. Allocation (list-endpoint + on-chain → indexer)
-      unchanged — no amendment needed unless SAC path forces a new column.
+      unchanged — no amendment needed unless a source forces a new column.
 
 ## Future Work
 
-- **Continuous parity monitor** — periodic CI job that re-runs Phase 4 sample
-  against Horizon and alerts on drift > 5%. Defer; one-shot validation is
-  enough for v1.
+- **Continuous residual check** — the `total_coins` residual on a schedule,
+  alerting on unexplained movement rather than a threshold (see "The
+  continuous reconciliation check"). Replaces the earlier Horizon parity
+  monitor.
+- **Pool shares into `balances`** — separate PR (ADR 0056, tasks 0499 / 0493).
 - **`circulating_supply`** column — issuer-held balance excluded. Out of
   scope; would need product decision + ADR.
 
