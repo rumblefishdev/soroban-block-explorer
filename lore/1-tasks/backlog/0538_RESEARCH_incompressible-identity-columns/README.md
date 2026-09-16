@@ -4,7 +4,7 @@ title: 'RESEARCH: identity columns that do not compress — measure the real cos
 type: RESEARCH
 status: backlog
 related_adr: []
-related_tasks: ['0393', '0417']
+related_tasks: ['0393', '0417', '0541']
 tags:
   [
     'clickhouse',
@@ -31,6 +31,15 @@ history:
       0.135 B/row against 8.03 B/row for the surrogate. Filed as RESEARCH, not
       REFACTOR: the saving is real but every candidate touches a sort key, so
       the question to answer first is which subset is worth the rewrite.
+  - date: 2026-09-16
+    status: backlog
+    who: karolkow
+    note: >
+      Re-measured. `transaction_id` columns now 270.10 GiB = 26% of a 1.01 TiB
+      database; free space 368.72 GiB. First concrete table decided: task 0541
+      keys `soroban_events` by the canonical event location, which drops its
+      50.48 GiB `transaction_id` for a reason beyond storage — event order and
+      rpc-comparable ids.
 ---
 
 # RESEARCH: identity columns that do not compress
@@ -133,3 +142,35 @@ Two facts follow directly:
 - [ ] Log TTL quantified and handed over as a standalone config change
 - [ ] Recommendation written as an ADR if a schema-wide convention is adopted
       (identity columns use the natural key; surrogates only where measured)
+
+## Re-measured 2026-09-16 (production, `system.columns` / `system.parts`)
+
+Database 1.01 TiB compressed; free 368.72 GiB of 1.72 TiB (was 458.87 GiB on
+2026-09-03; `/backups` shares the volume).
+
+| Table                             | `transaction_id` | B/row | Table total | Share             |
+| --------------------------------- | ---------------- | ----- | ----------- | ----------------- |
+| `operation_asset_appearances`     | 87.68 GiB        | 8.03  | 100.29 GiB  | 87%               |
+| `transaction_participants`        | 81.46 GiB        | 8.03  | 111.06 GiB  | 73%               |
+| `soroban_events`                  | 50.48 GiB        | 5.12  | 235.95 GiB  | 21%               |
+| `operations_appearances`          | 33.00 GiB        | 5.09  | 101.86 GiB  | 32%               |
+| `soroban_invocations_appearances` | 8.30 GiB         | 8.03  | 14.47 GiB   | 57%               |
+| `operation_pools`                 | 4.76 GiB         | 8.03  | 6.93 GiB    | 69%               |
+| `lp_operation_amounts`            | 4.43 GiB         | 4.87  | 11.52 GiB   | 38%               |
+| **all**                           | **270.10 GiB**   |       |             | **26% of the DB** |
+
+Plus `transactions.id` 31.32 GiB (8.03 B/row) and `transactions.hash`
+125.26 GiB.
+
+What the natural location costs where it already exists (sorted after the
+ledger): `application_order` 0.23 B/row in `asset_transfers` and
+`soroban_event_ops`, 0.074 in `transactions`; `op_index` / `event_pos_in_op`
+0.12. Behind a leading `account_id` / `asset_id` it will compress worse
+(fact 1 above) — the per-table estimate still has to be measured on one
+rebuilt partition, not extrapolated.
+
+The location is also the canonical identity Stellar uses (task 0541: rpc's
+event id is `TOID(ledger, tx application order, op) + event in op`), so the
+natural key is not only cheaper but the one outside tools speak.
+
+**First table:** `soroban_events`, via task 0541 (decided 2026-09-16).

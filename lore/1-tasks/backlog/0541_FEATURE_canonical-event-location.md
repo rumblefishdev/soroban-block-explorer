@@ -1,10 +1,10 @@
 ---
 id: '0541'
-title: 'FEATURE: soroban_event_ops — operation attribution for events, as a narrow side table'
+title: 'FEATURE: locate every Soroban event by its canonical identity — soroban_events keyed by (ledger, tx position, operation, event in operation)'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0453', '0457', '0540', '0182']
+related_tasks: ['0453', '0457', '0540', '0182', '0538', '0374']
 tags:
   [
     'clickhouse',
@@ -37,6 +37,17 @@ history:
       targeted write all landed on 0540's branch. Left here: the backfill run
       itself (0540 rollout step 6), coverage proof, and retiring 0453's
       read-time decode.
+  - date: 2026-09-16
+    status: backlog
+    who: karolkow
+    note: >
+      Re-scoped. Stellar's event identity, read from stellar-rpc's source, is
+      total for every row `soroban_events` stores, so the schema's two reasons
+      for our own flat `event_index` do not hold. Decided (option A): the
+      canonical location becomes the sort key of `soroban_events`; the side
+      table is its source and is dropped afterwards. The "micro-backend
+      removed" criterion was wrong and is replaced. First table of the
+      natural-key programme in 0538.
 ---
 
 # soroban_event_ops
@@ -182,7 +193,93 @@ net_settled` plus three new tables. One schema change per window (0310).
 - [ ] Coverage proven against the source: for a sampled range, every per-op
       event in the archive meta has a row, and no row exists for a tx-level or
       diagnostic event
-- [ ] 0453's transaction-detail render reads the table instead of decoding XDR,
-      and the micro-backend is removed
+- [ ] ~~0453's transaction-detail render reads the table instead of decoding
+      XDR, and the micro-backend is removed~~ — withdrawn 2026-09-16: the
+      micro-backend also serves signatures, envelope/result/meta XDR, the
+      operation list and the invocation tree; `op_index` is one field of many
 - [ ] **Docs updated** — `docs/architecture/database-schema/**` and
       `xdr-parsing/**` per ADR 0032
+
+## Canonical event identity — measured and decided (2026-09-16)
+
+### What Stellar defines (stellar-rpc v23+, read from source)
+
+`getEvents` returns `id` = `%019d-%010d` of `TOID(ledger, tx, op)` and the event
+number (`go-stellar-sdk/protocols/rpc/cursor.go`; built in stellar-rpc
+`internal/db/event.go`, `InsertEvents`). The same string is the paging cursor
+and sorts chronologically inside a ledger.
+
+| Component | Meaning                                     | Base  |
+| --------- | ------------------------------------------- | ----- |
+| ledger    | ledger sequence                             | —     |
+| tx        | application order in the ledger             | **1** |
+| op        | index into `TransactionMetaV4.operations[]` | **0** |
+| event     | position **within the operation**           | **0** |
+
+Transaction-level (fee) events are NOT id-less — they get sentinels by stage:
+`BEFORE_ALL_TXS` → `(ledger, 0, 0, n)` counting across the ledger;
+`AFTER_TX` → `(ledger, tx, 4095, n)` counting per tx;
+`AFTER_ALL_TXS` → `(ledger, 1048575, 0, n)` counting across the ledger.
+Diagnostic events get no id and are absent from `getEvents` since v23.
+`transactionIndex` / `operationIndex` are returned per event since v23.0.0.
+Before rpc v23 the id was `(ledger, tx, 0, index over the whole tx)` and is not
+comparable with v23+ ids. SEP-35 / Horizon number operations from 1; rpc from 0.
+
+### Where the project stands
+
+|             | canonical location                                                          | ours                                                                           |
+| ----------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| tables      | `asset_transfers`, `soroban_event_ops`, `transactions`, `transaction_memos` | `soroban_events`, `soroban_invocations_appearances`, the four presence indexes |
+| transaction | `application_order` (1-based, = rpc tx)                                     | `transaction_id` = hash64 of the hash                                          |
+| event       | `op_index`, `event_pos_in_op` (0-based, = rpc)                              | `event_index`: flat per tx, fee events first                                   |
+
+Measured on production 2026-09-16: `transactions.application_order` runs 1..N;
+`soroban_event_ops.op_index` / `event_pos_in_op` start at 0 — identical to rpc.
+`soroban_event_ops`: 5.69 bn rows, 3.34 GiB, written live up to the ingest head,
+**read by nothing**.
+
+### Why the schema's defence of `event_index` does not hold
+
+`init.sql` gives two reasons. (1) "Deterministic on replay" — true, and equally
+true of the canonical identity, which is a function of the ledger meta alone
+(the schema says so itself for `asset_transfers`). (2) "Not expressible for
+fee and diagnostic events" — fee events have rpc ids (sentinels above, and the
+parser already knows each one's `stage`); diagnostic events are not stored:
+staging drops them (`stage.rs`, `is_diagnostic`). The comment is stale on both.
+
+### What it costs today
+
+- Contract events and contract invocations are ordered
+  `(ledger, transaction_id, event_index)` (`api/src/contracts/queries.rs`), so
+  events of different transactions in one ledger come out in hash order, not in
+  execution order; inside a transaction the fee refund (settled after every
+  transaction) is numbered before the operations.
+- The event number on the transaction page cannot be matched to `getEvents`
+  or any other tool.
+- `soroban_events` is 235.95 GiB / 10.59 bn rows; its `transaction_id` column is
+  **50.48 GiB (21%)**, `event_index` 4.69 GiB. Position columns sorted after the
+  ledger cost 0.12–0.23 B/row (`asset_transfers`, `soroban_event_ops`).
+- `application_order` names two things: the transaction's position in
+  `transactions` / `asset_transfers` / `soroban_event_ops`, the operation's
+  position in `operations_appearances` / `lp_operation_amounts`.
+
+### Decision (karolkow, 2026-09-16) — option A
+
+`soroban_events` is keyed by the canonical location:
+`(contract_id, ledger_sequence, application_order, op_index, event_pos)` with
+the rpc sentinels for fee events, and the API exposes the rpc-format id.
+
+1. New table with the new key; filled per partition from `soroban_events` +
+   `soroban_event_ops` + `transactions` (no S3); fee-event sentinels from the
+   stage the parser already extracts (not stored today — the fill needs it).
+2. Live writer switched in the same window; swap by `EXCHANGE TABLES`
+   (indexer stopped, per `docs/backfills.md`).
+3. Coverage gate per partition before the swap: row counts equal, every
+   per-op event has a location, every fee event has a sentinel.
+4. Readers: contract events and invocations in execution order; rpc ids on the
+   wire; `#op-N` anchors possible; 0457 gets its attribution.
+5. Drop `soroban_event_ops`; rewrite the stale `init.sql` comment; resolve the
+   `application_order` double meaning.
+
+Space: production free 368.72 GiB of 1.72 TiB (backups share the volume); the
+new table is smaller than the 236 GiB it replaces — confirm per partition.
