@@ -1,7 +1,7 @@
 ---
 id: '0538'
-title: 'RESEARCH: identity columns that do not compress — measure the real cost of the surrogate transaction id and the duplicated hash'
-type: RESEARCH
+title: 'EPIC: locate every transaction, operation and event by its canonical position — replace the surrogate transaction id project-wide'
+type: EPIC
 status: backlog
 related_adr: []
 related_tasks: ['0393', '0417', '0541']
@@ -10,10 +10,10 @@ tags:
     'clickhouse',
     'storage',
     'performance',
-    'research',
+    'epic',
     'phase-future',
-    'effort-medium',
-    'priority-medium',
+    'effort-large',
+    'priority-high',
   ]
 links:
   - crates/db-clickhouse/schema/init.sql
@@ -40,9 +40,87 @@ history:
       keys `soroban_events` by the canonical event location, which drops its
       50.48 GiB `transaction_id` for a reason beyond storage — event order and
       rpc-comparable ids.
+  - date: 2026-09-16
+    status: backlog
+    who: karolkow
+    note: >
+      Turned from research into the programme (decision 209 A): the complete
+      move of every table from the surrogate `transaction_id` to the canonical
+      location, with 0541 as its first table. Scope widened by a second defect
+      found while checking reads — lists order rows inside a ledger by the
+      surrogate, i.e. by hash, not by execution order.
 ---
 
-# RESEARCH: identity columns that do not compress
+# EPIC: canonical location for transactions, operations and events
+
+## Programme (decided karolkow, 2026-09-16)
+
+**Target:** one way to locate rows everywhere — the position Stellar itself
+uses: transaction = `(ledger_sequence, application_order)` (1-based, the order
+applied), operation = its index in the transaction (0-based), event = its
+position within the operation (0-based), with stellar-rpc's sentinels for fee
+events (task 0541 has the source-read definition). The surrogate
+`transaction_id` (hash64 of the hash) disappears from every table; lookups by
+hash keep using `transaction_hash_index`.
+
+**Two defects, one cause:**
+
+1. **Storage.** `transaction_id` columns are 270.10 GiB = 26% of the database,
+   plus `transactions.id` 31.32 GiB (measured 2026-09-16, table below).
+2. **Order.** Lists order rows inside one ledger by the surrogate — by hash,
+   not by execution. Measured on ledger 64 454 000 for contract `CAS3J7GY…`:
+   transactions at positions 195, 231, 9, 211, 221, 139 are listed in that
+   order. Found by code reading in 11 list queries across 6 API modules:
+   `transactions` (4 — contract- and operation-type-filtered lists),
+   `assets` (2), `contracts` (2 — invocations, events), `accounts` (1),
+   `liquidity_pools` (1), `nfts` (1). Every one pages on
+   `(ledger_sequence, transaction_id)`.
+
+**Steps, in order — each table its own deploy window:**
+
+1. **ADR** — the convention: canonical location as identity and sort key;
+   surrogates only where a measurement justifies one. Settle the name clash
+   (`application_order` is the transaction position in `transactions` /
+   `asset_transfers` / `soroban_event_ops`, the operation position in
+   `operations_appearances` / `lp_operation_amounts`).
+2. **Measure before migrating** (the research below): rebuild ONE partition of
+   one presence table with the new key and measure its real size (position
+   behind a leading `account_id` / `asset_id` compresses worse), and benchmark
+   the two-column join on the hot list endpoints against today's.
+3. **`soroban_events`** — task 0541 (decided): canonical key, rpc-format ids,
+   `soroban_event_ops` dropped.
+4. **Presence tables by saving**: `operation_asset_appearances` (87.68 GiB),
+   `transaction_participants` (81.46), `operations_appearances` (33.00),
+   `soroban_invocations_appearances` (8.30), `operation_pools` (4.76),
+   `lp_operation_amounts` (4.43). Each: new table, fill from the old one +
+   `transactions` (no S3), coverage gate, `EXCHANGE TABLES` with the indexer
+   stopped (`docs/backfills.md`), readers switched in the same window.
+5. **Readers**: every list pages on the canonical position — execution order
+   inside a ledger, cursor `(ledger_sequence, application_order[, op, event])`.
+6. **`transactions.id`** dropped once nothing joins on it.
+7. **Duplicate hash** (`transactions.hash` + `transaction_hash_index.hash`,
+   ~275 GiB) — decided from the research question below, not assumed.
+
+**Constraints:** free space 368.72 GiB of 1.72 TiB with backups on the same
+volume — tables are rebuilt one at a time, largest last or after a cleanup;
+never two copies of two tables at once. Every struct change ships with
+`DEFAULT` and the DDL-before-writer order (ingest froze twice in 0548).
+
+## Acceptance Criteria (programme)
+
+- [ ] ADR adopted; `application_order` means one thing
+- [ ] Partition-level measurement and join benchmark recorded before step 4
+- [ ] No table carries `transaction_id`; `transactions.id` dropped
+- [ ] Every list returns rows in execution order inside a ledger — verified on
+      ledger 64 454 000 for contract `CAS3J7GY…` and on one account, one asset
+- [ ] Event ids on the wire match stellar-rpc `getEvents` (sampled)
+- [ ] Database size re-measured after each table; saving reported per table
+- [ ] **Docs updated** — `docs/architecture/database-schema/**`, API data
+      contracts; **API types regenerated** where cursors change
+
+---
+
+# RESEARCH: identity columns that do not compress (original research, kept)
 
 ## Summary
 
