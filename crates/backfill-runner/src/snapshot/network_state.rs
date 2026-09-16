@@ -187,11 +187,9 @@ pub struct NetworkState {
     pub trustlines: std::collections::HashMap<HoldingKey, NetHolding>,
     /// Pool shares, kept separate — see [`NetFact::PoolShare`].
     pub pool_shares: std::collections::HashMap<(i64, [u8; 32]), NetHolding>,
-    /// Claimable balances by `B…` surrogate, for `claimable_balance_holdings`.
-    pub claimable_balances: std::collections::HashMap<i64, NetHolding>,
-    /// `B…` surrogate → asset surrogate, for every LIVE claimable balance. Kept
-    /// beside the holding rather than in it because a dead record has no asset.
-    pub claimable_assets: std::collections::HashMap<i64, i64>,
+    /// Claimable balances by `B…` surrogate, for `claimable_balance_holdings`,
+    /// with the asset surrogate — `None` for a dead record, which has no asset.
+    pub claimable_balances: std::collections::HashMap<i64, (NetHolding, Option<i64>)>,
     /// Per-account identity, signers and thresholds, for `account_entry_state`.
     pub account_details: std::collections::HashMap<i64, AccountDetail>,
     /// asset surrogate → `(code, issuer strkey)`, for `assets` dimension stubs.
@@ -216,10 +214,10 @@ pub struct NetworkState {
 /// The three maps have different key types, so this is generic — the same rule
 /// applied identically to accounts, trustlines and pool shares, which is the
 /// point: one place to read, one place to get it wrong.
-fn first_wins<K: std::hash::Hash + Eq>(
-    map: &mut std::collections::HashMap<K, NetHolding>,
+fn first_wins<K: std::hash::Hash + Eq, V>(
+    map: &mut std::collections::HashMap<K, V>,
     key: K,
-    value: NetHolding,
+    value: V,
     superseded: &mut u64,
 ) {
     use std::collections::hash_map::Entry;
@@ -274,20 +272,20 @@ impl NetworkState {
                 asset,
                 entry,
             } => {
-                // Same first-wins rule for the asset as for the holding, or an
-                // older record could re-key a live balance.
-                if !self.claimable_balances.contains_key(&holder_id)
-                    && let Some((asset_id, identity)) = asset
-                {
-                    self.claimable_assets.insert(holder_id, asset_id);
-                    if let Some(identity) = identity {
+                // Only the newest record registers its asset, like the detail
+                // of an account above.
+                let asset_id = asset.map(|(asset_id, identity)| {
+                    if !self.claimable_balances.contains_key(&holder_id)
+                        && let Some(identity) = identity
+                    {
                         self.asset_registry.entry(asset_id).or_insert(identity);
                     }
-                }
+                    asset_id
+                });
                 first_wins(
                     &mut self.claimable_balances,
                     holder_id,
-                    entry,
+                    (entry, asset_id),
                     &mut self.superseded,
                 );
             }
@@ -324,7 +322,10 @@ impl NetworkState {
         self.pool_shares.values().filter(|e| e.live).count()
     }
     pub fn live_claimable_balances(&self) -> usize {
-        self.claimable_balances.values().filter(|e| e.live).count()
+        self.claimable_balances
+            .values()
+            .filter(|(e, _)| e.live)
+            .count()
     }
 }
 

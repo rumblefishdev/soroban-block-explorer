@@ -688,6 +688,32 @@ verdicts. `Ghost` → closure is correct for this table and must never reach
 - `seed.rs` is now 814 lines (was 791), just over the size limit; no inline tests
   to extract. Candidate split: the dump writers (~90 lines).
 
+### Review of PR #460 (2026-09-16)
+
+Standards + spec review, pre-mortem, over-engineering pass.
+
+- **Fixed:** dump writers moved to `snapshot/dumps.rs` (`seed.rs` 727 lines);
+  inline tests extracted from the touched `stage.rs`, `indexer/handler/mod.rs`
+  and `persist.rs` into sibling files; one `seed::slice_sql` serves both
+  tables; the asset folded into the claimable holding map (no second map kept
+  in step by hand).
+- **Kept:** a failed writer-coverage check refuses the whole `--execute`,
+  balances included.
+- **The coverage check rests on how backfill ranges are chosen.** The first
+  tombstone says when the writer started, not that it never stopped, and a
+  backfill writes this table for whatever range it is given. Neither matters in
+  practice: a `--reindex` covers the whole Soroban era up to the tip, a gap-fill
+  ends where the live writer resumed, and a seed runs only after the backfill
+  has finished. A re-parse of a bounded OLD range would break it — tombstones
+  below the deploy, and balances claimed after the range end left live — so that
+  is the one shape to avoid. Recorded at `writer_coverage`.
+- **`balances` with a holder-kind column was a real alternative** (4 readers to
+  filter: `balance_aggregates_mv`, `snapshot/seed.rs`, `balance_seed.rs`,
+  `bootstrap.rs`; API reads are per `holder_id`, so they never see a `B…` row).
+  Kept the dedicated table: a forgotten filter there hides rows instead of
+  counting a claimable balance as a holder, and deleting closed rows later does
+  not touch the table the account API reads.
+
 ## Context
 
 ### The four sources Horizon aggregates

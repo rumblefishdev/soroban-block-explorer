@@ -70,10 +70,10 @@ fn snapshot_keys_a_balance_the_way_the_writer_and_asset_transfers_do() {
     state.absorb_record(&live(AVLX_BALANCE_HEX, avlx(), 91_000, 64_000_000));
 
     let asset_id = ids::credit_asset_id("AVLX", AVLX_ISSUER);
-    let e = state.claimable_balances[&AVLX_BALANCE_SURROGATE];
+    let (e, network_asset) = state.claimable_balances[&AVLX_BALANCE_SURROGATE];
     assert!(e.live);
     assert_eq!((e.balance, e.ledger), (91_000, 64_000_000));
-    assert_eq!(state.claimable_assets[&AVLX_BALANCE_SURROGATE], asset_id);
+    assert_eq!(network_asset, Some(asset_id));
     // Registered so the seed can stub an asset we have never seen.
     assert_eq!(
         state.asset_registry[&asset_id],
@@ -87,8 +87,9 @@ fn a_removal_seen_first_is_not_resurrected_by_an_older_live_record() {
     state.absorb_record(&dead(AVLX_BALANCE_HEX));
     state.absorb_record(&live(AVLX_BALANCE_HEX, avlx(), 91_000, 60_000_000));
 
-    assert!(!state.claimable_balances[&AVLX_BALANCE_SURROGATE].live);
-    assert!(!state.claimable_assets.contains_key(&AVLX_BALANCE_SURROGATE));
+    let (e, network_asset) = state.claimable_balances[&AVLX_BALANCE_SURROGATE];
+    assert!(!e.live);
+    assert_eq!(network_asset, None);
     assert_eq!(state.superseded, 1);
     assert_eq!(state.live_claimable_balances(), 0);
 }
@@ -108,10 +109,10 @@ fn claim_matches_only_the_same_asset() {
         )
         .is_none()
     );
-    assert!(!state.claimable_balances[&AVLX_BALANCE_SURROGATE].matched);
+    assert!(!state.claimable_balances[&AVLX_BALANCE_SURROGATE].0.matched);
 
     assert!(claim(&mut state, &our_row(AVLX_BALANCE_SURROGATE, asset_id)).is_some());
-    assert!(state.claimable_balances[&AVLX_BALANCE_SURROGATE].matched);
+    assert!(state.claimable_balances[&AVLX_BALANCE_SURROGATE].0.matched);
 }
 
 #[test]

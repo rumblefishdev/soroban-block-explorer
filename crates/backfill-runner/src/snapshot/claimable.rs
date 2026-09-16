@@ -27,7 +27,7 @@ use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::snapshot::network_state::{NetHolding, NetworkState};
 use crate::snapshot::report::Report;
-use crate::snapshot::seed::key_slices;
+use crate::snapshot::seed::{key_slices, slice_sql};
 use crate::snapshot::verdict::{self, OurRow, Verdict};
 
 pub(crate) const TABLE: &str = "claimable_balance_holdings";
@@ -50,6 +50,14 @@ pub(crate) struct ClaimableCorrections {
 ///
 /// Seed-written closures also carry `closed_at_ledger`, but only from a run
 /// that already passed this check, so they never move the minimum earlier.
+///
+/// The minimum says when the writer started, not that it never stopped, and a
+/// backfill writes this table for whatever range it is given. Both hold because
+/// of how the range is chosen: a `--reindex` covers the whole Soroban era up to
+/// the tip, a gap-fill ends where the live writer resumed, and a seed runs only
+/// after the backfill has finished. A re-parse of a bounded OLD range would
+/// break the check — it would leave tombstones below the deploy and balances
+/// claimed after its end live with no tombstone (`docs/backfills.md`).
 pub(crate) fn writer_coverage(first_tombstone: Option<i64>, checkpoint: u32) -> Result<(), String> {
     match first_tombstone {
         None => Err(format!(
@@ -81,30 +89,12 @@ pub(crate) async fn first_writer_tombstone(sink: &Sink) -> Result<Option<i64>, B
 /// Claim the network balance for one of our rows — the `verdict::claim` of
 /// this table.
 pub(crate) fn claim(state: &mut NetworkState, row: &OurRow) -> Option<NetHolding> {
-    let network_asset = state.claimable_assets.get(&row.holder_id).copied();
-    let entry = state.claimable_balances.get_mut(&row.holder_id)?;
-    if entry.live && network_asset != Some(row.asset_id) {
+    let (entry, network_asset) = state.claimable_balances.get_mut(&row.holder_id)?;
+    if entry.live && *network_asset != Some(row.asset_id) {
         return None;
     }
     entry.matched = true;
     Some(*entry)
-}
-
-/// Same deduplicating read as the balances seed, over this table.
-fn slice_sql(from: i128, to: i128) -> String {
-    format!(
-        "SELECT holder_id, asset_id, tupleElement(best, 1) AS amount, \
-                led AS last_updated_ledger, tupleElement(best, 2) AS closed_at_ledger \
-         FROM ( \
-             SELECT holder_id, \
-                    asset_id, \
-                    argMax((amount, closed_at_ledger), last_updated_ledger) AS best, \
-                    max(last_updated_ledger) AS led \
-             FROM {TABLE} \
-             WHERE holder_id BETWEEN {from} AND {to} \
-             GROUP BY holder_id, asset_id \
-         )"
-    )
 }
 
 /// Compare our table with the snapshot and build its corrections. Credit
@@ -128,7 +118,7 @@ pub(crate) async fn build_corrections(
     for (from, to) in key_slices() {
         let mut cursor = sink
             .client()
-            .query(&slice_sql(from, to))
+            .query(&slice_sql(TABLE, "", from, to))
             .fetch::<OurRow>()?;
         while let Some(row) = cursor.next().await? {
             read += 1;
@@ -154,11 +144,10 @@ pub(crate) async fn build_corrections(
     }
     println!("  folded {read} of our claimable balance rows");
 
-    for (holder_id, e) in &state.claimable_balances {
-        if !e.live || e.matched {
+    for (holder_id, (e, asset_id)) in &state.claimable_balances {
+        let (true, false, Some(asset_id)) = (e.live, e.matched, *asset_id) else {
             continue;
-        }
-        let asset_id = state.claimable_assets[holder_id];
+        };
         report.claimable.missing += 1;
         out.rows.push(BalanceRow {
             holder_id: *holder_id,
