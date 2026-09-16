@@ -219,6 +219,12 @@ them**. Left alone, the restored DB simply stays short.
    so it fills exactly the missing range. This is the correct tool after a
    restore.
 
+   ⚠️ It does **not** apply contract upgrades: a contract whose code changed
+   inside the gap (Wasm upgrade or CAP-85 reference) keeps its pre-gap
+   `wasm_hash` / reference in `soroban_contracts`. List the gap's
+   `executable_update` events before trusting those rows (task 0548, "The sink
+   gap, measured").
+
 3. **If the data is bad _in place_** rather than missing (the range is still in
    `ledgers`), `run` will **no-op silently**. You need `--reindex` to bypass the
    resume-skip — see [`docs/backfills.md`](backfills.md).

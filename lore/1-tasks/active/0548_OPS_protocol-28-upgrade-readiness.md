@@ -168,7 +168,7 @@ applies ~16 GB of BucketList state before it resumes exporting.
 3. `cargo build --workspace --all-targets` + `cargo test -p xdr-parser` to catch
    any field-level struct change beyond the new arms.
 4. Regenerate api-types — `Cargo.{toml,lock}` change trips the
-   `API types freshness` CI gate: `npx nx run @rumblefish/api-types:generate`.
+   `API types freshness` CI gate: `pnpm nx run @rumblefish/api-types:generate`.
 
 ### Step 3 — verify decode before the vote
 
@@ -757,6 +757,18 @@ wasm_uploaded_at_ledger = 0`) must run after the new indexer is live — the
   JSON; `backfill-runner`'s sink applies no executable updates at all (empty
   prior-row map, pre-existing); classification of fleet members by the code
   they run.
+- The sink gap, measured (2026-09-16 release review): `stage.rs` skips an
+  `executable_update` whose prior row is not in the map, and the live path is
+  the only one that fills it, so a `backfill-runner run` over a post-restore
+  gap (`docs/backups.md`) keeps every contract upgraded inside that gap on its
+  old hash or reference. `--reindex` over live-written ranges is harmless — the
+  re-emitted deploy row loses to the newer upgrade row under
+  `ReplacingMergeTree(wasm_uploaded_at_ledger)`. A per-ledger prefetch alone is
+  not enough: inserts stay open until the partition commits, so a deploy staged
+  earlier in the same partition is invisible to ClickHouse. The fix needs a
+  partition-local map of staged contract rows merged with a fail-closed
+  `fetch_prior_contract_rows` read, and parallel ranges must not split a deploy
+  from its upgrade.
 
 ### Deploy 2026-09-14 — straight from `develop`, ahead of the vote
 
@@ -837,9 +849,9 @@ messages at 12:13.
       the constructed-arm round-trips are what fail under 27
 - [ ] Post-vote: indexer decodes mainnet proto-28 ledgers, DLQ stays empty,
       ingestion-lag alarm quiet
-- [ ] **Decision needed** — what `wasm_hash` and the upgradeable chip should say
-      for an external-ref contract (gaps 1 and 2 above). Not a Sep-16 blocker;
-      bites the first time a mainnet contract uses CAP-85
+- [x] **Decided 2026-09-10** — what `wasm_hash` and the upgradeable chip say for
+      an external-ref contract (gaps 1 and 2 above): both closed by option C,
+      see "The model that closed them" and "Gap 2 is closed"
 - [x] Production schema for this branch in place — both `soroban_contracts`
       columns with `DEFAULT NULL`, `contract_executable_refs` created
       (2026-09-11; see the incident above)
@@ -861,13 +873,10 @@ messages at 12:13.
 
 Not auto-created as backlog tasks — pending confirmation:
 
-- **CAP-85 semantics vs `wasm_hash` and the upgradeable badge.** External-ref
-  executables mean a contract's code identity lives in another contract. That
-  undercuts the stale-`wasm_hash` fix (0320/0326) and the upgradeable badge
-  (0327), whose premise — "does this contract import the upgrade host function" —
-  is wrong for a fleet member whose mutability sits with the owner. Also gives
-  `contract_deployments` a third executable kind with no direct hash. Not a
-  Sep-16 blocker: it only bites once mainnet contracts actually use external refs.
+- **CAP-85 in `contract_deployments`.** The `wasm_hash` and upgradeable-badge
+  questions are decided (option C, 2026-09-10). Still open: an external-ref
+  deployment is a third executable kind with no direct hash in
+  `contract_deployments`. It only bites once mainnet contracts use external refs.
 - **Sibling `prices` repo.** `prices-production-ledger-processor` builds from a
   separate repo and needs the same stellar-xdr bump. 0368 left the 26→27 bump
   there open as an external follow-up — confirm whether that ever landed before

@@ -2,7 +2,7 @@
 id: '0534'
 title: 'BUG: the canonical CODE:ISSUER classifies as nothing, so the most precise search returns a blank page'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0485', '0331', '0470']
 tags: [backend, api, frontend, search, assets, priority-medium, effort-small]
@@ -40,6 +40,16 @@ history:
       returned an empty page there after the global-search half shipped on
       2026-09-07. Fixed in the frontend only: a pair opens that asset's page
       instead of becoming a filter. No API change.
+  - date: 2026-09-16
+    status: completed
+    who: karolkow
+    note: >
+      Shipped with tag production-2026.09.16-1 (run 35103714224). Verified on
+      production after the deploy: the served bundle changed
+      (index-D24z7fBn.js → index-BiJWanXh.js), and typing
+      USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN into the
+      assets-list search opened /assets/USDC-GA5Z…KZVN. Issue #368 stays
+      closed (deployed in August); this was a follow-up to it.
 ---
 
 # BUG: the canonical `CODE:ISSUER` classifies as nothing

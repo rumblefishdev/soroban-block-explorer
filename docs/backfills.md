@@ -256,7 +256,9 @@ code guards this any more**. A pass that indexes transactions the table does not
 cover — a re-parse below the ingest floor, a gap refill — would make every such
 transaction show "no change" when nobody looked. Include `asset_transfers` (and
 its companions `soroban_event_ops`, `transaction_memos`) in that pass, then run
-the completion gate on the new range before anyone reads it.
+the completion gate on the new range before anyone reads it — the per-partition
+query is "Gate 7a" in
+[`lore/1-tasks/archive/0540_FEATURE_lossless-value-flow-index/notes/G-rollout-commands.md`](../lore/1-tasks/archive/0540_FEATURE_lossless-value-flow-index/notes/G-rollout-commands.md).
 
 ---
 

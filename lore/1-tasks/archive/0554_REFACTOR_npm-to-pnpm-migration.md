@@ -26,6 +26,13 @@ history:
       ~9 min). 32 files, 14 design decisions (10 emerged). Hooks now hand over
       to the checkout's own script; the worktree-hooks skill was removed and
       its no-bypass rule moved to CLAUDE.md. Task 0532 absorbed.
+  - date: '2026-09-16'
+    status: completed
+    who: karolkow
+    note: >
+      deploy-production.yml exercised on pnpm for the first time: tag
+      production-2026.09.16-1 (run 35103714224) green through pnpm setup,
+      install, cdk diff, Compute deploy, SPA build and both smoke tests.
 ---
 
 # Migrate the JS workspace from npm to pnpm
@@ -42,8 +49,8 @@ change — this is a package-manager swap, not a dependency upgrade.
 ## Status: Completed
 
 **Current state:** done. Implementation commit `aef8b641`; first `develop` CI
-run on pnpm green (run 34974114893). Not yet exercised: `deploy-production.yml`
-— its first release is the proof. Task 0532 (worktree provisioning) absorbed
+run on pnpm green (run 34974114893). `deploy-production.yml` first ran on pnpm
+with tag `production-2026.09.16-1` (run 35103714224), green. Task 0532 (worktree provisioning) absorbed
 here and archived as superseded.
 
 ## Context

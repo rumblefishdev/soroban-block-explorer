@@ -677,7 +677,7 @@ decoded by two sibling modules:
   `Router` keys plus its reserves in raw units from whichever of the three
   layouts its code uses (`ReserveA`/`ReserveB`, `Reserves`,
   `Reserve0`/`Reserve1` — the only three across all 58 code versions pools have
-  run) and `PrecisionMul`. `Plane` is the key that makes it a pool, while
+  run). `Plane` is the key that makes it a pool, while
   `Router` is absent on an older contract version (five of the ten live
   deployments, measured on chain) and is therefore optional.
   `extract_pool_instances` compares each post-image with its `state`
