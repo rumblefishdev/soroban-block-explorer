@@ -21,13 +21,26 @@ use crate::transactions::dto::TxListCursor;
 use super::dto::{
     AssetDetailResponse, AssetItem, AssetKeyCursor, AssetTransactionItem, ListParams,
 };
-use super::queries::{self, AssetRow, AssetTxRow, ResolvedListParams};
+use super::queries::{self, AssetRow, AssetTxRow, ListedAsset, ResolvedListParams};
+
+/// The list cursor: the rank the SEEK ordered this row by (already folded,
+/// `-1` for no aggregate row), never the `holder_count` hydration read again —
+/// the two can come from different `balance_aggregates` rebuilds.
+fn listed_asset_cursor(dir: Direction, r: &ListedAsset) -> String {
+    cursor::encode(
+        &AssetKeyCursor {
+            holder_rank: r.holder_rank,
+            id: r.row.id,
+        },
+        dir,
+    )
+}
 
 async fn fetch_list_for_source(
     state: &AppState,
     params: &ResolvedListParams,
     direction: Direction,
-) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
+) -> Result<Vec<ListedAsset>, clickhouse::error::Error> {
     queries::fetch_list(&state.ch(), params, direction).await
 }
 
@@ -184,7 +197,8 @@ pub async fn list_assets(
         sac_only,
     };
 
-    let mut rows: Vec<AssetRow> = match fetch_list_for_source(&state, &resolved, direction).await {
+    let mut rows: Vec<ListedAsset> = match fetch_list_for_source(&state, &resolved, direction).await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "DB error in list_assets");
@@ -197,22 +211,11 @@ pub async fn list_assets(
         pagination.limit,
         direction,
         has_predecessor,
-        |dir, r| {
-            cursor::encode(
-                &AssetKeyCursor {
-                    // The same fold the SQL applies, and it has to stay the
-                    // same: a missing aggregate row is `-1`, below a measured
-                    // zero.
-                    holder_rank: r.holder_count.unwrap_or(-1),
-                    id: r.id,
-                },
-                dir,
-            )
-        },
+        listed_asset_cursor,
     );
     let data: Vec<AssetItem> = rows
         .into_iter()
-        .map(|r| map_item(r, &state.network_id))
+        .map(|r| map_item(r.row, &state.network_id))
         .collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
@@ -553,6 +556,27 @@ mod tests {
             sac_deployed: false,
             id: 0,
         }
+    }
+
+    #[test]
+    fn list_cursor_carries_the_seek_rank_not_the_hydrated_count() {
+        // Task 0559: the page is selected by one query and hydrated by
+        // another; a `balance_aggregates` rebuild in between changes
+        // `holder_count`. The cursor must resume where THIS page ended.
+        let mut row = asset_row(1, Some("USDC"), Some(G_STRKEY), None);
+        row.id = 42;
+        row.holder_count = Some(2);
+        let listed = ListedAsset {
+            row,
+            holder_rank: 1,
+        };
+
+        let (dir, decoded) =
+            cursor::decode::<AssetKeyCursor>(&listed_asset_cursor(Direction::Next, &listed))
+                .expect("the list cursor decodes");
+
+        assert_eq!(dir, Direction::Next);
+        assert_eq!((decoded.holder_rank, decoded.id), (1, 42));
     }
 
     fn parsed_label(parsed: &Option<AssetIdRef<'_>>) -> &'static str {
