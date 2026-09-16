@@ -221,13 +221,29 @@ never recurs. There is also a correctness reason. Every current reader of
 a one-way hash. `snapshot-seed` would classify a `B…` row as `Ghost` and write
 it to zero at every run, and `holder_count` would count it.
 
-**Classic pool reserves do not qualify.** Two rows per pool, changed in place.
-A pool id is derived from its asset pair, so a removed pool's id returns when
-the pair is re-created. They go into `balances` (task 0210's LP stage), with
-`holder_count` excluding them.
+**Classic pool reserves are not written anywhere new.** Corrected 2026-09-16:
+the first version of this amendment put them into `balances` with
+`holder_count` excluding them. Both halves were wrong. Reserves change far more
+often than "in place" suggests — 373,501 snapshot rows in one day of ledgers,
+about 747k `balances` rows a day (production, 2026-09-16) — and no SQL filter
+can exclude a pool's hashed `holder_id`. More to the point, the state already
+exists: `liquidity_pool_snapshots` is written from the same `LiquidityPoolEntry`
+change, one row per pool per ledger, and its newest row per pool is clean
+(52,974 classic pools; 0 dead pools with reserves, 0 conflicting newest rows).
+A copy in `balances` could only drift from it. So `balance_aggregates_mv` reads
+the newest snapshot per classic pool directly, one leg per asset through
+`liquidity_pools.legs`.
 
-**Consequence.** `total_supply` is the sum of `balances` and the claimable
-balance table, and that aggregate is the only reader that unions them.
+**Who is a holder.** `holder_count` counts what holds value on its own
+account: accounts, contracts, and pools — classic and Soroban alike, so no
+reader has to judge which contracts count. A claimable balance does not count:
+it is value in transit that nothing holds yet. This changes a published
+number — 80,834 positive pool legs across 22,299 assets (9,406 assets up by more
+than 10%, 2026-09-16) — deliberately.
+
+**Consequence.** `total_supply` is the sum of `balances`, the claimable balance
+table and the newest classic pool snapshots, and `balance_aggregates_mv` is the
+only reader that unions them.
 
 ## Rejected alternatives
 

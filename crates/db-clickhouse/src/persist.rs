@@ -49,6 +49,7 @@ use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 use crate::SchemaError;
 
 pub mod claimable_balances;
+pub mod classic_pools;
 pub mod enrichment;
 pub mod ids;
 pub mod rows;

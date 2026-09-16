@@ -155,6 +155,13 @@ enum NetFact {
         asset: Option<(i64, Option<(String, String)>)>,
         entry: NetHolding,
     },
+    /// A classic liquidity pool (task 0210). The whole entry is kept — the seed
+    /// builds our pool rows from it through the live extractor. `None` is a
+    /// DEAD record.
+    Pool {
+        pool_id: [u8; 32],
+        entry: Option<Box<stellar_xdr::LedgerEntry>>,
+    },
 }
 
 /// Everything an `AccountEntry` carries beyond its native balance: identity for
@@ -190,6 +197,8 @@ pub struct NetworkState {
     /// Claimable balances by `B…` surrogate, for `claimable_balance_holdings`,
     /// with the asset surrogate — `None` for a dead record, which has no asset.
     pub claimable_balances: std::collections::HashMap<i64, (NetHolding, Option<i64>)>,
+    /// Classic liquidity pools by pool id; `None` for a dead record.
+    pub pools: std::collections::HashMap<[u8; 32], Option<Box<stellar_xdr::LedgerEntry>>>,
     /// Per-account identity, signers and thresholds, for `account_entry_state`.
     pub account_details: std::collections::HashMap<i64, AccountDetail>,
     /// asset surrogate → `(code, issuer strkey)`, for `assets` dimension stubs.
@@ -289,6 +298,9 @@ impl NetworkState {
                     &mut self.superseded,
                 );
             }
+            NetFact::Pool { pool_id, entry } => {
+                first_wins(&mut self.pools, pool_id, entry, &mut self.superseded);
+            }
         }
     }
 
@@ -327,6 +339,9 @@ impl NetworkState {
             .filter(|(e, _)| e.live)
             .count()
     }
+    pub fn live_pools(&self) -> usize {
+        self.pools.values().filter(|e| e.is_some()).count()
+    }
 }
 
 /// `B…` surrogate of a claimable balance id — the writer's `ids::address_id`
@@ -335,9 +350,10 @@ fn claimable_holder_id(id: &stellar_xdr::ClaimableBalanceId) -> i64 {
     ids::address_id(&stellar_xdr::ScAddress::ClaimableBalance(id.clone()).to_string())
 }
 
-/// Asset surrogate and, for a credit asset, its `(code, issuer)` identity.
-/// Spelled like the writer's `build_claimable_balance_rows`.
-fn claimable_asset(asset: &stellar_xdr::Asset) -> (i64, Option<(String, String)>) {
+/// Asset surrogate and, for a credit asset, its `(code, issuer)` identity, for
+/// a classic `Asset` (claimable balances, pool legs). Spelled like the writer's
+/// `build_claimable_balance_rows` and `ids::pool_leg_asset_id`.
+pub(crate) fn classic_asset(asset: &stellar_xdr::Asset) -> (i64, Option<(String, String)>) {
     use stellar_xdr::Asset as A;
     let credit = |code: &[u8], issuer: &stellar_xdr::AccountId| {
         let code = xdr_parser::asset_code::asset_code_str(code);
@@ -480,8 +496,12 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
             }
             D::ClaimableBalance(cb) => Some(NetFact::ClaimableBalance {
                 holder_id: claimable_holder_id(&cb.balance_id),
-                asset: Some(claimable_asset(&cb.asset)),
+                asset: Some(classic_asset(&cb.asset)),
                 entry: NetHolding::live(e.last_modified_ledger_seq, cb.amount),
+            }),
+            D::LiquidityPool(lp) => Some(NetFact::Pool {
+                pool_id: lp.liquidity_pool_id.0.0,
+                entry: Some(e.clone()),
             }),
             _ => None,
         },
@@ -513,6 +533,10 @@ fn classify(rec: &SnapshotRecord) -> Option<NetFact> {
                 holder_id: claimable_holder_id(&cb.balance_id),
                 asset: None,
                 entry: NetHolding::dead(),
+            }),
+            K::LiquidityPool(lp) => Some(NetFact::Pool {
+                pool_id: lp.liquidity_pool_id.0.0,
+                entry: None,
             }),
             _ => None,
         },
@@ -589,18 +613,25 @@ pub(crate) async fn open_snapshot(
     // `asset_transfers`, 2026-09-15), and the network holds at least those.
     // The floor sits ~9x under that estimate. Re-set it from the first dry-run.
     const MIN_LIVE_CLAIMABLE: usize = 100_000;
+    // Classic pools (task 0210): 40,417 pools hold reserves by our own newest
+    // snapshots (production, 2026-09-16), and every one of them is a live entry.
+    // A short pool read only under-inserts, but it would also report live pools
+    // as gone, so it gets the same guard.
+    const MIN_LIVE_POOLS: usize = 20_000;
     let (accounts, trustlines) = (state.live_accounts(), state.live_trustlines());
-    let claimable = state.live_claimable_balances();
+    let (claimable, pools) = (state.live_claimable_balances(), state.live_pools());
     if n_buckets < MIN_BUCKETS
         || accounts < MIN_LIVE_ACCOUNTS
         || trustlines < MIN_LIVE_TRUSTLINES
         || claimable < MIN_LIVE_CLAIMABLE
+        || pools < MIN_LIVE_POOLS
     {
         return Err(BackfillError::Incomplete(format!(
             "snapshot looks short: {n_buckets} buckets, {accounts} live accounts, \
-             {trustlines} live trustlines, {claimable} live claimable balances (floors \
-             {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / {MIN_LIVE_TRUSTLINES} / \
-             {MIN_LIVE_CLAIMABLE}) — refusing to read the gap as network-wide closures"
+             {trustlines} live trustlines, {claimable} live claimable balances, {pools} live \
+             pools (floors {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / {MIN_LIVE_TRUSTLINES} / \
+             {MIN_LIVE_CLAIMABLE} / {MIN_LIVE_POOLS}) — refusing to read the gap as \
+             network-wide closures"
         )));
     }
 
@@ -650,6 +681,12 @@ pub fn report_state(state: &NetworkState, checkpoint_ledger: u32, secs: f64) -> 
         "  claimable    {:>10} {:>15}",
         state.live_claimable_balances(),
         state.claimable_balances.len() - state.live_claimable_balances()
+    );
+    let _ = writeln!(
+        out,
+        "  pools        {:>10} {:>15}",
+        state.live_pools(),
+        state.pools.len() - state.live_pools()
     );
     let _ = writeln!(
         out,

@@ -714,6 +714,13 @@ Standards + spec review, pre-mortem, over-engineering pass.
   counting a claimable balance as a holder, and deleting closed rows later does
   not touch the table the account API reads.
 
+### Production — the table exists (2026-09-16)
+
+`claimable_balance_holdings` created on production, verbatim from `init.sql`;
+`SHOW CREATE TABLE` matches column for column (`closed_at_ledger Int64 DEFAULT
+0`, `ReplacingMergeTree(last_updated_ledger)`, `ORDER BY (holder_id,
+asset_id)`). Empty until the writer deploys, which is now unblocked.
+
 ### Progress — item 4 written, not yet applied to production (2026-09-16)
 
 - `balance_aggregates_mv` sums `balances` and `claimable_balance_holdings`
@@ -730,6 +737,55 @@ Standards + spec review, pre-mortem, over-engineering pass.
 - The two comments that called `sum(balances)` the real supply now say
   claimable balances have left the residue (`init.sql` `soroban_token_supply`
   tombstone, `api/src/assets/queries.rs`); classic LP reserves remain in it.
+
+## 2026-09-16 (karolkow) — classic pool reserves: decisions after a second review
+
+A devil's-advocate and an over-engineering pass over every decision above.
+Both rejected the plan to write reserves into `balances` (D3).
+
+- **Reserves come from the newest snapshot, not from rows in `balances`.** The
+  snapshot is the pool entry's own state (same ledger change, one row per pool
+  per ledger). Measured today: 52,974 classic pools, every one with two `legs`;
+  0 dead pools with reserves; 0 conflicting newest rows. Rows in `balances`
+  would be a copy of it, and a busier one than D3 assumed: 373,501 snapshot
+  rows in one day of ledgers, about 747k `balances` rows a day. The seed would
+  also zero them as ghosts, and no SQL filter can exclude a pool's hashed
+  `holder_id` — the same three reasons claimable balances got their own table.
+  D3's "low churn, into `balances`" is withdrawn; ADR 0056's amendment corrected.
+- **`balance_aggregates_mv` gets a third branch:** newest `(reserve_a,
+reserve_b)` per pool × 10^7, joined through `liquidity_pools.legs`, classic
+  pools only, `length(legs) = 2` so one malformed row cannot fail the refresh.
+  Moved below `liquidity_pool_snapshots` in `init.sql` — a refreshable MV needs
+  its sources at CREATE. `EXPLAIN PLAN` of the whole query passes on production.
+  The branch alone ran in 2.7 s; the current refresh takes 1.9 s (estimate:
+  refresh roughly doubles).
+- **Pools count as holders, classic and Soroban alike** (a Soroban pool contract
+  already does). Rule: a holder holds value on its own account — accounts,
+  contracts, pools. A claimable balance is value in transit and does not count.
+  This changes a published number on purpose: 80,834 positive pool legs over
+  22,299 assets; 9,406 assets rise by more than 10%, 1,211 at least double.
+- **Backfill keeps writing `claimable_balance_holdings`** (accepted). A
+  whole-era `--reindex` brings ~413 M keys (estimate) into the table the MV
+  rescans every refresh. Recorded in the DDL comment.
+- **Pools unchanged since the ingest floor** have no snapshot, so the MV misses
+  them. `snapshot-seed` now inserts, for every live checkpoint pool newer than
+  our newest snapshot of it (or without one), a snapshot and the pool row,
+  versioned on the entry's `lastModifiedLedgerSeq` — insert-only, so a newer
+  live row always wins and no coverage check is needed. Pools the network
+  removed while ours still hold reserves are listed in `pools_gone.tsv`, not
+  corrected (0 today by our data). Floors: 20,000 live pools in the snapshot,
+  20,000 pools on our side.
+  - **One builder.** Classic pool rows moved out of `stage.rs` into
+    `persist/classic_pools.rs`; staging and the seed both call it, and the seed
+    feeds it the checkpoint entry as a `state` change
+    (`ledger_entry_changes::entry_as_state_change`). `stage.rs` 3,371 → 3,275.
+  - **Proven on the chain:** two mainnet pool entries from `getLedgerEntries`
+    (ledgers 64,454,667 and 64,454,668) build exactly the rows production's live
+    writer stored for them — reserves, shares, legs, codes, fee
+    (`snapshot/pools_tests.rs`). With the ledger stamp broken the test fails
+    (`left: 0, right: 64454667`).
+  - How many pools this adds is unknown until the first dry-run.
+- **Separate PR:** pool shares into `balances` (ADR 0056, tasks 0499/0493).
 
 ## Context
 

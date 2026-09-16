@@ -336,7 +336,9 @@ raw representation. Two objects, none in PG:
 - **`balance_aggregates`** (`asset_id`, `total_supply Nullable(Int128)`,
   `holder_count Nullable(Int32)`) + **`balance_aggregates_mv`**
   (`REFRESH EVERY 2 MINUTE`) — `sum(amount)` / `countIf(amount > 0)` over
-  `balances FINAL`, keyed by the `assets.id` surrogate. One 1:1 read join for ALL
+  `balances FINAL`, keyed by the `assets.id` surrogate. Task 0210 adds
+  `claimable_balance_holdings` (supply only) and the newest classic pool
+  snapshot per leg (supply and holders). One 1:1 read join for ALL
   asset types. **`total_supply` = `sum(amount)` is the SOLE supply source** — task
   0331 Option A: a mint always credits a holder balance (often a contract treasury,
   summed because holders include `C…`), so the sum equals real supply. No per-token

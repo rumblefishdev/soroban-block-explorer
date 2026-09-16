@@ -176,8 +176,9 @@ Derived explorer entities:
 - `claimable_balance_holdings` — `balances`' twin for value held by a claimable balance, one row
   per `B…` balance (task 0210, §4.17.1)
 - `balance_aggregates` (+ refreshable MV) — pre-computed per-`asset_id` `total_supply` (`sum` over
-  `balances` **and** `claimable_balance_holdings`, task 0210) / `holder_count`
-  (`countIf(amount > 0)` over `balances` only — a claimable balance is not a holder)
+  `balances`, `claimable_balance_holdings` and the newest `liquidity_pool_snapshots` row of every
+  classic pool, one leg per asset through `liquidity_pools.legs`, task 0210) / `holder_count`
+  (`countIf(amount > 0)` over accounts, contracts and pools — a claimable balance is not a holder)
 - `asset_aggregates` / `soroban_token_supply` — **DROPPED (task 0331)**. Classic supply/holders now
   flow through `balance_aggregates` over the unified `balances`; `total_supply = sum(amount)` is the
   SOLE supply source for ALL asset types (Option A — no per-token `TotalSupply` key read). The

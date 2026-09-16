@@ -1106,57 +1106,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // ---- liquidity_pools (dedup by pool_id, latest watermark) ----
-    let mut pool_indices: HashMap<[u8; 32], usize> = HashMap::new();
-    for pool in liquidity_pools {
-        let pool_id = decode_hash(&pool.pool_id, "pool_id")?;
-        let (Some((a_type, a_code, a_issuer)), Some((b_type, b_code, b_issuer))) = (
-            split_pool_asset(&pool.asset_a),
-            split_pool_asset(&pool.asset_b),
-        ) else {
-            continue;
-        };
-        let last_updated_ledger = i64::from(pool.last_updated_ledger);
-        let asset_a_code = a_code.unwrap_or_default();
-        let asset_a_issuer_id = a_issuer.as_deref().map(ids::account_id).unwrap_or(0);
-        let asset_b_code = b_code.unwrap_or_default();
-        let asset_b_issuer_id = b_issuer.as_deref().map(ids::account_id).unwrap_or(0);
-        let new_row = LiquidityPoolRow {
-            pool_id,
-            // Legs migration step 2 (task 0374 committed follow-through):
-            // classic rows fill `legs` too, so the pair columns can retire.
-            // Classic legs are ASSET surrogates (`pool_leg_asset_id` — the
-            // same key `lp_operation_amounts` joins on), NOT contract
-            // surrogates like a soroban row's; `pool_kind` says which space.
-            legs: vec![
-                ids::pool_leg_asset_id(a_type as i16, &asset_a_code, asset_a_issuer_id),
-                ids::pool_leg_asset_id(b_type as i16, &asset_b_code, asset_b_issuer_id),
-            ],
-            asset_a_type: a_type as i16,
-            asset_a_code,
-            asset_a_issuer_id,
-            asset_b_type: b_type as i16,
-            asset_b_code,
-            asset_b_issuer_id,
-            fee_bps: pool.fee_bps,
-            last_updated_ledger,
-            pool_kind: 0,
-            deployment_id: 0,
-            pool_type_raw: String::new(),
-        };
-        match pool_indices.get(&pool_id).copied() {
-            Some(idx) => {
-                let existing = &mut out.pool_rows[idx];
-                if last_updated_ledger >= existing.last_updated_ledger {
-                    existing.last_updated_ledger = last_updated_ledger;
-                }
-            }
-            None => {
-                pool_indices.insert(pool_id, out.pool_rows.len());
-                out.pool_rows.push(new_row);
-            }
-        }
-    }
+    // ---- liquidity_pools (classic; shared with `snapshot-seed`) ----
+    out.pool_rows = super::classic_pools::build_pool_rows(liquidity_pools)?;
 
     // One family seam (task 0518, decision 4a): partition the unified write
     // collection back into per-family views for the arms below. The views are
@@ -1694,40 +1645,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     out.pool_state_change_rows = fold_pool_state_changes(pool_state_rows);
     out.pool_instance_state_rows = fold_pool_instance_state(instance_state_rows);
 
-    // ---- liquidity_pool_snapshots ----
+    // ---- liquidity_pool_snapshots (shared with `snapshot-seed`) ----
     // Per-(pool, ledger) asset-A trade volume from claim atoms (0261 extractor).
     // Live ingest now derives it directly (previously backfill-only); the 0266
     // worker reuses this same value via `prepare`, so live + backfill agree.
-    let gross_volume_by_pool = gross_volume_a_by_pool(operations);
-    for snap in pool_snapshots {
-        let pool_id = decode_hash(&snap.pool_id, "snapshot.pool_id")?;
-        let reserve_a = snap
-            .reserves
-            .get("a")
-            .and_then(Value::as_i64)
-            .map(i128::from)
-            .unwrap_or(0);
-        let reserve_b = snap
-            .reserves
-            .get("b")
-            .and_then(Value::as_i64)
-            .map(i128::from)
-            .unwrap_or(0);
-        out.snapshot_rows.push(LiquidityPoolSnapshotRow {
-            pool_id,
-            ledger_sequence: i64::from(snap.ledger_sequence),
-            reserve_a,
-            reserve_b,
-            total_shares: decimal7_string_to_i128(&snap.total_shares)?,
-            // Asset-A-side trade volume for this (pool, ledger) from claim
-            // atoms (0261). `None` when the pool had no trade this ledger.
-            // USD tvl/volume/fee_revenue have NO columns here any more: they
-            // were written as NULL since 0199 (compute-at-read, ADR 0053) and
-            // read by nothing — dropped from the write path in 0374's
-            // distillation; prod drops them with ALTER … DROP COLUMN.
-            gross_volume_a: gross_volume_by_pool.get(&pool_id).copied(),
-        });
-    }
+    out.snapshot_rows = super::classic_pools::build_snapshot_rows(
+        pool_snapshots,
+        &gross_volume_a_by_pool(operations),
+    )?;
 
     // ---- lp_positions (dedup by (pool_id, account_id)) ----
     use std::collections::hash_map::Entry;
@@ -2666,7 +2591,7 @@ fn upsert_balance(
     }
 }
 
-fn decimal7_string_to_i128(s: &str) -> Result<i128, SchemaError> {
+pub(crate) fn decimal7_string_to_i128(s: &str) -> Result<i128, SchemaError> {
     let s = s.trim();
     if s.is_empty() {
         return Ok(0);
@@ -3131,27 +3056,6 @@ fn asset_issuer(asset: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-}
-
-fn split_pool_asset(asset: &Value) -> Option<(AssetType, Option<String>, Option<String>)> {
-    if let Some(s) = asset.as_str()
-        && s == "native"
-    {
-        return Some((AssetType::Native, None, None));
-    }
-    let obj = asset.as_object()?;
-    let ty = obj.get("type").and_then(Value::as_str)?.parse().ok()?;
-    let code = obj
-        .get("code")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let issuer = obj
-        .get("issuer")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    Some((ty, code, issuer))
 }
 
 #[derive(Debug, Default)]

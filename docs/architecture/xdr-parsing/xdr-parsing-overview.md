@@ -357,7 +357,8 @@ explorer records.
 step 14, called out here so the parser/indexer boundary stays explicit):
 
 - `balance_aggregates.total_supply` / `.holder_count` — recomputed from
-  `balances` by the refreshable `balance_aggregates_mv` (task 0293/0331), never
+  `balances`, `claimable_balance_holdings` and the newest classic pool snapshot
+  by the refreshable `balance_aggregates_mv` (task 0293/0331/0210), never
   by the parser and no longer on the `assets` row at all (those columns were
   dropped in task 0310). Per
   [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are

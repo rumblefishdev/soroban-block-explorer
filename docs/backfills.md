@@ -466,9 +466,9 @@ hand-exported-TSV transport were removed in the 2026-08-20 review;
 the seed's dry-run IS the four-way comparison — a separate `snapshot-compare`
 carried the same decode and the same verdict behind its own counting shell.)
 
-| Subcommand                                      | What it does                                                                                                                                                                                                                                             | Writes                                                                                                        |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                      | What it does                                                                                                                                                                                                                                             | Writes                                                                                                                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
 **The decision table.** Every one of our rows falls into exactly one verdict,
 and the verdict alone decides what (if anything) is written. Read the report's
@@ -596,6 +596,16 @@ happen in practically every ledger, so that tombstone marks when the writer
 started, and an older checkpoint would seed balances claimed in between as
 live. The dry-run prints the same check in `summary.txt` instead of refusing.
 Ghosts for this table go to `claimable_ghosts.tsv`.
+
+**Classic pools (task 0210) are insert-only.** `total_supply` takes a classic
+pool's reserves from its newest `liquidity_pool_snapshots` row, and a pool no
+processed ledger touched has none. For every live pool in the checkpoint whose
+entry is newer than our newest snapshot of it (or that has no snapshot), the seed
+inserts one snapshot and the pool's `liquidity_pools` row, built by the live
+writer's own builders and versioned on the entry's `lastModifiedLedgerSeq` — a
+newer live row always wins, so there is no coverage check. Pools the network
+removed while our newest snapshot still holds reserves are only listed, in
+`pools_gone.tsv`.
 
 **`--execute` never decodes the checkpoint the dry-run reviewed — expect that,
 and read `summary.txt` accordingly.** Checkpoints publish every 64 ledgers

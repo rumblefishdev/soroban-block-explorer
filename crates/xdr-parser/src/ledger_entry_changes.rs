@@ -128,6 +128,21 @@ fn extract_from_changes(
     }
 }
 
+/// A ledger entry read outside any transaction — a checkpoint bucket record — as
+/// the `state` change the extractors already consume, stamped with the entry's
+/// own `lastModifiedLedgerSeq`. Lets `snapshot-seed` build rows through the
+/// same extractor and builders as live ingest instead of a second decoder.
+pub fn entry_as_state_change(entry: &LedgerEntry) -> Option<ExtractedLedgerEntryChange> {
+    extract_single_change(
+        &LedgerEntryChange::State(entry.clone()),
+        None,
+        "",
+        entry.last_modified_ledger_seq,
+        0,
+        0,
+    )
+}
+
 /// Convert a single `LedgerEntryChange` into an `ExtractedLedgerEntryChange`.
 fn extract_single_change(
     change: &LedgerEntryChange,

@@ -70,6 +70,7 @@ use crate::snapshot::archive::PUBNET_ARCHIVE;
 use crate::snapshot::claimable;
 use crate::snapshot::dumps;
 use crate::snapshot::network_state::{self, NetworkState};
+use crate::snapshot::pools;
 use crate::snapshot::report::Report;
 use crate::snapshot::verdict;
 use crate::util::insert_rows;
@@ -97,6 +98,7 @@ struct Corrections {
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
     claimable: claimable::ClaimableCorrections,
+    pools: pools::PoolCorrections,
     /// One line per row this run zeroes while it still held a positive amount
     /// — the anomaly report, and the only pre-image of what `--execute` takes
     /// away. It belongs to what the run produced, like the four row sets.
@@ -392,6 +394,8 @@ async fn build_corrections(
     out.claimable =
         claimable::build_corrections(sink, state, checkpoint, report, &mut referenced_assets)
             .await?;
+    // Pass 2c: classic pools with no current snapshot of ours, same reason.
+    out.pools = pools::build_corrections(sink, state, &mut referenced_assets).await?;
 
     // Pass 3: dimension stubs — a seeded balance whose asset or holder has no
     // dimension row would render as a broken join, i.e. a new lie replacing an
@@ -620,6 +624,11 @@ pub async fn seed_command(
         corr.claimable.ghosts.join("\n") + "\n",
     )
     .map_err(|e| BackfillError::Incomplete(format!("write claimable ghosts: {e}")))?;
+    std::fs::write(
+        artifacts.join("pools_gone.tsv"),
+        corr.pools.gone_with_reserves.join("\n") + "\n",
+    )
+    .map_err(|e| BackfillError::Incomplete(format!("write pools_gone: {e}")))?;
 
     // The summary IS the four-way comparison — the same twelve buckets per
     // population the report renders, from one `Report`, plus
@@ -663,7 +672,7 @@ pub async fn seed_command(
         .await?;
 
     let summary = format!(
-        "checkpoint {}\n{}{}{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
+        "checkpoint {}\n{}{}{}{}{}{}\n  NOT COMPARED (deliberate, see module docs)\n    \
          contract-held classic rows  {:>12}\n    \
          type-3 Soroban rows         {:>12}\n    \
          snapshot pool shares        {:>12}  (our side: lp_positions)\n\
@@ -685,6 +694,7 @@ pub async fn seed_command(
             .native
             .render("NATIVE XLM holdings (AccountEntry, not a trustline)", true),
         claimable::render_summary(&report, &corr.claimable, &coverage),
+        pools::render_summary(&corr.pools),
         report.render_missing_histogram(),
         excluded_contract,
         excluded_type3,
@@ -721,6 +731,8 @@ pub async fn seed_command(
         println!("  inserting…");
         insert_chunked(sink, "assets", &corr.asset_stubs).await?;
         insert_chunked(sink, "accounts", &corr.account_stubs).await?;
+        insert_chunked(sink, "liquidity_pools", &corr.pools.pool_rows).await?;
+        insert_chunked(sink, "liquidity_pool_snapshots", &corr.pools.snapshot_rows).await?;
         insert_chunked(sink, "balances", &corr.balances).await?;
         insert_chunked(sink, claimable::TABLE, &corr.claimable.rows).await?;
         insert_chunked(sink, "account_entry_state", &corr.entry_states).await?;
