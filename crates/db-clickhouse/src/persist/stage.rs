@@ -314,10 +314,10 @@ pub struct StageInputs<'a> {
     /// legacy callers.
     pub soroban_token_balances: &'a [ExtractedSorobanBalance],
     /// Every family's pool state writes behind ONE seam (task 0518,
-    /// decision 4a): router-family plane `PoolData` (the fungible reserve
-    /// source, task 0374 step 7) and pool instances (the STATE source for
-    /// share tokens and planes; supersedes the deposit⇄mint detector as
-    /// primary — it stays a cross-check), and pair-factory instances (reserve
+    /// decision 4a): router-family plane `PoolData` (no longer a reserve
+    /// source — decision C′, task 0374) and pool instances (the reserve AND
+    /// STATE source for share tokens and planes; supersedes the deposit⇄mint
+    /// detector as primary — it stays a cross-check), and pair-factory instances (reserve
     /// source AND declaration: leg tokens, deploying factory, LP supply).
     /// Staging partitions by variant; adding a family adds a variant + an
     /// arm, never a field.
@@ -1456,9 +1456,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // 2026-09-01: fold in stage, symmetric for both, no parser-side pre-fold).
     let mut pool_state_rows: Vec<PoolStateChangeRow> = Vec::new();
     let mut instance_state_rows: Vec<PoolInstanceStateRow> = Vec::new();
-    // Cross-check only (decision C′ rule 4): compare the LAST plane row with
-    // the LAST instance image of the same (pool, ledger) — intra-ledger
-    // intermediates legitimately differ.
+    // The plane's only remaining use: noticing an instance layout we do not
+    // read. Compared LAST plane row against LAST instance image of the same
+    // (pool, ledger) — intra-ledger intermediates legitimately differ.
     let last_plane: HashMap<(&str, u32), &xdr_parser::pool_state::PlanePoolData> = plane_pool_data
         .iter()
         .map(|pw| ((pw.data.pool.as_str(), pw.ledger_sequence), &pw.data))
@@ -1472,18 +1472,19 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let Some(plane) = last_plane.get(&(*pool, *ledger)) else {
             continue;
         };
-        if inst.reserves.is_empty() || inst.plane.as_deref() != Some(plane.plane.as_str()) {
-            continue;
-        }
-        if !plane_row_agrees_with_storage(&plane.reserves, &inst.reserves, &inst.precision_mul) {
-            tracing::warn!(
+        // No known reserve key while the plane still shows reserves: a code
+        // version with a storage layout we do not read. Without this line the
+        // pool's snapshots just stop.
+        if inst.reserves.is_empty()
+            && inst.plane.as_deref() == Some(plane.plane.as_str())
+            && plane.reserves.iter().any(|r| r != "0")
+        {
+            tracing::error!(
                 ledger_sequence = ledger,
                 pool = %pool,
                 plane_reserves = ?plane.reserves,
-                storage_reserves = ?inst.reserves,
-                precision_mul = ?inst.precision_mul,
-                "plane row disagrees with the pool's own storage × PrecisionMul — \
-                 the contract's plane semantics may have changed"
+                "pool instance carries no known reserve key while its plane row \
+                 shows reserves — a reserve snapshot is missing (new storage layout?)"
             );
         }
     }
@@ -2744,28 +2745,6 @@ fn fold_pool_state_changes(rows: Vec<PoolStateChangeRow>) -> Vec<PoolStateChange
 /// keeping only the last loses nothing.
 fn fold_pool_instance_state(rows: Vec<PoolInstanceStateRow>) -> Vec<PoolInstanceStateRow> {
     xdr_parser::fold::keep_last_by_key(rows, |r| (r.pool_id, r.derived_at_ledger))
-}
-
-/// Decision C′ cross-check: a router pool's plane row must equal its own
-/// stored reserves × `PrecisionMul` (× 1 where the key is absent). Held in
-/// every sample across all code versions; a disagreement means the contract's
-/// plane semantics changed and the pool deserves a look. Only the legs are
-/// compared: a plane vector may carry a per-tick tail past them.
-pub(crate) fn plane_row_agrees_with_storage(
-    plane: &[String],
-    storage: &[String],
-    precision_mul: &[String],
-) -> bool {
-    let parse = |x: &String| x.parse::<u128>().ok();
-    plane.len() >= storage.len()
-        && (precision_mul.is_empty() || precision_mul.len() == storage.len())
-        && storage.iter().enumerate().all(|(i, raw)| {
-            let mul = precision_mul.get(i).map_or(Some(1), parse);
-            match (parse(raw), mul, parse(&plane[i])) {
-                (Some(r), Some(m), Some(p)) => r.checked_mul(m) == Some(p),
-                _ => false,
-            }
-        })
 }
 
 /// Raw decimal reserve strings → `i128`, all-or-nothing: one unparseable

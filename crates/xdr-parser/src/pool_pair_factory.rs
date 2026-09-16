@@ -205,11 +205,20 @@ pub fn parse_factory_pair(pair: &str, storage: &Value) -> Option<FactoryPairStat
     let token_1 = u32_key(1).and_then(addr)?;
     let factory = u32_key(4).and_then(addr)?;
     // Both or neither: one reserve without the other is not a smaller
-    // answer, it is a malformed one.
+    // answer, it is a malformed one. The identity triple already proved the
+    // owner is a pair, so the refusal is loud: an instance snapshot carries
+    // every key, and a half pair means a storage layout we do not read.
     let reserves = match (u32_key(2).and_then(i128s), u32_key(3).and_then(i128s)) {
         (Some(r0), Some(r1)) => Some((r0, r1)),
         (None, None) => None,
-        _ => return None,
+        _ => {
+            tracing::error!(
+                pair = %pair,
+                "pair instance carries HALF a reserve pair — refusing the write; \
+                 a snapshot is missing (new storage layout?)"
+            );
+            return None;
+        }
     };
 
     Some(FactoryPairState {

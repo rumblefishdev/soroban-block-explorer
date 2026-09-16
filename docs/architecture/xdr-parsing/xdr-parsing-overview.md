@@ -683,8 +683,9 @@ decoded by two sibling modules:
   `extract_pool_instances` compares each post-image with its `state`
   pre-image and flags whether the reserves moved.
   `parse_plane_pool_data` still reads the plane's `PoolData[pool]`, but only
-  as a cross-check (decision C′): the plane carries `Reserves × PrecisionMul`,
-  the units a stable pool's swap math runs in.
+  to notice an instance layout whose reserve keys we do not read (decision
+  C′): the plane carries `Reserves × PrecisionMul`, the units a stable pool's
+  swap math runs in.
 
 Note the asymmetry between the two, which the storage contract depends on:
 `parse_pool_instance` keys on the entry's OWNER (the pool contract itself), so

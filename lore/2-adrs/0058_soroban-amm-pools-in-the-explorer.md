@@ -90,7 +90,8 @@ the six non-empty mixed-decimal stable pools stored one leg 10× or 10^11×
 too large. Measured before switching: 508 of 514 pools have identical
 storage and plane values; storage holds raw units in every one of 58 code
 versions; three reserve layouts exist in all history. Rows stage when an
-instance write moved the reserves; the plane stays a logged cross-check. This
+instance write moved the reserves; the plane only flags an instance layout
+we do not read. This
 also applies the owner-is-authority rule of §4 to reserves.
 
 **The grain decision was REVERSED once, deliberately (2026-08-30), before

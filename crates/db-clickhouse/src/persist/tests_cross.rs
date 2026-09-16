@@ -3304,7 +3304,6 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
             plane: Some("CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY".into()),
             router: Some(router.to_string()),
             reserves: Vec::new(),
-            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
@@ -3392,7 +3391,6 @@ fn pool_instance_declaring(
             plane: Some("CCABO2IQYDWRGGQ4DYQ73CV3ZFDBRZTEQNDDJMFT7JZO54CLS4RYJROY".into()),
             router: Some(router.into()),
             reserves: Vec::new(),
-            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
@@ -3475,7 +3473,6 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
             plane: Some(PLANE.into()),
             router: Some("CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK".into()),
             reserves: vec!["777".into(), "888".into()],
-            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
@@ -3764,7 +3761,6 @@ fn c_prime_instance(reserves_changed: bool) -> xdr_parser::pool_family::PoolFami
                 router: None,
                 // The same pool's own storage in the same ledger: raw units.
                 reserves: vec!["22168059846400376042".into(), "82877587".into()],
-                precision_mul: Vec::new(),
             },
             ledger_sequence: 10,
             created: false,
@@ -3803,41 +3799,6 @@ fn an_instance_rewrite_with_unchanged_reserves_stages_no_reserve_row() {
     assert_eq!(staged.pool_instance_state_rows.len(), 1);
 }
 
-/// Real figures of CCI5UGNC at 64,393,803: the plane carries the second leg
-/// × 10^11; storage is raw. Equal-decimal pools have no multiplier.
-#[test]
-fn the_plane_cross_check_accepts_the_measured_relation_and_nothing_else() {
-    let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-    let storage = v(&["22168059846400376042", "82877587"]);
-    assert!(stage::plane_row_agrees_with_storage(
-        &v(&["22168059846400376042", "8287758700000000000"]),
-        &storage,
-        &v(&["1", "100000000000"]),
-    ));
-    assert!(stage::plane_row_agrees_with_storage(
-        &storage,
-        &storage,
-        &[]
-    ));
-    assert!(!stage::plane_row_agrees_with_storage(
-        &v(&["22168059846400376042", "8287758700000000001"]),
-        &storage,
-        &v(&["1", "100000000000"]),
-    ));
-    assert!(!stage::plane_row_agrees_with_storage(
-        &v(&["1"]),
-        &storage,
-        &[]
-    ));
-    // A plane vector may carry a per-tick tail past the legs (readers slice by
-    // leg count); the tail is not a disagreement.
-    assert!(stage::plane_row_agrees_with_storage(
-        &v(&["22168059846400376042", "82877587", "0", "0"]),
-        &storage,
-        &[],
-    ));
-}
-
 #[test]
 fn prepare_stages_plane_writes_and_instance_share_tokens() {
     // Real values end to end: the plane write and instance from registration
@@ -3870,7 +3831,6 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             // Decision C′: the constant pool's own `ReserveA`/`ReserveB` —
             // equal to its plane row, as for every constant pool measured.
             reserves: vec!["100000000000".into(), "30617317".into()],
-            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,
@@ -3888,7 +3848,6 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
             // Real values from the hot-ledger probe: concentrated reserves
             // ride the INSTANCE, and must stage a snapshot row.
             reserves: vec!["4112908590".into(), "250000000000".into()],
-            precision_mul: Vec::new(),
         },
         ledger_sequence: 10,
         created: true,

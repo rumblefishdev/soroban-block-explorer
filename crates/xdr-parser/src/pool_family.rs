@@ -16,8 +16,8 @@ use crate::types::ExtractedLedgerEntryChange;
 /// ledger-entry changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PoolFamilyWrite {
-    /// Router family: a plane `PoolData` write — a cross-check against the
-    /// pool's own storage only (decision C′); stages no reserve row.
+    /// Router family: a plane `PoolData` write — stages no reserve row
+    /// (decision C′); only flags an instance layout we do not read.
     RouterPlane(ExtractedPlanePoolData),
     /// Router family: the pool's own instance — the source of its reserves
     /// and of its share-token / plane / router declarations.

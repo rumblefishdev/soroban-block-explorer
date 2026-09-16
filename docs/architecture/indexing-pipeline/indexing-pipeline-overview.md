@@ -280,7 +280,7 @@ step: `parse_ledger()`'s event sweep detects router `add_pool` registrations
 (`detect_pool_registrations`) and its ledger-entry-change walk extracts pool
 state (`extract_pool_instances` for pool instances — reserves in raw units +
 `TokenShare` / `Plane` / `Router`; `extract_plane_pool_data` for the plane's
-`PoolData`, now a cross-check only). Staging turns these into
+`PoolData`, now only a tripwire for an unread instance layout). Staging turns these into
 `liquidity_pools` rows (`pool_kind = 1`, whole-row registration — never
 partially updated on the RMT), `pool_state_changes` rows (one per
 `(pool, ledger)`) and `pool_instance_state` rows (side table, `asset_sac`
@@ -322,8 +322,8 @@ names its pool in a payload the emitter chooses freely:
   which overstated one leg of every non-empty mixed-decimal stable pool. A row
   stages when an instance write changed the reserves against its pre-image
   (or created the pool) — reward and config calls rewrite the instance too.
-  The plane row is compared against storage × `PrecisionMul` and a mismatch
-  is logged as a warning. The per-ledger fold keeps the last instance image,
+  An instance write with no reserve key we read, while the plane row of the
+  same `(pool, ledger)` shows reserves, is logged as an error. The per-ledger fold keeps the last instance image,
   the twin of `dedup_final_pool_snapshots` (lore 0356).
 
 The historical 15-step PG flow (atomic per-ledger `BEGIN/COMMIT`) was removed with

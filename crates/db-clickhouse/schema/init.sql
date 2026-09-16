@@ -713,7 +713,7 @@ ORDER BY (pool_id);
 -- Reserves, Reserve0/1 — raw units), staged only when a write moved them;
 -- rows before the C′ deploy came from the plane's PoolData, identical in value
 -- except for mixed-decimal stable pools, whose history was re-derived from
--- raw ledgers. The plane row is a cross-check (plane = storage × PrecisionMul).
+-- raw ledgers. The plane row is not staged (a stable pool writes storage × PrecisionMul there).
 -- Pair- and config-factory rows come from their own instances too. Named without
 -- a family prefix on purpose: classic history joins HERE if the snapshot
 -- models unify — never the reverse (ADR 0058).

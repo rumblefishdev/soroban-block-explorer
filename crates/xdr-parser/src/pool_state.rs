@@ -10,7 +10,8 @@
 //!    reserve source any more (decision C′, task 0374): a stable pool writes
 //!    `Reserves × PrecisionMul` there — the units its swap math runs in —
 //!    which overstated one leg by 10× or 10^11× for the six non-empty
-//!    mixed-decimal stable pools. Kept only as a cross-check.
+//!    mixed-decimal stable pools. Kept only to notice a pool whose instance
+//!    carries no reserve key we read while the plane still shows reserves.
 //! 2. **Pool instance storage** — written in the SAME transaction as
 //!    `add_pool`, and on every later operation. Carries `TokenShare` (the
 //!    share token, as state — the fundamental source that demoted the
@@ -82,10 +83,6 @@ pub struct PoolInstanceState {
     /// Empty when the write carries no reserve key: administrative calls
     /// rewrite the instance too, and absence must never become zeros.
     pub reserves: Vec<String>,
-    /// `PrecisionMul` — per-leg multiplier a stable pool applies before
-    /// writing its plane row. Empty where absent (every non-stable layout and
-    /// older stable code), which means × 1. Used only to cross-check the plane.
-    pub precision_mul: Vec<String>,
 }
 
 /// Decode the pool-relevant slice of an instance-storage list (house typed
@@ -143,9 +140,6 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
         plane: addr(plane),
         router: router.and_then(&addr),
         reserves,
-        precision_mul: get("PrecisionMul")
-            .and_then(raw_u128_vec)
-            .unwrap_or_default(),
     })
 }
 
@@ -159,7 +153,8 @@ pub struct ExtractedPlanePoolData {
 }
 
 /// Extract plane `PoolData` writes from a transaction's ledger-entry changes
-/// (task 0374, step 7). Since decision C′ a cross-check input, not a source.
+/// (task 0374, step 7). Since decision C′ not a reserve source: staging uses it
+/// only to notice an instance layout whose reserve keys we do not read.
 ///
 /// Mirrors `extract_soroban_token_balances`: only `created`/`updated`/
 /// `restored` carry a value; the `state` pre-image is skipped (same-ledger
@@ -474,7 +469,6 @@ mod tests {
             vec!["22168059846400376042", "82877587"],
             "raw token units, never the plane's normalised figure"
         );
-        assert_eq!(got.precision_mul, vec!["1", "100000000000"]);
     }
 
     /// Verbatim keys of constant pool `CDDLTOOD…` (last modified 63 116 736):
