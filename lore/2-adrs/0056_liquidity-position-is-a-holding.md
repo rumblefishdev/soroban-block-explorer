@@ -15,8 +15,9 @@ related_tasks:
     '0162',
     '0331',
     '0339',
+    '0210',
   ]
-related_adrs: ['0055', '0051', '0027']
+related_adrs: ['0055', '0051', '0027', '0057']
 tags: [clickhouse, data-model, balances, liquidity-pools, assets, read-path]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/377'
@@ -31,6 +32,14 @@ history:
       dimension cost, the table-difference inventory, and a decision session
       that audited the SAC precedent on its own merits. Implementation is
       trigger-gated — see the triggers clause.
+  - date: '2026-09-15'
+    status: proposed
+    who: karolkow
+    note: >
+      Amended with the boundary rule (task 0210): a holding lives outside
+      `balances` only when its lifecycle requires it. Claimable balances
+      qualify and get a dedicated table; classic pool reserves do not. See
+      "Amendment 2026-09-15".
 ---
 
 # ADR 0056: a liquidity position is a holding
@@ -183,6 +192,42 @@ histories:
 4. **New tables and artifacts key on surrogates, never on the natural
    tuple.** (The audit found the side tables' 4-column joins evolution-hostile
    — task 0498.)
+5. **A holding lives outside `balances` only when its lifecycle requires it**
+   (amendment 2026-09-15, below).
+
+## Amendment 2026-09-15 — the boundary rule
+
+Task 0210 adds the two supply venues that have no holder: claimable balances
+(`B…`) and classic pool reserves (`L…`). This decision says "nothing may deepen
+the split", and its own rejected-alternatives table dismisses the hard table
+boundary as the argument for keeping holdings apart. So an exception needs a
+reason other than "it is not a holder".
+
+**Rule.** A holding gets a table of its own only when BOTH hold:
+
+1. **Mass churn** — its tombstones would dominate `balances`, which
+   `balance_aggregates_mv` rescans with `FINAL` every 2 minutes.
+2. **An id that is never reused** — so every version of a closed key can be
+   hard-deleted without resurrecting anything.
+
+The table keeps the `balances` row shape and the ADR 0055 lifecycle column, so
+readers of both use one convention.
+
+**Claimable balances qualify.** Production, ledgers 64,000,000–64,100,000:
+655,838 removed balances, against 87,271 trustline closures in `balances` over
+the ~116,000 ledgers from 64,322,000 (~8.7× per ledger). A balance id hashes its creating operation, so it
+never recurs. There is also a correctness reason. Every current reader of
+`balances` assumes the holder is an account or a contract, and `holder_id` is
+a one-way hash. `snapshot-seed` would classify a `B…` row as `Ghost` and write
+it to zero at every run, and `holder_count` would count it.
+
+**Classic pool reserves do not qualify.** Two rows per pool, changed in place.
+A pool id is derived from its asset pair, so a removed pool's id returns when
+the pair is re-created. They go into `balances` (task 0210's LP stage), with
+`holder_count` excluding them.
+
+**Consequence.** `total_supply` is the sum of `balances` and the claimable
+balance table, and that aggregate is the only reader that unions them.
 
 ## Rejected alternatives
 

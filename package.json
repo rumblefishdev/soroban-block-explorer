@@ -3,19 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "license": "MIT",
-  "workspaces": [
-    "libs/*",
-    "infra",
-    "web"
-  ],
+  "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
   "scripts": {
-    "build": "npx nx run-many -t build",
-    "format": "npx nx format:write --all",
-    "format:check": "npx nx format:check --all",
-    "graph": "npx nx graph",
-    "lint": "npx nx run-many -t lint",
-    "test": "npx nx run-many -t test",
-    "typecheck": "npx nx run-many -t typecheck",
+    "build": "nx run-many -t build",
+    "format": "nx format:write --all",
+    "format:check": "nx format:check --all",
+    "graph": "nx graph",
+    "lint": "nx run-many -t lint",
+    "test": "nx run-many -t test",
+    "typecheck": "nx run-many -t typecheck",
     "prepare": "husky",
     "verify:staged": "node tools/scripts/run-affected-checks.mjs staged",
     "verify:push": "node tools/scripts/run-affected-checks.mjs push",
@@ -28,12 +24,12 @@
     "infra:deploy:production": "make -C infra deploy-production",
     "infra:synth:staging": "make -C infra synth-staging",
     "infra:synth:production": "make -C infra synth-production",
-    "web:serve": "npx nx serve @rumblefish/soroban-block-explorer-web",
-    "web:build": "npx nx build @rumblefish/soroban-block-explorer-web",
-    "web:preview": "npx nx preview @rumblefish/soroban-block-explorer-web",
-    "web:test": "npx nx test @rumblefish/soroban-block-explorer-web",
-    "web:lint": "npx nx lint @rumblefish/soroban-block-explorer-web",
-    "web:typecheck": "npx nx typecheck @rumblefish/soroban-block-explorer-web"
+    "web:serve": "nx serve @rumblefish/soroban-block-explorer-web",
+    "web:build": "nx build @rumblefish/soroban-block-explorer-web",
+    "web:preview": "nx preview @rumblefish/soroban-block-explorer-web",
+    "web:test": "nx test @rumblefish/soroban-block-explorer-web",
+    "web:lint": "nx lint @rumblefish/soroban-block-explorer-web",
+    "web:typecheck": "nx typecheck @rumblefish/soroban-block-explorer-web"
   },
   "devDependencies": {
     "@eslint/js": "^9.8.0",
@@ -79,7 +75,7 @@
       "rustfmt --edition 2024"
     ],
     "!(*.rs)": [
-      "npx nx format:write --files"
+      "nx format:write --files"
     ]
   },
   "dependencies": {

@@ -1824,6 +1824,110 @@ family — concentrated pools already use storage because they never write the
 plane. Current code uses three layouts: `ReserveA`/`ReserveB` (383 pools),
 `Reserves` (85), `Reserve0`/`Reserve1` (46).
 
+### Decision C′ measured across every code version (2026-09-15)
+
+Before changing the parser: which storage keys hold reserves in EVERY code
+version router-family pools have run, not only the current ones. Code
+versions come from `executable_update` topics (old and new hash per upgrade)
+plus the original code of never-upgraded pools.
+
+- **58** code versions ran on router pools in the ingested range (1,537
+  upgrades, 403 pools upgraded).
+- **55** versions: one raw archive ledger each in which a pool on that
+  version changed reserves, decoded — every one wrote its reserves into its
+  own instance storage. **3** versions (`D3A1C7B6`, `419DD5F0`, `45435508`)
+  saw only administrative events while pools ran them: no reserve change, so
+  nothing to read.
+- Exactly three layouts in all history, no fourth: `ReserveA` + `ReserveB`
+  (constant, elastic; later versions add `ReservesSyncLedger`), `Reserves`
+  (stable, a vector, with or without `Decimals` / `Precision` /
+  `PrecisionMul`), `Reserve0` + `Reserve1` (concentrated).
+- **Raw units in every version — the decisive check.** The 8 mixed-decimal
+  stable pools, every version each wrote reserves on: 23 samples; storage raw
+  and plane = storage × `PrecisionMul` in 21, both zero in 2, exceptions 0.
+  For equal-decimal pools plane = storage in every sample.
+- A suspected gap (trades on version `3ECB29BB` with no reserve rows) was a
+  sampling artefact: all six rows exist with exact values.
+
+Parser rules this fixes:
+
+1. Read `ReserveA`+`ReserveB` or `Reserves` from the pool's instance write. A
+   missing key emits no row — never a zero: administrative operations rewrite
+   the instance too.
+2. Emit only when the reserves changed between the instance pre-image and the
+   post-image (both are in ledger meta) or the instance was created. Otherwise
+   every reward or config operation adds a row with unchanged numbers.
+3. `plane_id` = the plane the pool declares in its own instance (the
+   concentrated arm already does this), so a corrected row REPLACES the old
+   one under the same key instead of standing beside it.
+4. The plane stays as a cross-check, not a source: plane = storage ×
+   `PrecisionMul` (1 where absent) held in every sample, so a mismatch is a
+   signal of changed contract semantics.
+
+Rollout: parser first (live), then the history of the 8 affected pools — 821
+rows in 726 ledgers across 60 archive partitions. A range re-parse would fetch
+~60 partitions (~800 GB) for ~1 GB of ledgers, so the backfill is a list pass
+over those 726 ledgers through the same parse+stage path (option A, decided
+2026-09-15), never an in-DB division. No DDL, no indexer pause. Verify by
+re-running the three-source comparison: expected 514 / 514.
+
+### Decision C′ implemented — PR #459 (2026-09-15)
+
+Branch `fix/0374_router-reserves-from-pool-storage`, commit `bbfe3ca5`, PR
+https://github.com/rumblefishdev/soroban-block-explorer/pull/459. Built
+test-first; every new test failed on the old code for the intended reason.
+
+**What changed**
+
+- `pool_state.rs`: `parse_pool_instance` reads reserves from all three
+  layouts in raw units, plus `PrecisionMul`; absent keys give no reserves,
+  never zeros. `extract_pool_instances` pairs each post-image with its `state`
+  pre-image and flags `reserves_changed`.
+- `stage.rs`: the plane arm no longer stages rows; the instance arm stages a
+  row when `reserves_changed`, with `plane_id` = the declared plane. The plane
+  row is compared with storage × `PrecisionMul` on the legs only (a plane
+  vector may carry a per-tick tail) and a mismatch logs a warning. **That
+  cross-check was removed later the same day** — it was wrong 17 times out of
+  17 on a wider corpus; see the two decision sections below.
+- Harness `redecode_pool_state_changes_from_list` (ledger list from a file) —
+  the differential tool and the backfill generator.
+- ADR 0058 amended; indexing-pipeline, xdr-parsing and database-schema
+  overviews, `init.sql` comments and `docs/backfills.md` (list-pass procedure)
+  updated. No schema change.
+
+**Verification**
+
+| Check                                                              | Result                                                                                                      |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| old code over 874 real ledgers vs production rows on those ledgers | 2,627 = 2,627 (the baseline reproduces production)                                                          |
+| new code, pools other than the 8 affected                          | 1,862 / 1,862 identical to production                                                                       |
+| new code, the 8 mixed-decimal pools                                | 754 rows = old ÷ `PrecisionMul`, all; 18 zero rows unchanged                                                |
+| new rows vs pool storage decoded from raw ledgers                  | 23 / 23 exact                                                                                               |
+| rows no longer produced                                            | 11, each an exact repeat of the pool's previous row (plane re-publication, 10 of them in ledger 62,234,220) |
+| rows produced that did not exist before                            | 0                                                                                                           |
+| reserve-moving activity of the 8 pools outside the backfill list   | 10 ledgers (`claim_protocol_fee`, gauge reward claims): 0 rows from the new code                            |
+| stored rows off the pool's declared plane (production)             | 0 of 773 pool/plane keys — re-derived rows replace old ones                                                 |
+| final code vs the verified run                                     | byte-identical output                                                                                       |
+| tests                                                              | xdr-parser 439/439, db-clickhouse 144/144, integration suites green; clippy `-D warnings` and fmt clean     |
+
+Two CH-gated tests fail identically on clean `develop` against the local
+container, which lacks the `executable_owner_id` column
+(`repair_tier1::columns_tests::soroban_contracts_rebuild_keeps_the_executable_reference`,
+`g9_cross_ledger_verdict_routes_nft_events`); `bootstrap::…writes_rows` is
+order-dependent in a full local run and passes on its own.
+
+**Rollout (writer first)**
+
+1. Merge PR #459, deploy Compute.
+2. Insert the re-derived history of the 8 pools — 772 `(pool, plane, ledger)`
+   keys in 726 ledgers, produced by the harness from the merged code
+   (payload SHA-256 `e4bff4c864902749e7a5618f759fa397e80c5bb942327fe5391bd75dbd1b1832`);
+   production holds 821 raw rows for those pools = the same 772 keys plus
+   unmerged duplicates. Then `OPTIMIZE TABLE pool_state_changes FINAL`.
+3. Re-run `cargo test -p backfill-runner --test pool_reserves_reconciliation`
+   — expected afterwards: every pool equals its own storage except
+   `CAZ6W4WH…`, whose code is no longer a pool (task 0325).
+
 ### Wide differential of decision C′ + the two sibling families (2026-09-15)
 
 **Differential, 1,565 ledgers.** The previous 874 plus one ledger per router
