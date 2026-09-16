@@ -427,7 +427,7 @@ ORDER BY (contract_id, ledger_sequence, transaction_index, operation_index, even
 | refund, ledger ≤ 58,762,517 | `application_order` | 4095              | 0                               |
 | refund, ledger ≥ 58,762,518 | 1048575             | 0                 | rank among the ledger's refunds |
 
-### Fill — per 20k-ledger slice, in ClickHouse, no S3
+### Fill — per 5k-ledger slice, in ClickHouse, no S3
 
 ```sql
 INSERT INTO soroban_events_staging_canonical
@@ -527,3 +527,43 @@ API types regenerated; architecture docs (schema, pipeline, xdr parsing);
 Built alongside the old table: ~185 GiB by column arithmetic (236 GiB − 55 GiB
 dropped + the new integer columns, estimate) against 368.72 GiB free.
 Measured on the first filled partition before the rest.
+
+### Decisions (karolkow, 2026-09-16)
+
+- **Column names — rpc names** (`transaction_index`, `operation_index`,
+  `event_index`). `event_index` changes meaning; every reader of the table is
+  rewritten in the same change and a grep confirms no query keeps the old
+  column.
+- **Cutover — one change, one window** (a phased dual write was considered and
+  rejected: three deploys, a second write path for the whole fill, and the old
+  name occupied until the end). `EXCHANGE TABLES` keeps the name
+  `soroban_events`.
+
+### Rollout
+
+1. Operator creates `soroban_events_staging_canonical` (DDL above). Nothing
+   writes it.
+2. Fill partition 127 first; measure size per column and run the gates. Stop
+   there if the table is not smaller than the old partition.
+3. Fill the remaining partitions while the indexer runs, one partition at a
+   time, gate per partition.
+4. One PR: live writer, the five readers, API types, docs, ADR for the naming.
+   Merged, not deployed.
+5. Window: stop the indexer → fill the tail up to the head → gates on the tail
+   → `EXCHANGE TABLES soroban_events AND soroban_events_staging_canonical` →
+   deploy Compute → start the indexer. Ingest paused ~30–60 min (estimate,
+   nothing lost — the queue holds it); event reads fail for the minutes between
+   the swap and the end of the deploy.
+6. After production checks (ids against `getEvents`, contract event order):
+   drop the old table (now under the staging name) and `soroban_event_ops`.
+   Until then the old table is the rollback; ledgers indexed after the swap
+   are only in the new one.
+
+### Pre-fill gate on partition 127 (read-only, 2026-09-16)
+
+100 slices of 5k ledgers (20k exceeds the read profile's memory cap for the
+distinct counts; the INSERT itself carries no such aggregate): 452,275,397
+rows = distinct new keys = distinct old keys = the partition's active row
+count. `transaction_index = 0` rows 170,740,563 = the partition's
+transactions; `operation_index = 4095` rows 0 (all ledgers ≥ 58,762,518);
+`transaction_index = 1048575` rows 78,294,908.
