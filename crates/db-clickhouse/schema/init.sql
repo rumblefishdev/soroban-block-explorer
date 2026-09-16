@@ -526,7 +526,9 @@ ORDER BY (asset_id);
 -- not the asset) and claimable balances (`ClaimableBalanceEntry` — off the
 -- sender, not yet the receiver), plus the TTL-archived tail and true rebasing.
 -- On USDT0 the first two are the ENTIRE gap: 24.5064194 + 0.3070000 of
--- 2,595,050.05, i.e. 0.001%. An AMM-heavy asset will show far worse. Soroban-DEX
+-- 2,595,050.05, i.e. 0.001%. An AMM-heavy asset will show far worse.
+-- Claimable balances LEFT this list in task 0210: `balance_aggregates_mv` sums
+-- `claimable_balance_holdings` alongside `balances`. Soroban-DEX
 -- pool reserves are NOT in this list — a Soroban pool holds its reserves as a
 -- contract, so ADR 0051 already sums them.
 
@@ -637,17 +639,34 @@ CREATE TABLE IF NOT EXISTS claimable_balance_holdings (
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (holder_id, asset_id);
 
--- Refreshable MV that recomputes `balance_aggregates` from `balances` (defined
--- above — the source table MUST exist before this CREATE). Full recompute + atomic
--- EXCHANGE, so reads need no FINAL.
+-- Refreshable MV that recomputes `balance_aggregates` from the two holding
+-- tables (both defined above — they MUST exist before this CREATE). Full
+-- recompute + atomic EXCHANGE, so reads need no FINAL.
+--
+-- Task 0210 — `total_supply` sums BOTH tables: value sitting in a claimable
+-- balance has left its sender and belongs to no account yet, but it is part of
+-- the asset's supply. `holder_count` stays `balances`-only (`is_holder`): a
+-- claimable balance is not a holder, and the assets list sorts on this column
+-- (task 0547). Closed rows carry `amount = 0` in both tables, so tombstones
+-- add nothing to either aggregate.
+--
+-- PROD: a refreshable MV cannot be ALTERed — DROP and re-CREATE it, and only
+-- AFTER `snapshot-seed` has filled `claimable_balance_holdings`. Between the
+-- writer deploy and that seed the table holds only balances created since the
+-- deploy, and summing it then would publish a supply that is neither the old
+-- number nor the true one.
 CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
 REFRESH EVERY 2 MINUTE
 TO balance_aggregates AS
 SELECT
     asset_id,
-    sum(amount)                  AS total_supply,
-    toInt32(countIf(amount > 0)) AS holder_count
-FROM balances FINAL
+    sum(amount)                                  AS total_supply,
+    toInt32(countIf(is_holder = 1 AND amount > 0)) AS holder_count
+FROM (
+    SELECT asset_id, amount, 1 AS is_holder FROM balances FINAL
+    UNION ALL
+    SELECT asset_id, amount, 0 AS is_holder FROM claimable_balance_holdings FINAL
+)
 GROUP BY asset_id;
 
 CREATE TABLE IF NOT EXISTS nfts (

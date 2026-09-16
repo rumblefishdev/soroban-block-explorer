@@ -714,6 +714,23 @@ Standards + spec review, pre-mortem, over-engineering pass.
   counting a claimable balance as a holder, and deleting closed rows later does
   not touch the table the account API reads.
 
+### Progress — item 4 written, not yet applied to production (2026-09-16)
+
+- `balance_aggregates_mv` sums `balances` and `claimable_balance_holdings`
+  through one `UNION ALL`; `holder_count` keeps its `balances`-only meaning
+  through an `is_holder` flag, so the assets-list sort key (0547) is unchanged.
+  Closed rows carry `amount = 0` in both tables and move neither aggregate.
+- **Order on production:** DDL, then the writer deploy, then `snapshot-seed`,
+  and only then DROP + CREATE the MV. Between the deploy and the seed the table
+  holds only balances created since the deploy, so summing it then publishes a
+  number that is neither the old one nor the true one. A refreshable MV cannot
+  be ALTERed.
+- Not yet run against a real ClickHouse — no local server available at the time
+  of writing.
+- The two comments that called `sum(balances)` the real supply now say
+  claimable balances have left the residue (`init.sql` `soroban_token_supply`
+  tombstone, `api/src/assets/queries.rs`); classic LP reserves remain in it.
+
 ## Context
 
 ### The four sources Horizon aggregates

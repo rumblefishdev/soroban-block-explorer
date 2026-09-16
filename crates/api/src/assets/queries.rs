@@ -178,10 +178,11 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // summed because we sum contracts too), so the sum equals the token's real
 // supply; the narrow residue is the accepted non-100% cost of one universal
 // method — no per-token `TotalSupply` key read (see the task 0331 Option-A
-// decision). The residue is everything the chain holds WITHOUT a holder, since
-// this sum is keyed by one: native LP reserves + claimable balances (task 0210,
-// measured 0.001% on USDT0 but unbounded for an AMM-heavy asset), plus the
-// TTL-archived tail and true rebasing. Soroban-DEX reserves are contract-held,
+// decision). The residue is what the chain holds WITHOUT a holder, since this
+// sum is keyed by one. Claimable balances left it in task 0210 — the MV sums
+// `claimable_balance_holdings` too. What remains: native LP reserves (unbounded
+// for an AMM-heavy asset — measured 3,686 assets over 1%, 1,468 over 50% on
+// 2026-09-14), plus the TTL-archived tail and true rebasing. Soroban-DEX reserves are contract-held,
 // so ADR 0051 already counts them. RAW `Int128` (the API returns it raw;
 // clients scale by `decimals`, classic = 7). `Nullable` columns, so a JOIN miss
 // (no holders — reads NULL under the readonly `api_reader`, where
