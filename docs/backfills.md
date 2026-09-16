@@ -912,7 +912,7 @@ contract_id IN (the pool surrogates)`. Derive that IN-list from the
    deposit⇄mint detector), so a pool-WASM upgrade re-purposing the u32
    keys would corrupt reserves silently. Two cheap defenses, per release
    or on a cadence: (a) `cargo test -p backfill-runner --test
-   pool_reserves_reconciliation` (task 0374) reads every Soroban pool's own
+pool_reserves_reconciliation` (task 0374) reads every Soroban pool's own
    reserve entries with `getLedgerEntries` and compares them with our newest
    `pool_state_changes` row — all three families; (b) watch
    `executable_update` events (already ingested, task 0320) on the registered
@@ -950,7 +950,7 @@ range re-parse would fetch ~800 GB to decode ~1 GB.
    `OPTIMIZE TABLE pool_state_changes FINAL` — a re-derived row ties on its key
    with the old one, and until the merge a read may still pick the old image.
 5. **Check:** `cargo test -p backfill-runner
-   --test pool_reserves_reconciliation -- --nocapture`. Before this backfill
+--test pool_reserves_reconciliation -- --nocapture`. Before this backfill
    it lists the 6 non-empty pools (one leg × 10 or × 10^11) and `CAZ6W4WH…`
    (measured 2026-09-15: 762 of 769 equal); after it, only `CAZ6W4WH…`.
 

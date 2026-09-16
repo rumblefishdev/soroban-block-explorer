@@ -1937,12 +1937,12 @@ anything in range. Function names are not stored, so the event set stands in
 for the called function; calls that emit nothing are not targeted. Base
 `c2fc620c` and the PR, same test harness, same archive files:
 
-| Outcome                              | Rows  | Check against production                                    |
-| ------------------------------------ | ----- | ----------------------------------------------------------- |
-| identical                            | 3,116 | —                                                           |
-| value changed                        | 754   | all in the 8 `PrecisionMul` ≠ 1 pools, each = base ÷ multiplier |
-| dropped                              | 160   | all equal the pool's previous production row (true repeats): 156 concentrated, 2 stable, 2 constant |
-| added                                | 0     | —                                                           |
+| Outcome       | Rows  | Check against production                                                                            |
+| ------------- | ----- | --------------------------------------------------------------------------------------------------- |
+| identical     | 3,116 | —                                                                                                   |
+| value changed | 754   | all in the 8 `PrecisionMul` ≠ 1 pools, each = base ÷ multiplier                                     |
+| dropped       | 160   | all equal the pool's previous production row (true repeats): 156 concentrated, 2 stable, 2 constant |
+| added         | 0     | —                                                                                                   |
 
 **Soroswap-shaped (235) and Phoenix-shaped (20) pools** already read raw
 reserves from their own storage (task 0518). RPC on 2026-09-15: 235/235 and
