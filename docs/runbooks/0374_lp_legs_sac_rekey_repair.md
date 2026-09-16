@@ -31,8 +31,14 @@ Measured on production 2026-09-08: **1,084 of 1,175 soroban leg occurrences
 resolved to no asset at all**, while 38,932 of 38,932 classic legs resolved
 cleanly. 218 pools hold a native XLM leg and not one carried XLM's id.
 
-The writer is fixed (`contract_token_asset_id` in `persist/stage.rs`, commit
-`bf1a46a8`). This runbook repairs the rows written before that fix.
+The writer is fixed in two parts: `contract_token_asset_id` in
+`persist/stage.rs` keys a leg on the asset (commit `bf1a46a8`), and
+`sac_classic_map_needed` in `persist.rs` loads the map it keys through on any
+ledger that registers a pool. The second part came later. Without it a pool
+registered in a ledger with no token balance change, and every pool a
+targeted (`--only`) re-parse rewrote, still got a SAC-keyed leg: 1,084 such
+legs became 1,452 after the registry re-parse of 2026-09-13. This runbook
+repairs the rows written before BOTH parts.
 
 ## Preconditions — the order is the whole safety argument
 
@@ -42,15 +48,16 @@ rows must be finished before step 3**, or it re-introduces them.
 
 1. **The registry backfill has finished.** It emits `liquidity_pools` rows for
    BOTH pool kinds, so a run in flight is such a writer.
-2. **The corrected writer is deployed.** From that moment the live indexer
-   writes correct legs, which is what makes step 3 safe without a pause.
+2. **The corrected writer is deployed** — both parts above, indexer and
+   `backfill-runner` alike. From that moment the live indexer writes correct
+   legs, which is what makes step 3 safe without a pause.
 3. Only then: run the repair.
 
 **No indexer pause is needed** — that is what the ordering buys. A pause would
 be required only if the mutation ran before the writer was deployed.
 
-**Standing hazard, permanent:** running any backfill with a binary older than
-`bf1a46a8` after this repair re-breaks the column. Precondition 2 applies to
+**Standing hazard, permanent:** running any backfill with a binary that lacks
+either part after this repair re-breaks the column. Precondition 2 applies to
 every later run, not just this one.
 
 ## A — the soroban rewrite expression
@@ -97,6 +104,12 @@ and a pool that stopped trading never does. Measured 2026-09-09: 8,825 classic
 pools still empty, none touched in the previous week, so no ledger-range
 re-index reaches them however long it runs. This is what closes that gap, and
 what makes the pair-column drop gate reachable.
+
+**Measured 2026-09-15, after the registry re-parse: 0 classic pools with empty
+`legs`.** The re-parse filled them, so B has nothing left to rewrite; its
+`WHERE` makes running it anyway a no-op. It stays documented because it is the
+only way back if a later run leaves rows empty — and only while the pair
+columns exist, since it reads them.
 
 ```sql
 arrayMap(x -> if(x = 0, -1, x), [
@@ -200,8 +213,9 @@ until it catches nothing.
 -- A: soroban
 ALTER TABLE liquidity_pools UPDATE legs = <REWRITE A> WHERE pool_kind = 1;
 
--- B: classic, only where a fill is needed AND both legs resolve. The
--- `NOT has(..., -1)` guard is why the expression maps a miss to -1: a row
+-- B: classic, only where a fill is needed AND both legs resolve. Once the
+-- pair columns are dropped, skip B: it reads them and ClickHouse rejects it.
+-- The `NOT has(..., -1)` guard is why the expression maps a miss to -1: a row
 -- whose asset has no `assets` row is skipped entirely rather than written
 -- with a placeholder.
 ALTER TABLE liquidity_pools UPDATE legs = <REWRITE B>

@@ -270,73 +270,60 @@ Frontend **content** is separate: `deploy-production-web`
     fresh `DESCRIBE` in `system.query_log` and `max(sequence)` on `ledgers`
     advancing. A `make deploy-production-compute` recycles too.
 
-- **Soroban-AMM (task 0374): DDL BEFORE the indexer, or ingest stops.** The
-  clickhouse-rs 0.15 client refuses an insert when the target table still has
-  a no-DEFAULT column the row struct dropped, or is missing entirely — a
-  `SchemaError` aborts the whole partition (the 0310 outage class). The 0374
-  indexer's soroban arm runs unconditionally, so deploying it against an
-  un-migrated schema is an outage, not a degradation. Order:
+- **Retiring the pool pair columns (task 0374): API first, then one indexer
+  pause for the DROP and the new indexer.** `liquidity_pools.asset_a_*` /
+  `asset_b_*` have no DEFAULT, so neither writer can run on the wrong side of
+  the DROP: the clickhouse-rs 0.15 client refuses an insert when the table
+  still has a no-DEFAULT column the row struct lacks (the new writer), and a
+  struct naming a column the table lacks fails the same way (the old writer).
+  Either is a `SchemaError` that aborts the partition — an outage, not a
+  degradation. The API only SELECTs named columns, so it is indifferent to
+  the DROP in both directions. Order:
 
-  0. **Pause the indexer first** (`indexerLambdaConcurrency = 0`): the
-     RUNNING (pre-0374) writer still names `tvl`/`volume`/`fee_revenue` in
-     its snapshot inserts (verified on `origin/master`
-     `LiquidityPoolSnapshotRow`), so dropping them under a live writer
-     fails every snapshot insert — doorbell retries drain toward the DLQ
-     until the new code deploys. Doorbells accumulate durably while paused
-     (see §3.1); the reconcile catches up after unpause. `CREATE TABLE` x2
-     and the `share_token_id` drop need no pause (nothing running writes or
-     reads them — verified against master's structs and SQL), but batch
-     everything inside the one pause window anyway.
-  1. **DDL next** (prod is mid-migration: the `liquidity_pools` soroban
-     columns are already ALTERed in — verified live 2026-09-02, five
-     columns present with correct defaults; the rest is not):
+  1. **Deploy the API and the web app.** The new API reads `legs` only, so it
+     runs against the table as it is.
+  2. **Pause the indexer** (`indexerLambdaConcurrency = 0`) and make sure no
+     backfill is running. Doorbells accumulate durably while paused (see
+     §3.1); the reconcile catches up after unpause.
+  3. **Gate — run both, every time, and stop on a failure:**
 
      ```sql
-     -- new tables: run the definitions VERBATIM from
-     -- crates/db-clickhouse/schema/init.sql (the source of truth — do not
-     -- retype them). Extract with:
-     --   awk '/CREATE TABLE IF NOT EXISTS pool_state_changes/,/^ORDER BY/; /CREATE TABLE IF NOT EXISTS pool_instance_state/,/^ORDER BY/' \
-     --     crates/db-clickhouse/schema/init.sql
-     CREATE TABLE IF NOT EXISTS pool_state_changes (...);   -- from init.sql
-     CREATE TABLE IF NOT EXISTS pool_instance_state (...);  -- from init.sql
-     -- load-bearing drops (no-DEFAULT columns the new structs dropped)
-     ALTER TABLE liquidity_pool_snapshots
-       DROP COLUMN tvl, DROP COLUMN volume, DROP COLUMN fee_revenue;
-     -- DEFAULT 0, no hard ordering constraint — batch it here anyway
-     ALTER TABLE liquidity_pools DROP COLUMN share_token_id;
-     -- load-bearing drops: the retired pair columns (task 0374). NOT
-     -- unconditional — read the gate below FIRST.
+     -- MUST be 0 and 0. A row with empty `legs` carries its composition
+     -- nowhere else once the pair columns are gone; a stored 0 is not a leg.
+     SELECT countIf(length(legs) = 0) AS unmigrated,
+            countIf(has(legs, 0))     AS placeholders
+     FROM liquidity_pools FINAL;
+
+     -- Record the output in the task file BEFORE dropping: a leg whose
+     -- asset has no `assets` row is named ONLY by the pair columns.
+     -- 2 classic pools on 2026-09-15, both empty (XLM/PIF, XLM/SUR810).
+     SELECT hex(p.pool_id), p.asset_a_type, p.asset_a_code, p.asset_a_issuer_id,
+            p.asset_b_type, p.asset_b_code, p.asset_b_issuer_id
+     FROM liquidity_pools AS p FINAL
+     ARRAY JOIN p.legs AS leg
+     WHERE p.pool_kind = 0
+       AND leg NOT IN (SELECT id FROM assets);
+     ```
+
+  4. **Drop the columns:**
+
+     ```sql
      ALTER TABLE liquidity_pools
        DROP COLUMN asset_a_type, DROP COLUMN asset_a_code, DROP COLUMN asset_a_issuer_id,
        DROP COLUMN asset_b_type, DROP COLUMN asset_b_code, DROP COLUMN asset_b_issuer_id;
      ```
 
-     **GATE — run this BEFORE the pair-column drop, every time:**
+  5. **Deploy the indexer** (Galexie recipe below), then unpause. Confirm
+     `max(sequence)` on `ledgers` advancing and no `SchemaError` in its logs.
+  6. **Run the SAC leg repair** — `docs/runbooks/0374_lp_legs_sac_rekey_repair.md`,
+     mutation A only. **Skip B and its dry run:** B reads the pair columns
+     step 4 dropped, so ClickHouse rejects it, and step 3's gate already
+     proved it has nothing to fill.
 
-     ```sql
-     SELECT countIf(length(legs) = 0) AS unmigrated FROM liquidity_pools FINAL;
-     ```
-
-     It MUST return 0. If it does not, **stop and do not drop**: a row with
-     empty `legs` carries its composition nowhere else, and the leg surrogate
-     is `cityhash_102_128`'s low half, which ClickHouse cannot compute (its
-     `cityHash64` is a different algorithm). Dropping under a non-zero count
-     destroys those pools' identity permanently — recoverable only by
-     re-parsing XDR from S3.
-
-     A non-zero count is the EXPECTED state until every pool row has been
-     rewritten. `legs` is filled at WRITE time only, so a pool gets it when the
-     indexer next touches it; a pool that stopped trading is never touched.
-     Measured 2026-09-09: 10,276 classic pools unmigrated, **none of them
-     touched in the previous week** — a ledger-range re-index cannot reach
-     them by design. Clearing that residue needs a one-shot pass over the
-     TABLE (read the pair columns, emit rows with `legs` filled, versioned on
-     each row's own `last_updated_ledger`); it must run before this drop, and
-     it reads the very columns being dropped, so the order is not negotiable.
-
-  2. **Then the indexer** (Galexie recipe below).
-  3. **Then the catch-up backfills and the window-closure check** — see
-     "Soroban-AMM pool passes" in [backfills.md](./backfills.md).
+  **Rollback:** everything up to step 3 is reversible by redeploying the old
+  API. After step 4 the old API and the old indexer cannot run: going back
+  means re-adding the columns with a DEFAULT and refilling them from `legs`
+  joined to `assets` (all but the pools step 3 recorded).
 
 - **A SPA build without the Turnstile site key takes production down for
   users.** With `enableAuthLayer: true` the API rejects unauthenticated
