@@ -315,4 +315,40 @@ Not yet checked against the chain: this proves the two tables agree, both
 written by the same parser. The rpc-id comparison (`getEvents` on a recent
 range) belongs to the swap gate, and must also settle how the fee sentinel is
 derived — the stage is not stored; one real fixture shows index 0 =
-`BeforeAllTxs` charge, index 1 = `AfterAllTxs` refund.
+`BeforeAllTxs` charge, index 1 = `AfterAllTxs` refund — settled in "Fee event identity" below.
+
+### Fee event identity — verified against the chain (2026-09-16)
+
+The fee sentinel needs the event's stage, which is not stored. It is derivable
+from what is stored — the event's position among the transaction's fee events
+and the ledger — with no re-parse.
+
+**Rule.**
+
+| our row                                         | stage (from archive meta) | rpc id                                                     |
+| ----------------------------------------------- | ------------------------- | ---------------------------------------------------------- |
+| fee event, `event_index` 0 (charge)             | `BeforeAllTxs`, always    | tx 0, op 0, event = rank of the charge in the ledger       |
+| fee event, `event_index` 1, ledger ≤ 58,762,517 | `AfterTx`                 | tx = `application_order`, op 4095, event 0                 |
+| fee event, `event_index` 1, ledger ≥ 58,762,518 | `AfterAllTxs`             | tx 1048575, op 0, event = rank of the refund in the ledger |
+
+Rank = 0-based position among the same-stage fee events of that ledger, by
+`application_order` (stellar-rpc `internal/db/event.go`, `txEventIndices`:
+one counter per stage per ledger, `afterTx` reset per transaction). Every
+transaction is charged, so a charge's rank equals `application_order − 1`;
+refunds exist only for some, so theirs does not.
+
+**Evidence.**
+
+- Live rpc (`getEvents`, v28.0.1, native SAC `fee` topic), ledgers 64,340,000 /
+  64,370,000 / 64,400,000 / 64,430,000 / 64,450,000: 2,104 rpc events = 2,104
+  of our rows, 0 mismatches on transaction and amount; 1,530 charges and 574
+  refunds, every rpc event index equal to the rank rule.
+- Archive meta decoded with the official CLI (`stellar xdr decode --type
+LedgerCloseMetaBatch`), stage per transaction: protocols 20, 21, 22 (ledgers
+  50,475,303 / 53,015,049 / 56,019,779 / 58,513,130) — refunds `after_tx`;
+  protocols 23, 24 (58,816,920 / 60,016,783) — `after_all_txs`. At the upgrade:
+  58,762,516 (p22) and 58,762,517 (header already p23, transactions applied
+  under p22) `after_tx`; 58,762,518 `after_all_txs`, the first with
+  `post_tx_apply_fee_processing`. No transaction carries more than one refund.
+- The pre-23 id (`AfterTx`) is taken from stellar-rpc's source; no live rpc
+  retains those ledgers, so it is not confirmed by an rpc answer.
