@@ -214,10 +214,11 @@ Derived explorer entities:
   `reserves Array(Int128)` verbatim. Same grain and
   mechanism as the classic snapshots: a version-less `ReplacingMergeTree`
   whose determinism comes from folding at stage time, never from a version
-  column. Fungible pools write plane `PoolData`; concentrated pools write
-  `Reserve0/1` on their own instance, so both writers feed this table and the
-  fold spans them. `plane_id` records WHICH plane wrote the row — reads must
-  filter on it (below). The target state-fact shape — classic snapshot
+  column. Router-family rows come from the pool's own instance in raw units,
+  staged when a write moved them (decision C′; rows before that deploy came
+  from the plane's `PoolData`, equal except for mixed-decimal stable pools,
+  whose history was re-derived from raw ledgers). `plane_id` is the plane the
+  pool declares — reads still filter on it (below). The target state-fact shape — classic snapshot
   history joins INTO it if the snapshot models unify (ADR 0058 §3)
 - `pool_instance_state` — what a pool declares ABOUT ITSELF, read from its own
   instance storage (side table, `asset_sac` pattern; ADR 0058 §4): `plane_id`

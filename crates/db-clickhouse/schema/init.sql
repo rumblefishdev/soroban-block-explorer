@@ -703,15 +703,18 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id);
 
--- Pool reserve state (task 0374 step 7) — THE reserve source (T4: event
--- arithmetic failed its oracle 6/49). ONE deterministic row per
+-- Pool reserve state (task 0374 step 7; source revised by decision C′,
+-- 2026-09-15). ONE deterministic row per
 -- (pool, plane, ledger), collapsed at parse time in ledger apply order — the
 -- same grain and mechanism as the classic snapshots (decision 2026-08-30), so
 -- the 0356 LIMIT-1/no-FINAL invariant holds and the future unification is
 -- a plain union. Intra-ledger history lives in soroban_events forever.
--- Two on-chain layouts feed it: fungible pools write plane PoolData
--- (vector VERBATIM — per-tick tail possible; reads slice by leg count),
--- concentrated pools write Reserve0/1 on their own instance. Named without
+-- Router-family rows come from the pool's OWN instance (ReserveA/B,
+-- Reserves, Reserve0/1 — raw units), staged only when a write moved them;
+-- rows before the C′ deploy came from the plane's PoolData, identical in value
+-- except for mixed-decimal stable pools, whose history was re-derived from
+-- raw ledgers. The plane row is not staged (a stable pool writes storage × PrecisionMul there).
+-- Pair- and config-factory rows come from their own instances too. Named without
 -- a family prefix on purpose: classic history joins HERE if the snapshot
 -- models unify — never the reverse (ADR 0058).
 --
@@ -731,9 +734,8 @@ ORDER BY (pool_id);
 --
 -- Version-less RMT, exactly like its classic twin `liquidity_pool_snapshots`:
 -- the row is made a deterministic function of the ledger by folding at STAGE
--- time (`fold_pool_state_changes`), not by a version column. Two writers feed
--- this table — the plane arm and the concentrated-instance arm — and the fold
--- collapses their collision; per backfills.md rule 4 a re-parse then wins on
+-- time (`fold_pool_state_changes`), not by a version column. The fold keeps
+-- a pool's last instance image per ledger; per backfills.md rule 4 a re-parse then wins on
 -- its own, because it lands last. A version column keyed on anything
 -- batch-local would BREAK that: a narrow re-parse could stamp a lower version
 -- than the original wide parse and lose to the stale row.

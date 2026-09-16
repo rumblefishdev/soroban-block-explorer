@@ -77,6 +77,7 @@ use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use db_clickhouse::persist::rows::PoolStateChangeRow;
 use db_clickhouse::persist::stage::{StageInputs, StagedLedger, prepare_with_sac_overrides};
 
 /// Thirty ledgers spread evenly over the backfilled range (the value-flow
@@ -201,6 +202,22 @@ fn stage_ledger(cache: &Path, seq: u32) -> Vec<StagedLedger> {
         .collect()
 }
 
+/// One `pool_state_changes` row as ClickHouse prints `hex(pool_id),
+/// ledger_sequence, reserves, plane_id`, keyed for a stable sort.
+fn state_change_line(r: &PoolStateChangeRow) -> ((String, i64, i64), String) {
+    let id = hex_upper(&r.pool_id);
+    (
+        (id.clone(), r.plane_id, r.ledger_sequence),
+        [
+            id,
+            r.ledger_sequence.to_string(),
+            array(&r.reserves),
+            r.plane_id.to_string(),
+        ]
+        .join("\t"),
+    )
+}
+
 /// Sort by key, drop the key, write one line per row.
 fn write_tsv<K: Ord>(out: &Path, name: &str, mut rows: Vec<(K, String)>) -> usize {
     rows.sort_by(|a, b| a.0.cmp(&b.0));
@@ -302,17 +319,7 @@ fn redecode_pool_tables() {
     for &seq in LEDGERS.iter().chain(POOL_LEDGERS) {
         for staged in stage_ledger(&cache, seq) {
             for r in &staged.pool_state_change_rows {
-                let id = hex_upper(&r.pool_id);
-                state_changes.push((
-                    (id.clone(), r.plane_id, r.ledger_sequence),
-                    [
-                        id,
-                        r.ledger_sequence.to_string(),
-                        array(&r.reserves),
-                        r.plane_id.to_string(),
-                    ]
-                    .join("\t"),
-                ));
+                state_changes.push(state_change_line(r));
             }
             for r in &staged.lp_amount_rows {
                 let id = hex_upper(&r.pool_id);
@@ -381,5 +388,52 @@ fn redecode_pool_tables() {
         write_tsv(&out, "lp_operation_amounts.tsv", amounts),
         write_tsv(&out, "liquidity_pools.all-versions.tsv", pools),
         write_tsv(&out, "pool_instance_state.all-versions.tsv", instances),
+    );
+}
+
+/// Task 0374 (decision C′) — `pool_state_changes` over a ledger LIST read from
+/// `REDECODE_LEDGER_LIST` (one sequence per line), through the same per-ledger
+/// path as the backfill. Two uses: a before/after differential when the
+/// reserve source changes (run once per build, diff the two files), and the
+/// list-pass backfill of the affected pools, whose output inserts as-is:
+///
+/// ```sql
+/// INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id)
+/// SELECT unhex(c1), c2, c3, c4
+/// FROM input('c1 String, c2 Int64, c3 Array(Int128), c4 Int64') FORMAT TSV
+/// ```
+///
+/// A range re-parse fetches whole archive partitions; a list touches only the
+/// ledgers named, which is the difference between ~1 GB and ~800 GB for a
+/// history of a few pools spread across the range.
+#[test]
+fn redecode_pool_state_changes_from_list() {
+    let Some(list) = std::env::var_os("REDECODE_LEDGER_LIST") else {
+        eprintln!("SKIP: set REDECODE_LEDGER_LIST");
+        return;
+    };
+    // A backfill pass must show the writes it refused, same as the indexer.
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .try_init();
+    let seqs: Vec<u32> = fs::read_to_string(&list)
+        .expect("read REDECODE_LEDGER_LIST")
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().parse().expect("a ledger sequence per line"))
+        .collect();
+    let Some((cache, out)) = setup(&[&seqs]) else {
+        return;
+    };
+    let rows: Vec<_> = seqs
+        .iter()
+        .flat_map(|&seq| stage_ledger(&cache, seq))
+        .flat_map(|staged| staged.pool_state_change_rows)
+        .map(|r| state_change_line(&r))
+        .collect();
+    println!(
+        "{} ledgers: {} pool state changes",
+        seqs.len(),
+        write_tsv(&out, "pool_state_changes.list.tsv", rows),
     );
 }
