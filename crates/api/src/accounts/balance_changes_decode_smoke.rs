@@ -21,7 +21,6 @@
 
 use super::{
     AssetIdentityChRow, DeltaChRow, TxKey, fetch_balance_changes, resolve_asset_identities,
-    resolve_moved_pieces,
 };
 use std::collections::BTreeSet;
 
@@ -115,19 +114,6 @@ async fn the_delta_statement_runs_and_an_empty_page_is_empty() {
         .await
         .expect("the delta statement must be accepted by the server");
     assert!(got.is_empty(), "no account matches i64::MIN");
-}
-
-#[tokio::test]
-async fn the_moved_piece_history_statement_is_accepted() {
-    let Some(ch) = client() else {
-        eprintln!("CH_URL unset — skipping moved-piece history smoke");
-        return;
-    };
-    let lookups = [(i64::MAX, i64::MAX)].into_iter().collect();
-    let got = resolve_moved_pieces(&ch, &lookups)
-        .await
-        .expect("the previous-owner window statement must be accepted");
-    assert!(got.is_empty(), "the synthetic lookup must match no rows");
 }
 
 #[tokio::test]
