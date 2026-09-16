@@ -2814,3 +2814,165 @@ Open, in order of user impact:
 5. Historical reserves remain checked only by the decoder-parity test of the
    backfill session (same code on both sides); checkpoint snapshots are the
    only independent history oracle and have not been run for these tables.
+
+## Multi-lens review of the read half (2026-09-15)
+
+Seven lenses (correctness, data truth, production readiness, security,
+frontend, simplification, devil's advocate), each finding checked by an
+independent skeptic against the code and production. 60 reports, 58 survived;
+deduplicated across lenses they are 16 distinct defects. Recorded here before
+any fix.
+
+**Blocking the deploy:**
+
+1. **Forgeable reserves.** Every new `pool_state_changes` read (detail, list
+   ordering + reserves, chart) takes `argMax(reserves)` over all planes. The
+   schema requires keeping only the plane the pool declares in
+   `pool_instance_state`, because the plane key names its pool in a payload any
+   contract can write. A classic pool is exposed too: a non-empty state row
+   switches its legs to raw reserves. Production today: 0 plane mismatches —
+   open, not used.
+2. **A token can crash the list.** `scale_decimal_str` pads to `decimals + 1`
+   with the width taken from on-chain metadata, unbounded. Two contracts
+   already declare 43,224 decimals; a larger value panics the handler.
+3. **A leg with no identity crashes the whole page.** `assetLegLabel` throws;
+   the header and list render outside any section error boundary. Three pools
+   carry such a leg today (two classic pools whose assets have no `assets` row,
+   one Soroban).
+4. **The writer fix is incomplete.** `fetch_sac_classic_map` returns an empty
+   map for any ledger without Soroban token balance changes, so a pool
+   registered in such a ledger still gets SAC-keyed legs; and the targeted
+   backfill (`--only`) always passes an empty map although `liquidity_pools` is
+   targetable. The latter explains why SAC-keyed soroban legs rose from 1,084
+   to 1,452 after the registry re-parse. Runbook A is not durable until both
+   are fixed.
+
+**Wrong or missing values:**
+
+5. The list's Reserves cell still gates on `reserve_a`/`reserve_b`, so every
+   Soroban row shows a dash although the API sends per-leg reserves.
+6. List TVL is computed from the classic snapshot pair only; Soroban list TVL
+   stays empty even after the repair, while detail prices the same pool.
+7. The Soroban chart divides `Decimal128(0)` by an integer literal; scale stays
+   0 and every reserve is truncated to whole units.
+8. Soroban participant count includes the pair contract's own locked minimum
+   liquidity balance: +1 on every pair-factory pool.
+9. Detail `volume` / `fee_revenue` read `0.00` for Soroban pools (NULL 24h sum
+   mapped to a zero day); `created_at_ledger` reads 0 (`min` over no rows is 0,
+   not NULL).
+10. The participants section says "No participants yet" when the count is
+    null.
+11. The KPI caption now follows value presence, so "no recent snapshot" can no
+    longer appear and a stale classic pool looks current.
+
+**Lower:** KPI strip does not wrap for 3–4 legs and small reserves round to 0;
+legs never carry the token symbol, so Soroban tokens show a truncated address;
+`docs/deployment.md` orders the pair-column DROP before the API deploy, cannot be
+re-run on current production, and its gate ignores legs without an `assets` row;
+twelve stale or misplaced comments (three doc comments attached to the wrong
+item, OpenAPI still says pool ids are `L…` only, dead `price_leg` arm).
+
+Refuted, worth keeping: "the activity keyset walks a mutable key and skips
+rows" — not reproduced.
+
+## Review fixes and what they measured (2026-09-15)
+
+Owner decisions: review fixes in this PR (defects 1–10 above plus the stale
+docs), the list split into two queries, the cursor docs corrected, and an
+honest participants state for concentrated pools.
+
+- **Forgeable reserves (1)** — every `pool_state_changes` read ANDs
+  `(pool_id, plane_id) IN (SELECT pool_id, plane_id FROM pool_instance_state
+FINAL)` beside its own pool bound. A classic pool has no instance row, so a
+  forged row can no longer replace its snapshot either.
+- **Unbounded scale (2)** — `decimals_known` is false past 38 (`MAX_SCALE`) in
+  the shared resolver, and `scale_decimal_str` refuses such a scale itself.
+- **Unidentified leg (3)** — renders "Unindexed asset" instead of throwing.
+- **Writer (4)** — `sac_classic_map_needed` loads the SAC map on any ledger
+  that registers a soroban pool, and the targeted backfill asks the same
+  question instead of skipping the map. Pinned by a test on real registration
+  payloads. The repair runbook's precondition now names both parts.
+- **List (5, 6)** — the reserves cell tests the legs; TVL prices the leg
+  reserves, the same inputs detail uses.
+- **Chart (7)** — raw reserves divide as `Float64`; the series is only ever
+  read through `toFloat64`.
+- **Participants (8, 10)** — the pool's own contract holding its share token
+  (242 of 727 pools with one) is subtracted; a soroban pool with unknown shares
+  reports `null`, and the section says "Participants not indexed".
+- **Detail (9)** — `created_at_ledger` falls back when there are no
+  snapshots; a soroban pool's 24h volume is unknown, not `0.00`.
+- **KPI caption (11) — not changed, on evidence.** The superseded branch had
+  already removed the "no recent snapshot" caption deliberately: a classic
+  pool writes a snapshot only when it changes, so an old snapshot is an idle
+  pool with current reserves, not stale data.
+
+**List cost, the part nobody had broken down.** As one query the page was a
+CTE referenced seven times, and ClickHouse re-ran it at each reference — seven
+full aggregations of `pool_state_changes`: 36.3M rows / 1.54 GiB per page, every
+page. Split into page + side reads by literal id, measured through the local API
+against production:
+
+| request      | before     | after                                         |
+| ------------ | ---------- | --------------------------------------------- |
+| default page | 39.3M rows | ~11.4M                                        |
+| soroban page | 37.2M      | ~9.6M                                         |
+| classic page | 39.1M      | ~6.4M (the state-change aggregate is skipped) |
+
+Three pages of each returned 60 distinct pools. Detail now reads ~1.5M rows;
+the soroban chart 4.9M.
+
+**A correction to this file's own participants note.** Listing the holders of
+one share token is not "113M rows and 4.22 GiB, past the profile": measured on
+the busiest token (643 holders) it is 111.8M rows read and 1.12 GiB scanned, in
+**24 MiB of memory and 90 ms**. The cost is rows read per request, not memory,
+so a listing is affordable without a schema change — which the superseded branch
+had implemented.
+
+**The superseded read branch (PR #438) held working code this branch
+re-investigated from scratch**: a soroban activity decoder for router pools
+(`trade`, `deposit_liquidity`, `withdraw_liquidity` — 154,620 / 2,100 / 837
+events since L64.3M), 24h and chart volume from those trades, a holders listing
+with first-deposit ledgers, TVL over every leg, `protocol` / `pool_type` fields,
+chart range auto-widening and a Playwright spec. None was dropped by a recorded
+decision. Its leg matching keys on contract surrogates, so porting it needs the
+asset-keyed legs of this branch.
+
+## Second review: were the fixes over-built? (2026-09-16)
+
+A devil's-advocate and over-engineering pass over the review fixes, each claim
+measured read-only on production. Eleven changes: nine keep, one simplify, one
+fix.
+
+- **Kept, with evidence.** The list split (page query 5.06M rows, side query
+  ~3.5M, a classic-only page 93k). `MAX_SCALE` in both places: the resolver
+  guards the chart divisor, `scale_decimal_str` guards share-token decimals
+  that reach it through `coalesce(m.decimals, 7)` unchecked; 2 production
+  contracts declare more than 38. The own-holding subtraction: 232 of 235
+  pair-factory pools and 9 of 20 config-factory pools hold their own share
+  token; the join costs ~50k rows and 76 ms.
+- **Fix: a doc comment on the wrong function.** `registers_soroban_pools` was
+  inserted between `contract_token_asset_id` and its doc in `persist/stage.rs`.
+- **Simplify: the plane filter.** 0 of 4,966,638 state rows sit off the
+  declared plane, and the filter costs nothing measurable. Once the router
+  reserves writer (PR #459) stamps `plane_id` from the pool's own instance, a
+  forged plane row can no longer be written, and the filter can only hide a
+  pool's history from before a plane change.
+- **Participants for 33 pair pools read "not indexed" when the true count is
+  0**: the only holder is the pool itself, holding exactly the locked minimum
+  liquidity. Honest, not exact. Making the count's source NULL only where no
+  aggregate row exists would keep the 60 share tokens without one unknown and
+  give these 33 their 0.
+- **Router pools:** the own-holding join matches on `plane_id`, which is the
+  pool's own contract only for the pair and config families. It matches
+  nothing for router pools — harmless, but the comment claims otherwise.
+- **Deployment step 6** sent the operator to the classic leg fill after its
+  columns were dropped; ClickHouse would reject it. Fixed in the docs.
+
+Routed elsewhere: the replaced contract `CAZ6W4WH…`, whose last reserve row
+still reads as a funded pool, belongs to the upgrade handling task (0325,
+`upgrade-class-flip-handling-and-verify`) and the contract code version history
+(0557). Not routed: the four pools whose stored reserves differ from the
+contract's answer because of rebasing tokens or direct transfers.
+
+Decided: the Soroban activity section gets real activity, not a reworded empty
+state.
