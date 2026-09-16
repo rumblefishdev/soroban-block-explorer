@@ -2010,3 +2010,25 @@ by task 0325 ("a code-derived row must follow the contract's CURRENT code"),
 where the decision is now to write the verdict at the code change instead of
 deriving it per read. Until that lands, `pool_reserves_reconciliation` lists
 the pool on every run and its stale reserves stay visible.
+
+### Decision C′ shipped to production (2026-09-16)
+
+- **Deploy:** Compute from `develop` at `9b0f05b6` (PR #459 merge); the indexer
+  Lambda updated 10:49:22 UTC; 0 WARN/ERROR lines in the following minutes.
+  A laptop deploy needs `zig` for `cargo lambda build --arm64` (it had been
+  removed from the machine; `brew install zig` restored it).
+- **Backfill:** ledger list taken 10 min after the deploy (in-flight runs of
+  the old code drained) — unchanged from the morning: 728 ledgers, 774 keys of
+  the 8 pools. Re-derived with the merged parser; checked against production
+  key by key: 758 = production ÷ `PrecisionMul`, 16 zero in both, 0 other, 0
+  keys on either side only. Payload sha256
+  `fb14d1b9e4ed51dc258f46ad0eb95f42bd27ea780ed90d9a2a000b13aefb7ba3` (contains
+  the 772-row payload recorded above plus 2 later rows of `CCYMZTOJ…`).
+  Loaded into a Memory staging table, read back identical, then
+  `INSERT … SELECT`, `OPTIMIZE … PARTITION 11 FINAL` and `… PARTITION 12 FINAL`
+  (the survivor of an unversioned `ReplacingMergeTree` merge is the last
+  inserted row), staging dropped.
+- **Verified after the write:** partitions 11 and 12 merged; 774 raw rows =
+  774 keys for the 8 pools; production rows equal the payload exactly.
+  `pool_reserves_reconciliation` at ledger 64,454,699: **769 of 770 pools equal
+  their own storage**; the one failure is `CAZ6W4WH…` (task 0325).
