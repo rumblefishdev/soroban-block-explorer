@@ -25,6 +25,13 @@ history:
       (production-2026.09.16-1). Each finding was verified against the code
       before it was accepted; the documentation-only findings landed directly
       on develop, these five change behaviour and go through a PR.
+  - date: '2026-09-16'
+    status: active
+    who: karolkow
+    note: >
+      Steps 1 and 2 (the `+N` popover and the visible external-management
+      sentence) declined in review after a local walkthrough and reverted
+      (7cfdbf76, ecfe59ea); both UI elements stay as they were. Steps 3–5 kept.
 ---
 
 # BUG: release review follow-ups
@@ -39,7 +46,9 @@ leaves an out-of-date `node_modules` in place.
 
 ## Status: Active
 
-**Current state:** filed; implementation not started.
+**Current state:** steps 3–5 implemented and tested on branch
+`fix/0559_release-review-follow-ups`; steps 1 and 2 declined in review and
+reverted. PR open, not deployed.
 
 ## Context
 
@@ -91,18 +100,77 @@ first; install when out of date.
 
 ## Acceptance Criteria
 
-- [ ] `+N` opens a keyboard-reachable list of every change with the same
-      rendering; test covers opening by keyboard
-- [ ] The external-management warning is visible without hover
-- [ ] The assets-list cursor encodes the rank the key query sorted by; test
+- [ ] ~~`+N` opens a keyboard-reachable list of every change~~ — declined in
+      review 2026-09-16, reverted; the hover tooltip stays
+- [ ] ~~The external-management warning is visible without hover~~ — declined
+      in review 2026-09-16, reverted; the chip tooltip stays
+- [x] The assets-list cursor encodes the rank the key query sorted by; test
       covers a hydration value that differs from the key value
-- [ ] A known reserve key with an unreadable value logs an error naming the
-      pool; test covers it
-- [ ] Branch checkout with an out-of-date `node_modules` re-syncs it; an
-      up-to-date tree stays a fast no-op (measured)
-- [ ] **Docs updated** — N/A unless a step changes a described contract
-- [ ] **API types regenerated** — `crates/api/**` changes; run
-      `pnpm nx run @rumblefish/api-types:generate`, expected empty diff
+- [x] A known reserve key with an unreadable value logs an error naming the
+      pool; test covers the key rule (the log line itself is not captured —
+      the crate has no tracing test harness)
+- [x] Branch checkout with an out-of-date `node_modules` re-syncs it; an
+      up-to-date tree stays a fast no-op (measured 0.9 s)
+- [x] **Docs updated** — N/A: no endpoint, schema, pipeline step or data
+      contract changes; the cursor keeps its `(holder_rank, id)` shape
+- [x] **API types regenerated** — run; the diff is empty
+
+## Implementation Notes
+
+- **Steps 1 and 2 — reverted** (7cfdbf76, ecfe59ea); recorded as built.
+- **Step 1** — `web/src/pages/accounts/BalanceChangeCell.tsx`: `+N` is a
+  `Link component="button"` (`aria-label="+N more balance changes"`,
+  `aria-expanded`, `aria-controls`) opening a MUI `Popover`. The `inverted`
+  colour variants of `ChangeAmount` / `AssetLink` and `Muted`'s `variant` prop
+  existed only for the dark tooltip surface and are removed.
+- **Step 2** — the sentence moved from the chip's tooltip into the summary's
+  Executable row (`ContractSummary.tsx`); the chip keeps its label.
+- **Step 3** — `assets/queries.rs`: the list seek projects
+  `coalesce(ba.holder_count, -1) AS holder_rank` and orders by the alias;
+  `fetch_list` returns `ListedAsset { row, holder_rank }`, and
+  `listed_asset_cursor` in the handler encodes that rank. Verified on
+  production ClickHouse (read-only): the alias decodes as `Int32`.
+- **Step 4** — `pool_state.rs`: `unread_reserve_keys` + one `tracing::error!`
+  with the pool and the key names.
+- **Step 5** — `.husky/post-checkout` no longer skips when `node_modules`
+  exists. Measured: 0.9 s on an up-to-date tree (includes husky's `prepare`),
+  0.01 s on a file checkout; on an npm-layout tree without `.modules.yaml`
+  pnpm rebuilds without a prompt (probe project in a scratch directory).
+- Tests: web 370 passed, `api` lib 283 passed, `xdr-parser` `pool_state` 16
+  passed, clippy `-D warnings` clean on both crates. The 4 web lint warnings
+  predate this branch.
+
+## Design Decisions
+
+### From Plan
+
+1. **Popover, not a focusable tooltip trigger**: a tooltip's content lives in
+   a portal Tab does not reach, so focusing the trigger alone would still
+   leave the links unreachable.
+
+### Emerged
+
+2. **`+N` opens on click, no longer on hover**: one surface for mouse and
+   keyboard instead of a hover tooltip plus a popover. Mouse users now click.
+3. **The chip's tooltip is gone rather than made focusable**: the sentence is
+   visible text in the summary, so a second copy on hover added nothing.
+4. **Tests of `assets/queries.rs` moved to `queries_tests.rs` and
+   `queries_decode_smoke.rs`**: the file was 1,504 lines, and the repo rule
+   requires extracting tests from an over-limit file that a PR touches. It is
+   now 1,196 lines — still over the limit, tracked by task 0525.
+5. **A decodable empty `Reserves` is a read, not a refusal**: found while
+   testing the rule — without it a pool with no liquidity yet would log an
+   error on every write.
+6. **The hook fix is `pnpm install` on every branch checkout, not
+   `verifyDepsBeforeRun`**: narrower (only branch checkouts, not every
+   `pnpm run` / `pnpm exec` everywhere including CI).
+
+## Issues Encountered
+
+- **Hook change cannot be exercised through `git switch` here**: worktrees
+  start the MAIN checkout's hook copy, and the main checkout is on a branch
+  from before the hand-over (task 0554 decision 13, bootstrap limit), so the
+  new script was run directly with branch-checkout arguments instead.
 
 ## Notes
 

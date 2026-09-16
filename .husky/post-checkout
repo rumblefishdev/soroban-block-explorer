@@ -20,8 +20,11 @@ if [ -L node_modules ]; then
   echo "husky -   mv node_modules \"\$(git worktree list --porcelain | awk '/^worktree /{print \$2; exit}')/.trash/node_modules.\$\$\" && pnpm install --frozen-lockfile"
   exit 0
 fi
-[ -d node_modules ] && exit 0  # already provisioned → no-op (incl. main worktree)
-
+# No "node_modules exists → skip": an existing tree can be stale (the lockfile
+# changed across the branch switch, or an npm-era layout pnpm cannot read) and
+# the pre-commit gate then fails inside nx. On an up-to-date tree this is a
+# ~1 s no-op ("Already up to date", measured 2026-09-16), and pnpm rebuilds an
+# npm-layout tree without prompting.
 pnpm install --frozen-lockfile --prefer-offline ||
   echo "husky - pnpm install failed; commit hooks will not run until it succeeds"
 exit 0

@@ -358,6 +358,29 @@ struct AssetKeyChRow {
     id: i64,
 }
 
+/// Phase-1 row of the LIST seek: the identity key plus the rank the page was
+/// ordered by. The cursor must carry this rank, not the `holder_count` the
+/// hydration query reads again later — `balance_aggregates` is rebuilt every
+/// few minutes, and a rebuild between the two reads would move the cursor off
+/// the boundary this page actually ends on.
+#[derive(Debug, Row, Deserialize)]
+struct AssetListKeyChRow {
+    asset_type: i16,
+    asset_code: String,
+    issuer_id: i64,
+    contract_id: i64,
+    id: i64,
+    holder_rank: i32,
+}
+
+/// One list-page asset and the rank its page was selected by (the cursor's
+/// first half).
+#[derive(Debug)]
+pub struct ListedAsset {
+    pub row: AssetRow,
+    pub holder_rank: i32,
+}
+
 impl AssetKeyChRow {
     /// The identity 4-tuple — the dedup / ordering key.
     fn tuple(&self) -> (i16, &str, i64, i64) {
@@ -763,11 +786,12 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
 
     format!(
         "SELECT a.asset_type AS asset_type, a.asset_code AS asset_code, \
-                a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id \
+                a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id, \
+                coalesce(ba.holder_count, -1) AS holder_rank \
          FROM assets a{search_join} \
          LEFT JOIN balance_aggregates ba ON ba.asset_id = a.id \
          WHERE 1{type_clause}{sac_clause}{code_clause}{cursor_clause} \
-         ORDER BY coalesce(ba.holder_count, -1) {order}, a.id {order} \
+         ORDER BY holder_rank {order}, a.id {order} \
          LIMIT {lim_over}"
     )
 }
@@ -780,7 +804,7 @@ pub async fn fetch_list(
     client: &clickhouse::Client,
     params: &ResolvedListParams,
     direction: Direction,
-) -> Result<Vec<AssetRow>, clickhouse::error::Error> {
+) -> Result<Vec<ListedAsset>, clickhouse::error::Error> {
     let sql = build_list_seek_sql(params, direction);
 
     let mut query = client.query(&sql);
@@ -792,8 +816,21 @@ pub async fn fetch_list(
     if let Some(c) = &params.cursor {
         query = query.bind(c.holder_rank).bind(c.id);
     }
-    let raw = query.fetch_all::<AssetKeyChRow>().await?;
+    let raw = query.fetch_all::<AssetListKeyChRow>().await?;
     let raw_len = raw.len();
+    // One query reads one `balance_aggregates` snapshot, so every version row
+    // of an asset carries the same rank.
+    let ranks: HashMap<i64, i32> = raw.iter().map(|r| (r.id, r.holder_rank)).collect();
+    let raw = raw
+        .into_iter()
+        .map(|r| AssetKeyChRow {
+            asset_type: r.asset_type,
+            asset_code: r.asset_code,
+            issuer_id: r.issuer_id,
+            contract_id: r.contract_id,
+            id: r.id,
+        })
+        .collect();
     // `params.limit` is the handler's `fetch_limit()` (already the peek +1);
     // consecutive-dedup the over-fetched versions to the page, then hydrate it.
     let keys = dedup_consecutive(raw, params.limit as usize);
@@ -833,7 +870,12 @@ pub async fn fetch_list(
         .into_iter()
         .map(|r| {
             let iss = issuers.get(&r.issuer_id_key).cloned();
-            list_row_to_asset_row(r, iss)
+            // Every hydrated id came from `raw`, so the index cannot miss.
+            let holder_rank = ranks[&r.id];
+            ListedAsset {
+                row: list_row_to_asset_row(r, iss),
+                holder_rank,
+            }
         })
         .collect())
 }
@@ -1186,319 +1228,11 @@ fn union_keyset_arms(arm_a: &str, arm_b: &str, order: &str, limit: i64) -> Strin
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "queries_tests.rs"]
+mod tests;
 
-    #[test]
-    fn union_keyset_arms_merges_both_arms_in_one_statement() {
-        // task 0446: the two arms are independent reads; they must cost ONE round
-        // trip, with the merge (order, cross-arm dedup, truncate) pushed into CH.
-        let sql = union_keyset_arms("SELECT a", "SELECT b", "DESC", 21);
-        assert!(sql.contains("(SELECT a) UNION ALL (SELECT b)"));
-        assert!(sql.contains("ORDER BY ledger_sequence DESC, transaction_id DESC"));
-        // Drops a transaction returned by BOTH arms — the old Rust `keys.dedup()`.
-        assert!(sql.contains("LIMIT 1 BY ledger_sequence, transaction_id"));
-        assert!(sql.ends_with("LIMIT 21"));
-    }
-
-    #[test]
-    fn asset_key_tuples_inlines_type_code_issuer_contract() {
-        let keys = vec![
-            AssetKeyChRow {
-                asset_type: 1,
-                asset_code: "USDC".to_string(),
-                issuer_id: 42,
-                contract_id: 0,
-                id: 7,
-            },
-            AssetKeyChRow {
-                asset_type: 0,
-                asset_code: String::new(), // native — empty code
-                issuer_id: 0,
-                contract_id: 0,
-                id: 9,
-            },
-        ];
-        assert_eq!(asset_key_tuples(&keys), "(1,'USDC',42,0),(0,'',0,0)");
-    }
-
-    #[test]
-    fn dedup_consecutive_keeps_first_version_per_key_and_truncates() {
-        // Both physical versions of an asset share one aggregate row, so they
-        // stay adjacent under the holder walk as they were under the old one —
-        // which is what lets a CONSECUTIVE dedup collapse them.
-        let key = |code: &str, id: i64| AssetKeyChRow {
-            asset_type: 1,
-            asset_code: code.to_string(),
-            issuer_id: 1,
-            contract_id: 0,
-            id,
-        };
-        // Two physical versions of AAA (contiguous in PK order), then BBB, CCC.
-        let raw = vec![key("AAA", 1), key("AAA", 1), key("BBB", 2), key("CCC", 3)];
-        let out = dedup_consecutive(raw, 2);
-        // Collapses AAA's versions, then truncates to the page limit.
-        assert_eq!(
-            out.iter()
-                .map(|k| k.asset_code.as_str())
-                .collect::<Vec<_>>(),
-            ["AAA", "BBB"]
-        );
-    }
-
-    #[test]
-    fn asset_type_name_matches_pg_function() {
-        assert_eq!(asset_type_name(0).as_deref(), Some("native"));
-        assert_eq!(asset_type_name(1).as_deref(), Some("classic_credit"));
-        // 2 (`sac`) retired — ADR 0051.
-        assert_eq!(asset_type_name(2), None);
-        assert_eq!(asset_type_name(3).as_deref(), Some("soroban"));
-        assert_eq!(asset_type_name(99), None);
-    }
-
-    #[test]
-    fn list_sql_searches_name_and_symbol_when_code_present() {
-        // task 0370: type-3 (Soroban-native) assets have an empty `asset_code`;
-        // their name/symbol live in the joined contract metadata, so the list
-        // search must match those columns too or they are unfindable by name.
-        let params = ResolvedListParams {
-            limit: 10,
-            cursor: None,
-            asset_type: None,
-            asset_code: Some("solv".to_string()),
-            sac_only: false,
-        };
-        let sql = build_list_seek_sql(&params, Direction::Next);
-        assert!(sql.contains("toString(a.asset_code)"));
-        assert!(sql.contains("coalesce(m.name, '')"));
-        assert!(sql.contains("coalesce(m.symbol, '')"));
-        // Classic enrichment names (ae.name) are intentionally NOT matched —
-        // substring-matching them adds noise ("Opulent Insolvent" ~ "solv").
-        assert!(!sql.contains("coalesce(ae.name, '')"));
-        // 3 needle placeholders (the shared code test + m.name + m.symbol);
-        // the LIMIT is inlined, so this MUST equal the 3×`.bind(code)` in
-        // `fetch_list`. A drift here is a runtime-only failure.
-        assert_eq!(sql.matches('?').count(), 3);
-    }
-
-    #[test]
-    fn native_is_matched_by_type_not_by_stored_code() {
-        // Task 0470. Native XLM is stored with an EMPTY `asset_code`, so a bare
-        // `positionCaseInsensitive(a.asset_code, 'XLM')` matched 6 404 credit
-        // assets minted under a code containing "XLM" and missed the real one
-        // (measured on production: the native row matched 0 times). Same defect
-        // and same fix as the pools predicate — see the guard test beside it in
-        // `common::pool_asset_codes`.
-        //
-        // Pinned on the SQL rather than on a result set because the CH-backed
-        // tests only run with `CH_URL` set; this one runs everywhere.
-        let params = ResolvedListParams {
-            limit: 10,
-            cursor: None,
-            asset_type: None,
-            asset_code: Some("XLM".to_string()),
-            sac_only: false,
-        };
-        let sql = build_list_seek_sql(&params, Direction::Next);
-        assert!(
-            sql.contains(SHOWN),
-            "the needle must be matched against the DISPLAYED code, so native \
-             XLM is reachable; got: {sql}"
-        );
-        // The bare form is what made native unfindable — it must not come back.
-        assert!(!sql.contains("positionCaseInsensitive(a.asset_code, ?)"));
-    }
-
-    #[test]
-    fn the_walk_is_by_holders_so_the_list_opens_on_what_people_hold() {
-        // Task 0485 needed native XLM to OPEN the list and got it from the
-        // alphabet (empty code = the minimum of the old key). It still opens
-        // the list, now because it has the most holders — so the outcome no
-        // longer rests on a property of the storage key.
-        let mut params = ResolvedListParams {
-            limit: 10,
-            cursor: Some(AssetKeyCursor {
-                holder_rank: 684_170,
-                id: 7,
-            }),
-            asset_type: None,
-            asset_code: Some("xlm".to_string()),
-            sac_only: false,
-        };
-        for sql in [build_list_seek_sql(&params, Direction::Next), {
-            params.asset_code = None;
-            build_list_seek_sql(&params, Direction::Next)
-        }] {
-            assert!(
-                sql.contains("ORDER BY coalesce(ba.holder_count, -1) DESC, a.id DESC"),
-                "{sql}"
-            );
-            // LEFT: an asset with no aggregate row still appears, ordered
-            // last. An inner join would delete it from the list.
-            assert!(
-                sql.contains("LEFT JOIN balance_aggregates ba ON ba.asset_id = a.id"),
-                "{sql}"
-            );
-            // The fold has to be identical in the ORDER BY, the projection and
-            // the cursor comparator, or a page boundary skips or repeats rows.
-            // Twice: the projection and the cursor comparator. The ORDER BY
-            // reuses the `holder_rank` alias rather than a third copy.
-            assert_eq!(
-                sql.matches("coalesce(ba.holder_count, -1)").count(),
-                2,
-                "{sql}"
-            );
-            // The comparator must point INTO the walk, or the cursor pages
-            // backwards on every "next".
-            assert!(sql.contains(") < (?, ?)"), "{sql}");
-            // No relevance machinery on this surface, by decision (0485):
-            // ranking it means carrying the rank in the cursor.
-            assert!(!sql.contains("rank_tier"), "{sql}");
-        }
-    }
-
-    #[test]
-    fn list_sql_has_no_search_predicate_without_a_term() {
-        let params = ResolvedListParams {
-            limit: 10,
-            cursor: None,
-            asset_type: None,
-            asset_code: None,
-            sac_only: false,
-        };
-        let sql = build_list_seek_sql(&params, Direction::Next);
-        assert!(!sql.contains("positionCaseInsensitive"));
-        // Neither SEARCH join is paid for. The aggregate join is always
-        // present (it carries the browse order), hence asserting the two by
-        // name rather than that "JOIN" is absent.
-        assert!(!sql.contains("soroban_contracts sc"), "{sql}");
-        assert!(!sql.contains("soroban_contract_metadata"), "{sql}");
-        assert!(sql.contains("LEFT JOIN balance_aggregates"), "{sql}");
-        // No cursor and no needle → nothing to bind (the LIMIT is inlined).
-        assert_eq!(sql.matches('?').count(), 0);
-    }
-}
-
-/// Live-CH **decode** smoke for the asset-transactions keyset read.
-///
-/// The two-arm `UNION ALL` (task 0446) is the class of SQL an offline build
-/// cannot validate: the outer `ORDER BY … LIMIT 1 BY … LIMIT` over a
-/// parenthesised union parses only against a real server, and the unit tests
-/// above assert its shape as a string, not that ClickHouse accepts it. The
-/// other read modules guard their generated SQL the same way.
-///
-/// Exercises BOTH shapes — the lone arm (no associated contract) and the union
-/// (an asset with one) — in both page directions.
-///
-/// **Skips cleanly when `CH_URL` is unset**, so CI (no CH access) is green.
-/// Run against a reachable CH (local replica or SSH tunnel):
-///
-/// ```text
-/// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
-///   cargo test -p api --lib assets::queries::decode_smoke -- --nocapture
-/// ```
+/// Live-CH decode smoke for the asset-transactions keyset read — see the module
+/// docs in the file itself.
 #[cfg(test)]
-mod decode_smoke {
-    use super::*;
-
-    /// Bootstrap row: any asset, plus its associated contract surrogate if it
-    /// has one (ADR 0051 — a type-3 token's own contract, else a SAC wrapper).
-    #[derive(Debug, Row, Deserialize)]
-    struct BootAssetRow {
-        id: i64,
-        contract_surrogate: i64,
-    }
-
-    /// Task 0485. The ranking that puts native XLM first is a SORT DIRECTION,
-    /// and a direction is invisible to the SQL-shape tests — they pin the
-    /// string, not what comes back. This runs the real read and looks at row 1.
-    #[tokio::test]
-    async fn code_search_returns_native_first() {
-        let Some(ch) = crate::common::ch::test_client_from_env() else {
-            eprintln!("CH_URL unset — skipping assets native-first smoke");
-            return;
-        };
-        let has_native: u64 = ch
-            .query("SELECT count() FROM assets WHERE asset_type = 0")
-            .fetch_one()
-            .await
-            .expect("native probe must run");
-        if has_native == 0 {
-            eprintln!("no native row in this CH — native-first smoke not exercised");
-            return;
-        }
-
-        let mut params = ResolvedListParams {
-            limit: 10,
-            cursor: None,
-            asset_type: None,
-            asset_code: Some("xlm".to_string()),
-            sac_only: false,
-        };
-        let page = fetch_list(&ch, &params, Direction::Next)
-            .await
-            .expect("code-search page decodes");
-
-        let first = page
-            .first()
-            .expect("a corpus with native XLM cannot be empty");
-        assert_eq!(
-            first.asset_type, 0,
-            "`xlm` answered with {:?} first — native XLM is the MINIMUM of the \
-             identity 4-tuple, so a DESC walk buries it on the last page",
-            first.asset_code
-        );
-
-        // And with NO filter at all: the asset list of a Stellar explorer
-        // opening on anything other than XLM was the same defect wearing a
-        // different hat (it opened on codeless Soroban contracts).
-        params.asset_code = None;
-        let browse = fetch_list(&ch, &params, Direction::Next)
-            .await
-            .expect("unfiltered page decodes");
-        assert_eq!(
-            browse.first().map(|r| r.asset_type),
-            Some(0),
-            "the unfiltered list must open on native XLM; got {:?}",
-            browse.first().map(|r| r.asset_code.clone())
-        );
-    }
-
-    #[tokio::test]
-    async fn asset_tx_keyset_union_decodes() {
-        let Some(ch) = crate::common::ch::test_client_from_env() else {
-            eprintln!("CH_URL unset — skipping asset-tx keyset decode smoke");
-            return;
-        };
-
-        // An asset that HAS an associated contract, so the union arm is real.
-        let boot = ch
-            .query(
-                "SELECT a.id AS id, max(sc.sac_contract_id) AS contract_surrogate \
-                 FROM assets a INNER JOIN asset_sac sc \
-                   ON sc.asset_type = a.asset_type AND sc.asset_code = a.asset_code \
-                  AND sc.issuer_id = a.issuer_id AND sc.contract_id = a.contract_id \
-                 WHERE sc.sac_contract_id != 0 \
-                 GROUP BY a.id LIMIT 1",
-            )
-            .fetch_optional::<BootAssetRow>()
-            .await
-            .expect("bootstrap asset query must run");
-
-        for direction in [Direction::Next, Direction::Prev] {
-            // Lone arm: `None` skips the wrapper entirely.
-            fetch_transactions(&ch, 1, None, 21, None, direction)
-                .await
-                .unwrap_or_else(|e| panic!("lone-arm keyset failed ({direction:?}): {e}"));
-
-            if let Some(b) = &boot {
-                fetch_transactions(&ch, b.id, Some(b.contract_surrogate), 21, None, direction)
-                    .await
-                    .unwrap_or_else(|e| panic!("union keyset failed ({direction:?}): {e}"));
-            }
-        }
-        if boot.is_none() {
-            eprintln!("no SAC-backed asset in this CH — union arm not exercised");
-        }
-    }
-}
+#[path = "queries_decode_smoke.rs"]
+mod decode_smoke;
