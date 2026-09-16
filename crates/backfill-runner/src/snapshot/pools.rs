@@ -86,9 +86,22 @@ pub(crate) fn rows_for_entry(
     ))
 }
 
+/// Whether our pool belongs in `pools_gone.tsv`: it still holds reserves, the
+/// snapshot has no live entry for it, and our newest row predates the
+/// checkpoint — a pool created after the checkpoint is simply not in it yet.
+pub(crate) fn gone_with_reserves(
+    has_reserves: bool,
+    live: bool,
+    our_ledger: i64,
+    checkpoint: u32,
+) -> bool {
+    has_reserves && !live && our_ledger < i64::from(checkpoint)
+}
+
 pub(crate) async fn build_corrections(
     sink: &Sink,
     state: &mut NetworkState,
+    checkpoint: u32,
     referenced_assets: &mut HashSet<i64>,
 ) -> Result<PoolCorrections, BackfillError> {
     let mut ours: HashMap<[u8; 32], OurNewest> = HashMap::new();
@@ -98,7 +111,9 @@ pub(crate) async fn build_corrections(
             "SELECT pool_id, max(ledger_sequence) AS ledger, \
                     toUInt8(argMax(reserve_a, ledger_sequence) > 0 \
                             OR argMax(reserve_b, ledger_sequence) > 0) AS has_reserves \
-             FROM liquidity_pool_snapshots GROUP BY pool_id",
+             FROM liquidity_pool_snapshots \
+             WHERE pool_id IN (SELECT pool_id FROM liquidity_pools WHERE pool_kind = 0) \
+             GROUP BY pool_id",
         )
         .fetch::<OurNewest>()?;
     while let Some(row) = cursor.next().await? {
@@ -148,7 +163,7 @@ pub(crate) async fn build_corrections(
 
     for (pool_id, o) in &ours {
         let live = matches!(state.pools.get(pool_id), Some(Some(_)));
-        if o.has_reserves == 1 && !live {
+        if gone_with_reserves(o.has_reserves == 1, live, o.ledger, checkpoint) {
             out.gone_with_reserves
                 .push(format!("{}\t{}", hex::encode(pool_id), o.ledger));
         }

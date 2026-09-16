@@ -576,6 +576,9 @@ ORDER BY (account_id, asset_type, asset_code, issuer_id);
 -- `DESCRIBE TABLE balances` / `lp_positions`:
 --     ALTER TABLE balances     ADD COLUMN IF NOT EXISTS closed_at_ledger Int64 DEFAULT 0;
 --     ALTER TABLE lp_positions ADD COLUMN IF NOT EXISTS closed_at_ledger Int64 DEFAULT 0;
+-- `claimable_balance_holdings` (below) is written through the same row struct
+-- (`BalanceRow`): every ALTER on this table must run on that one too, or its
+-- inserts fail the driver's column check and every ledger's persist stalls.
 CREATE TABLE IF NOT EXISTS balances (
     holder_id           Int64,
     asset_id            Int64,
@@ -1363,6 +1366,14 @@ ORDER BY (pool_id, ledger_sequence);
 -- writer deploy and that seed the table holds only balances created since the
 -- deploy, and summing it then would publish a supply that is neither the old
 -- number nor the true one.
+-- Create it as the same user as the view it replaces (`SHOW CREATE` names it):
+-- a refresh runs under that user's limits, and one capped at 30 s fails
+-- silently once the scan grows — only `system.view_refreshes.exception` shows
+-- it. Then `SYSTEM REFRESH VIEW` + `SYSTEM WAIT VIEW`, and check
+-- `system.view_refreshes`. `balance_aggregates` keeps its old rows until that
+-- first refresh swaps them. Rolling the claimable balance writer back later
+-- means rolling this view back too, or re-running `snapshot-seed --execute`:
+-- claims made while it was down are never closed otherwise.
 CREATE MATERIALIZED VIEW IF NOT EXISTS balance_aggregates_mv
 REFRESH EVERY 2 MINUTE
 TO balance_aggregates AS
@@ -1387,11 +1398,9 @@ FROM (
             GROUP BY pool_id
         ) AS s
         INNER JOIN (
-            SELECT pool_id, argMax(legs, last_updated_ledger) AS legs
-            FROM liquidity_pools
-            WHERE pool_kind = 0
-            GROUP BY pool_id
-            HAVING length(legs) = 2
+            SELECT pool_id, legs
+            FROM liquidity_pools FINAL
+            WHERE pool_kind = 0 AND length(legs) = 2
         ) AS p USING (pool_id)
     )
 )

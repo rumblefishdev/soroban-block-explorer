@@ -10,13 +10,13 @@ Deep-dive runbooks are linked, not duplicated.
 
 ## Which situation are you in?
 
-| Situation                                                                 | What to run                                                                                                        |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| **Gap** — ledgers missing (after a restore, an outage, a stalled indexer) | `backfill-runner run --start <gap> --end <tip>` — `run` is a **gap-filler**, it skips ledgers already in `ledgers` |
-| **New derived table** over history — the data exists only in XDR          | from-S3 re-parse: `run --reindex` (see [§ On the box](#path-a--directly-on-the-hetzner-box-current-default))       |
-| **New derived table** computable from columns already in CH               | cheap in-DB `INSERT … SELECT` (no re-parse)                                                                        |
-| **Bad data in place** (range already in `ledgers`)                        | `run --reindex` — a plain `run` would **no-op**                                                                    |
-| Tier-1 columns wrong after any of the above                               | `repair-tier1` (**mandatory** — see below)                                                                         |
+| Situation                                                                 | What to run                                                                                                                     |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Gap** — ledgers missing (after a restore, an outage, a stalled indexer) | `backfill-runner run --start <gap> --end <tip>` — `run` is a **gap-filler**, it skips ledgers already in `ledgers`              |
+| **New derived table** over history — the data exists only in XDR          | from-S3 re-parse: `run --reindex` (see [§ On the box](#path-a--directly-on-the-hetzner-box-current-default))                    |
+| **New derived table** computable from columns already in CH               | cheap in-DB `INSERT … SELECT` (no re-parse)                                                                                     |
+| **Bad data in place** (range already in `ledgers`)                        | `run --reindex` — a plain `run` would **no-op**; the range must end at or after the claimable balance writer deploy (see below) |
+| Tier-1 columns wrong after any of the above                               | `repair-tier1` (**mandatory** — see below)                                                                                      |
 
 ---
 
@@ -41,7 +41,7 @@ Three properties make replay safe:
 `insert_deduplicate = 0` — ReplacingMergeTree (RMT) is the dedup layer, not the
 insert path.
 
-**Engine inventory:** 25 of 28 tables are RMT. The 3 that are not are all
+**Engine inventory:** 34 of 37 tables are RMT. The 3 that are not are all
 duplicate-proof, so they are **not** a hazard: `accounts_recent` and
 `balance_aggregates` are refreshable-MV targets (full recompute + atomic
 `EXCHANGE`, nothing writes to them directly), and `asset_sac` is
@@ -597,6 +597,16 @@ started, and an older checkpoint would seed balances claimed in between as
 live. The dry-run prints the same check in `summary.txt` instead of refusing.
 Ghosts for this table go to `claimable_ghosts.tsv`.
 
+**Never re-parse a range that ends before the claimable balance writer
+deployed.** `run` writes `claimable_balance_holdings` for whatever range it is
+given, and the table has no history from before the deploy. A balance created
+inside such a range and claimed after its end, but before the deploy, gets a
+live row and never a tombstone, so `total_supply` counts it until a
+`snapshot-seed --execute` closes it — and `--execute`'s coverage check cannot
+see this, because the re-parse moves the first tombstone back to the start of
+the range. Our re-parses cover the whole Soroban era up to the tip; a gap-fill
+ends where the live writer resumed. Both are safe.
+
 **Classic pools (task 0210) are insert-only.** `total_supply` takes a classic
 pool's reserves from its newest `liquidity_pool_snapshots` row, and a pool no
 processed ledger touched has none. For every live pool in the checkpoint whose
@@ -605,7 +615,7 @@ inserts one snapshot and the pool's `liquidity_pools` row, built by the live
 writer's own builders and versioned on the entry's `lastModifiedLedgerSeq` — a
 newer live row always wins, so there is no coverage check. Pools the network
 removed while our newest snapshot still holds reserves are only listed, in
-`pools_gone.tsv`.
+`pools_gone.tsv` (classic pools only, and only pools ours before the checkpoint).
 
 **`--execute` never decodes the checkpoint the dry-run reviewed — expect that,
 and read `summary.txt` accordingly.** Checkpoints publish every 64 ledgers

@@ -57,7 +57,8 @@ pub(crate) struct ClaimableCorrections {
 /// the tip, a gap-fill ends where the live writer resumed, and a seed runs only
 /// after the backfill has finished. A re-parse of a bounded OLD range would
 /// break the check — it would leave tombstones below the deploy and balances
-/// claimed after its end live with no tombstone (`docs/backfills.md`).
+/// claimed after its end live with no tombstone. The rule is in
+/// `docs/backfills.md` ("Never re-parse a range that ends before…").
 pub(crate) fn writer_coverage(first_tombstone: Option<i64>, checkpoint: u32) -> Result<(), String> {
     match first_tombstone {
         None => Err(format!(

@@ -95,6 +95,15 @@ fn only_a_missing_or_older_snapshot_needs_an_insert() {
 }
 
 #[test]
+fn only_a_pool_that_was_ours_before_the_checkpoint_is_reported_gone() {
+    assert!(gone_with_reserves(true, false, 63_999_999, 64_000_000));
+    // Created after the checkpoint, so not in it yet.
+    assert!(!gone_with_reserves(true, false, 64_000_000, 64_000_000));
+    assert!(!gone_with_reserves(true, true, 63_999_999, 64_000_000));
+    assert!(!gone_with_reserves(false, false, 63_999_999, 64_000_000));
+}
+
+#[test]
 fn a_removed_pool_seen_first_is_not_revived_by_an_older_entry() {
     let live = entry(MAINNET_POOLS[0].data, MAINNET_POOLS[0].last_modified);
     let LedgerEntryData::LiquidityPool(lp) = &live.data else {

@@ -137,3 +137,58 @@ fn writer_coverage_requires_a_claim_at_or_before_the_checkpoint() {
     assert!(writer_coverage(Some(64_400_000), 64_400_000).is_ok());
     assert!(writer_coverage(Some(64_300_000), 64_400_000).is_ok());
 }
+
+/// The guard's own SQL, not only its verdict: a live row must not count as the
+/// writer's first claim (without `closed_at_ledger > 0` the minimum is 0 and
+/// every checkpoint passes), and the earliest closure is the one returned.
+/// Throwaway database, gated on `CLICKHOUSE_URL` like the other seed tests.
+#[tokio::test]
+async fn first_writer_tombstone_skips_live_rows_and_finds_the_earliest_claim() {
+    if std::env::var("CLICKHOUSE_URL").is_err() {
+        eprintln!("CLICKHOUSE_URL not set — skipping writer tombstone integration test");
+        return;
+    }
+    let db = "ch_test_0210_claimable_writer_coverage";
+    let base = db_clickhouse::client(&db_clickhouse::Config::from_env());
+    for q in [
+        format!("DROP DATABASE IF EXISTS {db}"),
+        format!("CREATE DATABASE {db}"),
+    ] {
+        base.query(&q).execute().await.expect("throwaway db");
+    }
+    let client = db_clickhouse::client(&db_clickhouse::Config {
+        database: db.to_string(),
+        ..db_clickhouse::Config::from_env()
+    });
+    db_clickhouse::apply_init_sql(&client)
+        .await
+        .expect("init sql");
+    let sink = Sink::new(client.clone());
+
+    client
+        .query(&format!(
+            "INSERT INTO {TABLE} (holder_id, asset_id, amount, last_updated_ledger) VALUES (1, 7, 5, 10)"
+        ))
+        .execute()
+        .await
+        .expect("insert live row");
+    assert_eq!(first_writer_tombstone(&sink).await.unwrap(), None);
+
+    client
+        .query(&format!(
+            "INSERT INTO {TABLE} (holder_id, asset_id, amount, last_updated_ledger, closed_at_ledger) \
+             VALUES (2, 7, 0, 64000100, 64000100), (3, 7, 0, 64000050, 64000050)"
+        ))
+        .execute()
+        .await
+        .expect("insert tombstones");
+    assert_eq!(
+        first_writer_tombstone(&sink).await.unwrap(),
+        Some(64_000_050)
+    );
+
+    base.query(&format!("DROP DATABASE IF EXISTS {db}"))
+        .execute()
+        .await
+        .expect("cleanup throwaway db");
+}

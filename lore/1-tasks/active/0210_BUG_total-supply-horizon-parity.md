@@ -955,3 +955,47 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
 - **Sequencing.** Phase 1+2 can ship together (LP reserves + claimable
   balances) as a smaller PR. Phase 3 needs its own PR with the spike + design
   decision. Phase 4 parity check runs on top of Phase 3.
+
+### Deep review of PR #460 (2026-09-16)
+
+Four sequential lenses (correctness, production data, devil's advocate, pattern
+generalization) and a separate judge, all read-only against production.
+Verdict: merge after one runbook fix. No defect in the write path, the view or
+the seed on today's data (0 newest-snapshot ties, 0 malformed `legs`, 0 dropped
+pools; seeded pool rows equal live rows).
+
+- **Fixed in this PR:**
+  - `docs/backfills.md` states the rule that a re-parse never ends before the
+    claimable balance writer deploy. Measured why: re-parsing 64,000,000–64,009,999
+    after the fact would leave 8,718 claimed balances live across 28 assets, and
+    the seed's coverage check cannot see it. No code guard: our re-parses are
+    whole-era or gap-fills.
+  - The view's CI test now covers a claimable balance (supply, not a holder), a
+    classic pool with two snapshots (newest wins, × 10^7, both legs) and a
+    Soroban pool (ignored).
+  - A ClickHouse test of the query behind the seed's writer-coverage check.
+  - The view reads `liquidity_pools FINAL` instead of `argMax(legs)`.
+  - `pools_gone.tsv` lists only classic pools that were ours before the
+    checkpoint.
+  - Comment: every `ALTER` on `balances` also runs on
+    `claimable_balance_holdings` (one row struct feeds both).
+  - View swap notes in `init.sql`: create it as the replaced view's user, force
+    and check the first refresh, roll the view back with the writer.
+  - Docs that still called supply `sum(balances)`, the API field docs
+    (regenerated types), table counts.
+- **Kept, decided:** a pool counts as a holder at any positive amount, dust
+  included, like every other holder. XLM gains 10,290 pool holders, 5,907 of
+  them under 1 XLM. A dust rule, if ever, applies to every holder kind at once.
+- **Measured cost:** refresh 1.3 s → 3.65 s, 115 M → 444 M rows read, 643 MiB;
+  about 5–6 s in a year (estimate). The seed's pool read 1.19 s.
+- **Follow-ups, not in this PR:** a seeded pool shows its last-modified ledger
+  as its creation ledger in the pool API; a pre-deploy check of every insert
+  struct against production columns; the `--execute` refusal branch itself
+  has no test (it needs a decoded checkpoint).
+- **Rollout checks for the view swap:** `SHOW CREATE TABLE balance_aggregates_mv`
+  names the user to create it as (`dev_shared` today). After the swap, XLM
+  holders should read about 9.97 M (9,960,150 before). Rollback:
+  `CREATE MATERIALIZED VIEW balance_aggregates_mv REFRESH EVERY 2 MINUTE TO
+balance_aggregates AS SELECT asset_id, sum(amount) AS total_supply,
+toInt32(countIf(amount > 0)) AS holder_count FROM balances FINAL GROUP BY
+asset_id` after dropping the new one; seeded rows need no removal.

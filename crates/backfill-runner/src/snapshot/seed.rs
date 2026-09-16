@@ -395,7 +395,7 @@ async fn build_corrections(
         claimable::build_corrections(sink, state, checkpoint, report, &mut referenced_assets)
             .await?;
     // Pass 2c: classic pools with no current snapshot of ours, same reason.
-    out.pools = pools::build_corrections(sink, state, &mut referenced_assets).await?;
+    out.pools = pools::build_corrections(sink, state, checkpoint, &mut referenced_assets).await?;
 
     // Pass 3: dimension stubs — a seeded balance whose asset or holder has no
     // dimension row would render as a broken join, i.e. a new lie replacing an
