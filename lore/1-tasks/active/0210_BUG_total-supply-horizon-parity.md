@@ -1017,3 +1017,34 @@ pools; seeded pool rows equal live rows).
 balance_aggregates AS SELECT asset_id, sum(amount) AS total_supply,
 toInt32(countIf(amount > 0)) AS holder_count FROM balances FINAL GROUP BY
 asset_id` after dropping the new one; seeded rows need no removal.
+
+### Writer check on the live stream, before the seed (decided 2026-09-17)
+
+Unit, mainnet-fixture and ClickHouse e2e tests cover single transactions; a
+defect that shows only across thousands of real ledgers would surface in
+production. A few hours after the deploy, and before `snapshot-seed`, compare
+the table with `asset_transfers`, which records the same creations and claims
+from events and shares the `B…` surrogate. `D` = the writer's first tombstone
+ledger + 1 (`SELECT min(closed_at_ledger) FROM claimable_balance_holdings WHERE
+closed_at_ledger > 0`). Every count must be 0:
+
+```sql
+WITH D AS (SELECT min(closed_at_ledger) + 1 FROM claimable_balance_holdings WHERE closed_at_ledger > 0),
+ins AS (SELECT to_id AS id, any(asset_id) AS asset, any(amount) AS amount
+        FROM asset_transfers WHERE to_kind = 'B' AND ledger_sequence >= (SELECT * FROM D) GROUP BY to_id),
+outs AS (SELECT DISTINCT from_id AS id FROM asset_transfers
+         WHERE from_kind = 'B' AND ledger_sequence >= (SELECT * FROM D)),
+ours AS (SELECT holder_id AS id, asset_id, amount, closed_at_ledger
+         FROM claimable_balance_holdings FINAL WHERE last_updated_ledger >= (SELECT * FROM D))
+SELECT
+  (SELECT count() FROM ins WHERE id NOT IN (SELECT id FROM ours))                   AS created_not_written,
+  (SELECT count() FROM outs WHERE id NOT IN (SELECT id FROM ours WHERE closed_at_ledger > 0)) AS claimed_not_closed,
+  (SELECT count() FROM ours WHERE closed_at_ledger > 0 AND id NOT IN (SELECT id FROM outs))   AS closed_without_claim,
+  (SELECT count() FROM ours WHERE closed_at_ledger = 0 AND id IN (SELECT id FROM outs))       AS live_but_claimed,
+  (SELECT count() FROM ours o INNER JOIN ins i USING id
+    WHERE o.closed_at_ledger = 0 AND (o.asset_id != i.asset OR o.amount != i.amount))         AS live_wrong_asset_or_amount
+```
+
+A sponsorship change rewrites a balance without an edge; it keeps asset and
+amount, so none of the counts moves. A non-zero count is a writer defect:
+stop, do not seed.
