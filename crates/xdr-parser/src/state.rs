@@ -693,7 +693,30 @@ pub fn extract_account_states(
 
 /// Extract liquidity pool states and snapshots from ledger entry changes.
 ///
-/// Returns pool state updates and a snapshot for each change.
+/// What each change means, per stellar-core (`LedgerTxn::getChanges`: a
+/// `STATE` is always followed by the `UPDATED` or `REMOVED` of the same key,
+/// and `CREATED` stands alone) and confirmed on 9,865 mainnet pool changes
+/// (task 0210, 2026-09-17: 0 lone `state`):
+///
+/// | change | snapshot | pool row |
+/// |---|---|---|
+/// | `created` / `restored` | its reserves | its params, creation ledger |
+/// | `updated` | its reserves | its params |
+/// | `state` | none | none — it is the image at the START of the operation, never a value |
+/// | `removed` | reserves and shares 0 | params of the `state` before it |
+///
+/// A `removed` has no data, and the `state` before it is not the pool just
+/// before removal: when an issuer revokes the last holder's authorization,
+/// core redeems the shares, zeroes the reserves and erases the pool inside one
+/// operation, and the meta carries only the start-of-operation `state` (full
+/// reserves) and the `removed`. Storing that `state` left 1,381 erased pools
+/// with their old reserves. A pool that does not exist holds nothing, so its
+/// snapshot at that ledger is zero. The pool row still comes from the `state`
+/// params (fixed for a pool id), because for a pool created before our history
+/// the removal can be its only appearance.
+///
+/// A `state` with no following `updated` / `removed` cannot happen; one is
+/// logged and ignored.
 pub fn extract_liquidity_pools(
     changes: &[ExtractedLedgerEntryChange],
 ) -> (
@@ -702,120 +725,120 @@ pub fn extract_liquidity_pools(
 ) {
     let mut pools = Vec::new();
     let mut snapshots = Vec::new();
+    // The `state` image the next change of the same pool pairs with.
+    let mut before: HashMap<String, &Value> = HashMap::new();
 
     for change in changes {
         if change.entry_type != "liquidity_pool" {
             continue;
         }
-        // Lore-0189: include `state` change_type. Stellar Core writes
-        // a read-only `state` snapshot of every LedgerEntry referenced
-        // (but not modified) by an operation. Skipping these used to
-        // produce orphan `lp_positions` rows when a pool_share trustline
-        // was created/updated/removed in a ledger that did not also
-        // mutate the pool's reserves — the pool was visible in op_meta
-        // only as `state`, the trustline carried the position update,
-        // and the FK from `lp_positions.pool_id → liquidity_pools.pool_id`
-        // tripped. Including `state` here lets us extract the full pool
-        // dimension (asset_a, asset_b, fee, reserves) from the snapshot
-        // and satisfy the FK without resorting to sentinel placeholders
-        // for the common case. Snapshots emitted alongside are absorbed
-        // by `liquidity_pool_snapshots`'s
-        // `uq_lp_snapshots_pool_ledger DO NOTHING` (write.rs).
-        if !matches!(
-            change.change_type.as_str(),
-            "created" | "updated" | "restored" | "state"
-        ) {
-            continue;
+        match change.change_type.as_str() {
+            "state" => {
+                if let Some(data) = &change.data
+                    && let Some(pool_id) = data.get("pool_id").and_then(Value::as_str)
+                {
+                    before.insert(pool_id.to_string(), data);
+                }
+            }
+            "removed" => {
+                let Some(pool_id) = change.key.get("pool_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                match before.remove(pool_id) {
+                    Some(data) => pools.push(pool_row(pool_id, data, change, false)),
+                    None => warn!(
+                        pool_id,
+                        ledger = change.ledger_sequence,
+                        "liquidity pool removed without a preceding state change; \
+                         writing its zero snapshot, no pool row"
+                    ),
+                }
+                snapshots.push(ExtractedLiquidityPoolSnapshot {
+                    pool_id: pool_id.to_string(),
+                    ledger_sequence: change.ledger_sequence,
+                    created_at: change.created_at,
+                    reserves: serde_json::json!({ "a": 0, "b": 0 }),
+                    total_shares: "0".to_string(),
+                });
+            }
+            "created" | "updated" | "restored" => {
+                let Some(data) = &change.data else { continue };
+                let Some(pool_id) = data.get("pool_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                before.remove(pool_id);
+                let is_creation = change.change_type != "updated";
+                let pool = pool_row(pool_id, data, change, is_creation);
+                snapshots.push(ExtractedLiquidityPoolSnapshot {
+                    pool_id: pool.pool_id.clone(),
+                    ledger_sequence: change.ledger_sequence,
+                    created_at: change.created_at,
+                    reserves: pool.reserves.clone(),
+                    total_shares: pool.total_shares.clone(),
+                });
+                pools.push(pool);
+            }
+            _ => {}
         }
-        let Some(ref data) = change.data else {
-            continue;
-        };
-
-        let pool_id = data
-            .get("pool_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if pool_id.is_empty() {
-            continue;
-        }
-
-        let params = data.get("params").cloned().unwrap_or(serde_json::json!({}));
-        let asset_a = params
-            .get("asset_a")
-            .cloned()
-            .unwrap_or(serde_json::json!(null));
-        let asset_b = params
-            .get("asset_b")
-            .cloned()
-            .unwrap_or(serde_json::json!(null));
-        let fee_bps = params.get("fee").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-
-        let reserve_a = data.get("reserve_a").and_then(|v| v.as_i64()).unwrap_or(0);
-        let reserve_b = data.get("reserve_b").and_then(|v| v.as_i64()).unwrap_or(0);
-        let reserves = serde_json::json!({ "a": reserve_a, "b": reserve_b });
-
-        let total_shares = data
-            .get("total_pool_shares")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0)
-            .to_string();
-
-        let is_creation = matches!(change.change_type.as_str(), "created" | "restored");
-        let pool = ExtractedLiquidityPool {
-            pool_id: pool_id.clone(),
-            asset_a: asset_a.clone(),
-            asset_b: asset_b.clone(),
-            fee_bps,
-            reserves: reserves.clone(),
-            total_shares: total_shares.clone(),
-            created_at_ledger: if is_creation {
-                Some(change.ledger_sequence)
-            } else {
-                None
-            },
-            last_updated_ledger: change.ledger_sequence,
-            created_at: change.created_at,
-        };
-
-        pools.push(pool);
-
-        // lore-0356: emit a snapshot for every liquidity-pool change that reaches
-        // here (created/updated/restored/state). "One row per (pool, ledger)" is
-        // delegated to `dedup_final_pool_snapshots`, which keeps the LAST image in
-        // ledger apply order = the end-of-ledger reserves. We deliberately do NOT
-        // drop `state` snapshots: for a pool mutated in the ledger the last change
-        // is always the `updated` after-image (a `state` before-image is
-        // immediately followed by its `updated`, so it never wins), while for a
-        // pool referenced but not mutated (the lore-0189 case — e.g. a pool_share
-        // trustline change) the lone `state` read IS its correct end-of-ledger
-        // value; dropping it would leave that pool with no snapshot and blank
-        // reserves in the read path.
-        snapshots.push(ExtractedLiquidityPoolSnapshot {
-            pool_id,
-            ledger_sequence: change.ledger_sequence,
-            created_at: change.created_at,
-            reserves,
-            total_shares,
-        });
+    }
+    for pool_id in before.keys() {
+        warn!(
+            pool_id = pool_id.as_str(),
+            "liquidity pool state change with no following updated or removed; ignored"
+        );
     }
 
     (pools, snapshots)
 }
 
+/// The pool row one change carries: params from `data`, reserves from `data`
+/// unless the pool was removed (then 0), versioned on the change's ledger.
+fn pool_row(
+    pool_id: &str,
+    data: &Value,
+    change: &ExtractedLedgerEntryChange,
+    is_creation: bool,
+) -> ExtractedLiquidityPool {
+    let removed = change.change_type == "removed";
+    let params = data.get("params").cloned().unwrap_or(serde_json::json!({}));
+    let reserve = |field| {
+        if removed {
+            0
+        } else {
+            data.get(field).and_then(Value::as_i64).unwrap_or(0)
+        }
+    };
+    let total_shares = if removed {
+        0
+    } else {
+        data.get("total_pool_shares")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    };
+    ExtractedLiquidityPool {
+        pool_id: pool_id.to_string(),
+        asset_a: params.get("asset_a").cloned().unwrap_or(Value::Null),
+        asset_b: params.get("asset_b").cloned().unwrap_or(Value::Null),
+        fee_bps: params.get("fee").and_then(Value::as_i64).unwrap_or(0) as i32,
+        reserves: serde_json::json!({ "a": reserve("reserve_a"), "b": reserve("reserve_b") }),
+        total_shares: total_shares.to_string(),
+        created_at_ledger: is_creation.then_some(change.ledger_sequence),
+        last_updated_ledger: change.ledger_sequence,
+        created_at: change.created_at,
+    }
+}
+
 /// Collapse pool snapshots to exactly one per `(pool_id, ledger_sequence)`: the
 /// LAST one in ledger apply order, i.e. the end-of-ledger (final) reserves.
 ///
-/// Producers push a snapshot for every liquidity-pool change in apply order
-/// (transaction order, then operation order), so the last snapshot for a
-/// `(pool, ledger)` reflects the pool's committed state at ledger close — the
-/// final `updated` after-image for a mutated pool, or the lone read-only `state`
-/// value for a pool that was only referenced. Deduping here makes the stored
-/// snapshot a deterministic function of the ledger (re-ingesting the same ledger
-/// yields the same row) instead of leaving "one row per (pool, ledger)" to CH's
-/// version-less `ReplacingMergeTree`, which would otherwise keep an arbitrary
-/// intra-ledger image. See lore-0356.
+/// Producers push a snapshot for every value-carrying pool change in apply
+/// order (transaction order, then operation order), so the last snapshot for a
+/// `(pool, ledger)` is the pool's committed state at ledger close — the final
+/// `updated` after-image, or the zero snapshot of a `removed`. Deduping here
+/// makes the stored snapshot a deterministic function of the ledger
+/// (re-ingesting the same ledger yields the same row) instead of leaving "one
+/// row per (pool, ledger)" to CH's version-less `ReplacingMergeTree`, which
+/// would otherwise keep an arbitrary intra-ledger image. See lore-0356.
 ///
 /// Call once per ledger, after aggregating every transaction's snapshots
 /// (`crate::fold::keep_last_by_key` carries the shared mechanism and the

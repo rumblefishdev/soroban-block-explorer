@@ -1066,3 +1066,82 @@ stop, do not seed.
   `seed.rs` (519 lines) keeps orchestration: preconditions, stubs, entry state,
   artifacts, inserts. `summary.txt` lists every table's corrections in one
   block.
+
+## 2026-09-17 (karolkow) — the first seed dry-run: 1,381 erased pools still held reserves
+
+Dry-run against checkpoint 64,469,759, after the claimable balance writer
+deployed and passed its live check (2,302 creations and 2,104 claims since the
+deploy, all five counts 0). Everything but the pools was clean: 3,980,803
+claimable balances to insert (the table is new), 466 pools with no snapshot of
+ours, 37 `balances` corrections (the previous seed at 64,131,263 holds), 181
+asset stubs. `pools_gone.tsv` listed **1,381 pools erased on the network whose
+newest snapshot of ours still holds reserves and shares**. The 2026-09-16 "0
+dead pools with reserves" measured death by `total_shares = 0` and could not
+see them. Through the new aggregate they would add phantom supply to 1,440
+assets (over half of the published supply for 181) and count 1,381 phantom
+holders; the pool API already lists them as live with TVL.
+
+### Root cause: a `state` change is not a value
+
+- **Core's meta.** Every `updated` / `removed` is preceded by a `state` of the
+  same key holding the entry at the START of the operation; `created` stands
+  alone (stellar-core `LedgerTxn::getChanges`, each operation in its own nested
+  `LedgerTxn`; stellar/go `ingest/change.go` says the same). A lone `state` is
+  impossible: 0 in 9,865 pool changes over 280 decoded mainnet ledgers.
+- **The erasing path.** When an issuer revokes the last pool-share holder
+  (`allow_trust` / `set_trust_line_flags`), core redeems the shares into
+  claimable balances, zeroes the reserves and erases the pool in one operation.
+  The meta carries the start-of-operation `state` (full reserves) and the
+  `removed` — no zeroing `updated`. Mainnet tx `969b9f2d…`, ledger 63,599,411:
+  `state` 5,153,048 / 267,029,108,195,986, shares 31,545,858,682, then `removed`.
+  A normal exit is unaffected: the withdraw writes `updated` 0/0/0 first.
+- **Our parser** took `state` as a value (lore-0189, 2026-05-05) and skipped
+  `removed`, so the keep-last dedup stored the start-of-operation image. The
+  0189 premise ("a pool referenced but not mutated") came from a decoder that
+  never printed data-less `removed`: its own reproducer, ledger 62,148,003, is
+  `state` + `removed`.
+- **Still live:** 1 of the 1,381 after the 0356 deploy (63,599,411).
+- **Other snapshot-compared tables are clean:** `balances` and `lp_positions`
+  never take a value from `state` and handle `removed`; claimable balances use
+  `state` only for the asset.
+- Horizon and stellar-etl flag an erased pool (`deleted = true`, pre-image
+  kept) and never read those values as current.
+
+### Decisions
+
+- **Parser follows the protocol.** Values only from `created` / `updated` /
+  `restored`; a pool `removed` writes a zero snapshot at its ledger, with the
+  pool row's params from the paired `state` (for a pool created before our
+  history the removal can be its only appearance, ~33 pools estimate); a lone
+  `state` is logged, never stored. The seed hands checkpoint entries to the
+  extractor as `updated` (`entry_as_current_change`). Mainnet fixtures:
+  revocation, withdraw then exit, pre-history removal, trustline-count-only
+  change. With the old logic restored the revocation test yields exactly the
+  production values.
+- **Differential check** (`tests/pool_snapshot_oracle.rs`, run by hand with
+  `POOL_ORACLE_DIR`): the extractor's end-of-ledger value for every pool in the
+  280 decoded ledgers against an expectation built from `stellar xdr decode`
+  JSON by a separate script — 6,502 of 6,502 agree. With the old logic
+  restored, 70 disagree: the 70 revocations, each keeping its stale reserves.
+- **History is repaired in place**, not re-parsed: the 1,381 stale rows are each
+  pool's newest snapshot, exactly one row per pool, all at the erasing ledger
+  (verified 2026-09-17). An `ALTER TABLE liquidity_pool_snapshots UPDATE
+reserve_a = 0, reserve_b = 0, total_shares = 0 WHERE (pool_id, ledger_sequence)
+IN (…)` over the `pools_gone.tsv` pairs gives the rows the fixed parser would
+  write. A re-parse writes the same key again and leaves two rows to an
+  unmerged version-less RMT; zeros at the checkpoint ledger would falsify the
+  pools' history.
+- **Seed guards:** the population floors are gone (`MIN_BUCKETS`,
+  `MIN_LIVE_ACCOUNTS`, `MIN_LIVE_TRUSTLINES`, `MIN_LIVE_CLAIMABLE`,
+  `MIN_OUR_ROWS`, `MIN_ASSET_IDS`, `MIN_ACCOUNT_IDS`). A short snapshot fails its
+  bucket hash or decode, a short read of ours fails its cursor; the one silent
+  path, a profile with an `*_overflow_mode` other than `throw`, now stops every
+  run. `account_entry_state` is labelled a full rewrite in `summary.txt`.
+- **Closed pools in the API** (both the 1,381 and the 12,607 normally closed
+  ones listed as live with zero reserves) → separate task.
+
+### Order
+
+PR → deploy → the `UPDATE` (`chw`), matching exactly 1,381 rows before and
+after → second dry-run (`pools_gone` 0) → `snapshot-seed --execute` → dry-run
+again → view swap.

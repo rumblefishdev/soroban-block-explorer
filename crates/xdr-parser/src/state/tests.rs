@@ -45,43 +45,35 @@ fn lp_change(
     )
 }
 
+fn lp_removed(pool_id: &str) -> ExtractedLedgerEntryChange {
+    make_change(
+        "liquidity_pool",
+        "removed",
+        json!({ "pool_id": pool_id }),
+        None,
+    )
+}
+
 #[test]
-fn lp_snapshot_final_wins_over_before_image() {
-    // Core writes `state` (before) then `updated` (after) per op. Both become
-    // snapshots, but ledger-scope dedup keeps the LAST (the `updated`
-    // after-image) — the stale before-image never wins for a mutated pool.
+fn a_state_image_is_never_a_value() {
+    // Core pairs every `updated` with the `state` it replaced (the image at the
+    // start of the operation). Only the `updated` carries the pool's value.
     let (pools, snapshots) = extract_liquidity_pools(&[
         lp_change("state", "POOL1", 100, 200, 50),
         lp_change("updated", "POOL1", 110, 182, 50),
     ]);
-    assert_eq!(pools.len(), 2, "dimension extracted from both changes");
-    assert_eq!(
-        snapshots.len(),
-        2,
-        "a snapshot per change (state + updated)"
-    );
-
-    let deduped = dedup_final_pool_snapshots(snapshots);
-    assert_eq!(deduped.len(), 1, "one snapshot per (pool, ledger)");
-    assert_eq!(
-        deduped[0].reserves,
-        json!({ "a": 110, "b": 182 }),
-        "final (after) image, not the stale before-image"
-    );
+    assert_eq!(pools.len(), 1);
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].reserves, json!({ "a": 110, "b": 182 }));
 }
 
 #[test]
-fn lp_snapshot_kept_for_state_only_pool() {
-    // lore-0356 regression guard: a pool referenced only as read-only `state`
-    // (the lore-0189 dormant case) must still get exactly one snapshot carrying
-    // its correct, unchanged reserves — otherwise the read path shows blank
-    // reserves for a real pool.
+fn a_lone_state_writes_nothing() {
+    // Cannot happen on chain (core always follows `state` with `updated` or
+    // `removed`); if it ever does, it is logged, not stored as the pool's value.
     let (pools, snapshots) = extract_liquidity_pools(&[lp_change("state", "POOL1", 100, 200, 50)]);
-    assert_eq!(pools.len(), 1);
-
-    let deduped = dedup_final_pool_snapshots(snapshots);
-    assert_eq!(deduped.len(), 1, "state-only pool keeps its snapshot");
-    assert_eq!(deduped[0].reserves, json!({ "a": 100, "b": 200 }));
+    assert!(pools.is_empty());
+    assert!(snapshots.is_empty());
 }
 
 #[test]
@@ -94,7 +86,7 @@ fn dedup_keeps_last_image_per_pool_ledger() {
         lp_change("updated", "POOL1", 121, 181, 50), // final
         lp_change("updated", "POOL2", 7, 8, 3),
     ]);
-    assert_eq!(snapshots.len(), 5, "a snapshot per change (incl. state)");
+    assert_eq!(snapshots.len(), 3, "a snapshot per updated, none per state");
 
     let deduped = dedup_final_pool_snapshots(snapshots);
     assert_eq!(deduped.len(), 2, "one snapshot per (pool, ledger)");
@@ -104,6 +96,37 @@ fn dedup_keeps_last_image_per_pool_ledger() {
         json!({ "a": 121, "b": 181 }),
         "final image, not before/intermediate"
     );
+}
+
+#[test]
+fn a_removed_pool_ends_the_ledger_at_zero() {
+    // The revocation shape (task 0210): an earlier trade in the ledger, then one
+    // operation whose meta is the start-of-operation `state` with full reserves
+    // and the `removed`. The pool holds nothing at ledger close.
+    let (pools, snapshots) = extract_liquidity_pools(&[
+        lp_change("state", "POOL1", 90, 210, 50),
+        lp_change("updated", "POOL1", 100, 200, 50),
+        lp_change("state", "POOL1", 100, 200, 50),
+        lp_removed("POOL1"),
+    ]);
+    let deduped = dedup_final_pool_snapshots(snapshots);
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].reserves, json!({ "a": 0, "b": 0 }));
+    assert_eq!(deduped[0].total_shares, "0");
+
+    // The pool row still carries the params, from the `state` before the removal.
+    let last = pools.last().unwrap();
+    assert_eq!(last.fee_bps, 30);
+    assert_eq!(last.reserves, json!({ "a": 0, "b": 0 }));
+    assert!(last.created_at_ledger.is_none());
+}
+
+#[test]
+fn a_removal_without_its_state_still_zeroes_the_pool() {
+    let (pools, snapshots) = extract_liquidity_pools(&[lp_removed("POOL1")]);
+    assert!(pools.is_empty(), "no params to build a pool row from");
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].reserves, json!({ "a": 0, "b": 0 }));
 }
 
 // -- Contract Deployment Tests --
@@ -1176,88 +1199,49 @@ fn lp_positions_ignore_state_change_type() {
     assert!(extract_lp_positions(&changes).is_empty());
 }
 
-// -- Lore-0189: pool extraction includes `state` change_type --
+// -- Lore-0189: a pool seen only at its removal keeps its dimension row --
 
 #[test]
-fn pool_extracted_from_state_change_type() {
-    // Lore-0189 reproducer: ledger 62148003 contained pool d63184... only
-    // as a `state` snapshot (no reserves change), but a pool_share trustline
-    // for that pool was simultaneously `removed` — producing an `lp_positions`
-    // emit with a pool_id that, pre-fix, was not present in `pool_rows`.
-    // Post-fix (lore-0189), `state` is included so the pool dimension is
-    // captured. lore-0356: `state` also emits a snapshot — for this
-    // referenced-but-not-mutated pool it is the pool's correct end-of-ledger
-    // value, so the pool keeps exactly one snapshot instead of blank reserves.
-    let changes = vec![make_change(
-        "liquidity_pool",
-        "state",
-        json!({
-            "pool_id": "d63184d4e5601fad174d9d5fa8e79f2366f6818892e43867a952e8adb13fa561",
-        }),
-        Some(json!({
-            "pool_id": "d63184d4e5601fad174d9d5fa8e79f2366f6818892e43867a952e8adb13fa561",
-            "params": {
-                "asset_a": { "type": "credit_alphanum4", "code": "Lira", "issuer": "GBU3EGQO" },
-                "asset_b": { "type": "credit_alphanum12", "code": "liragold", "issuer": "GAIHDHWF" },
-                "fee": 30,
-            },
-            "reserve_a": 0,
-            "reserve_b": 0,
-            "total_pool_shares": 0,
-            "type": "constant_product",
-        })),
-    )];
+fn pool_seen_only_at_its_removal_keeps_its_row() {
+    // Lore-0189 reproducer, re-read on 2026-09-17 (task 0210): ledger 62148003
+    // carries pool d63184… as `state` + `removed` in a `change_trust`, not as a
+    // lone read-only `state` as first assumed. The pool row comes from the
+    // `state` params, so the `lp_positions` row of that ledger still resolves;
+    // the snapshot is zero, because the pool no longer exists.
+    let pool_id = "d63184d4e5601fad174d9d5fa8e79f2366f6818892e43867a952e8adb13fa561";
+    let changes = vec![
+        make_change(
+            "liquidity_pool",
+            "state",
+            json!({ "pool_id": pool_id }),
+            Some(json!({
+                "pool_id": pool_id,
+                "params": {
+                    "asset_a": { "type": "credit_alphanum4", "code": "Lira", "issuer": "GBU3EGQO" },
+                    "asset_b": { "type": "credit_alphanum12", "code": "liragold", "issuer": "GAIHDHWF" },
+                    "fee": 30,
+                },
+                "reserve_a": 0,
+                "reserve_b": 0,
+                "total_pool_shares": 0,
+                "type": "constant_product",
+            })),
+        ),
+        lp_removed(pool_id),
+    ];
 
     let (pools, snapshots) = extract_liquidity_pools(&changes);
-    assert_eq!(pools.len(), 1, "state change_type must produce 1 pool row");
-    assert_eq!(
-        snapshots.len(),
-        1,
-        "lore-0356: state-only pool keeps one snapshot (its correct reserves)"
-    );
-    assert_eq!(snapshots[0].reserves, json!({ "a": 0, "b": 0 }));
-
-    let pool = &pools[0];
-    assert_eq!(
-        pool.pool_id,
-        "d63184d4e5601fad174d9d5fa8e79f2366f6818892e43867a952e8adb13fa561"
-    );
-    assert_eq!(pool.fee_bps, 30);
-    // `state` is not creation — created_at_ledger must remain None.
-    assert!(
-        pool.created_at_ledger.is_none(),
-        "state must NOT mark as creation"
-    );
-    assert_eq!(pool.last_updated_ledger, 100);
-}
-
-#[test]
-fn pool_state_only_does_not_promote_to_creation() {
-    // Reinforces the contract: `state` is observed-not-created. If we
-    // ever start treating it as a creation, downstream logic that
-    // depends on `created_at_ledger` (e.g. earliest-observation
-    // analytics) would silently regress.
-    let changes = vec![make_change(
-        "liquidity_pool",
-        "state",
-        json!({"pool_id": "aabb"}),
-        Some(json!({
-            "pool_id": "aabb",
-            "params": {
-                "asset_a": { "type": "native" },
-                "asset_b": { "type": "credit_alphanum4", "code": "USDC", "issuer": "GIS" },
-                "fee": 30,
-            },
-            "reserve_a": 100_i64,
-            "reserve_b": 50_i64,
-            "total_pool_shares": 70_i64,
-            "type": "constant_product",
-        })),
-    )];
-
-    let (pools, _) = extract_liquidity_pools(&changes);
     assert_eq!(pools.len(), 1);
-    assert!(pools[0].created_at_ledger.is_none());
+    assert_eq!(pools[0].pool_id, pool_id);
+    assert_eq!(pools[0].fee_bps, 30);
+    assert_eq!(pools[0].asset_a["code"], "Lira");
+    assert!(
+        pools[0].created_at_ledger.is_none(),
+        "a removal is not a creation"
+    );
+    assert_eq!(pools[0].last_updated_ledger, 100);
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].reserves, json!({ "a": 0, "b": 0 }));
 }
 
 #[test]
