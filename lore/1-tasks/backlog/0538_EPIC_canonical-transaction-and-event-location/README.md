@@ -201,7 +201,10 @@ Two facts follow directly:
 5. **Non-schema quick wins.** ClickHouse's own `text_log.message` (24.5 GiB)
    and `query_log.ProfileEvents` (8.1 GiB) are server-side logs. A TTL is a
    configuration change, not a migration — the cheapest ~32 GiB available, and
-   worth confirming separately because it needs no code at all.
+   worth confirming separately because it needs no code at all. **Taken by task
+   0563** (2026-09-17): the `system` database is 174.50 GiB, ≥ 89 GiB older than
+   30 days; a config TTL alone renames the tables instead of trimming them, so
+   the TTL goes on the live tables first.
 6. **What is the migration actually worth?** Every candidate sits in a sort
    key, so this is a full rebuild per table plus a re-ingest, not an `ALTER`.
    Quantify against the alternative of applying the natural key **only to new

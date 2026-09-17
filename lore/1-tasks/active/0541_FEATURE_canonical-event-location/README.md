@@ -729,3 +729,5 @@ Verdict: the table and the contract-event and transaction-page reads pass with
 margin. The `IN` mapping for the contract-filtered transaction list fails, and
 the list is already broken for native XLM today; plan task 2.5 moves that list
 to positions with bounded windows (measured 87 ms for native XLM).
+
+**Disk before phase 3 (2026-09-17, decision 231 A).** Free space 360.71 GiB (20.5%); filling the remaining partitions (+~169 GiB) plus two weeks of growth would leave ~9% until the old table is dropped. Server logs without retention hold 174.50 GiB (≥ 89 GiB older than 30 days), so task 0563 reclaims them first; phase 3 starts after 0563 step 1. Adding columns to the old table instead of swapping was rejected: the sort key cannot drop `transaction_id`, so the table would end ~78 GiB larger than the swap result and keep hash order.
