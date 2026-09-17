@@ -312,7 +312,13 @@ entities:
   JSONB blob on `accounts`)
 - classic LP state → `liquidity_pools` row + `liquidity_pool_snapshots` row +
   `lp_positions` upsert per participating account (asset pair modeled as typed
-  `asset_*_type SMALLINT` + code + issuer_id, not JSONB)
+  `asset_*_type SMALLINT` + code + issuer_id, not JSONB). Values come only from
+  `created` / `updated` / `restored`: a `state` change is the entry at the start
+  of the operation and always precedes that key's `updated` or `removed`
+  (stellar-core `LedgerTxn::getChanges`). A pool `removed` writes a zero
+  snapshot at its ledger, with the pool row's params taken from the `state`
+  before it — revoking the last holder's authorization erases a pool whose
+  only other image is the full-reserve `state` (task 0210)
 - **classic-credit + native asset entity rows** → `assets` row per distinct
   `(asset_code, issuer)` pair observed in a `trustline` LedgerEntryChange
   (`xdr_parser::detect_classic_credit_assets`, task 0219). Native XLM is a

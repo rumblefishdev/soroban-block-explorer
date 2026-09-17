@@ -9,8 +9,8 @@
 //! snapshot of it.
 //!
 //! Insert-only. Rows are built by the live builders
-//! (`db_clickhouse::persist::classic_pools`) from the entry read as a `state`
-//! change, and versioned on the entry's own `lastModifiedLedgerSeq`, so any
+//! (`db_clickhouse::persist::classic_pools`) from the entry read as an `updated`
+//! change (its value as of its own last modification), and versioned on the entry's own `lastModifiedLedgerSeq`, so any
 //! newer live row wins and a re-run inserts the same rows again. There is no
 //! writer-coverage check: the pool writer predates every checkpoint we can read.
 //! A pool the network removed while our newest snapshot still shows reserves is
@@ -71,7 +71,7 @@ pub(crate) fn need(our_newest_ledger: Option<i64>, entry_ledger: u32) -> Need {
 pub(crate) fn rows_for_entry(
     entry: &LedgerEntry,
 ) -> Result<(Vec<LiquidityPoolRow>, Vec<LiquidityPoolSnapshotRow>), BackfillError> {
-    let change = xdr_parser::ledger_entry_changes::entry_as_state_change(entry)
+    let change = xdr_parser::ledger_entry_changes::entry_as_current_change(entry)
         .ok_or_else(|| BackfillError::Incomplete("pool entry did not decode".into()))?;
     let (pools, snapshots) = xdr_parser::state::extract_liquidity_pools(&[change]);
     let staging = |e: db_clickhouse::SchemaError| BackfillError::Incomplete(e.to_string());
