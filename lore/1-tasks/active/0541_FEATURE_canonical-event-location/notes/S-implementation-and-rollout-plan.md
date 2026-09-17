@@ -105,7 +105,7 @@ chw "CREATE TABLE soroban_events_staging_canonical (contract_id Int64, ledger_se
 ```
 
 ```bash
-F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; for a in $(seq 63500000 5000 63995000); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
+F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; for a in $(seq -f '%.0f' 63500000 5000 63995000); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
 ```
 
 ### 1.2 Agent: size
@@ -678,42 +678,128 @@ that describe `(ledger_sequence, transaction_id, event_index)`.
 
 ### Task 2.5: transaction queries that read `soroban_events`
 
-**Files:** `crates/api/src/transactions/queries.rs` (contract arm ~455–485,
-`fetch_event_appearances` ~965–1000), `transactions/handlers.rs:500`.
+**Phase 1 changed this task.** Mapping the events arm to transaction ids through
+an `IN` set was measured unusable (native XLM: 6.64 GiB, over the 4 GB cap;
+mid contract: 4,331 ms vs 29 ms). Today's full driver already fails for native
+XLM (6.04 GiB). So the contract-filtered transaction list moves to positions in
+this PR: each arm yields `(ledger_sequence, application_order)` inside a
+bounded ledger window, the arms are merged in Rust, and the page is in
+execution order. The operation-type and unfiltered lists (statements A, C) stay
+as they are (programme 0538).
+
+**Files:** `crates/api/src/transactions/queries.rs` (statement B ~450–530,
+`fetch_event_appearances` ~965–1000), create
+`crates/api/src/transactions/contract_positions.rs` (window queries + merge; its
+tests in `contract_positions/tests.rs`), `transactions/dto.rs`
+(`TxListCursor`), `transactions/handlers.rs` (cursor per statement, `:500`).
+
+**Produces:**
+
+```rust
+// dto.rs — B's cursor; A/C keep `Ch`. Each statement rejects the other variant with 400.
+pub enum TxListCursor {
+    Ch { ledger_sequence: i64, tiebreak: i64 },
+    ChPosition { ledger_sequence: i64, application_order: i16 },
+}
+// contract_positions.rs
+pub struct ArmWindow { pub positions: Vec<(i64, i16)>, pub truncated: bool, pub last_ledger: Option<i64> }
+pub fn merge_arm_windows(arms: &[ArmWindow], direction: Direction, take: usize) -> MergeResult;
+pub enum MergeResult { Page(Vec<(i64, i16)>), NeedWiderWindow }
+pub async fn contract_tx_positions(client: &clickhouse::Client, contract_id: i64, partition_expr: &str,
+    head_max: &str, cursor: Option<(i64, i16)>, direction: Direction, take: usize)
+    -> Result<Vec<(i64, i16)>, clickhouse::error::Error>;
+```
+
+**Merge rule (the correctness condition).** An arm fetches the first
+`window` rows by ledger past the cursor, then **every** transaction position of
+the ledgers that window reached. A truncated arm is complete only down to its
+`last_ledger`, so the merged page may keep only positions on the complete side
+of the most restrictive truncated arm (`max` of `last_ledger` for a descending
+page, `min` for ascending). If fewer than `take` positions remain and some arm
+was truncated, the window doubles and the arms are asked again (at most 6
+rounds — `ponytail:` bounded; a contract needing more is logged and returns the
+positions it has).
 
 - [ ] **Step 0:** extract the inline tests of `transactions/queries.rs`
       (1,128 lines) → `crates/api/src/transactions/queries/tests.rs`;
       `cargo test -p api transactions` → green.
-- [ ] **Step 1: failing tests** — SQL-shape tests in `transactions/queries/tests.rs`:
-      the contract driver's events arm contains
-      `(t.ledger_sequence, t.application_order) IN (SELECT ledger_sequence, application_order FROM soroban_events`
-      and no `soroban_events` reference names `transaction_id`;
-      `event_appearances_sql()` filters `se.ledger_sequence = ? AND se.application_order = ?`.
-- [ ] **Step 2:** run → fails.
-- [ ] **Step 3: implementation**
-  - events arm (shape benchmarked in 1.4; if 1.4 failed, the list moves to
-    positions instead — see 1.4):
+- [ ] **Step 1: failing tests** (`transactions/contract_positions/tests.rs`)
 
 ```rust
-            let arm_evt = format!(
-                "SELECT t.ledger_sequence AS ledger_sequence, t.id AS transaction_id FROM transactions t \
-                 WHERE intDiv(t.ledger_sequence, 500000) = ifNull(intDiv({cl}, 500000), {head_partition}) \
-                   AND (t.ledger_sequence, t.application_order) IN ( \
-                       SELECT ledger_sequence, application_order FROM soroban_events \
-                       WHERE contract_id = {cid} \
-                         AND intDiv(ledger_sequence, 500000) = ifNull(intDiv({cl}, 500000), {head_partition})) \
-                   AND ({cl} IS NULL OR (t.ledger_sequence, t.id) {op} ({cl}, {ct}))"
-            );
+fn arm(p: &[(i64, i16)], truncated: bool) -> ArmWindow {
+    ArmWindow { positions: p.to_vec(), truncated, last_ledger: p.iter().map(|x| x.0).min() }
+}
+
+#[test]
+fn merges_in_execution_order_and_dedups() {
+    let r = merge_arm_windows(&[arm(&[(10, 3), (10, 1)], false), arm(&[(10, 3), (9, 7)], false)], Direction::Next, 10);
+    assert_eq!(r, MergeResult::Page(vec![(10, 3), (10, 1), (9, 7)])); // descending page
+}
+
+#[test]
+fn a_truncated_arm_caps_the_page_at_its_last_complete_ledger() {
+    // arm 1 reached only ledger 10; arm 2 has rows at ledger 8, which arm 1 may also have
+    let r = merge_arm_windows(&[arm(&[(11, 2), (10, 5)], true), arm(&[(8, 1)], false)], Direction::Next, 2);
+    assert_eq!(r, MergeResult::Page(vec![(11, 2), (10, 5)]));
+}
+
+#[test]
+fn asks_for_a_wider_window_when_the_cap_leaves_too_few() {
+    let r = merge_arm_windows(&[arm(&[(11, 2)], true), arm(&[(8, 1), (7, 1)], false)], Direction::Next, 3);
+    assert_eq!(r, MergeResult::NeedWiderWindow);
+}
 ```
 
-- `fetch_event_appearances(client, ledger_sequence: i64, application_order: i16)`:
-  `FROM soroban_events se JOIN ledgers l … WHERE se.ledger_sequence = ? AND
+plus SQL-shape tests in `queries/tests.rs`: no statement-B SQL names
+`transaction_id` for `soroban_events`; the page seeks
+`(t.ledger_sequence, t.application_order) IN (…)` and orders by
+`t.ledger_sequence {order}, t.application_order {order}`;
+`event_appearances_sql()` filters `se.ledger_sequence = ? AND
+se.application_order = ?`; and in `dto` tests a `ChPosition` cursor round-trips
+while a `Ch` cursor on statement B returns 400 `invalid_cursor`.
+
+- [ ] **Step 2:** `cargo test -p api transactions` → fails.
+- [ ] **Step 3: implementation**
+  - `merge_arm_windows`: collect all positions, dedup, drop those beyond the
+    cap (`max`/`min` of `last_ledger` over truncated arms), sort by
+    `(ledger, application_order)` in the page direction; `Page` if `len ≥ take`
+    or no arm was truncated, else `NeedWiderWindow`.
+  - window queries per arm (`{p}` partition expression, `{cur}` = `NULL` or the
+    cursor, `{op}`/`{order}` from `keyset_sql_desc`, `{w}` window): - events: `SELECT ledger_sequence, application_order FROM soroban_events
+WHERE contract_id = {cid} AND {p} AND ledger_sequence <= {head_max} AND
+({cur} IS NULL OR (ledger_sequence, application_order) {op} {cur})
+AND ledger_sequence {op}= (SELECT … ORDER BY ledger_sequence {order} LIMIT
+1 OFFSET {w}-1)` — implemented as two statements: the window's last ledger
+    (`SELECT ledger_sequence … ORDER BY ledger_sequence {order} LIMIT 1
+OFFSET {w}-1`, read-in-order on the key), then `SELECT DISTINCT
+ledger_sequence, application_order … AND ledger_sequence BETWEEN …`. - invocations (`soroban_invocations_appearances`, key `(contract_id,
+ledger_sequence, transaction_id)`) and operations
+    (`operations_appearances`, contract filter not in its key — scans the
+    partition as today): same two statements on `(ledger_sequence,
+transaction_id)`, then ids → positions with one seek `SELECT
+ledger_sequence, id, application_order FROM transactions WHERE
+(ledger_sequence, id) IN (…)`; the cursor predicate on positions is
+    applied after that mapping, and the window's first ledger is inclusive.
+  - statement B page: `… FROM transactions t WHERE (t.ledger_sequence,
+t.application_order) IN ({positions}) AND {src/op_type filters} ORDER BY
+t.ledger_sequence {order}, t.application_order {order} LIMIT 1 BY
+t.ledger_sequence, t.application_order LIMIT {lim_peek}`; the handler encodes
+    `TxListCursor::ChPosition` for statement B.
+  - `fetch_event_appearances(client, ledger_sequence: i64, application_order: i16)`:
+    `FROM soroban_events se JOIN ledgers l … WHERE se.ledger_sequence = ? AND
 se.application_order = ? AND intDiv(se.ledger_sequence, 500000) =
 intDiv(?, 500000) GROUP BY se.contract_id, se.ledger_sequence` (no `FINAL`:
-  the `GROUP BY` already collapses duplicates); the handler passes
-  `tx.ledger_sequence, tx.application_order`.
+    the `GROUP BY` already collapses duplicates); the handler passes
+    `tx.ledger_sequence, tx.application_order`.
 - [ ] **Step 4:** `cargo test -p api transactions` → pass.
-- [ ] **Step 5: commit:** `feat(lore-0541): read transaction events by position`
+- [ ] **Step 5: measure before merge** — local API against production
+      ClickHouse (read-only; the staging table has partition 127 only, so run
+      against a build whose SQL names `soroban_events_staging_canonical` and
+      ledgers of partition 127): first page and one cursor page of the
+      contract-filtered list for native XLM, contract `546855837558613593` and
+      `5314455185855296541`. Pass: each request < 1 s and < 1 GiB in
+      `system.query_log`.
+- [ ] **Step 6: commit:** `feat(lore-0541): page the contract transaction list on positions`
 
 ### Task 2.6: transaction page events from the archive carry the rpc id
 
@@ -933,7 +1019,7 @@ WHERE name = 'default'` ≥ 120 GiB; the day is not Sunday; no backup running
 3. **Operator — fill:**
 
 ```bash
-F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; P=101; for a in $(seq $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
+F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
 ```
 
 4. **Agent — post-fill:** staging row count for `P` = sum of the gate's `n`;
@@ -942,8 +1028,14 @@ F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sq
    CloudWatch dashboard (read-only); if it rose > 2× the previous hour, the
    next partition waits.
 
-Estimate: phase 1 measures the time of one partition; 28 partitions follow at
-that rate (to be filled in after 1.3).
+Estimate from phase 1: partition 127 (452 M rows, 4.3% of the table) took
+583 s of query time over 100 slices — median 5.6 s, max 10.7 s, peak 3.68 GiB
+per statement. Scaled by rows, all 29 partitions ≈ 3.8 h of query time
+(estimate); in practice one or two partitions per sitting.
+
+Loops use `seq -f '%.0f'`: the operator's `seq` printed `6.35e+07` in phase 1.
+ClickHouse read those as exact floats (all 100 slices matched), but integer
+literals remove the doubt.
 
 ---
 

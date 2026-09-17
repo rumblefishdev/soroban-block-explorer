@@ -691,3 +691,41 @@ c765f4d8); lore and the ADR land on `develop`.
 [`notes/S-implementation-and-rollout-plan.md`](notes/S-implementation-and-rollout-plan.md) — phases 1–5 (trial and benchmark, code tasks 2.1–2.8, partition fill, window runbook, cleanup), with the fill and gate SQL in [`notes/fill_insert.sql`](notes/fill_insert.sql) and [`notes/fill_gate.sql`](notes/fill_gate.sql). It supersedes the "Rollout" and "Revised order" lists above.
 
 **Decided (karolkow, 2026-09-17): the transaction page shows the rpc id.** Its `#` column becomes `ID` with the full `getEvents` id, rows in execution order; the bare `event_index` (ledger-wide counter for fees, position in the operation otherwise) and a short `op N · M` form were rejected. Plan task 2.6–2.7.
+
+## Phase 1 trial — partition 127 (2026-09-17)
+
+Operator created `soroban_events_staging_canonical` and filled partition 127
+(100 slices of 5k ledgers; 583 s of query time, median 5.6 s, peak 3.68 GiB per
+statement).
+
+**Correctness.** 452,275,397 rows = the old partition, in every one of the 100
+slices; 452,275,397 distinct keys; `transaction_index = 0` rows 170,740,563 (=
+the partition's transactions), `operation_index = 4095` 0, `transaction_index =
+1048575` 78,294,908 — all equal to the pre-fill gate.
+
+**Size.** 5.31 GiB against 7.19 GiB (−26%; still 6 parts, merges may shrink it
+further). Per column (bytes/row, old → new): `topics_xdr` 8.516 → 8.332,
+`data_xdr` 2.182 → 2.094, `transaction_id` 5.036 → gone, flat `event_index`
+0.699 → gone; new `transaction_index` 0.634, `application_order` 0.460,
+`event_index` 0.361, `operation_index` 0.150; `signature` 0.124 → 0.059. Whole
+table by the same ratio ≈ 174 GiB (estimate).
+
+**Read path** (median of 3, `system.query_log`; contracts: native XLM 271 M
+events in the partition, `546855837558613593` 14 M, `5314455185855296541`
+1,034):
+
+| case                                                          | old                      | new                           |
+| ------------------------------------------------------------- | ------------------------ | ----------------------------- |
+| contract events, first page — XLM / mid / small               | 285 / 392 / 13 ms        | 119 / 193 / 9 ms              |
+| contract events, cursor page — XLM / mid / small              | 290 / 354 / 15 ms        | 123 / 155 / 9 ms              |
+| memory, first page — XLM / mid                                | 1.19 / 1.90 GiB          | 573 MiB / 1.10 GiB            |
+| transaction resolve by id vs by position                      | 4 ms                     | 4 ms                          |
+| transaction page event appearances                            | 81 ms, 24.7 M rows read  | 5 ms, 49 k rows read          |
+| contract tx-list arm, `IN` over positions — XLM / mid / small | 315 / 29 / 3 ms          | **over 4 GB** / 4,331 / 57 ms |
+| contract tx-list, today's full driver — XLM                   | **over 4 GB (6.04 GiB)** | —                             |
+| contract tx-list arm, position window — XLM / mid             | —                        | 87 / 32 ms                    |
+
+Verdict: the table and the contract-event and transaction-page reads pass with
+margin. The `IN` mapping for the contract-filtered transaction list fails, and
+the list is already broken for native XLM today; plan task 2.5 moves that list
+to positions with bounded windows (measured 87 ms for native XLM).
