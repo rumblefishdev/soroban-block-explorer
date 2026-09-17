@@ -567,3 +567,121 @@ rows = distinct new keys = distinct old keys = the partition's active row
 count. `transaction_index = 0` rows 170,740,563 = the partition's
 transactions; `operation_index = 4095` rows 0 (all ledgers ≥ 58,762,518);
 `transaction_index = 1048575` rows 78,294,908.
+
+## Pre-implementation review (2026-09-16) — rollout above is superseded
+
+Stopped before any production write to check what the plan assumed. Verified
+facts first, then what they change.
+
+### Verified
+
+- `default` is an `Atomic` database, so `EXCHANGE TABLES` is available. No
+  materialized view, view or dictionary depends on `soroban_events` or
+  `soroban_event_ops`; the co-located `prices` database does not read them.
+- Last 14 days of `system.query_log`: only `ingestion_writer` (indexer),
+  `api_reader`, the operator account and read-only development access touch
+  the two tables.
+- Operator writes (`chw`) run under the `admin` profile: 20 GB per query, no
+  execution cap. Server memory cap 100 GiB, shared with the API and indexer.
+- Disk: 368.32 GiB free; `/backups/` is the same volume. Weekly backup is
+  `FREEZE` (hardlinks) → Borg → `UNFREEZE`, Sunday 03:30 UTC.
+- Pausing the indexer by disabling its SQS trigger is undone by the next
+  Compute deploy (`docs/deployment.md`); only `indexerLambdaConcurrency: 0`
+  plus a deploy is durable. Failed deliveries move to the DLQ after 10 receives.
+
+### What the plan missed
+
+1. **The window as written is unsafe.** "Stop the indexer → … → deploy" with
+   the quick pause lets the deploy re-enable the trigger; old indexer code
+   inserting into the swapped table fails every ledger toward the DLQ. The
+   pause must be the durable one, deployed from the code currently in
+   production, and the new code deployed after the swap.
+2. **Programme order skipped.** 0538 puts the naming ADR and a measured trial
+   (size and read-path benchmark) before any migration. Column names in a
+   DDL are the expensive thing to change later, and the table holds both
+   `transaction_index` (rpc id, with sentinels) and `application_order` (the
+   real position).
+3. **Scope gaps.** The transaction page's archive-decoded events expose and
+   display our flat `event_index` (`XdrEventDto`, `EventsSection.tsx`), so it
+   would still number events differently from the contract page; its doc
+   comment also claims pre-23 events carry no stage, which the archive
+   refutes. `asset_transfers.event_index` exists only to join the old key and
+   is orphaned by the change (dropping it needs the DEFAULT-first order).
+   `account_reconciliation` and `redecode_diff` tests, the `--only
+soroban_event_ops` backfill flag, `docs/backfills.md` and the merge scripts'
+   table lists reference the old shape.
+4. **Backups.** A `FREEZE` during the fill pins parts that merges would
+   replace, and Borg uploads the new ~185 GiB table as new data — then the old
+   one again under the staging name until it is dropped.
+5. **Load.** Fill queries may take 20 GB each on the box serving the API; they
+   run one at a time, outside the backup window, with the API latency watched.
+6. **Rollback is asymmetric.** After the swap the new writer stops
+   `soroban_events` (old shape) and `soroban_event_ops`; going back needs a
+   re-ingest of every ledger since the swap into both.
+7. **Live writer proof.** The id counters depend on walking transactions in
+   application order; tests need real meta for a pre-23 refund, a post-23
+   ledger with several refunds, and a runnable `getEvents` comparison kept as a
+   check (ADR 0057).
+
+### Revised order
+
+1. ADR: canonical event identity and names (`application_order` = SEP-35
+   transaction application order, the real position; rpc id components named
+   as rpc).
+2. Trial: create the staging table with the final DDL, fill partition 127,
+   measure per-column size, benchmark the three read paths against the old
+   table on that range. Go / no-go.
+3. PR: writer, readers (contract events, transactions-by-contract arm,
+   transaction detail and its archive-decoded ids, frontend numbering),
+   `asset_transfers.event_index` out of the struct, `soroban_event_ops` writes
+   removed, tests above, docs, API types. Merged, released only in step 6.
+4. Fill the remaining partitions one at a time, gates and disk check after
+   each, never across Sunday 03:30 UTC.
+5. `asset_transfers.event_index` gets a DEFAULT (no pause needed).
+6. Window: deploy `indexerLambdaConcurrency: 0` from the production code →
+   fill the tail, gate → `EXCHANGE TABLES` → deploy the new code with
+   concurrency 1 → `getEvents` check, contract event order, transaction page.
+7. After the rollback horizon: drop the old table, `soroban_event_ops`, and
+   `asset_transfers.event_index`.
+
+### Decisions after the review (karolkow, 2026-09-17)
+
+- **Transaction page numbering — same PR.** The archive-decoded events on the
+  transaction page carry the rpc id, computed from the ledger meta (stage and
+  per-ledger counters), and the frontend shows it; one numbering on every page
+  from the first day.
+- **`asset_transfers.event_index` — dropped in this change:** DEFAULT before
+  the window, out of the writer struct in the PR, `DROP COLUMN` after the
+  rollback horizon.
+- **Rollback horizon — until the next backup.** Production checks on the day
+  of the swap; the old table and `soroban_event_ops` are dropped before the
+  following Sunday 03:30 UTC backup. Re-ingest stays the fallback after that.
+
+### Naming found during the ADR draft
+
+The same per-operation location already has names in `asset_transfers` and
+`soroban_event_ops`: `application_order` (transaction, 1-based), `op_index`,
+`event_pos_in_op` (0-based). `operations_appearances` and
+`lp_operation_amounts` use `application_order` for the operation's position.
+ClickHouse cannot rename a sort-key column ("Columns specified in the key
+expression of the table … cannot be renamed", ALTER COLUMN docs), so aligning
+`asset_transfers` would mean rebuilding it (43.96 GiB, 5.60 bn rows). Fee
+events make the rpc id and the location differ, so both concepts exist
+regardless of names.
+
+**Decided (karolkow, 2026-09-17): stellar-rpc names everywhere** — ADR 0059
+(proposed). stellar-rpc itself names a transaction's position
+`applicationOrder` (`getTransaction` / `getTransactions`, 1-based) and uses
+`transactionIndex` / `operationIndex` only on events, where fee events carry
+the sentinel. So `application_order` stays in every table for the transaction;
+the operation becomes `operation_index` and the event-in-operation
+`event_index`; `transaction_index` exists only on event rows. The new
+`soroban_events` DDL above already matches. `asset_transfers` renames
+`op_index` / `event_pos_in_op` at its rebuild — task 0558 (backlog, not yet on
+`develop`) plans a rebuild-and-swap of the same table for `token_id`; one
+rebuild serves both. `operations_appearances` / `lp_operation_amounts` rename
+their operation position in 0538.
+
+Code work runs on `feat/0541_canonical-event-location` (worktree
+`.claude/worktrees/feat-0541_canonical-event-location`, from `develop`
+c765f4d8); lore and the ADR land on `develop`.
