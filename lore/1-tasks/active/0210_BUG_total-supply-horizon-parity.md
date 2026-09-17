@@ -1119,16 +1119,34 @@ holders; the pool API already lists them as live with TVL.
   change. With the old logic restored the revocation test yields exactly the
   production values.
 - **Differential check** (`tests/pool_snapshot_oracle.rs`, run by hand with
-  `POOL_ORACLE_DIR`): the extractor's end-of-ledger value for every pool in the
-  280 decoded ledgers against an expectation built from `stellar xdr decode`
-  JSON by a separate script — 6,502 of 6,502 agree. With the old logic
-  restored, 70 disagree: the 70 revocations, each keeping its stale reserves.
-- **History is repaired in place**, not re-parsed: the 1,381 stale rows are each
-  pool's newest snapshot, exactly one row per pool, all at the erasing ledger
-  (verified 2026-09-17). An `ALTER TABLE liquidity_pool_snapshots UPDATE
-reserve_a = 0, reserve_b = 0, total_shares = 0 WHERE (pool_id, ledger_sequence)
-IN (…)` over the `pools_gone.tsv` pairs gives the rows the fixed parser would
-  write. A re-parse writes the same key again and leaves two rows to an
+  `POOL_ORACLE_DIR`): the extractor's end-of-ledger value for every pool a
+  ledger touches, against an expectation built from `stellar xdr decode` JSON
+  by a separate script. 3,419 ledgers: every ledger where a pool-share
+  redemption paid into a claimable balance (1,624, from `asset_transfers`
+  `L` → `B`), every erasing ledger of the checkpoint's 1,381, 1,562 ledgers
+  sampled evenly over 50.4M–64.47M. **78,158 of 78,158 agree.** On the first
+  3,079 of them the old logic disagreed 1,399 times, each a revocation keeping
+  its reserves. Seen in the meta: 102,178 `state`+`updated`, 1,416
+  `state`+`removed` (1,399 revocations with reserves, 17 `change_trust` exits
+  with zeros), 48 `created`, 0 lone `state`. Two September ledgers
+  (64,445,874, 64,459,329) are not compared: `stellar` CLI 26.0.0 does not
+  decode them.
+- **Production against the same expectation:** 71,198 (pool, ledger) keys, all
+  present, no conflicting duplicates; values differ only at the 1,399
+  revocations.
+- **History is repaired in place**, not re-parsed. The census of stale rows is
+  every `state`+`removed` with non-zero reserves in the 1,624 redemption
+  ledgers: **1,671 rows in 1,454 pools** (1,661 `allow_trust`, 10
+  `set_trust_line_flags`), each exactly one production row, all non-zero. 1,381
+  are the checkpoint's gone pools (all included); the other 290 are older
+  erasures of pools re-created later under the same id, whose newest snapshot is
+  right but whose history is not. An `ALTER TABLE liquidity_pool_snapshots
+UPDATE reserve_a = 0, reserve_b = 0, total_shares = 0 WHERE (pool_id,
+ledger_sequence) IN (…)` over those pairs writes the rows the fixed parser
+  would. The list and both statements live outside the repo
+  (`.artifacts/pool-revocation-repair/`). Not covered: a revocation whose
+  redemption paid no claimable balance on either leg, which requires zero
+  reserves and so leaves nothing stale. A re-parse writes the same key again and leaves two rows to an
   unmerged version-less RMT; zeros at the checkpoint ledger would falsify the
   pools' history.
 - **Seed guards:** the population floors are gone (`MIN_BUCKETS`,
@@ -1142,6 +1160,6 @@ IN (…)` over the `pools_gone.tsv` pairs gives the rows the fixed parser would
 
 ### Order
 
-PR → deploy → the `UPDATE` (`chw`), matching exactly 1,381 rows before and
+PR → deploy → the `UPDATE` (`chw`), matching exactly 1,671 rows before and
 after → second dry-run (`pools_gone` 0) → `snapshot-seed --execute` → dry-run
 again → view swap.
