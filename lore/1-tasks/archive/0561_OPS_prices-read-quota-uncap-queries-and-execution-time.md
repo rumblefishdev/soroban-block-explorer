@@ -2,7 +2,7 @@
 id: '0561'
 title: 'prices_read quota: drop the hourly queries / execution_time caps that blacked out prices-api on 2026-09-03'
 type: OPS
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0314', '0243', '0338', '0250', '0477']
 tags:
@@ -26,6 +26,21 @@ history:
       CH code 201 until the clock hour rolled over. Karol informed on Slack
       the same day. Plan: PR here, then an in-place file overwrite on the box
       (0477 precedent), verified in system.quota_limits.
+  - date: '2026-09-17'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      PR #462 merged (develop 07210e28) and DEPLOYED the same day by the
+      in-place overwrite: inode 16777409 kept, ClickHouse hot-reloaded, no
+      restart, no ansible. system.quota_limits now shows max_queries NULL and
+      max_execution_time NULL for prices_read; read_rows 50B / read_bytes
+      1 TiB / result_rows 10B unchanged; every other quota byte-identical
+      before and after. One self-inflicted hiccup: the first write landed an
+      EMPTY file for 99 s (a `docker exec -i` earlier in the same ssh command
+      swallowed the stdin meant for `cat >`); ClickHouse refused to merge the
+      empty users.d file 50 times (Code 347, every 2 s) and kept the last
+      good config, so zero runtime impact — prices_reader saw 0 exceptions
+      and 0 code-201 today. Outcome recorded in prices task 0260. Archived.
 ---
 
 # prices_read quota: drop the hourly queries / execution_time caps
@@ -116,20 +131,48 @@ write keeps the inode and ClickHouse hot-reloads `users.d`. NOT `--tags app`
    only in a window agreed with Karol — it should not be needed.
 4. Record the outcome in prices task 0260.
 
+## Deployed — 2026-09-17 12:13 UTC
+
+Box file was byte-identical to the pre-merge repo version (inode 16777409,
+mtime 2026-06-23) and `services.xml` matched local, so the overwrite went
+ahead. `system.quota_limits` for `prices_read` before → after:
+
+|        | max_queries | max_execution_time | max_read_rows | max_read_bytes | max_result_rows |
+| ------ | ----------- | ------------------ | ------------- | -------------- | --------------- |
+| before | 10000       | 1000               | 50000000000   | 1099511627776  | 10000000000     |
+| after  | NULL        | NULL               | 50000000000   | 1099511627776  | 10000000000     |
+
+`api_throttle`, `dev_read`, `high_write`, `prices_write`, `unlimited`,
+`default`: identical before and after. No `SYSTEM RELOAD CONFIG`, no
+restart; ClickHouse picked the file up on its own 2-second reloader.
+
+## Issues Encountered
+
+- **First write produced an empty file (99 s).** The deploy command ran a
+  "before" `docker exec -i … clickhouse-client` in the same ssh session as
+  `cat > quotas.xml`; `docker exec -i` consumed the ssh stdin (the file
+  content), so `cat` wrote 0 bytes at 12:11:30. `system.text_log`: 50 ×
+  `ConfigReloader` "Failed to merge" (Code 347) from 12:11:31 to 12:13:09,
+  one every 2 s; ClickHouse keeps the last good users config on a failed
+  reload, so the live quotas never changed and `prices_reader` recorded 0
+  exceptions. Re-written at 12:13:09 with nothing but `cat` on stdin; first
+  clean load 12:13:11. Lesson for the runbook: **the `cat >` ssh command
+  must be the only stdin consumer — read state in a separate ssh call.**
+
 ## Acceptance Criteria
 
-- [ ] `prices_read`: `queries` and `execution_time` unlimited;
+- [x] `prices_read`: `queries` and `execution_time` unlimited;
       `read_rows` / `read_bytes` / `result_rows` unchanged
-- [ ] The XML comment and the `clickhouse-rbac.md` description tell the truth
+- [x] The XML comment and the `clickhouse-rbac.md` description tell the truth
       about this quota
-- [ ] After deploy: `system.quota_limits` shows NULL for `max_queries` and
+- [x] After deploy: `system.quota_limits` shows NULL for `max_queries` and
       `max_execution_time`, without a CH restart
-- [ ] Every other user and quota unchanged (the XML diff touches only the
-      `prices_read` block)
-- [ ] Deploy outcome recorded in stellar-prices-api task 0260
-- [ ] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
+- [x] Every other user and quota unchanged (the XML diff touches only the
+      `prices_read` block; `system.quota_limits` identical for the rest)
+- [x] Deploy outcome recorded in stellar-prices-api task 0260
+- [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
       (quotas section); other architecture docs N/A (no shape change).
-- [ ] **API types regenerated** — N/A (no `crates/api` change).
+- [x] **API types regenerated** — N/A (no `crates/api` change).
 
 ## Notes
 
