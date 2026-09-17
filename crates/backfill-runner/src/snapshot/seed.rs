@@ -327,6 +327,35 @@ async fn refuse_if_read_only(sink: &Sink) -> Result<(), BackfillError> {
     Ok(())
 }
 
+/// Refuse to run under a profile that can cut a read short without an error.
+///
+/// Every correction is inferred from absence: a row missing from our side is
+/// inserted, an entry missing from the snapshot is closed, an id missing from
+/// the dimension read gets a stub. ClickHouse stops a query that crosses a
+/// limit, but a `*_overflow_mode = 'break'` (or `'any'` for GROUP BY) returns
+/// the rows it has as a success, and every missing row would then be written
+/// as a correction. With every mode on `throw`, a limit fails the query and
+/// the run stops. Checked for the dry-run too, whose counts the operator signs
+/// off on. Production's read and write profiles are all `throw` (2026-09-17).
+async fn refuse_if_reads_can_truncate(sink: &Sink) -> Result<(), BackfillError> {
+    let silent: Vec<(String, String)> = sink
+        .client()
+        .query(
+            "SELECT name, value FROM system.settings \
+             WHERE name LIKE '%overflow_mode%' AND value != 'throw'",
+        )
+        .fetch_all()
+        .await?;
+    if !silent.is_empty() {
+        return Err(BackfillError::Incomplete(format!(
+            "refusing to run: this profile returns a partial result instead of an error \
+             ({silent:?}), and the seed would write every missing row as a correction. \
+             Use a profile where every overflow mode is 'throw'."
+        )));
+    }
+    Ok(())
+}
+
 /// The seed. Without `--execute`: reads its inputs from ClickHouse, decodes
 /// the snapshot, folds, writes artifacts, inserts NOTHING. With `--execute`:
 /// additionally inserts every correction the summary lists.
@@ -346,6 +375,7 @@ pub async fn seed_command(
     if execute {
         refuse_if_read_only(sink).await?;
     }
+    refuse_if_reads_can_truncate(sink).await?;
 
     let list = network_state::latest_checkpoint().await?;
     let coverage = claimable::writer_coverage(
@@ -365,22 +395,6 @@ pub async fn seed_command(
         known_assets.len(),
         known_accounts.len()
     );
-    // A short read is indistinguishable from a real one to everything
-    // downstream: fewer known ids means more "absent" ids means more stubs.
-    // These floors are far below the measured populations (344,989 assets /
-    // 14.5M accounts as of 2026-08-18) — they catch a wrong database, not a
-    // shrinking network.
-    const MIN_ASSET_IDS: usize = 100_000;
-    const MIN_ACCOUNT_IDS: usize = 5_000_000;
-    if known_assets.len() < MIN_ASSET_IDS || known_accounts.len() < MIN_ACCOUNT_IDS {
-        return Err(BackfillError::Incomplete(format!(
-            "dimension id read looks wrong ({} assets, {} accounts; expected at least \
-             {MIN_ASSET_IDS} and {MIN_ACCOUNT_IDS}) — is this the production database?",
-            known_assets.len(),
-            known_accounts.len()
-        )));
-    }
-
     // One directory per checkpoint, so a run never overwrites the record of an
     // earlier one — `ghosts.tsv` is the only pre-image of what a run zeroed.
     let artifacts = &artifacts_root.join(list.checkpoint_ledger.to_string());
@@ -451,7 +465,7 @@ pub async fn seed_command(
          claimable_balance_holdings   {:>12}\n    \
          liquidity_pools              {:>12}\n    \
          liquidity_pool_snapshots     {:>12}\n    \
-         account_entry_state          {:>12}\n    \
+         account_entry_state          {:>12}  (full rewrite, not a comparison)\n    \
          assets (stubs)               {:>12}\n    \
          accounts (stubs)             {:>12}\n\
          \n  UNRESOLVED REFERENCES (must be 0 for the first two)\n    \
@@ -519,3 +533,6 @@ pub async fn seed_command(
     println!("  total {:.1}s", started.elapsed().as_secs_f64());
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

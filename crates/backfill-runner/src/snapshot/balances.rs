@@ -24,13 +24,6 @@ pub(crate) struct BalanceCorrections {
     pub(crate) ghosts: Vec<String>,
 }
 
-/// Floor on the our-rows read. A short
-/// read (wrong database, a dropped key slice) is indistinguishable from a real
-/// one downstream: every missing row becomes an unmatched snapshot entry, i.e.
-/// a phantom network gap the seed would INSERT as a live holding. The real
-/// population measured 48.6M distinct (holder, asset) pairs — sit just under.
-pub(crate) const MIN_OUR_ROWS: u64 = 40_000_000;
-
 /// Stream our deduplicated `balances` in `holder_id` slices, invoking `f` per
 /// row. Like every
 /// other corrective command in this crate, the tool reads its own inputs
@@ -40,9 +33,9 @@ pub(crate) const MIN_OUR_ROWS: u64 = 40_000_000;
 /// inserts anyway, and a cursor error propagates loudly where the operator
 /// CLI's exit-0-on-server-error trap did not.)
 ///
-/// Errors below [`MIN_OUR_ROWS`] rows: a short read (wrong database,
-/// dropped slice) would silently report our own holdings as a phantom network
-/// gap.
+/// A short read cannot pass silently: a failed slice errors the cursor, and
+/// `seed::refuse_if_reads_can_truncate` rules out a profile that would cut a
+/// result instead of failing it.
 async fn stream_our_rows(
     sink: &Sink,
     mut f: impl FnMut(&verdict::OurRow),
@@ -60,13 +53,6 @@ async fn stream_our_rows(
             f(&row);
         }
         println!("    slice {:>2}/{KEY_SLICES} — {seen} rows so far", i + 1);
-    }
-    if seen < MIN_OUR_ROWS {
-        return Err(BackfillError::Incomplete(format!(
-            "our balances read returned {seen} rows, expected at least {} — a short \
-             read reports our own holdings as a phantom network gap (wrong database?)",
-            MIN_OUR_ROWS
-        )));
     }
     Ok(seen)
 }

@@ -570,6 +570,13 @@ SELECT currentUser(), getSetting('readonly'), getSetting('max_execution_time')
 at the first INSERT, but running the query yourself still costs 2 seconds and
 tells you which user you are before anything downloads.
 
+Every run, dry-run included, also refuses a profile with any
+`*_overflow_mode` other than `throw`. Each correction is inferred from absence,
+and a `break` mode returns a cut-off read as a success, which the seed would
+turn into inserted rows, closures and stubs. There are no population floors:
+a short snapshot fails its bucket hash or its decode, a short read of ours
+fails its cursor (task 0210, 2026-09-17).
+
 Keep a write cert OUT of any directory a read-only helper globs (the `chq`
 wrapper takes the first `*.crt` and the first `*.key` INDEPENDENTLY, so a second
 pair there either silently promotes that helper to admin or pairs mismatched

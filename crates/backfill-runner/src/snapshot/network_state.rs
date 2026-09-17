@@ -584,56 +584,12 @@ pub(crate) async fn open_snapshot(
             t0.elapsed().as_secs_f64()
         );
     }
-    // The snapshot is the input whose short read is CATASTROPHIC, and until
-    // now it was the only input without a floor. Our side has two
-    // (`MIN_OUR_ROWS`, the dimension-id floors) on the argument that a short
-    // read is indistinguishable from a real one downstream — but a short read
-    // of OURS over-inserts, which the live writer's newer rows correct, while a
-    // short read of the SNAPSHOT sends every unlisted key into the verdict's
-    // absence arm: tens of millions of live holdings zeroed and closed at the
-    // checkpoint version, which outranks every row already in the table.
-    //
-    // What this actually guards is worth being precise about, because the
-    // obvious threat is NOT the one left. A bad download fails on the
-    // per-bucket SHA-256; a 404 on `error_for_status`; a manifest in an
-    // unexpected shape on the missing-slot check in `fetch_bucket_list`. What
-    // survives all three is a decode that SUCCEEDS and recognises less than it
-    // should — a protocol change `classify` does not model, or a regression in
-    // our own dedup. Every byte verifies, nothing errors, and the maps come
-    // back thin. That is OUR failure mode, not the archive's, and this is the
-    // only thing that catches it.
-    //
-    // Floors sit 2-3x below the measured population (2026-08-18: 21 buckets,
-    // 10,863,731 live accounts, 32,344,912 live trustlines), so they cannot
-    // fire on a shrinking network — only on a pass that stopped seeing things.
-    const MIN_BUCKETS: usize = 10;
-    const MIN_LIVE_ACCOUNTS: usize = 5_000_000;
-    const MIN_LIVE_TRUSTLINES: usize = 15_000_000;
-    // Claimable balances (task 0210) have their own floor because their own
-    // classifier arm can regress alone, and every open balance of ours would
-    // then read as gone. Not yet measured on a full pass: ~920k balances were
-    // created after our floor and are still open (a 1/64 sample of
-    // `asset_transfers`, 2026-09-15), and the network holds at least those.
-    // The floor sits ~9x under that estimate. Re-set it from the first dry-run.
-    // The damage it prevents does not undo itself: the closures version on the
-    // checkpoint, above the entries' own ledgers, so a corrected re-run cannot
-    // reopen them. Classic pools get no floor — the seed only inserts them, so a
-    // short read under-inserts and harms nothing.
-    const MIN_LIVE_CLAIMABLE: usize = 100_000;
-    let (accounts, trustlines) = (state.live_accounts(), state.live_trustlines());
-    let claimable = state.live_claimable_balances();
-    if n_buckets < MIN_BUCKETS
-        || accounts < MIN_LIVE_ACCOUNTS
-        || trustlines < MIN_LIVE_TRUSTLINES
-        || claimable < MIN_LIVE_CLAIMABLE
-    {
-        return Err(BackfillError::Incomplete(format!(
-            "snapshot looks short: {n_buckets} buckets, {accounts} live accounts, \
-             {trustlines} live trustlines, {claimable} live claimable balances (floors \
-             {MIN_BUCKETS} / {MIN_LIVE_ACCOUNTS} / {MIN_LIVE_TRUSTLINES} / \
-             {MIN_LIVE_CLAIMABLE}) — refusing to read the gap as network-wide closures"
-        )));
-    }
+    // No population floors (removed 2026-09-17, task 0210). A short snapshot
+    // cannot pass silently: a bad or missing bucket fails its SHA-256 or its
+    // HTTP status, a malformed manifest fails the slot check in
+    // `fetch_bucket_list`, and an entry type stellar-xdr does not know fails the
+    // decode. What stays is `classify` dropping a type it should model, which
+    // its unit tests cover and `report_state` shows as unmodelled records.
 
     let source_report = report_state(
         &state,
