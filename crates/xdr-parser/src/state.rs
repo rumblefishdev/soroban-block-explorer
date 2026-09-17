@@ -709,11 +709,12 @@ pub fn extract_account_states(
 /// before removal: when an issuer revokes the last holder's authorization,
 /// core redeems the shares, zeroes the reserves and erases the pool inside one
 /// operation, and the meta carries only the start-of-operation `state` (full
-/// reserves) and the `removed`. Storing that `state` left 1,381 erased pools
-/// with their old reserves. A pool that does not exist holds nothing, so its
-/// snapshot at that ledger is zero. The pool row still comes from the `state`
-/// params (fixed for a pool id), because for a pool created before our history
-/// the removal can be its only appearance.
+/// reserves) and the `removed`. Storing that `state` left 1,671 stale snapshots
+/// (1,454 pools). CAP-38 requires a pool to have "no reserves if no account
+/// owns shares", so its snapshot at that ledger is zero. The pool row still
+/// comes from the `state` params — fixed for a pool id, which CAP-38 defines as
+/// `SHA256(LiquidityPoolParameters)` — because for a pool created before our
+/// history the removal can be its only appearance.
 ///
 /// A `state` with no following `updated` / `removed` cannot happen; one is
 /// logged and ignored.
