@@ -20,6 +20,14 @@ history:
       tables without any retention. Decided to reclaim this first (0541
       decision 231 A). Answers 0538 open question 5, which saw 32 GiB in
       September's first measurement.
+  - date: 2026-09-17
+    status: backlog
+    who: karolkow
+    note: >
+      Deferred, not dropped: no server log is deleted now. The measurements,
+      the rename trap and the two execution variants (drop the months older
+      than 30 days first, or a single MODIFY TTL that rewrites every part) stay
+      here for a later decision. 0541 proceeds without the reclaimed space.
 ---
 
 # OPS: ClickHouse system logs keep 30 days

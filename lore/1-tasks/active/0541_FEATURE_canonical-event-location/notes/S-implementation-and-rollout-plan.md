@@ -1000,6 +1000,12 @@ the stellar-rpc event id`, body lists phase 1 results and links this
 
 ## Phase 3 — fill partitions 100–128
 
+**When:** after the PR is ready to release, as close to the window as the fill
+time allows — both copies of the table share the disk from the first
+partition until phase 5. Free space 360.71 GiB on 2026-09-17; the fill adds
+~169 GiB (estimate) and the server logs are not trimmed (task 0563 deferred).
+**Stop** before any partition if free space is under 120 GiB.
+
 Order: 100 → 128. Partition 127 is done in phase 1. Partition 128 is filled up
 to `X` = the highest multiple of 5,000 at least 50,000 ledgers below the head
 when it is reached; the rest is the window's tail.
