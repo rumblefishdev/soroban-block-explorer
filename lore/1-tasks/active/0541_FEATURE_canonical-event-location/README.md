@@ -685,3 +685,9 @@ their operation position in 0538.
 Code work runs on `feat/0541_canonical-event-location` (worktree
 `.claude/worktrees/feat-0541_canonical-event-location`, from `develop`
 c765f4d8); lore and the ADR land on `develop`.
+
+## Implementation and rollout plan (2026-09-17)
+
+[`notes/S-implementation-and-rollout-plan.md`](notes/S-implementation-and-rollout-plan.md) — phases 1–5 (trial and benchmark, code tasks 2.1–2.8, partition fill, window runbook, cleanup), with the fill and gate SQL in [`notes/fill_insert.sql`](notes/fill_insert.sql) and [`notes/fill_gate.sql`](notes/fill_gate.sql). It supersedes the "Rollout" and "Revised order" lists above.
+
+**Decided (karolkow, 2026-09-17): the transaction page shows the rpc id.** Its `#` column becomes `ID` with the full `getEvents` id, rows in execution order; the bare `event_index` (ledger-wide counter for fees, position in the operation otherwise) and a short `op N · M` form were rejected. Plan task 2.6–2.7.
