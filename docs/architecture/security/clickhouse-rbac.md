@@ -147,14 +147,18 @@ returns as 403 before any backend hop.
 ### Quotas
 
 - `unlimited` — sidecar + dev laptops + emergency.
-- `api_throttle` — 10000 queries / hour, 1B read_rows, 100 GB
+- `api_throttle` — 10000 queries / hour, 50B read_rows, 1 TiB
   read_bytes, 1000 s execution_time.
 - `high_write` — unbounded queries / read, 1 PB written_bytes
   ceiling (sanity cap, not a real throttle).
 - `prices_write` — caps copied verbatim from `high_write`; a dedicated
   name so prices ingestion never draws down a BE service's budget.
-- `prices_read` — caps copied verbatim from `api_throttle`; dedicated
-  name for the same isolation reason.
+- `prices_read` — `api_throttle`'s byte/row guards (50B read_rows,
+  1 TiB read_bytes, 10B result_rows) with queries and execution_time
+  unlimited (task 0561: the 10000/h query cap blacked out prices-api
+  for 26 min on 2026-09-03). Dedicated name for the same isolation
+  reason; deliberately not `unlimited` so the prices tenant cannot
+  drain the shared box.
 
 ## Known limitations
 
