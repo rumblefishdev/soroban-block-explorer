@@ -1163,3 +1163,62 @@ ledger_sequence) IN (…)` over those pairs writes the rows the fixed parser
 PR → deploy → the `UPDATE` (`chw`), matching exactly 1,671 rows before and
 after → second dry-run (`pools_gone` 0) → `snapshot-seed --execute` → dry-run
 again → view swap.
+
+## 2026-09-18 (karolkow) — the seed ran; every divergence it found, with its cause
+
+`snapshot-seed --execute` at checkpoint 64,486,655, 362.4 s of inserts:
+3,619,334 claimable balances, 466 pools with their snapshots, 38 balance
+corrections, 181 asset stubs, 10,953,729 `account_entry_state` rows. The
+post-seed table holds 4,244,071 rows (3,846,085 open, 397,986 closed) and the
+`asset_transfers` oracle returns 0 on all five counters. `pools_gone` is 0 —
+the parser fix and the history repair hold.
+
+Six divergence classes came out of the comparison. Four are explained by our
+own history, two are defects:
+
+| class                            | count     | cause                                                  |
+| -------------------------------- | --------- | ------------------------------------------------------ |
+| claimable balances missing       | 3,619,334 | stock predates the writer (first tombstone 64,469,083) |
+| classic pools with no snapshot   | 466       | unchanged since before the ingest floor                |
+| trustline closures               | 2         | we held 0, the network had dropped the entry           |
+| asset stubs / unresolved issuers | 181 / 2   | assets seen only in pre-floor claimable balances       |
+| native same-ledger divergence    | 16,321    | **defect** — task 0514                                 |
+| "ghosts" zeroed by the run       | 36        | **defect** — task 0565                                 |
+
+Proofs, in the order the classes are listed:
+
+- **Claimable stock.** 3,618,581 of the inserted rows still carry a
+  pre-writer `last_updated_ledger`; the rest were claimed after the seed and
+  re-stamped by the live writer.
+- **Dormant pools.** The 466 are exactly the pools whose newest snapshot is
+  below the floor, and their snapshots sit between ledgers 38,115,941 and
+  50,442,423 — no ingested ledger mentions them.
+- **Asset stubs.** 180 of the 181 stub assets appear nowhere else in our data
+  (0 rows in `balances`, 0 in `asset_transfers`); their whole on-chain
+  presence is old claimable balances. The 2 unnamed issuers
+  (`GB2ATSMC…`, `GB3VYMEO…`) come back ABSENT from `getLedgerEntries` — the
+  issuing accounts were merged while the asset lives on in a claimable
+  balance.
+- **Same-ledger divergence** — the Soroban fee refund settled in
+  `post_tx_apply_fee_processing`, which no reader of `TransactionMeta` can
+  see. Third measurement of a known defect; the successful-transaction case
+  was decoded here and closed 0514's last inference. Fixing it is deferred to
+  that task, after this one closes.
+- **The 36 "ghosts"** are contract-held SAC holdings the seed could not
+  recognise as contract-held, so it zeroed live value (USDC, USDM0, USDM1,
+  PHANTOM, EURC and 5.4267314 XLM over 34 holders). Filed as 0565 with the
+  repair list; 1,183 holders are exposed to the same mistake.
+
+Neither defect blocks this task: 0514 moves native XLM by ~74 XLM (estimate)
+and 0565 by the amounts above, both far below the threshold at which the
+supply figures change meaning. The view swap is the remaining step.
+
+Also audited, same class as the two defects above — a write path that drops an
+update and leaves a stale row. Five places, each measured on production: the
+WASM-upgrade skip-on-miss (0 of 1,758 contracts lack the prior row), the two
+fail-open verdict prefetches (0 WASM hashes carry two verdicts; the
+`contract-type-rebuild` pass exists as their repair), the executable
+invariant (0 of 151,472 rows carry both a hash and a reference), and the
+Soroban pool extractors (`state`/`removed` filtered correctly; 0 duplicate
+keys in 1,036,399 `pool_state_changes` keys since ledger 63,000,000). No
+further instance found.
