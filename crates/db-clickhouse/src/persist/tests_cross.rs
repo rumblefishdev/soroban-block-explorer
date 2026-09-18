@@ -882,8 +882,7 @@ fn a_consensus_event_without_an_id_is_a_staging_error() {
         &[],
         &[],
     )
-    .err()
-    .expect("an event without an id must not stage");
+    .expect_err("an event without an id must not stage");
     assert!(
         err.to_string().contains("without a stellar-rpc id"),
         "{err}"
