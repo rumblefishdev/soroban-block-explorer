@@ -1222,3 +1222,65 @@ invariant (0 of 151,472 rows carry both a hash and a reference), and the
 Soroban pool extractors (`state`/`removed` filtered correctly; 0 duplicate
 keys in 1,036,399 `pool_state_changes` keys since ledger 63,000,000). No
 further instance found.
+
+## 2026-09-18 (karolkow) — the view swapped, and the XLM identity has a floor
+
+`balance_aggregates_mv` now sums all four sources on production. First refresh
+3,679 ms (was 2,040 ms), 449,038,197 rows read, 451,276 written. XLM moved from
+105,410,009,375.9499195 at 9,945,415 holders to **105,433,225,690.3715661 at
+9,955,633 holders** (+23,219,224.03 from classic pool reserves, +77,681.13 from
+claimable balances, +10,218 pool holders). USDT0: 2,575,158.8320210 → 2,575,347.517416
+at 242 holders.
+
+### The identity cannot close to zero — the chain itself does not close
+
+A census of the history archive (`backfill-runner/tests/native_sac_balance_census.rs`,
+env-gated, run by hand) sums every venue the protocol keeps XLM in, from the
+archive alone, with no involvement of our tables: accounts, claimable balances,
+classic pool reserves, SAC balance entries (live buckets AND the CAP-62 hot
+archive), plus `fee_pool` from the checkpoint's own header.
+
+| venue, stroops                           | 64,490,495                    | 64,490,559                    |
+| ---------------------------------------- | ----------------------------- | ----------------------------- |
+| accounts                                 | 1,045,061,593,996,438,607     | 1,045,062,867,751,582,292     |
+| claimable balances                       | 776,811,312,726               | 776,811,312,726               |
+| classic pools                            | 231,952,232,502,621           | 231,689,798,917,527           |
+| SAC balances (619 live + 1,516 archived) | 9,037,561,620,320,415         | 9,036,549,580,549,365         |
+| fee pool                                 | 106,362,774,538,139           | 106,363,492,750,598           |
+| **sum**                                  | **1,054,438,247,435,112,508** | **1,054,438,247,435,112,508** |
+| `total_coins`                            | 1,054,439,020,873,472,865     | 1,054,439,020,873,472,865     |
+| **unaccounted**                          | **773,438,360,357**           | **773,438,360,357**           |
+
+Every component moved over those 64 ledgers — over 127,000 XLM left accounts,
+26,000 left pools, 101,000 left contract balances — and **the sum did not move
+by one stroop**. That is the completeness proof: value flowing into a venue the
+census does not model would break it on the first such payment. It does not
+break, and the shortfall against `total_coins` is a constant
+**77,343.8360357 XLM**.
+
+So the coins are counted by the protocol and held by nothing: entries deleted
+by expiry before CAP-62 gave the network somewhere to archive them. **No
+indexer can drive this residual below that floor**, and our own residual
+measured earlier the same day (40,342.58 XLM) is BELOW it only because the two
+sides were read minutes apart — SAC balances alone move ~100,000 XLM per 64
+ledgers, so the identity only means something when both sides are taken at the
+same ledger.
+
+### What the census says about our own numbers
+
+- **Claimable balances: 776,811,313,000 (ours) against 776,811,312,726 (chain)
+  over 2,000 native holdings — 274 stroops apart.** The seed's work is exact.
+- **The fee-refund defect (task 0514) is now measured, not extrapolated.** All
+  1,000 sampled divergent accounts were read from the chain: 975 still sit at
+  the ledger we recorded, and **975 of 975 are ours-lower, none higher**. Mean
+  34,267 stroops, median 9,624, largest 0.4609 XLM — about **56 XLM** over the
+  16,321-row population (the earlier 74 XLM was a 20-account estimate).
+- **Contract-held XLM is where our own error lives**, in both directions, and
+  is recorded in task 0565 rather than here.
+
+### Consequence for the acceptance criterion
+
+"The identity closes" has to become a measurement rather than a target: both
+sides at one checkpoint, and the residual compared against the measured floor
+above, alerting on movement rather than on size — the shape the 2026-08-18
+section already asks for.
