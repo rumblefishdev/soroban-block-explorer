@@ -44,16 +44,13 @@
 //! partition:
 //!
 //! ```sql
-//! SELECT ledger_sequence, application_order, op_index, event_pos_in_op, event_index, asset_id,
+//! SELECT ledger_sequence, application_order, op_index, event_pos_in_op, asset_id,
 //!        amount, from_id, from_kind, from_muxed_id, to_id, to_kind, to_muxed_id, verb
 //! FROM asset_transfers FINAL WHERE ledger_sequence IN (L)
 //! ORDER BY ledger_sequence, application_order, op_index, event_pos_in_op FORMAT TSV;
 //! SELECT ledger_sequence, application_order, memo_type, hex(memo)
 //! FROM transaction_memos FINAL WHERE ledger_sequence IN (L)
 //! ORDER BY ledger_sequence, application_order FORMAT TSV;
-//! SELECT ledger_sequence, application_order, event_index, op_index, event_pos_in_op
-//! FROM soroban_event_ops FINAL WHERE ledger_sequence IN (L)
-//! ORDER BY ledger_sequence, application_order, event_index FORMAT TSV;
 //! SELECT hex(pool_id), ledger_sequence, reserves, plane_id
 //! FROM pool_state_changes FINAL WHERE ledger_sequence IN (L)
 //! ORDER BY hex(pool_id), plane_id, ledger_sequence FORMAT TSV;
@@ -235,7 +232,6 @@ fn redecode_value_flow_tables() {
     };
     let mut transfers = Vec::new();
     let mut memos = Vec::new();
-    let mut event_ops = Vec::new();
 
     for &seq in LEDGERS {
         for staged in stage_ledger(&cache, seq) {
@@ -252,7 +248,6 @@ fn redecode_value_flow_tables() {
                         r.application_order.to_string(),
                         r.op_index.to_string(),
                         r.event_pos_in_op.to_string(),
-                        r.event_index.to_string(),
                         r.asset_id.to_string(),
                         opt(r.amount),
                         opt(r.from_id),
@@ -278,28 +273,14 @@ fn redecode_value_flow_tables() {
                     .join("\t"),
                 ));
             }
-            for r in &staged.event_op_rows {
-                event_ops.push((
-                    (r.ledger_sequence, r.application_order, r.event_index),
-                    [
-                        r.ledger_sequence.to_string(),
-                        r.application_order.to_string(),
-                        r.event_index.to_string(),
-                        r.op_index.to_string(),
-                        r.event_pos_in_op.to_string(),
-                    ]
-                    .join("\t"),
-                ));
-            }
         }
     }
 
     println!(
-        "{} ledgers: {} transfers, {} memos, {} event ops",
+        "{} ledgers: {} transfers, {} memos",
         LEDGERS.len(),
         write_tsv(&out, "asset_transfers.tsv", transfers),
         write_tsv(&out, "transaction_memos.tsv", memos),
-        write_tsv(&out, "soroban_event_ops.tsv", event_ops),
     );
 }
 

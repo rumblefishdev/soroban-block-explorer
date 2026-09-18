@@ -94,8 +94,8 @@ struct Cli {
 
     /// Persist ONLY the named tables (comma-separated) — the targeted write a
     /// historical re-parse for new derived tables needs. Task 0279 introduced
-    /// it as `--lp-amounts-only`; task 0540 generalised it so its three tables
-    /// ride one pass: `--only asset_transfers,transaction_memos,soroban_event_ops`.
+    /// it as `--lp-amounts-only`; task 0540 generalised it so several tables
+    /// ride one pass: `--only asset_transfers,transaction_memos`.
     /// `--only lp_operation_amounts` is the old behaviour.
     ///
     /// Without it, `run --reindex` re-emits EVERY table, which rewrites the 12
