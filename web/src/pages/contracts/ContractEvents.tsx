@@ -181,7 +181,7 @@ export function ContractEvents({ contractId }: { contractId: string }) {
       <ExplorerTable
         columns={columns}
         rows={[]}
-        rowKey={(row, index) => `${row.transaction_hash}-${index}`}
+        rowKey={(row) => row.id}
         loading
         skeletonRows={20}
         rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
@@ -203,7 +203,7 @@ export function ContractEvents({ contractId }: { contractId: string }) {
       <ExplorerTable
         columns={columns}
         rows={rows}
-        rowKey={(row, index) => `${row.transaction_hash}-${index}`}
+        rowKey={(row) => row.id}
         rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
       />
     );

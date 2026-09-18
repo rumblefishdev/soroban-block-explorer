@@ -46,7 +46,7 @@ export function readResourceCounters(
   const out = new Map<string, number | string>();
   for (const event of events) {
     if (symTopic(event, 0) !== 'core_metrics') continue;
-    const name = symTopic(event, 1) ?? `(unnamed #${event.event_index})`;
+    const name = symTopic(event, 1) ?? '(unnamed)';
     const raw = (event.data as { value?: unknown } | null)?.value;
     out.set(
       name,
