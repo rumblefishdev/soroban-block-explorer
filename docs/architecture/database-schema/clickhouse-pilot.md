@@ -132,11 +132,13 @@ storing per-event `topics_xdr` + `data_xdr` blew up the heap. In a columnar
 store, the row-width penalty disappears — the pilot tests whether full
 event content per row is competitive on storage and query latency.
 
-The CH `soroban_events` table holds: `contract_id`, `transaction_id`,
-`ledger_sequence`, `event_index`, `event_type`, `signature`, `topics_xdr`,
-`data_xdr`. ORDER BY `(contract_id, ledger_sequence, transaction_id,
-event_index)` matches the PG primary key with `created_at` substituted by
-`ledger_sequence`. PG keeps `soroban_events_appearances` exactly as today.
+The CH `soroban_events` table holds: `contract_id`, the stellar-rpc event id
+(`ledger_sequence`, `transaction_index`, `operation_index`, `event_index` —
+ADR 0059), `application_order`, `event_type`, `signature`, `topics_xdr`,
+`data_xdr`. ORDER BY `(contract_id, ledger_sequence, transaction_index,
+operation_index, event_index)`: within a contract that is execution order, and
+it is the identity `getEvents` uses. PG keeps `soroban_events_appearances`
+exactly as today.
 
 **Codec:** `topics_xdr` and `data_xdr` use `CODEC(ZSTD(3))` (every other
 `String` column in the schema stays on CH-default LZ4). The two event
@@ -631,23 +633,23 @@ production schema settled on a **hybrid**: surrogate `id Int64` on
 the three central FK hubs, natural / composite primary keys on the
 other 12 tables.
 
-| Table                             | ORDER BY                                                      | Surrogate `id`? |
-| --------------------------------- | ------------------------------------------------------------- | --------------- |
-| `accounts`                        | `account_id` (StrKey G…)                                      | **yes — Int64** |
-| `soroban_contracts`               | `contract_id` (StrKey C…)                                     | **yes — Int64** |
-| `transactions`                    | `(ledger_sequence, application_order)`                        | **yes — Int64** |
-| `assets`                          | `(asset_type, asset_code, issuer_id, contract_id)`            | no              |
-| `account_balances_current`        | `(account_id, asset_type, asset_code, issuer_id)`             | no              |
-| `nfts`                            | `(contract_id, token_id)`                                     | no              |
-| `liquidity_pools`                 | `pool_id` (FixedString(32) hash)                              | no              |
-| `lp_positions`                    | `(pool_id, account_id)`                                       | no              |
-| `transaction_hash_index`          | `hash` (FixedString(32))                                      | no              |
-| `operations_appearances`          | `(ledger_sequence, transaction_id, application_order)`        | no              |
-| `transaction_participants`        | `(account_id, ledger_sequence, transaction_id)`               | no              |
-| `soroban_events`                  | `(contract_id, ledger_sequence, transaction_id, event_index)` | no              |
-| `soroban_invocations_appearances` | `(contract_id, ledger_sequence, transaction_id)`              | no              |
-| `nft_ownership`                   | `(contract_id, token_id, ledger_sequence, event_order)`       | no              |
-| `liquidity_pool_snapshots`        | `(pool_id, ledger_sequence)`                                  | no              |
+| Table                             | ORDER BY                                                                          | Surrogate `id`? |
+| --------------------------------- | --------------------------------------------------------------------------------- | --------------- |
+| `accounts`                        | `account_id` (StrKey G…)                                                          | **yes — Int64** |
+| `soroban_contracts`               | `contract_id` (StrKey C…)                                                         | **yes — Int64** |
+| `transactions`                    | `(ledger_sequence, application_order)`                                            | **yes — Int64** |
+| `assets`                          | `(asset_type, asset_code, issuer_id, contract_id)`                                | no              |
+| `account_balances_current`        | `(account_id, asset_type, asset_code, issuer_id)`                                 | no              |
+| `nfts`                            | `(contract_id, token_id)`                                                         | no              |
+| `liquidity_pools`                 | `pool_id` (FixedString(32) hash)                                                  | no              |
+| `lp_positions`                    | `(pool_id, account_id)`                                                           | no              |
+| `transaction_hash_index`          | `hash` (FixedString(32))                                                          | no              |
+| `operations_appearances`          | `(ledger_sequence, transaction_id, application_order)`                            | no              |
+| `transaction_participants`        | `(account_id, ledger_sequence, transaction_id)`                                   | no              |
+| `soroban_events`                  | `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)` | no              |
+| `soroban_invocations_appearances` | `(contract_id, ledger_sequence, transaction_id)`                                  | no              |
+| `nft_ownership`                   | `(contract_id, token_id, ledger_sequence, event_order)`                           | no              |
+| `liquidity_pool_snapshots`        | `(pool_id, ledger_sequence)`                                                      | no              |
 
 The three surrogate `id` values are deterministic
 `cityhash64(natural_key)` (lower 64 bits of CityHash 1.0.2 128-bit).
