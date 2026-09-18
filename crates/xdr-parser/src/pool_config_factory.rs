@@ -50,6 +50,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use tracing::error;
+
 use crate::scval::{address, map_get, symbol, typed, typed_str};
 use crate::types::{EventSource, ExtractedEvent, ExtractedLedgerEntryChange};
 
@@ -204,7 +206,25 @@ pub struct ExtractedConfigPool {
 /// changes: group the per-key persistent entries by owning contract, then
 /// keep owners that wrote a decodable `CONFIG` and/or the full reserve
 /// pair. Mirrors its siblings: only `created`/`updated`/`restored` carry a
-/// value; the `state` pre-image and `removed` record nothing.
+/// value; the `state` pre-image is the entry at the start of the operation.
+///
+/// A `removed` on one of these keys would leave our newest row standing for a
+/// pool that can no longer serve it — the deployed contracts read `CONFIG` and
+/// the reserve keys with `unwrap()`, so a pool missing one is broken, and
+/// writing a zero would state a reserve it does not have. No deployed version
+/// can do it (measured 2026-09-17: the bytecode of all 31 deployed wasm
+/// versions deletes only the instance `p_admin` key and one pool's unused
+/// `u32(5)`; 0 removals of a read key in 4,731 decoded ledgers), so this logs
+/// loudly instead of guessing, and an upgrade that starts doing it is heard.
+fn family_key(key: &Value, val: &Value) -> bool {
+    if symbol(key) == Some("CONFIG") {
+        return parse_pool_config(val).is_some();
+    }
+    typed(key, "u32")
+        .and_then(Value::as_u64)
+        .is_some_and(|n| n <= 2 && typed_str(val, "i128").is_some())
+}
+
 pub fn extract_config_pools(changes: &[ExtractedLedgerEntryChange]) -> Vec<ExtractedConfigPool> {
     #[derive(Default)]
     struct Acc {
@@ -217,15 +237,13 @@ pub fn extract_config_pools(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
     }
     // BTreeMap for deterministic output order across re-parses.
     let mut by_pool: BTreeMap<&str, Acc> = BTreeMap::new();
+    // `(contract, key)` of the family-shaped `state` images seen so far, so a
+    // `removed` that follows one is reported and a foreign contract's delete is
+    // not.
+    let mut before: std::collections::HashSet<(&str, String)> = std::collections::HashSet::new();
 
     for change in changes {
         if change.entry_type != "contract_data" {
-            continue;
-        }
-        if !matches!(
-            change.change_type.as_str(),
-            "created" | "updated" | "restored"
-        ) {
             continue;
         }
         let Some(owner) = change.key.get("contract").and_then(Value::as_str) else {
@@ -234,6 +252,33 @@ pub fn extract_config_pools(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
         let Some(key) = change.key.get("key") else {
             continue;
         };
+        match change.change_type.as_str() {
+            "created" | "updated" | "restored" => {}
+            // Keyed on the pair `state` always forms with the change that
+            // follows it, so the removal is judged on the value it carried.
+            "state" => {
+                if let Some(val) = change.data.as_ref().and_then(|d| d.get("val"))
+                    && family_key(key, val)
+                {
+                    before.insert((owner, key.to_string()));
+                }
+                continue;
+            }
+            "removed" => {
+                if before.remove(&(owner, key.to_string())) {
+                    error!(
+                        contract = owner,
+                        key = %key,
+                        ledger = change.ledger_sequence,
+                        "config-factory pool deleted a key this family reads; its \
+                         pool_state_changes / pool_instance_state rows stay at their \
+                         last written value"
+                    );
+                }
+                continue;
+            }
+            _ => continue,
+        }
         // The created gate reads the instance entry (which this family
         // leaves storage-less) — everything else needs the value payload.
         if key
@@ -433,6 +478,33 @@ mod tests {
         );
         assert_eq!(got.pool_type, 0);
         assert_eq!(got.total_fee_bps, 50);
+    }
+
+    #[test]
+    fn a_deleted_reserve_key_writes_no_row_and_is_recognised() {
+        // `state` (the image at the start of the operation) then `removed`:
+        // no deployed pool does this, and if one ever does we must not invent a
+        // reserve for it. The row it would leave behind is the last one written.
+        let key = json!({"type": "u32", "value": 1});
+        let val = json!({"type": "i128", "value": "5000"});
+        let changes = vec![
+            change(POOL, key.clone(), val.clone(), "state"),
+            change(POOL, key.clone(), val.clone(), "removed"),
+        ];
+        assert!(extract_config_pools(&changes).is_empty());
+        // The pair is recognised as this family's, which is what the error log
+        // keys on; a foreign contract's delete is not.
+        assert!(family_key(&key, &val));
+        assert!(family_key(
+            &json!({"type": "sym", "value": "CONFIG"}),
+            &real_config()
+        ));
+        assert!(!family_key(&key, &json!({"type": "u32", "value": 5})));
+        assert!(!family_key(&json!({"type": "u32", "value": 7}), &val));
+        assert!(!family_key(
+            &json!({"type": "sym", "value": "CONFIG"}),
+            &json!({"type": "map", "value": []})
+        ));
     }
 
     #[test]
