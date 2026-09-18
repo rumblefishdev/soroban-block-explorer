@@ -111,3 +111,36 @@ from.
 - [ ] A dry-run on a later checkpoint reports 0 unplaceable holders zeroed
 - [ ] `docs/backfills.md` states what the seed does with a holder it cannot
       place
+
+## 2026-09-18 — the same blind spot measured against the chain, both directions
+
+A census of the history archive itself (`backfill-runner/tests/native_sac_balance_census.rs`,
+run by hand) lists every native-SAC `Balance` entry at a checkpoint — live
+buckets and the CAP-62 hot archive — and writes one row per holder with the
+surrogate our writer uses, so it joins against `balances` directly. Checkpoint
+64,490,431 against our rows for native:
+
+|                           | entries | XLM              |
+| ------------------------- | ------- | ---------------- |
+| chain, live               | 619     | 903,753,024.2858 |
+| chain, archived (evicted) | 1,516   | 49,937.4758      |
+| ours, positive rows       | 1,011   | 903,838,774.8819 |
+
+Joined on the holder surrogate:
+
+- **797 in both, 792 equal to the unit.** The 5 that differ carry OUR ledger
+  above the checkpoint — movement after the snapshot, not error.
+- **214 rows only we hold — 48,715.93 XLM.** The chain has them neither live
+  nor archived. Their stamps run back to ledgers 61–63 M. Same class as the
+  chain's own unaccounted 77,343.8360357 XLM (task 0210): entries evicted
+  before the hot archive existed leave no record to compare against, so a row
+  of ours can outlive the entry with nothing to contradict it.
+- **1,338 entries only the chain holds — 11,627.15 XLM**, of which **1,138 are
+  archived (11,550.11 XLM)**. We do not index the hot archive at all, so an
+  evicted holding is invisible to us until someone restores it.
+
+Both directions are the same defect as this task's: the comparison cannot place
+a contract-held holding, because nothing on our side carries the holder's kind
+and nothing reads contract data from the checkpoint. Scope item 1 should
+therefore cover eviction as well — a holding that left live state is neither a
+ghost nor live, and the seed needs a third answer for it.
