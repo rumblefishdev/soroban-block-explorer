@@ -2,11 +2,23 @@ use super::*;
 
 #[test]
 fn parses_a_list_of_targetable_tables_in_order() {
-    let t = TargetedTables::parse("asset_transfers, transaction_memos,soroban_event_ops").unwrap();
+    let t =
+        TargetedTables::parse("asset_transfers, transaction_memos,lp_operation_amounts").unwrap();
     assert_eq!(
         t.iter().collect::<Vec<_>>(),
-        vec!["asset_transfers", "transaction_memos", "soroban_event_ops"]
+        vec![
+            "asset_transfers",
+            "transaction_memos",
+            "lp_operation_amounts"
+        ]
     );
+}
+
+#[test]
+fn soroban_event_ops_is_no_longer_targetable() {
+    // Task 0541: the table is gone; the event's operation lives in the
+    // `soroban_events` key.
+    assert!(TargetedTables::parse("soroban_event_ops").is_err());
 }
 
 #[test]

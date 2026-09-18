@@ -120,7 +120,6 @@ pub fn address_id(strkey: &str) -> i64 {
 /// `transactions.id` from the 32-byte tx hash bytes. Same helper feeds
 /// every transaction `Int64` FK: `operations_appearances.transaction_id`,
 /// `transaction_participants.transaction_id`,
-/// `soroban_events.transaction_id`,
 /// `soroban_invocations_appearances.transaction_id`,
 /// `nft_ownership.transaction_id`.
 #[inline]

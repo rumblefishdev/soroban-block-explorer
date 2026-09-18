@@ -280,8 +280,6 @@ pub struct StagedLedger {
     pub asset_transfer_rows: Vec<AssetTransferRow>,
     /// Task 0540 — one row per transaction that carries a memo → `transaction_memos`.
     pub transaction_memo_rows: Vec<TransactionMemoRow>,
-    /// Task 0541 — operation attribution per event → `soroban_event_ops`.
-    pub event_op_rows: Vec<SorobanEventOpRow>,
 }
 
 /// Named, borrowed inputs to [`prepare_with_sac_overrides`].
@@ -1042,6 +1040,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // 0374 e2e caught pool state picking an intermediate write as "last" on
     // 127 of 1,410 real pairs when ordered by tx_id).
     let mut tx_id_by_hash: HashMap<String, i64> = HashMap::with_capacity(transactions.len());
+    let mut app_order_by_hash: HashMap<String, i16> = HashMap::with_capacity(transactions.len());
     for (idx, tx) in transactions.iter().enumerate() {
         let hash = decode_hash(&tx.hash, "tx.hash")?;
         let tx_id = ids::transaction_id(&hash);
@@ -1053,6 +1052,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         };
         let app_order =
             i16::try_from(idx + 1).map_err(|_| staging_err("application_order overflow (>i16)"))?;
+        app_order_by_hash.insert(tx.hash.clone(), app_order);
         let op_count = op_count_by_tx.get(tx.hash.as_str()).copied().unwrap_or(0);
 
         out.transaction_rows.push(TransactionRow {
@@ -1875,11 +1875,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // ---- soroban_events (UNFOLDED per ADR 0044 §4a) ----
+    // ---- soroban_events (UNFOLDED per ADR 0044 §4a, keyed by rpc id per ADR 0059) ----
     let mut diagnostic_dropped: usize = 0;
     let mut contract_orphan_dropped: usize = 0;
     for (tx_hash, evs) in events {
-        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
+        let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
             continue;
         };
         for ev in evs {
@@ -1891,8 +1891,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 contract_orphan_dropped += 1;
                 continue;
             };
-            let event_index = i16::try_from(ev.event_index)
-                .map_err(|_| staging_err("event_index overflow (>i16)"))?;
+            // Never guessed: an id is the parser's reading of the meta, and a
+            // wrong one would silently merge two events under the RMT key.
+            let Some(id) = ev.event_id else {
+                return Err(staging_err(&format!(
+                    "event without a stellar-rpc id (tx {tx_hash}, source {:?}) — ADR 0059",
+                    ev.source
+                )));
+            };
             let topics_xdr = serde_json::to_string(&ev.topics)
                 .map_err(|e| staging_err(&format!("event topics serialize: {e}")))?;
             let data_xdr = serde_json::to_string(&ev.data)
@@ -1900,9 +1906,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             let signature = extract_event_signature(&ev.topics);
             out.event_rows.push(SorobanEventRow {
                 contract_id: ids::contract_id(contract_strkey),
-                transaction_id: tx_id,
                 ledger_sequence: ledger_sequence_i64,
-                event_index,
+                transaction_index: id.transaction_index,
+                operation_index: id.operation_index,
+                event_index: id.event_index,
+                application_order,
                 event_type: ev.event_type as i16,
                 signature,
                 topics_xdr,
@@ -2530,17 +2538,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         ledger_sequence_i64,
     ));
 
-    // ---- asset_transfers + transaction_memos + soroban_event_ops (0540/0541) --
+    // ---- asset_transfers + transaction_memos (0540) ----
     let value_flow = super::value_flow::build_value_flow_rows(
         ledger_sequence_i64,
         transactions,
         operations,
-        events,
         asset_transfers,
     )?;
     out.asset_transfer_rows = value_flow.transfers;
     out.transaction_memo_rows = value_flow.memos;
-    out.event_op_rows = value_flow.event_ops;
 
     Ok(out)
 }
