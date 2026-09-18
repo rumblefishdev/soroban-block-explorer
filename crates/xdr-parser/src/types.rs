@@ -164,8 +164,10 @@ pub struct ExtractedEvent {
     pub topics: serde_json::Value,
     /// ScVal-decoded event data payload as JSON.
     pub data: serde_json::Value,
-    /// Zero-based index of this event within the transaction.
-    pub event_index: u32,
+    /// Ordinal across all containers of the transaction (tx-level, per-op,
+    /// diagnostic). In memory only — never stored, never on the wire; the
+    /// event's identity is `event_id`.
+    pub position_in_tx: u32,
     /// Zero-based envelope position of the operation that emitted this event.
     /// Only the CAP-67 V4 per-operation container carries the attribution —
     /// `None` for tx-level, diagnostic and V3 events (task 0453 D7).
@@ -174,19 +176,21 @@ pub struct ExtractedEvent {
     /// list (`v4.operations[op_index].events`). Together with `op_index` this
     /// is Stellar's official event identity — the `getEvents` cursor is
     /// `(ledger, tx, op, event)` with `event` reset per operation (stellar-rpc
-    /// `db/event.go`) — and it is what keys the edge table (task 0540).
+    /// `db/event.go`).
     /// `None` whenever `op_index` is `None`.
     pub event_pos_in_op: Option<u32>,
     /// CAP-67 `TransactionEvent.stage` — when in ledger application the event
-    /// fired. Measured on mainnet (`tests/tx_event_stage_real_meta.rs`): the
-    /// fee charge is `BeforeAllTxs` and the refund is `AfterAllTxs` — settled
-    /// after every transaction in the ledger, not after this one.
-    /// The protocol's own statement of ordering, and the only one there is:
-    /// `event_index` is our flat counter over the three containers, so an
+    /// fired. The fee charge is `BeforeAllTxs`; the refund is `AfterTx` before
+    /// protocol 23 and `AfterAllTxs` from it (`tests/tx_event_stage_real_meta.rs`).
+    /// `position_in_tx` is a flat counter over the three containers, so a
     /// refund is numbered ahead of the operations it refunds.
     /// `None` for per-op, diagnostic and V3 events — only `v4.events` carries
     /// a stage.
     pub stage: Option<TransactionEventStage>,
+    /// stellar-rpc event id (ADR 0059), set by
+    /// [`crate::event::assign_event_ids`]. `None` for diagnostic events and
+    /// for a tx-level event without a stage.
+    pub event_id: Option<crate::event::EventId>,
     /// Parent ledger sequence number.
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time (Unix seconds), used for monthly partitioning.

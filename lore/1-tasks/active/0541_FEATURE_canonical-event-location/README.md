@@ -731,3 +731,54 @@ the list is already broken for native XLM today; plan task 2.5 moves that list
 to positions with bounded windows (measured 87 ms for native XLM).
 
 **Disk before phase 3 (2026-09-17, decision 231 A).** Free space 360.71 GiB (20.5%); filling the remaining partitions (+~169 GiB) plus two weeks of growth would leave ~9% until the old table is dropped. Server logs without retention hold 174.50 GiB (≥ 89 GiB older than 30 days); reclaiming them first was proposed (task 0563) and deferred by karolkow the same day — no log is deleted now. So phase 3 runs as late as possible, right before the window, to shorten the weeks both tables share the disk, and stops if free space before a partition is under 120 GiB. Adding columns to the old table instead of swapping was rejected: the sort key cannot drop `transaction_id`, so the table would end ~78 GiB larger than the swap result and keep hash order.
+
+## Phase 2 — the code (2026-09-17/18)
+
+Branch `feat/0541_canonical-event-location`, one PR, deploy only in phase 4.
+Tests: `cargo test --workspace`, `pnpm nx run-many -t test typecheck lint` green.
+
+| task | what changed                                                                                                                                                                                                                                        |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.1  | `xdr_parser::EventId` + `tx_level_event_ids` / `assign_event_ids`; `ExtractedEvent.event_id`; the flat counter renamed `position_in_tx` (in memory only). `ExtractedAssetTransfer` loses it entirely.                                               |
+| 2.2  | The indexer assigns ids per ledger. New test on ledger 58,816,920 from the public archive: every consensus event has an id, all unique, charge and refund counters contiguous, no `after_tx` under protocol 23.                                     |
+| 2.3  | `SorobanEventRow` = the rpc id + `application_order`; a consensus event without an id is a staging error. `soroban_event_ops` deleted (rows, writer slot, targetable list, DDL); `asset_transfers` stops writing the flat counter.                  |
+| 2.4  | Contract events page and cursor on the rpc id; the wire carries `id` instead of `transaction_id`; the transaction is resolved by `(ledger_sequence, application_order)`. A cursor minted before the change gets 400 `invalid_cursor`.               |
+| 2.5  | The contract-filtered transaction list moved to positions: per-arm ledger windows merged in Rust (`transactions/contract_positions.rs`), page and cursor on `(ledger_sequence, application_order)`. `fetch_event_appearances` filters the position. |
+| 2.6  | Transaction-page events (archive XDR) carry the id, come back in execution order, and name the operation as `operation_index`; the dead `extract_e14_heavy` is gone.                                                                                |
+| 2.7  | The events table's `#` column is now `ID` with the full rpc id (diagnostic rows `—`); `OperationCard` and `ContractEvents` key on it.                                                                                                               |
+| 2.8  | `init.sql`, backfill tooling, `docs/**` per ADR 0032, ADR 0059 → accepted, and a new `backfill-runner/tests/event_id_reconciliation.rs` comparing `getEvents` against both the table and a fresh parse of the archive (skips until the swap).       |
+
+### Read-path measurements on production (read-only, 2026-09-18)
+
+Partition 127 of `soroban_events_staging_canonical`, native XLM
+(`-6164601581949826601`) unless stated — the heaviest contract there is. Window
+84 rows (`limit × 4`), from `system.query_log`.
+
+| query                                                     | time           | read                           | memory   |
+| --------------------------------------------------------- | -------------- | ------------------------------ | -------- |
+| tx-list arm window — events / invocations / operations    | 13 / 6 / 58 ms | 3.88 MiB / 454 KiB / 51.68 MiB | ≤ 13 MiB |
+| tx-list arm rows — events / invocations / operations      | 5 / 7 / 22 ms  | 83 KiB / 264 KiB / 12.89 MiB   | ≤ 8 MiB  |
+| tx-list page by position (`IN` over the merged positions) | 9 ms           | 572 KiB                        | 6.65 MiB |
+| contract events, first page — native XLM                  | 135 ms         | 481 MiB                        | 435 MiB  |
+| contract events, cursor page — native XLM                 | 116 ms         | 533 MiB                        | 380 MiB  |
+| contract events, first page — `546855837558613593`        | 60 ms          | 187 MiB                        | 114 MiB  |
+
+One contract-filtered list page is the three arms plus the page: ~111 ms and
+~69 MiB for native XLM, against the 6.04 GiB that fails today. Every statement
+is under the gate (< 1 s, < 1 GiB). The event pages read more than phase 1
+measured because the partition was filled in 100 slices and its parts are not
+merged yet.
+
+### Where the code differs from the plan
+
+- The indexer's id test is an integration test
+  (`crates/indexer/tests/event_ids_real_ledger.rs`), not a unit test inside
+  `process.rs`: `parse_ledger` reads the network passphrase from the process
+  environment, and an integration test has that process to itself.
+- The transaction-page test (2.6) runs on the same real ledger fixture instead
+  of the single-transaction meta the plan named — it exercises the real
+  application order and the ledger's fee counters, which one transaction cannot.
+- `MergeResult::NeedWiderWindow` carries the positions it already has, so the
+  last round can return a short page instead of recomputing it.
+- Also moved under `__tests__` because the change touched them:
+  `ExecutionTrace.test.ts`, and `transactions/dto.rs`'s inline tests.

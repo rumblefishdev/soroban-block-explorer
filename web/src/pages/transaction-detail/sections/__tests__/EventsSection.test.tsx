@@ -4,10 +4,27 @@ import { render, screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { EventsSection } from './EventsSection.js';
+import { EventsSection } from '../EventsSection.js';
+
+/** An rpc id as `getEvents` returns it, for ledger 64,450,000 (ADR 0059). */
+function rpcId(transaction: number, operation: number, event: number): string {
+  const toid =
+    (BigInt(64_450_000) << 32n) |
+    (BigInt(transaction) << 12n) |
+    BigInt(operation);
+  return `${toid.toString().padStart(19, '0')}-${String(event).padStart(
+    10,
+    '0'
+  )}`;
+}
+
+/** The transaction of these fixtures: application order 136. */
+const CHARGE = rpcId(0, 0, 135);
+const OP_EVENT = rpcId(136, 0, 0);
+const REFUND = rpcId(1_048_575, 0, 0);
 
 function event(
-  event_index: number,
+  id: string | null,
   topic0: string | null,
   extra: Partial<XdrEventDto> = {}
 ): XdrEventDto {
@@ -16,8 +33,9 @@ function event(
     contract_id: null,
     topics: topic0 == null ? [] : [{ type: 'sym', value: topic0 }],
     data: { type: 'void' },
-    event_index,
-    op_index: null,
+    id,
+    event_index: null,
+    operation_index: null,
     stage: null,
     ...extra,
   } as unknown as XdrEventDto;
@@ -61,15 +79,15 @@ describe('EventsSection (#378 — the consensus stream is the event list)', () =
     // and the resource meter. The page used to advertise all of it as events.
     renderSection(
       [
-        event(0, 'fee', { stage: 'before_all_txs' }),
-        event(1, 'fee', { stage: 'after_all_txs' }),
-        event(2, 'transfer', { op_index: 0 }),
+        event(CHARGE, 'fee', { stage: 'before_all_txs' }),
+        event(OP_EVENT, 'transfer', { operation_index: 0, event_index: 0 }),
+        event(REFUND, 'fee', { stage: 'after_all_txs' }),
       ],
       [
-        event(3, 'fn_call', { event_type: 'diagnostic' }),
-        event(6, 'transfer'),
-        event(7, 'fn_return', { event_type: 'diagnostic' }),
-        event(8, 'core_metrics', { event_type: 'diagnostic' }),
+        event(null, 'fn_call', { event_type: 'diagnostic' }),
+        event(null, 'transfer', { event_type: 'diagnostic' }),
+        event(null, 'fn_return', { event_type: 'diagnostic' }),
+        event(null, 'core_metrics', { event_type: 'diagnostic' }),
       ]
     );
 
@@ -78,22 +96,22 @@ describe('EventsSection (#378 — the consensus stream is the event list)', () =
 
     // The copy is not a fourth event here. It is still on the page, one
     // disclosure down, in the debug channel it actually belongs to.
-    expect(rowsOf(screen.getByRole('table')).map((r) => r['#'])).toEqual([
-      '0',
-      '1',
-      '2',
+    expect(rowsOf(screen.getByRole('table')).map((r) => r.ID)).toEqual([
+      CHARGE,
+      OP_EVENT,
+      REFUND,
     ]);
   });
 
   it('keeps the copies in the debug channel — only counters move out', async () => {
     const user = userEvent.setup();
     renderSection(
-      [event(2, 'transfer', { op_index: 0 })],
+      [event(OP_EVENT, 'transfer', { operation_index: 0, event_index: 0 })],
       [
-        event(3, 'fn_call', { event_type: 'diagnostic' }),
-        event(4, 'transfer'), // the copy — raw record, kept as it arrived
-        event(5, 'fn_return', { event_type: 'diagnostic' }),
-        event(6, 'core_metrics', { event_type: 'diagnostic' }),
+        event(null, 'fn_call', { event_type: 'diagnostic' }),
+        event(null, 'transfer'), // the copy — raw record, kept as it arrived
+        event(null, 'fn_return', { event_type: 'diagnostic' }),
+        event(null, 'core_metrics', { event_type: 'diagnostic' }),
       ]
     );
     await user.click(screen.getByText(/Show 3 diagnostic entries/));
@@ -101,7 +119,8 @@ describe('EventsSection (#378 — the consensus stream is the event list)', () =
     // The counter is the only omission, and it renders in full on the
     // operation card. Everything else stands exactly as the ledger carries it.
     const table = screen.getAllByRole('table').at(-1) as HTMLElement;
-    expect(rowsOf(table).map((r) => r['#'])).toEqual(['3', '4', '5']);
+    // A diagnostic event has no rpc id — the protocol gives it none.
+    expect(rowsOf(table).map((r) => r.ID)).toEqual(['—', '—', '—']);
     // …and it states no position: `Where` belongs to the consensus stream.
     expect(rowsOf(table)[0].Where).toBeUndefined();
   });
@@ -110,8 +129,12 @@ describe('EventsSection (#378 — the consensus stream is the event list)', () =
     // The whole of issue #378: two records concatenated into one list and one
     // number, so two events advertised themselves as five.
     renderSection(
-      [event(0, 'fee'), event(2, 'transfer')],
-      [event(3, 'fn_call'), event(4, 'transfer'), event(5, 'core_metrics')]
+      [event(CHARGE, 'fee'), event(OP_EVENT, 'transfer')],
+      [
+        event(null, 'fn_call'),
+        event(null, 'transfer'),
+        event(null, 'core_metrics'),
+      ]
     );
     expect(screen.getByText('2 events')).toBeInTheDocument();
     expect(screen.getByText(/Show 2 diagnostic entries/)).toBeInTheDocument();
@@ -120,7 +143,7 @@ describe('EventsSection (#378 — the consensus stream is the event list)', () =
   it('offers no diagnostics disclosure when counters were all there was', () => {
     // Nothing to disclose once the meter readings render as Resources — an
     // expander onto an empty table would be a dead end.
-    renderSection([event(0, 'transfer')], [event(1, 'core_metrics')]);
+    renderSection([event(OP_EVENT, 'transfer')], [event(null, 'core_metrics')]);
     expect(screen.queryByText(/diagnostic entr/)).not.toBeInTheDocument();
   });
 
@@ -128,9 +151,9 @@ describe('EventsSection (#378 — the consensus stream is the event list)', () =
     const user = userEvent.setup();
     renderSection(
       [
-        event(0, 'fee', { stage: 'before_all_txs' }),
-        event(1, 'fee', { stage: 'after_tx' }),
-        event(2, 'transfer', { op_index: 0 }),
+        event(CHARGE, 'fee', { stage: 'before_all_txs' }),
+        event(rpcId(136, 4095, 0), 'fee', { stage: 'after_tx' }),
+        event(OP_EVENT, 'transfer', { operation_index: 0, event_index: 0 }),
       ],
       []
     );
@@ -148,7 +171,7 @@ describe('EventsSection (#378 — the consensus stream is the event list)', () =
   it('labels a system event System, not Contract', async () => {
     const user = userEvent.setup();
     renderSection(
-      [event(0, 'executable_update', { event_type: 'system' })],
+      [event(OP_EVENT, 'executable_update', { event_type: 'system' })],
       []
     );
     await user.click(screen.getByText(/Show 1 event/));

@@ -6,7 +6,8 @@
 --    are a misnomer; diagnostic-source events are also dropped at ingest), so
 --    the read path just JSON-deserializes inline — no Archive overlay, no
 --    read-time XDR decode. Keyset is 3-component
---    `(ledger_sequence, transaction_id, event_index)`. Divergence from PG: CH
+--    `(ledger_sequence, transaction_index, operation_index, event_index)` —
+--    the stellar-rpc event id (ADR 0059). Divergence from PG: CH
 --    pages per EVENT (one row → one item, `data.len() <= limit`) vs PG's folded
 --    appearance (expands to many). The PG fold-count is an internal storage
 --    detail and is not surfaced on the wire.
@@ -26,12 +27,14 @@
 -- Inputs:
 --   $1  :contract_strkey       String   C-form contract ID
 --   $2  :limit                 Int      page size
---   $3  :cursor_ledger         Int64    NULL on first page
---   $4  :cursor_tx_id          Int64    NULL on first page
---   $5  :cursor_event_index    Int16    NULL on first page
+--   $3  :cursor_ledger              Int64    NULL on first page
+--   $4  :cursor_transaction_index  UInt32   NULL on first page
+--   $5  :cursor_operation_index    UInt16   NULL on first page
+--   $6  :cursor_event_index        UInt32   NULL on first page
 -- Indexes:      soroban_contracts ORDER BY (id) — leading resolve.
 --               soroban_events ORDER BY (contract_id, ledger_sequence,
---                 transaction_id, event_index) + PARTITION BY intDiv.
+--                 transaction_index, operation_index, event_index) — the
+--                 stellar-rpc event id (ADR 0059) — + PARTITION BY intDiv.
 --               transactions ORDER BY (ledger_sequence, application_order, id).
 -- CH Engine:    soroban_events — Replacing partitioned (FINAL; ORDER BY is
 --                 unique per row so dedup is a no-op in practice, but FINAL
@@ -57,14 +60,16 @@
 --     This is a meaningful win — CH-backed events endpoint doesn't need
 --     Archive S3 fetches and avoids the per-ledger blob decode cost.
 --   • Cursor drops `created_at` (§5.2). Order is fully determined by
---     `(ledger_sequence, transaction_id, event_index)` — adding
---     `event_index` to ORDER BY (and projecting it) lets the API page
---     across multi-event txs cleanly.
+--     the rpc event id, so a page boundary inside a transaction (or inside
+--     one operation) is exact, and the order the rows come back in is
+--     execution order: fee charge, operation events, fee refund.
 
 SELECT
     se.ledger_sequence,
-    se.transaction_id,
+    se.transaction_index,
+    se.operation_index,
     se.event_index,
+    se.application_order,
     se.event_type,
     se.signature,
     se.topics_xdr,
@@ -72,13 +77,19 @@ SELECT
     lower(hex(t.hash))                              AS transaction_hash_hex,
     t.successful
 FROM soroban_events se FINAL
-JOIN transactions t FINAL ON t.id = se.transaction_id AND t.ledger_sequence = se.ledger_sequence
+JOIN transactions t FINAL
+  ON t.ledger_sequence = se.ledger_sequence AND t.application_order = se.application_order
 WHERE
     se.contract_id = (SELECT id FROM soroban_contracts FINAL WHERE contract_id = $1 LIMIT 1)
-    -- Cursor includes event_index as the tiebreaker so multi-event txs
-    -- page cleanly: ORDER BY uses all three columns, so the keyset
-    -- predicate must too (otherwise a page boundary inside a multi-event
-    -- tx would skip or repeat rows). Review feedback (Copilot PR #174).
-    AND ($3 IS NULL OR (se.ledger_sequence, se.transaction_id, se.event_index) < ($3, $4, $5))
-ORDER BY se.ledger_sequence DESC, se.transaction_id DESC, se.event_index DESC
+    -- The keyset is the whole rpc id: ORDER BY uses all four columns, so the
+    -- predicate must too, or a page boundary inside a transaction would skip
+    -- or repeat rows.
+    AND ($3 IS NULL OR (se.ledger_sequence, se.transaction_index, se.operation_index, se.event_index)
+                     < ($3, $4, $5, $6))
+ORDER BY se.ledger_sequence DESC, se.transaction_index DESC,
+         se.operation_index DESC, se.event_index DESC
 LIMIT $2;
+
+-- The transaction joins by POSITION, never by `transaction_id`: a fee refund's
+-- id carries the end-of-ledger sentinel (transaction 1048575), so only
+-- `application_order` says which transaction the event belongs to (ADR 0059).

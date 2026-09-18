@@ -376,15 +376,6 @@ pub async fn list_events(
         return resp;
     }
 
-    // Reject a stale cursor minted under the retired PG backend (ADR 0008
-    // fail-clean) — its keyset is not interchangeable with the CH keyset
-    // `(ledger_sequence, id, event_index)`.
-    if let Some(cursor) = &pagination.cursor
-        && !event_cursor_matches_source(cursor)
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
-
     let contract = match fetch_contract_for_source(&state, &contract_id).await {
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
@@ -398,8 +389,8 @@ pub async fn list_events(
     let has_predecessor = pagination.has_predecessor();
 
     // Full-content `soroban_events` (per-event rows, inline JSON payload) —
-    // one row → one `EventItem`, no Archive overlay. Keyset is 3-component
-    // `(ledger_sequence, id, event_index)`.
+    // one row → one `EventItem`, no Archive overlay. Keyset is the rpc event id
+    // `(ledger_sequence, transaction_index, operation_index, event_index)`.
     let mut rows = match queries::fetch_events(
         &state.ch(),
         contract.id,
@@ -422,9 +413,10 @@ pub async fn list_events(
         has_predecessor,
         |dir, r| {
             cursor::encode(
-                &EventCursor::Ch {
+                &EventCursor::ChEventId {
                     ledger_sequence: r.item.ledger_sequence,
-                    transaction_id: r.item.transaction_id,
+                    transaction_index: r.transaction_index,
+                    operation_index: r.operation_index,
                     event_index: r.event_index,
                 },
                 dir,
@@ -435,12 +427,6 @@ pub async fn list_events(
     let mut resp = Json(into_envelope(items, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
-}
-
-/// True when the decoded events cursor is a current (CH) cursor. A stale cursor
-/// minted under the retired PG backend is rejected (ADR 0008 fail-clean).
-fn event_cursor_matches_source(cursor: &EventCursor) -> bool {
-    matches!(cursor, EventCursor::Ch { .. })
 }
 
 // ---------------------------------------------------------------------------

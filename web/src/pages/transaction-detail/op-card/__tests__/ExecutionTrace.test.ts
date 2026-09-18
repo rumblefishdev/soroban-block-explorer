@@ -8,7 +8,7 @@ import {
   eventArgsText,
   partsToText,
   traceCallCount,
-} from './ExecutionTrace.js';
+} from '../ExecutionTrace.js';
 
 // Real pair from mainnet tx 54aab000…b21f2d: the fn_call bytes topic and the
 // C-strkey of the contract that raised events inside that call.
@@ -26,8 +26,12 @@ function ev(
     contract_id,
     topics,
     data,
-    event_index: nextIndex++,
-    op_index: null,
+    // Diagnostic entries carry no rpc id; the fixtures number their topics
+    // through the `data` payload instead, which is what the trace shows.
+    id: null,
+    event_index: null,
+    operation_index: null,
+    marker: nextIndex++,
   } as XdrEventDto;
 }
 
@@ -96,12 +100,12 @@ describe('buildExecutionTrace', () => {
       swap.children.map((child) =>
         child.kind === 'call'
           ? child.node.fnName
-          : `ev:${child.event.event_index}`
+          : `ev:${(child.event as unknown as { marker: number }).marker}`
       )
     ).toEqual([
-      `ev:${burn.event_index}`,
+      `ev:${(burn as unknown as { marker: number }).marker}`,
       'burn_and_transfer',
-      `ev:${transfer.event_index}`,
+      `ev:${(transfer as unknown as { marker: number }).marker}`,
       'balance',
     ]);
     expect(traceCallCount(nodes)).toBe(3);

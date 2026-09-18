@@ -1,5 +1,6 @@
 //! Transactions API module: GET /v1/transactions and GET /v1/transactions/:hash.
 
+mod contract_positions;
 pub mod dto;
 mod handlers;
 mod queries;

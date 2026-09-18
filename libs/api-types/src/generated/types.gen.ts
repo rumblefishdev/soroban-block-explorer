@@ -916,11 +916,15 @@ export type EventItem = {
   created_at: string;
   data: unknown;
   event_type: string;
+  /**
+   * The stellar-rpc event id, exactly as `getEvents` returns it
+   * (ADR 0059).
+   */
+  id: string;
   ledger_sequence: number;
   successful: boolean;
   topics: Array<unknown>;
   transaction_hash: string;
-  transaction_id: number;
 };
 
 /**
@@ -1586,11 +1590,15 @@ export type PaginatedEventItem = {
     created_at: string;
     data: unknown;
     event_type: string;
+    /**
+     * The stellar-rpc event id, exactly as `getEvents` returns it
+     * (ADR 0059).
+     */
+    id: string;
     ledger_sequence: number;
     successful: boolean;
     topics: Array<unknown>;
     transaction_hash: string;
-    transaction_id: number;
   }>;
   page: PageInfo;
 };
@@ -2406,29 +2414,33 @@ export type XdrEventDto = {
    */
   data: unknown;
   /**
-   * Event index within the transaction (zero-based).
+   * The id's event number: the position in the operation, or for a fee
+   * event the ledger's (or, for `after_tx`, the transaction's) counter of
+   * that stage. `None` for diagnostic events.
    */
-  event_index: number;
+  event_index?: number | null;
   /**
    * `"contract"`, `"system"`, or `"diagnostic"`.
    */
   event_type: string;
   /**
-   * Zero-based envelope position of the operation that emitted this event
-   * (CAP-67 V4 per-operation container only; `None` for tx-level,
-   * diagnostic and pre-Protocol-23 events). Matches
-   * `XdrOperationDto.application_order - 1`.
+   * The stellar-rpc event id, exactly as `getEvents` returns it (ADR 0059).
+   * Consensus events arrive sorted by it, which is execution order: fee
+   * charge, operation events, fee refund. `None` for diagnostic events.
    */
-  op_index?: number | null;
+  id?: string | null;
+  /**
+   * Zero-based envelope position of the operation that emitted this event
+   * (CAP-67 per-operation container only; `None` for fee and diagnostic
+   * events). Matches `XdrOperationDto.application_order - 1`.
+   */
+  operation_index?: number | null;
   /**
    * CAP-67 `TransactionEvent.stage` — `"before_all_txs"`, `"after_tx"` or
-   * `"after_all_txs"`. The protocol's only statement of when a tx-level
-   * event fired, and the reason `event_index` must not be read as a
-   * timeline: the fee refund is numbered ahead of the operation it
-   * refunds. Observed values on mainnet are `before_all_txs` for the charge
-   * and `after_all_txs` for the refund; `after_tx` exists in the protocol
-   * and is passed through unchanged if it appears. `None` for per-operation, diagnostic and
-   * pre-Protocol-23 events, which carry no stage.
+   * `"after_all_txs"`: when a tx-level event fired. The fee charge is
+   * `before_all_txs`; the refund is `after_tx` before protocol 23 and
+   * `after_all_txs` from it (archive meta, task 0541). `None` for
+   * per-operation and diagnostic events, which carry no stage.
    */
   stage?: string | null;
   /**

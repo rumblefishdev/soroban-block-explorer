@@ -849,8 +849,9 @@ ORDER BY (pool_id, account_id);
 ----------------------------------------------------------------------
 
 -- transactions: surrogate `id Int64` for cheap FK joins from
--- operations_appearances, transaction_participants, soroban_events,
--- soroban_invocations_appearances, nft_ownership. ORDER BY
+-- operations_appearances, transaction_participants,
+-- soroban_invocations_appearances, nft_ownership (`soroban_events` joins by
+-- `(ledger_sequence, application_order)`). ORDER BY
 -- (ledger_sequence, application_order) for time-series scans.
 CREATE TABLE IF NOT EXISTS transactions (
     id                Int64,
@@ -1076,71 +1077,41 @@ ORDER BY (pool_id, ledger_sequence, transaction_id, application_order, asset_id)
 -- soroban_events: full-content per-event row (ADR 0044 §4a unfold).
 -- ZSTD codecs on the ScVal-decoded JSON columns. `signature` is the
 -- first-topic Symbol, lifted for cheap `WHERE signature = 'transfer'`.
+--
+-- Identity (ADR 0059, task 0541): the stellar-rpc event id, the one
+-- `getEvents` returns — TOID(ledger, transaction, operation) + event number.
+-- The parser assigns it (`xdr_parser::tx_level_event_ids` +
+-- `assign_event_ids`); staging refuses a consensus event without one.
+--   * operation event: `transaction_index` = `application_order`,
+--     `operation_index` = the operation (0-based), `event_index` = position
+--     in that operation;
+--   * fee charge (`BeforeAllTxs`): transaction 0, operation 0, event = the
+--     ledger's charge counter;
+--   * fee refund `AfterTx` (before protocol 23): transaction =
+--     `application_order`, operation 4095, event = the transaction's counter;
+--   * fee refund `AfterAllTxs` (protocol 23+): transaction 1048575,
+--     operation 0, event = the ledger's refund counter.
+-- Diagnostic events have no id and are not stored.
+--
+-- Within a contract the key is execution order: charges first, end-of-ledger
+-- refunds last. `application_order` names the transaction the event belongs
+-- to — a refund's sentinel id does not — and is what the transaction page
+-- filters on (joins `transactions` by `(ledger_sequence, application_order)`).
 CREATE TABLE IF NOT EXISTS soroban_events (
-    contract_id     Int64,
-    transaction_id  Int64,
-    ledger_sequence Int64,
-    -- OURS, NOT STELLAR'S — and deliberately so. Read this before "fixing"
-    -- it to match the protocol.
-    --
-    -- `event_index` is a flat counter we assign per transaction while walking
-    -- the event containers in order (`xdr_parser::event::extract_events`):
-    -- tx-level → per-operation → diagnostic. Stellar defines no such number.
-    -- CAP-67's V4 meta has three separate event lists and none of them carries
-    -- an index; the official identity, the one `getEvents` returns, is
-    -- TOID(ledger, tx position, operation position) + the event's position
-    -- WITHIN that operation.
-    --
-    -- Two reasons ours stays:
-    --
-    -- 1. It is part of this table's ORDER BY, so it co-defines row identity
-    --    for `ReplacingMergeTree` dedup. A deterministic per-tx counter is
-    --    exactly what replay-idempotency needs — re-processing a ledger
-    --    yields the same numbers and the merge collapses cleanly. The
-    --    official key would change what counts as the same row.
-    -- 2. The official key is NOT EXPRESSIBLE for much of this table. It needs
-    --    an operation position, and `op_index` is absent for tx-level events
-    --    (fee charge and refund, always) and for every diagnostic event, both
-    --    of which this table stores. Adopting it would trade a total key for
-    --    one that is null-bearing.
-    --
-    --    CORRECTION (task 0540, 2026-09-04): this bullet also claimed the same
-    --    of "EVERY pre-Protocol-23 event", on the reasoning that V3 meta has no
-    --    per-operation container. True of the protocol, FALSE of our input —
-    --    the archive hands us `TransactionMeta::V4` across the whole ingested
-    --    range. Measured by decoding three archive ledgers end to end
-    --    (`xdr-parser/examples/event_op_index_audit.rs`): 1 265 of 1 265
-    --    transactions are V4, at protocols 20, 22 and 27, the first being the
-    --    ingest floor. So the operation position IS recoverable for all history
-    --    — from S3, never from this table, which does not store it.
-    --
-    --    The narrower claim still holds and is why OUR index stays: for
-    --    `soroban_events` as a whole the official key is null-bearing, because
-    --    fee and diagnostic events have no operation. For the subset that is
-    --    only token movements it is TOTAL (1 770 events audited, none at
-    --    transaction level) — which is why task 0540's edge table can consider
-    --    it and this table cannot.
-    --
-    -- So: ours is the better INTERNAL key, theirs is the better key for
-    -- exchanging data with the outside world. Different jobs, not a defect.
-    --
-    -- Revisit only if one of these becomes true, and budget a full rewrite of
-    -- the sort key (~10 B rows measured 2026-08-04):
-    --   * we publish our own events API and callers need stable, portable
-    --     event ids;
-    --   * we reconcile our events against an external source by id rather
-    --     than by content.
-    -- The read path does not depend on it for meaning: the transaction page
-    -- states an event's real position from `op_index` and CAP-67 `stage`.
-    event_index     Int16,
-    event_type      Int16,
-    signature       LowCardinality(Nullable(String)),
-    topics_xdr      String CODEC(ZSTD(3)),
-    data_xdr        String CODEC(ZSTD(3))
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    transaction_index  UInt32,
+    operation_index    UInt16,
+    event_index        UInt32,
+    application_order  Int16,
+    event_type         Int16,
+    signature          LowCardinality(Nullable(String)),
+    topics_xdr         String CODEC(ZSTD(3)),
+    data_xdr           String CODEC(ZSTD(3))
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (contract_id, ledger_sequence, transaction_id, event_index);
+ORDER BY (contract_id, ledger_sequence, transaction_index, operation_index, event_index);
 
 -- asset_transfers: one row per token movement (task 0540), the lossless
 -- replacement for the retired per-(tx, asset) `net_settled` aggregate.
@@ -1153,8 +1124,7 @@ ORDER BY (contract_id, ledger_sequence, transaction_id, event_index);
 -- Identity. The sort key is Stellar's OFFICIAL event identity: the
 -- `getEvents` cursor is `(ledger, tx, op, event)` with `event` reset per
 -- operation (stellar-rpc `db/event.go`). It is defined by the XDR itself, so
--- a re-parse can never renumber it; our flat `event_index` is carried only to
--- join `soroban_events`. Identical transfers DO repeat inside one operation
+-- a re-parse can never renumber it. Identical transfers DO repeat inside one operation
 -- (ledger 64 249 110: a single path payment crossing two offers from one
 -- maker at one price) — `event_pos_in_op` is what keeps them two rows.
 --
@@ -1200,7 +1170,6 @@ CREATE TABLE IF NOT EXISTS asset_transfers (
     application_order  Int16                   CODEC(ZSTD(3)),
     op_index           Int16                   CODEC(ZSTD(3)),
     event_pos_in_op    Int16                   CODEC(ZSTD(3)),
-    event_index        Int16                   CODEC(ZSTD(3)),
     asset_id           Int64                   CODEC(ZSTD(3)),
     amount             Nullable(Int128)        CODEC(ZSTD(3)),
     from_id            Nullable(Int64)         CODEC(ZSTD(3)),
@@ -1234,33 +1203,6 @@ CREATE TABLE IF NOT EXISTS transaction_memos (
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, application_order);
-
--- soroban_event_ops: which operation emitted each event (task 0541), as a
--- narrow side table. The canonical home of these two numbers is a column on
--- `soroban_events` (stellar-rpc returns the operation index as an attribute
--- of the event); this table is the VEHICLE that the S3 pass can write
--- additively today and the SOURCE of the later per-partition fold into
--- `soroban_events` (`ALTER … ADD COLUMN` + `ALTER … UPDATE`, which rewrites
--- only the two new columns — task 0541 "Target shape"). Keyed by the
--- transaction's position in the ledger, NOT by `transaction_id`: the id is a
--- random hash that cost 4.66 of a 5.07-byte row (measured 2026-09-07), the
--- position compresses to ~0 — 0.63 B/row, ~3.6 GB on 5.7 bn rows instead of
--- ~29 GB. The join to `soroban_events` goes through `transactions`
--- (`ledger_sequence, application_order` → `id`), as `asset_transfers` does.
--- Only per-operation events have a row — a tx-level (fee) or diagnostic
--- event has no operation, and absence is the honest encoding of that.
--- Retires the read-time XDR decode task 0453 pays on every transaction-detail
--- render.
-CREATE TABLE IF NOT EXISTS soroban_event_ops (
-    ledger_sequence    Int64                   CODEC(ZSTD(3)),
-    application_order  Int16                   CODEC(ZSTD(3)),
-    event_index        Int16                   CODEC(ZSTD(3)),
-    op_index           Int16                   CODEC(ZSTD(3)),
-    event_pos_in_op    Int16                   CODEC(ZSTD(3))
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (ledger_sequence, application_order, event_index);
 
 -- `amount` is a **fold count of invocation-tree nodes** aggregated into
 -- this (contract, transaction, ledger) trio (per ADR 0034 PG-side

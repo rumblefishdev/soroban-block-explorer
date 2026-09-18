@@ -117,7 +117,7 @@ fn main() {
             }
             println!(
                 "  idx {:>3}  {:<11}  op_index {:>6}  {}{}",
-                ev.event_index,
+                ev.position_in_tx,
                 src,
                 ev.op_index.map_or("None".into(), |o| o.to_string()),
                 sig,
@@ -201,7 +201,7 @@ fn audit_archive_ledger(path: &str) {
                         .count();
                     println!(
                         "  TWINLESS diagnostic token: tx#{tx_seen} idx {} {} consensus_events={} consensus_token={} data={}",
-                        e.event_index,
+                        e.position_in_tx,
                         signature(&e.topics).unwrap_or_default(),
                         consensus_any,
                         consensus.len(),
@@ -216,7 +216,7 @@ fn audit_archive_ledger(path: &str) {
                         .map(|x| {
                             format!(
                                 "{}:{}",
-                                x.event_index,
+                                x.position_in_tx,
                                 signature(&x.topics).unwrap_or_else(|| "?".into())
                             )
                         })
@@ -260,7 +260,7 @@ fn audit_archive_ledger(path: &str) {
                     token_without_op += 1;
                     println!(
                         "  MISSING op_index: tx#{tx_seen} idx {} src {:?} {sig}",
-                        ev.event_index, ev.source
+                        ev.position_in_tx, ev.source
                     );
                 }
             }

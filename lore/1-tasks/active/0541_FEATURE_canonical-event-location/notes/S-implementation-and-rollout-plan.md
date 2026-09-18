@@ -213,10 +213,10 @@ pub fn assign_event_ids(ledger_sequence: u32, application_order: u32,
 // ExtractedEvent.event_index → position_in_tx (in-memory ordinal, never stored)
 ```
 
-- [ ] **Step 0:** `git mv crates/xdr-parser/src/event_tests.rs
+- [x] **Step 0:** `git mv crates/xdr-parser/src/event_tests.rs
 crates/xdr-parser/src/event/tests.rs`, replace the `#[path]` declaration
       with `#[cfg(test)] mod tests;`, `cargo test -p xdr-parser` → still green.
-- [ ] **Step 1: failing tests** (append to `event/tests.rs`, reuse
+- [x] **Step 1: failing tests** (append to `event/tests.rs`, reuse
       `make_contract_event` / `make_v4_meta`)
 
 ```rust
@@ -296,10 +296,10 @@ fn a_transaction_level_event_without_a_stage_gets_no_id() {
 }
 ```
 
-- [ ] **Step 2:** `cargo test -p xdr-parser event::tests` → fails to compile
+- [x] **Step 2:** `cargo test -p xdr-parser event::tests` → fails to compile
       (`EventId` undefined).
 
-- [ ] **Step 3: implementation** in `event.rs` (below `extract_single_event`)
+- [x] **Step 3: implementation** in `event.rs` (below `extract_single_event`)
 
 ```rust
 /// stellar-rpc's identity for a non-diagnostic event (ADR 0059): a TOID
@@ -393,13 +393,13 @@ pub fn assign_event_ids(
 
 `lib.rs`: `pub use event::{EventId, assign_event_ids, extract_events, tx_level_event_ids};`
 
-- [ ] **Step 4:** add `pub event_id: Option<EventId>` to `ExtractedEvent`
+- [x] **Step 4:** add `pub event_id: Option<EventId>` to `ExtractedEvent`
       (doc: "stellar-rpc id, set by `assign_event_ids`; `None` for diagnostic
       events"), `event_id: None` in `extract_single_event`, rename the flat
       field to `position_in_tx` (doc: "ordinal across all containers of the
       transaction; in memory only — never stored, never on the wire"), fix
       every literal/read the compiler lists.
-- [ ] **Step 5:** `cargo test -p xdr-parser` → all pass, including
+- [x] **Step 5:** `cargo test -p xdr-parser` → all pass, including
       `tests/tx_event_stage_real_meta.rs`.
 - [ ] **Step 6: commit** (on "commit"):
       `feat(lore-0541): assign the stellar-rpc event id in the parser`
@@ -409,7 +409,7 @@ pub fn assign_event_ids(
 **Files:** Modify `crates/indexer/src/handler/process.rs:175-230`.
 **Consumes:** 2.1.
 
-- [ ] **Step 1: failing test** in a new `crates/indexer/src/handler/process/tests.rs`
+- [x] **Step 1: failing test** in a new `crates/indexer/src/handler/process/tests.rs`
       (`process.rs` gains `#[cfg(test)] mod tests;`), on a real ledger fixture:
       every non-diagnostic event in `ParseOutput.events` has
       `event_id.is_some()`, and the ids of one ledger are unique.
@@ -438,8 +438,8 @@ fn every_consensus_event_of_a_real_ledger_has_a_unique_rpc_id() {
 (unsigned request, 131 KB). Add `zstd` / `stellar-xdr` to the indexer's
 dev-dependencies only if they are not already direct dependencies.)
 
-- [ ] **Step 2:** run → fails (`event_id` is `None`).
-- [ ] **Step 3: implementation**
+- [x] **Step 2:** run → fails (`event_id` is `None`).
+- [x] **Step 3: implementation**
 
 ```rust
     let tx_level_ids = xdr_parser::tx_level_event_ids(ledger_sequence, &tx_metas);
@@ -455,7 +455,7 @@ dev-dependencies only if they are not already direct dependencies.)
             );
 ```
 
-- [ ] **Step 4:** `cargo test -p indexer` → pass.
+- [x] **Step 4:** `cargo test -p indexer` → pass.
 - [ ] **Step 5: commit:** `feat(lore-0541): give every parsed event its rpc id`
 
 ### Task 2.3: staging writes the new `soroban_events` and stops `soroban_event_ops`
@@ -493,7 +493,7 @@ pub struct SorobanEventRow {            // column order = DDL
 }
 ```
 
-- [ ] **Step 1: failing tests** in `tests_cross.rs`
+- [x] **Step 1: failing tests** in `tests_cross.rs`
 
 ```rust
 #[test]
@@ -519,8 +519,8 @@ fn a_consensus_event_without_an_id_is_a_staging_error() {
 (`stage_fixture_ledger_with_fee_events` / `…_with_event_id` follow the
 builders already used by the event tests at `tests_cross.rs:660-730`.)
 
-- [ ] **Step 2:** `cargo test -p db-clickhouse tests_cross` → fails.
-- [ ] **Step 3: implementation** — in the transactions loop:
+- [x] **Step 2:** `cargo test -p db-clickhouse tests_cross` → fails.
+- [x] **Step 3: implementation** — in the transactions loop:
       `app_order_by_hash.insert(tx.hash.clone(), app_order);` — events block:
 
 ```rust
@@ -569,12 +569,12 @@ struct field), `SorobanEventOpRow`, the writer's `event_ops` insert slot and
 `event_index`; the staging error message in `value_flow.rs:118` names
 `op_index`/`event_pos_in_op` instead.
 
-- [ ] **Step 4:** update the listed tests (drop `soroban_event_ops` from the
+- [x] **Step 4:** update the listed tests (drop `soroban_event_ops` from the
       targeted-write e2e and `TargetedTables::parse` cases; `smoke.rs`
       `INSERT INTO soroban_events (contract_id, ledger_sequence,
 transaction_index, operation_index, event_index, application_order,
 event_type, signature, topics_xdr, data_xdr)`).
-- [ ] **Step 5:** `cargo test -p db-clickhouse` (CH-gated tests against the
+- [x] **Step 5:** `cargo test -p db-clickhouse` (CH-gated tests against the
       repo docker ClickHouse, with the schema from task 2.8 applied) → pass.
 - [ ] **Step 6: commit:** `feat(lore-0541): stage soroban_events by rpc event id`
 
@@ -589,13 +589,13 @@ operation_index: u16, event_index: u32 }` (serde tag `ch_event_id` — a cursor
 minted before the deploy no longer decodes and gets the existing 400
 `invalid_cursor`).
 
-- [ ] **Step 0:** extract `contracts/queries.rs` tests (1,327 lines): the inline
+- [x] **Step 0:** extract `contracts/queries.rs` tests (1,327 lines): the inline
       `mod tests { … }` → `crates/api/src/contracts/queries/tests.rs`,
       `queries_ch_tests.rs` → `queries/ch_tests.rs`; declarations
       `#[cfg(test)] mod tests;` / `#[cfg(test)] mod ch_tests;`; same for
       `common/extractors.rs` (inline → `common/extractors/tests.rs`).
       `cargo test -p api` → green before any change.
-- [ ] **Step 1: failing tests** (`contracts/queries/tests.rs`)
+- [x] **Step 1: failing tests** (`contracts/queries/tests.rs`)
 
 ```rust
 fn event_row(event_type: i16, topics_xdr: &str, data_xdr: &str) -> EventChRow {
@@ -627,8 +627,8 @@ plus in `common/extractors/tests.rs`: a base64 cursor of the old
 `{"src":"ch","ledger_sequence":1,"transaction_id":2,"event_index":3}` shape
 returns 400 `invalid_cursor` for `Pagination<EventCursor>`.
 
-- [ ] **Step 2:** `cargo test -p api contracts` → fails.
-- [ ] **Step 3: implementation** — extract `events_page_sql(cursor, direction)
+- [x] **Step 2:** `cargo test -p api contracts` → fails.
+- [x] **Step 3: implementation** — extract `events_page_sql(cursor, direction)
 -> String` from `fetch_events` (so the test sees the real SQL):
 
 ```rust
@@ -672,8 +672,8 @@ id parts for the cursor; the handler encodes `EventCursor::ChEventId`;
 `event_cursor_matches_source` matches the new variant. Update the doc comments
 that describe `(ledger_sequence, transaction_id, event_index)`.
 
-- [ ] **Step 4:** `cargo test -p api` → pass.
-- [ ] **Step 5:** `pnpm nx run @rumblefish/api-types:generate`.
+- [x] **Step 4:** `cargo test -p api` → pass.
+- [x] **Step 5:** `pnpm nx run @rumblefish/api-types:generate`.
 - [ ] **Step 6: commit:** `feat(lore-0541): page contract events on the rpc event id`
 
 ### Task 2.5: transaction queries that read `soroban_events`
@@ -720,10 +720,10 @@ was truncated, the window doubles and the arms are asked again (at most 6
 rounds — `ponytail:` bounded; a contract needing more is logged and returns the
 positions it has).
 
-- [ ] **Step 0:** extract the inline tests of `transactions/queries.rs`
+- [x] **Step 0:** extract the inline tests of `transactions/queries.rs`
       (1,128 lines) → `crates/api/src/transactions/queries/tests.rs`;
       `cargo test -p api transactions` → green.
-- [ ] **Step 1: failing tests** (`transactions/contract_positions/tests.rs`)
+- [x] **Step 1: failing tests** (`transactions/contract_positions/tests.rs`)
 
 ```rust
 fn arm(p: &[(i64, i16)], truncated: bool) -> ArmWindow {
@@ -758,8 +758,8 @@ plus SQL-shape tests in `queries/tests.rs`: no statement-B SQL names
 se.application_order = ?`; and in `dto` tests a `ChPosition` cursor round-trips
 while a `Ch` cursor on statement B returns 400 `invalid_cursor`.
 
-- [ ] **Step 2:** `cargo test -p api transactions` → fails.
-- [ ] **Step 3: implementation**
+- [x] **Step 2:** `cargo test -p api transactions` → fails.
+- [x] **Step 3: implementation**
   - `merge_arm_windows`: collect all positions, dedup, drop those beyond the
     cap (`max`/`min` of `last_ledger` over truncated arms), sort by
     `(ledger, application_order)` in the page direction; `Page` if `len ≥ take`
@@ -791,8 +791,8 @@ se.application_order = ? AND intDiv(se.ledger_sequence, 500000) =
 intDiv(?, 500000) GROUP BY se.contract_id, se.ledger_sequence` (no `FINAL`:
     the `GROUP BY` already collapses duplicates); the handler passes
     `tx.ledger_sequence, tx.application_order`.
-- [ ] **Step 4:** `cargo test -p api transactions` → pass.
-- [ ] **Step 5: measure before merge** — local API against production
+- [x] **Step 4:** `cargo test -p api transactions` → pass.
+- [x] **Step 5: measure before merge** — local API against production
       ClickHouse (read-only; the staging table has partition 127 only, so run
       against a build whose SQL names `soroban_events_staging_canonical` and
       ledgers of partition 127): first page and one cursor page of the
@@ -812,11 +812,11 @@ stage: Option<String> }` — `id`/`event_index` `None` for diagnostic events;
 Delete the unused `extract_e14_heavy`, `E14HeavyEventFields` and their test
 (`mod.rs:407`), the last producer of the flat number.
 
-- [ ] **Step 0:** `stellar_archive/mod.rs` inline tests →
+- [x] **Step 0:** `stellar_archive/mod.rs` inline tests →
       `stellar_archive/tests/stellar_archive_tests.rs` via
       `#[cfg(test)] #[path = "tests/stellar_archive_tests.rs"] mod tests;`
       (minus the deleted E14 test); `cargo test -p api stellar_archive` → green.
-- [ ] **Step 1: failing test** in a new `stellar_archive/extractors/tests.rs`
+- [x] **Step 1: failing test** in a new `stellar_archive/extractors/tests.rs`
       (`extractors.rs` gains `#[cfg(test)] mod tests;`) using the real
       `tx_0a120260` meta (ledger 62,032,880, one KALE transfer): the refund's
       `id` has transaction part 1048575, the charge's has transaction 0, the
@@ -826,8 +826,8 @@ Delete the unused `extract_e14_heavy`, `E14HeavyEventFields` and their test
       counters are covered by 2.1.) The same test asserts `contract_events`
       come back in execution order: sorted by `id` (fixed-width strings, so
       string order = numeric order) — charge, operation events, refund.
-- [ ] **Step 2:** run → fails.
-- [ ] **Step 3: implementation** — `extract_e3_heavy` computes
+- [x] **Step 2:** run → fails.
+- [x] **Step 3: implementation** — `extract_e3_heavy` computes
       `let tx_level = xdr_parser::tx_level_event_ids(ledger_seq, &tx_metas);`
       once, then `assign_event_ids(ledger_seq, (idx + 1) as u32,
 &tx_level[idx], &mut events)` before `split_events`; `split_events` maps
@@ -838,7 +838,7 @@ e.event_id.map(|i| i.event_index)`, `operation_index: e.op_index…`, then
       container order). Fix the
       `stage` doc comment: pre-23 refunds carry `after_tx` (archive meta,
       README "Fee event identity").
-- [ ] **Step 4:** `cargo test -p api stellar_archive` → pass;
+- [x] **Step 4:** `cargo test -p api stellar_archive` → pass;
       `pnpm nx run @rumblefish/api-types:generate`.
 - [ ] **Step 5: commit:** `feat(lore-0541): number transaction-page events by rpc id`
 
@@ -859,10 +859,10 @@ for fees, a position in the operation otherwise — `135, 0, 1, 12` reads as an
 error) and a short `op 1 · 0` form with the id in a tooltip (our own notation,
 the canonical id hidden).
 
-- [ ] **Step 0:** `git mv` the three test files, fix their imports,
+- [x] **Step 0:** `git mv` the three test files, fix their imports,
       `pnpm nx test @rumblefish/soroban-block-explorer-web` → green.
 
-- [ ] **Step 1: failing tests** (`sections/__tests__/EventsSection.test.tsx`;
+- [x] **Step 1: failing tests** (`sections/__tests__/EventsSection.test.tsx`;
       the file's `event()` factory changes to take the new fields)
 
 ```tsx
@@ -936,8 +936,8 @@ it('gives diagnostic entries no id', async () => {
 transaction part is 1,048,575. The existing tests of this file switch from
 `r['#']` to `r.ID` and from `op_index` to `operation_index`.)
 
-- [ ] **Step 2:** `pnpm nx test @rumblefish/soroban-block-explorer-web` → fails.
-- [ ] **Step 3: implementation**
+- [x] **Step 2:** `pnpm nx test @rumblefish/soroban-block-explorer-web` → fails.
+- [x] **Step 3: implementation**
   - header `#` → `ID` (width auto); cell: `<Box component="span"
 sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{event.id ?? '—'}</Box>`
   - row key: `key={event.id ?? 'diag-' + index}` (map callback takes `index`)
@@ -945,7 +945,7 @@ sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{event.id ?? '—'}</Box>
   - `OperationCard`: `key={event.id ?? index}`
   - `resources.ts`: fallback name `'(unnamed)'`
   - `ContractEvents`: `rowKey={(row) => row.id}`
-- [ ] **Step 4:** tests + `pnpm nx typecheck @rumblefish/soroban-block-explorer-web` → pass.
+- [x] **Step 4:** tests + `pnpm nx typecheck @rumblefish/soroban-block-explorer-web` → pass.
 - [ ] **Step 5: commit:** `feat(lore-0541): show rpc event numbers on the transaction page`
 
 ### Task 2.8: schema, backfill tooling, network check, docs
@@ -984,12 +984,12 @@ FROM transaction_participants …))`.
   guidance), `scripts/merge-*.sh` table lists (`soroban_events` shape note).
 - ADR 0059 → `accepted`, delivery checklist ticked.
 
-- [ ] **Step 1:** grep gate — `rg -n "transaction_id" -g '*.rs' crates | rg
+- [x] **Step 1:** grep gate — `rg -n "transaction_id" -g '*.rs' crates | rg
 soroban_events` and `rg -n "soroban_event_ops|event_pos_in_op|op_index"
 crates/api crates/db-clickhouse/src/persist/stage.rs` return only
       intended hits (asset_transfers keeps `op_index`/`event_pos_in_op` until
       its rebuild).
-- [ ] **Step 2:** `cargo test --workspace`; `pnpm nx run-many -t test typecheck lint`;
+- [x] **Step 2:** `cargo test --workspace`; `pnpm nx run-many -t test typecheck lint`;
       `pnpm nx run @rumblefish/api-types:check-generated`.
 - [ ] **Step 3: commit:** `docs(lore-0541): schema, tooling and docs for the rpc event id`
 - [ ] **Step 4:** PR via `/pr` — title `feat(lore-0541): key soroban_events by

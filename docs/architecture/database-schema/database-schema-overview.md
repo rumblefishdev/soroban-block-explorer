@@ -254,7 +254,6 @@ ledgers
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
        ├─ soroban_events_appearances (partitioned)
-       ├─ soroban_event_ops (partitioned)        # op attribution per event (0541)
        └─ soroban_invocations_appearances (partitioned)
 
 soroban_contracts                           # contracts OBSERVED being deployed (0548)
@@ -716,7 +715,6 @@ CREATE TABLE asset_transfers (
     application_order  Int16                   CODEC(ZSTD(3)),
     op_index           Int16                   CODEC(ZSTD(3)),  -- official identity…
     event_pos_in_op    Int16                   CODEC(ZSTD(3)),  -- …(op, event-in-op)
-    event_index        Int16                   CODEC(ZSTD(3)),  -- ours; joins soroban_events
     asset_id           Int64                   CODEC(ZSTD(3)),  -- emitter-gated; bespoke = contract id
     amount             Nullable(Int128)        CODEC(ZSTD(3)),  -- NULL = non-fungible, nothing else
     from_id            Nullable(Int64)         CODEC(ZSTD(3)),  -- NULL for mint
@@ -737,8 +735,8 @@ Design notes (every figure measured — lore task 0540 and its research note):
 
 - **Sort key = Stellar's official event identity.** The `getEvents` cursor is
   `(ledger, tx, op, event)` with `event` reset per operation (stellar-rpc
-  `db/event.go`). It is defined by the XDR, so a re-parse cannot renumber it;
-  our flat `event_index` rides along only to join `soroban_events`. Identical
+  `db/event.go`). It is defined by the XDR, so a re-parse cannot renumber it.
+  Identical
   transfers really do repeat inside one operation (a path payment crossing two
   offers from one maker at one price) — `event_pos_in_op` keeps them two rows
   where any coarser key would let the RMT collapse them and under-report.
@@ -780,7 +778,7 @@ Design notes (every figure measured — lore task 0540 and its research note):
   `ALTER … MODIFY COLUMN` after the driver-vs-`DESCRIBE` check on a local
   instance (task 0310).
 - **Coverage**: the table holds every token movement from the ingest floor on,
-  filled by one from-S3 re-parse with `--only asset_transfers,transaction_memos,soroban_event_ops`
+  filled by one from-S3 re-parse with `--only asset_transfers,transaction_memos`
   (additive, no Tier-1 column touched) and proven three ways — per-partition
   counts against `soroban_events`, a byte-for-byte re-decode of archive ledgers,
   and account sums against network state (`backfill-runner/tests/redecode_diff.rs`,
@@ -1036,40 +1034,6 @@ Design notes:
 - partitioned on `created_at` mirroring `transactions`; cascade via composite FK
 - diagnostic events are filtered on ingest (they are not counted in `amount` and do
   not produce appearance rows); the detail view re-derives them on demand if needed
-
-### 4.8.1 Soroban Event Ops — operation attribution (task 0541)
-
-ClickHouse-only. **Which operation emitted each event**, as a narrow side
-table. The column belongs on `soroban_events` and will end up there (task
-0541 "Target shape": `ALTER … ADD COLUMN`, then a per-partition
-`ALTER … UPDATE` sourced from this table — a mutation rewrites only the
-mutated columns, so no re-insert of 10.4 bn rows and no second copy on disk);
-until that fold this table is what the S3 pass can write additively. Only per-operation
-events have a row — a transaction-level (fee) or diagnostic event has no
-operation, and absence is the honest encoding. Retires the read-time XDR decode
-the transaction-detail page paid on every render (task 0453). Written by the
-same S3 pass as `asset_transfers`.
-
-```sql
-CREATE TABLE soroban_event_ops (
-    ledger_sequence    Int64   CODEC(ZSTD(3)),
-    application_order  Int16   CODEC(ZSTD(3)),  -- tx position in the ledger → transactions.id → soroban_events
-    event_index        Int16   CODEC(ZSTD(3)),  -- joins soroban_events
-    op_index           Int16   CODEC(ZSTD(3)),  -- envelope position, 0-based
-    event_pos_in_op    Int16   CODEC(ZSTD(3))   -- position inside that op's event list
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (ledger_sequence, application_order, event_index);
-```
-
-Keyed by the transaction's position, not its id, on purpose: `transaction_id`
-is a random hash and cost 4.66 of a 5.07-byte row (measured 2026-09-07 on
-39.5 M events), while the position compresses to nothing — 0.63 B/row, ~3.6 GB
-on ~5.7 bn rows instead of ~29 GB. The canonical home of the two numbers is a
-column on `soroban_events` itself; this table is the vehicle the S3 pass can
-write additively and the source of the later per-partition fold (task 0541,
-"Target shape").
 
 ### 4.9 Soroban Invocations — Appearance Index
 

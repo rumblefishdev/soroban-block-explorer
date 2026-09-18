@@ -42,7 +42,7 @@ const STAGE_LABEL: Record<string, string> = {
  *  transfer" — the row number is a position in the record, the stage is the
  *  time. */
 function whereLabel(event: XdrEventDto): string {
-  if (event.op_index != null) return `op ${event.op_index + 1}`;
+  if (event.operation_index != null) return `op ${event.operation_index + 1}`;
   if (event.stage != null) return STAGE_LABEL[event.stage] ?? event.stage;
   return '—';
 }
@@ -69,7 +69,7 @@ function EventTable({
       <Table size="small">
         <TableHead>
           <TableRow>
-            <TableCell sx={{ width: 56 }}>#</TableCell>
+            <TableCell>ID</TableCell>
             <TableCell sx={{ width: 130 }}>Type</TableCell>
             {showWhere && <TableCell sx={{ width: 120 }}>Where</TableCell>}
             <TableCell sx={{ width: 200 }}>Contract</TableCell>
@@ -78,16 +78,17 @@ function EventTable({
           </TableRow>
         </TableHead>
         <TableBody>
-          {events.map((event) => (
-            <TableRow key={event.event_index}>
+          {events.map((event, index) => (
+            <TableRow key={event.id ?? `diag-${index}`}>
               <TableCell
                 sx={(theme) => ({
                   verticalAlign: 'top',
                   color: theme.palette.text.tertiary,
-                  fontVariantNumeric: 'tabular-nums',
+                  fontFamily: 'monospace',
+                  whiteSpace: 'nowrap',
                 })}
               >
-                {event.event_index}
+                {event.id ?? '—'}
               </TableCell>
               <TableCell sx={{ verticalAlign: 'top' }}>
                 {eventChip(event)}

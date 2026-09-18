@@ -312,16 +312,19 @@ async fn every_account_sums_to_its_ledger_balance() {
                     "SELECT g, toUInt8(ledger_sequence < transform(g, [{gs}], CAST([{bv}] AS Array(Int64)), \
                                                                    toInt64(0))) AS prior, \
                             sum(fee) AS net, count() AS n, max(ledger_sequence) AS last \
-                     FROM (SELECT ledger_sequence, transaction_id, event_index, \
+                     FROM (SELECT ledger_sequence, transaction_index, operation_index, event_index, \
                                   JSONExtractString(topics_xdr, 2, 'value') AS g, \
                                   toInt128(JSONExtractString(data_xdr, 'value')) AS fee \
                            FROM soroban_events \
                            WHERE contract_id = {NATIVE_SAC_ID} AND ledger_sequence BETWEEN {lo} AND {hi} \
                              AND signature = 'fee' \
-                             AND transaction_id IN (SELECT transaction_id FROM transaction_participants \
-                                                    WHERE account_id IN ({id_list}) \
-                                                      AND ledger_sequence BETWEEN {lo} AND {hi}) \
-                           LIMIT 1 BY transaction_id, event_index) \
+                             AND (ledger_sequence, application_order) IN ( \
+                                   SELECT t.ledger_sequence, t.application_order FROM transactions t \
+                                   WHERE t.ledger_sequence BETWEEN {lo} AND {hi} \
+                                     AND t.id IN (SELECT transaction_id FROM transaction_participants \
+                                                  WHERE account_id IN ({id_list}) \
+                                                    AND ledger_sequence BETWEEN {lo} AND {hi})) \
+                           LIMIT 1 BY ledger_sequence, transaction_index, operation_index, event_index) \
                      WHERE g IN ({gs}) \
                      GROUP BY g, prior",
                     gs = quoted(&accounts),

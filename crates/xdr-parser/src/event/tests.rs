@@ -169,7 +169,7 @@ fn extract_contract_event() {
     assert_eq!(e.transaction_hash, "abcd1234");
     assert!(e.contract_id.is_some());
     assert!(e.contract_id.as_ref().unwrap().starts_with('C'));
-    assert_eq!(e.event_index, 0);
+    assert_eq!(e.position_in_tx, 0);
     assert_eq!(e.ledger_sequence, 100);
     assert_eq!(e.created_at, 1700000000);
 
@@ -263,11 +263,11 @@ fn multiple_events_preserve_order() {
 
     let events = extract_events(&tx_meta, "abcd1234", 100, 1700000000);
     assert_eq!(events.len(), 3);
-    assert_eq!(events[0].event_index, 0);
+    assert_eq!(events[0].position_in_tx, 0);
     assert_eq!(events[0].data["value"], 1);
-    assert_eq!(events[1].event_index, 1);
+    assert_eq!(events[1].position_in_tx, 1);
     assert_eq!(events[1].data["value"], 2);
-    assert_eq!(events[2].event_index, 2);
+    assert_eq!(events[2].position_in_tx, 2);
     assert_eq!(events[2].data["value"], 3);
 }
 
@@ -352,7 +352,7 @@ fn extract_events_from_v4_meta() {
 // `v4.operations[i].events`, `v4.diagnostic_events`). The tests below
 // pin each pattern individually plus a mixed-sources case that proves
 // the iteration order (tx-level → per-op → diagnostic) and sequential
-// `event_index` numbering.
+// `position_in_tx` numbering.
 
 fn make_contract_event(contract_byte: u8, data: u32) -> ContractEvent {
     ContractEvent {
@@ -396,7 +396,7 @@ fn extract_events_v4_per_op_single() {
     let events = extract_events(&tx_meta, "abcd1234", 100, 1700000000);
     assert_eq!(events.len(), 1, "per-op event must be extracted");
     assert_eq!(events[0].event_type, DomainEventType::Contract);
-    assert_eq!(events[0].event_index, 0);
+    assert_eq!(events[0].position_in_tx, 0);
     assert_eq!(events[0].data["value"], 11);
     assert!(events[0].contract_id.is_some());
 }
@@ -405,7 +405,7 @@ fn extract_events_v4_per_op_single() {
 fn extract_events_v4_mixed_sources_preserve_order_and_indexing() {
     // tx-level (1) + per-op across two operations (2 + 1) + diagnostic (1).
     // Expected order: tx-level → op0 → op1 → diagnostic, with sequential
-    // `event_index` 0..=4 and contract bytes `0xAA, 0xB0, 0xB1, 0xC0, 0xDD`.
+    // `position_in_tx` 0..=4 and contract bytes `0xAA, 0xB0, 0xB1, 0xC0, 0xDD`.
     let tx_event = TransactionEvent {
         stage: TransactionEventStage::default(),
         event: make_contract_event(0xAA, 100),
@@ -434,11 +434,11 @@ fn extract_events_v4_mixed_sources_preserve_order_and_indexing() {
     let events = extract_events(&tx_meta, "abcd1234", 100, 1700000000);
     assert_eq!(events.len(), 5, "1 tx-level + 3 per-op + 1 diagnostic");
 
-    // Sequential event_index across the three sources.
+    // Sequential position_in_tx across the three sources.
     for (i, e) in events.iter().enumerate() {
         assert_eq!(
-            e.event_index, i as u32,
-            "event_index must be sequential across all sources"
+            e.position_in_tx, i as u32,
+            "position_in_tx must be sequential across all sources"
         );
     }
 
@@ -458,7 +458,7 @@ fn extract_events_v4_carries_transaction_event_stage() {
     // refunds arrive as `AfterAllTxs`, pinned in
     // `tests/tx_event_stage_real_meta.rs`. The second event is numbered 1,
     // ahead of the operation event at 2 that it refunds —
-    // which is exactly why `event_index` must not be read as a timeline.
+    // which is exactly why `position_in_tx` must not be read as a timeline.
     let charge = TransactionEvent {
         stage: TransactionEventStage::BeforeAllTxs,
         event: make_contract_event(0xAA, 10),
@@ -507,7 +507,7 @@ fn extract_events_v4_empty_per_op_produces_no_spurious_rows() {
 
     let events = extract_events(&tx_meta, "abcd1234", 100, 1700000000);
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].event_index, 0);
+    assert_eq!(events[0].position_in_tx, 0);
     assert_eq!(events[0].data["value"], 7);
 }
 
@@ -687,13 +687,13 @@ fn v4_multi_op_per_op_events_all_tagged_per_op() {
     );
     // The position inside the operation resets per operation — this is the
     // `event` component of the official `(ledger, tx, op, event)` identity
-    // (task 0540), NOT our flat `event_index`.
+    // (task 0540), NOT our flat `position_in_tx`.
     assert_eq!(
         events.iter().map(|e| e.event_pos_in_op).collect::<Vec<_>>(),
         vec![Some(0), Some(1), Some(0)]
     );
     assert_eq!(
-        events.iter().map(|e| e.event_index).collect::<Vec<_>>(),
+        events.iter().map(|e| e.position_in_tx).collect::<Vec<_>>(),
         vec![0, 1, 2]
     );
 }
@@ -724,4 +724,138 @@ fn v4_event_pos_in_op_is_none_outside_the_per_op_container() {
         vec![(None, None), (Some(0), Some(0)), (None, None)],
         "only the per-op container carries the official identity"
     );
+}
+
+fn tx_event(stage: TransactionEventStage) -> TransactionEvent {
+    TransactionEvent {
+        stage,
+        event: make_contract_event(0xAA, 1),
+    }
+}
+
+fn op_with(n: u32) -> OperationMetaV2 {
+    OperationMetaV2 {
+        ext: ExtensionPoint::V0,
+        changes: LedgerEntryChanges::default(),
+        events: (0..n)
+            .map(|i| make_contract_event(0xB0, i))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap(),
+    }
+}
+
+#[test]
+fn rpc_string_matches_getevents_format() {
+    // Ledger 64,450,000's first charge as mainnet getEvents returns it.
+    let id = EventId {
+        ledger_sequence: 64_450_000,
+        transaction_index: 0,
+        operation_index: 0,
+        event_index: 0,
+    };
+    assert_eq!(id.to_rpc_string(), "0276810642227200000-0000000000");
+}
+
+#[test]
+fn fee_events_take_rpc_sentinels_and_ledger_counters() {
+    use TransactionEventStage::*;
+    // tx1: charge + end-of-ledger refund; tx2: charge only; tx3: charge + refund.
+    let m1 = make_v4_meta(
+        vec![tx_event(BeforeAllTxs), tx_event(AfterAllTxs)],
+        vec![op_with(2)],
+        vec![],
+    );
+    let m2 = make_v4_meta(vec![tx_event(BeforeAllTxs)], vec![], vec![]);
+    let m3 = make_v4_meta(
+        vec![tx_event(BeforeAllTxs), tx_event(AfterAllTxs)],
+        vec![],
+        vec![],
+    );
+    let ids = tx_level_event_ids(7, &[&m1, &m2, &m3]);
+    let t = |tx, op, ev| EventId {
+        ledger_sequence: 7,
+        transaction_index: tx,
+        operation_index: op,
+        event_index: ev,
+    };
+    assert_eq!(ids[0], vec![t(0, 0, 0), t(1_048_575, 0, 0)]);
+    assert_eq!(ids[1], vec![t(0, 0, 1)]);
+    assert_eq!(ids[2], vec![t(0, 0, 2), t(1_048_575, 0, 1)]);
+}
+
+#[test]
+fn pre_23_refund_is_after_its_own_transaction() {
+    use TransactionEventStage::*;
+    let m1 = make_v4_meta(
+        vec![tx_event(BeforeAllTxs), tx_event(AfterTx)],
+        vec![],
+        vec![],
+    );
+    let m2 = make_v4_meta(
+        vec![tx_event(BeforeAllTxs), tx_event(AfterTx)],
+        vec![],
+        vec![],
+    );
+    let ids = tx_level_event_ids(9, &[&m1, &m2]);
+    assert_eq!(
+        ids[1][1],
+        EventId {
+            ledger_sequence: 9,
+            transaction_index: 2,
+            operation_index: 4_095,
+            event_index: 0
+        }
+    );
+}
+
+#[test]
+fn assign_sets_operation_events_and_leaves_diagnostics_without_id() {
+    use TransactionEventStage::*;
+    let diag = DiagnosticEvent {
+        in_successful_contract_call: true,
+        event: make_contract_event(0xDD, 9),
+    };
+    let meta = make_v4_meta(
+        vec![tx_event(BeforeAllTxs)],
+        vec![op_with(1), op_with(2)],
+        vec![diag],
+    );
+    let tx_level = tx_level_event_ids(5, &[&meta]);
+    let mut events = extract_events(&meta, "abc", 5, 0);
+    assign_event_ids(5, 1, &tx_level[0], &mut events);
+    let ids: Vec<_> = events.iter().map(|e| e.event_id).collect();
+    let t = |tx, op, ev| {
+        Some(EventId {
+            ledger_sequence: 5,
+            transaction_index: tx,
+            operation_index: op,
+            event_index: ev,
+        })
+    };
+    assert_eq!(
+        ids,
+        vec![t(0, 0, 0), t(1, 0, 0), t(1, 1, 0), t(1, 1, 1), None]
+    );
+}
+
+#[test]
+fn a_transaction_level_event_without_a_stage_gets_no_id() {
+    // V3 meta carries no stage; staging refuses the row (ADR 0059 §5).
+    let meta = TransactionMeta::V3(TransactionMetaV3 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: LedgerEntryChanges::default(),
+        operations: VecM::default(),
+        tx_changes_after: LedgerEntryChanges::default(),
+        soroban_meta: Some(SorobanTransactionMeta {
+            ext: SorobanTransactionMetaExt::V0,
+            events: vec![make_contract_event(0xAA, 1)].try_into().unwrap(),
+            return_value: ScVal::Void,
+            diagnostic_events: VecM::default(),
+        }),
+    });
+    let mut events = extract_events(&meta, "abc", 5, 0);
+    assert_eq!(events.len(), 1);
+    assign_event_ids(5, 1, &tx_level_event_ids(5, &[&meta])[0], &mut events);
+    assert_eq!(events[0].event_id, None);
 }

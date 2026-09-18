@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { ExplorerThemeProvider } from '@rumblefish/soroban-block-explorer-ui';
 import { describe, expect, it } from 'vitest';
 
-import { OperationCard } from './OperationCard.js';
+import { OperationCard } from '../OperationCard.js';
 
 const DEST = 'GA5XIGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGKTM';
 
@@ -76,7 +76,7 @@ describe('OperationCard', () => {
     ).toBe('false');
   });
 
-  it('shows only the events attributed to this operation via op_index', () => {
+  it('shows only the events attributed to this operation via operation_index', () => {
     renderCard({
       contractEvents: [
         {
@@ -85,16 +85,18 @@ describe('OperationCard', () => {
             'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA',
           topics: [{ type: 'sym', value: 'transfer' }],
           data: {},
+          id: '027681064222720000-0000000000',
+          operation_index: 1,
           event_index: 0,
-          op_index: 1,
         },
         {
           event_type: 'contract',
           contract_id: null,
           topics: [{ type: 'sym', value: 'mint' }],
           data: {},
+          id: '027681064222720001-0000000001',
+          operation_index: 0,
           event_index: 1,
-          op_index: 0,
         },
         {
           event_type: 'contract',
@@ -102,11 +104,11 @@ describe('OperationCard', () => {
           topics: [],
           data: {},
           event_index: 2,
-          op_index: null,
+          operation_index: null,
         },
       ],
     });
-    // heavy.application_order = 2 → matches op_index 1 only.
+    // heavy.application_order = 2 → matches operation_index 1 only.
     expect(screen.getByText('transfer')).toBeTruthy();
     expect(screen.queryByText('mint')).toBeNull();
   });
@@ -141,7 +143,7 @@ describe('OperationCard', () => {
             ],
           },
           event_index: 0,
-          op_index: null,
+          operation_index: null,
         },
         {
           event_type: 'diagnostic',
@@ -152,7 +154,7 @@ describe('OperationCard', () => {
           ],
           data: { type: 'u128', value: '81404538' },
           event_index: 1,
-          op_index: null,
+          operation_index: null,
         },
       ],
     });
@@ -189,7 +191,7 @@ describe('OperationCard', () => {
           // Void payload = ZERO arguments — never "1 arg".
           data: { type: 'void', value: null },
           event_index: 0,
-          op_index: null,
+          operation_index: null,
         },
         {
           event_type: 'diagnostic',
@@ -214,7 +216,7 @@ describe('OperationCard', () => {
             ],
           },
           event_index: 1,
-          op_index: null,
+          operation_index: null,
         },
       ],
     });
@@ -242,7 +244,7 @@ describe('OperationCard', () => {
       ],
       data: null,
       event_index: index,
-      op_index: null,
+      operation_index: null,
     });
     renderCard({
       light: light({ type_name: 'INVOKE_HOST_FUNCTION' }),

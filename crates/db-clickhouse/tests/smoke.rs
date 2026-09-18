@@ -247,10 +247,9 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- soroban_events (append-only fact, full-content; the v3 design) -----
     client
         .query(
-            "INSERT INTO soroban_events (contract_id, transaction_id, ledger_sequence, event_index, event_type, signature, topics_xdr, data_xdr) \
-             VALUES (?, ?, ?, 0, 1, 'transfer', 'topics', 'data')",
+            "INSERT INTO soroban_events (contract_id, ledger_sequence, transaction_index, operation_index, event_index, application_order, event_type, signature, topics_xdr, data_xdr) \
+             VALUES (?, ?, 1, 0, 0, 1, 1, 'transfer', 'topics', 'data')",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()

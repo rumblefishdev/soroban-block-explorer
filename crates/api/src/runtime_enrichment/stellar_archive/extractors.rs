@@ -11,7 +11,7 @@
 use stellar_xdr::{LedgerCloseMeta, TransactionEnvelope, TransactionMeta};
 use tracing::instrument;
 
-use super::dto::{E3HeavyFields, E14HeavyEventFields, SignatureDto, XdrEventDto, XdrOperationDto};
+use super::dto::{E3HeavyFields, SignatureDto, XdrEventDto, XdrOperationDto};
 
 /// Extract the heavy-field subset of the E3 (`/transactions/:hash`) response
 /// for a given transaction hash within the supplied ledger.
@@ -51,13 +51,19 @@ pub fn extract_e3_heavy(
         .unwrap_or_default();
 
     // Events: call extract_events if we have tx meta; returns contract + diagnostic together.
+    // Fee events are numbered per ledger, so the ids need every meta of it.
     let (contract_events, diagnostic_events) = match tx_meta {
-        Some(tm) => split_events(xdr_parser::extract_events(
-            tm,
-            &ext_tx.hash,
-            ledger_seq,
-            closed_at,
-        )),
+        Some(tm) => {
+            let mut events = xdr_parser::extract_events(tm, &ext_tx.hash, ledger_seq, closed_at);
+            let tx_level = xdr_parser::tx_level_event_ids(ledger_seq, &tx_metas);
+            xdr_parser::assign_event_ids(
+                ledger_seq,
+                u32::try_from(idx + 1).expect("transactions per ledger fit u32"),
+                tx_level.get(idx).map_or(&[][..], Vec::as_slice),
+                &mut events,
+            );
+            split_events(events)
+        }
         None => (Vec::new(), Vec::new()),
     };
 
@@ -133,51 +139,6 @@ pub fn extract_e3_heavy(
         },
         operation_tree,
     })
-}
-
-/// Extract the heavy-field subset of the E14 (`/contracts/:id/events`) response:
-/// full `topics[0..N]` + decoded `data` for every event emitted by `contract_id`
-/// within the supplied ledger.
-///
-/// `contract_id` is the StrKey C… address (56 chars).
-#[allow(dead_code)] // used by future E14 events endpoint
-#[instrument(skip(meta, network_id), fields(contract_id = %contract_id, events = tracing::field::Empty))]
-pub fn extract_e14_heavy(
-    meta: &LedgerCloseMeta,
-    contract_id: &str,
-    network_id: &[u8; 32],
-) -> Vec<E14HeavyEventFields> {
-    let ledger = xdr_parser::extract_ledger(meta);
-    let ledger_seq = ledger.sequence;
-    let closed_at = ledger.closed_at;
-
-    let extracted_txs = xdr_parser::extract_transactions(meta, ledger_seq, closed_at, network_id);
-    let tx_metas = collect_tx_metas(meta);
-
-    let mut out = Vec::new();
-    for (idx, ext_tx) in extracted_txs.iter().enumerate() {
-        let Some(tm) = tx_metas.get(idx).copied() else {
-            continue;
-        };
-        let events = xdr_parser::extract_events(tm, &ext_tx.hash, ledger_seq, closed_at);
-        for event in events {
-            if event.contract_id.as_deref() == Some(contract_id) {
-                let Some(event_index) = to_i16_index(event.event_index, "event_index") else {
-                    continue;
-                };
-                let topics = topics_to_vec(event.topics);
-                out.push(E14HeavyEventFields {
-                    event_index,
-                    transaction_hash: event.transaction_hash,
-                    topics,
-                    data: event.data,
-                });
-            }
-        }
-    }
-
-    tracing::Span::current().record("events", out.len() as u64);
-    out
 }
 
 // --- private helpers ---
@@ -276,9 +237,6 @@ fn split_events(events: Vec<xdr_parser::ExtractedEvent>) -> (Vec<XdrEventDto>, V
     let mut contract = Vec::new();
     let mut diagnostic = Vec::new();
     for e in events {
-        let Some(event_index) = to_i16_index(e.event_index, "event_index") else {
-            continue;
-        };
         let is_diagnostic = e.source == EventSource::Diagnostic;
         let topics = topics_to_vec(e.topics);
         let dto = XdrEventDto {
@@ -286,8 +244,9 @@ fn split_events(events: Vec<xdr_parser::ExtractedEvent>) -> (Vec<XdrEventDto>, V
             contract_id: e.contract_id,
             topics,
             data: e.data,
-            event_index,
-            op_index: e.op_index.and_then(|i| i16::try_from(i).ok()),
+            id: e.event_id.map(|id| id.to_rpc_string()),
+            operation_index: e.op_index.and_then(|i| i16::try_from(i).ok()),
+            event_index: e.event_id.map(|id| id.event_index),
             stage: e.stage.map(stage_name),
         };
         if is_diagnostic {
@@ -296,6 +255,9 @@ fn split_events(events: Vec<xdr_parser::ExtractedEvent>) -> (Vec<XdrEventDto>, V
             contract.push(dto);
         }
     }
+    // Execution order. The id strings are fixed-width, so string order is the
+    // numeric order. The diagnostic list keeps its container order.
+    contract.sort_by(|a, b| a.id.cmp(&b.id));
     (contract, diagnostic)
 }
 
@@ -318,3 +280,6 @@ fn to_operation_dto(
         result_code,
     })
 }
+
+#[cfg(test)]
+mod tests;
