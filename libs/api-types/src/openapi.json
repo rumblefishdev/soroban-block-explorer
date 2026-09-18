@@ -3084,9 +3084,9 @@
         "type": "object",
         "description": "One row per event — the full-content `soroban_events` table stores one\nrow per event (no appearance-fold expansion).",
         "required": [
+          "id",
           "transaction_hash",
           "ledger_sequence",
-          "transaction_id",
           "successful",
           "created_at",
           "event_type",
@@ -3102,6 +3102,10 @@
           "event_type": {
             "type": "string"
           },
+          "id": {
+            "type": "string",
+            "description": "The stellar-rpc event id, exactly as `getEvents` returns it\n(ADR 0059)."
+          },
           "ledger_sequence": {
             "type": "integer",
             "format": "int64"
@@ -3115,10 +3119,6 @@
           },
           "transaction_hash": {
             "type": "string"
-          },
-          "transaction_id": {
-            "type": "integer",
-            "format": "int64"
           }
         }
       },
@@ -3933,9 +3933,9 @@
               "type": "object",
               "description": "One row per event — the full-content `soroban_events` table stores one\nrow per event (no appearance-fold expansion).",
               "required": [
+                "id",
                 "transaction_hash",
                 "ledger_sequence",
-                "transaction_id",
                 "successful",
                 "created_at",
                 "event_type",
@@ -3951,6 +3951,10 @@
                 "event_type": {
                   "type": "string"
                 },
+                "id": {
+                  "type": "string",
+                  "description": "The stellar-rpc event id, exactly as `getEvents` returns it\n(ADR 0059)."
+                },
                 "ledger_sequence": {
                   "type": "integer",
                   "format": "int64"
@@ -3964,10 +3968,6 @@
                 },
                 "transaction_hash": {
                   "type": "string"
-                },
-                "transaction_id": {
-                  "type": "integer",
-                  "format": "int64"
                 }
               }
             }
@@ -4937,7 +4937,7 @@
       "XdrEventDto": {
         "type": "object",
         "description": "Common shape for contract events and diagnostic events.",
-        "required": ["event_type", "topics", "data", "event_index"],
+        "required": ["event_type", "topics", "data"],
         "properties": {
           "contract_id": {
             "type": ["string", "null"],
@@ -4947,22 +4947,27 @@
             "description": "Decoded event data payload."
           },
           "event_index": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "Event index within the transaction (zero-based)."
+            "description": "The id's event number: the position in the operation, or for a fee\nevent the ledger's (or, for `after_tx`, the transaction's) counter of\nthat stage. `None` for diagnostic events.",
+            "minimum": 0
           },
           "event_type": {
             "type": "string",
             "description": "`\"contract\"`, `\"system\"`, or `\"diagnostic\"`."
           },
-          "op_index": {
+          "id": {
+            "type": ["string", "null"],
+            "description": "The stellar-rpc event id, exactly as `getEvents` returns it (ADR 0059).\nConsensus events arrive sorted by it, which is execution order: fee\ncharge, operation events, fee refund. `None` for diagnostic events."
+          },
+          "operation_index": {
             "type": ["integer", "null"],
             "format": "int32",
-            "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 V4 per-operation container only; `None` for tx-level,\ndiagnostic and pre-Protocol-23 events). Matches\n`XdrOperationDto.application_order - 1`."
+            "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 per-operation container only; `None` for fee and diagnostic\nevents). Matches `XdrOperationDto.application_order - 1`."
           },
           "stage": {
             "type": ["string", "null"],
-            "description": "CAP-67 `TransactionEvent.stage` — `\"before_all_txs\"`, `\"after_tx\"` or\n`\"after_all_txs\"`. The protocol's only statement of when a tx-level\nevent fired, and the reason `event_index` must not be read as a\ntimeline: the fee refund is numbered ahead of the operation it\nrefunds. Observed values on mainnet are `before_all_txs` for the charge\nand `after_all_txs` for the refund; `after_tx` exists in the protocol\nand is passed through unchanged if it appears. `None` for per-operation, diagnostic and\npre-Protocol-23 events, which carry no stage."
+            "description": "CAP-67 `TransactionEvent.stage` — `\"before_all_txs\"`, `\"after_tx\"` or\n`\"after_all_txs\"`: when a tx-level event fired. The fee charge is\n`before_all_txs`; the refund is `after_tx` before protocol 23 and\n`after_all_txs` from it (archive meta, task 0541). `None` for\nper-operation and diagnostic events, which carry no stage."
           },
           "topics": {
             "type": "array",
