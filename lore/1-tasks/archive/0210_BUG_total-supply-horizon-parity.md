@@ -2,7 +2,7 @@
 id: '0210'
 title: 'BUG: assets.total_supply sums all four sources — the XLM identity closes'
 type: BUG
-status: active
+status: completed
 related_adr: ['0043', '0055', '0056', '0057']
 related_tasks:
   [
@@ -16,6 +16,9 @@ related_tasks:
     '0515',
     '0523',
     '0540',
+    '0514',
+    '0565',
+    '0566',
   ]
 tags:
   [priority-high, effort-medium, layer-indexer, layer-xdr-parsing, correctness]
@@ -122,6 +125,21 @@ history:
       `ClaimableBalanceEntry` changes in a dedicated table shaped like
       `balances`, joined to the snapshot reconciliation per ADR 0057.
       Measurements and the rejected options are in the 2026-09-15 section.
+  - date: '2026-09-18'
+    status: completed
+    who: karolkow
+    note: >
+      Closed. All four supply sources live on production after the
+      balance_aggregates_mv swap (refresh 2,040 ms → 3,679 ms; XLM +0.022% of
+      supply, +10,218 pool holders). The XLM identity was measured against the
+      history archive instead of Horizon and given a floor: the chain's own
+      state is short of total_coins by 0.000073% of supply, constant to the
+      stroop across two checkpoints while every component moved. Our remaining
+      divergence is 0.000057% of supply, fully attributed to tasks 0514 and
+      0565. Residual monitoring spawned as 0566. Also in scope on the way: the
+      pool `state`-as-value defect (1,671 rows repaired, parser fixed, 78,158
+      of 78,158 pool end states agreeing with an independent decoder) and the
+      seed for both new sources.
 ---
 
 # BUG: `assets.total_supply` sums all four sources — the XLM identity closes
@@ -904,40 +922,57 @@ total-supply-parity.md`. Each row a real (code, issuer, ours, horizon,
 
 ## Acceptance Criteria
 
-_Rewritten 2026-09-16: the earlier per-ledger PostgreSQL overhead target and
-the Horizon parity snapshot no longer describe how supply is computed or
-proven._
+_Rewritten 2026-09-18 on closing. Every figure below is a SHARE of the XLM
+supply, because an absolute amount inside a 105-billion total carries no
+meaning; the raw stroops live in the dated sections above._
 
-- [~] Supply sums all 4 sources. **Trustlines + SAC/contract holdings DONE via 0331**
-  (`sum(balances)` over the unified model); **claimable balances**
-  (`claimable_balance_holdings` + its `balance_aggregates_mv` branch, work list
-  above) and **classic pool reserves** (the MV branch over the newest
-  `liquidity_pool_snapshots` row per pool, 2026-09-16 decisions) remain.
-- [x] SAC contract holdings path — DONE via **0331 + ADR 0051** (contract-held type-0/1
-      re-key; state-based, no separate aggregation table needed).
-- [ ] The XLM identity closes: on a sampled ledger, `total_coins` minus the
-      indexed XLM sum equals `fee_pool` (see "The reconciliation identity").
-- [ ] Non-native assets that hold value in claimable balances or classic pools
-      are cross-checked against raw XDR or the checkpoint snapshot (task 0502) — never Horizon.
-- [ ] `balance_aggregates_mv` refresh time measured with both new branches
-      (baseline 1.9 s; estimate: roughly doubles).
-- [ ] Docs updated: `docs/architecture/database-schema/database-schema-overview.md`
-      (the `total_supply` sources, `claimable_balance_holdings`);
-      `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` (the
-      claimable-balance writer and the snapshot seed);
-      `docs/architecture/xdr-parsing/` for the `ClaimableBalanceEntry` decode.
-- [ ] ADR 0043 cross-checked. Allocation (list-endpoint + on-chain → indexer)
-      unchanged — no amendment needed unless a source forces a new column.
+- [x] **Supply sums all four sources.** Trustlines and contract/SAC holdings via
+      0331 + ADR 0051; claimable balances via `claimable_balance_holdings`;
+      classic pool reserves via the newest `liquidity_pool_snapshots` row per
+      pool. Live on production 2026-09-18 with the `balance_aggregates_mv` swap.
+      XLM gained 0.022% of supply and 10,218 pool holders on the swap.
+- [x] **The XLM identity is measured, with its floor — it cannot "close".** The
+      chain's own state (accounts + claimable balances + classic pools + SAC
+      balances live and archived + `fee_pool`) falls short of `total_coins` by
+      **0.000073% of supply**, identical to the stroop at two checkpoints 64
+      ledgers apart while every component moved — so no indexer can drive the
+      residual to zero. Our own divergence from the network is **0.000057% of
+      supply** in both directions: 0.000046% rows we hold that the chain has
+      neither live nor archived, 0.000011% archived entries we never index
+      (both task 0565), 0.0000001% missing Soroban fee refunds (task 0514).
+      Superseded the earlier wording "`total_coins` minus our sum equals
+      `fee_pool`".
+- [x] **Cross-checked without Horizon.** Claimable balances against the
+      checkpoint: 2,000 native holdings, ours and the chain's apart by less than
+      0.0000001% of supply. Pool reserves and account balances against the same
+      archive census. Per-entry agreement over the whole population comes from
+      `snapshot-seed`, not from a sample.
+- [x] **Refresh time measured:** 2,040 ms → 3,679 ms, 449,038,197 rows read,
+      451,276 written — the "roughly doubles" estimate held.
+- [x] **Docs updated:** `database-schema-overview.md` (the three sources,
+      `claimable_balance_holdings`), `indexing-pipeline-overview.md` (writer and
+      seed), `xdr-parsing-overview.md` (change-type semantics), `backfills.md`
+      (the re-parse rule and the seed runbook).
+- [x] **ADR 0043 cross-checked** — allocation (list-endpoint + on-chain →
+      indexer) unchanged, no amendment needed.
+- [ ] **Residual as a monitored invariant**, with `total_coins` / `fee_pool`
+      stored per ledger — deferred to task **0566**, which the measurement above
+      now gives a baseline to alert against.
 
 ## Future Work
 
-- **Continuous residual check** — the `total_coins` residual on a schedule,
-  alerting on unexplained movement rather than a threshold (see "The
-  continuous reconciliation check"). Replaces the earlier Horizon parity
-  monitor.
+Each item below is a task, not prose: nothing here is left for a future reader
+to rediscover.
+
+- **Task 0566** — store `total_coins` / `fee_pool` per ledger and run the
+  residual as a monitored invariant against the floor measured here.
+- **Task 0514** — the Soroban fee refund settled outside `TransactionMeta`.
+- **Task 0565** — contract-held balances the seed cannot place, in both
+  directions (stale rows of ours, archived entries we never index).
+- **Task 0342** — total vs circulating supply in the UI. 52.58% of XLM sits in
+  one account that provably cannot spend (master weight 0, no signers), so our
+  total is right and only the display convention is open.
 - **Pool shares into `balances`** — separate PR (ADR 0056, tasks 0499 / 0493).
-- **`circulating_supply`** column — issuer-held balance excluded. Out of
-  scope; would need product decision + ADR.
 
 ## Notes
 
@@ -1284,3 +1319,16 @@ same ledger.
 sides at one checkpoint, and the residual compared against the measured floor
 above, alerting on movement rather than on size — the shape the 2026-08-18
 section already asks for.
+
+## 2026-09-18 (karolkow) — closed
+
+Shipped: the claimable-balance table and its writer, the classic pool-reserve
+branch, the checkpoint seed for both, the `balance_aggregates_mv` swap, and the
+pool-removal parser fix with its history repair (1,671 rows). Proven by the
+archive census rather than asserted — see the two sections above.
+
+What this task does NOT close, by design: the residual monitor (0566), the two
+defects the census surfaced (0514, 0565) and the display convention (0342).
+Supply itself is correct and complete as of the swap; our remaining divergence
+from the network is 0.000057% of XLM supply, against a floor of 0.000073% that
+belongs to the chain.
