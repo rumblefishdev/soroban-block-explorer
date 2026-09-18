@@ -88,13 +88,13 @@ pub async fn list_transactions(
         return resp;
     }
 
-    // Reject a stale cursor minted under the retired PG backend. Its keyset
-    // values are meaningless under CH, so per ADR 0008 we fail with
-    // `invalid_cursor` instead of silently mis-paginating. A legacy/untagged
-    // cursor already fails to decode upstream in the extractor; this guards the
-    // decodes-but-wrong-intent case.
+    // Reject a cursor whose keyset is not this list's: the contract-filtered
+    // list pages on the transaction position, the others on `Ch` (task 0541).
+    // Per ADR 0008 we fail with `invalid_cursor` instead of silently
+    // mis-paginating. A legacy/untagged cursor already fails to decode upstream
+    // in the extractor; this guards the decodes-but-wrong-intent case.
     if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(cursor)
+        && !cursor.fits_transaction_list(params.filter_contract_id.is_some())
     {
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
@@ -201,32 +201,30 @@ pub async fn list_transactions(
 ///   primary-key order `(ledger_sequence, application_order)` with FINAL
 ///   dropped (the `read_rows` quota fix — see `queries::fetch_list`), so its
 ///   tie-break is `application_order`.
-/// - **Statements B/C** (contract / op_type filter) drive off
-///   `operations_appearances` and key on the `transactions.id` surrogate, so
-///   their tie-break is `id`.
+/// - **Statement B** (contract filter) pages on the transaction position
+///   (task 0541), so its cursor is `ChPosition`.
+/// - **Statement C** (op_type filter only) drives off `operations_appearances`
+///   and keys on the `transactions.id` surrogate, so its tie-break is `id`.
 ///
-/// The emitted variant is tagged with the active datasource so a later request
-/// can reject a cursor minted for the other backend (see `list_transactions`).
-/// A cursor is not tagged with its statement: switching filters mid-pagination
-/// resets the page in practice, and per ADR 0008 a stale opaque cursor that
-/// anchors the wrong keyset degrades to a re-aligned page, never a hard error.
+/// Statement B's cursor is its own variant, so a cursor carried across the
+/// contract filter is rejected (see `list_transactions`). Between A and C the
+/// cursor is not tagged: per ADR 0008 a stale opaque cursor that anchors the
+/// wrong keyset there degrades to a re-aligned page, never a hard error.
 fn list_cursor_for(params: &ResolvedListParams, r: &TxListRow) -> TxListCursor {
+    if params.contract_id.is_some() {
+        return TxListCursor::ChPosition {
+            ledger_sequence: r.ledger_sequence,
+            application_order: r.application_order,
+        };
+    }
     TxListCursor::Ch {
         ledger_sequence: r.ledger_sequence,
-        tiebreak: if params.contract_id.is_none() && params.op_type.is_none() {
+        tiebreak: if params.op_type.is_none() {
             i64::from(r.application_order)
         } else {
             r.id
         },
     }
-}
-
-/// True when the decoded cursor is a current (CH) cursor. A stale cursor minted
-/// under the retired PG backend decodes but lacks the current `ch` intent, so
-/// it is rejected with `invalid_cursor` rather than silently mis-paginating
-/// (ADR 0008 fail-clean, HTTP 400).
-fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::Ch { .. })
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +496,7 @@ async fn fetch_events_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_event_appearances(&state.ch(), tx.ledger_sequence, tx.application_order).await
 }
 
 async fn fetch_invocations_for_source(

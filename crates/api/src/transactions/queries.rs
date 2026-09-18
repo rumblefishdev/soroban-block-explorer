@@ -43,8 +43,10 @@
 //! with all projected columns immutable across versions; a Rust-side dedup is
 //! the belt-and-braces. The cursor keys on `application_order` for this path
 //! (also the correct in-ledger order — the old `id`-hash tie-break did not
-//! preserve it). The filtered Statements B/C still key on the
-//! `transactions.id` surrogate (they drive off `operations_appearances`).
+//! preserve it). Statement B (contract filter) keys on the same position,
+//! merged from per-arm windows in [`super::contract_positions`] (task 0541).
+//! Statement C still keys on the `transactions.id` surrogate (it drives off
+//! `operations_appearances`).
 //!
 //! `operation_types` comes from the shared [`ch::fetch_tx_list_aggregates`]
 //! keyed on the ≤ `limit + 1` page rows (sourced from `operations_appearances`
@@ -61,6 +63,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use chrono::{DateTime, Utc};
 
+use super::contract_positions;
 use super::dto::TxListCursor;
 
 // ---------------------------------------------------------------------------
@@ -220,13 +223,6 @@ struct TxPageRawRow {
 struct LedgerClosedAtRow {
     sequence: i64,
     closed_at: i64,
-}
-
-/// Driver key row for the filtered-list two-step seek (task 0354).
-#[derive(Debug, Row, Deserialize)]
-struct TxKeyRow {
-    ledger_sequence: i64,
-    transaction_id: i64,
 }
 
 /// Resolve `source_account` + `created_at` for a page of raw rows via key
@@ -449,93 +445,41 @@ pub async fn fetch_list(
     let rows = match (contract_surrogate, params.op_type) {
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
-            // Same partition-bounded restructure as Statement C (see there):
-            // `transactions t` pruned to a single partition + streamed, the
-            // small driver `m` hashed, FINAL dropped (append-only, Rust dedup)
-            // — so the join never merges the whole 3.6B-row table.
-            //
-            // The driver is the 3-arm contract UNION. The
-            // `soroban_invocations_appearances` and `soroban_events` arms seek
-            // by `contract_id` (their primary-key prefix); the
-            // `operations_appearances` arm scans the pruned partition
-            // (`contract_id` is not its PK prefix — deferred skip-index
-            // follow-up, same as op_type).
-            let ot = op_type_opt.map_or_else(|| "NULL".to_string(), |v| v.to_string());
-            let arm = |table: &str| {
-                format!(
-                    "SELECT ledger_sequence, transaction_id FROM {table} \
-                     WHERE contract_id = {cid} \
-                       AND intDiv(ledger_sequence, 500000) \
-                           = ifNull(intDiv({cl}, 500000), {head_partition}) \
-                       AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct}))"
-                )
+            // Step 1: up to `lim_over` positions of transactions touching the
+            // contract, merged from the three arms' ledger windows in
+            // execution order (`contract_positions`, task 0541). One partition
+            // per page, as before: the cursor's, else the head's.
+            let cursor = match params.cursor.as_ref() {
+                Some(TxListCursor::ChPosition {
+                    ledger_sequence,
+                    application_order,
+                }) => Some((*ledger_sequence, *application_order)),
+                _ => None,
             };
-            // Step 1: the 3-arm contract driver → ≤lim_over (ledger, tx) keys.
-            let driver_sql = format!(
-                "SELECT DISTINCT ledger_sequence, transaction_id FROM ( \
-                    {arm_ops} UNION DISTINCT {arm_inv} UNION DISTINCT {arm_evt} \
-                 ) u \
-                 WHERE ledger_sequence <= {head_max} \
-                 ORDER BY ledger_sequence {order}, transaction_id {order} \
-                 LIMIT {lim_over}",
-                arm_ops = arm("operations_appearances"),
-                arm_inv = arm("soroban_invocations_appearances"),
-                arm_evt = arm("soroban_events"),
+            let partition = format!(
+                "intDiv(ledger_sequence, 500000) = {}",
+                cursor.map_or_else(
+                    || head_partition.clone(),
+                    |(l, _)| (l / 500_000).to_string()
+                )
             );
-            let keys = client.query(&driver_sql).fetch_all::<TxKeyRow>().await?;
-            if keys.is_empty() {
+            let positions = contract_positions::contract_tx_positions(
+                client,
+                cid,
+                &partition,
+                &head_max,
+                cursor,
+                direction,
+                usize::try_from(lim_over).unwrap_or_default(),
+            )
+            .await?;
+            if positions.is_empty() {
                 Vec::new()
             } else {
-                // Step 2: SEEK `transactions` by the driver keys instead of
-                // streaming the whole partition as the join's left side (task
-                // 0354: CH can't push `t.id = m.transaction_id` into the scan —
-                // `id` is not a PK prefix — so the old `FROM (SELECT * FROM
-                // transactions WHERE <partition>) t` read the entire ~1e8-row
-                // head partition). Same raw projection as Statement A; source +
-                // closed_at resolve by key-seek in `resolve_source_and_closed_at`
-                // (dropping the whole-`accounts` `LEFT JOIN src`). The seek on
-                // `(ledger_sequence, id) IN (keys)` returns exactly the rows the
-                // INNER JOIN on the same keys did.
-                let in_tuples = keys
-                    .iter()
-                    .map(|k| format!("({},{})", k.ledger_sequence, k.transaction_id))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let partitions = keys
-                    .iter()
-                    .map(|k| k.ledger_sequence / 500_000)
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .into_iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                let sql = format!(
-                    "SELECT \
-                        lower(hex(t.hash)) AS hash, \
-                        t.ledger_sequence AS ledger_sequence, \
-                        t.application_order AS application_order, \
-                        t.source_id AS source_id, \
-                        t.fee_charged AS fee_charged, \
-                        lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
-                        t.successful AS successful, \
-                        t.operation_count AS operation_count, \
-                        t.has_soroban AS has_soroban, \
-                        t.id AS id \
-                     FROM transactions t \
-                     WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
-                       AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
-                       AND ({src} IS NULL OR t.source_id = {src}) \
-                       AND ({ot} IS NULL OR ( \
-                            SELECT count() FROM operations_appearances oa2 \
-                            WHERE oa2.transaction_id = t.id \
-                              AND oa2.ledger_sequence = t.ledger_sequence \
-                              AND oa2.type = {ot} \
-                              AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
-                       ) > 0) \
-                     ORDER BY t.ledger_sequence {order}, t.id {order} \
-                     LIMIT 1 BY t.id \
-                     LIMIT {lim_peek}",
-                );
+                // Step 2: seek `transactions` on its own key. Source + closed_at
+                // resolve by key-seek in `resolve_source_and_closed_at`.
+                let ot = op_type_opt.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+                let sql = contract_page_sql(&positions, &src, &ot, order, lim_peek);
                 let raw = client.query(&sql).fetch_all::<TxPageRawRow>().await?;
                 resolve_source_and_closed_at(client, raw).await?
             }
@@ -962,29 +906,88 @@ pub async fn fetch_participants(
     Ok(out)
 }
 
+/// Statement B's page: the transactions at `positions`, filtered by source and
+/// operation type, in position order. Every value is an integer literal.
+fn contract_page_sql(
+    positions: &[contract_positions::Position],
+    src: &str,
+    ot: &str,
+    order: &str,
+    lim_peek: i64,
+) -> String {
+    let in_tuples = positions
+        .iter()
+        .map(|(ledger, order)| format!("({ledger},{order})"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let partitions = positions
+        .iter()
+        .map(|(ledger, _)| ledger / 500_000)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "SELECT \
+            lower(hex(t.hash)) AS hash, \
+            t.ledger_sequence AS ledger_sequence, \
+            t.application_order AS application_order, \
+            t.source_id AS source_id, \
+            t.fee_charged AS fee_charged, \
+            lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
+            t.successful AS successful, \
+            t.operation_count AS operation_count, \
+            t.has_soroban AS has_soroban, \
+            t.id AS id \
+         FROM transactions t \
+         WHERE (t.ledger_sequence, t.application_order) IN ({in_tuples}) \
+           AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
+           AND ({src} IS NULL OR t.source_id = {src}) \
+           AND ({ot} IS NULL OR ( \
+                SELECT count() FROM operations_appearances oa2 \
+                WHERE oa2.transaction_id = t.id \
+                  AND oa2.ledger_sequence = t.ledger_sequence \
+                  AND oa2.type = {ot} \
+                  AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
+           ) > 0) \
+         ORDER BY t.ledger_sequence {order}, t.application_order {order} \
+         LIMIT 1 BY t.ledger_sequence, t.application_order \
+         LIMIT {lim_peek}",
+    )
+}
+
+/// One row per contract with an event in the transaction. Binds
+/// `ledger_sequence`, `application_order`, `ledger_sequence`.
+///
+/// No `FINAL`: the `GROUP BY` already collapses duplicate rows. The filter is
+/// the transaction's position — a fee refund's rpc id carries a sentinel, not
+/// the transaction, so `application_order` is what names it (ADR 0059).
+fn event_appearances_sql() -> &'static str {
+    "SELECT \
+        se.contract_id AS id, \
+        se.ledger_sequence, \
+        any(l.closed_at) AS created_at \
+     FROM soroban_events se \
+     JOIN ledgers l ON l.sequence = se.ledger_sequence \
+     WHERE se.ledger_sequence = ? \
+       AND se.application_order = ? \
+       AND intDiv(se.ledger_sequence, 500000) = intDiv(?, 500000) \
+     GROUP BY se.contract_id, se.ledger_sequence"
+}
+
 pub async fn fetch_event_appearances(
     client: &clickhouse::Client,
-    transaction_id: i64,
     ledger_sequence: i64,
+    application_order: i16,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
     // CH `soroban_events` is the full-payload table (one row per event). We
     // group per (contract, ledger) to produce one appearance row per contract
     // in this tx — the same wire shape as the PG appearance index.
     let raw = client
-        .query(
-            "SELECT \
-                se.contract_id AS id, \
-                se.ledger_sequence, \
-                any(l.closed_at) AS created_at \
-             FROM soroban_events se FINAL \
-             JOIN ledgers l ON l.sequence = se.ledger_sequence \
-             WHERE se.transaction_id = ? \
-               AND se.ledger_sequence = ? \
-               AND intDiv(se.ledger_sequence, 500000) = intDiv(?, 500000) \
-             GROUP BY se.contract_id, se.ledger_sequence",
-        )
-        .bind(transaction_id)
+        .query(event_appearances_sql())
         .bind(ledger_sequence)
+        .bind(application_order)
         .bind(ledger_sequence)
         .fetch_all::<EventAppearanceRawRow>()
         .await?;
@@ -1090,39 +1093,4 @@ async fn resolve_contract_surrogate(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn page_row_merges_aggregates_and_maps_sentinels() {
-        // Slim page row: empty-string sentinels → None, millis → UTC, and the
-        // separately-fetched aggregate (op types) merges in by id. Replaces the
-        // old correlated-projection mapping.
-        let row = TxPageChRow {
-            hash: "ab".repeat(32),
-            ledger_sequence: 100,
-            application_order: 2,
-            source_account: Some(String::new()),
-            fee_charged: 100,
-            inner_tx_hash: None,
-            successful: true,
-            operation_count: 1,
-            has_soroban: false,
-            id: 999,
-            created_at: 1_700_000_000_000,
-        };
-        let agg = ch::TxListAggregates {
-            operation_types: vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
-        };
-        let mapped = row.into_list_row(agg);
-        assert_eq!(mapped.source_account, None);
-        assert_eq!(mapped.inner_tx_hash, None);
-        assert_eq!(mapped.id, 999);
-        assert_eq!(mapped.ledger_sequence, 100);
-        assert_eq!(
-            mapped.operation_types,
-            vec!["CREATE_ACCOUNT".to_string(), "PAYMENT".to_string()],
-        );
-        assert_eq!(mapped.created_at, ch::millis_to_utc(1_700_000_000_000));
-    }
-}
+mod tests;

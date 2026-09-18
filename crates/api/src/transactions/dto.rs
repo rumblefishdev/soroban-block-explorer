@@ -43,10 +43,32 @@ pub struct ListParams {
 /// clean HTTP 400, exactly the "fail, don't silent-promote" contract ADR
 /// 0008 prescribes. The tie-break is non-optional on the `Ch` variant, so a
 /// CH keyset can never bind a NULL tuple element.
+///
+/// `ChPosition` is the contract-filtered list's keyset (statement B, task
+/// 0541): the transaction's position, which is also its execution order. The
+/// other lists keep `Ch`; each rejects the other's variant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum TxListCursor {
-    Ch { ledger_sequence: i64, tiebreak: i64 },
+    Ch {
+        ledger_sequence: i64,
+        tiebreak: i64,
+    },
+    ChPosition {
+        ledger_sequence: i64,
+        application_order: i16,
+    },
+}
+
+impl TxListCursor {
+    /// Does this cursor anchor the keyset of the list it came back to?
+    /// `contract_filter` selects statement B.
+    pub fn fits_transaction_list(&self, contract_filter: bool) -> bool {
+        match self {
+            TxListCursor::Ch { .. } => !contract_filter,
+            TxListCursor::ChPosition { .. } => contract_filter,
+        }
+    }
 }
 
 /// Slim transaction row returned in the list endpoint.
@@ -186,65 +208,6 @@ pub struct OperationItem {
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::common::cursor::{self, CursorError, Direction};
-    use chrono::TimeZone;
-
-    #[test]
-    fn ch_cursor_round_trips() {
-        // CH variant: ledger_sequence is the partition key + primary sort;
-        // tiebreak is the transactions.id hash surrogate (the SQL `id`
-        // column in the (ledger_sequence, id) keyset — may be negative,
-        // cityhash64 lower bits as i64).
-        let c = TxListCursor::Ch {
-            ledger_sequence: 50_000,
-            tiebreak: -123,
-        };
-        let encoded = cursor::encode(&c, Direction::Prev);
-        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
-        assert_eq!(dir, Direction::Prev);
-        assert!(matches!(
-            decoded,
-            TxListCursor::Ch {
-                ledger_sequence: 50_000,
-                tiebreak: -123
-            }
-        ));
-    }
-
-    #[test]
-    fn variant_carries_the_src_tag_on_the_wire() {
-        // The `src` discriminant is what lets `list_transactions` reject a
-        // stale PG cursor (ADR 0008 fail-clean): a decoded cursor without the
-        // current `ch` tag is refused.
-        assert_eq!(
-            serde_json::to_value(TxListCursor::Ch {
-                ledger_sequence: 1,
-                tiebreak: 2
-            })
-            .unwrap()["src"],
-            "ch"
-        );
-    }
-
-    #[test]
-    fn legacy_untagged_cursor_is_rejected() {
-        // A pre-0243 `{ts, id}` cursor carries no `src` tag, so it MUST fail
-        // to decode as the tagged enum — surfacing as `invalid_cursor` (400)
-        // rather than silently promoting to a PG (or CH) walk. This is the
-        // ADR 0008 "clean break / no silent-promotion" contract: a cursor
-        // that lacks the current backend's intent fails, it does not
-        // mis-paginate.
-        #[derive(serde::Serialize)]
-        struct Legacy {
-            ts: DateTime<Utc>,
-            id: i64,
-        }
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        let encoded = cursor::encode(&Legacy { ts, id: 7 }, Direction::Prev);
-        let err = cursor::decode::<TxListCursor>(&encoded).unwrap_err();
-        assert!(matches!(err, CursorError::InvalidPayload));
-    }
-}
+mod tests;
