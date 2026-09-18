@@ -124,7 +124,14 @@ fn fixture_upgrade_event(contract_id: &str) -> ExtractedEvent {
         op_index: None,
         event_pos_in_op: None,
         stage: None,
-        event_id: None,
+        // Staging refuses a consensus event without one (ADR 0059); the
+        // transaction is the ledger's first, its event the first of operation 0.
+        event_id: Some(xdr_parser::EventId {
+            ledger_sequence: E2E_LEDGER as u32,
+            transaction_index: 1,
+            operation_index: 0,
+            event_index: 0,
+        }),
         ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
     }
