@@ -13,7 +13,7 @@
 
 use base64::Engine;
 use stellar_xdr::{Limits, ReadXdr, TransactionEventStage, TransactionMeta};
-use xdr_parser::{EventSource, extract_events};
+use xdr_parser::{EventId, EventSource, assign_event_ids, extract_events, tx_level_event_ids};
 
 const META_B64: &str = include_str!("fixtures/tx_0a120260_meta_v4.b64");
 
@@ -87,14 +87,46 @@ fn the_refund_is_numbered_before_the_operation_it_refunds() {
         .find(|e| e.source == EventSource::PerOp)
         .expect("the fixture carries a per-operation event");
 
-    // This is the whole reason the field is carried: `event_index` follows
+    // This is the whole reason the field is carried: `position_in_tx` follows
     // the XDR containers, so the refund — settled last — is numbered ahead of
     // the operation that caused it. The number is a position in the record,
     // the stage is the time.
     assert!(
-        refund.event_index < first_op_event.event_index,
+        refund.position_in_tx < first_op_event.position_in_tx,
         "refund #{} should be numbered before the op event #{}",
-        refund.event_index,
-        first_op_event.event_index
+        refund.position_in_tx,
+        first_op_event.position_in_tx
+    );
+}
+
+#[test]
+fn the_rpc_id_orders_charge_operation_refund() {
+    let meta = meta();
+    let mut events = extract_events(&meta, "0a120260", 62_032_880, 0);
+    let tx_level = tx_level_event_ids(62_032_880, &[&meta]);
+    assign_event_ids(62_032_880, 1, &tx_level[0], &mut events);
+
+    let id = |pick: &dyn Fn(&xdr_parser::ExtractedEvent) -> bool| {
+        events
+            .iter()
+            .find(|e| pick(e))
+            .and_then(|e| e.event_id)
+            .expect("event with an id")
+    };
+    let charge = id(&|e| e.stage == Some(TransactionEventStage::BeforeAllTxs));
+    let op = id(&|e| e.source == EventSource::PerOp);
+    let refund = id(&|e| e.stage == Some(TransactionEventStage::AfterAllTxs));
+
+    // Execution order, which the flat position above gets wrong.
+    assert!(charge < op && op < refund);
+    assert_eq!(
+        (refund.transaction_index, refund.operation_index),
+        (EventId::AFTER_ALL_TXS, 0)
+    );
+    assert!(
+        events
+            .iter()
+            .filter(|e| e.source == EventSource::Diagnostic)
+            .all(|e| e.event_id.is_none())
     );
 }

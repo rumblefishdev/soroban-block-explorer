@@ -115,8 +115,6 @@ fn scalar_i128(v: &Value) -> Option<i128> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedAssetTransfer {
     pub transaction_hash: String,
-    /// Our flat per-transaction counter (joins `soroban_events`).
-    pub event_index: u32,
     /// Official identity: envelope position of the emitting operation…
     pub op_index: u32,
     /// …and the event's position within that operation's event list.
@@ -137,7 +135,8 @@ pub struct ExtractedAssetTransfer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferReject {
     pub transaction_hash: String,
-    pub event_index: u32,
+    /// Where to find the event in the transaction (log locator only).
+    pub position_in_tx: u32,
     /// `None` only for [`RejectKind::NoEmitter`].
     pub emitter: Option<String>,
     pub kind: RejectKind,
@@ -248,7 +247,7 @@ pub fn extract_asset_transfers(
         // (0 of 12 237); without one there is no asset identity to write.
         let reject = |emitter: Option<&str>, kind: RejectKind| TransferReject {
             transaction_hash: ev.transaction_hash.clone(),
-            event_index: ev.event_index,
+            position_in_tx: ev.position_in_tx,
             emitter: emitter.map(str::to_string),
             kind,
         };
@@ -257,7 +256,7 @@ pub fn extract_asset_transfers(
         let Some(emitter) = ev.contract_id.clone() else {
             debug!(
                 target: "xdr_parser::asset_transfers",
-                tx = %ev.transaction_hash, event_index = ev.event_index,
+                tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx,
                 "token verb with no emitting contract — rejected"
             );
             out.rejects.push(reject(None, RejectKind::NoEmitter));
@@ -267,7 +266,7 @@ pub fn extract_asset_transfers(
             let topic_count = ev.topics.as_array().map_or(0, Vec::len);
             debug!(
                 target: "xdr_parser::asset_transfers",
-                tx = %ev.transaction_hash, event_index = ev.event_index, %emitter,
+                tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx, %emitter,
                 verb = ?kind, topic_count,
                 "token verb in a topic shape the decoder does not know — rejected"
             );
@@ -284,7 +283,7 @@ pub fn extract_asset_transfers(
         let (Some(op_index), Some(event_pos_in_op)) = (ev.op_index, ev.event_pos_in_op) else {
             debug!(
                 target: "xdr_parser::asset_transfers",
-                tx = %ev.transaction_hash, event_index = ev.event_index, %emitter,
+                tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx, %emitter,
                 "token verb outside the per-operation container — rejected"
             );
             out.rejects
@@ -306,7 +305,7 @@ pub fn extract_asset_transfers(
                 .to_string();
             debug!(
                 target: "xdr_parser::asset_transfers",
-                tx = %ev.transaction_hash, event_index = ev.event_index, %emitter, %asset,
+                tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx, %emitter, %asset,
                 "labelled token event whose emitter is not the asset's SAC — rejected"
             );
             out.rejects
@@ -327,7 +326,7 @@ pub fn extract_asset_transfers(
                     .to_string();
                 debug!(
                     target: "xdr_parser::asset_transfers",
-                    tx = %ev.transaction_hash, event_index = ev.event_index, %emitter,
+                    tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx, %emitter,
                     verb = ?token.kind, %data_type,
                     "token verb with an unrecognised payload — rejected, not a movement"
                 );
@@ -344,7 +343,6 @@ pub fn extract_asset_transfers(
 
         out.transfers.push(ExtractedAssetTransfer {
             transaction_hash: ev.transaction_hash.clone(),
-            event_index: ev.event_index,
             op_index,
             event_pos_in_op,
             kind: token.kind,

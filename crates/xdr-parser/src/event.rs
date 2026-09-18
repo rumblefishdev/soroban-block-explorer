@@ -60,7 +60,7 @@ pub fn extract_events(
             // — tx-level (fee charge and refund, carrying a `stage`),
             // per-operation (Soroban contract events emitted during
             // InvokeHostFunction execution + classic-op SAC events under
-            // Protocol 23 unification), and diagnostic. `event_index` is
+            // Protocol 23 unification), and diagnostic. `position_in_tx` is
             // numbered sequentially across all three sources so the V3
             // contract (monotonic per-tx index) is preserved. Each event
             // is tagged with its `EventSource` so consumers can drop the
@@ -79,8 +79,8 @@ pub fn extract_events(
                     // the fee charge is `BeforeAllTxs`, the refund
                     // `AfterAllTxs` — settled after every transaction in the
                     // ledger, yet numbered ahead of the operation it refunds.
-                    // Without the stage, `event_index` reads as a timeline it
-                    // is not.
+                    // Without the stage, `position_in_tx` reads as a timeline
+                    // it is not.
                     let mut ev = extract_single_event(
                         &tx_event.event,
                         transaction_hash,
@@ -170,13 +170,119 @@ fn extract_single_event(
         contract_id,
         topics,
         data,
-        event_index: u32::try_from(index).expect("event index does not fit into u32"),
+        position_in_tx: u32::try_from(index).expect("event index does not fit into u32"),
         op_index: None,
         event_pos_in_op: None,
         // Only `v4.events` carries one; the tx-level arm sets it.
         stage: None,
+        // Needs the transaction's position in the ledger; `assign_event_ids`.
+        event_id: None,
         ledger_sequence,
         created_at,
+    }
+}
+
+/// stellar-rpc's identity for a non-diagnostic event (ADR 0059): a TOID
+/// (SEP-35 layout) plus an event number. Source: stellar-rpc
+/// `internal/db/event.go`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EventId {
+    pub ledger_sequence: u32,
+    pub transaction_index: u32,
+    pub operation_index: u16,
+    pub event_index: u32,
+}
+
+impl EventId {
+    /// Transaction part of a `BeforeAllTxs` event.
+    pub const BEFORE_ALL_TXS: u32 = 0;
+    /// Transaction part of an `AfterAllTxs` event: the largest 20-bit value.
+    pub const AFTER_ALL_TXS: u32 = (1 << 20) - 1;
+    /// Operation part of an `AfterTx` event: the largest 12-bit value.
+    pub const AFTER_TX_OPERATION: u16 = (1 << 12) - 1;
+
+    pub fn toid(&self) -> u64 {
+        (u64::from(self.ledger_sequence) << 32)
+            | (u64::from(self.transaction_index) << 12)
+            | u64::from(self.operation_index)
+    }
+
+    /// The `id` string `getEvents` returns.
+    pub fn to_rpc_string(&self) -> String {
+        format!("{:019}-{:010}", self.toid(), self.event_index)
+    }
+}
+
+/// Ids of every transaction-level event of a ledger, per transaction, in
+/// `TransactionMetaV4.events` order. `tx_metas[i]` is application order
+/// `i + 1`. Counters come from the meta itself, so a transaction whose events
+/// were not extracted still advances them. Non-V4 metas have none.
+pub fn tx_level_event_ids(
+    ledger_sequence: u32,
+    tx_metas: &[&TransactionMeta],
+) -> Vec<Vec<EventId>> {
+    let mut before_all = 0u32;
+    let mut after_all = 0u32;
+    let mut out = Vec::with_capacity(tx_metas.len());
+    for (i, meta) in tx_metas.iter().enumerate() {
+        let application_order = u32::try_from(i + 1).expect("transactions per ledger fit u32");
+        let mut ids = Vec::new();
+        if let TransactionMeta::V4(v4) = meta {
+            let mut after_tx = 0u32;
+            for event in v4.events.iter() {
+                let (transaction_index, operation_index, counter) = match event.stage {
+                    TransactionEventStage::BeforeAllTxs => {
+                        (EventId::BEFORE_ALL_TXS, 0, &mut before_all)
+                    }
+                    TransactionEventStage::AfterTx => (
+                        application_order,
+                        EventId::AFTER_TX_OPERATION,
+                        &mut after_tx,
+                    ),
+                    TransactionEventStage::AfterAllTxs => {
+                        (EventId::AFTER_ALL_TXS, 0, &mut after_all)
+                    }
+                };
+                ids.push(EventId {
+                    ledger_sequence,
+                    transaction_index,
+                    operation_index,
+                    event_index: *counter,
+                });
+                *counter += 1;
+            }
+        }
+        out.push(ids);
+    }
+    out
+}
+
+/// Sets `event_id` on one transaction's `extract_events` output. `tx_level` is
+/// that transaction's entry from [`tx_level_event_ids`]. Diagnostic events,
+/// per-operation events without a position and transaction-level events
+/// without a matching id keep `None`; staging refuses those rows.
+pub fn assign_event_ids(
+    ledger_sequence: u32,
+    application_order: u32,
+    tx_level: &[EventId],
+    events: &mut [ExtractedEvent],
+) {
+    let mut tx_level = tx_level.iter().copied();
+    for event in events.iter_mut() {
+        event.event_id = match event.source {
+            EventSource::Diagnostic => None,
+            EventSource::TxLevel if event.stage.is_some() => tx_level.next(),
+            EventSource::TxLevel => None,
+            EventSource::PerOp => match (event.op_index, event.event_pos_in_op) {
+                (Some(op), Some(pos)) => u16::try_from(op).ok().map(|operation_index| EventId {
+                    ledger_sequence,
+                    transaction_index: application_order,
+                    operation_index,
+                    event_index: pos,
+                }),
+                _ => None,
+            },
+        };
     }
 }
 
@@ -242,5 +348,4 @@ pub fn extract_executable_update(topics: &Value) -> Option<ExecutableUpdate> {
 }
 
 #[cfg(test)]
-#[path = "event_tests.rs"]
 mod tests;
