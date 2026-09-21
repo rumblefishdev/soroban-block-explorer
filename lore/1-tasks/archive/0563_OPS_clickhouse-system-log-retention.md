@@ -2,7 +2,7 @@
 id: '0563'
 title: 'OPS: ClickHouse system logs keep 30 days — four log tables grow without limit (≥ 89 GiB reclaimable)'
 type: OPS
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0541', '0538', '0455']
 tags: ['clickhouse', 'hetzner', 'disk', 'ops', 'effort-small', 'priority-high']
@@ -50,6 +50,18 @@ history:
       Promoted to active for runbook step 1: the config file, the compose bind
       mount and the README config list, in one PR. The production steps (2–5)
       follow its merge and stay with the operator.
+  - date: 2026-09-21
+    status: completed
+    who: karolkow
+    note: >
+      Deployed. Dropped 22 expired monthly partitions, set the 30-day TTL on
+      the six live tables (25 minutes of rewrites), then ran the Ansible app
+      deploy from the merged commit 96f1a053; ClickHouse recreated at 10:47
+      UTC. No _N table, six TTLs, text_log without Debug or Trace,
+      logger.level debug. Free disk 345.46 → 478.57 GiB (+133.11). Three
+      alarms paged once during the recreate and cleared by themselves; 0
+      ledger gaps, DLQ empty. macOS openrsync failed the first dry run (fixed
+      with Homebrew rsync). Archived.
 ---
 
 # OPS: ClickHouse system logs keep 30 days
@@ -58,7 +70,7 @@ history:
 
 > Decided 2026-09-21 — see "Decision" and "Runbook" below: six tables at 30
 > days, `text_log` at `information`, the file log at `debug`; about 132 GiB back
-> at once.
+> at once. Deployed the same day — see "Deployed": +133.11 GiB free.
 
 `text_log`, `trace_log`, `query_log` and `part_log` (and three small metric
 logs) have no TTL: they hold everything since May. Give every server log a
@@ -425,10 +437,19 @@ Wait until this returns nothing:
 chq "SELECT table, parts_to_do FROM system.mutations WHERE database='system' AND NOT is_done"
 ```
 
+Each `ALTER` returns only after its own table's rewrite (85–510 s each, 25
+minutes for all six on 2026-09-21), so keep the terminal open: interrupting the
+loop leaves the remaining tables without the TTL.
+
 **4. Deploy the config immediately after step 3.** Ansible sync, then **recreate**
 the ClickHouse container (a new bind-mounted file needs a recreate, not a
 restart — task 0314). Keep the gap after step 3 short. Brief API and indexer
-errors during the recreate; the indexer queue holds the ledgers.
+errors during the recreate; the indexer queue holds the ledgers. The operator's
+laptop needs rsync 3.x (on macOS, `brew install rsync` — the system's openrsync
+rejects the playbook's `--chmod`). Expect one page each from
+`indexer-ch-write-failures`, `ingestion-backlog-age` and the co-located
+project's error alarm; on 2026-09-21 all three cleared by themselves within 5–7
+minutes.
 
 **5. Verify (read-only).**
 
@@ -445,6 +466,75 @@ Expected: no `_N` table (do not rely on the rename message — it is logged at
 toIntervalDay(30)`; no Trace or Debug rows in `text_log`; `logger.level` is
 `debug`; about 132 GiB more free space than step 0, more once step 3's mutations
 finish.
+
+## Deployed — 2026-09-21
+
+Operator `karolkow`, from the task worktree at `96f1a053` (the merged
+`develop`), clean tree. Every check below is read-only.
+
+| step     | UTC                 | result                                                                                                                                                                                                                                               |
+| -------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 before | 09:40               | free 345.46 GiB; no `_N` table; no running system mutation; the 22 partitions present, 132.38 GiB                                                                                                                                                    |
+| 2 drop   | 09:43:35 – 09:43:53 | 22 × `DROP PARTITION`, each `QueryFinish` without exception; no part older than September left                                                                                                                                                       |
+| 3 TTL    | 09:44:07 – 10:09:29 | six `MODIFY TTL` without exception, each returning after its rewrite: `text_log` 266 s, `trace_log` 510 s, `query_log` 398 s, `part_log` 98 s, `metric_log` 164 s, `asynchronous_metric_log` 85 s; six mutations done, no fail reason                |
+| 4 deploy | 10:47:31 (up)       | `--tags app`; content changed: `system-logs.xml` (new), `docker-compose.prod.yml`, `infra-hetzner/README.md`, `ansible/roles/app/tasks/main.yml`, and `schema/init.sql` (see Issues); `.env`, client credentials and the Caddy map `ok`; all healthy |
+| 5 verify | 10:50               | below                                                                                                                                                                                                                                                |
+
+After the recreate:
+
+- No `_N` table. The six tables show `TTL event_date + toIntervalDay(30)`;
+  `processors_profile_log` keeps its own 30 days, `query_metric_log` none.
+- `text_log` since the recreate (first 2.5 minutes): Information 209, Warning 9
+  (startup: `[::]` listen, delay accounting, schedule pool), Error 2
+  (`Cancelled merging parts`); no Debug or Trace.
+- `logger.level` = `debug` in `system.server_settings`.
+- The six tables: 167.86 GiB (2026-09-20) → 35.84 GiB.
+- Free disk: 345.46 GiB → 469.14 GiB after step 3 → 478.57 GiB after the
+  recreate, **+133.11 GiB**.
+- Schema sidecar: 40 statements as `default`, 0 errors.
+- Ingestion: 0 gaps in `ledgers` over three hours (the query in
+  `docs/runbooks/health.md`), lag 2–3 s by 10:50, ingest DLQ empty. API reads
+  (`api_reader`) resumed at 10:50:53 without errors.
+- `DEPLOYED_INFO` now records `96f1a053`.
+
+Alarms — each paged once and cleared without action:
+
+| alarm                                  | ALARM    | OK       |
+| -------------------------------------- | -------- | -------- |
+| co-located project's error alarm       | 10:48:05 | 10:53:05 |
+| `production-indexer-ch-write-failures` | 10:48:49 | 10:53:49 |
+| `production-ingestion-backlog-age`     | 10:54:08 | 11:01:08 |
+
+Cause: two indexer reconciles, at 10:47:24 and 10:47:30, got `502 Bad Gateway`
+from Caddy while ClickHouse restarted (`reconcile failed — will redeliver
+doorbell`). SQS hides a failed doorbell for the visibility timeout — 660 s, the
+indexer's 600 s timeout plus 60 — so the oldest message's age climbed to 604 s
+and fell to 0 at 10:59 on redelivery. Later doorbells had already written every
+ledger.
+
+## Issues Encountered
+
+- **macOS openrsync fails the playbook.** `/usr/bin/rsync` on macOS 26 is
+  openrsync ("rsync version 2.6.9 compatible"). The first dry run stopped at the
+  first sync with `rsync: --chmod=D755,F644: invalid argument`, before touching
+  the box (`changed=0`). Fix: `brew install rsync` (3.5.0), which precedes
+  `/usr/bin` on `PATH`.
+- **The box was not at its `DEPLOYED_INFO` commit.** It recorded `b63d2782`, the
+  last Ansible deploy (2026-08-21), but `users.d/quotas.xml` already matched
+  `develop`: task 0561 overwrote that one file in place, without Ansible. The dry
+  run's rsync list showed the real difference: `schema/init.sql` changed in size
+  (the box held the 2026-08-21 version), every other file only in mtime and
+  owner. The sidecar runs `init.sql` on every `up`; all 40 of its
+  `CREATE … IF NOT EXISTS` objects already existed on production (checked before
+  the deploy), so it created nothing.
+- **The dry run's health wait always fails.** Under `--check` the handler's
+  `docker inspect` is skipped (`Command would have run if not in check mode`),
+  so it retries 24 times and reports `failed`. Not a problem signal.
+- **`MODIFY TTL` blocks the client until its rewrite ends.** The runbook assumed
+  background mutations; in fact the six-statement loop held the operator's
+  terminal for 25 minutes. Recorded in step 3.
+- **38 minutes between step 3 and the recreate** (10:09 → 10:47), spent on the
+  rsync fix. Nothing restarted ClickHouse in between, so nothing was renamed.
 
 ## Implementation
 
@@ -499,15 +589,19 @@ level, logger_name, count() … GROUP BY …` over one day). If most rows are
 
 ## Acceptance Criteria
 
-- [ ] Six tables (`text_log`, `trace_log`, `query_log`, `part_log`,
+- [x] Six tables (`text_log`, `trace_log`, `query_log`, `part_log`,
       `metric_log`, `asynchronous_metric_log`) show
-      `TTL event_date + toIntervalDay(30)` in production
-- [ ] Old months dropped; free disk rose by about 132 GiB (record before/after)
-- [ ] `config.d/system-logs.xml` merged and deployed — six TTLs, `text_log`
-      level `information`, `logger.level` `debug`; no `_N` system log table
-      exists after the recreate
-- [ ] `text_log` holds no Trace or Debug rows written after the recreate; the
-      file log holds no Trace lines
+      `TTL event_date + toIntervalDay(30)` in production (2026-09-21, before
+      and after the recreate)
+- [x] Old months dropped; free disk rose by about 132 GiB — 345.46 → 478.57
+      GiB, +133.11
+- [x] `config.d/system-logs.xml` merged (PR #466) and deployed — six TTLs,
+      `text_log` level `information`, `logger.level` `debug`; no `_N` system
+      log table exists after the recreate
+- [x] `text_log` holds no Trace or Debug rows written after the recreate; the
+      file log holds no Trace lines — `logger.level` = `debug` as loaded by the
+      server (`system.server_settings`); the file itself was not read, there
+      is no host access from the checking session
 - [x] `text_log` per-day volume measured; level decision recorded (2026-09-21)
 - [x] **Docs updated** — `infra-hetzner/README.md` (directory map, and the
       single-file mount count 10 → 11); `docs/architecture/infrastructure/infrastructure-overview.md`
@@ -546,3 +640,7 @@ toIntervalDay(30)`, `processors_profile_log` its own 30 days,
    file is where the next editor of a system log setting will look, and the
    trap (a config TTL alone renames the table and frees nothing) is invisible
    from the XML itself.
+3. **Deployed from the task worktree**, not from the operator's main checkout.
+   The playbook syncs the checkout it runs from; the main checkout was on an
+   unrelated feature branch without `system-logs.xml`, and deploying that after
+   step 3 would have triggered the rename trap.
