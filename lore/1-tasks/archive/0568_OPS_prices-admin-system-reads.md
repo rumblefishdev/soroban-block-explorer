@@ -73,10 +73,11 @@ free/total space. Same shape as 0477's `system.mutations` grant.
 
 - [x] `SHOW GRANTS FOR prices_admin` on prod lists the two new SELECTs and
       nothing else new — verified on the box after the hot-reload.
-- [ ] Under the `prices-admin-production` cert, `system.disks` and
-      `system.columns` are readable from the campaign machine — ⏳ the
-      grants are live (SHOW GRANTS); the read from the campaign machine is
-      still to be run and pasted.
+- [x] Under the `prices-admin-production` cert, `system.disks` and
+      `system.columns` are readable from the campaign machine —
+      `SELECT min(free_space) FROM system.disks` returned 479180791808
+      (~446 GiB) from there, 2026-09-21. The dev_read pair was then removed
+      from that machine; the admin cert is the script's reader.
 - [x] Repo `services.xml` matches the box file byte-for-byte after merge —
       the box copy IS `git show origin/develop:…services.xml` (706ab649).
 - [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
