@@ -182,6 +182,12 @@
         <query>GRANT SELECT ON default.*</query>
         <query>GRANT SELECT ON system.parts</query>
         <query>GRANT SELECT ON system.mutations</query>
+        <!-- task 0568: the re-ingest script's preflight reads the column
+             list (schema gate) and free disk space (snapshot headroom);
+             both are metadata, and with them the admin cert is also the
+             script's reader — no dev_read cert on the campaign machine. -->
+        <query>GRANT SELECT ON system.columns</query>
+        <query>GRANT SELECT ON system.disks</query>
       </grants>
     </prices_admin>
 
