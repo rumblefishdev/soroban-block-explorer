@@ -2,7 +2,7 @@
 id: '0570'
 title: 'FEATURE: contract Interface tab — start with every function collapsed'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: []
 tags: ['frontend', 'effort-small']
@@ -13,6 +13,15 @@ history:
     status: active
     who: karolkow
     note: 'Task created from issue #467 triage (one-liner).'
+  - date: 2026-09-21
+    status: completed
+    who: karolkow
+    note: >
+      Merged in PR #471, shipped in production-2026.09.21-1 (Compute + SPA,
+      run 35652244312 green; only the three Lambda code assets changed across
+      all stacks). Verified on production on the reported contract: 27 rows,
+      0 expanded on load, 0 overflowing, click expands. Issue #467 stays open
+      until the close comment is posted.
 ---
 
 # FEATURE: contract Interface tab — start with every function collapsed
@@ -24,9 +33,9 @@ expanded. On contracts with a large interface that is a long scroll before the
 reader sees which functions exist. Start every row collapsed, so the first view
 is the list of function names; the reader expands only what they need.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** fix written and checked locally; awaiting commit + PR.
+**Current state:** shipped and verified on production (2026-09-21).
 
 ## Context
 
@@ -47,6 +56,10 @@ panel as the reason. A user report asked for the collapsed view instead.
 - [x] Checked on the contract from the report
       (`CAD5W4MAEAFGRSARWE3TMWRWA4RVEIWCCMUOEQZPWEDIC6AZA4IAUVKA`).
 - [x] No collapsed row overflows the card (long signatures ellipsize).
+- [x] Live on production — `production-2026.09.21-1`; checked on
+      https://sorobanscan.rumblefish.dev/contracts/CAD5W4MAEAFGRSARWE3TMWRWA4RVEIWCCMUOEQZPWEDIC6AZA4IAUVKA
+      (before the deploy the same page showed 27/27 rows expanded and 2
+      overflowing).
 - [x] **Docs updated** — N/A: UI default state only, no change to the shape of
       the system.
 - [x] **API types regenerated** — N/A: frontend-only, nothing under
