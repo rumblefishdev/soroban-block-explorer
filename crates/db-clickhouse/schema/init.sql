@@ -1080,8 +1080,8 @@ ORDER BY (pool_id, ledger_sequence, transaction_id, application_order, asset_id)
 --
 -- Identity (ADR 0059, task 0541): the stellar-rpc event id, the one
 -- `getEvents` returns — TOID(ledger, transaction, operation) + event number.
--- The parser assigns it (`xdr_parser::tx_level_event_ids` +
--- `assign_event_ids`); staging refuses a consensus event without one.
+-- The parser assigns it (`xdr_parser::LedgerEvents`); staging refuses a
+-- consensus event without one.
 --   * operation event: `transaction_index` = `application_order`,
 --     `operation_index` = the operation (0-based), `event_index` = position
 --     in that operation;

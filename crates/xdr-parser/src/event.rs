@@ -213,11 +213,56 @@ impl EventId {
     }
 }
 
+/// One ledger's events with their stellar-rpc ids — the only way to get the
+/// ids outside this crate. Fee events are numbered across the whole ledger and
+/// every other event needs its transaction's application order, so doing the
+/// two steps by hand is how a caller ends up staging events without ids.
+pub struct LedgerEvents<'a> {
+    ledger_sequence: u32,
+    created_at: i64,
+    tx_metas: &'a [&'a TransactionMeta],
+    tx_level: Vec<Vec<EventId>>,
+}
+
+impl<'a> LedgerEvents<'a> {
+    /// `tx_metas` is every transaction of the ledger, in apply order — also
+    /// the ones a caller skips, because their fee events still count.
+    pub fn new(ledger_sequence: u32, created_at: i64, tx_metas: &'a [&'a TransactionMeta]) -> Self {
+        Self {
+            ledger_sequence,
+            created_at,
+            tx_metas,
+            tx_level: tx_level_event_ids(ledger_sequence, tx_metas),
+        }
+    }
+
+    /// [`extract_events`] for the transaction at apply position `tx_index`
+    /// (0-based), ids set. Empty when the ledger has no such transaction.
+    pub fn extract(&self, tx_index: usize, transaction_hash: &str) -> Vec<ExtractedEvent> {
+        let Some(meta) = self.tx_metas.get(tx_index) else {
+            return Vec::new();
+        };
+        let mut events = extract_events(
+            meta,
+            transaction_hash,
+            self.ledger_sequence,
+            self.created_at,
+        );
+        assign_event_ids(
+            self.ledger_sequence,
+            u32::try_from(tx_index + 1).expect("transactions per ledger fit u32"),
+            &self.tx_level[tx_index],
+            &mut events,
+        );
+        events
+    }
+}
+
 /// Ids of every transaction-level event of a ledger, per transaction, in
 /// `TransactionMetaV4.events` order. `tx_metas[i]` is application order
 /// `i + 1`. Counters come from the meta itself, so a transaction whose events
 /// were not extracted still advances them. Non-V4 metas have none.
-pub fn tx_level_event_ids(
+pub(crate) fn tx_level_event_ids(
     ledger_sequence: u32,
     tx_metas: &[&TransactionMeta],
 ) -> Vec<Vec<EventId>> {
@@ -261,7 +306,7 @@ pub fn tx_level_event_ids(
 /// that transaction's entry from [`tx_level_event_ids`]. Diagnostic events,
 /// per-operation events without a position and transaction-level events
 /// without a matching id keep `None`; staging refuses those rows.
-pub fn assign_event_ids(
+pub(crate) fn assign_event_ids(
     ledger_sequence: u32,
     application_order: u32,
     tx_level: &[EventId],

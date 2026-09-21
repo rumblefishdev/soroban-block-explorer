@@ -487,8 +487,8 @@ because Protocol 23 (CAP-67) reorganised the on-chain event surface
   `events` field — that field was removed in CAP-67. `position_in_tx` is
   numbered sequentially across all three sources within a single transaction
   (in memory only). What identifies an event is `ExtractedEvent.event_id`, the
-  stellar-rpc id assigned by `xdr_parser::tx_level_event_ids` +
-  `assign_event_ids` per ledger (ADR 0059): for an operation event the
+  stellar-rpc id assigned per ledger through `xdr_parser::LedgerEvents`, the
+  only way to get it outside the parser (ADR 0059): for an operation event the
   transaction's application order, the operation and the position inside it;
   for a fee event the stage's sentinel (transaction 0 before all
   transactions, operation 4095 after one transaction, transaction 1048575

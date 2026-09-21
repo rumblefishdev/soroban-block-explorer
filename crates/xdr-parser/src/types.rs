@@ -188,7 +188,7 @@ pub struct ExtractedEvent {
     /// a stage.
     pub stage: Option<TransactionEventStage>,
     /// stellar-rpc event id (ADR 0059), set by
-    /// [`crate::event::assign_event_ids`]. `None` for diagnostic events and
+    /// [`crate::event::LedgerEvents`]. `None` for diagnostic events and
     /// for a tx-level event without a stage.
     pub event_id: Option<crate::event::EventId>,
     /// Parent ledger sequence number.

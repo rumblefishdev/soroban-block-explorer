@@ -183,9 +183,9 @@ artifact:
 - Soroban invocation data from `InvokeHostFunctionOp` and
   `SorobanTransactionMeta.returnValue`
 - CAP-67 contract events from `SorobanTransactionMeta.events`, each given its
-  stellar-rpc event id once per ledger (`xdr_parser::tx_level_event_ids` +
-  `assign_event_ids`) — the id keys `soroban_events`, and staging refuses a
-  consensus event that lacks one (ADR 0059)
+  stellar-rpc event id once per ledger (`xdr_parser::LedgerEvents`) — the id
+  keys `soroban_events`, and staging refuses a consensus event that lacks one
+  (ADR 0059)
 - contract deployment data from `LedgerEntryChanges` of contract type
 - account changes from `LedgerEntryChanges` of account type
 - liquidity pool state from `LedgerEntryChanges` of liquidity-pool type

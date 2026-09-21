@@ -50,22 +50,11 @@ pub fn extract_e3_heavy(
         .map(|env| (envelope_signatures(env), envelope_fee_bump_source(env)))
         .unwrap_or_default();
 
-    // Events: call extract_events if we have tx meta; returns contract + diagnostic together.
-    // Fee events are numbered per ledger, so the ids need every meta of it.
-    let (contract_events, diagnostic_events) = match tx_meta {
-        Some(tm) => {
-            let mut events = xdr_parser::extract_events(tm, &ext_tx.hash, ledger_seq, closed_at);
-            let tx_level = xdr_parser::tx_level_event_ids(ledger_seq, &tx_metas);
-            xdr_parser::assign_event_ids(
-                ledger_seq,
-                u32::try_from(idx + 1).expect("transactions per ledger fit u32"),
-                tx_level.get(idx).map_or(&[][..], Vec::as_slice),
-                &mut events,
-            );
-            split_events(events)
-        }
-        None => (Vec::new(), Vec::new()),
-    };
+    // Events: contract + diagnostic together, none without tx meta. Fee events
+    // are numbered per ledger, so the ids need every meta of it.
+    let (contract_events, diagnostic_events) = split_events(
+        xdr_parser::LedgerEvents::new(ledger_seq, closed_at, &tx_metas).extract(idx, &ext_tx.hash),
+    );
 
     // Invocations: nested Soroban call tree (flat list is not exposed by any endpoint).
     let operation_tree = match (envelope, tx_meta) {
@@ -143,8 +132,8 @@ pub fn extract_e3_heavy(
 
 // --- private helpers ---
 
-/// Checked `u32 → i16` conversion for indices that correlate to DB `SMALLINT`
-/// columns (`event_index`, `invocation_index`, `application_order`).
+/// Checked `u32 → i16` conversion for an operation's `application_order`,
+/// which correlates to a DB `SMALLINT` column.
 /// Returns `None` and logs a warning if the value overflows i16 — the caller
 /// skips the row rather than silently truncate and corrupt correlation with DB.
 fn to_i16_index(value: u32, kind: &'static str) -> Option<i16> {
@@ -169,11 +158,7 @@ fn to_i16_index(value: u32, kind: &'static str) -> Option<i16> {
 /// on this alignment when joining metas back to extracted txs by index).
 /// Mirrors the unified collection used in
 /// `crates/indexer/src/handler/process.rs::collect_tx_metas`.
-///
-/// `pub` (rather than `pub(super)`) so per-endpoint modules outside
-/// `runtime_enrichment::stellar_archive` (E13/E14 in `contracts/`) can
-/// re-extract per-tx metadata without a parallel implementation.
-pub fn collect_tx_metas(meta: &LedgerCloseMeta) -> Vec<&TransactionMeta> {
+fn collect_tx_metas(meta: &LedgerCloseMeta) -> Vec<&TransactionMeta> {
     match meta {
         LedgerCloseMeta::V0(v) => v
             .tx_processing
@@ -245,6 +230,8 @@ fn split_events(events: Vec<xdr_parser::ExtractedEvent>) -> (Vec<XdrEventDto>, V
             topics,
             data: e.data,
             id: e.event_id.map(|id| id.to_rpc_string()),
+            // Not from the id: a fee event's id names operation 0 or 4095,
+            // and the operation cards would take it as their own.
             operation_index: e.op_index.and_then(|i| i16::try_from(i).ok()),
             event_index: e.event_id.map(|id| id.event_index),
             stage: e.stage.map(stage_name),
