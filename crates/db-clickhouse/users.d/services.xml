@@ -156,6 +156,35 @@
       </grants>
     </prices_reader>
 
+    <!-- prices tenant, operator campaigns (prices-api task 0286 phase 3,
+             BE task 0567). The history re-ingest rebuilds monthly candle
+             partitions: ATTACH PARTITION … FROM into a backup table, DROP
+             PARTITION, re-ingest, REPLACE PARTITION back on rollback.
+             prices_writer cannot hold those (users_xml storage is read-only
+             to GRANT), and the only other mTLS identity able to is
+             dev_shared, which is admin on every database here. This user is
+             the scoped alternative: DDL and partition rights on prices.*
+             only; SELECT on default.* because the AMM half of the re-ingest
+             reads soroban_events / transactions. Operator-held cert, never a
+             Lambda; revoked by dropping its CN from CLICKHOUSE_CN_USER_MAP. -->
+    <prices_admin>
+      <no_password/>
+      <networks>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+        <ip>172.30.0.0/16</ip>
+      </networks>
+      <profile>prices_write_ddl</profile>
+      <quota>prices_write</quota>
+      <access_management>0</access_management>
+      <grants>
+        <query>GRANT SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE ON prices.*</query>
+        <query>GRANT SELECT ON default.*</query>
+        <query>GRANT SELECT ON system.parts</query>
+        <query>GRANT SELECT ON system.mutations</query>
+      </grants>
+    </prices_admin>
+
     <!-- migration_admin + partition_admin users removed in task 0241
              (PG-era migration + partition Lambdas dropped; CH applies its
              schema box-side via the db-clickhouse-init sidecar and
