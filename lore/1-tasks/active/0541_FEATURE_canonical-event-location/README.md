@@ -864,6 +864,32 @@ duplicates in the old table, charges = the partition's transactions, pre-23
 refunds only up to partition 117 and post-23 ones only from it (117 holds the
 boundary and both). 10,176,445,797 rows to copy.
 
+**Phase 3 filled, 2026-09-21** (operator, 12:14–20:50 UTC): every whole
+partition, 100–128. The staging table holds 10,628,721,194 rows = the gated
+10,176,445,797 + partition 127's 452,275,397; every one of the 2,900 slices
+equals its gate's `n`, none over. `contract_transactions` holds 2,975,298,311
+pairs; its per-slice gate is recorded partition by partition. Staging 195.06 GiB
+on 254 unmerged parts (the old table 237.65 GiB); free disk 265.92 GiB (15.1%).
+API p95 in the two hours of real traffic during the fill (390 and 223
+requests): 313 and 269 ms, against ~280–390 ms the day before; the other hours
+had too few requests to judge.
+
+Two interruptions, both clean at a slice boundary: a manual stop, and the
+operator's laptop sleeping mid-slice. The second showed a hole in the script's
+guard — `curl`'s transport error goes to stderr with a non-zero exit, and the
+guard read only stdout for `DB::Exception`, so the loop printed `ok` and went on.
+That slice had landed server-side regardless (checked per slice). The guard now
+stops on any output or a non-zero exit, and a partition resumes from a slice
+with `P:A`; both exercised with a stub `chw`.
+
+The head's partition has nothing to fill before the window: the head is 47,640
+ledgers into partition 129, under the 50,000-ledger margin, so all of 129 goes
+into the window's tail.
+
+**Decided (karolkow, 2026-09-21): the window follows the two merges** (PR #465,
+then the release PR `develop → master`, untagged) — Tuesday at the earliest,
+Wednesday at the latest.
+
 Phase 3 runs as one command per list of partitions,
 [`fill_partitions.zsh`](notes/fill_partitions.zsh): both tables per partition,
 disk checked before each, stop at the first error. Dry-run with a stub `chw`
