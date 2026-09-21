@@ -4,7 +4,7 @@ title: 'Read-path robustness + architecture-audit cleanup (poison-pill, overscan
 type: REFACTOR
 status: active
 related_adr: []
-related_tasks: ['0359']
+related_tasks: ['0359', '0541']
 tags: [priority-medium, effort-large, layer-api, robustness]
 links: []
 history:
@@ -47,6 +47,29 @@ items surfaced by the audit; independent of the write-side re-model.
 - Muxed-id dropped in details JSON (preserve the muxed memo-id).
 - Sibling-wildcard canary tests for `emit_asset_appearances` /
   `extract_counterparties` / `claim_atoms` (guard against a silent `_` regression).
+
+## Measured instances (task 0541 review, 2026-09-21)
+
+The review of 0541 swept the lists for the short-page defect: a page that comes
+back under `limit` for any reason but the end of the data reads as "no next
+page", because the envelope infers the end from the row count. Measured on
+production 2026-09-20.
+
+| list                                                       | cause                                                                                 | reach                                                                                      |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| transactions, every filtered variant                       | pages inside one partition (canonical SQL 02)                                         | a list ends at a partition boundary, every 500,000 ledgers                                 |
+| liquidity-pool participants (`liquidity_pools/queries.rs`) | a row dropped for a dangling account surrogate takes the `limit + 1` sentinel with it | 82 of 26,489 pools hold more than one page, the largest 684; only when a surrogate dangles |
+| assets (`assets/queries.rs`, `SEEK_OVERFETCH`)             | over-fetch, then version dedup; warns and still returns short                         | latent: at most 6 versions per key                                                         |
+| ledgers (`ledgers/queries.rs`, `LEDGER_OVERFETCH`)         | over-fetch ×3, no guard                                                               | latent: at most 1 row per sequence                                                         |
+
+0541 fixed the same defect in the contract-filtered transaction list (804
+transactions, 13 shown, no next page) by giving contracts a presence index,
+`contract_transactions`, like the ones accounts, assets and pools have. All four
+entities can now seek a transaction list across partitions through an index.
+
+The rule the fix followed: a bounded search that stops before exhausting its
+input hands its bound to the caller; the envelope never infers "end of list"
+from a count the search itself capped.
 
 ## Acceptance Criteria
 
