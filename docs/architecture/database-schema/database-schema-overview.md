@@ -821,7 +821,7 @@ ClickHouse-only. The **contract-dimension twin of `transaction_participants`** â
 per-(contract, transaction) presence index, so the contract-filtered transaction
 list is a key seek. Before it, that list merged three tables none of which could
 answer "the next N transactions of this contract": `soroban_events` holds one row
-per *event* (hundreds per transaction for a busy contract),
+per _event_ (hundreds per transaction for a busy contract),
 `soroban_invocations_appearances` covers invocations only, and
 `operations_appearances` has no `contract_id` in its key. The read guessed how many
 rows made a page and retried wider â€” a mechanism with a density cliff, where a
