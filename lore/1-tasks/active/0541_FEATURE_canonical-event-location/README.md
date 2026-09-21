@@ -48,6 +48,14 @@ history:
       Promoted. First step: prove `soroban_event_ops` covers every
       non-diagnostic `soroban_events` row, partition by partition, before it
       becomes the source of the new sort key.
+  - date: 2026-09-21
+    status: active
+    who: karolkow
+    note: >
+      After two reviews of the phase-2 code: the contract-filtered transaction
+      list reads a new `contract_transactions` presence index instead of merged
+      ledger windows, and fee events do not count as touching a contract. Six
+      merge blockers fixed. See notes/S-review-and-contract-transactions.md.
 ---
 
 # soroban_event_ops
@@ -730,6 +738,12 @@ margin. The `IN` mapping for the contract-filtered transaction list fails, and
 the list is already broken for native XLM today; plan task 2.5 moves that list
 to positions with bounded windows (measured 87 ms for native XLM).
 
+> Corrected 2026-09-21: the transaction-page "5 ms, 49 k rows" is a warm re-run
+> of a statement without the shipped `JOIN ledgers`; cold, the shipped query is
+> ~1.6–2× faster than the old one. The bounded windows were later replaced by
+> the `contract_transactions` index. See
+> [S-review-and-contract-transactions](notes/S-review-and-contract-transactions.md).
+
 **Disk before phase 3 (2026-09-17, decision 231 A).** Free space 360.71 GiB (20.5%); filling the remaining partitions (+~169 GiB) plus two weeks of growth would leave ~9% until the old table is dropped. Server logs without retention hold 174.50 GiB (≥ 89 GiB older than 30 days); reclaiming them first was proposed (task 0563) and deferred by karolkow the same day — no log is deleted now. So phase 3 runs as late as possible, right before the window, to shorten the weeks both tables share the disk, and stops if free space before a partition is under 120 GiB. Adding columns to the old table instead of swapping was rejected: the sort key cannot drop `transaction_id`, so the table would end ~78 GiB larger than the swap result and keep hash order.
 
 ## Phase 2 — the code (2026-09-17/18)
@@ -769,6 +783,11 @@ is under the gate (< 1 s, < 1 GiB). The event pages read more than phase 1
 measured because the partition was filled in 100 slices and its parts are not
 merged yet.
 
+> Superseded 2026-09-21: these measured one round of the window mechanism. Its
+> cap ended a dense contract's list early (804 transactions, 13 shown), and it
+> was replaced by the `contract_transactions` index — re-measure the list after
+> the index's trial on partition 127.
+
 ### Where the code differs from the plan
 
 - The indexer's id test is an integration test
@@ -778,7 +797,31 @@ merged yet.
 - The transaction-page test (2.6) runs on the same real ledger fixture instead
   of the single-transaction meta the plan named — it exercises the real
   application order and the ledger's fee counters, which one transaction cannot.
-- `MergeResult::NeedWiderWindow` carries the positions it already has, so the
-  last round can return a short page instead of recomputing it.
+- ~~`MergeResult::NeedWiderWindow` carries the positions it already has, so the
+  last round can return a short page instead of recomputing it.~~ The window
+  mechanism is gone (review, 2026-09-21).
 - Also moved under `__tests__` because the change touched them:
   `ExecutionTrace.test.ts`, and `transactions/dto.rs`'s inline tests.
+
+## Review and the contract index (2026-09-20/21)
+
+Two reviews of `abd5a801`: the deep protocol and the two-axis `/code-review`.
+Design confirmed; six merge blockers fixed; one design change. Full record:
+[S-review-and-contract-transactions](notes/S-review-and-contract-transactions.md).
+
+**Decided (karolkow, 2026-09-21):**
+
+- **The contract-filtered transaction list reads a new presence index,
+  `contract_transactions`**, built in this task. The window mechanism of task
+  2.5 existed because contracts, unlike accounts, assets and pools, had no
+  per-(entity, transaction) index; its cap could end a dense contract's list
+  early. The list is now one seek, like the account list.
+- **Fee events do not count as touching a contract.** Otherwise the native SAC's
+  list is every transaction on the network.
+
+**Owed before the window:** create `contract_transactions` and trial it on
+partition 127; fill it in the phase-3 loop after the rekey of each slice;
+`asset_transfers.event_index` `DEFAULT`, gated by a read; hand over two query
+shapes of a client outside this repository that the swap breaks. Run task 0517
+(event names) only after the swap: 132,256 resolvable `NULL` names were already
+copied with partition 127.

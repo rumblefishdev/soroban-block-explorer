@@ -678,6 +678,13 @@ that describe `(ledger_sequence, transaction_id, event_index)`.
 
 ### Task 2.5: transaction queries that read `soroban_events`
 
+> Superseded 2026-09-21 for the contract-filtered list: the bounded windows below
+> were replaced by a seek on the `contract_transactions` presence index. The
+> window's cap counted rows while the page counts transactions, so a contract
+> with many events per transaction got a page that read as the end of its list.
+> See [S-review-and-contract-transactions](S-review-and-contract-transactions.md).
+> `fetch_event_appearances` stands as written.
+
 **Phase 1 changed this task.** Mapping the events arm to transaction ids through
 an `IN` set was measured unusable (native XLM: 6.64 GiB, over the 4 GB cap;
 mid contract: 4,331 ms vs 29 ms). Today's full driver already fails for native
@@ -998,17 +1005,31 @@ the stellar-rpc event id`, body lists phase 1 results and links this
 
 ---
 
-## Phase 3 — fill partitions 100–128
+## Phase 3 — fill partitions 100 through the head's partition
+
+> Updated 2026-09-21 (review): the head crossed into partition 129 after this
+> plan was written, and the phase now fills a second table,
+> `contract_transactions`, slice by slice after the rekey (step 3b). See
+> [S-review-and-contract-transactions](S-review-and-contract-transactions.md).
 
 **When:** after the PR is ready to release, as close to the window as the fill
 time allows — both copies of the table share the disk from the first
-partition until phase 5. Free space 360.71 GiB on 2026-09-17; the fill adds
-~169 GiB (estimate) and the server logs are not trimmed (task 0563 deferred).
-**Stop** before any partition if free space is under 120 GiB.
+partition until phase 5. Free space 360.71 GiB on 2026-09-17 and 348.50 GiB on
+2026-09-20 (~4 GiB/day, estimate from two readings); the fill adds ~170 GiB
+(estimate) and the server logs are not trimmed (task 0563 deferred). At that
+rate the finished fill sits ~2 weeks above the stop line, so the window must
+follow the fill within that. **Stop** before any partition if free space is
+under 120 GiB.
 
-Order: 100 → 128. Partition 127 is done in phase 1. Partition 128 is filled up
-to `X` = the highest multiple of 5,000 at least 50,000 ledgers below the head
-when it is reached; the rest is the window's tail.
+**Before the first partition:** the operator creates `contract_transactions`
+verbatim from `crates/db-clickhouse/schema/init.sql`, and fills partition 127's
+slices with step 3b as the index's trial; the agent then measures the
+contract-filtered list on it against the plan's gate (< 1 s, < 1 GiB).
+
+Order: 100 → the head's partition (129 on 2026-09-20). Partition 127 is done in
+phase 1. The head's partition is filled up to `X` = the highest multiple of
+5,000 at least 50,000 ledgers below the head when it is reached; the rest is
+the window's tail.
 
 Per partition `P`:
 
@@ -1028,11 +1049,20 @@ WHERE name = 'default'` ≥ 120 GiB; the day is not Sunday; no backup running
 F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
 ```
 
+3b. **Operator — `contract_transactions` for the same partition**, after step 3
+    (it reads the rekeyed rows):
+
+```bash
+F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
+```
+
 4. **Agent — post-fill:** staging row count for `P` = sum of the gate's `n`;
    if larger, operator runs `chw "OPTIMIZE TABLE soroban_events_staging_canonical PARTITION $P FINAL"`
-   and the count repeats. API p95 latency during the fill is read from the
-   CloudWatch dashboard (read-only); if it rose > 2× the previous hour, the
-   next partition waits.
+   and the count repeats. For `contract_transactions`: `uniqExact(contract_id,
+   ledger_sequence, application_order)` of `P` = the fill's `SELECT DISTINCT`
+   run as a count over `P` (a short count is a partial insert). API p95
+   latency during the fill is read from the CloudWatch dashboard (read-only);
+   if it rose > 2× the previous hour, the next partition waits.
 
 Estimate from phase 1: partition 127 (452 M rows, 4.3% of the table) took
 583 s of query time over 100 slices — median 5.6 s, max 10.7 s, peak 3.68 GiB
@@ -1049,11 +1079,22 @@ literals remove the doubt.
 
 ### 4.0 Preconditions (all true before starting)
 
-- Phase 3 complete up to `X`; every gate passed.
+- Phase 3 complete up to `X` for both tables; every gate passed.
+- `contract_transactions` exists — the new indexer writes it, and a missing
+  table fails every insert: `chq "EXISTS TABLE default.contract_transactions"`
+  returns `1`.
 - PR merged to `develop`; release PR `develop → master` merged (not tagged, not
   deployed). Everything else in that release is known and wanted.
-- `chw "ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0"` done
-  (the running indexer still writes the column; the new one will not).
+- `asset_transfers.event_index` has its default — verified by a read, not
+  recalled: `chq "SELECT default_kind FROM system.columns WHERE database =
+  'default' AND table = 'asset_transfers' AND name = 'event_index'"` returns
+  `DEFAULT`. If not, the operator runs
+  `chw "ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0"` (the
+  running indexer still writes the column; the new one will not). The swap does
+  not cover this table.
+- The two query shapes of the client outside this repository that read
+  `soroban_events.transaction_id` / `event_index` are handed to its owner, or
+  its outage over the window is accepted explicitly.
 - Two local checkouts ready and built once (`make -C infra` build step):
   `prod` at the last `production-*` tag, `new` at `origin/master`.
 - Not Sunday; free disk ≥ 120 GiB; SQS ingest queue and DLQ empty
@@ -1077,10 +1118,13 @@ Record the head `H`.
 ### 4.2 Tail (operator, then agent)
 
 Operator: fill loop from `X` to `H + 1` (last slice may be shorter; use
-`seq X 5000 H` and `B = min(a + 5000, H + 1)`). Agent: pre/post gates on the
-tail slices; `getEvents` comparison on 5 tail ledgers reading the **staging**
-table (they are inside the rpc window); totals: staging distinct rows per
-partition 100–128 = old table's.
+`seq X 5000 H` and `B = min(a + 5000, H + 1)`), then the
+`contract_transactions` loop over the same slices. Agent: pre/post gates on the
+tail slices of both tables; `getEvents` comparison on 5 tail ledgers reading
+the **staging** table (they are inside the rpc window); totals: staging
+distinct rows per partition 100 through the head's partition = old table's —
+the head's partition included, since it is the one a short tail loop or an
+off-by-one on `H` would land in.
 
 ### 4.3 New code, still paused (operator)
 
@@ -1120,7 +1164,10 @@ Agent verifies: ESM present; `max(sequence)` advancing; DLQ empty after 15 min;
 new rows since `H` exist with `transaction_index` set;
 `cargo test -p backfill-runner --test event_id_reconciliation` passes; ledger
 64,454,000 for `CAS3J7GY…` lists transactions in application order; one
-transaction page shows `op N` / stage and rpc numbers.
+transaction page shows `op N` / stage and rpc numbers; over the first ledgers
+the new indexer wrote, `fill_contract_transactions.sql` (run as a `SELECT`)
+returns exactly the writer's `contract_transactions` rows — `EXCEPT` both ways
+empty — the one check that the SQL fill and the Rust writer agree.
 
 ### 4.6 Rollback (only if 4.5 fails and cannot be fixed forward)
 
