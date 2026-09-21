@@ -35,11 +35,23 @@ history:
       Measured again for 0541's review: net growth per table, the text_log
       level (answers implementation step 5), where the log lines come from, and
       a consideration on query_log's TTL. No status change.
+  - date: 2026-09-21
+    status: backlog
+    who: karolkow
+    note: >
+      Decided: 30 days on six log tables, text_log keeps information and
+      above, the server file log goes from trace to debug, query_metric_log is
+      left out. Tested on a local container of the production image; runbook
+      recorded. Still backlog until promoted for the config PR.
 ---
 
 # OPS: ClickHouse system logs keep 30 days
 
 ## Summary
+
+> Decided 2026-09-21 — see "Decision" and "Runbook" below: six tables at 30
+> days, `text_log` at `information`, the file log at `debug`; about 132 GiB back
+> at once.
 
 `text_log`, `trace_log`, `query_log` and `part_log` (and three small metric
 logs) have no TTL: they hold everything since May. Give every server log a
@@ -133,12 +145,20 @@ pattern on an aggregate. Its storage is small (`accounts_recent` 972.55 MiB);
 its write volume was not measured in 0385. Out of this task's scope — recorded
 because it drives log volume.
 
+Its refreshes in `query_log` on 2026-09-20 — internal
+`` INSERT INTO default.`.tmp.inner_id.5b2fb432-…` ``; the text does not contain
+the view's name, so a filter on `accounts_recent` finds nothing: 720 refreshes, 8.5 s
+average, 18.8 s maximum, 4.43 CPU-hours, 18.30 billion rows read, 895.58 GiB
+written, 1.23 GiB peak memory — in one day.
+
 ### `trace_log` composition
 
 2026-09-20: Memory 40.3%, MemoryPeak 36.8%, Real 20.8%, CPU 2.0%. All defaults:
 `memory_profiler_step` 4 MiB, both query profiler periods 1 s.
 
 ### Consideration for the TTL decision — `query_log`
+
+> Not taken — `query_log` stays at 30 days (see "Decision").
 
 The plan gives every table 30 days. `query_log` is the evidence base for
 questions like 0541's consumer sweep: a sweep of its full retention (from
@@ -147,6 +167,154 @@ active in July and on two days in September. With 30 days the July activity
 would not have been visible. A longer TTL for `query_log` alone (90–180 days)
 costs about 200 MiB a day. `part_log` served the per-table write measurement
 above; 30–60 days covers that use.
+
+## Decision (karolkow, 2026-09-21)
+
+| setting                          | value                                                                                                                       |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| TTL                              | `event_date + INTERVAL 30 DAY` on `text_log`, `trace_log`, `query_log`, `part_log`, `metric_log`, `asynchronous_metric_log` |
+| `processors_profile_log`         | unchanged — already 30 days from the shipped config                                                                         |
+| `query_metric_log`               | left without a TTL (below)                                                                                                  |
+| `text_log` level                 | `information` — keeps Fatal, Critical, Error, Warning, Notice, Information                                                  |
+| server file log (`logger.level`) | `trace` → `debug`                                                                                                           |
+
+Steady state ≈ 34 GiB of server logs (row-proportional estimate from each
+table's last 30 days), against 183 GiB today and ~770 GiB a year from now if
+nothing changes (+1.6 GiB a day, measured over the last 30 days).
+
+Considered and not taken:
+
+- **Per-table retention** (`query_log` 90–180 days, `trace_log` 14, …): more
+  rules for a larger result (~55 GiB). The risk that argued for a long
+  `query_log` — the outside client found in 0541 ran on 2026-07-17, 09-14 and
+  09-18, a 59-day gap — is covered by the pre-change sweep plus asking the
+  co-located project's owner, not by retention.
+- **A conditional TTL on `text_log`** (7 days for Trace/Debug, 90 for the rest):
+  accepted by the config and correct on a local test, but unnecessary once the
+  table keeps `information` and above.
+- **Dropping `query_log`'s start rows** — see "Redundancy inside tables".
+
+### Log levels
+
+Cumulative: a level keeps itself and everything more severe, so `information`
+keeps 1–6.
+
+| #   | level       | `text_log` rows, 70 days | example on production                                                                 |
+| --- | ----------- | ------------------------ | ------------------------------------------------------------------------------------- |
+| 1   | Fatal       | 0                        | —                                                                                     |
+| 2   | Critical    | 0                        | —                                                                                     |
+| 3   | Error       | 178,630                  | `Error loading config from users.xml`; `Cancelled merging parts` (~690 a day, benign) |
+| 4   | Warning     | 8,102                    | `Cannot read remaining request body during exception handling`                        |
+| 5   | Notice      | 0                        | —                                                                                     |
+| 6   | Information | 1,641,306                | `Ready for connections`; `Have 16 tables in drop queue`                               |
+| 7   | Debug       | 814,683,022              | `Selected 1/50 parts … 379/55210 marks by primary key`; `Loading config users.xml`    |
+| 8   | Trace       | 863,831,911              | `Renaming temporary part tmp_insert_… to …`                                           |
+| 9   | Test        | 0                        | —                                                                                     |
+
+### Why `text_log` can drop Debug and Trace
+
+What those lines say is kept, structured, elsewhere — each checked on
+production on 2026-09-21:
+
+| information             | structured source                                                                                                                                                                                                      |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| index pruning per query | `query_log` `ProfileEvents` `SelectedParts`, `SelectedPartsTotal`, `SelectedMarks`, `SelectedMarksTotal`, `SelectedRanges` — for one query, the same numbers as its Debug line (1/50 parts, 379/55,210 marks, 1 range) |
+| duration, rows, memory  | `query_log`                                                                                                                                                                                                            |
+| query errors            | `query_log` exception with stack trace; `error_log` (2.1 M entries since May, 66 codes)                                                                                                                                |
+| merge backlog           | `asynchronous_metric_log` `MaxPartCountForPartition`, as a time series                                                                                                                                                 |
+| merges                  | `part_log`                                                                                                                                                                                                             |
+| view refreshes          | `query_log` — internal `` INSERT INTO default.`.tmp.inner_id.<uuid>` ``, 720 a day per view                                                                                                                            |
+
+`text_log` was read 16 times in 70 days, `trace_log` once (`query_log`, every
+user).
+
+The one real cost found: **a successful config reload logs only at Debug.** On
+2026-09-17 `ConfigReloader` wrote 50 Error lines, 53 Debug lines and no
+Information line. After the change, confirm a reload from the file log or from
+the loaded state (`system.users`, `system.quotas`, `system.server_settings`).
+
+### Why the file log goes to `debug`
+
+The file (`/srv/clickhouse-logs/clickhouse-server.log`) is bounded by rotation —
+`logger.size` 1000M × `logger.count` 10 ≈ 10 GB — whatever the level; the level
+only sets how many days fit. At `trace` that is about 1.5 days (estimate:
+`text_log` holds 445.86 GiB uncompressed over 70 days at 5.5× compression, so
+~6.4 GiB of text a day). `debug` drops Trace, about half the lines, so about
+three days fit (estimate). After the change this file is the only place Debug
+lines exist; lowering it further would free at most the ~10 GB it already
+occupies, once.
+
+### Why `query_metric_log` is left out
+
+It is the only log table that re-checks its definition against the config
+**while running**, not only at startup. On the local test its `ALTER … MODIFY
+TTL` was followed within half a second by a rename to `query_metric_log_0` —
+before the config was deployed — and the restart renamed it again. The other six
+did neither. Including it would need a config-only change plus a `DROP` of its
+`_0` copy, and would turn the verification rule into "any `_N` table is a
+failure, except this one". It holds 1.10 GiB, adds about 9 MiB a day, and nothing
+has read it in four months.
+
+### Where the logs live on the host (from this repository)
+
+| log                             | location                                         | bound                        | duplicate?                    |
+| ------------------------------- | ------------------------------------------------ | ---------------------------- | ----------------------------- |
+| `system.text_log`               | table                                            | none today; 30 days after    | yes — of the log file         |
+| server log file                 | `/srv/clickhouse-logs/clickhouse-server.log`     | 10 × 1000M                   | yes — of `text_log`           |
+| server error file               | `/srv/clickhouse-logs/clickhouse-server.err.log` | 10 × 1000M                   | a subset of the log file      |
+| other log tables                | `system` database                                | none today; 30 days after    | no file copy                  |
+| ClickHouse container stdout     | Docker `json-file`                               | 5 × 100m                     | no — 5 startup lines (tested) |
+| Caddy access log                | Docker `json-file` (`output stdout`)             | 5 × 100m                     | partly overlaps `query_log`   |
+| backup job                      | `/var/log/ch-backup.log`                         | logrotate, 26 weeks          | no                            |
+| system journal                  | `/var/log/journal`                               | systemd default (unverified) | —                             |
+| co-located project's containers | not in this repository                           | unverified                   | —                             |
+
+The weekly backup freezes only the `default` database (`ch-backup.sh.j2`:
+`readonly DB="default"`), so no server log is in the Borg archive. No log
+shipper runs — Loki is only mentioned as a future option in the `Caddyfile`.
+
+Host-side sizes are not measured yet (operator, read-only, on the host):
+`sudo du -sh /srv/clickhouse-logs /var/log /var/lib/docker/containers`,
+`journalctl --disk-usage`,
+`sudo find /var/lib/docker/containers -name '*-json.log*' -size +10M -exec ls -lh {} +`,
+`docker ps`.
+
+### Who reads the log tables
+
+`query_log` over its whole retention (from 2026-05-19): besides manual reads,
+three query shapes by `default` over the native client — `query_log` by
+`log_comment`, `part_log` over the last hours, `text_log` with `level <= 3` over
+the last 60 minutes. None needs more than 30 days or a Debug line. `text_log` was
+also truncated by hand on 2026-07-14, which is why it starts on that date.
+
+### Redundancy inside tables — noted, not acted on
+
+- `query_log` stores every query twice: `QueryStart` and `QueryFinish`,
+  3,840,442 and 3,840,370 in seven days. The 72-row difference equals the 72
+  `ExceptionWhileProcessing` rows, so that week the start rows added nothing.
+  `log_queries_min_type = 'QUERY_FINISH'` would save ~1.5–2 GiB at 30 days
+  (estimate). Not taken: it is a user-profile setting, in the config area that
+  produced 50 reload errors on 2026-09-17.
+- `part_log` writes a start and an end row per merge (1.43 M each a week) and a
+  `RemovePart` row per removed part (43% of its rows). No setting trims it; it is
+  ~4.6 GiB at 30 days.
+- If space runs short later, the next levers are `processors_profile_log`
+  (~14 GiB, read on one day in four months) and the `query_log` start rows.
+
+### Tested on a local container (2026-09-21, image 26.3.10.60 = production)
+
+| check                                                                 | result                                                                                                       |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| stock `text_log` definition                                           | identical to production, character for character                                                             |
+| TTL in the config only                                                | old table renamed to `text_log_0` with all its data — the trap below is real                                 |
+| ALTER first, then the same TTL in the config, then restart            | six tables kept, rows preserved, no rename                                                                   |
+| `query_metric_log`                                                    | renamed twice — right after its ALTER, and again at restart                                                  |
+| `ALTER … MODIFY TTL`                                                  | rewrites every part, including parts with nothing expired (`materialize_ttl_after_modify = 1` on production) |
+| conditional TTL (`… DELETE WHERE level IN ('Trace', 'Debug'), …`)     | accepted by the config; deleted exactly the intended rows                                                    |
+| final config (`logger.level` debug, `text_log` information, six TTLs) | file: 0 Trace, 304 Debug; table: 0 Trace, 0 Debug, 60 Information, 9 Warning                                 |
+| rename message                                                        | logged at `Debug` — invisible in `text_log` after the change; verify by the absence of `_N` tables           |
+| production `ttl_only_drop_parts`                                      | 0 — row-level TTL deletes work                                                                               |
+| production `max_partition_size_to_drop`                               | 46.57 GiB; the largest partition to drop is 30.97 GiB                                                        |
 
 ## The trap — a config TTL alone frees nothing
 
@@ -162,7 +330,120 @@ The same comparison bites the other way: a TTL set only by `ALTER` is undone at
 the next restart (the config still says "no TTL", so the table is renamed and a
 TTL-less one created).
 
+## Runbook (2026-09-21)
+
+Every step that changes production is the operator's (`chw`, Ansible);
+read-only checks are `chq`.
+
+**0. Before (read-only).** Record free space; confirm no renamed log table
+exists yet (the second query must return nothing).
+
+```bash
+chq "SELECT formatReadableSize(free_space) FROM system.disks WHERE name='default'"
+chq "SELECT name FROM system.tables WHERE database='system' AND match(name, '_[0-9]+\$')"
+```
+
+**1. Merge the config PR — do not deploy it yet.** New
+`crates/db-clickhouse/config.d/system-logs.xml`, the bind-mount line in
+`docker-compose.prod.yml`, and the config list in `infra-hetzner/README.md`.
+Merged first so that steps 3 and 4 can run back to back.
+
+```xml
+<clickhouse>
+    <logger>
+        <level>debug</level>
+    </logger>
+    <text_log>
+        <level>information</level>
+        <ttl>event_date + INTERVAL 30 DAY</ttl>
+    </text_log>
+    <trace_log><ttl>event_date + INTERVAL 30 DAY</ttl></trace_log>
+    <query_log><ttl>event_date + INTERVAL 30 DAY</ttl></query_log>
+    <part_log><ttl>event_date + INTERVAL 30 DAY</ttl></part_log>
+    <metric_log><ttl>event_date + INTERVAL 30 DAY</ttl></metric_log>
+    <asynchronous_metric_log><ttl>event_date + INTERVAL 30 DAY</ttl></asynchronous_metric_log>
+</clickhouse>
+```
+
+**2. Drop whole months older than 30 days** — instant, rewrites nothing. With
+the cutoff at 2026-08-22, August goes too: its last ten days would expire within
+ten days anyway, and dropping it spares step 3 about 49 GiB of rewriting. If
+the runbook is executed later, recompute which months are fully expired.
+
+```bash
+chw "ALTER TABLE system.text_log DROP PARTITION 202607"
+chw "ALTER TABLE system.text_log DROP PARTITION 202608"
+chw "ALTER TABLE system.trace_log DROP PARTITION 202605"
+chw "ALTER TABLE system.trace_log DROP PARTITION 202606"
+chw "ALTER TABLE system.trace_log DROP PARTITION 202607"
+chw "ALTER TABLE system.trace_log DROP PARTITION 202608"
+chw "ALTER TABLE system.query_log DROP PARTITION 202605"
+chw "ALTER TABLE system.query_log DROP PARTITION 202606"
+chw "ALTER TABLE system.query_log DROP PARTITION 202607"
+chw "ALTER TABLE system.query_log DROP PARTITION 202608"
+chw "ALTER TABLE system.part_log DROP PARTITION 202605"
+chw "ALTER TABLE system.part_log DROP PARTITION 202606"
+chw "ALTER TABLE system.part_log DROP PARTITION 202607"
+chw "ALTER TABLE system.part_log DROP PARTITION 202608"
+chw "ALTER TABLE system.metric_log DROP PARTITION 202605"
+chw "ALTER TABLE system.metric_log DROP PARTITION 202606"
+chw "ALTER TABLE system.metric_log DROP PARTITION 202607"
+chw "ALTER TABLE system.metric_log DROP PARTITION 202608"
+chw "ALTER TABLE system.asynchronous_metric_log DROP PARTITION 202605"
+chw "ALTER TABLE system.asynchronous_metric_log DROP PARTITION 202606"
+chw "ALTER TABLE system.asynchronous_metric_log DROP PARTITION 202607"
+chw "ALTER TABLE system.asynchronous_metric_log DROP PARTITION 202608"
+```
+
+Frees about 132 GiB (measured 2026-09-21: `text_log` 59.15, `trace_log` 32.50,
+`query_log` 20.87, `part_log` 14.34, `metric_log` 3.23,
+`asynchronous_metric_log` 2.33).
+
+**3. TTL on the six live tables — outside peak hours.** Each statement launches a
+mutation that rewrites every remaining part — after step 2, September only,
+about 35 GiB compressed.
+
+```bash
+chw "ALTER TABLE system.text_log MODIFY TTL event_date + INTERVAL 30 DAY"
+chw "ALTER TABLE system.trace_log MODIFY TTL event_date + INTERVAL 30 DAY"
+chw "ALTER TABLE system.query_log MODIFY TTL event_date + INTERVAL 30 DAY"
+chw "ALTER TABLE system.part_log MODIFY TTL event_date + INTERVAL 30 DAY"
+chw "ALTER TABLE system.metric_log MODIFY TTL event_date + INTERVAL 30 DAY"
+chw "ALTER TABLE system.asynchronous_metric_log MODIFY TTL event_date + INTERVAL 30 DAY"
+```
+
+Wait until this returns nothing:
+
+```bash
+chq "SELECT table, parts_to_do FROM system.mutations WHERE database='system' AND NOT is_done"
+```
+
+**4. Deploy the config immediately after step 3.** Ansible sync, then **recreate**
+the ClickHouse container (a new bind-mounted file needs a recreate, not a
+restart — task 0314). Keep the gap after step 3 short. Brief API and indexer
+errors during the recreate; the indexer queue holds the ledgers.
+
+**5. Verify (read-only).**
+
+```bash
+chq "SELECT name FROM system.tables WHERE database='system' AND match(name, '_[0-9]+\$')"
+chq "SELECT name, extract(engine_full, 'TTL [^S]*') FROM system.tables WHERE database='system' AND name IN ('text_log','trace_log','query_log','part_log','metric_log','asynchronous_metric_log')"
+chq "SELECT level, count() FROM system.text_log WHERE event_time > now() - INTERVAL 1 HOUR GROUP BY level"
+chq "SELECT value FROM system.server_settings WHERE name='logger.level'"
+chq "SELECT formatReadableSize(free_space) FROM system.disks WHERE name='default'"
+```
+
+Expected: no `_N` table (do not rely on the rename message — it is logged at
+`Debug` and will not reach `text_log`); six tables with `TTL event_date +
+toIntervalDay(30)`; no Trace or Debug rows in `text_log`; `logger.level` is
+`debug`; about 132 GiB more free space than step 0, more once step 3's mutations
+finish.
+
 ## Implementation
+
+> Superseded by the Runbook above (2026-09-21): six tables instead of seven,
+> whole old months dropped first, the `text_log` level and the file log level
+> added.
 
 Order matters: live tables first, config second, so the restart finds a table
 that already matches the config.
@@ -211,11 +492,16 @@ level, logger_name, count() … GROUP BY …` over one day). If most rows are
 
 ## Acceptance Criteria
 
-- [ ] All seven tables show `TTL event_date + toIntervalDay(30)` in production
-- [ ] Free disk rose by ≥ 89 GiB (record before/after)
-- [ ] `config.d/system-logs.xml` merged and deployed; no `_0` system log table
-      exists after the recreate (or it carries the TTL)
-- [ ] `text_log` per-day volume measured; level decision recorded
+- [ ] Six tables (`text_log`, `trace_log`, `query_log`, `part_log`,
+      `metric_log`, `asynchronous_metric_log`) show
+      `TTL event_date + toIntervalDay(30)` in production
+- [ ] Old months dropped; free disk rose by about 132 GiB (record before/after)
+- [ ] `config.d/system-logs.xml` merged and deployed — six TTLs, `text_log`
+      level `information`, `logger.level` `debug`; no `_N` system log table
+      exists after the recreate
+- [ ] `text_log` holds no Trace or Debug rows written after the recreate; the
+      file log holds no Trace lines
+- [x] `text_log` per-day volume measured; level decision recorded (2026-09-21)
 - [ ] **Docs updated** — `infra-hetzner/README.md` (config list);
       `docs/architecture/infrastructure/**` if it lists server config
       (N/A otherwise, reason recorded)
