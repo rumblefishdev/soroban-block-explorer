@@ -14,7 +14,8 @@
 #   and the data dir (where FREEZE writes `shadow/`) is reachable
 #   for the Borg backup cron on the host.
 # - Layers in the production-only ClickHouse XML overrides
-#   (`config.d/memory.xml`, `config.d/prometheus.xml`).
+#   (`config.d/memory.xml`, `config.d/prometheus.xml`,
+#   `config.d/system-logs.xml`).
 # - Switches the schema sidecar to a shell-wrapped entrypoint that
 #   reads the prod password from the container env at runtime
 #   (keeps it out of the rendered Compose spec and `docker inspect`
@@ -187,6 +188,12 @@ services:
       # readonly=1 (B2 per-request correlation). Without this mount the flag
       # never reaches the container and the constraint is silently ignored.
       - ./crates/db-clickhouse/config.d/access-control.xml:/etc/clickhouse-server/config.d/access-control.xml:ro
+      # Server log retention (task 0563): 30-day TTL on six system log tables,
+      # `text_log` at information, the file log at debug. The live tables must
+      # already carry the same TTL when this file first reaches the container,
+      # or ClickHouse renames each one to `<name>_0` and keeps the old data —
+      # see the order in the file's header and the task's runbook.
+      - ./crates/db-clickhouse/config.d/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
     environment:
       CLICKHOUSE_USER: default
       # Fail-fast pattern — Compose refuses to start if the env

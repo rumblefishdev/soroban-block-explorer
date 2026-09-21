@@ -21,6 +21,7 @@ docker-compose.prod.yml      ← Production overlay over the dev compose file
 (in crates/db-clickhouse/)
 config.d/memory.xml          ← Production memory tuning
 config.d/prometheus.xml      ← Native metrics endpoint on loopback
+config.d/system-logs.xml     ← Server log retention and levels (task 0563)
 users.d/dict.xml             ← `dict_reader` user (loopback-only)
 ```
 
@@ -275,9 +276,9 @@ ansible-playbook ... --tags storagebox
 > ```
 
 > **Single-file bind mounts pin the inode — an edit can reach the box and
-> still not reach the process.** Twelve files are mounted into a container
+> still not reach the process.** Thirteen files are mounted into a container
 > individually rather than as a directory: `Caddyfile` and `ca/ca.crt` into
-> `app-caddy-1`, and ten `config.d/*.xml` + `users.d/*.xml` into
+> `app-caddy-1`, and eleven `config.d/*.xml` + `users.d/*.xml` into
 > `app-clickhouse-1`. A single-file bind mount follows the **inode**, not the
 > path, and rsync's default temp-file + rename hands every sync a new one — so
 > the container goes on reading the pre-sync file no matter how correct the

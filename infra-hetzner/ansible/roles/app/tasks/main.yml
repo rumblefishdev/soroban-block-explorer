@@ -240,7 +240,7 @@
   # Cargo.toml, tests etc. stay on the operator's laptop.
   #
   # `--inplace` for the same reason as the infra-hetzner/ sync above,
-  # and here it has already cost us once: ten of these XML files are
+  # and here it has already cost us once: eleven of these XML files are
   # bind-mounted into app-clickhouse-1 INDIVIDUALLY, so each is pinned
   # to an inode. The 2026-07-06 `prices_writer` grant change synced
   # cleanly, reported success, and did nothing until the container was
