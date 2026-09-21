@@ -138,6 +138,11 @@
              shape as system.parts (task 0314). -->
         <query>GRANT SELECT ON system.mutations</query>
         <query>GRANT SELECT ON system.view_refreshes</query>
+        <!-- prices-api task 0100 (BE task 0569): weekly coverage sweep —
+             contracts emitting swap/trade events that prices.pool_registry
+             does not know. Read-only, these two tables only (not default.*). -->
+        <query>GRANT SELECT ON default.soroban_events</query>
+        <query>GRANT SELECT ON default.soroban_contracts</query>
       </grants>
     </prices_writer>
 
