@@ -86,6 +86,41 @@ review of this size.
 - **Fill dry-run** (read-only, 63,700,000–63,705,000): 1,554,897 pairs, 8,369
   contracts, 740 ms, 586 MiB.
 
+### Trial on partition 127 (2026-09-21)
+
+The operator created the table and filled partition 127 with
+`fill_contract_transactions.sql`, 100 slices of 5k ledgers, none failed.
+
+- **Gate:** per slice, `uniqExact` of the fill's own `SELECT DISTINCT` equals
+  `uniqExact` in the table: 100 of 100 slices. 160,521,800 pairs, 0 duplicates,
+  106,889 contracts.
+- **Fee rule:** the native SAC touches 7,212,432 of the partition's 170,740,563
+  transactions (4.2%) once fee events are left out.
+- **Size:** 312.79 MiB, 2.04 B/row on 10 unmerged parts; the ~0.96 B/row
+  estimate above was low. Whole table ≈ 9 GiB (_estimate_: 30 partitions of
+  this size).
+- **List, first page** at the UI's page size (20), three runs each, each with
+  a different head bound so the query condition cache never hits:
+
+  | contract                                                             | transactions in 127 | position seek      | page                 |
+  | -------------------------------------------------------------------- | ------------------- | ------------------ | -------------------- |
+  | native SAC                                                           | 7,212,432           | 23–33 ms, ≤ 67 MiB | 6–11 ms, 7.4 MiB     |
+  | `546855837558613593`                                                 | 6,299,819           | 20–26 ms, ≤ 55 MiB | 5–9 ms, 7.4 MiB      |
+  | `993975029801440783` (89.5 events per transaction, the densest here) | 484                 | 5–7 ms, 8.8 MiB    | 10–19 ms, ≤ 15.5 MiB |
+
+  Every first page is full and has a next page.
+
+- **Whole list of the dense contract**, walked by cursor as the API pages it:
+  25 pages, 484 transactions = 484 in the index. The failure the index
+  replaces (13 of 804 shown, no next page) came from a cap on rows read; the
+  seek has none.
+- **Cost of the dedup.** `LIMIT 1 BY` stops the read-in-order early exit: the
+  native SAC's seek reads 5,750,784 rows (29 ms) with it and 245,760 (13 ms)
+  without. The cost follows the contract's rows in the partition, not the page
+  size, and stays inside the gate. A plain `LIMIT` with the dedup in Rust would
+  restore the early exit, at the price of the short-page risk that over-fetch
+  plus dedup carries (task 0381); not changed.
+
 ## Also found
 
 - **Task 0517 timing.** The event-name backfill has not run. The rekey copy

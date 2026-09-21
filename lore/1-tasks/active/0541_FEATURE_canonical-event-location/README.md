@@ -835,9 +835,23 @@ Design confirmed; six merge blockers fixed; one design change. Full record:
 - **Fee events do not count as touching a contract.** Otherwise the native SAC's
   list is every transaction on the network.
 
-**Owed before the window:** create `contract_transactions` and trial it on
-partition 127; fill it in the phase-3 loop after the rekey of each slice;
-`asset_transfers.event_index` `DEFAULT`, gated by a read; hand over two query
-shapes of a client outside this repository that the swap breaks. Run task 0517
-(event names) only after the swap: 132,256 resolvable `NULL` names were already
-copied with partition 127.
+**Owed before the window:** ~~create `contract_transactions` and trial it on
+partition 127~~ (done 2026-09-21: 160,521,800 pairs, gate 100 of 100 slices,
+every tested first page full; the dense contract's whole list pages through,
+484 of 484); fill it in the phase-3 loop after the rekey of each slice;
+~~`asset_transfers.event_index` `DEFAULT`, gated by a read~~ (done 2026-09-21,
+`system.columns` reads `DEFAULT 0`); hand over two query shapes of a client
+outside this repository that the swap breaks. Run task 0517 (event names) only
+after the swap: 132,256 resolvable `NULL` names were already copied with
+partition 127.
+
+**Decided (karolkow, 2026-09-21): the window this week.** Phase 3 fill on
+Tuesday 2026-09-22, the window on Wednesday 2026-09-23, provided PR #465 and the
+release PR `develop → master` are merged by Tuesday; phase 5 drops before
+Sunday 2026-09-27 03:30 UTC. Free disk 344.75 GiB (19.6%) on 2026-09-21; the
+fill adds ~180 GiB (_estimate_), leaving ~165 GiB against the 120 GiB stop
+line.
+
+> 2026-09-21: the contract-events page, re-measured after the operator merged
+> the staging partition to one part, reads fewer rows than the old page (median
+> 1,490,944 against 1,515,520): the `read_rows ≤ old` gate passes.
