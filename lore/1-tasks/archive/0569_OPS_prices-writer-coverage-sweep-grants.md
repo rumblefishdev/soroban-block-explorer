@@ -2,7 +2,7 @@
 id: '0569'
 title: 'prices_writer: SELECT on default.soroban_events + default.soroban_contracts for the weekly pool-coverage sweep'
 type: OPS
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0477', '0314', '0567']
 tags: ['clickhouse', 'prices-api', 'rbac', 'effort-small']
@@ -15,6 +15,18 @@ history:
       Created from the prices-api ask (their task 0100). Same shape as 0477:
       two read grants on prices_writer, applied in place on the box. Scope is
       deliberately the two tables, not default.*.
+  - date: '2026-09-21'
+    status: completed
+    who: okarcz
+    note: >
+      PR #470 merged (706ab649). Applied box-side the same evening, the 0477
+      path: box file diffed against the previous version (only the 11 added
+      lines), backed up to /tmp/services.xml.bak-0569, overwritten in place
+      (inode 16777410 kept, 7742 -> 8508 bytes), ClickHouse hot-reloaded, no
+      container restart. SHOW GRANTS FOR prices_writer: the two new SELECTs
+      plus the four existing. Prices-side check under their prices_writer
+      cert: count() WHERE 0 on soroban_events and soroban_contracts -> 0,
+      default.transactions -> Code 497. Archived.
 ---
 
 # prices_writer: SELECT on default.soroban_events + default.soroban_contracts
@@ -32,10 +44,9 @@ GRANT SELECT ON default.soroban_contracts
 Only SELECT, only these two tables — not `default.*`. No new user, cert, CN
 map entry, profile or quota.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** branch `ops/0569_prices-writer-coverage-sweep-grants`,
-chained on `ops/0568_prices-admin-system-reads` (same doc table); not applied.
+**Current state:** live on prod since 2026-09-21 evening; PR #470 merged; prices-side check passed.
 
 ## Context
 
@@ -72,11 +83,12 @@ Verification on the prices side, with their `prices_writer` cert:
 
 ## Acceptance Criteria
 
-- [ ] `SHOW GRANTS FOR prices_writer` on prod lists the two new SELECTs and
-      the four existing grants, nothing else.
-- [ ] prices-side check passes: both tables readable, `default.transactions`
-      still denied.
-- [ ] Repo `services.xml` matches the box file byte-for-byte after merge.
-- [ ] **Docs updated** — `clickhouse-rbac.md` row; other architecture docs
+- [x] `SHOW GRANTS FOR prices_writer` on prod lists the two new SELECTs and
+      the four existing grants, nothing else — verified after the hot-reload.
+- [x] prices-side check passes: both tables readable, `default.transactions`
+      still denied — run from the prices campaign machine with their cert.
+- [x] Repo `services.xml` matches the box file byte-for-byte after merge —
+      the box copy IS `git show origin/develop:…services.xml` (706ab649).
+- [x] **Docs updated** — `clickhouse-rbac.md` row; other architecture docs
       N/A.
-- [ ] **API types regenerated** — N/A (no `crates/api` change).
+- [x] **API types regenerated** — N/A (no `crates/api` change).

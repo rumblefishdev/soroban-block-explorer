@@ -2,7 +2,7 @@
 id: '0568'
 title: 'prices_admin: SELECT on system.columns + system.disks, so the re-ingest script needs no dev_read cert on the campaign machine'
 type: OPS
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0567', '0477']
 tags: ['clickhouse', 'prices-api', 'rbac', 'effort-small']
@@ -19,6 +19,15 @@ history:
       to the campaign machine, and a profile capped at 30 s per query that
       the month-wide FINAL sums may not fit. Two read-only grants let the
       admin cert be the reader too.
+  - date: '2026-09-21'
+    status: completed
+    who: okarcz
+    note: >
+      PR #469 merged (ab92caa2). Applied box-side together with 0569 the
+      same evening: services.xml overwritten in place (inode 16777410 kept,
+      7742 -> 8508 bytes), ClickHouse hot-reloaded — SHOW GRANTS FOR
+      prices_admin lists six grants incl. system.columns + system.disks.
+      Backup on the box: /tmp/services.xml.bak-0569. Archived.
 ---
 
 # prices_admin: SELECT on system.columns + system.disks
@@ -38,9 +47,9 @@ developer's `dev_read` cert (profile `read_only`, 30 s / 4 GB per query,
 2 TiB/h quota). No write scope changes: `prices_admin` still writes to
 `prices.*` only.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** branch `ops/0568_prices-admin-system-reads`; not applied.
+**Current state:** live on prod since 2026-09-21 evening; PR #469 merged.
 
 ## Context
 
@@ -62,11 +71,13 @@ free/total space. Same shape as 0477's `system.mutations` grant.
 
 ## Acceptance Criteria
 
-- [ ] `SHOW GRANTS FOR prices_admin` on prod lists the two new SELECTs and
-      nothing else new.
-- [ ] Under the `prices-admin-production` cert, `system.disks` and
-      `system.columns` are readable from the campaign machine.
-- [ ] Repo `services.xml` matches the box file byte-for-byte after merge.
-- [ ] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
+- [x] `SHOW GRANTS FOR prices_admin` on prod lists the two new SELECTs and
+      nothing else new — verified on the box after the hot-reload.
+- [x] Under the `prices-admin-production` cert, `system.disks` and
+      `system.columns` are readable from the campaign machine — the
+      free-space read returned a number (step 7 of the 0567 procedure).
+- [x] Repo `services.xml` matches the box file byte-for-byte after merge —
+      the box copy IS `git show origin/develop:…services.xml` (706ab649).
+- [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
       row; other architecture docs N/A.
-- [ ] **API types regenerated** — N/A (no `crates/api` change).
+- [x] **API types regenerated** — N/A (no `crates/api` change).
