@@ -105,6 +105,13 @@ review of this size.
 - **The contract-events page** reads 1.32× the old rows on partition 127 (6
   unmerged parts against 2). The plan's `read_rows ≤ old` criterion was never
   evaluated; re-measure once the partition is merged.
+  Re-measured 2026-09-21 after the operator merged the partition to one part
+  (5.31 → 5.26 GiB, rows unchanged; the old partition has 2 parts). Native
+  SAC, first page of 21, both bounded to partition 127; three runs each, each
+  with a different upper ledger bound so the query condition cache never hits
+  (the read-only profile cannot switch it off). Median: old 98 ms, 1,515,520
+  rows, 447 MiB; new 92 ms, 1,490,944 rows, 393 MiB. The new page read fewer
+  rows in all three runs (0.96–0.99×): the gate passes.
 - **Canonical endpoint SQL 02** still described the pre-0541 UNION, reading
   `soroban_events.transaction_id`; updated with the index seek.
 - **graphify** (structural, no LLM) drops calls written as `crate::fn(...)`, so
