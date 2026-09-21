@@ -28,6 +28,13 @@ history:
       the rename trap and the two execution variants (drop the months older
       than 30 days first, or a single MODIFY TTL that rewrites every part) stay
       here for a later decision. 0541 proceeds without the reclaimed space.
+  - date: 2026-09-21
+    status: backlog
+    who: claude
+    note: >
+      Measured again for 0541's review: net growth per table, the text_log
+      level (answers implementation step 5), where the log lines come from, and
+      a consideration on query_log's TTL. No status change.
 ---
 
 # OPS: ClickHouse system logs keep 30 days
@@ -60,6 +67,86 @@ Whole monthly parts older than 30 days: 89.27 GiB. The TTL also trims the
 rows of August's parts older than 30 days, so the real gain is higher
 (estimate). `text_log` alone adds about 1 GiB a day (47.78 GiB since
 mid-August).
+
+## Measured again (production, 2026-09-20/21, read-only)
+
+> Answers implementation step 5. Adds net growth per table, where the log
+> lines come from, and a consideration on `query_log`'s TTL.
+
+### Written is not kept
+
+Bytes written (`system.part_log`, `NewPart`) overstate what a log table keeps:
+merges compress wide rows hard. Kept per day = size on disk ÷ days of data held
+(`system.parts`, active parts):
+
+| table                     | size      | days held            | kept / day | TTL     |
+| ------------------------- | --------- | -------------------- | ---------- | ------- |
+| `text_log`                | 80.74 GiB | 70 (from 2026-07-14) | 1.15 GiB   | none    |
+| `trace_log`               | 38.00 GiB | 126                  | 308.79 MiB | none    |
+| `query_log`               | 24.62 GiB | 126                  | 200.05 MiB | none    |
+| `part_log`                | 17.65 GiB | 126                  | 143.44 MiB | none    |
+| `processors_profile_log`  | 14.18 GiB | 30                   | steady     | 30 days |
+| `metric_log`              | 3.91 GiB  | 126                  | 31.78 MiB  | none    |
+| `asynchronous_metric_log` | 2.94 GiB  | 126                  | 23.91 MiB  | none    |
+| `query_metric_log`        | 1.10 GiB  | 124                  | 9.05 MiB   | none    |
+
+Server logs keep ≈ 1.86 GiB a day. `metric_log` writes about 2.5 GiB a day and
+keeps 32 MiB of it.
+
+Disk, from `asynchronous_metric_log` (`DiskAvailable_default`, daily maximum):
+380.49 GiB free on 2026-09-13, 351.58 GiB on 2026-09-20 — a net loss of
+4.13 GiB a day, so the logs are about 45% of it. Free space swings about 8 GiB
+within a day (37 GiB on backfill days), so a free-space gate should read the
+daily minimum.
+
+### `text_log` — the server logs at `trace`
+
+`system.server_settings`: `logger.level = trace`, the value in ClickHouse's
+shipped default config. `text_log` by level, 2026-09-18 to 09-20: Trace 58.0%,
+Debug 41.9%, Information 0.1%, Warning 5,052 rows, Error 2,727 rows.
+
+A `text_log` level of `information` keeps the useful 0.1% and removes nearly
+all of the 1.15 GiB a day. Verify the config element name in the ClickHouse docs
+before writing it (step 5).
+
+### Where the log lines come from
+
+`text_log` on 2026-09-20, attributed through `query_id` → `query_log.user`:
+
+| source                                            | share |
+| ------------------------------------------------- | ----- |
+| indexer (`ingestion_writer`)                      | 29.6% |
+| internal queries (empty user — refreshable views) | 28.5% |
+| background, no query id (merges, view refreshes)  | 22.1% |
+| co-located `prices` database (`prices_writer`)    | 19.6% |
+| API (`api_reader`)                                | 0.2%  |
+| operator reads (`dev_read`)                       | 0.1%  |
+
+Queries 2026-09-14 to 09-20: indexer 72.7%, `prices_*` 20.9%, internal 5.7%,
+API 0.4%, operator 0.3%. Manual reads are not a factor.
+
+About half the lines come from refreshable views and merges.
+`accounts_recent_mv` (task 0385, `REFRESH EVERY 2 MINUTE`, a full recompute
+from `accounts FINAL`) writes 687.73 GiB of temporary parts a day (7-day
+average), against 1.61 GiB for `balance_aggregates_mv`, which uses the same
+pattern on an aggregate. Its storage is small (`accounts_recent` 972.55 MiB);
+its write volume was not measured in 0385. Out of this task's scope — recorded
+because it drives log volume.
+
+### `trace_log` composition
+
+2026-09-20: Memory 40.3%, MemoryPeak 36.8%, Real 20.8%, CPU 2.0%. All defaults:
+`memory_profiler_step` 4 MiB, both query profiler periods 1 s.
+
+### Consideration for the TTL decision — `query_log`
+
+The plan gives every table 30 days. `query_log` is the evidence base for
+questions like 0541's consumer sweep: a sweep of its full retention (from
+2026-05-19) found one client outside this repository reading `soroban_events`,
+active in July and on two days in September. With 30 days the July activity
+would not have been visible. A longer TTL for `query_log` alone (90–180 days)
+costs about 200 MiB a day. `part_log` served the per-table write measurement
+above; 30–60 days covers that use.
 
 ## The trap — a config TTL alone frees nothing
 
