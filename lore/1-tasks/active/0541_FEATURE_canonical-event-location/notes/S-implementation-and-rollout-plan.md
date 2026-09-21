@@ -1080,6 +1080,10 @@ literals remove the doubt.
 ### 4.0 Preconditions (all true before starting)
 
 - Phase 3 complete up to `X` for both tables; every gate passed.
+- No backfill or re-ingest touched a range below `X` since it was filled: such
+  a write lands in the old table after the copy and is lost at the swap.
+  Checked by a read — per filled partition, the old table's row count still
+  equals the pre-fill gate's `n`.
 - `contract_transactions` exists — the new indexer writes it, and a missing
   table fails every insert: `chq "EXISTS TABLE default.contract_transactions"`
   returns `1`.

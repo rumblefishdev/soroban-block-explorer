@@ -858,6 +858,12 @@ task 0563's retention; ~296 GiB would remain after the fill.
 partition as each passes its pre-fill gate; with the disk no longer the
 constraint, Tuesday stays for the head's partition and the checks.
 
+Pre-fill gate, 2026-09-21 (read-only, `fill_gate.sql` per 5k slice): 28 of 28
+partitions pass (100–126, 128) — new keys = old keys in every slice, no
+duplicates in the old table, charges = the partition's transactions, pre-23
+refunds only up to partition 117 and post-23 ones only from it (117 holds the
+boundary and both). 10,176,445,797 rows to copy.
+
 Phase 3 runs as one command per list of partitions,
 [`fill_partitions.zsh`](notes/fill_partitions.zsh): both tables per partition,
 disk checked before each, stop at the first error. Dry-run with a stub `chw`
