@@ -126,6 +126,11 @@ pool = `get_reserves` or `query_pool_info`.
   hash involved has an interface row (0 unknown).
 - **9** upgrades changed the shape, across **6** contracts:
 
+> **Inconsistent as recorded (found 2026-09-16):** the table below names 5
+> contracts and at least 7 transitions. The sixth contract and the per-contract
+> upgrade counts were not recorded; re-run the scan before using 9 / 6 as a
+> baseline.
+
 | Contract    | Transition                             | Misrepresented in our tables today?                     |
 | ----------- | -------------------------------------- | ------------------------------------------------------- |
 | `CAZ6W4WH…` | pool → other                           | **yes** — soroban pool registry                         |

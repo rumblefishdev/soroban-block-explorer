@@ -7,6 +7,7 @@
 
 pub mod asset_appearances;
 pub mod asset_code;
+pub mod claimable_balance;
 pub mod classification;
 pub mod contract;
 pub mod error;

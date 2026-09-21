@@ -48,6 +48,10 @@ command below is the **map owner's**; nothing here is run by an agent. Order:
 
 ## Step 1 — merge first, do NOT tag
 
+> **Superseded — the rollout did not follow this order.** See Step 4 ("DONE
+> 2026-09-07, and NOT as written below"): column defaults first, then the
+> indexer deploy, with the column drops deferred until after the backfills.
+
 The branch is reviewed and merged to `develop`, then merged `develop →
 master` — **without a release tag**. In this repo a tag IS the deploy
 (`docs/deployment.md`: pushing `production-…` runs `cdk deploy` of the Compute
@@ -391,37 +395,32 @@ Rows in `asset_transfers` against the non-diagnostic token events
 rejects the decoder counted (`xdr_parser::asset_transfers` warnings in the
 worker logs; expected ≈ 0 — the gate rejected 0 on 33 ledgers).
 
+One partition per run — set `p`. Both sides count under `FINAL`, which streams
+and fits the per-query memory cap and removes unmerged duplicates on both tables
+(tested 2026-09-16 on partition 100: 17,357,926 = 17,357,926, 0.1 s).
+
 ```sql
+WITH 100 AS p
 SELECT p,
-       any(ev) AS token_events,
-       any(at) AS transfers,
-       any(ev) - any(at) AS diff
-FROM (
-    SELECT intDiv(ledger_sequence, 500000) AS p,
-           count() AS ev, 0 AS at
-    FROM soroban_events
-    WHERE lower(signature) IN ('transfer','mint','burn','clawback') AND event_type = 1
-    GROUP BY p
-    UNION ALL
-    SELECT intDiv(ledger_sequence, 500000) AS p, 0,
-           uniqExact((ledger_sequence, application_order, op_index, event_pos_in_op))
-    FROM asset_transfers
-    GROUP BY p
-)
-GROUP BY p ORDER BY p
+       (SELECT count() FROM soroban_events FINAL
+         WHERE intDiv(ledger_sequence, 500000) = p
+           AND lower(signature) IN ('transfer','mint','burn','clawback')
+           AND event_type = 1) AS token_events,
+       (SELECT count() FROM asset_transfers FINAL
+         WHERE intDiv(ledger_sequence, 500000) = p) AS transfers,
+       token_events - transfers AS diff
 ```
 
-`soroban_events` carries unmerged duplicates too, so compare
-`uniqExact((transaction_id, event_index))` there (its own key) if `diff` is not ~0 before
-reading anything into it. Gate 7b (archive re-decode diff) and 7c (T11) follow.
+Gate 7b (archive re-decode diff) and 7c (T11) follow.
 
 Run 2026-09-13 on the full range — see README "Completion gate 7 passed on the
-full range". Three corrections to the query above, learned there: count with
+full range". The query above carries the corrections learned there: count with
 `lower(signature)` (the decoder matches verbs case-insensitively; a case-sensitive
-filter misses 175 events and reads them as rejects); a whole-partition
-`uniqExact` exceeds the per-query memory cap, so compare `count()` under `FINAL`
-per partition instead; and the reject counters to subtract come from the worker
-logs deduplicated per ledger, since overlapping worker ranges log a ledger twice.
+filter misses 175 events and reads them as rejects), and `count()` under `FINAL`
+per partition, because a whole-partition `uniqExact` exceeds the per-query memory
+cap. The reject counters to subtract from `diff` come from the worker logs
+deduplicated per ledger, since overlapping worker ranges log a ledger twice.
+`chq` exits 0 even on a server error — check the output for `DB::Exception`.
 
 ## Rollback at any point up to step 7
 

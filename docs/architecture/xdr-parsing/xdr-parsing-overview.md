@@ -312,7 +312,13 @@ entities:
   JSONB blob on `accounts`)
 - classic LP state → `liquidity_pools` row + `liquidity_pool_snapshots` row +
   `lp_positions` upsert per participating account (asset pair modeled as typed
-  `asset_*_type SMALLINT` + code + issuer_id, not JSONB)
+  `asset_*_type SMALLINT` + code + issuer_id, not JSONB). Values come only from
+  `created` / `updated` / `restored`: a `state` change is the entry at the start
+  of the operation and always precedes that key's `updated` or `removed`
+  (stellar-core `LedgerTxn::getChanges`). A pool `removed` writes a zero
+  snapshot at its ledger, with the pool row's params taken from the `state`
+  before it — revoking the last holder's authorization erases a pool whose
+  only other image is the full-reserve `state` (task 0210)
 - **classic-credit + native asset entity rows** → `assets` row per distinct
   `(asset_code, issuer)` pair observed in a `trustline` LedgerEntryChange
   (`xdr_parser::detect_classic_credit_assets`, task 0219). Native XLM is a
@@ -357,7 +363,8 @@ explorer records.
 step 14, called out here so the parser/indexer boundary stays explicit):
 
 - `balance_aggregates.total_supply` / `.holder_count` — recomputed from
-  `balances` by the refreshable `balance_aggregates_mv` (task 0293/0331), never
+  `balances`, `claimable_balance_holdings` and the newest classic pool snapshot
+  by the refreshable `balance_aggregates_mv` (task 0293/0331/0210), never
   by the parser and no longer on the `assets` row at all (those columns were
   dropped in task 0310). Per
   [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) both are
@@ -677,7 +684,7 @@ decoded by two sibling modules:
   `Router` keys plus its reserves in raw units from whichever of the three
   layouts its code uses (`ReserveA`/`ReserveB`, `Reserves`,
   `Reserve0`/`Reserve1` — the only three across all 58 code versions pools have
-  run) and `PrecisionMul`. `Plane` is the key that makes it a pool, while
+  run). `Plane` is the key that makes it a pool, while
   `Router` is absent on an older contract version (five of the ten live
   deployments, measured on chain) and is therefore optional.
   `extract_pool_instances` compares each post-image with its `state`

@@ -159,6 +159,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             contract_metadata_writes: &[],
             executable_ref_targets: &[],
             soroban_token_balances: &[],
+            claimable_balances: &[],
             pool_family_writes: &writes,
             sac_classic: &std::collections::HashMap::new(),
             sac_overrides: &[],

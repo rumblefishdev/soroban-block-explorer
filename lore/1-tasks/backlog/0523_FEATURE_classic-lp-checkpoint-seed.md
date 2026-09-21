@@ -66,6 +66,28 @@ restating the pair's real first deposit (whole-row RMT).
 Mind 0499 (merge lp_positions into balances, parked): this seed writes the
 CURRENT table; if 0499 ever lands first, the corrections target moves.
 
+## 2026-09-16 (karolkow) — the pools half landed in task 0210
+
+PR #460 (task 0210) folds the **pools** half into `snapshot-seed`: every live
+checkpoint `LiquidityPoolEntry` newer than our newest snapshot of it (or with
+none) gets a `liquidity_pool_snapshots` row and its `liquidity_pools` row,
+insert-only, versioned on the entry's `lastModifiedLedgerSeq`, built by the live
+writer's builders (`db_clickhouse::persist::classic_pools`). Pools gone from the
+network with reserves left are listed in `pools_gone.tsv`. What remains here is
+the **positions** half (pool-share trustlines → `lp_positions`) and the items
+below.
+
+**Pool creation date before our history.** The pool API derives
+`created_at_ledger` from the pool's oldest snapshot
+(`crates/api/src/liquidity_pools/queries.rs`, `min(ledger_sequence)`). For a
+pool first seen at the ingest floor (50,457,424), and for every pool the seed
+inserts, that is not the creation ledger: the checkpoint carries only the last
+modification, and a seeded ledger older than `ledgers` has no timestamp.
+Same class as `first_deposit_ledger = 0` above, same fix: when the oldest
+snapshot is at or below the floor, return null and show "before indexed
+history" instead of a ledger. Task 0401 (store `created_at_ledger` at write
+time) must keep that semantics if it lands first.
+
 ## Acceptance Criteria
 
 - [ ] one `snapshot-seed` run covers balances + accounts + LP world (no
@@ -74,4 +96,6 @@ CURRENT table; if 0499 ever lands first, the corrections target moves.
 - [ ] coverage re-measured after: positions-sum vs snapshot total agree
       (modulo documented ghosts), pre-floor pools visible
 - [ ] 0468 closed by the sentinel read + FE dead-link fix
+- [ ] pool `created_at_ledger` null for pools older than our history (API + FE
+      "before indexed history")
 - [ ] docs: backfills runbook row + lp_positions sentinel comment

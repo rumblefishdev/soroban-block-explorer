@@ -78,6 +78,17 @@ siblings and moved the share-token oracle out of `pool_router.rs` into
 - Update the table above as files shrink; close the task when nothing
   production exceeds the CLAUDE.md limit.
 
+## 2026-09-16 (karolkow) — test files leave the code's directory
+
+The rule changed: tests no longer sit beside the code. Rust uses the native
+submodule path (`foo.rs` → `foo/tests.rs`, `mod tests;` with no `#[path]`);
+TS/TSX uses `__tests__/foo.test.ts(x)`, which the Vitest `include` pattern
+(`src/**/*.{test,spec}.{ts,tsx}`) already matches. Stock on 2026-09-16: 24
+`*_tests.rs` files under `crates/*/src` and 60 `*.test.ts(x)` files, all
+siblings, 0 `__tests__` directories. They move with the same ratchet as the
+splits: when a task touches the file. A move is a pure-move `refactor(...)`
+commit like any split. Close only when no sibling test file is left either.
+
 ### Open question, first hit 2026-09-02 (task 0485)
 
 `*_tests.rs` does not exist ANYWHERE in this repo yet — 0374 extracted the LP

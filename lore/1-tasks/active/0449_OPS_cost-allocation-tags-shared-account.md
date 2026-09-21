@@ -119,6 +119,45 @@ history:
       started. All seven acceptance criteria remain unticked and genuinely
       open — none were verified — so this is a status correction, not a
       completion. Found by the 0455 review sweep (finding 36).
+  - date: 2026-09-01
+    status: active
+    who: stkrolikiewicz
+    note: >
+      The propagateTags fix took NINE DAYS to do anything, and nobody
+      noticed. Found while producing a per-project cost breakdown, which is
+      the first time anyone read the tag data back. Timeline, verified on
+      the live system: commit 78bcf735 on 2026-08-10; CloudFormation
+      applied it in the 2026-08-18 release (Explorer-production-Ingestion
+      LastUpdatedTime 12:49 UTC, UPDATE_COMPLETE) - the same release that
+      shipped the anomaly detection noted above; and ECS spend stayed 100%
+      untagged until 2026-08-27. The gap IS the mechanism: propagateTags
+      only affects tasks launched AFTER it goes live, and a running Fargate
+      service does not replace its task when only the service config
+      changes - the task definition was untouched and the primary
+      deployment is still dated 2026-07-09. It began working when the task
+      was replaced for an unrelated reason at 02:33 on 2026-08-27 (task
+      createdAt; almost certainly Fargate platform retirement, since no
+      deploy happened that night). Daily CE confirms the shape exactly:
+      ECS untagged 4.08-4.91 USD/day through 08-26, then tagged 5.09 /
+      untagged 0.10 on 08-27, then untagged 0.00. Three consequences.
+      (1) AC #4 was failing for all of August - 198.43 of 258.37 USD
+      unattributed - and docs/runbooks/costs.md is WRONG where it claims a
+      ~0.6 USD/day residual: measured 1.44 USD/day in the clean window, of
+      which CloudWatch alone is 0.93. (2) The historical backfill never
+      took effect (April, May and June are 100% untagged) and could never
+      have fixed ECS anyway - backfill applies the tags a resource carried
+      at usage time, and the tasks carried none. (3) The first honestly
+      attributed window is 2026-08-27..31: explorer 28.27, prices 2.95,
+      untagged 7.19 USD over five days, i.e. ~172 / ~18 / ~44 USD per
+      month; Galexie alone is 86% of the explorer's AWS bill, of which
+      28 USD/month is egress to Hetzner rather than compute. Same shape as
+      0513 (bind-mount inode): a deploy that reports success while the
+      running process keeps the old behaviour until something unrelated
+      restarts it - another instance of 0455 defect 1. The probe that would
+      have caught this on 08-19 is one call, and stack UPDATE_COMPLETE is
+      NOT it - read the tags off the RUNNING task:
+      aws ecs describe-tasks --cluster production-ingestion --tasks <arn>
+      --include TAGS.
 ---
 
 # The AWS account bills two projects as one

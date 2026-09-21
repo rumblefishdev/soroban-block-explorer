@@ -36,6 +36,14 @@ history:
       reaches the balance. One (account, ledger) pair decoded end to end;
       92,122 charged, 27,083 refunded, and our stored value equals the
       container we read to the stroop.
+  - date: '2026-09-18'
+    status: backlog
+    who: karolkow
+    note: >
+      Third measurement (0210's seed, checkpoint 64,486,655): 16,321 rows —
+      the bucket SHRANK from 18,363 (2026-09-02), so it is not monotonic.
+      The one open inference is now measured: a SUCCESSFUL Soroban
+      transaction refunds in the same place, outside `TransactionMeta`.
 ---
 
 # BUG: native balance lower than the chain's at the same ledger (Soroban path)
@@ -198,3 +206,51 @@ then heal once.
       full list kept as an artifact
 - [ ] The standing tie-audit query (0503) returns zero NEW rows for a week of
       post-fix ledgers
+
+## 2026-09-18 (karolkow) — third measurement, and the successful-transaction case
+
+Measured during task 0210's seed run (checkpoint 64,486,655), all figures from
+production plus RPC decoding of real mainnet transactions.
+
+### The bucket does not only grow
+
+| date       | checkpoint | rows       |
+| ---------- | ---------- | ---------- |
+| 2026-08-24 | 64,106,495 | 17,798     |
+| 2026-09-02 | 64,237,951 | 18,363     |
+| 2026-09-17 | 64,469,759 | 16,422     |
+| 2026-09-18 | 64,486,655 | **16,321** |
+
+The population is the set of accounts whose LAST write was a Soroban
+transaction, so it falls whenever such an account is touched again by anything
+else. The ~470 rows/week accrual figure describes arrivals, not the balance of
+the bucket, and the bucket itself is not a progress measure.
+
+Direction re-checked on 20 rows drawn across the key range: 20 of 20 ours
+lower, 0 higher. Ledgers of the 1,000-row dump start at 58,866,501 — above the
+protocol-23 activation at 58,762,517, which is where the refund moved out of
+`tx_changes_after`. That is why no row predates it.
+
+### The successful transaction, decoded end to end
+
+The 2026-08-25 root cause rested on a FAILED transaction and left "the refund
+lands in the same container for a successful one" as an inference. Measured
+now, on `b38dbffc…`, ledger 64,486,600, status SUCCESS
+(`invoke_host_function` succeeded), account
+`GD6WH5XQKA32VWHWMSSEUIO3MGQM6ZLDPAP22FEZMZQPJVPP4EXMMHUU`:
+
+- `TransactionMetaV4` carries the account at **390,686,365** in
+  `tx_changes_before` (`state` and `updated`, differing only in `seq_num`),
+  zero operation changes touching it, and an **empty `tx_changes_after`** —
+  our stored value is exactly that container.
+- The meta's own fee events: `before_all_txs` **+948,496**,
+  `after_all_txs` **−853,390**.
+- The transaction result: `fee_charged` **95,106** = 948,496 − 853,390.
+
+So a successful Soroban transaction settles its refund the same way, and the
+true balance for that ledger is 390,686,365 + 853,390. The inference is closed:
+the defect is not specific to failed transactions.
+
+A second failed case was decoded alongside it (`0e769fe8…`, ledger 64,485,846,
+account `GA67YDSN…`): ours 225,330,345, chain 225,356,195, `fee_charged`
+62,817 against a 88,667 debit — the 25,850 difference is the refund.

@@ -24,7 +24,12 @@
 //! but "knows nothing about our schema" was true of one module, not two.
 
 pub mod archive;
+pub mod balances;
+pub mod claimable;
+pub mod dumps;
 pub mod network_state;
+pub mod pools;
 pub mod report;
 pub mod seed;
+pub mod slices;
 pub mod verdict;

@@ -65,16 +65,17 @@ Caddy does not know the password to forge Basic Auth.
 
 ## Per-service user matrix
 
-| CH user            | Profile         | Quota          | Permitted operations                                                                                                                                                            | Consumer                                               |
-| ------------------ | --------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `default`          | `default`       | `default`      | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)                                                                                                                     | `db-clickhouse-init` sidecar + backup script + SSH ops |
-| `dev_shared`       | `admin`         | `unlimited`    | Everything (admin, `<no_password/>` + loopback/bridge networks)                                                                                                                 | Dev laptops (one shared cert-gated user)               |
-| `galexie`          | `write_no_ddl`  | `high_write`   | INSERT only on ingestion tables                                                                                                                                                 | Galexie ECS task                                       |
-| `api_reader`       | `read_only`     | `api_throttle` | SELECT on `default.*`                                                                                                                                                           | Lambda API (read-heavy)                                |
-| `ingestion_writer` | `write_no_ddl`  | `high_write`   | INSERT on tables Galexie does not touch                                                                                                                                         | Lambda Ingestion                                       |
-| `prices_writer`    | `write_no_ddl`  | `prices_write` | SELECT, INSERT, OPTIMIZE + ALTER DELETE on `prices.*`; SELECT on `system.parts` / `system.mutations` / `system.view_refreshes` (inline `<grants>`; 0314 + 0477 self-monitoring) | prices-api ingestion (separate service, task 0063)     |
-| `prices_reader`    | `read_only`     | `prices_read`  | SELECT on `prices.*` only (inline `<grants>`)                                                                                                                                   | prices-api / BE LP-analytics `price_usd_series` JOIN   |
-| `dict_reader`      | `read_only_lan` | n/a (loopback) | SELECT inside container (loopback only)                                                                                                                                         | Dictionary SOURCE clause                               |
+| CH user            | Profile            | Quota          | Permitted operations                                                                                                                                                                                                                                                         | Consumer                                                                                                 |
+| ------------------ | ------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `default`          | `default`          | `default`      | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)                                                                                                                                                                                                                  | `db-clickhouse-init` sidecar + backup script + SSH ops                                                   |
+| `dev_shared`       | `admin`            | `unlimited`    | Everything (admin, `<no_password/>` + loopback/bridge networks)                                                                                                                                                                                                              | Dev laptops (one shared cert-gated user)                                                                 |
+| `galexie`          | `write_no_ddl`     | `high_write`   | INSERT only on ingestion tables                                                                                                                                                                                                                                              | Galexie ECS task                                                                                         |
+| `api_reader`       | `read_only`        | `api_throttle` | SELECT on `default.*`                                                                                                                                                                                                                                                        | Lambda API (read-heavy)                                                                                  |
+| `ingestion_writer` | `write_no_ddl`     | `high_write`   | INSERT on tables Galexie does not touch                                                                                                                                                                                                                                      | Lambda Ingestion                                                                                         |
+| `prices_writer`    | `write_no_ddl`     | `prices_write` | SELECT, INSERT, OPTIMIZE + ALTER DELETE on `prices.*`; SELECT on `system.parts` / `system.mutations` / `system.view_refreshes` ; SELECT on `default.soroban_events` / `default.soroban_contracts` only (inline `<grants>`; 0314 + 0477 self-monitoring, 0569 coverage sweep) | prices-api ingestion (separate service, task 0063)                                                       |
+| `prices_reader`    | `read_only`        | `prices_read`  | SELECT on `prices.*` only (inline `<grants>`)                                                                                                                                                                                                                                | prices-api / BE LP-analytics `price_usd_series` JOIN                                                     |
+| `prices_admin`     | `prices_write_ddl` | `prices_write` | SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE on `prices.*`; SELECT on `default.*`, `system.parts`, `system.mutations`, `system.columns`, `system.disks` (inline `<grants>`; tasks 0567 + 0568)                                                                  | prices-api operator campaigns (history re-ingest, partition repair) — operator-held cert, never a Lambda |
+| `dict_reader`      | `read_only_lan`    | n/a (loopback) | SELECT inside container (loopback only)                                                                                                                                                                                                                                      | Dictionary SOURCE clause                                                                                 |
 
 > `migration_admin` + `partition_admin` were removed in task 0241 (from
 > `crates/db-clickhouse/users.d/services.xml`) together with the PG-era
@@ -93,7 +94,7 @@ other service users:
   all-database access — correct while `default` is the only DB). The prices
   users carry an inline `<grants>` block (`GRANT … ON prices.*`), which both
   scopes them to `prices.*` and flips them into explicit-grant mode, so
-  `prices_writer` is denied `default.*` and cannot run DDL. Inline user-XML
+  `prices_writer` is denied `default.*` — bar SELECT on `soroban_events` / `soroban_contracts` (task 0569) — and cannot run DDL. Inline user-XML
   grants apply at startup (CH ≥ 21.4).
 - **Tenant boundary is one-directional.** The prices certs are confined to
   `prices.*` and cannot touch `default.*`. The reverse is **not** enforced:
@@ -118,6 +119,7 @@ the full list. Convention:
 | `lambda-ingestion-<environment>` | `ingestion_writer` |
 | `prices-ingestion`               | `prices_writer`    |
 | `prices-api`                     | `prices_reader`    |
+| `prices-admin-<environment>`     | `prices_admin`     |
 | `<firstname>-laptop`             | `dev_shared`       |
 
 > `lambda-partition-<env>` and `lambda-migration-<env>` were retired in task
@@ -147,14 +149,18 @@ returns as 403 before any backend hop.
 ### Quotas
 
 - `unlimited` — sidecar + dev laptops + emergency.
-- `api_throttle` — 10000 queries / hour, 1B read_rows, 100 GB
+- `api_throttle` — 10000 queries / hour, 50B read_rows, 1 TiB
   read_bytes, 1000 s execution_time.
 - `high_write` — unbounded queries / read, 1 PB written_bytes
   ceiling (sanity cap, not a real throttle).
 - `prices_write` — caps copied verbatim from `high_write`; a dedicated
   name so prices ingestion never draws down a BE service's budget.
-- `prices_read` — caps copied verbatim from `api_throttle`; dedicated
-  name for the same isolation reason.
+- `prices_read` — `api_throttle`'s byte/row guards (50B read_rows,
+  1 TiB read_bytes, 10B result_rows) with queries and execution_time
+  unlimited (task 0561: the 10000/h query cap blacked out prices-api
+  for 26 min on 2026-09-03). Dedicated name for the same isolation
+  reason; deliberately not `unlimited` so the prices tenant cannot
+  drain the shared box.
 
 ## Known limitations
 

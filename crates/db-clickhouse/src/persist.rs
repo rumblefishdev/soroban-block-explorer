@@ -48,6 +48,8 @@ use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
 use crate::SchemaError;
 
+pub mod claimable_balances;
+pub mod classic_pools;
 pub mod enrichment;
 pub mod ids;
 pub mod rows;
@@ -90,6 +92,7 @@ pub async fn persist_ledger_clickhouse(
     contract_metadata_writes: &[xdr_parser::ExtractedContractMetadata],
     executable_ref_targets: &[xdr_parser::executable_ref::ExtractedExecutableRefTarget],
     soroban_token_balances: &[xdr_parser::ExtractedSorobanBalance],
+    claimable_balances: &[xdr_parser::claimable_balance::ExtractedClaimableBalance],
     pool_family_writes: &[xdr_parser::pool_family::PoolFamilyWrite],
     sac_overrides: &[SacOverride],
     asset_transfers: &[xdr_parser::ExtractedAssetTransfer],
@@ -147,6 +150,7 @@ pub async fn persist_ledger_clickhouse(
         contract_metadata_writes,
         executable_ref_targets,
         soroban_token_balances,
+        claimable_balances,
         pool_family_writes,
         // ADR 0051: `build_balance_rows` keys contract-held SAC balances onto the
         // wrapped classic/native asset (the SAC has no `assets` row) via this map.
@@ -548,57 +552,5 @@ async fn fetch_prior_contract_rows(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn synthetic_ledger() -> ExtractedLedger {
-        ExtractedLedger {
-            sequence: 1,
-            hash: "00".repeat(32),
-            closed_at: 0,
-            protocol_version: 22,
-            transaction_count: 0,
-            base_fee: 100,
-        }
-    }
-
-    /// `persist_ledger_clickhouse` against an unroutable URL must
-    /// surface a transport error — we treat it as the "no side effect"
-    /// proof that the wrapper actually issues the insert path
-    /// (the stub it replaced returned Ok without any I/O).
-    #[tokio::test]
-    async fn wrapper_returns_err_when_client_unreachable() {
-        // Deliberately unroutable URL — any real network use must fail.
-        let client = Client::default().with_url("http://127.0.0.1:1");
-        let ledger = synthetic_ledger();
-        // Single ledger, no transactions or downstream data — the
-        // writer still opens the `ledgers` insert at commit time, which
-        // touches the network and surfaces the unroutable-URL error.
-        let res = persist_ledger_clickhouse(
-            &client,
-            &ledger,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &ClassificationCache::new(),
-        )
-        .await;
-        assert!(res.is_err(), "expected transport error, got: {res:?}");
-    }
-}
+#[path = "persist_tests.rs"]
+mod tests;

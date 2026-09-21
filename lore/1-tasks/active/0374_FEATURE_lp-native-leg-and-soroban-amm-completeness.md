@@ -2032,3 +2032,46 @@ the pool on every run and its stale reserves stay visible.
   774 keys for the 8 pools; production rows equal the payload exactly.
   `pool_reserves_reconciliation` at ledger 64,454,699: **769 of 770 pools equal
   their own storage**; the one failure is `CAZ6W4WH…` (task 0325).
+
+## 2026-09-17 (karolkow) — can a Soroban pool delete a key we read? No deployed one can
+
+Spawned from task 0210's pool-removal fix: the classic extractor stored a
+`state` image as a value and skipped `removed`, which left 1,671 stale
+snapshots. The same question for the six Soroban-side extractors that skip
+`removed`.
+
+- **Safe by construction:** `extract_pool_instances` (router family) and
+  `extract_factory_pairs` (Soroswap) read the contract instance entry. A
+  contract cannot name that key (`soroban-env-common` `val.rs:622-626`,
+  `convert.rs:596-600`) and deleting a key inside instance storage rewrites the
+  entry as `updated` (`host.rs:2167-2173`). `extract_executable_ref_targets`
+  reads executable-tag entries, whose delete the host refuses
+  (`host/data_helper.rs:668-684`).
+- **Safe because they write no row:** `extract_plane_pool_data` feeds a
+  mismatch log (`stage.rs:1425`), `extract_address_list_writes` a same-ledger
+  registration check.
+- **Phoenix-family `extract_config_pools` reads deletable persistent keys**
+  (`CONFIG`, `u32` 0/1/2). Measured 2026-09-17:
+  - 4,731 ledgers decoded (every admin, creation, upgrade and no-event ledger
+    of the 20 pools and 6 factories, plus sampled swap/provide traffic):
+    **0 removals and 0 evictions** of those keys, 0 instance updates dropping a
+    storage key.
+  - Current chain state over RPC at 64,474,775: all four keys present for all
+    20 pools (44 archived, 57 live — archived is not deleted).
+  - **Bytecode, not the vendor's `main`:** all 31 wasm versions these pools ever
+    ran, fetched by hash over RPC. None matches a published Phoenix checksum, so
+    each was read directly: the delete host function is imported by 9 of them
+    and called only on the instance key `p_admin` (an `updated`) and, for the
+    blended pool, on `u32(5)`, which we do not read.
+  - **A removal cannot mean zero:** the deployed contracts read these keys with
+    `unwrap()`, so a pool missing one is broken, not empty.
+- **Landed:** `extract_config_pools` now recognises a family-shaped
+  `state` + `removed` pair and logs `error!` instead of silently skipping it;
+  it writes no row, because no honest value exists. Unit test on a constructed
+  pair.
+- **Residual risk:** an upgrade could add a delete. `soroban_contracts` carries
+  the wasm hash per contract, so that is where a watch belongs.
+- **Two findings for elsewhere:** pool `CAZ6W4…` was upgraded at 63,767,534 to a
+  four-function sweep contract and is still in the pool registry;
+  `soroban_contracts` shows `f74d87d7…` for `CBENABXP…`, which runs `6fe099b6…`
+  (task 0320's stale-hash symptom). Both under audit.

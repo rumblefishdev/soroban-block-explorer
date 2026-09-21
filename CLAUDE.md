@@ -11,8 +11,16 @@
 
 - Production module ≤ ~800 lines. Split BY TOPIC (one concern per file),
   never by layer ("all queries of the module" is how god files grow).
-- Tests always live in a sibling file, never inline: Rust `foo_tests.rs`
-  via `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`, TS `foo.test.ts(x)`.
+- Tests always live in their own file, never inline, and never in the same
+  directory as the code:
+  - Rust: `foo.rs` declares `#[cfg(test)] mod tests;`, which resolves natively
+    to `foo/tests.rs` (no `#[path]`, and the tests still see private items).
+    For `lib.rs`, `main.rs` or `mod.rs`, where `mod tests;` would land beside
+    the file, use `#[cfg(test)] #[path = "tests/<name>_tests.rs"] mod tests;`.
+  - TS/TSX: `__tests__/foo.test.ts(x)` next to `foo.ts(x)`, importing
+    `../foo`.
+  - Existing `foo_tests.rs` / `foo.test.tsx` siblings move when a task touches
+    them (task 0525), never in a sweep.
 - Verification-only code (oracles, corpus checks) belongs in the crate's
   `tests/` directory, not in the production module it verifies.
 - Touching a file that exceeds the limit? Extract at least its tests in the

@@ -1,0 +1,47 @@
+<!--
+  Server log retention (task 0563). Production-only, mounted by
+  docker-compose.prod.yml.
+
+  - Thirty-day TTL on six system log tables. `processors_profile_log` already
+    has thirty days from ClickHouse's shipped config. `query_metric_log` is left
+    out on purpose: it re-checks its definition against this file while running,
+    so an ALTER ahead of the deploy renames it to `query_metric_log_0`.
+  - `text_log` keeps `information` and above. Debug and Trace lines repeat what
+    `query_log`, `error_log`, `part_log` and the metric logs already hold in
+    structured form.
+  - The file log (`/var/log/clickhouse-server`) goes from `trace` to `debug`. It
+    is bounded by rotation (`logger.size` x `logger.count`) whatever the level;
+    the level sets how many days fit, and after this change the file is the only
+    place Debug lines exist.
+
+  ORDER MATTERS. When a system log table's definition differs from the one this
+  file produces, ClickHouse renames the table to `<name>_0`, keeps its data and
+  creates an empty one — so a TTL shipped here alone frees nothing. The live
+  tables must carry the identical TTL (`ALTER TABLE system.<t> MODIFY TTL
+  event_date + INTERVAL 30 DAY`) before this file reaches a running server. The
+  task's runbook has the full order and the checks.
+-->
+<clickhouse>
+    <logger>
+        <level>debug</level>
+    </logger>
+    <text_log>
+        <level>information</level>
+        <ttl>event_date + INTERVAL 30 DAY</ttl>
+    </text_log>
+    <trace_log>
+        <ttl>event_date + INTERVAL 30 DAY</ttl>
+    </trace_log>
+    <query_log>
+        <ttl>event_date + INTERVAL 30 DAY</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL 30 DAY</ttl>
+    </part_log>
+    <metric_log>
+        <ttl>event_date + INTERVAL 30 DAY</ttl>
+    </metric_log>
+    <asynchronous_metric_log>
+        <ttl>event_date + INTERVAL 30 DAY</ttl>
+    </asynchronous_metric_log>
+</clickhouse>

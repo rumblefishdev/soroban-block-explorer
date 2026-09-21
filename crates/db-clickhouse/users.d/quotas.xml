@@ -123,15 +123,28 @@
             </interval>
         </prices_write>
 
-        <prices_read>    <!-- mirrors api_throttle -->
+        <!-- prices_read started as a copy of api_throttle. queries 10000→0
+             and execution_time 1000→0 (2026-09-17, task 0561): on 2026-09-03
+             a prices-api load test (100 req/s of cache misses) exhausted the
+             10k/h query cap in two minutes and CH refused the next 28,853
+             prices_reader queries with Code: 201 until the clock hour rolled
+             over — a 26-minute blackout of their whole read path with the
+             box idle (median 7–8 ms). At the measured ~9 ms/query the
+             execution_time cap would have tripped next at ~110k queries,
+             so both count-style caps go; read_rows / read_bytes / result_rows
+             stay as the resource guards that keep the prices tenant from
+             draining the shared box (the reason prices_reader is NOT on
+             `unlimited`). Per-query max_execution_time is still enforced by
+             the read_only profile. Evidence: stellar-prices-api task 0260. -->
+        <prices_read>
             <interval>
                 <duration>3600</duration>
-                <queries>10000</queries>
+                <queries>0</queries>
                 <errors>0</errors>
                 <result_rows>10000000000</result_rows>
                 <read_rows>50000000000</read_rows>
                 <read_bytes>1099511627776</read_bytes>
-                <execution_time>1000</execution_time>
+                <execution_time>0</execution_time>
             </interval>
         </prices_read>
 

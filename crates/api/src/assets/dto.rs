@@ -81,11 +81,13 @@ pub struct AssetItem {
     /// Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
     /// display (task 0331 Option C: one convention for ALL asset types; classic
     /// `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
-    /// (a token/asset with no holders). Sourced from `balance_aggregates` over the
-    /// unified `balances` table.
+    /// (a token/asset with no holders). Sourced from `balance_aggregates`: account
+    /// and contract balances, plus claimable balances and classic liquidity pool
+    /// reserves.
     pub total_supply: Option<String>,
-    /// Active-holder count (`amount > 0`) from the unified `balances` aggregate
-    /// (all asset types — trustline holders + contract holders). `null` = no data.
+    /// Active-holder count (`amount > 0`) from `balance_aggregates` (all asset
+    /// types — accounts, contracts and liquidity pools; a claimable balance is not
+    /// a holder). `null` = no data.
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
 }

@@ -4,7 +4,7 @@ title: 'BUG: the NFT collection link is half-dead and its destination never name
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0472', '0483', '0392', '0309', '0540']
+related_tasks: ['0472', '0483', '0392', '0309', '0540', '0541']
 tags: [frontend, nfts, contracts, priority-medium, effort-small]
 links:
   - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/368'
@@ -76,6 +76,19 @@ The second one is bounded by the same two pipeline gaps this task's first half
 is about: a collection stuck in `nft_ownership_pending` has no token id to link
 to, so it falls through to here. Closing 0392 / the 0309 classifier gap shrinks
 that path as well as the "No NFTs match your filters" one.
+
+## The name filter merges collections (task 0541 review, 2026-09-21)
+
+`GET /v1/nfts?filter[collection]=<name>` matches the contract's latest ledger
+METADATA name (`nfts/queries.rs`, `argMax(name, version)`), so every contract
+carrying that name lands in one list. Measured on production 2026-09-20: 330
+names are carried by more than one contract, 1,681 contracts in all, the worst
+name by 490 distinct contracts.
+
+The UI hides the filter (`COLLECTION_COLUMN_ENABLED = false`, with the
+Collection column), so today only direct API callers reach it. A collection is
+a contract — the key this task's view already uses. Before the flag flips, the
+filter keys on the contract, or the name filter goes.
 
 ## Scope
 

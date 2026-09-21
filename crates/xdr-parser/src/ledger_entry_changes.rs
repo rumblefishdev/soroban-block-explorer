@@ -128,6 +128,27 @@ fn extract_from_changes(
     }
 }
 
+/// A ledger entry read outside any transaction — a checkpoint bucket record — as
+/// an `updated` change stamped with the entry's own `lastModifiedLedgerSeq`:
+/// the entry's value as of that ledger. Lets `snapshot-seed` build rows through
+/// the same extractor and builders as live ingest instead of a second decoder.
+///
+/// `updated`, not `state`: a `state` change is the image at the start of an
+/// operation and the extractors never take a value from it. Not `created`
+/// either, which would claim the pool was created at its last modification.
+/// There is no transaction, so the hash is empty and `created_at` is 0: use it
+/// only for rows that store neither.
+pub fn entry_as_current_change(entry: &LedgerEntry) -> Option<ExtractedLedgerEntryChange> {
+    extract_single_change(
+        &LedgerEntryChange::Updated(entry.clone()),
+        None,
+        "",
+        entry.last_modified_ledger_seq,
+        0,
+        0,
+    )
+}
+
 /// Convert a single `LedgerEntryChange` into an `ExtractedLedgerEntryChange`.
 fn extract_single_change(
     change: &LedgerEntryChange,

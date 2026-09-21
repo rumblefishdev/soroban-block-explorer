@@ -16,6 +16,18 @@ history:
       AMM support, issue #405). The per-step measurements and the full
       verification record stay in the task; this ADR carries what future work
       must not re-litigate.
+  - date: '2026-09-15'
+    status: accepted
+    who: karolkow
+    note: >
+      Amended by decision C′ (task 0374): router pool reserves come from each
+      pool's own instance storage; the plane only flags an unread layout.
+  - date: '2026-09-16'
+    status: accepted
+    who: karolkow
+    note: >
+      Marked the original reserve-source rule superseded and corrected the
+      claim that concentrated pools write the plane only at registration.
 ---
 
 # ADR 0058: Soroban AMM pools in the explorer
@@ -73,7 +85,8 @@ Event arithmetic failed its oracle on 6/49 pools (measured), so reserves come
 from ledger-entry changes, written to `pool_state_changes
 (pool_id, ledger_sequence, reserves Array(Int128), plane_id)` — sort key
 `(pool, ledger)`, ONE deterministic row per pair, collapsed at parse time in
-ledger apply order. Two on-chain layouts feed one table:
+ledger apply order. Two on-chain layouts feed one table (the 2026-08-29 reserve
+source — superseded by the amendment below):
 
 - **fungible** pools (constant/stable) write `PoolData[pool]` on the
   deployment's shared _plane_ contract — the vector is stored VERBATIM
@@ -81,7 +94,9 @@ ledger apply order. Two on-chain layouts feed one table:
   length);
 - **concentrated** pools write `Reserve0`/`Reserve1` on their own instance —
   the plane holds their `PoolData` only at registration (discovered by a
-  bidirectional anti-test against `update_reserves` events).
+  bidirectional anti-test against `update_reserves` events). **Corrected
+  2026-09-16:** concentrated pools do write plane rows later too — the plane
+  cross-check fired on 4 of them over 1,565 ledgers (commit `2de25914`).
 
 **Amended 2026-09-15 (decision C′, task 0374): every router pool's reserves
 now come from its OWN instance.** The plane's `PoolData` turned out to be a

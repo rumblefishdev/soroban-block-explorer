@@ -1162,12 +1162,11 @@ event_pos_in_op)`, all NOT NULL; `event_index` is an ordinary column —
       range, so no partial figure was ever shown; the floor was removed only
       after gate 7 passed (2026-09-13). As planned: tables created on prod
       **before** the indexer deploy (driver validates the struct against
-      `DESCRIBE`); indexer deploy in its **own window** with the
-      `DROP COLUMN net_settled` `ALTER`; backfill floor → deploy ledger with the
-      targeted write (`--only asset_transfers,transaction_memos,soroban_event_ops`,
+      `DESCRIBE`); indexer deploy in its **own window**; backfill floor → deploy
+      ledger with the targeted write
+      (`--only asset_transfers,transaction_memos,soroban_event_ops`,
       generalising 0279's `--lp-amounts-only`) from the **same commit** as the
-      live indexer; the column
-      ships only after the three-layer completion gate passes on the full range
+      live indexer; the three-layer completion gate on the full range
       (per-partition count vs `soroban_events`, archive re-decode diff, T11)
 - [x] Read path benchmarked on the account endpoint before exposure
       (0243/0386 were both read-shape outages) — 20 ms / 13 824 rows for the

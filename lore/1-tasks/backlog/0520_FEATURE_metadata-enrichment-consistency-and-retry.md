@@ -125,9 +125,12 @@ routing decision, every consumer reads it (the 0542 principle applied to NFTs).
 - API maps the status: "no metadata" and "could not fetch" render differently
   (never an empty value that looks real).
 
-**A3 — history.** Existing empty rows become `failed` (retried by A2, so no
-manual `--retry-sentinels`); the 53 239 Fungible-contract rows are deleted
-(operator runs the DELETE).
+**A3 — history.** First the 53 239 Fungible-contract rows are deleted
+(operator runs the DELETE). Then every remaining empty row is fetched once more
+through A2 and stores its real outcome — `ok`, `no_metadata` or `failed` +
+reason — so A2's retry gate (never contract reverts or malformed URIs) applies
+to history too; no manual `--retry-sentinels`. Marking history `failed` without
+a reason would retry rows A2 excludes.
 
 **A4 — stop warning about a key that is not token metadata.** `is_metadata_key`
 (`token_metadata.rs`) accepts `Symbol("METADATA")` and the OZ NFT

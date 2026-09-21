@@ -143,7 +143,10 @@ WITH pools AS (
 ad AS (SELECT id, any(asset_type) AS t, any(asset_code) AS c,
               any(issuer_id) AS i FROM assets GROUP BY id)
 SELECT count() AS checked,
-       countIf(NOT ((if(x.t=0,0,1) = if(p.a_type=0,0,1)) AND x.c=p.a_code AND x.i=p.a_iss
+       -- `x.id = p.legs[1]`: a LEFT JOIN miss yields defaults (id 0, '', 0),
+       -- which a native leg would otherwise match
+       countIf(NOT (x.id = p.legs[1] AND y.id = p.legs[2]
+               AND  (if(x.t=0,0,1) = if(p.a_type=0,0,1)) AND x.c=p.a_code AND x.i=p.a_iss
                AND  (if(y.t=0,0,1) = if(p.b_type=0,0,1)) AND y.c=p.b_code AND y.i=p.b_iss)
               ) AS mismatched
 FROM pools p LEFT JOIN ad x ON x.id = p.legs[1]

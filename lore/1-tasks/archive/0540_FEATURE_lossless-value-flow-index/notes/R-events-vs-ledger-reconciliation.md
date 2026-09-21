@@ -119,6 +119,10 @@ This count is read directly from stored events; it needs none of 0536's 1.67
 sides-per-transfer assumption. **Bytes per row are NOT measured** — that needs the
 per-column pass 0536 ran, and no size figure should be quoted until it exists.
 
+> **Superseded (2026-09-05):** §8 below measures bytes per row, and the row
+> count was corrected to 5.47 bn — task README "Storage, settled by measurement".
+> Actual at completion: 5.52 bn rows, 43.44 GiB.
+
 ## 5. Where operation attribution stands
 
 `soroban_events` has no `op_index` column — confirmed against production
@@ -233,6 +237,10 @@ Going more granular is not automatically safer.
 claim, not a proven fact. `init.sql` argues it is deterministic on replay. Verify
 before making it row identity.
 
+> **Superseded (2026-09-05):** row identity is Stellar's
+> `(op_index, event_pos_in_op)`; `event_index` stays an ordinary column — task
+> README "What is settled".
+
 ## 8. What an edge row costs — measured per column on production
 
 Per-column compressed bytes divided by the table's live row count
@@ -264,6 +272,10 @@ Directly: 655.2 edge events per ledger (weighted over the three epochs) ×
 13 810 748 ingested ledgers = **9.05 bn**. Cross-check against task 0536's node
 counts gives ratio 0.46 × 19.3 bn = 8.9 bn. The two agree, and the direct count
 needs none of 0536's sides-per-transfer assumption.
+
+> **Superseded (2026-09-05):** corrected to 5.47 bn — task README "Storage,
+> settled by measurement"; actual 5.52 bn rows, 43.44 GiB, so the 140–160 GB
+> figure below does not hold.
 
 ### Candidate layouts
 

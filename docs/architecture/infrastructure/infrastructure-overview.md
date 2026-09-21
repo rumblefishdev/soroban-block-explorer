@@ -678,6 +678,14 @@ Prometheus endpoint (`127.0.0.1:9363`) and `system.metric_log` —
 they are NOT mirrored to CloudWatch. Pull-side scraping is deferred
 to a follow-up monitoring task per task 0216 future work.
 
+The server's own log tables keep 30 days (task 0563,
+`config.d/system-logs.xml`): `metric_log`, `asynchronous_metric_log`,
+`query_log`, `part_log`, `trace_log`, and `text_log` at `information` and
+above (`processors_profile_log` has 30 days from ClickHouse's own config;
+`query_metric_log` is left unbounded). Since nothing scrapes or ships them,
+server history older than that exists nowhere. Debug detail lives only in the
+rotated file log under `/srv/clickhouse-logs`, a few days deep.
+
 ### 8.2 Alerting Surface
 
 **One engine, one path, five rules.** Every AWS-side signal alarms through

@@ -133,6 +133,18 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
         .or_else(|| get("Reserves").and_then(raw_u128_vec))
         .or_else(|| pair("Reserve0", "Reserve1"))
         .unwrap_or_default();
+    // A reserve key that no layout could read is a refusal, not an
+    // administrative rewrite: without this line it is silent whenever the
+    // plane does not write in the same ledger (staging's cross-check is the
+    // only other signal).
+    let unread = unread_reserve_keys(get, &reserves);
+    if !unread.is_empty() {
+        tracing::error!(
+            pool,
+            keys = ?unread,
+            "pool instance carries reserve keys no known layout reads; no reserve row staged"
+        );
+    }
     Some(PoolInstanceState {
         pool: pool.to_string(),
         token_share: get("TokenShare").and_then(&addr),
@@ -141,6 +153,27 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
         router: router.and_then(&addr),
         reserves,
     })
+}
+
+/// Reserve keys the instance carries although no layout could be read from
+/// them — a value of an unexpected type, or half a pair. Empty when reserves
+/// were read, or when the write carries no reserve key at all.
+fn unread_reserve_keys<'a>(
+    get: impl Fn(&str) -> Option<&'a Value>,
+    reserves: &[String],
+) -> Vec<&'static str> {
+    if !reserves.is_empty() {
+        return Vec::new();
+    }
+    // A `Reserves` vector that decodes is a read even when empty — a pool
+    // with no liquidity yet — not a refusal.
+    if get("Reserves").is_some_and(|v| raw_u128_vec(v).is_some()) {
+        return Vec::new();
+    }
+    ["ReserveA", "ReserveB", "Reserves", "Reserve0", "Reserve1"]
+        .into_iter()
+        .filter(|k| get(k).is_some())
+        .collect()
 }
 
 /// One plane `PoolData` write. Per-write coordinates (tx hash, change
@@ -501,6 +534,34 @@ mod tests {
         ]);
         let got = parse_pool_instance("CPOOL", &storage).unwrap();
         assert!(got.reserves.is_empty());
+    }
+
+    /// Task 0559. A reserve key no layout can read is a refusal and must be
+    /// named; an administrative rewrite without reserve keys is not.
+    #[test]
+    fn a_reserve_key_no_layout_reads_is_named() {
+        let u128v = json!({"type": "u128", "value": "7"});
+        let i128_vec = json!({"type": "vec", "value": [{"type": "i128", "value": "7"}]});
+        let empty_vec = json!({"type": "vec", "value": []});
+        let fee = json!({"type": "u32", "value": 30});
+        let keys = |present: &[(&str, &Value)], reserves: &[String]| {
+            unread_reserve_keys(
+                |k| present.iter().find(|(n, _)| *n == k).map(|(_, v)| *v),
+                reserves,
+            )
+        };
+
+        // Wrong value type: `Reserves` holds i128s, nothing parsed.
+        assert_eq!(keys(&[("Reserves", &i128_vec)], &[]), vec!["Reserves"]);
+        // Half a pair.
+        assert_eq!(keys(&[("ReserveA", &u128v)], &[]), vec!["ReserveA"]);
+        // An empty `Reserves` that decodes is a pool with no liquidity yet.
+        assert!(keys(&[("Reserves", &empty_vec)], &[]).is_empty());
+        // No reserve key at all: an administrative rewrite, not a refusal.
+        assert!(keys(&[("FeeFraction", &fee)], &[]).is_empty());
+        // Reserves were read: nothing to report.
+        let read = ["7".to_string(), "7".to_string()];
+        assert!(keys(&[("ReserveA", &u128v), ("ReserveB", &u128v)], &read).is_empty());
     }
 
     fn instance_change(change_type: &str, reserve_a: &str, fee: u32) -> ExtractedLedgerEntryChange {

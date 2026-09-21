@@ -298,8 +298,9 @@ export type AssetDetailResponse = {
    */
   decimals: number;
   /**
-   * Active-holder count (`amount > 0`) from the unified `balances` aggregate
-   * (all asset types — trustline holders + contract holders). `null` = no data.
+   * Active-holder count (`amount > 0`) from `balance_aggregates` (all asset
+   * types — accounts, contracts and liquidity pools; a claimable balance is not
+   * a holder). `null` = no data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
@@ -350,8 +351,9 @@ export type AssetDetailResponse = {
    * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
    * display (task 0331 Option C: one convention for ALL asset types; classic
    * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
-   * (a token/asset with no holders). Sourced from `balance_aggregates` over the
-   * unified `balances` table.
+   * (a token/asset with no holders). Sourced from `balance_aggregates`: account
+   * and contract balances, plus claimable balances and classic liquidity pool
+   * reserves.
    */
   total_supply?: string | null;
 } & {
@@ -391,8 +393,9 @@ export type AssetItem = {
    */
   decimals: number;
   /**
-   * Active-holder count (`amount > 0`) from the unified `balances` aggregate
-   * (all asset types — trustline holders + contract holders). `null` = no data.
+   * Active-holder count (`amount > 0`) from `balance_aggregates` (all asset
+   * types — accounts, contracts and liquidity pools; a claimable balance is not
+   * a holder). `null` = no data.
    */
   holder_count?: number | null;
   icon_url?: string | null;
@@ -443,8 +446,9 @@ export type AssetItem = {
    * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
    * display (task 0331 Option C: one convention for ALL asset types; classic
    * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
-   * (a token/asset with no holders). Sourced from `balance_aggregates` over the
-   * unified `balances` table.
+   * (a token/asset with no holders). Sourced from `balance_aggregates`: account
+   * and contract balances, plus claimable balances and classic liquidity pool
+   * reserves.
    */
   total_supply?: string | null;
 };
@@ -1432,8 +1436,9 @@ export type PaginatedAssetItem = {
      */
     decimals: number;
     /**
-     * Active-holder count (`amount > 0`) from the unified `balances` aggregate
-     * (all asset types — trustline holders + contract holders). `null` = no data.
+     * Active-holder count (`amount > 0`) from `balance_aggregates` (all asset
+     * types — accounts, contracts and liquidity pools; a claimable balance is not
+     * a holder). `null` = no data.
      */
     holder_count?: number | null;
     icon_url?: string | null;
@@ -1484,8 +1489,9 @@ export type PaginatedAssetItem = {
      * Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
      * display (task 0331 Option C: one convention for ALL asset types; classic
      * `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
-     * (a token/asset with no holders). Sourced from `balance_aggregates` over the
-     * unified `balances` table.
+     * (a token/asset with no holders). Sourced from `balance_aggregates`: account
+     * and contract balances, plus claimable balances and classic liquidity pool
+     * reserves.
      */
     total_supply?: string | null;
   }>;
