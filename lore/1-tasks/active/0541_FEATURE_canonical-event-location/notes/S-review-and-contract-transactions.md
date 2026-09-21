@@ -134,8 +134,23 @@ review of this size.
   return type would go one step further.
 - The transaction lists page within one partition (canonical SQL 02, pre-existing):
   a list ends at the partition boundary. The index would make crossing cheap.
+  → task 0381, which already scopes partition-pinned lists and short pages,
+  with the liquidity-pool, asset and ledger instances below.
 - The NFT collection filter matches by name: 330 names on more than one contract,
-  1,681 contracts, the worst name on 490 (measured 2026-09-20).
+  1,681 contracts, the worst name on 490 (measured 2026-09-20). The UI hides the
+  filter (`COLLECTION_COLUMN_ENABLED = false`); only direct API callers reach
+  it. → task 0486, whose collection view is keyed by contract.
 - The liquidity-pool participants list shares the short-page defect; its own
-  comment says so.
+  comment says so. Assets (`SEEK_OVERFETCH`) and ledgers (`LEDGER_OVERFETCH`)
+  have the same shape, latent on today's data. → task 0381.
 - 26 ClickHouse-gated tests in `crates/api` never run in CI.
+- `HumanizedSentence` keys its links by a truncated address: two accounts with
+  the same short form collapse, and the sentence links one to the other.
+- `PoolActivity` keys a leg by its bare asset code: one code from two issuers
+  gives two legs the same React key.
+- A truncated WASM import section reads as "does not self-upgrade"
+  (`xdr_parser::contract`, `Some(false)`), the same answer as a real negative;
+  it feeds the upgradeable badge.
+- Past `i16::MAX` ownership events for one NFT in one ledger,
+  `xdr_parser::state` skips the rest with a warning. A documented guard against
+  a hostile contract, not an oversight; no real contract has reached it.

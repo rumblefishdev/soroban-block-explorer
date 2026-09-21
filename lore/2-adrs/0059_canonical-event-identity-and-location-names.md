@@ -230,8 +230,9 @@ the task 0541 PR:
 - [x] `docs/architecture/technical-design-general-overview.md` — N/A: its
       ClickHouse passages name the table, never the key
 - [x] `docs/architecture/database-schema/database-schema-overview.md` — the
-      `soroban_events` DDL, the dropped `soroban_event_ops` section and
-      `asset_transfers` without the flat counter
+      dropped `soroban_event_ops` section and `asset_transfers` without the
+      flat counter. It has no `soroban_events` DDL; the table's columns and
+      key are in `clickhouse-pilot.md` §4a (below)
 - [x] `docs/architecture/backend/backend-overview.md` — N/A: it does not
       describe the events keyset
 - [x] `docs/architecture/frontend/frontend-overview.md` — the transaction
