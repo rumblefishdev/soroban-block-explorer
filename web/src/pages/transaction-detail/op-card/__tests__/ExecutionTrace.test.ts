@@ -15,7 +15,6 @@ import {
 const CDDT_BYTES = 'xzT92aatkBMtnTNkRAThGP6Ivts2hpYWmu/CNZihVeg=';
 const CDDT = 'CDDTJ7OZU2WZAEZNTUZWIRAE4EMP5CF63M3INFQWTLX4ENMYUFK6RCTX';
 
-let nextIndex = 0;
 function ev(
   topics: { type: string; value?: unknown }[],
   data: unknown = null,
@@ -31,8 +30,7 @@ function ev(
     id: null,
     event_index: null,
     operation_index: null,
-    marker: nextIndex++,
-  } as XdrEventDto;
+  };
 }
 
 const fnCall = (name: string, bytes = CDDT_BYTES, data: unknown = null) =>
@@ -100,14 +98,13 @@ describe('buildExecutionTrace', () => {
       swap.children.map((child) =>
         child.kind === 'call'
           ? child.node.fnName
-          : `ev:${(child.event as unknown as { marker: number }).marker}`
+          : child.event === burn
+          ? 'ev:burn'
+          : child.event === transfer
+          ? 'ev:transfer'
+          : 'ev:other'
       )
-    ).toEqual([
-      `ev:${(burn as unknown as { marker: number }).marker}`,
-      'burn_and_transfer',
-      `ev:${(transfer as unknown as { marker: number }).marker}`,
-      'balance',
-    ]);
+    ).toEqual(['ev:burn', 'burn_and_transfer', 'ev:transfer', 'balance']);
     expect(traceCallCount(nodes)).toBe(3);
   });
 
