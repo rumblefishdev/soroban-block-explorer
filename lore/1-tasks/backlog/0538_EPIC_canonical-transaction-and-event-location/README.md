@@ -103,7 +103,14 @@ hash keep using `transaction_hash_index`.
    stopped (`docs/backfills.md`), readers switched in the same window.
 6. **Readers**: every list pages on the canonical position — execution order
    inside a ledger, cursor `(ledger_sequence, application_order[, op, event])`.
-7. **`transactions.id`** dropped once nothing joins on it.
+7. **`transactions.id`** dropped once nothing joins on it. The indexer joins
+   by hash in memory too: eight extracted types carry `transaction_hash:
+String`, and staging resolves them through maps keyed by it
+   (`persist/stage.rs` `tx_id_by_hash` / `app_order_by_hash`,
+   `persist/value_flow.rs` `tx_by_hash` / `ops_by_hash`). Those joins move to
+   the position with the tables. An event already carries it — since 0541 its
+   rpc id holds the transaction's `application_order`, and a transfer comes
+   only from an operation event (0541 review, 2026-09-21).
 8. **Duplicate hash** (`transactions.hash` + `transaction_hash_index.hash`,
    ~275 GiB) — decided from the research question below, not assumed.
 
