@@ -357,5 +357,4 @@ pub fn extract_asset_transfers(
 }
 
 #[cfg(test)]
-#[path = "asset_transfers_tests.rs"]
 mod tests;

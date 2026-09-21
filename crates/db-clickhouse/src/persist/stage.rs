@@ -3271,21 +3271,16 @@ pub fn ledger_deltas_net_settled(
 }
 
 #[cfg(test)]
-#[path = "stage_pool_fill_amount_tests.rs"]
 mod pool_fill_amount_tests;
 
 #[cfg(test)]
-#[path = "stage_ledger_deltas_net_settled_tests.rs"]
 mod ledger_deltas_net_settled_tests;
 
 #[cfg(test)]
-#[path = "stage_derive_token_event_tests.rs"]
 mod derive_token_event_tests;
 
 #[cfg(test)]
-#[path = "stage_balance_tests.rs"]
 mod balance_tests;
 
 #[cfg(test)]
-#[path = "stage_executable_ref_tests.rs"]
 mod executable_ref_tests;
