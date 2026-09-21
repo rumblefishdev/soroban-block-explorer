@@ -509,6 +509,40 @@ level, logger_name, count() … GROUP BY …` over one day). If most rows are
 - [ ] `text_log` holds no Trace or Debug rows written after the recreate; the
       file log holds no Trace lines
 - [x] `text_log` per-day volume measured; level decision recorded (2026-09-21)
-- [ ] **Docs updated** — `infra-hetzner/README.md` (config list);
-      `docs/architecture/infrastructure/**` if it lists server config
-      (N/A otherwise, reason recorded)
+- [x] **Docs updated** — `infra-hetzner/README.md` (directory map, and the
+      single-file mount count 10 → 11); `docs/architecture/infrastructure/infrastructure-overview.md`
+      §8.1 (server log retention, and that older server history exists nowhere)
+
+## Implementation notes (config PR, 2026-09-21)
+
+Runbook step 1. Nothing here touches production; steps 2–5 follow the merge.
+
+| file                                                          | change                                                                                                              |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `crates/db-clickhouse/config.d/system-logs.xml`               | new — the six TTLs, `text_log` at `information`, `logger.level` `debug`; the header states the order rule           |
+| `docker-compose.prod.yml`                                     | production-only bind mount, and the file in the overlay's header list                                               |
+| `infra-hetzner/README.md`                                     | directory map; single-file mounts into `app-clickhouse-1` 10 → 11 (13 with Caddy's two)                             |
+| `infra-hetzner/ansible/roles/app/tasks/main.yml`              | comment only (the same count). The sync already copies all of `config.d/`, so the file ships with no Ansible change |
+| `docs/architecture/infrastructure/infrastructure-overview.md` | §8.1 — retention of the server log tables                                                                           |
+
+Verified:
+
+- The committed file on a local `26.3.10.60` container (the production image):
+  `Merging configuration file '/etc/clickhouse-server/config.d/system-logs.xml'`;
+  `logger.level` = `debug`; the six tables carry `TTL event_date +
+toIntervalDay(30)`, `processors_profile_log` its own 30 days,
+  `query_metric_log` none; `text_log` holds only Information and Warning rows.
+- `docker compose -f docker-compose.yml -f docker-compose.prod.yml config`
+  renders the mount, read-only, into the ClickHouse service.
+- Mount count checked against the compose file itself: 10 on `develop`, 11 here.
+
+### Design decisions — emerged
+
+1. **Production-only, not in the dev compose.** The existing system tables of a
+   dev container carry no TTL, so mounting the file there would rename them to
+   `_0` on the next start — harmless, but noise, and dev log volume is not the
+   problem. Same placement as `memory.xml` and `prometheus.xml`.
+2. **The order rule lives in the file's header**, not only in this task. The
+   file is where the next editor of a system log setting will look, and the
+   trap (a config TTL alone renames the table and frees nothing) is invisible
+   from the XML itself.
