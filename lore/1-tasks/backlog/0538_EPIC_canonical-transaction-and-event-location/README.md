@@ -104,8 +104,8 @@ hash keep using `transaction_hash_index`.
 6. **Readers**: every list pages on the canonical position — execution order
    inside a ledger, cursor `(ledger_sequence, application_order[, op, event])`.
 7. **`transactions.id`** dropped once nothing joins on it. The indexer joins
-   by hash in memory too: eight extracted types carry `transaction_hash:
-String`, and staging resolves them through maps keyed by it
+   by hash in memory too: eight extracted types carry a `transaction_hash`
+   string, and staging resolves them through maps keyed by it
    (`persist/stage.rs` `tx_id_by_hash` / `app_order_by_hash`,
    `persist/value_flow.rs` `tx_by_hash` / `ops_by_hash`). Those joins move to
    the position with the tables. An event already carries it — since 0541 its
