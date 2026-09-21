@@ -2,7 +2,7 @@
 id: '0563'
 title: 'OPS: ClickHouse system logs keep 30 days — four log tables grow without limit (≥ 89 GiB reclaimable)'
 type: OPS
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0541', '0538', '0455']
 tags: ['clickhouse', 'hetzner', 'disk', 'ops', 'effort-small', 'priority-high']
@@ -43,6 +43,13 @@ history:
       above, the server file log goes from trace to debug, query_metric_log is
       left out. Tested on a local container of the production image; runbook
       recorded. Still backlog until promoted for the config PR.
+  - date: 2026-09-21
+    status: active
+    who: karolkow
+    note: >
+      Promoted to active for runbook step 1: the config file, the compose bind
+      mount and the README config list, in one PR. The production steps (2–5)
+      follow its merge and stay with the operator.
 ---
 
 # OPS: ClickHouse system logs keep 30 days
