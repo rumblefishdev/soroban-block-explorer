@@ -665,6 +665,10 @@ soroban_event_ops` backfill flag, `docs/backfills.md` and the merge scripts'
   of the swap; the old table and `soroban_event_ops` are dropped before the
   following Sunday 03:30 UTC backup. Re-ingest stays the fallback after that.
 
+> Corrected 2026-09-21: after the horizon the old shape is still derivable
+> inside ClickHouse from the new table, so re-ingesting the archive is not the
+> only way back (plan 4.6).
+
 ### Naming found during the ADR draft
 
 The same per-operation location already has names in `asset_transfers` and
@@ -802,6 +806,18 @@ merged yet.
   mechanism is gone (review, 2026-09-21).
 - Also moved under `__tests__` because the change touched them:
   `ExecutionTrace.test.ts`, and `transactions/dto.rs`'s inline tests.
+- Added, not in the plan: `crates/db-clickhouse/tests/soroban_events_write_e2e.rs`
+  inserts a staged `SorobanEventRow` into a real table. The driver checks the
+  row against `DESCRIBE` only at insert time, the check that stopped ingest in
+  0310; a unit test cannot see it.
+- Task 2.4 asked for `event_cursor_matches_source` to match the new variant;
+  it was deleted instead, with its handler check. `EventCursor` has one
+  variant, so the check could only return true; a cursor minted before the
+  change still fails at decode with 400 `invalid_cursor`.
+- The id assignment has one entry point, `xdr_parser::LedgerEvents`, which the
+  indexer, the transaction page and the tests go through; the two steps it
+  wraps are private to the parser. Two real-history tests had done them by
+  hand, one step short (review, 2026-09-21).
 
 ## Review and the contract index (2026-09-20/21)
 

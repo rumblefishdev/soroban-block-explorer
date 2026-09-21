@@ -45,13 +45,13 @@ review of this size.
 
 ## Fixed before merge
 
-| finding | fix |
-| --- | --- |
-| The contract-filtered transaction list reported the end on a capped page: a contract with 804 transactions showed 13 at the UI's page size | replaced by the index below |
-| Nothing marked `develop`/`master` undeployable between merge and window | `docs/deployment.md` section; `PROD:` note in `init.sql` |
-| `config_pool_stage_real_e2e` / `pair_factory_stage_real_e2e` staged events without ids and panicked (env-gated, so CI was green) | ids assigned as the indexer does; run on 23 archive registration ledgers, 20/20 and 3/3; shown to fail without the fix |
-| The event-name recipe in `docs/backfills.md` was a positional `INSERT` naming `transaction_id` | `SELECT * REPLACE`, verified read-only on both table shapes |
-| Test files beside the code (`stage.rs`, `asset_transfers.rs`) | moved; test counts unchanged (151, 451) |
+| finding                                                                                                                                    | fix                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| The contract-filtered transaction list reported the end on a capped page: a contract with 804 transactions showed 13 at the UI's page size | replaced by the index below                                                                                            |
+| Nothing marked `develop`/`master` undeployable between merge and window                                                                    | `docs/deployment.md` section; `PROD:` note in `init.sql`                                                               |
+| `config_pool_stage_real_e2e` / `pair_factory_stage_real_e2e` staged events without ids and panicked (env-gated, so CI was green)           | ids assigned as the indexer does; run on 23 archive registration ledgers, 20/20 and 3/3; shown to fail without the fix |
+| The event-name recipe in `docs/backfills.md` was a positional `INSERT` naming `transaction_id`                                             | `SELECT * REPLACE`, verified read-only on both table shapes                                                            |
+| Test files beside the code (`stage.rs`, `asset_transfers.rs`)                                                                              | moved; test counts unchanged (151, 451)                                                                                |
 
 ## Decisions (karolkow, 2026-09-21)
 
@@ -59,7 +59,7 @@ review of this size.
   merge.** The window mechanism compensated for its absence. Accounts, assets
   and pools each have one (`transaction_participants`,
   `operation_asset_appearances`, `operation_pools`); contracts had three partial
-  sources, one of them per *event*, so no read could ask for "the next N
+  sources, one of them per _event_, so no read could ask for "the next N
   transactions" and the code guessed how many rows made a page.
 - **Fee events do not count as touching a contract.** Every transaction pays
   one to the native SAC, so counting it made that contract's list every
@@ -81,8 +81,8 @@ review of this size.
   charges + 78,294,908 refunds, none outside the native SAC.
 - **Read:** one seek, the account list's shape. `contract_positions.rs` is gone.
 - **Size:** the three columns cost ~0.96 B/row in this sort order (measured on
-  the rekeyed table); ~155 M pairs per partition (*estimate*: one 5k slice ×
-  100); a few GiB in all (*estimate*).
+  the rekeyed table); ~155 M pairs per partition (_estimate_: one 5k slice ×
+  100); a few GiB in all (_estimate_).
 - **Fill dry-run** (read-only, 63,700,000–63,705,000): 1,554,897 pairs, 8,369
   contracts, 740 ms, 586 MiB.
 
@@ -123,11 +123,15 @@ review of this size.
 
 ## Left as follow-ups
 
-- The operation position is held twice on `ExtractedEvent` (`op_index` /
-  `event_pos_in_op` and `event_id`).
-- `assign_event_ids` is a separate step held by convention; an un-id'd return
-  type from `extract_events` would make staging an event without its id
-  impossible to write, rather than a runtime error.
+- ~~The operation position is held twice on `ExtractedEvent` (`op_index` /
+  `event_pos_in_op` and `event_id`).~~ Not a duplicate: the pair is what the id
+  is built from, and the only answer to "which operation emitted it" — a fee
+  event's id names operation 0 or 4095. Reading the operation off the id, as
+  the review proposed, would put fee events on the first operation's card.
+- ~~`assign_event_ids` is a separate step held by convention.~~ One entry
+  point now, `xdr_parser::LedgerEvents`; the two steps are private to the
+  parser. `extract_events` still returns events without ids, so an un-id'd
+  return type would go one step further.
 - The transaction lists page within one partition (canonical SQL 02, pre-existing):
   a list ends at the partition boundary. The index would make crossing cheap.
 - The NFT collection filter matches by name: 330 names on more than one contract,

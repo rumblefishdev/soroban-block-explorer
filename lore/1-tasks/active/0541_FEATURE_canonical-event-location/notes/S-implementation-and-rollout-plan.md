@@ -1050,7 +1050,7 @@ F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sq
 ```
 
 3b. **Operator — `contract_transactions` for the same partition**, after step 3
-    (it reads the rekeyed rows):
+(it reads the rekeyed rows):
 
 ```bash
 F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
@@ -1059,7 +1059,7 @@ F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_contract_
 4. **Agent — post-fill:** staging row count for `P` = sum of the gate's `n`;
    if larger, operator runs `chw "OPTIMIZE TABLE soroban_events_staging_canonical PARTITION $P FINAL"`
    and the count repeats. For `contract_transactions`: `uniqExact(contract_id,
-   ledger_sequence, application_order)` of `P` = the fill's `SELECT DISTINCT`
+ledger_sequence, application_order)` of `P` = the fill's `SELECT DISTINCT`
    run as a count over `P` (a short count is a partial insert). API p95
    latency during the fill is read from the CloudWatch dashboard (read-only);
    if it rose > 2× the previous hour, the next partition waits.
@@ -1087,7 +1087,7 @@ literals remove the doubt.
   deployed). Everything else in that release is known and wanted.
 - `asset_transfers.event_index` has its default — verified by a read, not
   recalled: `chq "SELECT default_kind FROM system.columns WHERE database =
-  'default' AND table = 'asset_transfers' AND name = 'event_index'"` returns
+'default' AND table = 'asset_transfers' AND name = 'event_index'"` returns
   `DEFAULT`. If not, the operator runs
   `chw "ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0"` (the
   running indexer still writes the column; the new one will not). The swap does
@@ -1178,6 +1178,12 @@ empty — the one check that the SQL fill and the Rust writer agree.
    `soroban_event_ops`: re-ingest them with `backfill-runner run` over that
    range from the `prod` checkout, then `repair-tier1` (`docs/backfills.md`).
 4. README records what failed.
+
+After phase 5 the old table is gone, but going back still needs no archive read:
+the old shape is derivable in ClickHouse from the new table — `transaction_id`
+through `transactions` on the position, the flat index by rank within the
+transaction, fee events first. Hours of in-database work (_estimate_), not a
+re-ingest of the whole range; the SQL is not written.
 
 ---
 

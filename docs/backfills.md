@@ -164,7 +164,7 @@ backfill-runner run --start <A> --end <B> --only lp_operation_amounts
 ```
 
 Task 0540 generalised the flag to a list — `--only asset_transfers,transaction_memos`
-writes its three tables in one pass; task 0518 added the three pool tables, so a
+writes both tables in one pass; task 0518 added the three pool tables, so a
 full-range targeted re-parse can carry the pool families' whole history in the
 same descent. Only tables that are additive (deterministic from the XDR, **no
 Tier-1 column**) are accepted, and the list is closed in code

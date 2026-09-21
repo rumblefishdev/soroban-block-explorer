@@ -183,7 +183,7 @@ WHERE (se.ledger_sequence, se.application_order) = (
     LIMIT 1)
   AND intDiv(se.ledger_sequence, 500000)
       = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
-ORDER BY se.ledger_sequence, sc.contract_id, se.operation_index, se.event_index;
+ORDER BY se.ledger_sequence, sc.contract_id, se.transaction_index, se.operation_index, se.event_index;
 
 -- The filter is the transaction's POSITION (ADR 0059): a fee refund's rpc id
 -- carries the end-of-ledger sentinel, so `application_order` is the only
