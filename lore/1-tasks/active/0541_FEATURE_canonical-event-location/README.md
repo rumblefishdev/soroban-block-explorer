@@ -850,7 +850,19 @@ Tuesday 2026-09-22, the window on Wednesday 2026-09-23, provided PR #465 and the
 release PR `develop → master` are merged by Tuesday; phase 5 drops before
 Sunday 2026-09-27 03:30 UTC. Free disk 344.75 GiB (19.6%) on 2026-09-21; the
 fill adds ~180 GiB (_estimate_), leaving ~165 GiB against the 120 GiB stop
-line.
+line. Later the same day 476.01 GiB (27.1%): the `system` database dropped to
+51.14 GiB from the 174.50 GiB of server logs recorded on 2026-09-17, most likely
+task 0563's retention; ~296 GiB would remain after the fill.
+
+**Decided (karolkow, 2026-09-21): phase 3 starts the same day**, partition by
+partition as each passes its pre-fill gate; with the disk no longer the
+constraint, Tuesday stays for the head's partition and the checks.
+
+Phase 3 runs as one command per list of partitions,
+[`fill_partitions.zsh`](notes/fill_partitions.zsh): both tables per partition,
+disk checked before each, stop at the first error. Dry-run with a stub `chw`
+on partitions 100–101: 400 statements, 200 per table, bounds 50,000,000 to
+51,000,000, no placeholder left.
 
 > 2026-09-21: the contract-events page, re-measured after the operator merged
 > the staging partition to one part, reads fewer rows than the old page (median
