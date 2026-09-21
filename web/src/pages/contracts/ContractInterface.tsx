@@ -67,7 +67,10 @@ function TypeTok({
   );
 }
 
-/** One function signature row — expanded by default, like the Figma panel. */
+/**
+ * One function signature row — collapsed by default, so a large interface
+ * opens as a scannable list of signatures (user request, issue #467).
+ */
 function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
   const params = fn.inputs
     .map((param) => `${param.name}: ${param.type_name}`)
@@ -75,7 +78,6 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
   const returnType = formatReturnType(fn.outputs);
   return (
     <Accordion
-      defaultExpanded
       disableGutters
       square
       elevation={0}
@@ -88,7 +90,12 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
     >
       <AccordionSummary
         expandIcon={<KeyboardArrowDownIcon fontSize="small" />}
-        sx={{ flexDirection: 'row-reverse', gap: 1 }}
+        sx={{
+          flexDirection: 'row-reverse',
+          gap: 1,
+          // Let a long signature ellipsize instead of widening the row.
+          '& .MuiAccordionSummary-content': { minWidth: 0 },
+        }}
       >
         <Stack
           direction="row"
