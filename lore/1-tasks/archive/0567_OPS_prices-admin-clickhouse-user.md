@@ -2,7 +2,7 @@
 id: '0567'
 title: 'prices_admin: a prices.*-scoped ClickHouse user for partition operations, so the prices re-ingest does not need dev_shared'
 type: OPS
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0314', '0477', '0561']
 tags: ['clickhouse', 'prices-api', 'rbac', 'effort-small']
@@ -20,6 +20,21 @@ history:
       dev_shared — which holds DROP on every database on the shared box.
       This adds a user scoped to prices.* instead. Same shape as 0314's
       prices users; same in-place-inode application path as 0477.
+  - date: '2026-09-21'
+    status: completed
+    who: okarcz
+    note: >
+      PR #468 merged (b046e1e2) and APPLIED on the box the same afternoon,
+      box-side like 0477: services.xml overwritten in place (inode 16777410
+      kept, 6329 -> 7742 bytes), ClickHouse hot-reloaded — SHOW GRANTS FOR
+      prices_admin lists exactly the four grants. CN map: operator secret
+      updated (version 6b8c55c9), /srv/caddy/cn_user_map.snippet edited in
+      place + `caddy reload` (graceful, no restart). Cert
+      prices-admin-production issued (365 d, sha256 C8:27:3F:58…). From the
+      campaign machine: currentUser() = prices_admin; CREATE / TRUNCATE /
+      DROP of a probe table in prices succeeded. No container restart, no
+      BE-visible event. Backups on the box: /tmp/services.xml.bak-0567,
+      /tmp/cn_user_map.snippet.bak-0567. Archived.
 ---
 
 # prices_admin: a prices.\*-scoped ClickHouse user for partition operations
@@ -43,10 +58,9 @@ Profile `prices_write_ddl` and quota `prices_write`, the same as
 `prices_writer`. Cert CN `prices-admin-production`, mapped in
 `CLICKHOUSE_CN_USER_MAP` (operator env, not this repo).
 
-## Status: Active
+## Status: Completed
 
-**Current state:** PR #468 open (`ops/0567_prices-admin-clickhouse-user` → develop);
-not yet applied on the box.
+**Current state:** live on prod since 2026-09-21 ~14:30 UTC; PR #468 merged.
 
 ## Context
 
@@ -85,15 +99,30 @@ prices-admin-production`; hand-over per README.
 
 ## Acceptance Criteria
 
-- [ ] `SHOW GRANTS FOR prices_admin` on prod lists exactly the four grants
-      above and nothing else.
-- [ ] A request with the `prices-admin-production` cert returns
+- [x] `SHOW GRANTS FOR prices_admin` on prod lists exactly the four grants
+      above and nothing else — verified on the box after the hot-reload.
+- [x] A request with the `prices-admin-production` cert returns
       `currentUser() = 'prices_admin'`, can CREATE/TRUNCATE/DROP a probe table
-      in `prices`, and is refused DDL on `default.*`.
-- [ ] Repo `services.xml` matches the box file byte-for-byte after merge.
-- [ ] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md` row
+      in `prices` — all verified from the campaign machine. "Refused DDL on
+      `default.*`" was not exercised live; it follows from the grant list
+      (SELECT only on `default.*`, explicit-grant mode).
+- [x] Repo `services.xml` matches the box file byte-for-byte after merge —
+      the box copy IS `git show origin/develop:…services.xml`.
+- [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md` row
       added; other architecture docs N/A (grant list only).
-- [ ] **API types regenerated** — N/A (no `crates/api` change).
+- [x] **API types regenerated** — N/A (no `crates/api` change).
+
+## Issues Encountered
+
+- The deploy laptop has no `ansible-core`, no `inventory.ini` and no
+  `~/.config/soroban-prod.env`, so the playbook path was not available.
+  Applied box-side instead (runbook below). ⚠️ Consequence for BE: the next
+  `--tags app` run rsyncs an identical `services.xml` (no-op) and re-renders
+  the Caddy snippet from the updated secret to the same content — nothing
+  should change, but the snippet was hand-edited, so a diff there is the
+  first thing to look at if a run ever reports a change.
+- The first attempt at editing the secret assumed a one-line value; the map
+  is multi-line with `\` continuations. Edited with a small script instead.
 
 ## Notes
 
