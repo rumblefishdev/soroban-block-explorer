@@ -45,7 +45,7 @@ Profile `prices_write_ddl` and quota `prices_write`, the same as
 
 ## Status: Active
 
-**Current state:** repo change on branch `ops/0567_prices-admin-clickhouse-user`;
+**Current state:** PR #468 open (`ops/0567_prices-admin-clickhouse-user` → develop);
 not yet applied on the box.
 
 ## Context
