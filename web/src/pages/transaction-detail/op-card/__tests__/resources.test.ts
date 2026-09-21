@@ -103,13 +103,17 @@ describe('resource counters (#378)', () => {
     ]);
   });
 
-  it('names a counter the host left unlabelled instead of discarding it', () => {
-    const nameless = {
-      ...counter('x', 7),
-      topics: [{ type: 'sym', value: 'core_metrics' }],
-    } as unknown as XdrEventDto;
-    expect(allResourceFacts(readResourceCounters([nameless]))).toEqual([
-      { label: '(unnamed)', value: '7' },
+  it('names counters the host left unlabelled instead of discarding them', () => {
+    const nameless = (value: number) =>
+      ({
+        ...counter('x', value),
+        topics: [{ type: 'sym', value: 'core_metrics' }],
+      } as unknown as XdrEventDto);
+    expect(
+      allResourceFacts(readResourceCounters([nameless(7), nameless(8)]))
+    ).toEqual([
+      { label: '(unnamed #0)', value: '7' },
+      { label: '(unnamed #1)', value: '8' },
     ]);
   });
 
