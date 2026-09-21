@@ -102,3 +102,44 @@ prices-admin-production`; hand-over per README.
 - The user is intended for operator-driven campaigns, not for a Lambda. Its
   cert bundle stays with the operator, never in Secrets Manager next to the
   `prices_writer` bundle.
+
+## 📕 DEPLOY RUNBOOK (box-side, the 0477 path)
+
+The deploy operator's laptop has no `ansible-core`, no `inventory.ini` and no
+`~/.config/soroban-prod.env`, so this applies the merged file the way 0477
+did: in place on the box (inode preserved → ClickHouse hot-reloads), plus the
+Caddy map line by hand and a graceful `caddy reload`. The operator secret is
+updated first so the next ansible run renders the same map.
+
+0. **Pre-check (laptop, BE repo)** — the merged file carries the user:
+   `git show origin/develop:crates/db-clickhouse/users.d/services.xml | grep -c prices_admin` → ≥ 2.
+1. **CN map in the operator secret (laptop → Secrets Manager)** — fetch
+   `soroban/production/operator/env` to `/dev/shm`, append
+   `,prices-admin-production:prices_admin` inside the quotes of the
+   `CLICKHOUSE_CN_USER_MAP=` line, `put-secret-value` from the file, shred.
+   Checkpoint: re-fetch and grep the map line for the new pair → 1.
+2. **services.xml in place (laptop → box as `deploy`)** — first
+   `diff` the box file against the pre-merge repo version (`2deabd12`) →
+   empty, else STOP (undeployed drift). Record `stat -c '%i'` of
+   `/srv/app/crates/db-clickhouse/users.d/services.xml`, back it up to
+   `/tmp`, then `git show origin/develop:… | ssh … "cat > FILE"`.
+   Checkpoint: inode unchanged, `grep -c prices_admin` ≥ 2.
+3. **ClickHouse reloaded (box)** — `docker exec -i app-clickhouse-1
+clickhouse-client -q 'SHOW GRANTS FOR prices_admin'` → the four grants.
+   If "no user": ⚠️ container recreate needed — schedule with BE, do not
+   do ad hoc.
+4. **Caddy map (box, sudo)** — back up `/srv/caddy/cn_user_map.snippet`,
+   insert `    "CN=prices-admin-production"    prices_admin` before the
+   `default "__unmapped__"` line, then
+   `docker exec app-caddy-1 caddy validate --config /etc/caddy/Caddyfile`
+   and `docker exec app-caddy-1 caddy reload --config /etc/caddy/Caddyfile`
+   (graceful; the ansible handler would restart the container instead).
+5. **Cert (laptop, BE repo `infra-hetzner/ca`)** — CA key from Secrets
+   Manager `soroban/production/ca/key` into `/dev/shm`,
+   `./issue-client-cert.sh prices-admin-production`, shred the CA key.
+6. **Hand-over** — scp the bundle to the campaign machine; password-manager
+   backup per README; shred the laptop `out/` key.
+7. **Final test (campaign machine)** — `SELECT currentUser()` → `prices_admin`;
+   `CREATE TABLE prices.prices_admin_probe (x UInt8) ENGINE = Memory`,
+   `TRUNCATE TABLE prices.prices_admin_probe`, `DROP TABLE prices.prices_admin_probe`
+   all succeed. `Code: 497` on any → a grant is missing.
