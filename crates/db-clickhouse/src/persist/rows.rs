@@ -482,6 +482,20 @@ pub struct OperationPoolRow {
     pub transaction_id: i64,
 }
 
+/// `contract_transactions` — fact, the per-(contract, transaction) presence
+/// index (task 0541): the contract-dimension twin of `transaction_participants`,
+/// so a per-contract transaction list is a key seek instead of a merge over
+/// three tables. Keyed by the transaction's position (ADR 0059), not its hash
+/// surrogate. A transaction touches a contract through an operation event, an
+/// invocation or an operation naming it — never through a fee event. Pure
+/// presence; duplicate rows collapse in the RMT.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
+pub struct ContractTransactionRow {
+    pub contract_id: i64,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+}
+
 /// `lp_operation_amounts` — fact, what one operation moved through one pool
 /// (task 0279). The value twin of [`OperationPoolRow`]: same pool-leading key,
 /// plus `application_order` / `asset_id` / `amount`.
@@ -558,6 +572,18 @@ pub struct SorobanEventRow {
     pub signature: Option<String>,
     pub topics_xdr: String,
     pub data_xdr: String,
+}
+
+impl SorobanEventRow {
+    /// Emitted by an operation, not a fee charge or refund. A fee event's rpc
+    /// id carries a sentinel — transaction 0 or 1048575, or operation 4095
+    /// (ADR 0059) — so only an operation event names its own transaction in
+    /// `transaction_index`. The `contract_transactions` history fill applies
+    /// the same test in SQL (`docs/backfills.md`).
+    pub fn is_operation_event(&self) -> bool {
+        i64::from(self.transaction_index) == i64::from(self.application_order)
+            && self.operation_index != xdr_parser::EventId::AFTER_TX_OPERATION
+    }
 }
 
 /// `soroban_invocations_appearances` — fact (ADR 0034 fold).

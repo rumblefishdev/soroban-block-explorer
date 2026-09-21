@@ -1165,6 +1165,13 @@ ORDER BY (contract_id, ledger_sequence, transaction_index, operation_index, even
 -- PROD: created by hand BEFORE the indexer that writes it deploys — the
 -- driver validates the row struct against `DESCRIBE`, and a missing table
 -- fails every insert client-side (task 0310).
+--
+-- PROD: production still carries `event_index Int16`, the flat per-transaction
+-- counter the task-0541 writer no longer sends. Before that writer deploys it
+-- needs `ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0` —
+-- without a default the driver refuses every insert, as above — and after the
+-- rollback horizon `ALTER TABLE asset_transfers DROP COLUMN event_index`. Order
+-- and gate: docs/deployment.md, "Canonical event location".
 CREATE TABLE IF NOT EXISTS asset_transfers (
     ledger_sequence    Int64                   CODEC(ZSTD(3)),
     application_order  Int16                   CODEC(ZSTD(3)),
@@ -1222,6 +1229,32 @@ CREATE TABLE IF NOT EXISTS soroban_invocations_appearances (
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, transaction_id);
+
+-- contract_transactions: one row per (contract, transaction) the transaction
+-- touched — the contract-dimension twin of `transaction_participants`, so the
+-- contract-filtered transaction list is a key seek (task 0541). Before it, that
+-- list merged `soroban_events` (one row per EVENT, up to hundreds per
+-- transaction), `soroban_invocations_appearances` and `operations_appearances`
+-- (no `contract_id` in its key) and had to guess how many rows made a page.
+--
+-- Sources: an operation event the transaction emits, an invocation, an
+-- operation naming the contract. Fee events do not count — every transaction
+-- pays one to the native SAC, which would make that contract's list every
+-- transaction on the network. Keyed by the transaction's position (ADR 0059),
+-- not the hash surrogate its siblings carry.
+--
+-- PROD: created by hand BEFORE the indexer that writes it deploys — the driver
+-- validates the row struct against `DESCRIBE`, and a missing table fails every
+-- insert client-side (task 0310). History is filled in-DB: docs/backfills.md,
+-- "Canonical event location fill".
+CREATE TABLE IF NOT EXISTS contract_transactions (
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    application_order  Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, application_order);
 
 CREATE TABLE IF NOT EXISTS nft_ownership (
     contract_id      Int64,

@@ -117,6 +117,13 @@ Backbone timeline:
   `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
   `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
   hash — the same value `operations_appearances.pool_ids` stores per crossing)
+- `contract_transactions` — per-(contract, transaction) presence index powering
+  `/transactions?filter[contract_id]=` (task 0541; the contract-dimension twin of
+  `transaction_participants`, keyed contract-first and by the transaction's
+  **position** `(ledger_sequence, application_order)`, not the hash surrogate).
+  A transaction touches a contract through an operation event, an invocation or
+  an operation naming it; fee events do not count, or the native SAC's list
+  would be every transaction on the network ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md))
 - `lp_operation_amounts` — per-(operation, pool, asset) amounts behind that
   endpoint's "Amount" column (task 0279 / issue #371; the value twin of
   `operation_pools`, same pool-leading prefix). `amount` is raw stroops in a
@@ -250,6 +257,7 @@ ledgers
        ├─ transaction_participants (partitioned)
        ├─ operation_asset_appearances (partitioned)
        ├─ operation_pools (partitioned)
+       ├─ contract_transactions (partitioned)     # (contract, tx position) presence (0541)
        ├─ lp_operation_amounts (partitioned)
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
@@ -806,6 +814,47 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, application_order);
 ```
+
+### 4.5.6 Contract Transactions (task 0541)
+
+ClickHouse-only. The **contract-dimension twin of `transaction_participants`** — a
+per-(contract, transaction) presence index, so the contract-filtered transaction
+list is a key seek. Before it, that list merged three tables none of which could
+answer "the next N transactions of this contract": `soroban_events` holds one row
+per *event* (hundreds per transaction for a busy contract),
+`soroban_invocations_appearances` covers invocations only, and
+`operations_appearances` has no `contract_id` in its key. The read guessed how many
+rows made a page and retried wider — a mechanism with a density cliff, where a
+page could end before the list did.
+
+```sql
+CREATE TABLE contract_transactions (
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    application_order  Int16   -- the transaction's position (ADR 0059)
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, application_order);
+```
+
+Purpose / design notes:
+
+- **Sources:** an operation event the transaction emits, an invocation, an
+  operation naming the contract — the same three the list read before.
+- **Fee events do not count.** Every transaction pays a fee, and the fee is an
+  event on the native SAC; counting it would make that contract's list every
+  transaction on the network. A fee event is recognised by its rpc id, which
+  carries a sentinel (`transaction_index` 0 or 1048575, or `operation_index`
+  4095): only an operation event has `transaction_index = application_order`.
+- **Keyed by position**, not by the `transactions.id` hash surrogate its siblings
+  carry — the shape task 0538 moves the whole family to. The three columns cost
+  ~0.96 B/row in this sort order (measured on the rekeyed `soroban_events`).
+- **Pure presence**, deduped per transaction at write; duplicates left by
+  re-ingest collapse in the RMT and on read (`LIMIT 1 BY`).
+- **Backfill** is in-DB from the three sources — no XDR re-parse; the per-slice
+  statement is referenced from `docs/backfills.md`, "Canonical event location
+  fill".
 
 ### 4.6 Soroban Contracts
 

@@ -188,10 +188,12 @@ mod tests {
         // value held by a claimable balance. 39 → 40.
         // task 0541: dropped `soroban_event_ops` — the operation is part of
         // the `soroban_events` key (ADR 0059). 40 → 39.
+        // task 0541: added `contract_transactions` — the per-(contract, tx)
+        // presence index the contract-filtered transaction list seeks. 39 → 40.
         assert_eq!(
             stmts.len(),
-            39,
-            "expected 35 tables + 2 materialized views + 1 dictionary, got {}",
+            40,
+            "expected 37 tables + 2 materialized views + 1 dictionary, got {}",
             stmts.len()
         );
     }

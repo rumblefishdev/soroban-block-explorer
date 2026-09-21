@@ -39,7 +39,7 @@
 //! convention: `WHERE amount > 0` to recover "active trustlines"
 //! semantics.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
@@ -250,6 +250,9 @@ pub struct StagedLedger {
     pub lp_amount_rows: Vec<LpOperationAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
+    /// Per-(contract, tx) presence rows (task 0541) → `contract_transactions`,
+    /// the contract-dimension twin of `participant_rows`.
+    pub contract_tx_rows: Vec<ContractTransactionRow>,
     pub asset_rows: Vec<AssetRow>,
     /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
     pub asset_sac_rows: Vec<AssetSacRow>,
@@ -1986,6 +1989,49 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             amount: agg.amount,
         });
     }
+
+    // ---- contract_transactions: which contracts each transaction touched ----
+    //
+    // The union of the three ways a transaction touches a contract — an
+    // operation event it emits, an invocation, an operation naming it — which
+    // are exactly the sources the per-contract transaction list reads (task
+    // 0541). Fee events are left out: every transaction pays one to the native
+    // SAC, which would make that contract's list every transaction on the
+    // network. Invocations and operations name the transaction by its hash
+    // surrogate; the index keys it by position, as the events already do.
+    let app_order_by_tx_id: HashMap<i64, i16> = out
+        .transaction_rows
+        .iter()
+        .map(|t| (t.id, t.application_order))
+        .collect();
+    let position_of = |tx_id: i64| {
+        app_order_by_tx_id
+            .get(&tx_id)
+            .copied()
+            .ok_or_else(|| staging_err(&format!("transaction id {tx_id} is not in this ledger")))
+    };
+    let mut contract_txs: BTreeSet<(i64, i16)> = out
+        .event_rows
+        .iter()
+        .filter(|e| e.is_operation_event())
+        .map(|e| (e.contract_id, e.application_order))
+        .collect();
+    for inv in &out.invocation_rows {
+        contract_txs.insert((inv.contract_id, position_of(inv.transaction_id)?));
+    }
+    for op in &out.op_rows {
+        if let Some(contract_id) = op.contract_id {
+            contract_txs.insert((contract_id, position_of(op.transaction_id)?));
+        }
+    }
+    out.contract_tx_rows = contract_txs
+        .into_iter()
+        .map(|(contract_id, application_order)| ContractTransactionRow {
+            contract_id,
+            ledger_sequence: ledger_sequence_i64,
+            application_order,
+        })
+        .collect();
 
     // ---- assets identity rows (dedup by 4-tuple) + asset_sac facet rows ----
     //

@@ -173,6 +173,7 @@ struct TableInserts {
     operations: Option<Insert<OperationAppearanceRow>>,
     events: Option<Insert<SorobanEventRow>>,
     invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
+    contract_txs: Option<Insert<ContractTransactionRow>>,
     assets: Option<Insert<AssetRow>>,
     asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
@@ -349,6 +350,7 @@ impl PartitionWriter {
             lp_amount_rows,
             event_rows,
             invocation_rows,
+            contract_tx_rows,
             asset_rows,
             asset_sac_rows,
             nft_rows,
@@ -501,6 +503,13 @@ impl PartitionWriter {
             &invocation_rows,
         )
         .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.contract_txs,
+            "contract_transactions",
+            &contract_tx_rows,
+        )
+        .await?;
 
         write_rows(
             &self.client,
@@ -621,6 +630,7 @@ impl PartitionWriter {
             operations,
             events,
             invocations,
+            contract_txs,
             assets,
             asset_sac,
             nfts,
@@ -652,6 +662,7 @@ impl PartitionWriter {
         end(operations).await?;
         end(events).await?;
         end(invocations).await?;
+        end(contract_txs).await?;
         end(assets).await?;
         end(asset_sac).await?;
         end(nfts).await?;

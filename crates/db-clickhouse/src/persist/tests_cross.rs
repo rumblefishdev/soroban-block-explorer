@@ -389,6 +389,14 @@ fn column_order_soroban_invocations_appearances() {
 }
 
 #[test]
+fn column_order_contract_transactions() {
+    assert_columns::<ContractTransactionRow>(
+        "contract_transactions",
+        &["contract_id", "ledger_sequence", "application_order"],
+    );
+}
+
+#[test]
 fn column_order_nft_ownership() {
     assert_columns::<NftOwnershipRow>(
         "nft_ownership",
@@ -841,6 +849,127 @@ fn staged_events_carry_the_rpc_id_and_their_transaction() {
             (0, 0, 1, 2),         // tx2 charge
         ]
     );
+
+    // The contract index takes the operation event only. Paying a fee is not
+    // using the SAC: tx2, which only paid one, is not in the contract's list.
+    assert_eq!(
+        staged.contract_tx_rows,
+        vec![ContractTransactionRow {
+            contract_id: ids::contract_id(&sac),
+            ledger_sequence: 10,
+            application_order: 1,
+        }]
+    );
+}
+
+#[test]
+fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
+    let ledger = synthetic_ledger();
+    let tx1 = synthetic_tx(0x71);
+    let tx2 = synthetic_tx(0x72);
+    let c1 = "C".to_string() + &"D".repeat(55);
+    let c2 = "C".to_string() + &"E".repeat(55);
+    let native = "C".to_string() + &"F".repeat(55);
+    let event = |tx: &ExtractedTransaction, contract: &str, source: EventSource, id: (u32, u16)| {
+        ExtractedEvent {
+            transaction_hash: tx.hash.clone(),
+            event_type: ContractEventType::Contract,
+            source,
+            contract_id: Some(contract.to_owned()),
+            topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
+            data: serde_json::json!({}),
+            position_in_tx: 0,
+            op_index: None,
+            event_pos_in_op: None,
+            stage: None,
+            event_id: Some(xdr_parser::EventId {
+                ledger_sequence: 10,
+                transaction_index: id.0,
+                operation_index: id.1,
+                event_index: 0,
+            }),
+            ledger_sequence: 10,
+            created_at: 1_700_000_000,
+        }
+    };
+    let events = vec![
+        (
+            tx1.hash.clone(),
+            vec![event(&tx1, &c2, EventSource::PerOp, (1, 0))],
+        ),
+        (
+            tx2.hash.clone(),
+            vec![
+                event(&tx2, &c1, EventSource::PerOp, (2, 3)),
+                // A pre-protocol-23 refund: its own transaction, operation 4095.
+                event(&tx2, &native, EventSource::TxLevel, (2, 4095)),
+            ],
+        ),
+    ];
+    // The operation sits at index 3: its row's `application_order` is the
+    // OPERATION's position, which must not leak into the transaction key.
+    let ops = vec![
+        (tx1.hash.clone(), vec![]),
+        (
+            tx2.hash.clone(),
+            vec![ExtractedOperation {
+                transaction_hash: tx2.hash.clone(),
+                operation_index: 3,
+                op_type: OperationType::InvokeHostFunction,
+                source_account: None,
+                asset_appearances: vec![],
+                counterparties: vec![],
+                source_muxed_id: None,
+                destination_muxed_id: None,
+                details: serde_json::json!({ "contractId": c1 }),
+            }],
+        ),
+    ];
+    let invocation = |contract: &str| ExtractedInvocation {
+        transaction_hash: tx2.hash.clone(),
+        contract_id: Some(contract.to_owned()),
+        caller_account: None,
+        function_name: Some("f".into()),
+        function_args: serde_json::json!([]),
+        return_value: serde_json::Value::Null,
+        successful: true,
+        invocation_index: 0,
+        depth: 0,
+        ledger_sequence: 10,
+        created_at: 1_700_000_000,
+    };
+    let invocations = vec![(tx2.hash.clone(), vec![invocation(&c1), invocation(&c2)])];
+
+    let staged = stage::prepare(
+        &ledger,
+        &[tx1.clone(), tx2.clone()],
+        &ops,
+        &events,
+        &invocations,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("prepare");
+
+    let row = |contract: &str, application_order| ContractTransactionRow {
+        contract_id: ids::contract_id(contract),
+        ledger_sequence: 10,
+        application_order,
+    };
+    let mut expected = vec![
+        row(&c1, 2), // tx2's event, invocation and operation: one row
+        row(&c2, 1), // tx1's event
+        row(&c2, 2), // tx2's invocation
+    ];
+    expected.sort();
+    assert_eq!(staged.contract_tx_rows, expected);
 }
 
 #[test]

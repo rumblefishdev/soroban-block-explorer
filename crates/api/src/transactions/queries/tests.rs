@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn contract_positions_are_one_seek_on_the_presence_index() {
+    let sql = contract_positions_sql(42, "128", "64000009", None, Direction::Next, 80);
+    assert!(sql.contains("FROM contract_transactions WHERE contract_id = 42"));
+    assert!(sql.contains("intDiv(ledger_sequence, 500000) = 128"));
+    assert!(sql.contains("ledger_sequence <= 64000009"));
+    assert!(sql.contains("ORDER BY ledger_sequence DESC, application_order DESC"));
+    assert!(sql.contains("LIMIT 1 BY ledger_sequence, application_order"));
+    assert!(sql.ends_with("LIMIT 80"));
+    // The first page has no keyset bound; nothing else is read.
+    assert!(!sql.contains("(ledger_sequence, application_order) <"));
+    for gone in ["soroban_events", "operations_appearances", "UNION"] {
+        assert!(
+            !sql.contains(gone),
+            "{gone} is no longer read by the driver"
+        );
+    }
+
+    let sql = contract_positions_sql(
+        42,
+        "128",
+        "64000009",
+        Some((64_000_000, 7)),
+        Direction::Prev,
+        80,
+    );
+    assert!(sql.contains("AND (ledger_sequence, application_order) > (64000000, 7)"));
+    assert!(sql.contains("ORDER BY ledger_sequence ASC, application_order ASC"));
+}
+
+#[test]
 fn contract_page_seeks_and_orders_by_position() {
     let sql = contract_page_sql(
         &[(64_000_001, 3), (64_000_000, 12)],

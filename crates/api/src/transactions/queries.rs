@@ -43,8 +43,8 @@
 //! with all projected columns immutable across versions; a Rust-side dedup is
 //! the belt-and-braces. The cursor keys on `application_order` for this path
 //! (also the correct in-ledger order — the old `id`-hash tie-break did not
-//! preserve it). Statement B (contract filter) keys on the same position,
-//! merged from per-arm windows in [`super::contract_positions`] (task 0541).
+//! preserve it). Statement B (contract filter) keys on the same position, by a
+//! seek on the `contract_transactions` presence index (task 0541).
 //! Statement C still keys on the `transactions.id` surrogate (it drives off
 //! `operations_appearances`).
 //!
@@ -63,7 +63,6 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use chrono::{DateTime, Utc};
 
-use super::contract_positions;
 use super::dto::TxListCursor;
 
 // ---------------------------------------------------------------------------
@@ -446,9 +445,10 @@ pub async fn fetch_list(
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
             // Step 1: up to `lim_over` positions of transactions touching the
-            // contract, merged from the three arms' ledger windows in
-            // execution order (`contract_positions`, task 0541). One partition
-            // per page, as before: the cursor's, else the head's.
+            // contract, by a seek on the `contract_transactions` presence index
+            // — the shape `transaction_participants` gives the account list
+            // (task 0541). One partition per page, as before: the cursor's,
+            // else the head's.
             let cursor = match params.cursor.as_ref() {
                 Some(TxListCursor::ChPosition {
                     ledger_sequence,
@@ -456,23 +456,19 @@ pub async fn fetch_list(
                 }) => Some((*ledger_sequence, *application_order)),
                 _ => None,
             };
-            let partition = format!(
-                "intDiv(ledger_sequence, 500000) = {}",
-                cursor.map_or_else(
-                    || head_partition.clone(),
-                    |(l, _)| (l / 500_000).to_string()
-                )
+            let partition = cursor.map_or_else(
+                || head_partition.clone(),
+                |(l, _)| (l / 500_000).to_string(),
             );
-            let positions = contract_positions::contract_tx_positions(
-                client,
-                cid,
-                &partition,
-                &head_max,
-                cursor,
-                direction,
-                usize::try_from(lim_over).unwrap_or_default(),
-            )
-            .await?;
+            let positions: Vec<(i64, i16)> = client
+                .query(&contract_positions_sql(
+                    cid, &partition, &head_max, cursor, direction, lim_over,
+                ))
+                .fetch_all::<PositionRow>()
+                .await?
+                .into_iter()
+                .map(|r| (r.ledger_sequence, r.application_order))
+                .collect();
             if positions.is_empty() {
                 Vec::new()
             } else {
@@ -906,10 +902,46 @@ pub async fn fetch_participants(
     Ok(out)
 }
 
+#[derive(Debug, Row, Deserialize)]
+struct PositionRow {
+    ledger_sequence: i64,
+    application_order: i16,
+}
+
+/// Statement B's driver: the positions of the transactions touching the
+/// contract, past the cursor, in page order — one seek on the
+/// `contract_transactions` key, the way the account list seeks
+/// `transaction_participants`. `partition` is the partition id the page is
+/// bounded to; `LIMIT 1 BY` collapses rows the RMT has not merged yet. Every
+/// value is an integer literal (the bound-parameter path returned empty pages,
+/// see `fetch_list`).
+fn contract_positions_sql(
+    contract_id: i64,
+    partition: &str,
+    head_max: &str,
+    cursor: Option<(i64, i16)>,
+    direction: Direction,
+    lim_over: i64,
+) -> String {
+    let (op, order) = keyset_sql_desc(direction);
+    let cursor = cursor.map_or_else(String::new, |(l, a)| {
+        format!(" AND (ledger_sequence, application_order) {op} ({l}, {a})")
+    });
+    format!(
+        "SELECT ledger_sequence, application_order FROM contract_transactions \
+         WHERE contract_id = {contract_id} \
+           AND intDiv(ledger_sequence, 500000) = {partition} \
+           AND ledger_sequence <= {head_max}{cursor} \
+         ORDER BY ledger_sequence {order}, application_order {order} \
+         LIMIT 1 BY ledger_sequence, application_order \
+         LIMIT {lim_over}"
+    )
+}
+
 /// Statement B's page: the transactions at `positions`, filtered by source and
 /// operation type, in position order. Every value is an integer literal.
 fn contract_page_sql(
-    positions: &[contract_positions::Position],
+    positions: &[(i64, i16)],
     src: &str,
     ot: &str,
     order: &str,

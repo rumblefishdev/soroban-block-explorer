@@ -1001,6 +1001,16 @@ over `topics_xdr` — flavour A, no re-parse, no S3. The SQL mirrors
 `extract_event_signature` (stage.rs) exactly; version-less RMT keeps the
 last insert per key (rule 4), so re-running a slice is harmless.
 
+**Timing against the task-0541 rekey.** That rekey copies `soroban_events`
+into `soroban_events_staging_canonical` partition by partition, `signature`
+included, and then swaps the two tables. Run this backfill **before that copy
+starts** (the copy then carries the names) **or after the swap** (on the new
+table) — never in between: a partition already copied keeps its `NULL` names
+in the table that becomes `soroban_events`, and nothing flags it. The copy
+began with the rekey's trial partition, so from then on **after the swap** is
+the only safe moment (partition 127 held 132,256 resolvable `NULL` names when
+copied — measured 2026-09-21).
+
 **Run it per partition** — a bare `WHERE signature IS NULL` scans all 10G+
 rows in one query, which blows the hourly read quota; the partition key is
 `intDiv(ledger_sequence, 500000)` and each partition is ~300-420M rows, so
@@ -1008,11 +1018,15 @@ one partition per query prunes cleanly (~4-5/hour under quota, or loop them
 all as the box operator where no quota applies). Partition ids:
 `SELECT DISTINCT partition FROM system.parts WHERE table='soroban_events' AND active`.
 
+`SELECT * REPLACE` re-inserts each row with only `signature` recomputed, in the
+table's own column order — so the statement is the same before and after the
+task-0541 rekey, and no column list can drift out of step with the table
+(verified read-only on both shapes, 2026-09-21).
+
 ```sql
 -- one slice; substitute {P} with a partition id and iterate
 INSERT INTO soroban_events
-SELECT
-    contract_id, transaction_id, ledger_sequence, event_index, event_type,
+SELECT * REPLACE (
     multiIf(
         JSONExtractString(topics_xdr,1,'type') = 'string'
           AND JSONExtractString(topics_xdr,2,'type') = 'sym'
@@ -1022,8 +1036,8 @@ SELECT
           AND JSONExtractString(topics_xdr,1,'value') != '',
             JSONExtractString(topics_xdr,1,'value'),
         CAST(NULL, 'Nullable(String)')
-    ) AS signature,
-    topics_xdr, data_xdr
+    ) AS signature
+)
 FROM soroban_events
 WHERE signature IS NULL
   AND intDiv(ledger_sequence, 500000) = {P}
@@ -1053,6 +1067,43 @@ WHERE signature IS NULL
 
 Verification criteria for the deployed result live in task 0374's
 final-phase notes.
+
+## Canonical event location fill (task 0541) — in-DB, per 5k-ledger slice
+
+Two new tables are filled from what ClickHouse already holds — no S3, no
+re-parse — before the task-0541 window, one partition at a time, in the same
+5,000-ledger slices (20k exceeds the read profile's memory cap for the gates).
+Per slice `[A, B)`, in this order:
+
+1. **`soroban_events_staging_canonical`** — the rekeyed `soroban_events`. The
+   statement and its pre/post gates are in the task's notes
+   ([`fill_insert.sql`](../lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql),
+   [`fill_gate.sql`](../lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_gate.sql)).
+2. **`contract_transactions`** — the per-(contract, transaction) presence index:
+   [`fill_contract_transactions.sql`](../lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql).
+   A `SELECT DISTINCT` over the three ways a transaction touches a contract —
+   operation events, invocations, operations naming it — mapping the hash
+   surrogate to the transaction's position through `transactions`. It reads
+   step 1's output, so it runs after it. Only this one-time history fill needs
+   it: afterwards the indexer writes the table, and a re-ingest goes through
+   the same writer.
+
+The event arm's test is the one the live writer applies
+(`SorobanEventRow::is_operation_event`). Measured read-only on 63,700,000–
+63,705,000 (2026-09-21): 1,554,897 pairs across 8,369 contracts, 740 ms,
+586 MiB — well inside the read profile. The sentinel test was checked on the
+whole of partition 127: it selects 249,035,471 rows, exactly the partition's
+170,740,563 charges plus 78,294,908 refunds, and none outside the native SAC.
+
+**Gate, per slice:** `uniqExact(contract_id, ledger_sequence,
+application_order)` of the slice in `contract_transactions` equals the same
+`SELECT DISTINCT` run as a count — a short count means a partial insert
+(`uniqExact`, not `count()`: a re-run slice holds duplicates until the RMT
+merges them). The id format and its sentinels:
+[ADR 0059](../lore/2-adrs/0059_canonical-event-identity-and-location-names.md).
+**After the window:** for the first ledgers the new indexer writes,
+that statement run over the same range must return exactly the writer's rows
+(`EXCEPT` both ways is empty) — the one check that the SQL and the Rust agree.
 
 ## Superseded — do not follow
 

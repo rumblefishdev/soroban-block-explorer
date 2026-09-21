@@ -361,6 +361,16 @@ registers their `from` / `to` as account participants plus — for SAC-wrapped
 classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`).
 `transaction_participants` stays pure presence.
 
+`contract_transactions` (task 0541) is the contract-dimension presence index,
+built at staging from rows the ledger already produced: every contract that
+emitted an **operation** event in the transaction, was invoked in it, or is named
+by one of its operations — one row per (contract, transaction position). Fee
+events are skipped (`SorobanEventRow::is_operation_event`): every transaction
+pays one to the native SAC, and they would put every transaction in that
+contract's list. Invocation and operation rows name the transaction by its hash
+surrogate; staging maps it to the position through the ledger's own
+`transactions` rows, and a transaction missing from them is a staging error.
+
 `operation_asset_appearances` is pure presence. The `net_settled` value column
 (task 0393) was REMOVED on 2026-09-04 — the per-(tx, asset) aggregate carried no
 direction and no account. The reducer that produced it
