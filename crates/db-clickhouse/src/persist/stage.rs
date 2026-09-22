@@ -1881,6 +1881,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // ---- soroban_events (UNFOLDED per ADR 0044 §4a, keyed by rpc id per ADR 0059) ----
     let mut diagnostic_dropped: usize = 0;
     let mut contract_orphan_dropped: usize = 0;
+    // (contract, transaction) of every operation event, for
+    // `contract_transactions` below: the parser says where an event came from,
+    // so a fee event is left out by its source, not inferred from its id.
+    let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
     for (tx_hash, evs) in events {
         let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
             continue;
@@ -1907,8 +1911,12 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             let data_xdr = serde_json::to_string(&ev.data)
                 .map_err(|e| staging_err(&format!("event data serialize: {e}")))?;
             let signature = extract_event_signature(&ev.topics);
+            let contract_id = ids::contract_id(contract_strkey);
+            if ev.source == EventSource::PerOp {
+                contract_txs.insert((contract_id, application_order));
+            }
             out.event_rows.push(SorobanEventRow {
-                contract_id: ids::contract_id(contract_strkey),
+                contract_id,
                 ledger_sequence: ledger_sequence_i64,
                 transaction_index: id.transaction_index,
                 operation_index: id.operation_index,
@@ -2010,12 +2018,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             .copied()
             .ok_or_else(|| staging_err(&format!("transaction id {tx_id} is not in this ledger")))
     };
-    let mut contract_txs: BTreeSet<(i64, i16)> = out
-        .event_rows
-        .iter()
-        .filter(|e| e.is_operation_event())
-        .map(|e| (e.contract_id, e.application_order))
-        .collect();
     for inv in &out.invocation_rows {
         contract_txs.insert((inv.contract_id, position_of(inv.transaction_id)?));
     }

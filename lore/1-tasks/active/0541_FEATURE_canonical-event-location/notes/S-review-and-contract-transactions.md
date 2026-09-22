@@ -75,8 +75,10 @@ review of this size.
   operations naming a contract. Invocations and operations carry the hash
   surrogate; it maps to the position through the ledger's `transactions` rows,
   and a miss is a staging error.
-- **Fee rule** (`SorobanEventRow::is_operation_event`, and the same test in the
-  fill SQL): `transaction_index = application_order AND operation_index != 4095`.
+- **Fee rule** in the fill SQL: `transaction_index = application_order AND
+operation_index != 4095`. The live writer read the same rule off the row
+  until 2026-09-22; it now takes the parser's source (`EventSource::PerOp`),
+  known in the same loop, instead of inferring it from the id.
   On partition 127 its complement selects 249,035,471 rows = 170,740,563
   charges + 78,294,908 refunds, none outside the native SAC.
 - **Read:** one seek, the account list's shape. `contract_positions.rs` is gone.

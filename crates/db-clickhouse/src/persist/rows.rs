@@ -574,18 +574,6 @@ pub struct SorobanEventRow {
     pub data_xdr: String,
 }
 
-impl SorobanEventRow {
-    /// Emitted by an operation, not a fee charge or refund. A fee event's rpc
-    /// id carries a sentinel — transaction 0 or 1048575, or operation 4095
-    /// (ADR 0059) — so only an operation event names its own transaction in
-    /// `transaction_index`. The `contract_transactions` history fill applies
-    /// the same test in SQL (`docs/backfills.md`).
-    pub fn is_operation_event(&self) -> bool {
-        i64::from(self.transaction_index) == i64::from(self.application_order)
-            && self.operation_index != xdr_parser::EventId::AFTER_TX_OPERATION
-    }
-}
-
 /// `soroban_invocations_appearances` — fact (ADR 0034 fold).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct SorobanInvocationAppearanceRow {

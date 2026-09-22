@@ -365,7 +365,7 @@ classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`).
 built at staging from rows the ledger already produced: every contract that
 emitted an **operation** event in the transaction, was invoked in it, or is named
 by one of its operations — one row per (contract, transaction position). Fee
-events are skipped (`SorobanEventRow::is_operation_event`): every transaction
+events are skipped by the source the parser gives them: every transaction
 pays one to the native SAC, and they would put every transaction in that
 contract's list. Invocation and operation rows name the transaction by its hash
 surrogate; staging maps it to the position through the ledger's own

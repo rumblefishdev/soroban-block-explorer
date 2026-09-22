@@ -3,10 +3,10 @@ SELECT DISTINCT contract_id, ledger_sequence, application_order
 FROM
 (
     -- Operation events only: a fee event's rpc id carries a sentinel, so only an
-    -- operation event names its own transaction in `transaction_index`
-    -- (`SorobanEventRow::is_operation_event`). Reads the rekeyed slice, so it
-    -- runs after `fill_insert.sql` for the same slice; after the swap, name
-    -- `soroban_events` here instead.
+    -- operation event names its own transaction in `transaction_index` (the
+    -- live writer reads the parser's `EventSource` instead). Reads the rekeyed
+    -- slice, so it runs after `fill_insert.sql` for the same slice; after the
+    -- swap, name `soroban_events` here instead.
     SELECT contract_id, ledger_sequence, application_order
     FROM soroban_events_staging_canonical
     WHERE ledger_sequence >= {A} AND ledger_sequence < {B}

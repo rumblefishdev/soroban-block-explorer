@@ -1088,8 +1088,11 @@ Per slice `[A, B)`, in this order:
    it: afterwards the indexer writes the table, and a re-ingest goes through
    the same writer.
 
-The event arm's test is the one the live writer applies
-(`SorobanEventRow::is_operation_event`). Measured read-only on 63,700,000–
+The event arm tells an operation event by its id: a fee event's carries a
+sentinel, so only an operation event names its own transaction in
+`transaction_index`. The live writer needs no such inference — the parser
+states each event's source (`EventSource::PerOp`); the check after the window
+(below) confirms the two agree on real rows. Measured read-only on 63,700,000–
 63,705,000 (2026-09-21): 1,554,897 pairs across 8,369 contracts, 740 ms,
 586 MiB — well inside the read profile. The sentinel test was checked on the
 whole of partition 127: it selects 249,035,471 rows, exactly the partition's
