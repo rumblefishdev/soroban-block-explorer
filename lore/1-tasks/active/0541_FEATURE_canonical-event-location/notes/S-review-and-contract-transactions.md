@@ -3,7 +3,8 @@ title: 'Review of the phase-2 code, and the contract_transactions index'
 type: synthesis
 status: developing
 spawned_from: notes/S-implementation-and-rollout-plan.md
-spawns: []
+spawns:
+  - notes/I-stage-enum-instead-of-transaction-index.md
 tags: [review, clickhouse, api, rollout]
 links:
   - crates/db-clickhouse/schema/init.sql
@@ -167,6 +168,9 @@ The operator created the table and filled partition 127 with
 
 ## Left as follow-ups
 
+- A three-value stage instead of `transaction_index` would save ~6 GiB
+  (_estimate_) but needs another rebuild and window; kept for the next rebuild
+  of the table: [I-stage-enum-instead-of-transaction-index](I-stage-enum-instead-of-transaction-index.md).
 - ~~The operation position is held twice on `ExtractedEvent` (`op_index` /
   `event_pos_in_op` and `event_id`).~~ Not a duplicate: the pair is what the id
   is built from, and the only answer to "which operation emitted it" — a fee
