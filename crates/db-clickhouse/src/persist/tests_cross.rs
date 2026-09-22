@@ -3549,10 +3549,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
 fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
     let router = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
     let pool = "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O";
-    let router_ledger = vec![(
-        "tx".to_string(),
-        vec![add_pool_event("tx", router, pool, EventSource::TxLevel)],
-    )];
+    let router_ledger = vec![("tx".to_string(), vec![add_pool_event("tx", router, pool)])];
     let pair_ledger = vec![(
         "tx".to_string(),
         vec![new_pair_event("tx", SORO_FACTORY, SORO_PAIR)],
