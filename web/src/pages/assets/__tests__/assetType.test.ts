@@ -5,7 +5,7 @@ import {
   assetDisplayCode,
   assetTypeMeta,
   SAC_TAG,
-} from './assetType.js';
+} from '../assetType.js';
 
 describe('assetTypeMeta', () => {
   it('maps known type names to label + color', () => {
