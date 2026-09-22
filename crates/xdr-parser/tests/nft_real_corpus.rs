@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use domain::ContractEventType;
 use serde_json::Value;
-use xdr_parser::types::{EventSource, ExtractedEvent};
+use xdr_parser::types::ExtractedEvent;
 use xdr_parser::{MAINNET_PASSPHRASE, detect_nft_events, network_id};
 
 /// One harvested prod row (CH `FORMAT JSONEachRow`). `topics_xdr` / `data_xdr`
@@ -72,17 +72,17 @@ fn nft_real_corpus_invariants() {
         sig_of.push(row.signature.clone());
         events.push(ExtractedEvent {
             transaction_hash: "corpus".into(),
+            event_id: xdr_parser::EventId {
+                ledger_sequence: 1,
+                transaction_index: 1,
+                operation_index: 0,
+                event_index: 0,
+            },
+            origin: xdr_parser::EventOrigin::Operation(0),
             event_type: ContractEventType::Contract,
-            source: EventSource::PerOp,
             contract_id: Some(row.contract_id.to_string()),
             topics,
             data,
-            position_in_tx: 0,
-            op_index: None,
-            event_pos_in_op: None,
-            stage: None,
-            event_id: None,
-            ledger_sequence: 1,
             created_at: 1_700_000_000,
         });
     }

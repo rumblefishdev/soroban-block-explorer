@@ -36,13 +36,12 @@ use domain::{ContractEventType, ContractType};
 // ClassificationCache` stays a valid path for callers + integration tests that
 // don't depend on `domain` directly (task 0283).
 pub use domain::ClassificationCache;
-use xdr_parser::event::extract_executable_update;
+use xdr_parser::executable_update::extract_executable_update;
 use xdr_parser::types::{
-    ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
-    ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
-    ExtractedLedger, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition,
-    ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedSorobanBalance,
-    ExtractedTransaction,
+    ContractFunction, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
+    ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
+    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
+    ExtractedNftEvent, ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction,
 };
 use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
@@ -535,11 +534,9 @@ async fn fetch_prior_contract_rows(
     let mut want: Vec<&str> = events
         .iter()
         .flat_map(|(_, evs)| evs.iter())
-        // Consensus events only — drop the diagnostic container (byte-identical
-        // copies + failed-tx events). Must match `build_wasm_upgrade_rows`'s
-        // filters so the prefetch covers exactly the contracts it will rewrite:
-        // non-diagnostic, host-emitted SYSTEM events with a parseable new hash.
-        .filter(|ev| !matches!(ev.source, EventSource::Diagnostic))
+        // Must match `build_wasm_upgrade_rows`'s filters so the prefetch covers
+        // exactly the contracts it will rewrite: host-emitted SYSTEM events with
+        // a parseable new hash.
         .filter(|ev| ev.event_type == ContractEventType::System)
         .filter(|ev| extract_executable_update(&ev.topics).is_some())
         .filter_map(|ev| ev.contract_id.as_deref())

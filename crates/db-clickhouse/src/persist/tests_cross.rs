@@ -452,7 +452,7 @@ fn column_order_liquidity_pool_snapshots() {
 
 use domain::{AssetFamily, ContractEventType, ContractType, OperationType};
 use xdr_parser::types::{
-    EventSource, ExtractedContractDeployment, ExtractedEvent, ExtractedLedger, ExtractedOperation,
+    EventOrigin, ExtractedContractDeployment, ExtractedEvent, ExtractedLedger, ExtractedOperation,
     ExtractedTransaction,
 };
 
@@ -626,17 +626,14 @@ fn prepare_extracts_signature_from_first_symbol_topic() {
 
     let make = |topics: serde_json::Value| ExtractedEvent {
         transaction_hash: tx.hash.clone(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::Contract,
-        source: EventSource::TxLevel,
         contract_id: Some(contract.clone()),
         topics,
         data: serde_json::json!({}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
     let events = vec![(
@@ -686,32 +683,23 @@ fn prepare_extracts_signature_from_first_symbol_topic() {
 }
 
 #[test]
-fn prepare_drops_diagnostic_events_and_orphans() {
+fn prepare_drops_events_without_a_contract() {
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x20);
     let contract = "C".to_string() + &"D".repeat(55);
-    let make = |contract_id: Option<String>, source: EventSource| ExtractedEvent {
+    let make = |contract_id: Option<String>| ExtractedEvent {
         transaction_hash: tx.hash.clone(),
+        event_id: any_event_id(),
+        origin: EventOrigin::Transaction(stellar_xdr::TransactionEventStage::BeforeAllTxs),
         event_type: ContractEventType::Contract,
-        source,
         contract_id,
         topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
         data: serde_json::json!({}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
     let events = vec![(
         tx.hash.clone(),
-        vec![
-            make(Some(contract.clone()), EventSource::TxLevel),
-            make(Some(contract.clone()), EventSource::Diagnostic),
-            make(None, EventSource::TxLevel),
-        ],
+        vec![make(Some(contract.clone())), make(None)],
     )];
 
     let staged = stage::prepare(
@@ -735,7 +723,7 @@ fn prepare_drops_diagnostic_events_and_orphans() {
     assert_eq!(
         staged.event_rows.len(),
         1,
-        "expected diagnostic + orphan to be filtered, got {}",
+        "expected the orphan to be filtered, got {}",
         staged.event_rows.len()
     );
     assert_eq!(
@@ -762,51 +750,37 @@ fn staged_events_carry_the_rpc_id_and_their_transaction() {
     let tx1 = synthetic_tx(0x61);
     let tx2 = synthetic_tx(0x62);
     let sac = "C".to_string() + &"A".repeat(55);
-    let ev = |tx: &ExtractedTransaction,
-              source: EventSource,
-              stage: Option<stellar_xdr::TransactionEventStage>,
-              id: (u32, u16, u32)| ExtractedEvent {
+    let ev = |tx: &ExtractedTransaction, origin: EventOrigin, id: (u32, u16, u32)| ExtractedEvent {
         transaction_hash: tx.hash.clone(),
-        event_type: ContractEventType::Contract,
-        source,
-        contract_id: Some(sac.clone()),
-        topics: serde_json::json!([{"type": "sym", "value": "fee"}]),
-        data: serde_json::json!({}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage,
-        event_id: Some(xdr_parser::EventId {
+        event_id: xdr_parser::EventId {
             ledger_sequence: 10,
             transaction_index: id.0,
             operation_index: id.1,
             event_index: id.2,
-        }),
-        ledger_sequence: 10,
+        },
+        origin,
+        event_type: ContractEventType::Contract,
+        contract_id: Some(sac.clone()),
+        topics: serde_json::json!([{"type": "sym", "value": "fee"}]),
+        data: serde_json::json!({}),
         created_at: 1_700_000_000,
     };
     let events = vec![
         (
             tx1.hash.clone(),
             vec![
-                ev(&tx1, EventSource::TxLevel, Some(BeforeAllTxs), (0, 0, 0)),
+                ev(&tx1, EventOrigin::Transaction(BeforeAllTxs), (0, 0, 0)),
                 ev(
                     &tx1,
-                    EventSource::TxLevel,
-                    Some(AfterAllTxs),
+                    EventOrigin::Transaction(AfterAllTxs),
                     (1_048_575, 0, 0),
                 ),
-                ev(&tx1, EventSource::PerOp, None, (1, 0, 0)),
+                ev(&tx1, EventOrigin::Operation(0), (1, 0, 0)),
             ],
         ),
         (
             tx2.hash.clone(),
-            vec![ev(
-                &tx2,
-                EventSource::TxLevel,
-                Some(BeforeAllTxs),
-                (0, 0, 1),
-            )],
+            vec![ev(&tx2, EventOrigin::Transaction(BeforeAllTxs), (0, 0, 1))],
         ),
     ];
 
@@ -870,39 +844,39 @@ fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
     let c1 = "C".to_string() + &"D".repeat(55);
     let c2 = "C".to_string() + &"E".repeat(55);
     let native = "C".to_string() + &"F".repeat(55);
-    let event = |tx: &ExtractedTransaction, contract: &str, source: EventSource, id: (u32, u16)| {
+    let event = |tx: &ExtractedTransaction, contract: &str, origin: EventOrigin, id: (u32, u16)| {
         ExtractedEvent {
             transaction_hash: tx.hash.clone(),
-            event_type: ContractEventType::Contract,
-            source,
-            contract_id: Some(contract.to_owned()),
-            topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
-            data: serde_json::json!({}),
-            position_in_tx: 0,
-            op_index: None,
-            event_pos_in_op: None,
-            stage: None,
-            event_id: Some(xdr_parser::EventId {
+            event_id: xdr_parser::EventId {
                 ledger_sequence: 10,
                 transaction_index: id.0,
                 operation_index: id.1,
                 event_index: 0,
-            }),
-            ledger_sequence: 10,
+            },
+            origin,
+            event_type: ContractEventType::Contract,
+            contract_id: Some(contract.to_owned()),
+            topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
+            data: serde_json::json!({}),
             created_at: 1_700_000_000,
         }
     };
     let events = vec![
         (
             tx1.hash.clone(),
-            vec![event(&tx1, &c2, EventSource::PerOp, (1, 0))],
+            vec![event(&tx1, &c2, EventOrigin::Operation(0), (1, 0))],
         ),
         (
             tx2.hash.clone(),
             vec![
-                event(&tx2, &c1, EventSource::PerOp, (2, 3)),
+                event(&tx2, &c1, EventOrigin::Operation(3), (2, 3)),
                 // A pre-protocol-23 refund: its own transaction, operation 4095.
-                event(&tx2, &native, EventSource::TxLevel, (2, 4095)),
+                event(
+                    &tx2,
+                    &native,
+                    EventOrigin::Transaction(stellar_xdr::TransactionEventStage::AfterTx),
+                    (2, 4095),
+                ),
             ],
         ),
     ];
@@ -970,52 +944,6 @@ fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
     ];
     expected.sort();
     assert_eq!(staged.contract_tx_rows, expected);
-}
-
-#[test]
-fn a_consensus_event_without_an_id_is_a_staging_error() {
-    let ledger = synthetic_ledger();
-    let tx = synthetic_tx(0x63);
-    let events = vec![(
-        tx.hash.clone(),
-        vec![ExtractedEvent {
-            transaction_hash: tx.hash.clone(),
-            event_type: ContractEventType::Contract,
-            source: EventSource::TxLevel,
-            contract_id: Some("C".to_string() + &"B".repeat(55)),
-            topics: serde_json::json!([]),
-            data: serde_json::json!({}),
-            position_in_tx: 0,
-            op_index: None,
-            event_pos_in_op: None,
-            stage: None,
-            event_id: None,
-            ledger_sequence: 10,
-            created_at: 1_700_000_000,
-        }],
-    )];
-
-    let err = stage::prepare(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &events,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-    )
-    .expect_err("an event without an id must not stage");
-    assert!(
-        err.to_string().contains("without a stellar-rpc id"),
-        "{err}"
-    );
 }
 
 #[test]
@@ -1624,17 +1552,14 @@ fn a_merely_referenced_contract_gets_no_contract_row() {
 
     let event = ExtractedEvent {
         transaction_hash: tx.hash.clone(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::Contract,
-        source: EventSource::TxLevel,
         contract_id: Some(referenced_contract.clone()),
         topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
         data: serde_json::json!({}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
 
@@ -1687,17 +1612,14 @@ fn prepare_does_not_duplicate_when_contract_both_deployed_and_referenced() {
     };
     let event = ExtractedEvent {
         transaction_hash: tx.hash.clone(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::Contract,
-        source: EventSource::TxLevel,
         contract_id: Some(contract.clone()),
         topics: serde_json::json!([{"type": "sym", "value": "init"}]),
         data: serde_json::json!({}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
 
@@ -2688,8 +2610,11 @@ fn executable_update_event(contract: &str) -> ExtractedEvent {
     //                                        vec[Symbol("Wasm"), Bytes(new=0x22)]]
     ExtractedEvent {
         transaction_hash: "abcd".into(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::System,
-        source: EventSource::TxLevel,
         contract_id: Some(contract.to_string()),
         topics: serde_json::json!([
             {"type":"sym","value":"executable_update"},
@@ -2697,12 +2622,6 @@ fn executable_update_event(contract: &str) -> ExtractedEvent {
             {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI="}]}
         ]),
         data: serde_json::json!({"type":"vec","value":[]}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 555,
         created_at: 1_700_000_000,
     }
 }
@@ -2849,23 +2768,6 @@ fn build_wasm_upgrade_rows_ignores_non_upgrade_events() {
     let addr = "C".to_string() + &"W".repeat(55);
     let mut ev = executable_update_event(&addr);
     ev.topics = serde_json::json!([{"type":"sym","value":"transfer"}]);
-    let events = vec![("abcd".to_string(), vec![ev])];
-    let mut prior = std::collections::HashMap::new();
-    prior.insert(
-        addr.clone(),
-        prior_contract_row(&addr, Some(7), Some(100), Some(1), false),
-    );
-    assert!(stage::build_wasm_upgrade_rows(&events, &prior, 555).is_empty());
-}
-
-#[test]
-fn build_wasm_upgrade_rows_ignores_diagnostic_source() {
-    // A diagnostic-container copy (or a failed-tx event) must NOT drive a write —
-    // it can carry a hash the chain never applied. Mirrors the soroban_events
-    // staging guard + the backfill's already-filtered source table.
-    let addr = "C".to_string() + &"X".repeat(55);
-    let mut ev = executable_update_event(&addr);
-    ev.source = EventSource::Diagnostic;
     let events = vec![("abcd".to_string(), vec![ev])];
     let mut prior = std::collections::HashMap::new();
     prior.insert(
@@ -3440,8 +3342,11 @@ fn prepare_registers_a_pool_from_a_real_add_pool_event() {
 
     let ev = ExtractedEvent {
         transaction_hash: tx.hash.clone(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::Contract,
-        source: EventSource::TxLevel,
         contract_id: Some(router.to_string()),
         topics: serde_json::json!([
             {"type": "sym", "value": "add_pool"},
@@ -3456,12 +3361,6 @@ fn prepare_registers_a_pool_from_a_real_add_pool_event() {
             {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
             {"type": "vec", "value": [{"type": "u32", "value": 10}]}
         ]}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
     let events = vec![(tx.hash.clone(), vec![ev])];
@@ -3509,17 +3408,14 @@ fn prepare_ignores_non_registrations_and_labelled_topics() {
 
     let make = |topics: serde_json::Value| ExtractedEvent {
         transaction_hash: tx.hash.clone(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::Contract,
-        source: EventSource::TxLevel,
         contract_id: Some(contract.clone()),
         topics,
         data: serde_json::json!({"type": "vec", "value": []}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
     let events = vec![(
@@ -3568,8 +3464,11 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
 
     let ev = ExtractedEvent {
         transaction_hash: tx.hash.clone(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::Contract,
-        source: EventSource::TxLevel,
         contract_id: Some(router.to_string()),
         topics: serde_json::json!([
             {"type": "sym", "value": "add_pool"},
@@ -3584,12 +3483,6 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
             {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
             {"type": "vec", "value": [{"type": "sym", "value": "not_a_fee"}]}
         ]}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
     };
     let events = vec![(tx.hash.clone(), vec![ev])];
@@ -3696,11 +3589,12 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
 /// Build an `add_pool` event for `pool`, emitted by `router`, from the
 /// mainnet-verbatim payload shape.
 #[cfg(test)]
-fn add_pool_event(tx_hash: &str, router: &str, pool: &str, source: EventSource) -> ExtractedEvent {
+fn add_pool_event(tx_hash: &str, router: &str, pool: &str) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: tx_hash.to_string(),
+        event_id: any_event_id(),
+        origin: EventOrigin::Transaction(stellar_xdr::TransactionEventStage::BeforeAllTxs),
         event_type: ContractEventType::Contract,
-        source,
         contract_id: Some(router.to_string()),
         topics: serde_json::json!([
             {"type": "sym", "value": "add_pool"},
@@ -3715,12 +3609,6 @@ fn add_pool_event(tx_hash: &str, router: &str, pool: &str, source: EventSource) 
             {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
             {"type": "vec", "value": [{"type": "u32", "value": 10}]}
         ]}),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
     }
 }
@@ -3888,12 +3776,7 @@ fn prepare_refuses_a_registration_the_pool_does_not_corroborate() {
     let tx = synthetic_tx(0x71);
     let events = vec![(
         tx.hash.clone(),
-        vec![add_pool_event(
-            &tx.hash,
-            ATTACKER,
-            VICTIM,
-            EventSource::TxLevel,
-        )],
+        vec![add_pool_event(&tx.hash, ATTACKER, VICTIM)],
     )];
     // The victim's own instance names its REAL router, not the attacker.
     let instances = [pool_instance_declaring(VICTIM, REAL_ROUTER)];
@@ -3916,7 +3799,7 @@ fn prepare_accepts_a_registration_the_pool_corroborates() {
     let tx = synthetic_tx(0x72);
     let events = vec![(
         tx.hash.clone(),
-        vec![add_pool_event(&tx.hash, ROUTER, POOL, EventSource::TxLevel)],
+        vec![add_pool_event(&tx.hash, ROUTER, POOL)],
     )];
     let instances = [pool_instance_declaring(POOL, ROUTER)];
 
@@ -3947,7 +3830,7 @@ fn a_registration_for_a_pool_that_declares_no_router_is_accepted() {
     let tx = synthetic_tx(0x75);
     let events = vec![(
         tx.hash.clone(),
-        vec![add_pool_event(&tx.hash, ROUTER, POOL, EventSource::TxLevel)],
+        vec![add_pool_event(&tx.hash, ROUTER, POOL)],
     )];
     let mut legacy = pool_instance_declaring(POOL, ROUTER);
     legacy.state.router = None; // the older contract shape
@@ -3985,12 +3868,7 @@ fn a_routerless_registration_with_a_merely_touched_instance_is_refused() {
     let tx = synthetic_tx(0x76);
     let events = vec![(
         tx.hash.clone(),
-        vec![add_pool_event(
-            &tx.hash,
-            ATTACKER,
-            VICTIM,
-            EventSource::TxLevel,
-        )],
+        vec![add_pool_event(&tx.hash, ATTACKER, VICTIM)],
     )];
     let mut touched = pool_instance_declaring(VICTIM, ATTACKER);
     touched.state.router = None; // the older, router-less contract shape
@@ -4010,37 +3888,6 @@ fn a_routerless_registration_with_a_merely_touched_instance_is_refused() {
             .iter()
             .any(|r| r.plane_id == ids::contract_id(PLANE)),
         "the pool's own declaration still stages — it is authentic state"
-    );
-}
-
-/// The diagnostic container carries copies of events from FAILED transactions
-/// (task 0182). A registration that never applied must not become a pool —
-/// every sibling detector filters this container; review #438 found this one
-/// missing the guard.
-#[test]
-fn prepare_ignores_a_registration_from_the_diagnostic_container() {
-    const POOL: &str = "CBMWU3574VFWNBNMNYAAH4OBT7DPB27URDW4BWIV7XAPQG6YYMJW2LSH";
-    const ROUTER: &str = "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK";
-
-    let ledger = synthetic_ledger();
-    let tx = synthetic_tx(0x73);
-    let events = vec![(
-        tx.hash.clone(),
-        vec![add_pool_event(
-            &tx.hash,
-            ROUTER,
-            POOL,
-            EventSource::Diagnostic,
-        )],
-    )];
-    // Fully corroborated — ONLY the event source may keep this out.
-    let instances = [pool_instance_declaring(POOL, ROUTER)];
-
-    let staged = stage_registration(&ledger, &tx, &events, &instances);
-
-    assert!(
-        staged.pool_rows.iter().all(|r| r.pool_kind == 0),
-        "a diagnostic-container registration must not become a row"
     );
 }
 
@@ -4302,8 +4149,11 @@ const SORO_T1: &str = "CAVXDPJ2M6BWRVTJ3VOVSE3U7QISFS4ET3XA3ONS3UD47X6TA54PIXFJ"
 fn new_pair_event(tx_hash: &str, factory: &str, pair: &str) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: tx_hash.to_string(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::Contract,
-        source: EventSource::TxLevel,
         contract_id: Some(factory.to_string()),
         topics: serde_json::json!([
             {"type": "string", "value": "SoroswapFactory"},
@@ -4316,12 +4166,6 @@ fn new_pair_event(tx_hash: &str, factory: &str, pair: &str) -> ExtractedEvent {
             {"key": {"type": "sym", "value": "token_0"}, "value": {"type": "address", "value": SORO_T0}},
             {"key": {"type": "sym", "value": "token_1"}, "value": {"type": "address", "value": SORO_T1}}
         ]}),
-        ledger_sequence: 10,
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
         created_at: 1_700_000_000,
     }
 }
@@ -4515,20 +4359,17 @@ const CFG_SHARE: &str = "CA3KLIRAM6BKPN6BPPKTDX3CSY2DSM4YZAX54KZLER25X2QRK3FGDXR
 fn liquidity_pool_created_event(tx_hash: &str, factory: &str, pool: &str) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: tx_hash.to_string(),
+        event_id: any_event_id(),
+        origin: xdr_parser::EventOrigin::Transaction(
+            stellar_xdr::TransactionEventStage::BeforeAllTxs,
+        ),
         event_type: ContractEventType::Contract,
-        source: EventSource::TxLevel,
         contract_id: Some(factory.to_string()),
         topics: serde_json::json!([
             {"type": "string", "value": "create"},
             {"type": "string", "value": "liquidity_pool"}
         ]),
         data: serde_json::json!({"type": "address", "value": pool}),
-        ledger_sequence: 10,
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: Some(any_event_id()),
         created_at: 1_700_000_000,
     }
 }

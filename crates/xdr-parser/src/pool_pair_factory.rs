@@ -37,7 +37,7 @@
 use serde_json::Value;
 
 use crate::scval::{address, map_get, symbol, typed, typed_str};
-use crate::types::{EventSource, ExtractedEvent, ExtractedLedgerEntryChange};
+use crate::types::{ExtractedEvent, ExtractedLedgerEntryChange};
 
 /// One pair registration, tied to the factory that emitted it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,12 +119,6 @@ pub fn detect_pair_registrations(
     let mut out = Vec::new();
     for (_tx, evs) in events {
         for ev in evs {
-            // The diagnostic container carries copies of consensus events
-            // AND events from FAILED transactions (task 0182); indexing it
-            // would register pairs whose registration never applied.
-            if matches!(ev.source, EventSource::Diagnostic) {
-                continue;
-            }
             let Some(factory) = ev.contract_id.as_deref() else {
                 continue;
             };
@@ -135,7 +129,7 @@ pub fn detect_pair_registrations(
                 }),
                 Err(NewPairReject::NotNewPair) => {}
                 Err(reason) => tracing::warn!(
-                    ledger_sequence = ev.ledger_sequence,
+                    ledger_sequence = ev.event_id.ledger_sequence,
                     factory = %factory,
                     ?reason,
                     "new_pair claimed to be a registration and could not be read — a pair is missing"

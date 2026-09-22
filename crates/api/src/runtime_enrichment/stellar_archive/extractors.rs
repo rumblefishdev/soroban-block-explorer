@@ -52,7 +52,7 @@ pub fn extract_e3_heavy(
 
     // Events: contract + diagnostic together, none without tx meta. Fee events
     // are numbered per ledger, so the ids need every meta of it.
-    let (contract_events, diagnostic_events) = split_events(
+    let (contract_events, diagnostic_events) = event_dtos(
         xdr_parser::LedgerEvents::new(ledger_seq, closed_at, &tx_metas).extract(idx, &ext_tx.hash),
     );
 
@@ -211,40 +211,49 @@ fn stage_name(stage: stellar_xdr::TransactionEventStage) -> String {
     .to_string()
 }
 
-fn split_events(events: Vec<xdr_parser::ExtractedEvent>) -> (Vec<XdrEventDto>, Vec<XdrEventDto>) {
-    use xdr_parser::EventSource;
+fn event_dtos(tx: xdr_parser::TxEvents) -> (Vec<XdrEventDto>, Vec<XdrEventDto>) {
+    use xdr_parser::EventOrigin;
 
-    // Route on container source, not inner `event_type` — the
-    // diagnostic_events container holds byte-identical Contract-typed
-    // copies of per-op consensus events (inner `type_ = Contract`) when
-    // diagnostic mode is enabled, so a type-based split would surface
-    // those copies as additional contract events (task 0182).
-    let mut contract = Vec::new();
-    let mut diagnostic = Vec::new();
-    for e in events {
-        let is_diagnostic = e.source == EventSource::Diagnostic;
-        let topics = topics_to_vec(e.topics);
-        let dto = XdrEventDto {
+    let mut contract: Vec<XdrEventDto> = tx
+        .events
+        .into_iter()
+        .map(|e| {
+            let (operation_index, stage) = match e.origin {
+                EventOrigin::Operation(op) => (i16::try_from(op).ok(), None),
+                EventOrigin::Transaction(stage) => (None, Some(stage_name(stage))),
+            };
+            XdrEventDto {
+                event_type: e.event_type.to_string(),
+                contract_id: e.contract_id,
+                topics: topics_to_vec(e.topics),
+                data: e.data,
+                id: Some(e.event_id.to_rpc_string()),
+                // From the origin, not the id: a fee event's id names operation
+                // 0 or 4095, and the operation cards would take it as their own.
+                operation_index,
+                event_index: Some(e.event_id.event_index),
+                stage,
+            }
+        })
+        .collect();
+    // Execution order. The id strings are fixed-width, so string order is the
+    // numeric order.
+    contract.sort_by(|a, b| a.id.cmp(&b.id));
+    // The debug channel keeps its container order and has no id.
+    let diagnostic = tx
+        .diagnostic
+        .into_iter()
+        .map(|e| XdrEventDto {
             event_type: e.event_type.to_string(),
             contract_id: e.contract_id,
-            topics,
+            topics: topics_to_vec(e.topics),
             data: e.data,
-            id: e.event_id.map(|id| id.to_rpc_string()),
-            // Not from the id: a fee event's id names operation 0 or 4095,
-            // and the operation cards would take it as their own.
-            operation_index: e.op_index.and_then(|i| i16::try_from(i).ok()),
-            event_index: e.event_id.map(|id| id.event_index),
-            stage: e.stage.map(stage_name),
-        };
-        if is_diagnostic {
-            diagnostic.push(dto);
-        } else {
-            contract.push(dto);
-        }
-    }
-    // Execution order. The id strings are fixed-width, so string order is the
-    // numeric order. The diagnostic list keeps its container order.
-    contract.sort_by(|a, b| a.id.cmp(&b.id));
+            id: None,
+            operation_index: None,
+            event_index: None,
+            stage: None,
+        })
+        .collect();
     (contract, diagnostic)
 }
 
