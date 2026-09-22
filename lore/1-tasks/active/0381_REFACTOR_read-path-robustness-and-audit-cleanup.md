@@ -130,6 +130,23 @@ the account list (keys first), `liquidity_pools/queries.rs` (PR #335, reverted:
   `operations_appearances` by either column — `fetch_operations` only projects
   them, `repair_tier1` uses `notEmpty(pool_ids)`, which a bloom filter does not
   serve. Drop both, like `idx_oa_asset_issuer_id` before them (operator).
+- **Transaction search by account is partition-pinned too.** A source filter
+  without contract or operation type runs Statement A, pinned to the head's
+  partition — the transactions page's search box with a `G…` address. Of the
+  344,060 accounts that sent a transaction in partition 128, 71,544 (20.8%)
+  sent one in 129; the other 79.2% get an empty first page (2026-09-22). The
+  account page itself reads `transaction_participants` and is not pinned. The
+  fix needs a product decision first: the search lists what the account
+  **sent** today; the account page lists every transaction it **takes part
+  in**.
+- **Asset contracts of classic assets cannot be searched.**
+  `resolve_contract_surrogate` looks the address up in `soroban_contracts`
+  only; 313,913 of the 466,104 contract ids in `contract_transactions` have no
+  row there (e.g. the `RLUSD` asset contract, 122k transactions in partition
+  128), so their list comes back empty. Same root: `fetch_event_appearances`
+  renders such a contract with an empty address (`unwrap_or_default()`, the
+  archive-unavailable fallback only). From the code and the id count; not
+  exercised through the API.
 
 ## Dedup and filtered pages without over-fetch — options (2026-09-22)
 
