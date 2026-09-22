@@ -2033,6 +2033,42 @@ the pool on every run and its stale reserves stay visible.
   `pool_reserves_reconciliation` at ledger 64,454,699: **769 of 770 pools equal
   their own storage**; the one failure is `CAZ6W4WH…` (task 0325).
 
+### SAC legs keyed on the asset — shipped and repaired (2026-09-22)
+
+The first PR split out of #455: #474 (`fix/0374-sac-leg-rekey`). A soroban
+pool leg keys on the asset it is (`assets.id`), not on the SAC contract
+surrogate; the SAC → classic map loads on every ledger that registers a pool,
+live and under `--only`; one fn keys legs and contract-held balances; runbook
+`docs/runbooks/0374_lp_legs_sac_rekey_repair.md`.
+
+- **Deploy:** Compute from `develop` at `9a89d35c` (the #474 merge), which also
+  carried task 0381's `536dbcdb` and `c346117c`. Indexer Lambda updated
+  15:26:12 UTC, API 15:26:14; the index at the chain's tip afterwards, DLQ
+  empty.
+- **Repair A** (runbook step 3, operator): `mutation_1995468`, created
+  15:33:01, done, no failure. No registry backfill was running.
+- **Verified after the mutation**, reading `legs` directly:
+
+  |                                         | before (dry run) | after          |
+  | --------------------------------------- | ---------------- | -------------- |
+  | soroban legs keyed on a SAC, latest row | 1,454 of 1,553   | **0**          |
+  | same, every physical row (duplicates)   | —                | **0**          |
+  | soroban legs with no `assets` row       | 1,455            | **1**          |
+  | soroban pools carrying native XLM's id  | 0 of 770         | **260 of 770** |
+  | classic legs with no `assets` row       | —                | 0 of 107,056   |
+
+  The one unresolved leg is pool `8FE06922…`, the inert config-family pool
+  the runbook names.
+
+- **Still open, task 0571:** the live map keeps only facets with
+  `max(sac_deployed) = 1`, and 138 SACs are marked not deployed. The repair's
+  map has no such filter, so their legs are fixed now, but a new registration
+  naming one of them orphans its leg again until 0571's root is found. The same
+  gap keys 286 contract-held balance pairs on the SAC; that predates #474 and
+  is not this defect.
+- **Not closable yet:** the read side does not show soroban legs until the
+  read PRs of the split land; issue #405 stays open.
+
 ## 2026-09-17 (karolkow) — can a Soroban pool delete a key we read? No deployed one can
 
 Spawned from task 0210's pool-removal fix: the classic extractor stored a
