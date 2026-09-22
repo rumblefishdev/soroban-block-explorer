@@ -39,6 +39,14 @@ history:
       never has to be settled). The step-2 acceptance check was written and
       run early against the 7 509 classic pools the live writer had already
       migrated: 7 509 of 7 509 consistent, 0 mismatches.
+  - date: '2026-09-22'
+    status: backlog
+    who: karolkow
+    note: >
+      No separate implementation: PR #455 carries step 3 and the code half of
+      step 4. Step 2 verified on all 52 974 classic pools (0 mismatches). The
+      two classic legs with no `assets` row were repaired before the drop.
+      Closes after PR #455 deploys — see "Status 2026-09-22".
 ---
 
 # REFACTOR: `legs` as the only leg source, and the pair columns dropped
@@ -171,6 +179,51 @@ asset_a_type, …` (operator) together with the removal from `init.sql`, the
    cannot lose them earlier, because the driver validates inserts against the
    live table.
 
+## Status 2026-09-22 — carried by PR #455
+
+**No separate implementation.** PR #455 (`feat/0374-soroban-pools-read-half`)
+already does step 3 and the code half of step 4: every reader moved to `legs`,
+`asset_codes_predicate` matches through `legs` + `assets` with no `pool_kind`
+guard, the six columns are gone from `init.sql`, `LiquidityPoolRow` and the
+column-order test, and `docs/deployment.md` carries the deploy order (API →
+indexer pause → gate → `DROP` → indexer → runbook mutation A). On that branch
+no production reader names `asset_a_*` / `asset_b_*`.
+
+**Measured on production (read-only):**
+
+- Step 2: all 52 974 classic pools checked with the query above —
+  0 mismatched, 0 with a leg count other than 2, 0 empty `legs`
+  (2026-09-16). 53 522 classic pools on 2026-09-22, still 0 empty.
+- Classic parity, pair-column predicate vs the PR #455 `legs` predicate, on
+  `XLM`, `USDC`, `KALE`, `AQUA`, `yUSDC`, `XLM/XLM`, `USDC/USDC`, `USD/USDC`,
+  `XLM/USDC`, `AQUA/XLM`: identical classic pool sets (e.g. `XLM` 15 073 on
+  both sides).
+- Soroban: the pair-column predicate matches all 770 soroban pools as `XLM`
+  and `XLM/XLM` (placeholders). The `legs` predicate matches none today,
+  because 1 455 of 1 553 soroban legs are keyed on SAC contracts with no
+  `assets` row. Simulated with the runbook mutation A map: `XLM` 286, `USDC`
+  166, `AQUA` 156, `XLM/XLM` 9, `XLM/USDC` 27, no pool with only native legs —
+  every `XLM/XLM` hit is a real pair such as XLM + yXLM. One leg stays
+  unresolved (pool `8FE06922…`, token contract absent from
+  `soroban_contracts`).
+- Gate: 2 classic legs had no `assets` row — `XLM/PIF` and `XLM/SUR810`,
+  pools created by the asset's own issuer, who needs no trustline, so no
+  `assets` row was ever emitted. After the drop their code and issuer would
+  exist nowhere in the database, so both rows were inserted on 2026-09-22
+  (`id` = the value in `legs`, code and issuer from the pair columns).
+  Orphaned classic legs since: 0 of 107 044. The writer fix is task 0571.
+
+**Left before this task can close:**
+
+1. Merge PR #455. As of 2026-09-22 it conflicts with `develop` in
+   `persist/stage.rs` (the pool-row builder moved to `classic_pools.rs`,
+   which still fills the pair fields and is also called by the checkpoint
+   seed) and in `api/src/assets/queries.rs` (tests moved to a sibling file).
+2. Deploy, `DROP` the six columns (operator, `chw`), run runbook mutation A.
+3. On production: the `XLM` and `XLM/XLM` filters show no soroban
+   placeholders, and soroban pools match by their real leg codes.
+4. Archive this task.
+
 ## Not in scope
 
 - **`pool_kind` itself stays.** It is a real user-facing distinction: the
@@ -183,8 +236,8 @@ asset_a_type, …` (operator) together with the removal from `init.sql`, the
 
 ## Acceptance Criteria
 
-- [ ] `legs` populated for every classic row, spot-verified against the pair
-      columns before they are dropped
+- [x] `legs` populated for every classic row, spot-verified against the pair
+      columns before they are dropped (52 974 checked, 0 mismatched, 2026-09-16)
 - [ ] No production reader references `asset_a_*` / `asset_b_*`
 - [ ] `asset_codes_predicate` matches through `legs`, with no `pool_kind`
       guard, and returns the same classic results as today plus soroban pools
