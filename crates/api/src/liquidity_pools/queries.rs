@@ -834,8 +834,8 @@ fn pool_instance_sql(pool_ids_predicate: &str) -> String {
          /* Holders come from `balance_aggregates`, keyed on `asset_id` — a PK \
             seek. Counting them straight off `balances` is not an option: that \
             table is ordered `(holder_id, asset_id)`, so an asset filter is a \
-            full scan, measured at 113M rows and 4.22 GiB for ONE token, past \
-            the read-only profile's 4 GB. Every other `balances` read in this \
+            full scan: 111.8M rows and 1.12 GiB read for ONE token (measured \
+            2026-09-15), on every request. Every other `balances` read in this \
             API goes by holder for the same reason. The aggregate is a periodic \
             recompute, so this count is eventually consistent — the assets list \
             already presents it on those terms. */ \
@@ -844,8 +844,11 @@ fn pool_instance_sql(pool_ids_predicate: &str) -> String {
          /* The aggregate counts every positive balance, and the pool's own \
             contract is one of them: a pair locks its minimum liquidity by \
             holding its own share token. That is not a provider — measured on \
-            242 of 727 pools with a share token, 2026-09-15. A PK seek on \
-            `(holder_id, asset_id)`, bounded by the same pools. */ \
+            242 of 727 pools with a share token, 2026-09-15. `plane_id` is the \
+            pool's own contract only in the pair and config families, the ones \
+            that hold their token; a router pool's is a separate plane contract, \
+            and the join matches nothing. A PK seek on `(holder_id, asset_id)`, \
+            bounded by the same pools. */ \
          LEFT JOIN (SELECT holder_id, asset_id, \
                            toInt64(argMax(amount, last_updated_ledger) > 0) AS held \
                     FROM balances \

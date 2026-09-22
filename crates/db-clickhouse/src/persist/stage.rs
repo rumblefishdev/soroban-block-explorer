@@ -2783,14 +2783,6 @@ fn parse_supply(raw: Option<&str>) -> Result<i128, ()> {
 /// Both callers key the same asset identically because they are the same
 /// function. They were two copies, which had already drifted cosmetically (one
 /// spelled the family `3`, the other named the enum).
-/// Whether this ledger's events register any soroban pool, in any of the three
-/// families — i.e. whether [`contract_token_asset_id`] will be asked for a leg.
-pub fn registers_soroban_pools(events: &[(String, Vec<ExtractedEvent>)]) -> bool {
-    !xdr_parser::pool_router::detect_pool_registrations(events).is_empty()
-        || !xdr_parser::pool_pair_factory::detect_pair_registrations(events).is_empty()
-        || !xdr_parser::pool_config_factory::detect_config_pool_registrations(events).is_empty()
-}
-
 #[inline]
 fn contract_token_asset_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 {
     let contract = ids::contract_id(token);
@@ -2798,6 +2790,14 @@ fn contract_token_asset_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 
         .get(&contract)
         .copied()
         .unwrap_or_else(|| ids::asset_id(domain::AssetFamily::Soroban as i16, "", 0, contract))
+}
+
+/// Whether this ledger's events register any soroban pool, in any of the three
+/// families — i.e. whether [`contract_token_asset_id`] will be asked for a leg.
+pub fn registers_soroban_pools(events: &[(String, Vec<ExtractedEvent>)]) -> bool {
+    !xdr_parser::pool_router::detect_pool_registrations(events).is_empty()
+        || !xdr_parser::pool_pair_factory::detect_pair_registrations(events).is_empty()
+        || !xdr_parser::pool_config_factory::detect_config_pool_registrations(events).is_empty()
 }
 
 /// Registry row for one corroborated `new_pair` registration (task 0518).
