@@ -568,12 +568,8 @@ pub fn build_balance_rows(
     let mut rows: Vec<BalanceRow> = Vec::with_capacity(balances.len());
     let mut idx: HashMap<(i64, i64), usize> = HashMap::with_capacity(balances.len());
     for b in balances {
-        let contract = ids::contract_id(&b.contract_id);
         let holder_id = ids::address_id(&b.holder);
-        let asset_id = sac_classic
-            .get(&contract)
-            .copied()
-            .unwrap_or_else(|| ids::asset_id(3, "", 0, contract));
+        let asset_id = contract_token_asset_id(&b.contract_id, sac_classic);
         let row = BalanceRow {
             holder_id,
             asset_id,
@@ -2763,19 +2759,10 @@ fn parse_supply(raw: Option<&str>) -> Result<i128, ()> {
     }
 }
 
-/// Registry row for one corroborated `new_pair` registration (task 0518).
+/// The `assets.id` surrogate for a token named by its CONTRACT address —
+/// a soroban pool leg, or a contract-held balance.
 ///
-/// `pool_type_raw` stays EMPTY: the vendor emits no type — Soroswap is one
-/// fixed constant-product mode — and an invented label would be our
-/// interpretation, not a verbatim value (decision 64). The fee is the
-/// vendor's compiled-in constant: 3/1000 on every swap ("Constant product
-/// AMM with a .3% swap fee", `soroswap/core` pair source, fetched
-/// 2026-09-02) = 30 bps. Legs are the pair's leg TOKENS in vendor order
-/// (token_0, token_1); the share token is NOT a registry column — the pair
-/// is its own LP token and the relation lives in `pool_instance_state`.
-/// The `assets.id` surrogate for ONE soroban pool leg token.
-///
-/// A leg token is one of two things, and only one of them may keep its own
+/// Such a token is one of two things, and only one of them may keep its own
 /// contract surrogate. A genuine Soroban token IS its contract as far as asset
 /// identity goes (`ids::asset_id`'s type-3 arm returns `contract_id`). A SAC is
 /// NOT: ADR 0051 retired `asset_type = 2`, so a SAC has no `assets` row of its
@@ -2790,9 +2777,13 @@ fn parse_supply(raw: Option<&str>) -> Result<i128, ()> {
 /// token, and it goes through `ids::asset_id` rather than returning the
 /// contract surrogate directly — the two are equal only because that is what
 /// the type-3 arm does, and spelling it as an ASSET id is what the defect
-/// below was missing. Mirrors `build_balance_rows` line for line.
+/// above was missing.
+///
+/// Both callers key the same asset identically because they are the same
+/// function. They were two copies, which had already drifted cosmetically (one
+/// spelled the family `3`, the other named the enum).
 #[inline]
-fn pool_leg_token_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 {
+fn contract_token_asset_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 {
     let contract = ids::contract_id(token);
     sac_classic
         .get(&contract)
@@ -2801,13 +2792,23 @@ fn pool_leg_token_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 {
 }
 
 /// Whether this ledger's events register any soroban pool, in any of the three
-/// families — i.e. whether [`pool_leg_token_id`] will be asked for a leg.
+/// families — i.e. whether [`contract_token_asset_id`] will be asked for a leg.
 pub fn registers_soroban_pools(events: &[(String, Vec<ExtractedEvent>)]) -> bool {
     !xdr_parser::pool_router::detect_pool_registrations(events).is_empty()
         || !xdr_parser::pool_pair_factory::detect_pair_registrations(events).is_empty()
         || !xdr_parser::pool_config_factory::detect_config_pool_registrations(events).is_empty()
 }
 
+/// Registry row for one corroborated `new_pair` registration (task 0518).
+///
+/// `pool_type_raw` stays EMPTY: the vendor emits no type — Soroswap is one
+/// fixed constant-product mode — and an invented label would be our
+/// interpretation, not a verbatim value (decision 64). The fee is the
+/// vendor's compiled-in constant: 3/1000 on every swap ("Constant product
+/// AMM with a .3% swap fee", `soroswap/core` pair source, fetched
+/// 2026-09-02) = 30 bps. Legs are the pair's leg TOKENS in vendor order
+/// (token_0, token_1); the share token is NOT a registry column — the pair
+/// is its own LP token and the relation lives in `pool_instance_state`.
 fn factory_pair_registry_row(
     reg: &xdr_parser::pool_pair_factory::PairRegistration,
     ledger_sequence: i64,
@@ -2827,8 +2828,8 @@ fn factory_pair_registry_row(
         last_updated_ledger: ledger_sequence,
         pool_kind: 1,
         legs: vec![
-            pool_leg_token_id(&reg.event.token_0, sac_classic),
-            pool_leg_token_id(&reg.event.token_1, sac_classic),
+            contract_token_asset_id(&reg.event.token_0, sac_classic),
+            contract_token_asset_id(&reg.event.token_1, sac_classic),
         ],
         deployment_id: ids::contract_id(&reg.factory),
         pool_type_raw: String::new(),
@@ -2869,8 +2870,8 @@ fn config_pool_registry_row(
         last_updated_ledger: ledger_sequence,
         pool_kind: 1,
         legs: vec![
-            pool_leg_token_id(&config.token_a, sac_classic),
-            pool_leg_token_id(&config.token_b, sac_classic),
+            contract_token_asset_id(&config.token_a, sac_classic),
+            contract_token_asset_id(&config.token_b, sac_classic),
         ],
         deployment_id: ids::contract_id(&reg.factory),
         pool_type_raw: config.pool_type.to_string(),
@@ -2920,7 +2921,7 @@ fn pool_registry_row(
         legs: reg
             .tokens
             .iter()
-            .map(|t| pool_leg_token_id(t, sac_classic))
+            .map(|t| contract_token_asset_id(t, sac_classic))
             .collect(),
         deployment_id: ids::contract_id(router_strkey),
         pool_type_raw: reg.pool_type.clone(),
