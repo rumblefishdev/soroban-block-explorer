@@ -56,6 +56,14 @@ history:
       list reads a new `contract_transactions` presence index instead of merged
       ledger windows, and fee events do not count as touching a contract. Six
       merge blockers fixed. See notes/S-review-and-contract-transactions.md.
+  - date: 2026-09-22
+    status: active
+    who: karolkow
+    note: >
+      The window ran: `soroban_events` is keyed by the rpc event id on
+      production and the indexer writes the new tables; the reconciliation
+      test passes against production. Owed before phase 5: the cheap full
+      content check. See "The window".
 ---
 
 # soroban_event_ops
@@ -901,7 +909,8 @@ Wednesday at the latest.
 **Decided (karolkow, 2026-09-22):**
 
 - **The window deploys from `develop`, not `master`.** PR #465 is merged
-  (`4cc95aee`); the new code is deployed from `develop` at `0baddade`, and
+  (`4cc95aee`); the new code is deployed from `develop` at `60bba1b9`
+  (`0baddade` plus docs), and
   `master` takes the change later. Until a `production-*` tag carries it,
   a Compute deploy from `master` or an older tag stops ingest after the swap —
   recorded as the reverse hold in `docs/deployment.md`.
@@ -922,3 +931,95 @@ on partitions 100–101: 400 statements, 200 per table, bounds 50,000,000 to
 > 2026-09-21: the contract-events page, re-measured after the operator merged
 > the staging partition to one part, reads fewer rows than the old page (median
 > 1,490,944 against 1,515,520): the `read_rows ≤ old` gate passes.
+
+## The window (2026-09-22)
+
+Run as planned (`notes/S-implementation-and-rollout-plan.md`, phase 4), from
+two local checkouts: `prod` at `production-2026.09.21-1`, `new` at `develop`
+`60bba1b9`. Ingest stood still for ~32 minutes; the explorer kept serving
+throughout, three of its reads failing for ~6 of those minutes.
+
+| UTC         | step                                                                                                                                                                                                                 |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 08:48       | Pause: Compute from `prod` with `indexerLambdaConcurrency: 0`. Last indexer write to the old table 08:47:57; **H = 64,556,219** (closed 08:47:53).                                                                   |
+| 09:04–09:05 | Tail: `fill_partitions.zsh 129`, both tables.                                                                                                                                                                        |
+| 09:11:40    | New code, still paused: Compute from `new`, concurrency 0.                                                                                                                                                           |
+| ~09:18      | Swap: `EXCHANGE TABLES soroban_events AND soroban_events_staging_canonical`. Between 09:11:40 and the swap the contract events tab, the contract transaction list and the transaction page's events returned errors. |
+| ~09:20      | Resume: Compute from `new`, concurrency 1; web deployed, CloudFront invalidation done 09:20:26.                                                                                                                      |
+
+**Checks before the swap** (read-only):
+
+- Partition 129's pre-fill gate: 53,021,549 rows, no duplicates, charges =
+  the partition's 14,623,286 transactions. After the fill, 100 of 100 slices
+  equal the gate; `contract_transactions` 10,924,157 pairs, no differences, no
+  duplicates.
+- Totals over partitions 100–129: old 10,681,742,743 = new 10,681,742,743,
+  every partition equal on its own; the new table ends at H.
+- No writer on either table: the indexer's last write 08:47:57, the tail's
+  09:05:02.
+- Content hash per slice (contract, ledger, transaction — for the new table
+  mapped back from the position through `transactions` —, type, name, topics,
+  data): 9 of 9 slices identical, 35.3 M events. The slices: the first with
+  data, partition 106's resume point, the protocol-23 boundary, partition 127,
+  the tail at H.
+
+**Checks after the resume** (read-only):
+
+- The indexer's trigger is enabled, errors 0, the DLQ empty (again at 09:56).
+  After H the new indexer writes only the new tables: `soroban_events` in the
+  new shape, `contract_transactions`, `asset_transfers`; 0 rows reached the
+  old table. It caught up with the network by ~09:29 (~65 ledgers a minute
+  against 12 arriving).
+- The SQL fill and the Rust writer agree: `fill_contract_transactions.sql`
+  as a `SELECT` over the first 80 ledgers the new indexer wrote gives 15,638
+  pairs, the writer 15,638; `EXCEPT` both ways empty.
+- Ids equal `getEvents` on 7 ledgers, 5,806 events: 3 ledgers from the fill
+  (H among them), 4 written by the new indexer. Run by hand with the
+  reconciliation test's logic.
+- The site, run locally on the deployed code against the production database
+  (read-only): the native SAC's events carry rpc ids and page on; its
+  transaction list is a full page of 20, newest first by position, and pages
+  on; a transaction page's `ID` column shows the charge first
+  (`…-0000000162` for the transaction at position 163), then operation 0's
+  events.
+
+**Found during the window:**
+
+- **The reconciliation test sent `startLedger = endLedger`.** `getEvents`
+  treats `endLedger` as exclusive, so the range was empty and the test would
+  have failed on its first ledger. It had never run on production — it skips
+  until the swap. Fixed to `[L, L + 1)` (PR #473, merged).
+- **A full content hash does not fit the development read quota.** The run
+  over every slice was stopped after 182 contiguous slices, all identical: it
+  used the whole hourly quota (2 TiB, counted uncompressed; topics and data are
+  ~11 GiB a slice, ~28 TB for the table). Estimated at 2 hours, it would have
+  taken ~14.
+
+**Decided (karolkow, 2026-09-22):**
+
+- **Swap first, compare in full afterwards.** Both tables stay until phase 5,
+  so the comparison does not need the indexer paused.
+- **The full check is the cheap one** (option A): per slice, count and a hash
+  of contract, ledger, transaction, type, name and the lengths of topics and
+  data, over all 2,821 slices up to H. A copy moves topics and data unchanged,
+  so a same-length substitution has no way to arise; content itself is hashed
+  on 191 slices (~6.8%). One slice (60,000,000, identical) read 1.51 GiB
+  over both tables against ~11 GiB for the content hash: ~4.2 TiB for all
+  slices (_estimate_), about two hours of the whole quota.
+- **The test fix goes in its own PR** (option A), PR #473.
+- **`transaction_index` stays.** A three-value stage would save ~6–7 GiB
+  (_estimate_) but needs another rebuild and window:
+  [I-stage-enum-instead-of-transaction-index](notes/I-stage-enum-instead-of-transaction-index.md).
+
+**Owed before phase 5** (drops before Sunday 2026-09-27 03:30 UTC):
+
+- [ ] the cheap full check, all 2,821 slices equal;
+- [x] `event_id_reconciliation` run against production and green — 5 ledgers
+      written by the new indexer (64,556,788–64,556,936), 3,298 ids equal on
+      all three sides: `getEvents`, the table, the parser on the archive;
+- [ ] the production site in a clean browser (Turnstile), by the operator.
+
+Phase 5 frees 241.98 GiB against the day's sizes: the old table 237.81 GiB,
+`soroban_event_ops` 3.38 GiB, `asset_transfers.event_index` 0.79 GiB. The
+reverse hold in `docs/deployment.md` stays until a `production-*` tag carries
+this change.

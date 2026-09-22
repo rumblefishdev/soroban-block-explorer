@@ -45,9 +45,16 @@ operation_index, event_index)`:
 
 ## What it would save
 
-`transaction_index` costs 0.634 B/row (partition 127, phase 1), about 6.3 GiB
-over 10.68 bn rows. A sorted three-value column compresses to almost nothing.
-Net about 6 GiB — ~3% of the table, ~0.5% of the database (_estimate_).
+`transaction_index` costs 0.634 B/row (partition 127, phase 1); on the whole
+table after the swap 7.27 GiB, 0.731 B/row, on still unmerged parts
+(2026-09-22). A sorted three-value column compresses to almost nothing. Net
+about 6–7 GiB — ~3% of the table, ~0.5% of the database (_estimate_).
+
+The same rebuild can narrow `event_index` to `UInt16`: its maximum over
+partitions 100–129 is 1,991 (an operation event; charges reach 1,170, refunds
+after protocol 23 342), measured 2026-09-22. The column is 3.24 GiB; the high
+bytes are zeros that already compress away, so the saving is under ~1 GiB
+(_estimate_).
 
 ## Why not now
 
@@ -55,7 +62,7 @@ A sort-key column cannot be dropped by `ALTER`, so it is a rebuild of the whole
 table (195 GiB, ~8 h of fill, both copies on disk) and a second window with the
 indexer paused. The writer, the readers, the event cursor (another 400 for old
 cursors) and ADR 0059 — which stores the id literally, as `getEvents` returns
-it — would all change. Not worth it for 6 GiB.
+it — would all change. Not worth it for 6–7 GiB.
 
 ## When
 
