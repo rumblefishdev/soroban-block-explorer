@@ -814,6 +814,13 @@ merged yet.
   it was deleted instead, with its handler check. `EventCursor` has one
   variant, so the check could only return true; a cursor minted before the
   change still fails at decode with 400 `invalid_cursor`.
+- The transaction-list cursor names its key (decision 2026-09-22): `Ch
+{ tiebreak }` held the position for the unfiltered list and the id surrogate
+  for the operation-type list and the account, asset and invocation lists, so
+  a cursor carried between the two `/transactions` lists was read with the
+  wrong key. Now `ChPosition` (unfiltered and contract-filtered) and
+  `ChSurrogate { transaction_id }` (the rest), each list refusing the other;
+  a cursor minted before the change gets 400 `invalid_cursor` once.
 - The id assignment has one entry point, `xdr_parser::LedgerEvents`, which the
   indexer, the transaction page and the tests go through; the two steps it
   wraps are private to the parser. Two real-history tests had done them by
@@ -868,7 +875,8 @@ boundary and both). 10,176,445,797 rows to copy.
 partition, 100–128. The staging table holds 10,628,721,194 rows = the gated
 10,176,445,797 + partition 127's 452,275,397; every one of the 2,900 slices
 equals its gate's `n`, none over. `contract_transactions` holds 2,975,298,311
-pairs; its per-slice gate is recorded partition by partition. Staging 195.06 GiB
+pairs; its per-slice gate passes in all 29 partitions (2,900 slices, no
+duplicates), and the per-partition sums add up to the table's total exactly. Staging 195.06 GiB
 on 254 unmerged parts (the old table 237.65 GiB); free disk 265.92 GiB (15.1%).
 API p95 in the two hours of real traffic during the fill (390 and 223
 requests): 313 and 269 ms, against ~280–390 ms the day before; the other hours
