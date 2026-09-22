@@ -88,13 +88,14 @@ pub async fn list_transactions(
         return resp;
     }
 
-    // Reject a cursor whose keyset is not this list's: the contract-filtered
-    // list pages on the transaction position, the others on `Ch` (task 0541).
-    // Per ADR 0008 we fail with `invalid_cursor` instead of silently
-    // mis-paginating. A legacy/untagged cursor already fails to decode upstream
-    // in the extractor; this guards the decodes-but-wrong-intent case.
+    // Reject a cursor whose keyset is not this list's: the statements page on
+    // the transaction position, except the operation-type filter alone, which
+    // pages on the id surrogate. Per ADR 0008 we fail with `invalid_cursor`
+    // instead of silently mis-paginating. A legacy/untagged cursor already
+    // fails to decode upstream in the extractor; this guards the
+    // decodes-but-wrong-intent case.
     if let Some(cursor) = &pagination.cursor
-        && !cursor.fits_transaction_list(params.filter_contract_id.is_some())
+        && !cursor.fits_transaction_list(params.filter_contract_id.is_some(), op_type.is_some())
     {
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
@@ -192,38 +193,30 @@ pub async fn list_transactions(
     resp
 }
 
-/// Build the opaque list cursor for a boundary row. PG keys the list scan on
-/// `(created_at, id)`. CH keys on `(ledger_sequence, <tie-break>)`, where the
-/// tie-break depends on which list statement served the page — the cursor must
-/// anchor the *same* keyset the next page's query will use:
+/// Build the opaque list cursor for a boundary row. CH keys on
+/// `(ledger_sequence, <within-ledger key>)`, and the cursor must anchor the
+/// *same* keyset the next page's query will use:
 ///
 /// - **Statement A** (no filter, the polled hot path) reads `transactions` in
 ///   primary-key order `(ledger_sequence, application_order)` with FINAL
-///   dropped (the `read_rows` quota fix — see `queries::fetch_list`), so its
-///   tie-break is `application_order`.
-/// - **Statement B** (contract filter) pages on the transaction position
-///   (task 0541), so its cursor is `ChPosition`.
+///   dropped (the `read_rows` quota fix — see `queries::fetch_list`).
+/// - **Statement B** (contract filter) pages on the same position through the
+///   `contract_transactions` index (task 0541).
 /// - **Statement C** (op_type filter only) drives off `operations_appearances`
-///   and keys on the `transactions.id` surrogate, so its tie-break is `id`.
+///   and keys on the `transactions.id` surrogate.
 ///
-/// Statement B's cursor is its own variant, so a cursor carried across the
-/// contract filter is rejected (see `list_transactions`). Between A and C the
-/// cursor is not tagged: per ADR 0008 a stale opaque cursor that anchors the
-/// wrong keyset there degrades to a re-aligned page, never a hard error.
+/// A and B mint `ChPosition`, C mints `ChSurrogate`; `list_transactions`
+/// rejects a cursor carried to a statement with the other keyset.
 fn list_cursor_for(params: &ResolvedListParams, r: &TxListRow) -> TxListCursor {
-    if params.contract_id.is_some() {
+    if params.contract_id.is_some() || params.op_type.is_none() {
         return TxListCursor::ChPosition {
             ledger_sequence: r.ledger_sequence,
             application_order: r.application_order,
         };
     }
-    TxListCursor::Ch {
+    TxListCursor::ChSurrogate {
         ledger_sequence: r.ledger_sequence,
-        tiebreak: if params.op_type.is_none() {
-            i64::from(r.application_order)
-        } else {
-            r.id
-        },
+        transaction_id: r.id,
     }
 }
 

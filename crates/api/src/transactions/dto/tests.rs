@@ -3,29 +3,26 @@ use crate::common::cursor::{self, CursorError, Direction};
 use chrono::TimeZone;
 
 #[test]
-fn ch_cursor_round_trips() {
-    // CH variant: ledger_sequence is the partition key + primary sort;
-    // tiebreak is the transactions.id hash surrogate (the SQL `id`
-    // column in the (ledger_sequence, id) keyset — may be negative,
-    // cityhash64 lower bits as i64).
-    let c = TxListCursor::Ch {
+fn surrogate_cursor_round_trips() {
+    // The transactions.id hash surrogate may be negative (cityhash64 as i64).
+    let c = TxListCursor::ChSurrogate {
         ledger_sequence: 50_000,
-        tiebreak: -123,
+        transaction_id: -123,
     };
     let encoded = cursor::encode(&c, Direction::Prev);
     let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
     assert_eq!(dir, Direction::Prev);
     assert!(matches!(
         decoded,
-        TxListCursor::Ch {
+        TxListCursor::ChSurrogate {
             ledger_sequence: 50_000,
-            tiebreak: -123
+            transaction_id: -123
         }
     ));
 }
 
 #[test]
-fn position_cursor_round_trips_and_fits_only_the_contract_list() {
+fn position_cursor_round_trips() {
     let c = TxListCursor::ChPosition {
         ledger_sequence: 64_000_000,
         application_order: 7,
@@ -39,30 +36,76 @@ fn position_cursor_round_trips_and_fits_only_the_contract_list() {
             application_order: 7
         }
     ));
-    assert!(decoded.fits_transaction_list(true));
-    assert!(!decoded.fits_transaction_list(false));
-    // A pre-0541 contract-list cursor (keyed by the id surrogate) is refused.
-    let old = TxListCursor::Ch {
+}
+
+#[test]
+fn each_statement_takes_only_its_own_keyset() {
+    let position = TxListCursor::ChPosition {
         ledger_sequence: 64_000_000,
-        tiebreak: -123,
+        application_order: 7,
     };
-    assert!(!old.fits_transaction_list(true));
-    assert!(old.fits_transaction_list(false));
+    let surrogate = TxListCursor::ChSurrogate {
+        ledger_sequence: 64_000_000,
+        transaction_id: -123,
+    };
+    // (contract filter, operation-type filter) → the statement's keyset.
+    for (contract, op_type, keyed_by_position) in [
+        (false, false, true), // A: no filter
+        (true, false, true),  // B: contract
+        (true, true, true),   // B: contract + operation type
+        (false, true, false), // C: operation type only
+    ] {
+        assert_eq!(
+            position.fits_transaction_list(contract, op_type),
+            keyed_by_position,
+            "position cursor, contract {contract}, op_type {op_type}"
+        );
+        assert_eq!(
+            surrogate.fits_transaction_list(contract, op_type),
+            !keyed_by_position,
+            "surrogate cursor, contract {contract}, op_type {op_type}"
+        );
+    }
 }
 
 #[test]
 fn variant_carries_the_src_tag_on_the_wire() {
-    // The `src` discriminant is what lets `list_transactions` reject a
-    // stale PG cursor (ADR 0008 fail-clean): a decoded cursor without the
-    // current `ch` tag is refused.
+    let tag = |c: TxListCursor| serde_json::to_value(c).unwrap()["src"].clone();
     assert_eq!(
-        serde_json::to_value(TxListCursor::Ch {
+        tag(TxListCursor::ChSurrogate {
             ledger_sequence: 1,
-            tiebreak: 2
-        })
-        .unwrap()["src"],
-        "ch"
+            transaction_id: 2
+        }),
+        "ch_surrogate"
     );
+    assert_eq!(
+        tag(TxListCursor::ChPosition {
+            ledger_sequence: 1,
+            application_order: 2
+        }),
+        "ch_position"
+    );
+}
+
+#[test]
+fn cursor_minted_before_the_split_is_rejected() {
+    // The `ch` variant carried the position or the surrogate in one
+    // `tiebreak` field. It no longer decodes: a 400 once at the deploy
+    // instead of a page read with the wrong key (ADR 0008 clean break).
+    #[derive(serde::Serialize)]
+    struct Old {
+        src: &'static str,
+        ledger_sequence: i64,
+        tiebreak: i64,
+    }
+    let old = Old {
+        src: "ch",
+        ledger_sequence: 64_000_000,
+        tiebreak: 7,
+    };
+    let encoded = cursor::encode(&old, Direction::Next);
+    let err = cursor::decode::<TxListCursor>(&encoded).unwrap_err();
+    assert!(matches!(err, CursorError::InvalidPayload));
 }
 
 #[test]

@@ -392,21 +392,22 @@ pub async fn fetch_list(
     };
 
     let (op, order) = keyset_sql_desc(direction);
-    // Cursor keyset is `(ledger_sequence, id)` (canonical SQL 02). The CH
-    // cursor variant carries `ledger_sequence` (partition key + primary sort)
-    // and `tiebreak` (the `transactions.id` hash surrogate, within-ledger
-    // tie-break). Both are present together or absent together, so the keyset
-    // tuple never binds a NULL element. A `Pg`-variant cursor never reaches
-    // here — `list_transactions` rejects a cross-datasource cursor with
-    // `invalid_cursor` before dispatch — so the `_` arm only ever means
-    // "first page".
+    // Cursor keyset is `(ledger_sequence, <within-ledger key>)` (canonical SQL
+    // 02): the position for statements A and B, the id surrogate for C.
+    // `list_transactions` has already rejected a cursor of the other keyset, so
+    // each statement reads the key its variant carries. Both parts are present
+    // together or absent together, so the keyset tuple never binds a NULL.
     let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match params.cursor.as_ref()
     {
-        Some(TxListCursor::Ch {
+        Some(TxListCursor::ChPosition {
             ledger_sequence,
-            tiebreak,
-        }) => (Some(*ledger_sequence), Some(*tiebreak)),
-        _ => (None, None),
+            application_order,
+        }) => (Some(*ledger_sequence), Some(i64::from(*application_order))),
+        Some(TxListCursor::ChSurrogate {
+            ledger_sequence,
+            transaction_id,
+        }) => (Some(*ledger_sequence), Some(*transaction_id)),
+        None => (None, None),
     };
 
     // Inline the integer params directly into the filtered-statement SQL rather

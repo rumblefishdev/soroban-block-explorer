@@ -36,7 +36,7 @@
 //!   `.bind()`-ed (user-controlled); `asset_type` is interpolated (typed `i16`).
 //!
 //! `/transactions` (canonical 10) keys on the datasource-tagged `TxListCursor`
-//! (`Ch { ledger_sequence, tiebreak }`), mirroring the accounts sub-resource. It
+//! (`ChSurrogate { ledger_sequence, transaction_id }`), mirroring the accounts sub-resource. It
 //! seeks the `operation_asset_appearances` fan-out on its `asset_id`-leading PK
 //! (task 0359) — a bounded PK-prefix range read behind the `max(sequence)` commit
 //! fence, so a hot asset early-terminates near the tip and a rare asset stays a
@@ -1070,15 +1070,17 @@ pub async fn fetch_transactions(
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // CH cursor only (the handler's cross-source guard rejects a `Pg` variant).
+    // Surrogate cursor only (the handler's guard rejects a position cursor).
     // Inlined i64 — no injection surface; omitted on the first page so no NULL is
     // bound. Unqualified columns: each seek is a single-table read, no ambiguity.
     let cursor_clause = match cursor {
-        Some(TxListCursor::Ch {
+        Some(TxListCursor::ChSurrogate {
             ledger_sequence,
-            tiebreak,
+            transaction_id,
         }) => {
-            format!(" AND (ledger_sequence, transaction_id) {op} ({ledger_sequence}, {tiebreak})")
+            format!(
+                " AND (ledger_sequence, transaction_id) {op} ({ledger_sequence}, {transaction_id})"
+            )
         }
         _ => String::new(),
     };

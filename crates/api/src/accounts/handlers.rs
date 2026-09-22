@@ -417,14 +417,14 @@ async fn fetch_account_tx_for_source(
 /// `(ledger_sequence, id)` (the `transaction_participants` / `transactions`
 /// keyset).
 fn account_tx_cursor_for(r: &AccountTxRow) -> TxListCursor {
-    TxListCursor::Ch {
+    TxListCursor::ChSurrogate {
         ledger_sequence: r.ledger_sequence,
-        tiebreak: r.id,
+        transaction_id: r.id,
     }
 }
 
-/// True when the decoded cursor is a current (CH) cursor. A stale cursor minted
-/// under the retired PG backend is rejected (ADR 0008 fail-clean).
+/// True when the cursor anchors this list's keyset, the id surrogate. A
+/// position cursor from `/transactions` is refused (ADR 0008 fail-clean).
 fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::Ch { .. })
+    matches!(cursor, TxListCursor::ChSurrogate { .. })
 }

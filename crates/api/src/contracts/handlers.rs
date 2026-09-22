@@ -475,16 +475,16 @@ async fn fetch_invocations_for_source(
 /// Build the opaque invocations cursor for a boundary row. CH keys on
 /// `(ledger_sequence, id)` (the `soroban_invocations_appearances` keyset).
 fn invocation_cursor_for(r: &InvocationAppearanceRow) -> TxListCursor {
-    TxListCursor::Ch {
+    TxListCursor::ChSurrogate {
         ledger_sequence: r.ledger_sequence,
-        tiebreak: r.transaction_id,
+        transaction_id: r.transaction_id,
     }
 }
 
-/// True when the decoded cursor is a current (CH) cursor. A stale cursor minted
-/// under the retired PG backend is rejected (ADR 0008 fail-clean).
+/// True when the cursor anchors this list's keyset, the id surrogate. A
+/// position cursor from `/transactions` is refused (ADR 0008 fail-clean).
 fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::Ch { .. })
+    matches!(cursor, TxListCursor::ChSurrogate { .. })
 }
 
 // ---------------------------------------------------------------------------

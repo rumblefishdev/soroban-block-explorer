@@ -624,10 +624,10 @@ pub async fn fetch_transactions(
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, clickhouse::error::Error> {
     let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match cursor {
-        Some(TxListCursor::Ch {
+        Some(TxListCursor::ChSurrogate {
             ledger_sequence,
-            tiebreak,
-        }) => (Some(*ledger_sequence), Some(*tiebreak)),
+            transaction_id,
+        }) => (Some(*ledger_sequence), Some(*transaction_id)),
         _ => (None, None),
     };
     let (op, order) = keyset_sql(sort, direction);
