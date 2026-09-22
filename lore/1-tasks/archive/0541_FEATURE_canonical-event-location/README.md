@@ -773,6 +773,17 @@ further). Per column (bytes/row, old → new): `topics_xdr` 8.516 → 8.332,
 `event_index` 0.361, `operation_index` 0.150; `signature` 0.124 → 0.059. Whole
 table by the same ratio ≈ 174 GiB (estimate).
 
+> Corrected 2026-09-22: the whole table came out at 195.91 GiB, −17.6% per
+> row, not −26%. The saving is close to constant in bytes, not in percent:
+> −4.21 B/row measured on the whole table (23.9 → 19.69) and −4.5 on the
+> trial partition. Partition 127's rows are among the lightest (12.48 B/row new, against
+> ~25 in partitions 100–108), so its percentage overstated the table's. The
+> per-row arithmetic ("Space" above, ~185 GiB) was the better estimate. Merging
+> changes little: partition 127 went from 6 parts to 1 for −0.9%, partition
+> 128 from 12 to 1 for −1.8% (5.69 → 5.59 GiB, 234 s, rows unchanged). The
+> rest is left to background merges: ~2–4 GiB at most (_estimate_), not worth
+> ~2 hours of full merges on the server that serves the API.
+
 **Read path** (median of 3, `system.query_log`; contracts: native XLM 271 M
 events in the partition, `546855837558613593` 14 M, `5314455185855296541`
 1,034):
