@@ -123,7 +123,7 @@ pub async fn persist_ledger_clickhouse(
         // surrogate; re-map them onto the wrapped classic/native asset id below.
         fetch_sac_classic_map(
             client,
-            sac_classic_map_needed(soroban_token_balances, events)
+            sac_classic_map_needed(soroban_token_balances, events, true)
         ),
     );
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
@@ -273,18 +273,23 @@ async fn fetch_prior_wasm_verdicts(
 }
 
 /// Whether a ledger needs the SAC → classic map: it has a contract-held token
-/// balance to re-key, OR it registers a soroban pool, whose legs key on the
-/// same map.
+/// balance to re-key AND this write persists `balances`, OR it registers a
+/// soroban pool, whose legs key on the same map.
 ///
-/// The second arm is what went missing. Gating on balances alone left a pool
+/// The pool arm is what went missing. Gating on balances alone left a pool
 /// registered in a ledger with no token balance change keyed on its SAC
 /// surrogate — the orphan defect task 0374's repair runbook exists for — so the
-/// live writer kept producing it after the fix.
+/// live writer kept producing it after the fix. `writes_balances` is asked of
+/// the caller rather than inferred from a targeted write: whether `balances`
+/// is written is the fact the balance arm depends on, and a targeted write
+/// that one day includes it must still get the map.
 pub fn sac_classic_map_needed(
     soroban_token_balances: &[ExtractedSorobanBalance],
     events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
+    writes_balances: bool,
 ) -> bool {
-    !soroban_token_balances.is_empty() || stage::registers_soroban_pools(events)
+    (writes_balances && !soroban_token_balances.is_empty())
+        || stage::registers_soroban_pools(events)
 }
 
 /// One AGGREGATED row of the `fetch_sac_classic_map` query (a projection, not the

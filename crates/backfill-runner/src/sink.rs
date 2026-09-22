@@ -169,20 +169,21 @@ pub struct PartitionWriterHandle {
 
 impl PartitionWriterHandle {
     pub async fn write_ledger(&mut self, meta: &LedgerCloseMeta) -> Result<(), BackfillError> {
-        let targeted = self.only.is_some();
+        let writes_balances = self.only.as_ref().is_none_or(|t| t.contains("balances"));
         let pw = &mut self.writer;
         {
             let parsed = indexer::handler::process::parse_ledger(meta);
             // ADR 0051 — contract-held SAC balances and soroban pool legs key
-            // onto the wrapped classic/native asset through this map. A pool
-            // registration always needs it; balances only when they are
-            // written, which `--only` never does (`balances` is not
-            // targetable). Ledgers needing neither skip the query.
+            // onto the wrapped classic/native asset through this map; the
+            // balances only matter when this write persists `balances`.
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
-            let needed = db_clickhouse::persist::stage::registers_soroban_pools(&parsed.events)
-                || (!targeted && !parsed.soroban_token_balances.is_empty());
+            let needed = db_clickhouse::persist::sac_classic_map_needed(
+                &parsed.soroban_token_balances,
+                &parsed.events,
+                writes_balances,
+            );
             let sac_classic =
                 db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
             // Task 0220 — switch to the `_with_sac_overrides` entry

@@ -3665,9 +3665,32 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         vec![new_pair_event("tx", SORO_FACTORY, SORO_PAIR)],
     )];
 
-    assert!(crate::persist::sac_classic_map_needed(&[], &router_ledger));
-    assert!(crate::persist::sac_classic_map_needed(&[], &pair_ledger));
-    assert!(!crate::persist::sac_classic_map_needed(&[], &[]));
+    assert!(crate::persist::sac_classic_map_needed(
+        &[],
+        &router_ledger,
+        false
+    ));
+    assert!(crate::persist::sac_classic_map_needed(
+        &[],
+        &pair_ledger,
+        false
+    ));
+    assert!(!crate::persist::sac_classic_map_needed(&[], &[], true));
+
+    // A contract-held balance needs the map exactly when `balances` is written.
+    let balance = [xdr_parser::ExtractedSorobanBalance {
+        contract_id: "CSAC".into(),
+        holder: "CPOOL".into(),
+        balance: 1,
+        ledger: 1,
+        closed: false,
+    }];
+    assert!(crate::persist::sac_classic_map_needed(&balance, &[], true));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &balance,
+        &[],
+        false
+    ));
 }
 
 /// Build an `add_pool` event for `pool`, emitted by `router`, from the

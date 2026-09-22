@@ -132,6 +132,10 @@ impl TargetedTables {
     pub fn iter(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.0.iter().copied()
     }
+
+    pub fn contains(&self, table: &str) -> bool {
+        self.0.contains(&table)
+    }
 }
 
 /// Lifecycle handle for a single 0204-schema partition write.
