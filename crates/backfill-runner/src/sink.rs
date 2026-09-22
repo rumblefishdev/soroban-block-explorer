@@ -169,36 +169,23 @@ pub struct PartitionWriterHandle {
 
 impl PartitionWriterHandle {
     pub async fn write_ledger(&mut self, meta: &LedgerCloseMeta) -> Result<(), BackfillError> {
-        let targeted = self.only.is_some();
+        let writes_balances = self.only.as_ref().is_none_or(|t| t.contains("balances"));
         let pw = &mut self.writer;
         {
             let parsed = indexer::handler::process::parse_ledger(meta);
-            // ADR 0051 — re-key contract-held type-0/1 balances onto their
-            // wrapped classic/native asset_id, same as the live indexer and
-            // RPC `balance-seed`. The fetch guards on empty balances, so
-            // ledgers with no SAC/token balances skip the query.
+            // ADR 0051 — contract-held SAC balances and soroban pool legs key
+            // onto the wrapped classic/native asset through this map; the
+            // balances only matter when this write persists `balances`.
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
-            //
-            // Skipped entirely under the targeted write (`--only`): the map's
-            // ONLY consumer is `build_balance_rows` (the `balances` table),
-            // which is not targetable — `TargetedTables::TARGETABLE` is a
-            // closed list and none of its four tables reads `sac_classic`
-            // (`asset_transfers` resolves a SAC through
-            // `event_asset_surrogate`, not this map). So the query would be a
-            // per-ledger round-trip bought for nothing — 13.16M of them
-            // across the run. If a future targetable table needs the map,
-            // this branch must key on the table list, not on `targeted`.
-            let sac_classic = if targeted {
-                std::collections::HashMap::new()
-            } else {
-                db_clickhouse::persist::fetch_sac_classic_map(
-                    pw.client(),
-                    &parsed.soroban_token_balances,
-                )
-                .await?
-            };
+            let needed = db_clickhouse::persist::sac_classic_map_needed(
+                &parsed.soroban_token_balances,
+                &parsed.events,
+                writes_balances,
+            );
+            let sac_classic =
+                db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
             // Task 0220 — switch to the `_with_sac_overrides` entry
             // point so the CH writer flips `is_sac=true,
             // contract_type=Token` on pre-existing SAC skeleton
