@@ -63,9 +63,10 @@ pub struct PoolRow {
     /// The wire `PoolListCursor.created_at_ledger` slot stays opaque (ADR
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
-    /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
-    /// Task 0246 — see DTO doc for surfacing rules.
-    pub participant_count: i64,
+    /// Classic: `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND
+    /// shares > 0`. Soroban: holders of the share token, `None` when nothing
+    /// counted them. Task 0246 — see DTO doc for surfacing rules.
+    pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
     pub reserve_a: Option<String>,
     pub reserve_b: Option<String>,
@@ -821,8 +822,12 @@ fn pool_instance_sql(pool_ids_predicate: &str) -> String {
         "SELECT s.pool_id AS pool_id, \
                 toNullable(toString(s.total_shares)) AS shares_raw, \
                 toNullable(toUInt32(coalesce(m.decimals, 7))) AS shares_decimals, \
-                toNullable(greatest(toInt64(ifNull(ba.holder_count, 0)) \
-                                    - ifNull(own.held, 0), 0)) AS holders \
+                /* NULL only when the share token has no aggregate row (60 of \
+                   727, 2026-09-16) — there nothing was counted. With a row, 0 \
+                   is a count: 33 pair pools are held only by themselves. */ \
+                if(ba.asset_id = 0, NULL, \
+                   toNullable(greatest(toInt64(ba.holder_count) \
+                                       - ifNull(own.held, 0), 0))) AS holders \
          FROM (SELECT pool_id, plane_id, share_token_id, total_shares \
                FROM pool_instance_state FINAL \
                WHERE {pool_ids_predicate}) s \
@@ -994,7 +999,7 @@ struct PoolDetailChRow {
     legs: Vec<i64>,
     fee_bps: i32,
     created_at_ledger: i64,
-    participant_count: i64,
+    participant_count: Option<i64>,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
     reserve_b: Option<String>,
@@ -1065,13 +1070,12 @@ pub async fn fetch_pool_by_id(
                     lp.last_updated_ledger)          AS created_at_ledger, \
                 /* A classic pool's providers hold pool-share TRUSTLINES \
                    (`lp_positions`); a soroban pool's hold its share TOKEN, so \
-                   they are counted from the instance side. A pool is one kind \
-                   or the other, so the two never both answer. */ \
-                greatest( \
-                    toInt64(ifNull( \
-                        (SELECT count() FROM lp_positions FINAL \
-                          WHERE pool_id = unhex(?) AND shares > 0), 0)), \
-                    toInt64(ifNull(inst.holders, 0))) AS participant_count, \
+                   they are counted from the instance side, where NULL means \
+                   not counted. */ \
+                if(lp.pool_kind = {soroban}, inst.holders, \
+                   toNullable(toInt64(ifNull( \
+                       (SELECT count() FROM lp_positions FINAL \
+                         WHERE pool_id = unhex(?) AND shares > 0), 0)))) AS participant_count, \
                 s.ledger_sequence                    AS latest_snapshot_ledger, \
                 toString(s.reserve_a)                AS reserve_a, \
                 toString(s.reserve_b)                AS reserve_b, \
@@ -1105,6 +1109,7 @@ pub async fn fetch_pool_by_id(
              LIMIT 1",
             inst = pool_instance_sql("pool_id = unhex(?)"),
             declared = DECLARED_PLANE,
+            soroban = domain::PoolKind::Soroban as i16,
         ))
         // Eight `?`, all the same pool, in SQL text order: created_at,
         // participants, the state-change reserves, the snapshot seek, the
@@ -1940,7 +1945,11 @@ struct PoolSideChRow {
     /// Latest per-leg reserves from `pool_state_changes`, raw and in leg order.
     /// Empty for a classic pool, which has none there.
     state_reserves: Vec<String>,
-    participant_count: i64,
+    /// Providers holding pool-share trustlines — a classic pool's count.
+    classic_participants: i64,
+    /// Holders of the share token — a soroban pool's count, NULL when nothing
+    /// counted them. The page knows each pool's kind, so it picks.
+    soroban_holders: Option<i64>,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
     reserve_b: Option<String>,
@@ -2114,8 +2123,8 @@ pub async fn fetch_pool_list(
         "SELECT \
              lower(hex(p.pool_id))                           AS pool_id_hex, \
              ifNull(sc.res, [])                              AS state_reserves, \
-             greatest(toInt64(ifNull(pc.participant_count, 0)), \
-                      toInt64(ifNull(inst.holders, 0)))      AS participant_count, \
+             toInt64(ifNull(pc.participant_count, 0))        AS classic_participants, \
+             inst.holders                                    AS soroban_holders, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
              toString(s.reserve_a)                           AS reserve_a, \
              toString(s.reserve_b)                           AS reserve_b, \
@@ -2250,7 +2259,13 @@ pub async fn fetch_pool_list(
                 fee_percent: fee_percent_str(p.fee_bps),
                 created_at_ledger: None,
                 cursor_ledger: p.activity_ledger,
-                participant_count: s.map_or(0, |s| s.participant_count),
+                participant_count: s.and_then(|s| {
+                    if p.pool_kind == domain::PoolKind::Soroban as i16 {
+                        s.soroban_holders
+                    } else {
+                        Some(s.classic_participants)
+                    }
+                }),
                 latest_snapshot_ledger: s.and_then(|s| s.latest_snapshot_ledger),
                 total_shares: total_shares_of(
                     s.and_then(|s| s.total_shares.clone()),

@@ -40,7 +40,7 @@ fn base_row() -> PoolRow {
         fee_percent: "0.30".into(),
         created_at_ledger: Some(100),
         cursor_ledger: 100,
-        participant_count: 0,
+        participant_count: Some(0),
         latest_snapshot_ledger: None,
         reserve_a: None,
         reserve_b: None,
@@ -138,4 +138,37 @@ fn the_pool_id_renders_by_kind() {
     let soroban = map_pool_item(row, &net());
     assert!(soroban.pool_id.starts_with('C'), "{}", soroban.pool_id);
     assert_eq!(soroban.pool_kind.as_deref(), Some("soroban"));
+}
+
+/// A zero means different things per kind. Beside outstanding classic shares it
+/// is the ingest floor's blind spot, so it is withheld; a soroban zero comes
+/// from a share token the aggregate DID count — a pair holding only its own
+/// locked minimum liquidity has no providers — so it stands.
+#[test]
+fn a_zero_participant_count_is_withheld_only_where_it_is_not_a_count() {
+    let mut classic = base_row();
+    classic.total_shares = Some("1000.0000000".into());
+    assert_eq!(map_pool_item(classic, &net()).participant_count, None);
+
+    let mut pair = base_row();
+    pair.pool_kind = domain::PoolKind::Soroban as i16;
+    pair.total_shares = Some("0.0000001".into());
+    assert_eq!(map_pool_item(pair, &net()).participant_count, Some(0));
+
+    let mut uncounted = base_row();
+    uncounted.pool_kind = domain::PoolKind::Soroban as i16;
+    uncounted.participant_count = None;
+    assert_eq!(map_pool_item(uncounted, &net()).participant_count, None);
+
+    // Nobody counted the holders, but nothing is outstanding to hold.
+    let mut empty = base_row();
+    empty.pool_kind = domain::PoolKind::Soroban as i16;
+    empty.participant_count = None;
+    empty.total_shares = Some("0".into());
+    assert_eq!(map_pool_item(empty, &net()).participant_count, Some(0));
+
+    let mut counted = base_row();
+    counted.participant_count = Some(5);
+    counted.total_shares = Some("1000.0000000".into());
+    assert_eq!(map_pool_item(counted, &net()).participant_count, Some(5));
 }

@@ -192,14 +192,20 @@ fn map_pool_item(row: PoolRow, network_id: &[u8; 32]) -> PoolItem {
         // positive share balance is not a measurement — it is the ingest
         // floor's blind spot wearing a number, on 35% of live classic pools.
         //
-        // And a soroban pool whose shares are unknown has nothing a zero could
-        // be measured against: a concentrated pool has no share token at all,
-        // its providers hold positions, and "0 providers" there was false on 45
-        // of 46 pools.
+        // A soroban count arrives already honest: `None` where nothing counted
+        // the share token's holders (a concentrated pool has no share token at
+        // all, and "0 providers" there was false on 45 of 46 pools), and 0
+        // where a pair holds nothing but its own locked minimum liquidity. And
+        // shares measured at zero leave nobody to hold them, counted or not.
         participant_count: match (row.participant_count, row.total_shares.as_deref()) {
-            (0, Some(shares)) if shares.parse::<f64>().is_ok_and(|v| v > 0.0) => None,
-            (0, None) if row.pool_kind == domain::PoolKind::Soroban as i16 => None,
-            (n, _) => Some(n),
+            (Some(0), Some(shares))
+                if row.pool_kind == domain::PoolKind::Classic as i16
+                    && shares.parse::<f64>().is_ok_and(|v| v > 0.0) =>
+            {
+                None
+            }
+            (None, Some(shares)) if shares.parse::<f64>().is_ok_and(|v| v == 0.0) => Some(0),
+            (n, _) => n,
         },
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         reserve_a: row.reserve_a,

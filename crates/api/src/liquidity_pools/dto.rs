@@ -232,6 +232,12 @@ pub struct PoolItem {
     ///
     /// A genuine `0` — no shares outstanding, nobody in — is still `0`.
     /// Independent of snapshot freshness either way.
+    ///
+    /// A soroban pool counts the holders of its share token, less the pool's
+    /// own contract (a pair locks its minimum liquidity by holding its own
+    /// token). `0` there is a count too: a pair held only by itself has no
+    /// providers. `null` when nothing counted the token's holders — a
+    /// concentrated pool has no share token at all.
     pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
     /// A CLASSIC pool's latest snapshot reserves, in leg order; always `null`
