@@ -2,9 +2,11 @@ use super::*;
 
 #[test]
 fn contract_positions_are_one_seek_on_the_presence_index() {
-    let sql = contract_positions_sql(42, "128", "64000009", None, Direction::Next, 80);
+    let sql = contract_positions_sql(42, "64000009", None, Direction::Next, 80);
     assert!(sql.contains("FROM contract_transactions WHERE contract_id = 42"));
-    assert!(sql.contains("intDiv(ledger_sequence, 500000) = 128"));
+    // Not pinned to a partition: a contract quiet in the head's partition
+    // would list as empty.
+    assert!(!sql.contains("intDiv"));
     assert!(sql.contains("ledger_sequence <= 64000009"));
     assert!(sql.contains("ORDER BY ledger_sequence DESC, application_order DESC"));
     assert!(sql.contains("LIMIT 1 BY ledger_sequence, application_order"));
@@ -18,14 +20,7 @@ fn contract_positions_are_one_seek_on_the_presence_index() {
         );
     }
 
-    let sql = contract_positions_sql(
-        42,
-        "128",
-        "64000009",
-        Some((64_000_000, 7)),
-        Direction::Prev,
-        80,
-    );
+    let sql = contract_positions_sql(42, "64000009", Some((64_000_000, 7)), Direction::Prev, 80);
     assert!(sql.contains("AND (ledger_sequence, application_order) > (64000000, 7)"));
     assert!(sql.contains("ORDER BY ledger_sequence ASC, application_order ASC"));
 }

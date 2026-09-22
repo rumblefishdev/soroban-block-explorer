@@ -24,12 +24,12 @@
 //! ### List pagination + the partition-prune / read-in-order guard
 //!
 //! Canonical SQL 02 (PR #175 amendment) bounds every page to a single
-//! `intDiv(ledger_sequence, 500000)` partition. We reproduce that — first
-//! page prunes to the latest partition (`intDiv(max(sequence), 500000)`),
-//! subsequent pages prune to the cursor's partition. The known cost is that
-//! backward pagination across a 500k-ledger partition boundary stops early;
-//! acceptable for an explorer (deep cross-partition cursor walks do not
-//! occur in the UI).
+//! `intDiv(ledger_sequence, 500000)` partition. Statements A and C reproduce
+//! that — first page prunes to the latest partition (`intDiv(max(sequence),
+//! 500000)`), subsequent pages prune to the cursor's partition. The known cost
+//! is that pagination across a 500k-ledger partition boundary stops early —
+//! and for a rare `op_type` the first page is already short or empty (task
+//! 0381). Statement B seeks an index keyed by contract and is not bounded.
 //!
 //! The partition prune alone is NOT enough. A partition is ~1e8 transactions
 //! on mainnet, and `transactions FINAL ... ORDER BY ... LIMIT` reads the
@@ -448,8 +448,8 @@ pub async fn fetch_list(
             // Step 1: up to `lim_over` positions of transactions touching the
             // contract, by a seek on the `contract_transactions` presence index
             // — the shape `transaction_participants` gives the account list
-            // (task 0541). One partition per page, as before: the cursor's,
-            // else the head's.
+            // (task 0541). Not bounded to a partition: the index is keyed by
+            // contract, so the seek crosses them cheaply (task 0381).
             let cursor = match params.cursor.as_ref() {
                 Some(TxListCursor::ChPosition {
                     ledger_sequence,
@@ -457,13 +457,9 @@ pub async fn fetch_list(
                 }) => Some((*ledger_sequence, *application_order)),
                 _ => None,
             };
-            let partition = cursor.map_or_else(
-                || head_partition.clone(),
-                |(l, _)| (l / 500_000).to_string(),
-            );
             let positions: Vec<(i64, i16)> = client
                 .query(&contract_positions_sql(
-                    cid, &partition, &head_max, cursor, direction, lim_over,
+                    cid, &head_max, cursor, direction, lim_over,
                 ))
                 .fetch_all::<PositionRow>()
                 .await?
@@ -912,13 +908,16 @@ struct PositionRow {
 /// Statement B's driver: the positions of the transactions touching the
 /// contract, past the cursor, in page order — one seek on the
 /// `contract_transactions` key, the way the account list seeks
-/// `transaction_participants`. `partition` is the partition id the page is
-/// bounded to; `LIMIT 1 BY` collapses rows the RMT has not merged yet. Every
-/// value is an integer literal (the bound-parameter path returned empty pages,
-/// see `fetch_list`).
+/// `transaction_participants`. No partition bound: pinned to the head's
+/// partition, a contract without transactions there listed as empty (93.3% of
+/// the contracts in `soroban_contracts`, 2026-09-22). Across every partition
+/// the native SAC's first page reads 28–31M rows in 117–137 ms, a contract
+/// quiet since the previous partition 1.8M in 36–57 ms. `LIMIT 1 BY` collapses
+/// rows the RMT has not merged yet — exactly, so the page never comes back
+/// short. Every value is an integer literal (the bound-parameter path returned
+/// empty pages, see `fetch_list`).
 fn contract_positions_sql(
     contract_id: i64,
-    partition: &str,
     head_max: &str,
     cursor: Option<(i64, i16)>,
     direction: Direction,
@@ -931,7 +930,6 @@ fn contract_positions_sql(
     format!(
         "SELECT ledger_sequence, application_order FROM contract_transactions \
          WHERE contract_id = {contract_id} \
-           AND intDiv(ledger_sequence, 500000) = {partition} \
            AND ledger_sequence <= {head_max}{cursor} \
          ORDER BY ledger_sequence {order}, application_order {order} \
          LIMIT 1 BY ledger_sequence, application_order \

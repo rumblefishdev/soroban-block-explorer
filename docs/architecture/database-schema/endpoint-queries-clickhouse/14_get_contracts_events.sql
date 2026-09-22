@@ -59,6 +59,11 @@
 --           the decoded payload directly.
 --     This is a meaningful win — CH-backed events endpoint doesn't need
 --     Archive S3 fetches and avoids the per-ledger blob decode cost.
+--   • Live read (task 0381): no FINAL; the page's keys are picked first with
+--     `LIMIT 1 BY` on the key columns alone, and `topics_xdr` / `data_xdr`
+--     read only for those keys. `LIMIT 1 BY` walks every row it dedups, so
+--     beside the payload it read 1.2 GiB for the native SAC's first page
+--     (0.6 GiB this way, 2026-09-22).
 --   • Cursor drops `created_at` (§5.2). Order is fully determined by
 --     the rpc event id, so a page boundary inside a transaction (or inside
 --     one operation) is exact, and the order the rows come back in is

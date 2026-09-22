@@ -101,7 +101,7 @@
 --                 `contract_surrogate_ids[]` projections.
 -- CH Engine:    All Replacing — FINAL required.
 -- CH Pattern:   3 statements (A no-filter / B contract / C op_type).
---               Partition prune ALWAYS applied — `$2 IS NULL` first-page
+--               A and C: partition prune ALWAYS applied — `$2 IS NULL` first-page
 --               path uses `$7` (caller-supplied latest_partition) to bound
 --               the scan to one partition. Without this, full-table FINAL
 --               on 20M+ tx rows blows the 5.6 GB default memory limit.
@@ -112,7 +112,7 @@
 --   so we partition-prune from the start. Frontend can derive `$7` from
 --   the latest_ledger_sequence in E01's response or cache it for ~5s.
 -- Notes:
---   • Partition prune via `intDiv(t.ledger_sequence, 500000) = ifNull($2_part, $7)`
+--   • A and C: partition prune via `intDiv(t.ledger_sequence, 500000) = ifNull($2_part, $7)`
 --     where `$2_part = intDiv($2, 500000)` when cursor set, else `$7`.
 --     Limits scan to ONE partition (~500k ledgers worst case).
 --   • `contract_surrogate_ids[]` projection: PR #175 dropped `assets.id`
@@ -175,7 +175,9 @@ JOIN accounts src ON src.id = t.source_id;  -- no FINAL: account_id is determini
 -- `soroban_events` that hashed the whole partition (6.04 GiB for native XLM,
 -- over the reader cap). The keyset is the transaction's position, so for this
 -- statement `$3` is the cursor's `application_order`, not `transactions.id`.
--- Partition prune via intDiv on the cursor's ledger or caller-supplied $7.
+-- NOT bounded to one partition (task 0381): the index is keyed by contract, so
+-- the seek crosses partitions cheaply, and bounded to the head's partition a
+-- contract quiet there listed as empty — 93.3% of contracts on 2026-09-22.
 -- (The `contract_surrogate_ids` projection below is historical — see the
 -- header; nothing computes it.)
 SELECT
@@ -213,7 +215,6 @@ FROM (
     SELECT ledger_sequence, application_order
     FROM contract_transactions
     WHERE contract_id = $5
-      AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
       AND ($2 IS NULL OR (ledger_sequence, application_order) < ($2, $3))
     ORDER BY ledger_sequence DESC, application_order DESC
     LIMIT 1 BY ledger_sequence, application_order

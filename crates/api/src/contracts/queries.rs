@@ -999,13 +999,10 @@ fn map_event_row(r: EventChRow) -> ChEvent {
 }
 
 /// `contract_surrogate_id` is from [`fetch_contract`]; caller passes the
-/// handler's `fetch_limit()` (already the peek `+1`). Single-statement
-/// contract-leading PK seek on `soroban_events` (no two-step driver needed —
-/// the payload is inline, unlike invocations/account-tx which fan out to
-/// `transactions`). `FINAL` on the per-contract seek collapses re-ingest
-/// duplicates; the `transactions` / `ledgers` joins carry NO `FINAL` (a tx is
-/// immutable, so a dup version is identical) and `LIMIT 1 BY` the event key
-/// collapses any join fan-out. The cursor keys on the rpc event id
+/// handler's `fetch_limit()` (already the peek `+1`). Two statements: the page
+/// by a contract-leading PK seek on `soroban_events`, then its transactions by
+/// position. No `FINAL` on either; `LIMIT 1 BY` collapses duplicate rows. The
+/// cursor keys on the rpc event id
 /// `(ledger_sequence, transaction_index, operation_index, event_index)`.
 pub async fn fetch_events(
     client: &clickhouse::Client,
@@ -1026,11 +1023,12 @@ pub async fn fetch_events(
     // (reproduced: FINAL OOMs at 500 MB–2 GB, only barely survives 4 GB). The
     // full-key `LIMIT 1 BY` on the rpc id already collapses re-ingest
     // duplicates, and every projected column is immutable across
-    // ReplacingMergeTree versions, so a non-FINAL read returns identical rows —
-    // the read-in-order page then short-circuits at `LIMIT` instead of merging
-    // the whole contract. Same rationale as transactions Statement A (task 0290).
+    // ReplacingMergeTree versions, so a non-FINAL read returns identical rows.
+    // `LIMIT 1 BY` does not stop the read at `LIMIT`, so it runs on the key
+    // columns alone — see `events_page_sql`.
     let raw = client
         .query(&events_page_sql(cursor, direction))
+        .bind(contract_surrogate_id)
         .bind(contract_surrogate_id)
         .bind(limit)
         .fetch_all::<EventPageRow>()
@@ -1095,7 +1093,7 @@ pub async fn fetch_events(
 }
 
 /// Step 1 of [`fetch_events`]: one page of a contract's events in rpc id
-/// order. Binds `contract_id` and `limit`. The cursor is inlined (integers —
+/// order. Binds `contract_id`, `contract_id`, `limit`. The cursor is inlined (integers —
 /// no injection surface) and omitted on the first page, so no NULL is bound
 /// into the tuple keyset (the clickhouse 0.15 None-in-tuple defect).
 fn events_page_sql(cursor: Option<&EventCursor>, direction: Direction) -> String {
@@ -1112,21 +1110,33 @@ fn events_page_sql(cursor: Option<&EventCursor>, direction: Direction) -> String
         ),
         None => String::new(),
     };
+    // The page's keys first, on the key columns alone; the payload only for
+    // those keys. One statement reading both would load `topics_xdr` /
+    // `data_xdr` for every row `LIMIT 1 BY` walks — the native SAC's first page
+    // read 1.2 GiB in ~0.5 s with 2.2 GiB of memory, against 0.6 GiB, ~0.15 s
+    // and 0.5 GiB this way (2026-09-22). `LIMIT 1 BY` stays exact, so the page
+    // is never short of `limit` while more events exist.
     format!(
         "SELECT \
-            se.ledger_sequence              AS ledger_sequence, \
-            se.transaction_index            AS transaction_index, \
-            se.operation_index              AS operation_index, \
-            se.event_index                  AS event_index, \
-            se.application_order            AS application_order, \
-            se.event_type                   AS event_type, \
-            se.topics_xdr                   AS topics_xdr, \
-            se.data_xdr                     AS data_xdr \
-         FROM soroban_events se \
-         WHERE se.contract_id = ? AND se.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
-         ORDER BY se.ledger_sequence {order}, se.transaction_index {order}, se.operation_index {order}, se.event_index {order} \
-         LIMIT 1 BY se.ledger_sequence, se.transaction_index, se.operation_index, se.event_index \
-         LIMIT ?"
+            e.ledger_sequence               AS ledger_sequence, \
+            e.transaction_index             AS transaction_index, \
+            e.operation_index               AS operation_index, \
+            e.event_index                   AS event_index, \
+            e.application_order             AS application_order, \
+            e.event_type                    AS event_type, \
+            e.topics_xdr                    AS topics_xdr, \
+            e.data_xdr                      AS data_xdr \
+         FROM soroban_events e \
+         WHERE e.contract_id = ? \
+           AND (e.ledger_sequence, e.transaction_index, e.operation_index, e.event_index) IN ( \
+             SELECT se.ledger_sequence, se.transaction_index, se.operation_index, se.event_index \
+             FROM soroban_events se \
+             WHERE se.contract_id = ? AND se.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
+             ORDER BY se.ledger_sequence {order}, se.transaction_index {order}, se.operation_index {order}, se.event_index {order} \
+             LIMIT 1 BY se.ledger_sequence, se.transaction_index, se.operation_index, se.event_index \
+             LIMIT ?) \
+         ORDER BY e.ledger_sequence {order}, e.transaction_index {order}, e.operation_index {order}, e.event_index {order} \
+         LIMIT 1 BY e.ledger_sequence, e.transaction_index, e.operation_index, e.event_index"
     )
 }
 
