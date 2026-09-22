@@ -173,27 +173,16 @@ impl PartitionWriterHandle {
         let pw = &mut self.writer;
         {
             let parsed = indexer::handler::process::parse_ledger(meta);
-            // ADR 0051 — re-key contract-held type-0/1 balances, and soroban
-            // pool legs, onto their wrapped classic/native asset_id, same as
-            // the live indexer and RPC `balance-seed`. Ledgers with neither
-            // skip the query.
+            // ADR 0051 — contract-held SAC balances and soroban pool legs key
+            // onto the wrapped classic/native asset through this map. A pool
+            // registration always needs it; balances only when they are
+            // written, which `--only` never does (`balances` is not
+            // targetable). Ledgers needing neither skip the query.
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
-            //
-            // Under the targeted write (`--only`) balances are not written
-            // (`balances` is not targetable), so only a pool registration asks
-            // for the map. Skipping it there entirely was the bug: the
-            // registry re-parse wrote every SAC leg back onto its surrogate —
-            // 1,084 such legs became 1,452 after one run (task 0374).
-            let needed = if targeted {
-                db_clickhouse::persist::stage::registers_soroban_pools(&parsed.events)
-            } else {
-                db_clickhouse::persist::sac_classic_map_needed(
-                    &parsed.soroban_token_balances,
-                    &parsed.events,
-                )
-            };
+            let needed = db_clickhouse::persist::stage::registers_soroban_pools(&parsed.events)
+                || (!targeted && !parsed.soroban_token_balances.is_empty());
             let sac_classic =
                 db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
             // Task 0220 — switch to the `_with_sac_overrides` entry
