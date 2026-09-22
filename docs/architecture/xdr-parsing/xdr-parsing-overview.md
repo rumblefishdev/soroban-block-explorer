@@ -484,9 +484,15 @@ because Protocol 23 (CAP-67) reorganised the on-chain event surface
      diagnostic / trace events.
 
   `SorobanTransactionMetaV2` (the V4 `soroban_meta`) no longer carries an
-  `events` field — that field was removed in CAP-67. `event_index` is
-  numbered sequentially across all three sources within a single
-  transaction so the V3 contract (monotonic per-tx index) is preserved.
+  `events` field — that field was removed in CAP-67. `position_in_tx` is
+  numbered sequentially across all three sources within a single transaction
+  (in memory only). What identifies an event is `ExtractedEvent.event_id`, the
+  stellar-rpc id assigned per ledger through `xdr_parser::LedgerEvents`, the
+  only way to get it outside the parser (ADR 0059): for an operation event the
+  transaction's application order, the operation and the position inside it;
+  for a fee event the stage's sentinel (transaction 0 before all
+  transactions, operation 4095 after one transaction, transaction 1048575
+  after all of them) and that stage's counter. Diagnostic events have no id.
 
 The split matters because per-operation events carry the bulk of
 post-Protocol 23 Soroban traffic. Missing them produces a silently
@@ -776,6 +782,8 @@ Two identity fields were added for this table:
   operation's own event list. With `op_index` this is Stellar's official event
   identity (the `getEvents` cursor `(ledger, tx, op, event)`, `event` reset per
   operation), and it keys `asset_transfers`. `None` outside the per-op container.
+  The same two numbers, plus the transaction's application order, become
+  `ExtractedEvent.event_id` and key `soroban_events` (ADR 0059).
 - `ExtractedTransaction.source_muxed_id`, `ExtractedOperation.source_muxed_id`
   / `destination_muxed_id` — the 64-bit id of an `M…` address (`envelope::muxed_id`).
   ADR 0026 reduces every `M…` to its `G…` at the parser boundary; these fields

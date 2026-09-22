@@ -8,14 +8,13 @@ import {
   eventArgsText,
   partsToText,
   traceCallCount,
-} from './ExecutionTrace.js';
+} from '../ExecutionTrace.js';
 
 // Real pair from mainnet tx 54aab000…b21f2d: the fn_call bytes topic and the
 // C-strkey of the contract that raised events inside that call.
 const CDDT_BYTES = 'xzT92aatkBMtnTNkRAThGP6Ivts2hpYWmu/CNZihVeg=';
 const CDDT = 'CDDTJ7OZU2WZAEZNTUZWIRAE4EMP5CF63M3INFQWTLX4ENMYUFK6RCTX';
 
-let nextIndex = 0;
 function ev(
   topics: { type: string; value?: unknown }[],
   data: unknown = null,
@@ -26,9 +25,12 @@ function ev(
     contract_id,
     topics,
     data,
-    event_index: nextIndex++,
-    op_index: null,
-  } as XdrEventDto;
+    // Diagnostic entries carry no rpc id; the fixtures number their topics
+    // through the `data` payload instead, which is what the trace shows.
+    id: null,
+    event_index: null,
+    operation_index: null,
+  };
 }
 
 const fnCall = (name: string, bytes = CDDT_BYTES, data: unknown = null) =>
@@ -96,14 +98,13 @@ describe('buildExecutionTrace', () => {
       swap.children.map((child) =>
         child.kind === 'call'
           ? child.node.fnName
-          : `ev:${child.event.event_index}`
+          : child.event === burn
+          ? 'ev:burn'
+          : child.event === transfer
+          ? 'ev:transfer'
+          : 'ev:other'
       )
-    ).toEqual([
-      `ev:${burn.event_index}`,
-      'burn_and_transfer',
-      `ev:${transfer.event_index}`,
-      'balance',
-    ]);
+    ).toEqual(['ev:burn', 'burn_and_transfer', 'ev:transfer', 'balance']);
     expect(traceCallCount(nodes)).toBe(3);
   });
 

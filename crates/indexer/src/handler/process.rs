@@ -174,6 +174,9 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     let envelopes = xdr_parser::envelope::extract_envelopes(meta, net_id);
     let tx_metas = collect_tx_metas(meta);
     let tx_results = xdr_parser::collect_tx_results(meta);
+    // Fee events are numbered per ledger, so every transaction's meta counts —
+    // including the ones skipped below for a parse error.
+    let ledger_events = xdr_parser::LedgerEvents::new(ledger_sequence, closed_at, &tx_metas);
 
     let mut all_operations = Vec::new();
     let mut all_events = Vec::new();
@@ -218,7 +221,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         }
 
         if let Some(tm) = tx_meta {
-            let events = xdr_parser::extract_events(tm, &ext_tx.hash, ledger_sequence, closed_at);
+            let events = ledger_events.extract(tx_index, &ext_tx.hash);
             let nft_events = xdr_parser::detect_nft_events(&events, net_id);
             all_nft_events.extend(nft_events);
             let edges = xdr_parser::extract_asset_transfers(&events, net_id);

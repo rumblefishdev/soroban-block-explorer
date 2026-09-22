@@ -417,7 +417,7 @@ The card shows:
   auth-entry tree (what the transaction was signed to do), and the backend
   stamps every node with the whole transaction's verdict — so the UI
   deliberately renders no per-node ✓/✗ there;
-- the operation's own events, matched via `XdrEventDto.op_index`
+- the operation's own events, matched via `XdrEventDto.operation_index`
   (`application_order - 1`);
 - an "Operation details" disclosure with every raw `details` key — exactness
   preserved; nothing null/empty that matters for debugging is hidden;
@@ -426,7 +426,7 @@ The card shows:
 Consumed heavy fields: `operations[].details`, `operations[].result_code`
 (per-op result names straight from the XDR library — the fail-reason source),
 `operation_tree`, `diagnostic_events` (execution trace + Resources counters),
-`contract_events[].op_index`, `result_code`, `fee_bump_source`, `signatures`,
+`contract_events[].operation_index`, `result_code`, `fee_bump_source`, `signatures`,
 `envelope_xdr`, `result_xdr`, `result_meta_xdr`.
 Large payload areas stay collapsible.
 
@@ -434,11 +434,13 @@ Large payload areas stay collapsible.
 
 The transaction's **Events** card lists `heavy.contract_events` only: the
 tx-level and per-operation containers, hashed into the ledger, which is what
-CAP-67 and `getEvents` mean by the events of a transaction. Its `Where` column
-names the raising operation (`op_index`) or, for tx-level events, the CAP-67
-`stage` (`before all txs` / `after all txs`) — `event_index` follows XDR
-container order, so the fee refund is numbered ahead of the operation it
-refunds and the number alone would read as a timeline it is not.
+CAP-67 and `getEvents` mean by the events of a transaction. Rows arrive in
+execution order (the fee charge, the operation events, the fee refund) and the
+`ID` column shows each event's stellar-rpc id verbatim — the identity
+`getEvents` returns, so a row can be looked up outside this explorer (ADR
+0059); a diagnostic entry has none and shows `—`. The `Where` column names the
+raising operation (`operation_index`) or, for tx-level events, the CAP-67
+`stage` (`before all txs` / `after all txs`).
 
 `heavy.diagnostic_events` sits under its own disclosure, **raw** — the call
 trace, contract logs, failure diagnostics, and the byte-identical copies of the

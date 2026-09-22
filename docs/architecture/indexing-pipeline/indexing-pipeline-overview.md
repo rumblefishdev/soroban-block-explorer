@@ -182,7 +182,10 @@ artifact:
 - operation type and details from `OperationMeta`
 - Soroban invocation data from `InvokeHostFunctionOp` and
   `SorobanTransactionMeta.returnValue`
-- CAP-67 contract events from `SorobanTransactionMeta.events`
+- CAP-67 contract events from `SorobanTransactionMeta.events`, each given its
+  stellar-rpc event id once per ledger (`xdr_parser::LedgerEvents`) — the id
+  keys `soroban_events`, and staging refuses a consensus event that lacks one
+  (ADR 0059)
 - contract deployment data from `LedgerEntryChanges` of contract type
 - account changes from `LedgerEntryChanges` of account type
 - liquidity pool state from `LedgerEntryChanges` of liquidity-pool type
@@ -357,6 +360,16 @@ the staging event loop decodes SEP-41 / CAP-67 `transfer` / `mint` / `burn` /
 registers their `from` / `to` as account participants plus — for SAC-wrapped
 classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`).
 `transaction_participants` stays pure presence.
+
+`contract_transactions` (task 0541) is the contract-dimension presence index,
+built at staging from rows the ledger already produced: every contract that
+emitted an **operation** event in the transaction, was invoked in it, or is named
+by one of its operations — one row per (contract, transaction position). Fee
+events are skipped by the source the parser gives them: every transaction
+pays one to the native SAC, and they would put every transaction in that
+contract's list. Invocation and operation rows name the transaction by its hash
+surrogate; staging maps it to the position through the ledger's own
+`transactions` rows, and a transaction missing from them is a staging error.
 
 `operation_asset_appearances` is pure presence. The `net_settled` value column
 (task 0393) was REMOVED on 2026-09-04 — the per-(tx, asset) aggregate carried no

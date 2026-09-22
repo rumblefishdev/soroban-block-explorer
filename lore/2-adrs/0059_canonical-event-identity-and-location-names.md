@@ -1,7 +1,7 @@
 ---
 id: '0059'
 title: 'Events are identified by the stellar-rpc event id; positions carry stellar-rpc names'
-status: proposed
+status: accepted
 deciders: [karolkow]
 related_tasks: ['0541', '0538', '0540', '0558', '0453']
 related_adrs: ['0044', '0057']
@@ -18,6 +18,13 @@ history:
       Drafted in task 0541 before the soroban_events rebuild, after the
       identity was verified against getEvents and the archive meta. Amends the
       soroban_events key of ADR 0044; first convention of the 0538 programme.
+  - date: '2026-09-17'
+    status: accepted
+    who: karolkow
+    note: >
+      Accepted with the task 0541 implementation: the parser assigns the id,
+      staging writes it, every reader and the transaction page use it, and the
+      docs below carry it.
 ---
 
 # ADR 0059: Events are identified by the stellar-rpc event id; positions carry stellar-rpc names
@@ -220,14 +227,26 @@ events; rebuilds `transactions` for a rename.
 Per [ADR 0032](./0032_docs-architecture-evergreen-maintenance.md) — ticked in
 the task 0541 PR:
 
-- [ ] `docs/architecture/technical-design-general-overview.md` updated (or N/A)
-- [ ] `docs/architecture/database-schema/database-schema-overview.md` updated (or N/A)
-- [ ] `docs/architecture/backend/backend-overview.md` updated (or N/A)
-- [ ] `docs/architecture/frontend/frontend-overview.md` updated (or N/A)
-- [ ] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` updated (or N/A)
-- [ ] `docs/architecture/infrastructure/infrastructure-overview.md` updated (or N/A)
-- [ ] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` updated (or N/A)
-- [ ] This ADR is linked from each updated doc at the relevant section
+- [x] `docs/architecture/technical-design-general-overview.md` — N/A: its
+      ClickHouse passages name the table, never the key
+- [x] `docs/architecture/database-schema/database-schema-overview.md` — the
+      dropped `soroban_event_ops` section and `asset_transfers` without the
+      flat counter. It has no `soroban_events` DDL; the table's columns and
+      key are in `clickhouse-pilot.md` §4a (below)
+- [x] `docs/architecture/backend/backend-overview.md` — N/A: it does not
+      describe the events keyset
+- [x] `docs/architecture/frontend/frontend-overview.md` — the transaction
+      page's `ID` column and `operation_index`
+- [x] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` —
+      the parse step assigns the id; staging refuses an event without one
+- [x] `docs/architecture/infrastructure/infrastructure-overview.md` — N/A:
+      no schema in it
+- [x] `docs/architecture/xdr-parsing/xdr-parsing-overview.md` — `event_id`,
+      `position_in_tx` and the fee sentinels
+- [x] Also: `database-schema/clickhouse-pilot.md`,
+      `endpoint-queries-clickhouse/{14_get_contracts_events.sql,03_get_transactions_by_hash.sql,README.md}`,
+      `docs/backfills.md`
+- [x] This ADR is linked from each updated doc at the relevant section
 
 ---
 

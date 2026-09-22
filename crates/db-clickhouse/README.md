@@ -273,7 +273,7 @@ dictionary build on the high-cardinality FK columns.
 
 All FK columns referencing these three tables are `Int64`
 (`transactions.source_id`, `operations_appearances.contract_id`,
-`soroban_events.transaction_id`, etc.) — cheap integer joins, ~7×
+`soroban_events.contract_id`, etc.) — cheap integer joins, ~7×
 smaller on-disk than 56-byte StrKey FK columns.
 
 **Other tables (`assets`, `nfts`, `liquidity_pools`, `lp_positions`,

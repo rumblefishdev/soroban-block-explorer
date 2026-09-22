@@ -193,6 +193,16 @@ The restore has been drill-tested locally end-to-end, but a real BX21 restore is
 still the operator's **first live exercise** — rehearse on a throwaway box before
 you need it.
 
+**A backup older than a schema swap restores the old shape.** `_schema.sql` is the
+schema on the day of the backup. A table rebuilt and swapped since, or added since,
+comes back as it was — for example `soroban_events` before its rekey, without
+`contract_transactions`. The deployed code then fails on it: the indexer's inserts
+are refused and the readers query columns that are not there. Redo the change on
+the restored database before resuming ingest — the rekey is filled inside
+ClickHouse from the restored tables, no archive read
+([`docs/backfills.md` § Canonical event location fill](backfills.md#canonical-event-location-fill-task-0541--in-db-per-5k-ledger-slice))
+— then re-ingest the gap below.
+
 ---
 
 ## After a restore — re-ingest the gap

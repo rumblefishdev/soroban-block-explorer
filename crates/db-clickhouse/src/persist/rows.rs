@@ -482,6 +482,20 @@ pub struct OperationPoolRow {
     pub transaction_id: i64,
 }
 
+/// `contract_transactions` — fact, the per-(contract, transaction) presence
+/// index (task 0541): the contract-dimension twin of `transaction_participants`,
+/// so a per-contract transaction list is a key seek instead of a merge over
+/// three tables. Keyed by the transaction's position (ADR 0059), not its hash
+/// surrogate. A transaction touches a contract through an operation event, an
+/// invocation or an operation naming it — never through a fee event. Pure
+/// presence; duplicate rows collapse in the RMT.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
+pub struct ContractTransactionRow {
+    pub contract_id: i64,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+}
+
 /// `lp_operation_amounts` — fact, what one operation moved through one pool
 /// (task 0279). The value twin of [`OperationPoolRow`]: same pool-leading key,
 /// plus `application_order` / `asset_id` / `amount`.
@@ -505,8 +519,7 @@ pub struct LpOperationAmountRow {
 }
 
 /// `asset_transfers` — fact, one row per token movement (task 0540). Keyed
-/// by Stellar's official event identity `(ledger, tx, op, event-in-op)`;
-/// `event_index` is our flat counter and only joins `soroban_events`.
+/// by Stellar's official event identity `(ledger, tx, op, event-in-op)`.
 /// `amount` is `NULL` for exactly one reason: a non-fungible movement.
 /// `from_id`/`to_id` are `NULL` for mint / burn+clawback respectively, and
 /// always the surrogate of the underlying `G…` (an `M…` is split into
@@ -517,7 +530,6 @@ pub struct AssetTransferRow {
     pub application_order: i16,
     pub op_index: i16,
     pub event_pos_in_op: i16,
-    pub event_index: i16,
     pub asset_id: i64,
     pub amount: Option<i128>,
     pub from_id: Option<i64>,
@@ -542,31 +554,20 @@ pub struct TransactionMemoRow {
     pub memo: String,
 }
 
-/// `soroban_event_ops` — narrow side table (task 0541): which operation
-/// emitted each event. Keyed by the transaction's **position in the ledger**
-/// (`application_order`), not its id: a `transaction_id` is a random hash and
-/// cost 4.66 of the row's 5.07 bytes (measured), while the position
-/// compresses to ~0 — 0.63 B/row for the same information. The join to
-/// `soroban_events` goes through `transactions`, as `asset_transfers` does.
-/// Only per-operation events have a row; tx-level and diagnostic events have
-/// no operation and are absent rather than null.
-#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
-pub struct SorobanEventOpRow {
-    pub ledger_sequence: i64,
-    pub application_order: i16,
-    pub event_index: i16,
-    pub op_index: i16,
-    pub event_pos_in_op: i16,
-}
-
 /// `soroban_events` — fact, full-content per-event row (ADR 0044
-/// §4a unfold). `signature` is the lifted first-topic Symbol.
+/// §4a unfold), keyed by the stellar-rpc event id (ADR 0059):
+/// `(ledger_sequence, transaction_index, operation_index, event_index)`,
+/// sentinels included. `application_order` is the transaction the event
+/// belongs to, which a fee refund's sentinel id does not say.
+/// `signature` is the lifted first-topic Symbol. Column order = DDL.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct SorobanEventRow {
     pub contract_id: i64,
-    pub transaction_id: i64,
     pub ledger_sequence: i64,
-    pub event_index: i16,
+    pub transaction_index: u32,
+    pub operation_index: u16,
+    pub event_index: u32,
+    pub application_order: i16,
     pub event_type: i16,
     pub signature: Option<String>,
     pub topics_xdr: String,

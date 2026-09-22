@@ -1,7 +1,7 @@
 import type { XdrEventDto } from '@rumblefish/api-types';
 import { describe, expect, it } from 'vitest';
 
-import { allResourceFacts, readResourceCounters } from './resources.js';
+import { allResourceFacts, readResourceCounters } from '../resources.js';
 
 function counter(name: string, value: number): XdrEventDto {
   return {
@@ -12,8 +12,9 @@ function counter(name: string, value: number): XdrEventDto {
       { type: 'sym', value: name },
     ],
     data: { type: 'u64', value },
-    event_index: 0,
-    op_index: null,
+    id: null,
+    event_index: null,
+    operation_index: null,
     stage: null,
   } as unknown as XdrEventDto;
 }
@@ -24,8 +25,9 @@ function fnCall(): XdrEventDto {
     contract_id: null,
     topics: [{ type: 'sym', value: 'fn_call' }],
     data: { type: 'void', value: null },
-    event_index: 1,
-    op_index: null,
+    id: null,
+    event_index: null,
+    operation_index: null,
     stage: null,
   } as unknown as XdrEventDto;
 }
@@ -101,14 +103,17 @@ describe('resource counters (#378)', () => {
     ]);
   });
 
-  it('names a counter the host left unlabelled instead of discarding it', () => {
-    const nameless = {
-      ...counter('x', 7),
-      topics: [{ type: 'sym', value: 'core_metrics' }],
-      event_index: 12,
-    } as unknown as XdrEventDto;
-    expect(allResourceFacts(readResourceCounters([nameless]))).toEqual([
-      { label: '(unnamed #12)', value: '7' },
+  it('names counters the host left unlabelled instead of discarding them', () => {
+    const nameless = (value: number) =>
+      ({
+        ...counter('x', value),
+        topics: [{ type: 'sym', value: 'core_metrics' }],
+      } as unknown as XdrEventDto);
+    expect(
+      allResourceFacts(readResourceCounters([nameless(7), nameless(8)]))
+    ).toEqual([
+      { label: '(unnamed #0)', value: '7' },
+      { label: '(unnamed #1)', value: '8' },
     ]);
   });
 

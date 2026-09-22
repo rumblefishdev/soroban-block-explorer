@@ -93,6 +93,8 @@
 -- Indexes:      transactions ORDER BY (ledger_sequence, application_order)
 --                 + PARTITION BY intDiv(ledger_sequence, 500000).
 --               accounts ORDER BY (account_id) — source join by id.
+--               contract_transactions ORDER BY (contract_id, ledger_sequence,
+--                 application_order) — Statement B's driver (task 0541).
 --               operations_appearances, soroban_invocations_appearances,
 --                 soroban_events all by (contract_id, …) or
 --                 (ledger_sequence, …) — used for `operation_types[]` and
@@ -167,8 +169,15 @@ JOIN accounts src ON src.id = t.source_id;  -- no FINAL: account_id is determini
 -- ============================================================================
 -- Statement B — contract filter set (with or without op_type)
 -- ============================================================================
--- Driven by the 3-table UNION matched on contract_id; partition prune via
--- intDiv on cursor's ledger or caller-supplied $7.
+-- Driven by one seek on the `contract_transactions` presence index (task 0541)
+-- — the shape `transaction_participants` gives the account list. It replaced a
+-- UNION over `operations_appearances`, `soroban_invocations_appearances` and
+-- `soroban_events` that hashed the whole partition (6.04 GiB for native XLM,
+-- over the reader cap). The keyset is the transaction's position, so for this
+-- statement `$3` is the cursor's `application_order`, not `transactions.id`.
+-- Partition prune via intDiv on the cursor's ledger or caller-supplied $7.
+-- (The `contract_surrogate_ids` projection below is historical — see the
+-- header; nothing computes it.)
 SELECT
     lower(hex(t.hash))                              AS hash_hex,
     t.ledger_sequence,
@@ -198,27 +207,20 @@ SELECT
     ))                                              AS contract_surrogate_ids,
     t.id                                            AS cursor_id
 FROM (
-    SELECT DISTINCT ledger_sequence, transaction_id
-    FROM (
-        SELECT ledger_sequence, transaction_id FROM operations_appearances FINAL
-        WHERE contract_id = $5
-          AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
-          AND ($2 IS NULL OR (ledger_sequence, transaction_id) < ($2, $3))
-        UNION DISTINCT
-        SELECT ledger_sequence, transaction_id FROM soroban_invocations_appearances FINAL
-        WHERE contract_id = $5
-          AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
-          AND ($2 IS NULL OR (ledger_sequence, transaction_id) < ($2, $3))
-        UNION DISTINCT
-        SELECT ledger_sequence, transaction_id FROM soroban_events FINAL
-        WHERE contract_id = $5
-          AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
-          AND ($2 IS NULL OR (ledger_sequence, transaction_id) < ($2, $3))
-    ) u
-    ORDER BY ledger_sequence DESC, transaction_id DESC
+    -- One row per (contract, transaction); `LIMIT 1 BY` collapses rows the
+    -- RMT has not merged yet (no FINAL — it would merge the contract's rows
+    -- across every part).
+    SELECT ledger_sequence, application_order
+    FROM contract_transactions
+    WHERE contract_id = $5
+      AND intDiv(ledger_sequence, 500000) = ifNull(intDiv($2, 500000), $7)
+      AND ($2 IS NULL OR (ledger_sequence, application_order) < ($2, $3))
+    ORDER BY ledger_sequence DESC, application_order DESC
+    LIMIT 1 BY ledger_sequence, application_order
     LIMIT $1 * 4
 ) m
-JOIN transactions t FINAL ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence
+JOIN transactions t
+  ON t.ledger_sequence = m.ledger_sequence AND t.application_order = m.application_order
 JOIN accounts src FINAL ON src.id = t.source_id
 WHERE
     ($4 IS NULL OR t.source_id = $4)
@@ -227,7 +229,8 @@ WHERE
         WHERE oa2.transaction_id = t.id AND oa2.ledger_sequence = t.ledger_sequence AND oa2.type = $6
           AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)
     ) > 0)
-ORDER BY t.ledger_sequence DESC, t.id DESC
+ORDER BY t.ledger_sequence DESC, t.application_order DESC
+LIMIT 1 BY t.ledger_sequence, t.application_order
 LIMIT $1;
 
 -- @@ split @@

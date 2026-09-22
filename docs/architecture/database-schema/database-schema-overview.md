@@ -117,6 +117,13 @@ Backbone timeline:
   `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
   `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
   hash — the same value `operations_appearances.pool_ids` stores per crossing)
+- `contract_transactions` — per-(contract, transaction) presence index powering
+  `/transactions?filter[contract_id]=` (task 0541; the contract-dimension twin of
+  `transaction_participants`, keyed contract-first and by the transaction's
+  **position** `(ledger_sequence, application_order)`, not the hash surrogate).
+  A transaction touches a contract through an operation event, an invocation or
+  an operation naming it; fee events do not count, or the native SAC's list
+  would be every transaction on the network ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md))
 - `lp_operation_amounts` — per-(operation, pool, asset) amounts behind that
   endpoint's "Amount" column (task 0279 / issue #371; the value twin of
   `operation_pools`, same pool-leading prefix). `amount` is raw stroops in a
@@ -250,11 +257,11 @@ ledgers
        ├─ transaction_participants (partitioned)
        ├─ operation_asset_appearances (partitioned)
        ├─ operation_pools (partitioned)
+       ├─ contract_transactions (partitioned)     # (contract, tx position) presence (0541)
        ├─ lp_operation_amounts (partitioned)
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
        ├─ soroban_events_appearances (partitioned)
-       ├─ soroban_event_ops (partitioned)        # op attribution per event (0541)
        └─ soroban_invocations_appearances (partitioned)
 
 soroban_contracts                           # contracts OBSERVED being deployed (0548)
@@ -716,7 +723,6 @@ CREATE TABLE asset_transfers (
     application_order  Int16                   CODEC(ZSTD(3)),
     op_index           Int16                   CODEC(ZSTD(3)),  -- official identity…
     event_pos_in_op    Int16                   CODEC(ZSTD(3)),  -- …(op, event-in-op)
-    event_index        Int16                   CODEC(ZSTD(3)),  -- ours; joins soroban_events
     asset_id           Int64                   CODEC(ZSTD(3)),  -- emitter-gated; bespoke = contract id
     amount             Nullable(Int128)        CODEC(ZSTD(3)),  -- NULL = non-fungible, nothing else
     from_id            Nullable(Int64)         CODEC(ZSTD(3)),  -- NULL for mint
@@ -737,8 +743,8 @@ Design notes (every figure measured — lore task 0540 and its research note):
 
 - **Sort key = Stellar's official event identity.** The `getEvents` cursor is
   `(ledger, tx, op, event)` with `event` reset per operation (stellar-rpc
-  `db/event.go`). It is defined by the XDR, so a re-parse cannot renumber it;
-  our flat `event_index` rides along only to join `soroban_events`. Identical
+  `db/event.go`). It is defined by the XDR, so a re-parse cannot renumber it.
+  Identical
   transfers really do repeat inside one operation (a path payment crossing two
   offers from one maker at one price) — `event_pos_in_op` keeps them two rows
   where any coarser key would let the RMT collapse them and under-report.
@@ -780,7 +786,7 @@ Design notes (every figure measured — lore task 0540 and its research note):
   `ALTER … MODIFY COLUMN` after the driver-vs-`DESCRIBE` check on a local
   instance (task 0310).
 - **Coverage**: the table holds every token movement from the ingest floor on,
-  filled by one from-S3 re-parse with `--only asset_transfers,transaction_memos,soroban_event_ops`
+  filled by one from-S3 re-parse with `--only asset_transfers,transaction_memos`
   (additive, no Tier-1 column touched) and proven three ways — per-partition
   counts against `soroban_events`, a byte-for-byte re-decode of archive ledgers,
   and account sums against network state (`backfill-runner/tests/redecode_diff.rs`,
@@ -808,6 +814,47 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, application_order);
 ```
+
+### 4.5.6 Contract Transactions (task 0541)
+
+ClickHouse-only. The **contract-dimension twin of `transaction_participants`** — a
+per-(contract, transaction) presence index, so the contract-filtered transaction
+list is a key seek. Before it, that list merged three tables none of which could
+answer "the next N transactions of this contract": `soroban_events` holds one row
+per _event_ (hundreds per transaction for a busy contract),
+`soroban_invocations_appearances` covers invocations only, and
+`operations_appearances` has no `contract_id` in its key. The read guessed how many
+rows made a page and retried wider — a mechanism with a density cliff, where a
+page could end before the list did.
+
+```sql
+CREATE TABLE contract_transactions (
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    application_order  Int16   -- the transaction's position (ADR 0059)
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, application_order);
+```
+
+Purpose / design notes:
+
+- **Sources:** an operation event the transaction emits, an invocation, an
+  operation naming the contract — the same three the list read before.
+- **Fee events do not count.** Every transaction pays a fee, and the fee is an
+  event on the native SAC; counting it would make that contract's list every
+  transaction on the network. A fee event is recognised by its rpc id, which
+  carries a sentinel (`transaction_index` 0 or 1048575, or `operation_index`
+  4095): only an operation event has `transaction_index = application_order`.
+- **Keyed by position**, not by the `transactions.id` hash surrogate its siblings
+  carry — the shape task 0538 moves the whole family to. The three columns cost
+  ~0.96 B/row in this sort order (measured on the rekeyed `soroban_events`).
+- **Pure presence**, deduped per transaction at write; duplicates left by
+  re-ingest collapse in the RMT and on read (`LIMIT 1 BY`).
+- **Backfill** is in-DB from the three sources — no XDR re-parse; the per-slice
+  statement is referenced from `docs/backfills.md`, "Canonical event location
+  fill".
 
 ### 4.6 Soroban Contracts
 
@@ -1036,40 +1083,6 @@ Design notes:
 - partitioned on `created_at` mirroring `transactions`; cascade via composite FK
 - diagnostic events are filtered on ingest (they are not counted in `amount` and do
   not produce appearance rows); the detail view re-derives them on demand if needed
-
-### 4.8.1 Soroban Event Ops — operation attribution (task 0541)
-
-ClickHouse-only. **Which operation emitted each event**, as a narrow side
-table. The column belongs on `soroban_events` and will end up there (task
-0541 "Target shape": `ALTER … ADD COLUMN`, then a per-partition
-`ALTER … UPDATE` sourced from this table — a mutation rewrites only the
-mutated columns, so no re-insert of 10.4 bn rows and no second copy on disk);
-until that fold this table is what the S3 pass can write additively. Only per-operation
-events have a row — a transaction-level (fee) or diagnostic event has no
-operation, and absence is the honest encoding. Retires the read-time XDR decode
-the transaction-detail page paid on every render (task 0453). Written by the
-same S3 pass as `asset_transfers`.
-
-```sql
-CREATE TABLE soroban_event_ops (
-    ledger_sequence    Int64   CODEC(ZSTD(3)),
-    application_order  Int16   CODEC(ZSTD(3)),  -- tx position in the ledger → transactions.id → soroban_events
-    event_index        Int16   CODEC(ZSTD(3)),  -- joins soroban_events
-    op_index           Int16   CODEC(ZSTD(3)),  -- envelope position, 0-based
-    event_pos_in_op    Int16   CODEC(ZSTD(3))   -- position inside that op's event list
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (ledger_sequence, application_order, event_index);
-```
-
-Keyed by the transaction's position, not its id, on purpose: `transaction_id`
-is a random hash and cost 4.66 of a 5.07-byte row (measured 2026-09-07 on
-39.5 M events), while the position compresses to nothing — 0.63 B/row, ~3.6 GB
-on ~5.7 bn rows instead of ~29 GB. The canonical home of the two numbers is a
-column on `soroban_events` itself; this table is the vehicle the S3 pass can
-write additively and the source of the later per-partition fold (task 0541,
-"Target shape").
 
 ### 4.9 Soroban Invocations — Appearance Index
 

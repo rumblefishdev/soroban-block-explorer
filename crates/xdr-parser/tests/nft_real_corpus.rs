@@ -77,10 +77,11 @@ fn nft_real_corpus_invariants() {
             contract_id: Some(row.contract_id.to_string()),
             topics,
             data,
-            event_index: 0,
+            position_in_tx: 0,
             op_index: None,
             event_pos_in_op: None,
             stage: None,
+            event_id: None,
             ledger_sequence: 1,
             created_at: 1_700_000_000,
         });

@@ -47,10 +47,11 @@ fn event(
         contract_id: emitter.map(str::to_string),
         topics: Value::Array(topics),
         data,
-        event_index: 3,
+        position_in_tx: 3,
         op_index: op.map(|o| o.0),
         event_pos_in_op: op.map(|o| o.1),
         stage: None,
+        event_id: None,
         ledger_sequence: 64_259_660,
         created_at: 0,
     }
@@ -222,7 +223,6 @@ fn native_transfer_from_the_real_xlm_sac_is_a_row() {
         out.transfers,
         vec![ExtractedAssetTransfer {
             transaction_hash: "ab".repeat(32),
-            event_index: 3,
             op_index: 0,
             event_pos_in_op: 0,
             kind: TokenEventKind::Transfer,
@@ -286,7 +286,7 @@ fn a_foreign_contract_claiming_a_labelled_asset_is_rejected_not_stored() {
         out.rejects,
         vec![TransferReject {
             transaction_hash: "ab".repeat(32),
-            event_index: 3,
+            position_in_tx: 3,
             emitter: Some(OTHER_CONTRACT.into()),
             kind: RejectKind::EmitterNotSac {
                 asset: format!("KALE:{KALE_ISSUER}"),
@@ -387,7 +387,7 @@ fn a_token_verb_outside_an_operation_is_a_reject() {
     assert!(matches!(
         out.rejects.as_slice(),
         [TransferReject {
-            event_index: 3,
+            position_in_tx: 3,
             kind: RejectKind::NoOperation,
             ..
         }]
@@ -466,7 +466,7 @@ fn a_token_verb_without_an_emitter_is_a_reject() {
     assert!(matches!(
         out.rejects.as_slice(),
         [TransferReject {
-            event_index: 3,
+            position_in_tx: 3,
             emitter: None,
             kind: RejectKind::NoEmitter,
             ..

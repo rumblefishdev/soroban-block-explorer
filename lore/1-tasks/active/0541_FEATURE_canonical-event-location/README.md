@@ -48,6 +48,14 @@ history:
       Promoted. First step: prove `soroban_event_ops` covers every
       non-diagnostic `soroban_events` row, partition by partition, before it
       becomes the source of the new sort key.
+  - date: 2026-09-21
+    status: active
+    who: karolkow
+    note: >
+      After two reviews of the phase-2 code: the contract-filtered transaction
+      list reads a new `contract_transactions` presence index instead of merged
+      ledger windows, and fee events do not count as touching a contract. Six
+      merge blockers fixed. See notes/S-review-and-contract-transactions.md.
 ---
 
 # soroban_event_ops
@@ -657,6 +665,10 @@ soroban_event_ops` backfill flag, `docs/backfills.md` and the merge scripts'
   of the swap; the old table and `soroban_event_ops` are dropped before the
   following Sunday 03:30 UTC backup. Re-ingest stays the fallback after that.
 
+> Corrected 2026-09-21: after the horizon the old shape is still derivable
+> inside ClickHouse from the new table, so re-ingesting the archive is not the
+> only way back (plan 4.6).
+
 ### Naming found during the ADR draft
 
 The same per-operation location already has names in `asset_transfers` and
@@ -730,4 +742,168 @@ margin. The `IN` mapping for the contract-filtered transaction list fails, and
 the list is already broken for native XLM today; plan task 2.5 moves that list
 to positions with bounded windows (measured 87 ms for native XLM).
 
+> Corrected 2026-09-21: the transaction-page "5 ms, 49 k rows" is a warm re-run
+> of a statement without the shipped `JOIN ledgers`; cold, the shipped query is
+> ~1.6–2× faster than the old one. The bounded windows were later replaced by
+> the `contract_transactions` index. See
+> [S-review-and-contract-transactions](notes/S-review-and-contract-transactions.md).
+
 **Disk before phase 3 (2026-09-17, decision 231 A).** Free space 360.71 GiB (20.5%); filling the remaining partitions (+~169 GiB) plus two weeks of growth would leave ~9% until the old table is dropped. Server logs without retention hold 174.50 GiB (≥ 89 GiB older than 30 days); reclaiming them first was proposed (task 0563) and deferred by karolkow the same day — no log is deleted now. So phase 3 runs as late as possible, right before the window, to shorten the weeks both tables share the disk, and stops if free space before a partition is under 120 GiB. Adding columns to the old table instead of swapping was rejected: the sort key cannot drop `transaction_id`, so the table would end ~78 GiB larger than the swap result and keep hash order.
+
+## Phase 2 — the code (2026-09-17/18)
+
+Branch `feat/0541_canonical-event-location`, one PR, deploy only in phase 4.
+Tests: `cargo test --workspace`, `pnpm nx run-many -t test typecheck lint` green.
+
+| task | what changed                                                                                                                                                                                                                                        |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.1  | `xdr_parser::EventId` + `tx_level_event_ids` / `assign_event_ids`; `ExtractedEvent.event_id`; the flat counter renamed `position_in_tx` (in memory only). `ExtractedAssetTransfer` loses it entirely.                                               |
+| 2.2  | The indexer assigns ids per ledger. New test on ledger 58,816,920 from the public archive: every consensus event has an id, all unique, charge and refund counters contiguous, no `after_tx` under protocol 23.                                     |
+| 2.3  | `SorobanEventRow` = the rpc id + `application_order`; a consensus event without an id is a staging error. `soroban_event_ops` deleted (rows, writer slot, targetable list, DDL); `asset_transfers` stops writing the flat counter.                  |
+| 2.4  | Contract events page and cursor on the rpc id; the wire carries `id` instead of `transaction_id`; the transaction is resolved by `(ledger_sequence, application_order)`. A cursor minted before the change gets 400 `invalid_cursor`.               |
+| 2.5  | The contract-filtered transaction list moved to positions: per-arm ledger windows merged in Rust (`transactions/contract_positions.rs`), page and cursor on `(ledger_sequence, application_order)`. `fetch_event_appearances` filters the position. |
+| 2.6  | Transaction-page events (archive XDR) carry the id, come back in execution order, and name the operation as `operation_index`; the dead `extract_e14_heavy` is gone.                                                                                |
+| 2.7  | The events table's `#` column is now `ID` with the full rpc id (diagnostic rows `—`); `OperationCard` and `ContractEvents` key on it.                                                                                                               |
+| 2.8  | `init.sql`, backfill tooling, `docs/**` per ADR 0032, ADR 0059 → accepted, and a new `backfill-runner/tests/event_id_reconciliation.rs` comparing `getEvents` against both the table and a fresh parse of the archive (skips until the swap).       |
+
+### Read-path measurements on production (read-only, 2026-09-18)
+
+Partition 127 of `soroban_events_staging_canonical`, native XLM
+(`-6164601581949826601`) unless stated — the heaviest contract there is. Window
+84 rows (`limit × 4`), from `system.query_log`.
+
+| query                                                     | time           | read                           | memory   |
+| --------------------------------------------------------- | -------------- | ------------------------------ | -------- |
+| tx-list arm window — events / invocations / operations    | 13 / 6 / 58 ms | 3.88 MiB / 454 KiB / 51.68 MiB | ≤ 13 MiB |
+| tx-list arm rows — events / invocations / operations      | 5 / 7 / 22 ms  | 83 KiB / 264 KiB / 12.89 MiB   | ≤ 8 MiB  |
+| tx-list page by position (`IN` over the merged positions) | 9 ms           | 572 KiB                        | 6.65 MiB |
+| contract events, first page — native XLM                  | 135 ms         | 481 MiB                        | 435 MiB  |
+| contract events, cursor page — native XLM                 | 116 ms         | 533 MiB                        | 380 MiB  |
+| contract events, first page — `546855837558613593`        | 60 ms          | 187 MiB                        | 114 MiB  |
+
+One contract-filtered list page is the three arms plus the page: ~111 ms and
+~69 MiB for native XLM, against the 6.04 GiB that fails today. Every statement
+is under the gate (< 1 s, < 1 GiB). The event pages read more than phase 1
+measured because the partition was filled in 100 slices and its parts are not
+merged yet.
+
+> Superseded 2026-09-21: these measured one round of the window mechanism. Its
+> cap ended a dense contract's list early (804 transactions, 13 shown), and it
+> was replaced by the `contract_transactions` index — re-measure the list after
+> the index's trial on partition 127.
+
+### Where the code differs from the plan
+
+- The indexer's id test is an integration test
+  (`crates/indexer/tests/event_ids_real_ledger.rs`), not a unit test inside
+  `process.rs`: `parse_ledger` reads the network passphrase from the process
+  environment, and an integration test has that process to itself.
+- The transaction-page test (2.6) runs on the same real ledger fixture instead
+  of the single-transaction meta the plan named — it exercises the real
+  application order and the ledger's fee counters, which one transaction cannot.
+- ~~`MergeResult::NeedWiderWindow` carries the positions it already has, so the
+  last round can return a short page instead of recomputing it.~~ The window
+  mechanism is gone (review, 2026-09-21).
+- Also moved under `__tests__` because the change touched them:
+  `ExecutionTrace.test.ts`, and `transactions/dto.rs`'s inline tests.
+- Added, not in the plan: `crates/db-clickhouse/tests/soroban_events_write_e2e.rs`
+  inserts a staged `SorobanEventRow` into a real table. The driver checks the
+  row against `DESCRIBE` only at insert time, the check that stopped ingest in
+  0310; a unit test cannot see it.
+- Task 2.4 asked for `event_cursor_matches_source` to match the new variant;
+  it was deleted instead, with its handler check. `EventCursor` has one
+  variant, so the check could only return true; a cursor minted before the
+  change still fails at decode with 400 `invalid_cursor`.
+- The transaction-list cursor names its key (decision 2026-09-22): `Ch
+{ tiebreak }` held the position for the unfiltered list and the id surrogate
+  for the operation-type list and the account, asset and invocation lists, so
+  a cursor carried between the two `/transactions` lists was read with the
+  wrong key. Now `ChPosition` (unfiltered and contract-filtered) and
+  `ChSurrogate { transaction_id }` (the rest), each list refusing the other;
+  a cursor minted before the change gets 400 `invalid_cursor` once.
+- The id assignment has one entry point, `xdr_parser::LedgerEvents`, which the
+  indexer, the transaction page and the tests go through; the two steps it
+  wraps are private to the parser. Two real-history tests had done them by
+  hand, one step short (review, 2026-09-21).
+
+## Review and the contract index (2026-09-20/21)
+
+Two reviews of `abd5a801`: the deep protocol and the two-axis `/code-review`.
+Design confirmed; six merge blockers fixed; one design change. Full record:
+[S-review-and-contract-transactions](notes/S-review-and-contract-transactions.md).
+
+**Decided (karolkow, 2026-09-21):**
+
+- **The contract-filtered transaction list reads a new presence index,
+  `contract_transactions`**, built in this task. The window mechanism of task
+  2.5 existed because contracts, unlike accounts, assets and pools, had no
+  per-(entity, transaction) index; its cap could end a dense contract's list
+  early. The list is now one seek, like the account list.
+- **Fee events do not count as touching a contract.** Otherwise the native SAC's
+  list is every transaction on the network.
+
+**Owed before the window:** ~~create `contract_transactions` and trial it on
+partition 127~~ (done 2026-09-21: 160,521,800 pairs, gate 100 of 100 slices,
+every tested first page full; the dense contract's whole list pages through,
+484 of 484); fill it in the phase-3 loop after the rekey of each slice;
+~~`asset_transfers.event_index` `DEFAULT`, gated by a read~~ (done 2026-09-21,
+`system.columns` reads `DEFAULT 0`); hand over two query shapes of a client
+outside this repository that the swap breaks. Run task 0517 (event names) only
+after the swap: 132,256 resolvable `NULL` names were already copied with
+partition 127.
+
+**Decided (karolkow, 2026-09-21): the window this week.** Phase 3 fill on
+Tuesday 2026-09-22, the window on Wednesday 2026-09-23, provided PR #465 and the
+release PR `develop → master` are merged by Tuesday; phase 5 drops before
+Sunday 2026-09-27 03:30 UTC. Free disk 344.75 GiB (19.6%) on 2026-09-21; the
+fill adds ~180 GiB (_estimate_), leaving ~165 GiB against the 120 GiB stop
+line. Later the same day 476.01 GiB (27.1%): the `system` database dropped to
+51.14 GiB from the 174.50 GiB of server logs recorded on 2026-09-17, most likely
+task 0563's retention; ~296 GiB would remain after the fill.
+
+**Decided (karolkow, 2026-09-21): phase 3 starts the same day**, partition by
+partition as each passes its pre-fill gate; with the disk no longer the
+constraint, Tuesday stays for the head's partition and the checks.
+
+Pre-fill gate, 2026-09-21 (read-only, `fill_gate.sql` per 5k slice): 28 of 28
+partitions pass (100–126, 128) — new keys = old keys in every slice, no
+duplicates in the old table, charges = the partition's transactions, pre-23
+refunds only up to partition 117 and post-23 ones only from it (117 holds the
+boundary and both). 10,176,445,797 rows to copy.
+
+**Phase 3 filled, 2026-09-21** (operator, 12:14–20:50 UTC): every whole
+partition, 100–128. The staging table holds 10,628,721,194 rows = the gated
+10,176,445,797 + partition 127's 452,275,397; every one of the 2,900 slices
+equals its gate's `n`, none over. `contract_transactions` holds 2,975,298,311
+pairs; its per-slice gate passes in all 29 partitions (2,900 slices, no
+duplicates), and the per-partition sums add up to the table's total exactly. Staging 195.06 GiB
+on 254 unmerged parts (the old table 237.65 GiB); free disk 265.92 GiB (15.1%).
+API p95 in the two hours of real traffic during the fill (390 and 223
+requests): 313 and 269 ms, against ~280–390 ms the day before; the other hours
+had too few requests to judge.
+
+Two interruptions, both clean at a slice boundary: a manual stop, and the
+operator's laptop sleeping mid-slice. The second showed a hole in the script's
+guard — `curl`'s transport error goes to stderr with a non-zero exit, and the
+guard read only stdout for `DB::Exception`, so the loop printed `ok` and went on.
+That slice had landed server-side regardless (checked per slice). The guard now
+stops on any output or a non-zero exit, and a partition resumes from a slice
+with `P:A`; both exercised with a stub `chw`.
+
+The head's partition has nothing to fill before the window: the head is 47,640
+ledgers into partition 129, under the 50,000-ledger margin, so all of 129 goes
+into the window's tail.
+
+**Decided (karolkow, 2026-09-21): the window follows the two merges** (PR #465,
+then the release PR `develop → master`, untagged) — Tuesday at the earliest,
+Wednesday at the latest.
+
+Phase 3 runs as one command per list of partitions,
+[`fill_partitions.zsh`](notes/fill_partitions.zsh): both tables per partition,
+disk checked before each, stop at the first error. Dry-run with a stub `chw`
+on partitions 100–101: 400 statements, 200 per table, bounds 50,000,000 to
+51,000,000, no placeholder left.
+
+> 2026-09-21: the contract-events page, re-measured after the operator merged
+> the staging partition to one part, reads fewer rows than the old page (median
+> 1,490,944 against 1,515,520): the `read_rows ≤ old` gate passes.

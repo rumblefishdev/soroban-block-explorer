@@ -120,10 +120,18 @@ fn fixture_upgrade_event(contract_id: &str) -> ExtractedEvent {
                                       {"type": "bytes", "value": NEW_WASM_B64}]},
         ]),
         data: serde_json::Value::Null,
-        event_index: 0,
+        position_in_tx: 0,
         op_index: None,
         event_pos_in_op: None,
         stage: None,
+        // Staging refuses a consensus event without one (ADR 0059); the
+        // transaction is the ledger's first, its event the first of operation 0.
+        event_id: Some(xdr_parser::EventId {
+            ledger_sequence: E2E_LEDGER,
+            transaction_index: 1,
+            operation_index: 0,
+            event_index: 0,
+        }),
         ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
     }

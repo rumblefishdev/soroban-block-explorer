@@ -165,6 +165,8 @@ ORDER BY a.account_id;
 SELECT
     sc.contract_id,
     se.ledger_sequence,
+    se.transaction_index,
+    se.operation_index,
     se.event_index,
     se.event_type,
     se.signature,
@@ -174,14 +176,18 @@ SELECT
 FROM soroban_events se FINAL
 JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id
 JOIN ledgers l ON l.sequence = se.ledger_sequence
-WHERE se.transaction_id = (
-    SELECT id FROM transactions FINAL WHERE hash = $1
+WHERE (se.ledger_sequence, se.application_order) = (
+    SELECT ledger_sequence, application_order FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
           = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
     LIMIT 1)
   AND intDiv(se.ledger_sequence, 500000)
       = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
-ORDER BY se.ledger_sequence, sc.contract_id, se.event_index;
+ORDER BY se.ledger_sequence, sc.contract_id, se.transaction_index, se.operation_index, se.event_index;
+
+-- The filter is the transaction's POSITION (ADR 0059): a fee refund's rpc id
+-- carries the end-of-ledger sentinel, so `application_order` is the only
+-- column that says which transaction an event belongs to.
 
 -- @@ split @@
 

@@ -130,7 +130,7 @@ async fn targeted_write_persists_only_lp_operation_amounts() {
 /// us to run before a deploy, not after.
 #[tokio::test]
 async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
-    use db_clickhouse::persist::rows::{AssetTransferRow, SorobanEventOpRow, TransactionMemoRow};
+    use db_clickhouse::persist::rows::{AssetTransferRow, TransactionMemoRow};
 
     let Some(url) = std::env::var("CLICKHOUSE_URL").ok() else {
         eprintln!("CLICKHOUSE_URL not set — skipping");
@@ -147,7 +147,6 @@ async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
     for table in [
         "asset_transfers",
         "transaction_memos",
-        "soroban_event_ops",
         "lp_operation_amounts",
         "ledgers",
     ] {
@@ -191,7 +190,6 @@ async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
                 application_order: 1,
                 op_index: 0,
                 event_pos_in_op: 0,
-                event_index: 2,
                 asset_id: -6_959_166_271_784_855_184,
                 amount: Some(10_000),
                 from_id: Some(11),
@@ -208,7 +206,6 @@ async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
                 application_order: 1,
                 op_index: 0,
                 event_pos_in_op: 1,
-                event_index: 3,
                 asset_id: 99,
                 amount: None,
                 from_id: Some(11),
@@ -226,18 +223,11 @@ async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
             memo_type: "text".into(),
             memo: "pspb:5721732".into(),
         }],
-        event_op_rows: vec![SorobanEventOpRow {
-            ledger_sequence: LEDGER,
-            application_order: 7,
-            event_index: 2,
-            op_index: 0,
-            event_pos_in_op: 0,
-        }],
         ..Default::default()
     };
 
-    let only = TargetedTables::parse("asset_transfers,transaction_memos,soroban_event_ops")
-        .expect("valid table list");
+    let only =
+        TargetedTables::parse("asset_transfers,transaction_memos").expect("valid table list");
     let mut writer = PartitionWriter::open(ch.clone());
     writer.write_only(&staged, &only).await.expect("write_only");
     writer.commit().await.expect("commit");
@@ -258,10 +248,6 @@ async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
     );
     assert_eq!(
         count("SELECT count() FROM transaction_memos WHERE ledger_sequence = ?").await,
-        1
-    );
-    assert_eq!(
-        count("SELECT count() FROM soroban_event_ops WHERE ledger_sequence = ?").await,
         1
     );
     assert_eq!(

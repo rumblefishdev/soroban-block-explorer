@@ -88,13 +88,14 @@ pub async fn list_transactions(
         return resp;
     }
 
-    // Reject a stale cursor minted under the retired PG backend. Its keyset
-    // values are meaningless under CH, so per ADR 0008 we fail with
-    // `invalid_cursor` instead of silently mis-paginating. A legacy/untagged
-    // cursor already fails to decode upstream in the extractor; this guards the
+    // Reject a cursor whose keyset is not this list's: the statements page on
+    // the transaction position, except the operation-type filter alone, which
+    // pages on the id surrogate. Per ADR 0008 we fail with `invalid_cursor`
+    // instead of silently mis-paginating. A legacy/untagged cursor already
+    // fails to decode upstream in the extractor; this guards the
     // decodes-but-wrong-intent case.
     if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(cursor)
+        && !cursor.fits_transaction_list(params.filter_contract_id.is_some(), op_type.is_some())
     {
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
@@ -192,41 +193,31 @@ pub async fn list_transactions(
     resp
 }
 
-/// Build the opaque list cursor for a boundary row. PG keys the list scan on
-/// `(created_at, id)`. CH keys on `(ledger_sequence, <tie-break>)`, where the
-/// tie-break depends on which list statement served the page — the cursor must
-/// anchor the *same* keyset the next page's query will use:
+/// Build the opaque list cursor for a boundary row. CH keys on
+/// `(ledger_sequence, <within-ledger key>)`, and the cursor must anchor the
+/// *same* keyset the next page's query will use:
 ///
 /// - **Statement A** (no filter, the polled hot path) reads `transactions` in
 ///   primary-key order `(ledger_sequence, application_order)` with FINAL
-///   dropped (the `read_rows` quota fix — see `queries::fetch_list`), so its
-///   tie-break is `application_order`.
-/// - **Statements B/C** (contract / op_type filter) drive off
-///   `operations_appearances` and key on the `transactions.id` surrogate, so
-///   their tie-break is `id`.
+///   dropped (the `read_rows` quota fix — see `queries::fetch_list`).
+/// - **Statement B** (contract filter) pages on the same position through the
+///   `contract_transactions` index (task 0541).
+/// - **Statement C** (op_type filter only) drives off `operations_appearances`
+///   and keys on the `transactions.id` surrogate.
 ///
-/// The emitted variant is tagged with the active datasource so a later request
-/// can reject a cursor minted for the other backend (see `list_transactions`).
-/// A cursor is not tagged with its statement: switching filters mid-pagination
-/// resets the page in practice, and per ADR 0008 a stale opaque cursor that
-/// anchors the wrong keyset degrades to a re-aligned page, never a hard error.
+/// A and B mint `ChPosition`, C mints `ChSurrogate`; `list_transactions`
+/// rejects a cursor carried to a statement with the other keyset.
 fn list_cursor_for(params: &ResolvedListParams, r: &TxListRow) -> TxListCursor {
-    TxListCursor::Ch {
-        ledger_sequence: r.ledger_sequence,
-        tiebreak: if params.contract_id.is_none() && params.op_type.is_none() {
-            i64::from(r.application_order)
-        } else {
-            r.id
-        },
+    if params.contract_id.is_some() || params.op_type.is_none() {
+        return TxListCursor::ChPosition {
+            ledger_sequence: r.ledger_sequence,
+            application_order: r.application_order,
+        };
     }
-}
-
-/// True when the decoded cursor is a current (CH) cursor. A stale cursor minted
-/// under the retired PG backend decodes but lacks the current `ch` intent, so
-/// it is rejected with `invalid_cursor` rather than silently mis-paginating
-/// (ADR 0008 fail-clean, HTTP 400).
-fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::Ch { .. })
+    TxListCursor::ChSurrogate {
+        ledger_sequence: r.ledger_sequence,
+        transaction_id: r.id,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +489,7 @@ async fn fetch_events_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_event_appearances(&state.ch(), tx.ledger_sequence, tx.application_order).await
 }
 
 async fn fetch_invocations_for_source(

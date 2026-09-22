@@ -10,9 +10,9 @@
 //! indexer already ScVal-decodes them to JSON at ingest (`persist::stage`), and
 //! also drops diagnostic-source events there, so the CH read path just
 //! JSON-deserializes the inline payload — NO Archive S3 overlay, NO read-time
-//! XDR decode (the PG path's `expand_events`). Keyset is 3-component
-//! `(ledger_sequence, transaction_id, event_index)` (`event_index` = the
-//! multi-event-tx tie-break). Pagination unit differs from PG: CH pages per
+//! XDR decode (the PG path's `expand_events`). Keyset is the stellar-rpc event
+//! id `(ledger_sequence, transaction_index, operation_index, event_index)`
+//! (ADR 0059). Pagination unit differs from PG: CH pages per
 //! EVENT (one row → one `EventItem`), PG pages per folded APPEARANCE (one row →
 //! many events, expanded at read time). The PG fold-count is an internal
 //! storage detail and is not surfaced on the wire.
@@ -680,101 +680,6 @@ fn contract_stats_sql(days: i64) -> String {
     )
 }
 
-#[cfg(test)]
-mod stats_sql_tests {
-    use super::{STATS_WINDOW_DAYS, contract_stats_sql, stats_window_label};
-
-    /// The wire label must stay derived from the constant, so the number the
-    /// SQL windows on and the string the client is told can never disagree.
-    #[test]
-    fn wire_label_is_derived_from_the_window_constant() {
-        assert_eq!(stats_window_label(), format!("{STATS_WINDOW_DAYS} days"));
-        assert!(stats_window_label().starts_with(&STATS_WINDOW_DAYS.to_string()));
-    }
-
-    // Regression guard for task 0300: CH `recent_events` was hardcoded `0`.
-    // The stats SQL MUST select a real windowed event count off `soroban_events`
-    // (parity with PG's appearance-fold SUM), not a literal.
-    #[test]
-    fn stats_sql_computes_recent_events_from_events_table() {
-        let sql = contract_stats_sql(7);
-
-        assert!(
-            sql.contains("AS recent_events"),
-            "recent_events column missing: {sql}"
-        );
-        assert!(
-            sql.contains("FROM soroban_events se"),
-            "recent_events must read soroban_events: {sql}"
-        );
-        // The bug shape: a bare literal aliased to recent_events. Collapse
-        // whitespace first so the guard is alignment-independent.
-        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            !normalized.contains("0 AS recent_events"),
-            "recent_events still hardcoded to a literal: {sql}"
-        );
-        // Window parity: both the invocations seek and the events subquery
-        // apply the same ledger floor + INTERVAL N DAY bound.
-        assert_eq!(
-            sql.matches("INTERVAL 7 DAY").count(),
-            2,
-            "events window must mirror the invocations window: {sql}"
-        );
-        // Two binds: events-subquery contract_id, then outer contract_id.
-        assert_eq!(
-            sql.matches("contract_id = ?").count(),
-            2,
-            "expected two `contract_id = ?` binds: {sql}"
-        );
-        // The scalar subquery MUST be `ifNull(…, 0)`-wrapped: CH types a bare
-        // `(SELECT …)` as Nullable(UInt64), which fails the non-nullable `u64`
-        // decode → 500 on every contract detail.
-        assert!(
-            normalized.contains("ifNull(( SELECT toUInt64(count())"),
-            "recent_events subquery must be ifNull-wrapped: {sql}"
-        );
-    }
-
-    /// Regression guard for lore-0420. Two failure modes, one shape.
-    ///
-    /// `ledgers` is a ReplacingMergeTree with unmerged duplicate rows, so
-    /// JOINing it into a `count()` multiplies the count by the number of
-    /// physical copies (measured ~1.6x). And the seek bound must be resolved
-    /// from the data, not from a hardcoded ledgers-per-day constant: the old
-    /// `days * 17_280` assumed a 5 s cadence, ran 13% wide against the real
-    /// ~5.6 s, and would silently run SHORT — under-reporting the window — if
-    /// the chain ever sped up.
-    ///
-    /// One `min(sequence)` bound satisfies both: immune to duplicates, exact by
-    /// construction.
-    #[test]
-    fn stats_sql_bounds_window_from_data_never_a_join_or_a_constant() {
-        let sql = contract_stats_sql(7);
-        let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-
-        assert!(
-            !normalized.contains("JOIN ledgers"),
-            "a JOIN onto ledgers fans each row out per duplicate copy and \
-             inflates the count: {sql}"
-        );
-        assert!(
-            !normalized.contains("17280") && !normalized.contains("17_280"),
-            "the window bound must come from the data, not a ledgers-per-day \
-             constant that drifts with the chain cadence: {sql}"
-        );
-        // One per window: the invocations seek and the events subquery.
-        assert_eq!(
-            normalized
-                .matches("SELECT min(sequence) FROM ledgers WHERE closed_at >=")
-                .count(),
-            2,
-            "both the invocations and events windows must derive their bound \
-             from the data: {sql}"
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Interface — canonical 12
 // ---------------------------------------------------------------------------
@@ -867,10 +772,10 @@ pub async fn fetch_invocation_appearances(
     direction: Direction,
 ) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
     let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match cursor {
-        Some(TxListCursor::Ch {
+        Some(TxListCursor::ChSurrogate {
             ledger_sequence,
-            tiebreak,
-        }) => (Some(*ledger_sequence), Some(*tiebreak)),
+            transaction_id,
+        }) => (Some(*ledger_sequence), Some(*transaction_id)),
         _ => (None, None),
     };
     let (op, order) = keyset_sql_desc(direction);
@@ -1001,8 +906,9 @@ pub async fn fetch_invocation_appearances(
 #[derive(Debug, Row, Deserialize)]
 struct EventChRow {
     ledger_sequence: i64,
-    transaction_id: i64,
-    event_index: i16,
+    transaction_index: u32,
+    operation_index: u16,
+    event_index: u32,
     event_type: i16,
     /// ScVal already JSON-decoded at ingest (column name is a misnomer).
     topics_xdr: String,
@@ -1019,17 +925,21 @@ struct EventChRow {
 #[derive(Debug, Row, Deserialize)]
 struct EventPageRow {
     ledger_sequence: i64,
-    transaction_id: i64,
-    event_index: i16,
+    transaction_index: u32,
+    operation_index: u16,
+    event_index: u32,
+    application_order: i16,
     event_type: i16,
     topics_xdr: String,
     data_xdr: String,
 }
 
-/// Step-2 resolve row: `transactions.id` → `(hash, successful)`.
+/// Step-2 resolve row: `(ledger_sequence, application_order)` →
+/// `(hash, successful)`.
 #[derive(Debug, Row, Deserialize)]
 struct EventTxRow {
-    id: i64,
+    ledger_sequence: i64,
+    application_order: i16,
     /// Already `lower(hex())` in the query.
     hash: String,
     successful: bool,
@@ -1038,11 +948,14 @@ struct EventTxRow {
     created_at: i64,
 }
 
-/// A decoded event row + its `event_index` (the cursor tie-break, which is not
-/// carried on the `EventItem` wire). The handler finalises the page over these,
-/// builds the `EventCursor::Ch` from the boundary row, then maps to `EventItem`.
+/// A decoded event row + its rpc id parts (the cursor, which the wire carries
+/// only as the `id` string). The handler finalises the page over these, builds
+/// the `EventCursor::ChEventId` from the boundary row, then maps to
+/// `EventItem`.
 pub struct ChEvent {
-    pub event_index: i16,
+    pub transaction_index: u32,
+    pub operation_index: u16,
+    pub event_index: u32,
     pub item: EventItem,
 }
 
@@ -1061,12 +974,21 @@ fn map_event_row(r: EventChRow) -> ChEvent {
     let event_type = ContractEventType::try_from(r.event_type)
         .map(|e| e.to_string())
         .unwrap_or_default();
+    let id = xdr_parser::EventId {
+        ledger_sequence: u32::try_from(r.ledger_sequence)
+            .expect("a ledger sequence is a u32 by protocol"),
+        transaction_index: r.transaction_index,
+        operation_index: r.operation_index,
+        event_index: r.event_index,
+    };
     ChEvent {
+        transaction_index: r.transaction_index,
+        operation_index: r.operation_index,
         event_index: r.event_index,
         item: EventItem {
+            id: id.to_rpc_string(),
             transaction_hash: r.transaction_hash,
             ledger_sequence: r.ledger_sequence,
-            transaction_id: r.transaction_id,
             successful: r.successful,
             created_at: millis_to_utc(r.created_at),
             event_type,
@@ -1083,9 +1005,8 @@ fn map_event_row(r: EventChRow) -> ChEvent {
 /// `transactions`). `FINAL` on the per-contract seek collapses re-ingest
 /// duplicates; the `transactions` / `ledgers` joins carry NO `FINAL` (a tx is
 /// immutable, so a dup version is identical) and `LIMIT 1 BY` the event key
-/// collapses any join fan-out. CH cursor keys on
-/// `(ledger_sequence, transaction_id, event_index)`; a `Pg`-variant cursor never
-/// reaches here (the handler's cross-source guard rejects it).
+/// collapses any join fan-out. The cursor keys on the rpc event id
+/// `(ledger_sequence, transaction_index, operation_index, event_index)`.
 pub async fn fetch_events(
     client: &clickhouse::Client,
     contract_surrogate_id: i64,
@@ -1093,23 +1014,6 @@ pub async fn fetch_events(
     cursor: Option<&EventCursor>,
     direction: Direction,
 ) -> Result<Vec<ChEvent>, clickhouse::error::Error> {
-    let (op, order) = keyset_sql_desc(direction);
-
-    // Inline the cursor bounds (i64 / i16 — no injection surface); the clause is
-    // omitted entirely on the first page so no NULL is bound into the tuple
-    // keyset (the clickhouse 0.15 None-in-tuple defect).
-    let cursor_clause = match cursor {
-        Some(EventCursor::Ch {
-            ledger_sequence,
-            transaction_id,
-            event_index,
-        }) => format!(
-            " AND (se.ledger_sequence, se.transaction_id, se.event_index) {op} \
-             ({ledger_sequence}, {transaction_id}, {event_index})"
-        ),
-        _ => String::new(),
-    };
-
     // Step 1: page the events via the `contract_id` PK seek — NO joins (task
     // 0317). The previous form `JOIN transactions t` / `INNER JOIN ledgers l`
     // made ClickHouse build the join hash side from the WHOLE `transactions`
@@ -1120,29 +1024,13 @@ pub async fn fetch_events(
     // whole per-contract range, reading the heavy `topics_xdr`/`data_xdr`
     // columns, and OOMs (Code 241) under the prod `api_reader` 4 GB cap
     // (reproduced: FINAL OOMs at 500 MB–2 GB, only barely survives 4 GB). The
-    // full-key `LIMIT 1 BY (ledger_sequence, transaction_id, event_index)`
-    // already collapses re-ingest duplicates, and every projected column is
-    // immutable across ReplacingMergeTree versions, so a non-FINAL read returns
-    // identical rows — the read-in-order page then short-circuits at `LIMIT`
-    // instead of merging the whole contract. Same rationale as transactions
-    // Statement A (task 0290).
-    let page_sql = format!(
-        "SELECT \
-            se.ledger_sequence              AS ledger_sequence, \
-            se.transaction_id               AS transaction_id, \
-            se.event_index                  AS event_index, \
-            se.event_type                   AS event_type, \
-            se.topics_xdr                   AS topics_xdr, \
-            se.data_xdr                     AS data_xdr \
-         FROM soroban_events se \
-         WHERE se.contract_id = ? AND se.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
-         ORDER BY se.ledger_sequence {order}, se.transaction_id {order}, se.event_index {order} \
-         LIMIT 1 BY se.ledger_sequence, se.transaction_id, se.event_index \
-         LIMIT ?"
-    );
-
+    // full-key `LIMIT 1 BY` on the rpc id already collapses re-ingest
+    // duplicates, and every projected column is immutable across
+    // ReplacingMergeTree versions, so a non-FINAL read returns identical rows —
+    // the read-in-order page then short-circuits at `LIMIT` instead of merging
+    // the whole contract. Same rationale as transactions Statement A (task 0290).
     let raw = client
-        .query(&page_sql)
+        .query(&events_page_sql(cursor, direction))
         .bind(contract_surrogate_id)
         .bind(limit)
         .fetch_all::<EventPageRow>()
@@ -1152,44 +1040,32 @@ pub async fn fetch_events(
     }
 
     // Step 2: resolve the page's `transaction_hash` / `successful` / `closed_at`
-    // with a PK-prefix key-seek instead of full-table hash joins (mirrors
-    // `transactions::queries::resolve_source_and_closed_at`, task 0290).
-    // `transactions WHERE ledger_sequence IN (...)` prunes by the PK prefix to
-    // the handful of ledgers on this page, then filters `id IN (...)`; no
-    // `FINAL` (a transaction is immutable, so a dup version is identical).
+    // with a seek on the `transactions` key `(ledger_sequence,
+    // application_order)` instead of full-table hash joins (task 0290). The
+    // event row names its transaction by position — a fee refund's rpc id
+    // carries a sentinel, not the transaction. No `FINAL` (a transaction is
+    // immutable, so a dup version is identical).
     //
     // `closed_at` rides along on the `ledgers` join rather than costing its own
-    // statement (task 0446) — the same shape `fetch_invocation_appearances`
-    // uses 150 lines up, so one round trip covers both.
-    let in_list = |vals: &[i64]| {
-        vals.iter()
-            .map(i64::to_string)
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    let dedup = |f: fn(&EventPageRow) -> i64| -> Vec<i64> {
-        let mut v: Vec<i64> = raw.iter().map(f).collect();
-        v.sort_unstable();
-        v.dedup();
-        v
-    };
-    let ledger_seqs = dedup(|r| r.ledger_sequence);
-    let tx_ids = dedup(|r| r.transaction_id);
+    // statement (task 0446).
+    let mut positions: Vec<(i64, i16)> = raw
+        .iter()
+        .map(|r| (r.ledger_sequence, r.application_order))
+        .collect();
+    positions.sort_unstable();
+    positions.dedup();
 
-    let txs: std::collections::HashMap<i64, (String, bool, i64)> = client
-        .query(&format!(
-            "SELECT t.id AS id, lower(hex(t.hash)) AS hash, t.successful AS successful, \
-                    l.closed_at AS created_at \
-             FROM transactions t \
-             INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-             WHERE t.ledger_sequence IN ({}) AND t.id IN ({}) LIMIT 1 BY t.id",
-            in_list(&ledger_seqs),
-            in_list(&tx_ids),
-        ))
+    let txs: std::collections::HashMap<(i64, i16), (String, bool, i64)> = client
+        .query(&event_transactions_sql(&positions))
         .fetch_all::<EventTxRow>()
         .await?
         .into_iter()
-        .map(|r| (r.id, (r.hash, r.successful, r.created_at)))
+        .map(|r| {
+            (
+                (r.ledger_sequence, r.application_order),
+                (r.hash, r.successful, r.created_at),
+            )
+        })
         .collect();
 
     // Rebuild full event rows in page order, then map. A missing tx lookup
@@ -1198,11 +1074,14 @@ pub async fn fetch_events(
     Ok(raw
         .into_iter()
         .map(|r| {
-            let (transaction_hash, successful, created_at) =
-                txs.get(&r.transaction_id).cloned().unwrap_or_default();
+            let (transaction_hash, successful, created_at) = txs
+                .get(&(r.ledger_sequence, r.application_order))
+                .cloned()
+                .unwrap_or_default();
             map_event_row(EventChRow {
                 ledger_sequence: r.ledger_sequence,
-                transaction_id: r.transaction_id,
+                transaction_index: r.transaction_index,
+                operation_index: r.operation_index,
                 event_index: r.event_index,
                 event_type: r.event_type,
                 topics_xdr: r.topics_xdr,
@@ -1215,113 +1094,62 @@ pub async fn fetch_events(
         .collect())
 }
 
+/// Step 1 of [`fetch_events`]: one page of a contract's events in rpc id
+/// order. Binds `contract_id` and `limit`. The cursor is inlined (integers —
+/// no injection surface) and omitted on the first page, so no NULL is bound
+/// into the tuple keyset (the clickhouse 0.15 None-in-tuple defect).
+fn events_page_sql(cursor: Option<&EventCursor>, direction: Direction) -> String {
+    let (op, order) = keyset_sql_desc(direction);
+    let cursor_clause = match cursor {
+        Some(EventCursor::ChEventId {
+            ledger_sequence,
+            transaction_index,
+            operation_index,
+            event_index,
+        }) => format!(
+            " AND (se.ledger_sequence, se.transaction_index, se.operation_index, se.event_index) {op} \
+             ({ledger_sequence}, {transaction_index}, {operation_index}, {event_index})"
+        ),
+        None => String::new(),
+    };
+    format!(
+        "SELECT \
+            se.ledger_sequence              AS ledger_sequence, \
+            se.transaction_index            AS transaction_index, \
+            se.operation_index              AS operation_index, \
+            se.event_index                  AS event_index, \
+            se.application_order            AS application_order, \
+            se.event_type                   AS event_type, \
+            se.topics_xdr                   AS topics_xdr, \
+            se.data_xdr                     AS data_xdr \
+         FROM soroban_events se \
+         WHERE se.contract_id = ? AND se.ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
+         ORDER BY se.ledger_sequence {order}, se.transaction_index {order}, se.operation_index {order}, se.event_index {order} \
+         LIMIT 1 BY se.ledger_sequence, se.transaction_index, se.operation_index, se.event_index \
+         LIMIT ?"
+    )
+}
+
+/// Step 2 of [`fetch_events`]: the page's transactions by position.
+fn event_transactions_sql(positions: &[(i64, i16)]) -> String {
+    let in_pairs = positions
+        .iter()
+        .map(|(ledger, order)| format!("({ledger},{order})"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "SELECT t.ledger_sequence AS ledger_sequence, t.application_order AS application_order, \
+                lower(hex(t.hash)) AS hash, t.successful AS successful, \
+                l.closed_at AS created_at \
+         FROM transactions t \
+         INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+         WHERE (t.ledger_sequence, t.application_order) IN ({in_pairs}) \
+         LIMIT 1 BY t.ledger_sequence, t.application_order"
+    )
+}
+
 #[cfg(test)]
-#[path = "queries_ch_tests.rs"]
 mod ch_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn contract_type_name_matches_pg_function() {
-        assert_eq!(contract_type_name(0).as_deref(), Some("token"));
-        assert_eq!(contract_type_name(1).as_deref(), Some("other"));
-        assert_eq!(contract_type_name(2).as_deref(), Some("nft"));
-        assert_eq!(contract_type_name(3).as_deref(), Some("fungible"));
-        assert_eq!(contract_type_name(4), None);
-    }
-
-    #[test]
-    fn map_upgradeable_three_state() {
-        // SAC → Immutable regardless of the join code: nothing to swap.
-        assert_eq!(map_upgradeable(false, true, -1), Some(false));
-        assert_eq!(map_upgradeable(false, true, 1), Some(false));
-        // WASM present: 1 → upgradeable, 0 → frozen.
-        assert_eq!(map_upgradeable(true, false, 1), Some(true));
-        assert_eq!(map_upgradeable(true, false, 0), Some(false));
-        // WASM present, -1 (no metadata row / pre-0327 key absent) → Unknown.
-        assert_eq!(map_upgradeable(true, false, -1), None);
-    }
-
-    /// Task 0548 — the case that used to answer a confident "cannot upgrade"
-    /// about a contract we know nothing about. Covers both populations: a
-    /// pre-0548 placeholder row (no deploy observed) and, from protocol 28, a
-    /// contract whose code is owned by another contract.
-    #[test]
-    fn no_wasm_and_not_a_sac_is_unknown_not_immutable() {
-        assert_eq!(map_upgradeable(false, false, -1), None);
-        assert_eq!(
-            map_upgradeable(false, false, 1),
-            None,
-            "an executable we never resolved cannot be reported as frozen or as \
-             upgradeable — the chip must stay off"
-        );
-    }
-
-    fn event_row(event_type: i16, topics_xdr: &str, data_xdr: &str) -> EventChRow {
-        EventChRow {
-            ledger_sequence: 100,
-            transaction_id: 7,
-            event_index: 2,
-            event_type,
-            topics_xdr: topics_xdr.to_string(),
-            data_xdr: data_xdr.to_string(),
-            transaction_hash: "deadbeef".to_string(),
-            successful: true,
-            created_at: 1_700_000_000_000,
-        }
-    }
-
-    #[test]
-    fn map_event_row_decodes_payload_type_and_index() {
-        let ev = map_event_row(event_row(
-            1, // contract
-            r#"[{"type":"sym","value":"transfer"},{"type":"address","value":"GABC"}]"#,
-            r#"{"type":"i128","value":"1000"}"#,
-        ));
-        assert_eq!(ev.event_index, 2); // cursor tie-break preserved off the wire
-        assert_eq!(ev.item.event_type, "contract");
-        assert_eq!(ev.item.topics.len(), 2); // JSON array → its elements
-        assert_eq!(ev.item.data["value"], "1000");
-        assert_eq!(ev.item.transaction_hash, "deadbeef");
-        assert_eq!(ev.item.ledger_sequence, 100);
-        assert!(ev.item.successful);
-    }
-
-    #[test]
-    fn map_event_row_scalar_topics_wraps_singleton() {
-        let ev = map_event_row(event_row(0 /* system */, r#""solo""#, "null"));
-        assert_eq!(ev.item.event_type, "system");
-        assert_eq!(ev.item.topics.len(), 1); // scalar JSON → singleton vec
-        assert!(ev.item.data.is_null());
-    }
-
-    #[test]
-    fn map_event_row_event_type_labels_and_out_of_range() {
-        assert_eq!(
-            map_event_row(event_row(0, "[]", "null")).item.event_type,
-            "system"
-        );
-        assert_eq!(
-            map_event_row(event_row(1, "[]", "null")).item.event_type,
-            "contract"
-        );
-        assert_eq!(
-            map_event_row(event_row(2, "[]", "null")).item.event_type,
-            "diagnostic"
-        );
-        // Out-of-range discriminant → empty string (try_from fails, default).
-        assert_eq!(
-            map_event_row(event_row(99, "[]", "null")).item.event_type,
-            ""
-        );
-    }
-
-    #[test]
-    fn map_event_row_malformed_payload_degrades_not_drops() {
-        let ev = map_event_row(event_row(1, "not json", "also not json"));
-        assert!(ev.item.topics.is_empty()); // decode fail → empty, row still emitted
-        assert!(ev.item.data.is_null());
-    }
-}
+mod tests;

@@ -76,7 +76,6 @@ impl TargetedTables {
         "lp_operation_amounts",
         "asset_transfers",
         "transaction_memos",
-        "soroban_event_ops",
         // Task 0518 — the three pool tables, so a full-range targeted
         // re-parse carries the pool families' whole history (and the classic
         // `legs` migration) in the SAME descent instead of owing a second one.
@@ -174,6 +173,7 @@ struct TableInserts {
     operations: Option<Insert<OperationAppearanceRow>>,
     events: Option<Insert<SorobanEventRow>>,
     invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
+    contract_txs: Option<Insert<ContractTransactionRow>>,
     assets: Option<Insert<AssetRow>>,
     asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
@@ -190,10 +190,9 @@ struct TableInserts {
     unified_balances: Option<Insert<BalanceRow>>,
     /// Task 0210 — `balances`' twin for value held by a claimable balance.
     claimable_balance_holdings: Option<Insert<BalanceRow>>,
-    /// Task 0540 / 0541 — the value-flow tables.
+    /// Task 0540 — the value-flow tables.
     asset_transfers: Option<Insert<AssetTransferRow>>,
     transaction_memos: Option<Insert<TransactionMemoRow>>,
-    event_ops: Option<Insert<SorobanEventOpRow>>,
 }
 
 impl PartitionWriter {
@@ -228,8 +227,7 @@ impl PartitionWriter {
     /// Stream ONLY the named tables' rows for this ledger — the targeted write
     /// a historical re-parse for new derived tables runs (task 0279 set the
     /// pattern with `lp_operation_amounts`; task 0540 generalised it to a list
-    /// so `asset_transfers`, `transaction_memos` and `soroban_event_ops` ride
-    /// one pass).
+    /// so `asset_transfers` and `transaction_memos` ride one pass).
     ///
     /// Two things this deliberately does NOT do, both load-bearing:
     ///
@@ -280,15 +278,6 @@ impl PartitionWriter {
                         &mut self.inserts.transaction_memos,
                         "transaction_memos",
                         &staged.transaction_memo_rows,
-                    )
-                    .await?
-                }
-                "soroban_event_ops" => {
-                    write_rows(
-                        &self.client,
-                        &mut self.inserts.event_ops,
-                        "soroban_event_ops",
-                        &staged.event_op_rows,
                     )
                     .await?
                 }
@@ -361,6 +350,7 @@ impl PartitionWriter {
             lp_amount_rows,
             event_rows,
             invocation_rows,
+            contract_tx_rows,
             asset_rows,
             asset_sac_rows,
             nft_rows,
@@ -371,7 +361,6 @@ impl PartitionWriter {
             claimable_balance_rows,
             asset_transfer_rows,
             transaction_memo_rows,
-            event_op_rows,
         } = staged;
 
         write_rows(
@@ -514,6 +503,13 @@ impl PartitionWriter {
             &invocation_rows,
         )
         .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.contract_txs,
+            "contract_transactions",
+            &contract_tx_rows,
+        )
+        .await?;
 
         write_rows(
             &self.client,
@@ -583,13 +579,6 @@ impl PartitionWriter {
             &transaction_memo_rows,
         )
         .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.event_ops,
-            "soroban_event_ops",
-            &event_op_rows,
-        )
-        .await?;
 
         Ok(())
     }
@@ -641,6 +630,7 @@ impl PartitionWriter {
             operations,
             events,
             invocations,
+            contract_txs,
             assets,
             asset_sac,
             nfts,
@@ -651,7 +641,6 @@ impl PartitionWriter {
             claimable_balance_holdings,
             asset_transfers,
             transaction_memos,
-            event_ops,
         } = self.inserts;
         end(accounts).await?;
         end(account_entry_state).await?;
@@ -673,6 +662,7 @@ impl PartitionWriter {
         end(operations).await?;
         end(events).await?;
         end(invocations).await?;
+        end(contract_txs).await?;
         end(assets).await?;
         end(asset_sac).await?;
         end(nfts).await?;
@@ -689,7 +679,6 @@ impl PartitionWriter {
         end(claimable_balance_holdings).await?;
         end(asset_transfers).await?;
         end(transaction_memos).await?;
-        end(event_ops).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every
         // buffered row, end the request.
@@ -820,5 +809,4 @@ async fn end<T>(slot: Option<Insert<T>>) -> Result<(), SchemaError> {
 }
 
 #[cfg(test)]
-#[path = "writer_tests.rs"]
 mod tests;

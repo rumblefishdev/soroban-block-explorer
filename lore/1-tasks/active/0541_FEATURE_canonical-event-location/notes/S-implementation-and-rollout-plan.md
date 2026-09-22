@@ -213,10 +213,10 @@ pub fn assign_event_ids(ledger_sequence: u32, application_order: u32,
 // ExtractedEvent.event_index → position_in_tx (in-memory ordinal, never stored)
 ```
 
-- [ ] **Step 0:** `git mv crates/xdr-parser/src/event_tests.rs
+- [x] **Step 0:** `git mv crates/xdr-parser/src/event_tests.rs
 crates/xdr-parser/src/event/tests.rs`, replace the `#[path]` declaration
       with `#[cfg(test)] mod tests;`, `cargo test -p xdr-parser` → still green.
-- [ ] **Step 1: failing tests** (append to `event/tests.rs`, reuse
+- [x] **Step 1: failing tests** (append to `event/tests.rs`, reuse
       `make_contract_event` / `make_v4_meta`)
 
 ```rust
@@ -296,10 +296,10 @@ fn a_transaction_level_event_without_a_stage_gets_no_id() {
 }
 ```
 
-- [ ] **Step 2:** `cargo test -p xdr-parser event::tests` → fails to compile
+- [x] **Step 2:** `cargo test -p xdr-parser event::tests` → fails to compile
       (`EventId` undefined).
 
-- [ ] **Step 3: implementation** in `event.rs` (below `extract_single_event`)
+- [x] **Step 3: implementation** in `event.rs` (below `extract_single_event`)
 
 ```rust
 /// stellar-rpc's identity for a non-diagnostic event (ADR 0059): a TOID
@@ -393,13 +393,13 @@ pub fn assign_event_ids(
 
 `lib.rs`: `pub use event::{EventId, assign_event_ids, extract_events, tx_level_event_ids};`
 
-- [ ] **Step 4:** add `pub event_id: Option<EventId>` to `ExtractedEvent`
+- [x] **Step 4:** add `pub event_id: Option<EventId>` to `ExtractedEvent`
       (doc: "stellar-rpc id, set by `assign_event_ids`; `None` for diagnostic
       events"), `event_id: None` in `extract_single_event`, rename the flat
       field to `position_in_tx` (doc: "ordinal across all containers of the
       transaction; in memory only — never stored, never on the wire"), fix
       every literal/read the compiler lists.
-- [ ] **Step 5:** `cargo test -p xdr-parser` → all pass, including
+- [x] **Step 5:** `cargo test -p xdr-parser` → all pass, including
       `tests/tx_event_stage_real_meta.rs`.
 - [ ] **Step 6: commit** (on "commit"):
       `feat(lore-0541): assign the stellar-rpc event id in the parser`
@@ -409,7 +409,7 @@ pub fn assign_event_ids(
 **Files:** Modify `crates/indexer/src/handler/process.rs:175-230`.
 **Consumes:** 2.1.
 
-- [ ] **Step 1: failing test** in a new `crates/indexer/src/handler/process/tests.rs`
+- [x] **Step 1: failing test** in a new `crates/indexer/src/handler/process/tests.rs`
       (`process.rs` gains `#[cfg(test)] mod tests;`), on a real ledger fixture:
       every non-diagnostic event in `ParseOutput.events` has
       `event_id.is_some()`, and the ids of one ledger are unique.
@@ -438,8 +438,8 @@ fn every_consensus_event_of_a_real_ledger_has_a_unique_rpc_id() {
 (unsigned request, 131 KB). Add `zstd` / `stellar-xdr` to the indexer's
 dev-dependencies only if they are not already direct dependencies.)
 
-- [ ] **Step 2:** run → fails (`event_id` is `None`).
-- [ ] **Step 3: implementation**
+- [x] **Step 2:** run → fails (`event_id` is `None`).
+- [x] **Step 3: implementation**
 
 ```rust
     let tx_level_ids = xdr_parser::tx_level_event_ids(ledger_sequence, &tx_metas);
@@ -455,7 +455,7 @@ dev-dependencies only if they are not already direct dependencies.)
             );
 ```
 
-- [ ] **Step 4:** `cargo test -p indexer` → pass.
+- [x] **Step 4:** `cargo test -p indexer` → pass.
 - [ ] **Step 5: commit:** `feat(lore-0541): give every parsed event its rpc id`
 
 ### Task 2.3: staging writes the new `soroban_events` and stops `soroban_event_ops`
@@ -493,7 +493,7 @@ pub struct SorobanEventRow {            // column order = DDL
 }
 ```
 
-- [ ] **Step 1: failing tests** in `tests_cross.rs`
+- [x] **Step 1: failing tests** in `tests_cross.rs`
 
 ```rust
 #[test]
@@ -519,8 +519,8 @@ fn a_consensus_event_without_an_id_is_a_staging_error() {
 (`stage_fixture_ledger_with_fee_events` / `…_with_event_id` follow the
 builders already used by the event tests at `tests_cross.rs:660-730`.)
 
-- [ ] **Step 2:** `cargo test -p db-clickhouse tests_cross` → fails.
-- [ ] **Step 3: implementation** — in the transactions loop:
+- [x] **Step 2:** `cargo test -p db-clickhouse tests_cross` → fails.
+- [x] **Step 3: implementation** — in the transactions loop:
       `app_order_by_hash.insert(tx.hash.clone(), app_order);` — events block:
 
 ```rust
@@ -569,12 +569,12 @@ struct field), `SorobanEventOpRow`, the writer's `event_ops` insert slot and
 `event_index`; the staging error message in `value_flow.rs:118` names
 `op_index`/`event_pos_in_op` instead.
 
-- [ ] **Step 4:** update the listed tests (drop `soroban_event_ops` from the
+- [x] **Step 4:** update the listed tests (drop `soroban_event_ops` from the
       targeted-write e2e and `TargetedTables::parse` cases; `smoke.rs`
       `INSERT INTO soroban_events (contract_id, ledger_sequence,
 transaction_index, operation_index, event_index, application_order,
 event_type, signature, topics_xdr, data_xdr)`).
-- [ ] **Step 5:** `cargo test -p db-clickhouse` (CH-gated tests against the
+- [x] **Step 5:** `cargo test -p db-clickhouse` (CH-gated tests against the
       repo docker ClickHouse, with the schema from task 2.8 applied) → pass.
 - [ ] **Step 6: commit:** `feat(lore-0541): stage soroban_events by rpc event id`
 
@@ -589,13 +589,13 @@ operation_index: u16, event_index: u32 }` (serde tag `ch_event_id` — a cursor
 minted before the deploy no longer decodes and gets the existing 400
 `invalid_cursor`).
 
-- [ ] **Step 0:** extract `contracts/queries.rs` tests (1,327 lines): the inline
+- [x] **Step 0:** extract `contracts/queries.rs` tests (1,327 lines): the inline
       `mod tests { … }` → `crates/api/src/contracts/queries/tests.rs`,
       `queries_ch_tests.rs` → `queries/ch_tests.rs`; declarations
       `#[cfg(test)] mod tests;` / `#[cfg(test)] mod ch_tests;`; same for
       `common/extractors.rs` (inline → `common/extractors/tests.rs`).
       `cargo test -p api` → green before any change.
-- [ ] **Step 1: failing tests** (`contracts/queries/tests.rs`)
+- [x] **Step 1: failing tests** (`contracts/queries/tests.rs`)
 
 ```rust
 fn event_row(event_type: i16, topics_xdr: &str, data_xdr: &str) -> EventChRow {
@@ -627,8 +627,8 @@ plus in `common/extractors/tests.rs`: a base64 cursor of the old
 `{"src":"ch","ledger_sequence":1,"transaction_id":2,"event_index":3}` shape
 returns 400 `invalid_cursor` for `Pagination<EventCursor>`.
 
-- [ ] **Step 2:** `cargo test -p api contracts` → fails.
-- [ ] **Step 3: implementation** — extract `events_page_sql(cursor, direction)
+- [x] **Step 2:** `cargo test -p api contracts` → fails.
+- [x] **Step 3: implementation** — extract `events_page_sql(cursor, direction)
 -> String` from `fetch_events` (so the test sees the real SQL):
 
 ```rust
@@ -672,11 +672,18 @@ id parts for the cursor; the handler encodes `EventCursor::ChEventId`;
 `event_cursor_matches_source` matches the new variant. Update the doc comments
 that describe `(ledger_sequence, transaction_id, event_index)`.
 
-- [ ] **Step 4:** `cargo test -p api` → pass.
-- [ ] **Step 5:** `pnpm nx run @rumblefish/api-types:generate`.
+- [x] **Step 4:** `cargo test -p api` → pass.
+- [x] **Step 5:** `pnpm nx run @rumblefish/api-types:generate`.
 - [ ] **Step 6: commit:** `feat(lore-0541): page contract events on the rpc event id`
 
 ### Task 2.5: transaction queries that read `soroban_events`
+
+> Superseded 2026-09-21 for the contract-filtered list: the bounded windows below
+> were replaced by a seek on the `contract_transactions` presence index. The
+> window's cap counted rows while the page counts transactions, so a contract
+> with many events per transaction got a page that read as the end of its list.
+> See [S-review-and-contract-transactions](S-review-and-contract-transactions.md).
+> `fetch_event_appearances` stands as written.
 
 **Phase 1 changed this task.** Mapping the events arm to transaction ids through
 an `IN` set was measured unusable (native XLM: 6.64 GiB, over the 4 GB cap;
@@ -720,10 +727,10 @@ was truncated, the window doubles and the arms are asked again (at most 6
 rounds — `ponytail:` bounded; a contract needing more is logged and returns the
 positions it has).
 
-- [ ] **Step 0:** extract the inline tests of `transactions/queries.rs`
+- [x] **Step 0:** extract the inline tests of `transactions/queries.rs`
       (1,128 lines) → `crates/api/src/transactions/queries/tests.rs`;
       `cargo test -p api transactions` → green.
-- [ ] **Step 1: failing tests** (`transactions/contract_positions/tests.rs`)
+- [x] **Step 1: failing tests** (`transactions/contract_positions/tests.rs`)
 
 ```rust
 fn arm(p: &[(i64, i16)], truncated: bool) -> ArmWindow {
@@ -758,8 +765,8 @@ plus SQL-shape tests in `queries/tests.rs`: no statement-B SQL names
 se.application_order = ?`; and in `dto` tests a `ChPosition` cursor round-trips
 while a `Ch` cursor on statement B returns 400 `invalid_cursor`.
 
-- [ ] **Step 2:** `cargo test -p api transactions` → fails.
-- [ ] **Step 3: implementation**
+- [x] **Step 2:** `cargo test -p api transactions` → fails.
+- [x] **Step 3: implementation**
   - `merge_arm_windows`: collect all positions, dedup, drop those beyond the
     cap (`max`/`min` of `last_ledger` over truncated arms), sort by
     `(ledger, application_order)` in the page direction; `Page` if `len ≥ take`
@@ -791,8 +798,8 @@ se.application_order = ? AND intDiv(se.ledger_sequence, 500000) =
 intDiv(?, 500000) GROUP BY se.contract_id, se.ledger_sequence` (no `FINAL`:
     the `GROUP BY` already collapses duplicates); the handler passes
     `tx.ledger_sequence, tx.application_order`.
-- [ ] **Step 4:** `cargo test -p api transactions` → pass.
-- [ ] **Step 5: measure before merge** — local API against production
+- [x] **Step 4:** `cargo test -p api transactions` → pass.
+- [x] **Step 5: measure before merge** — local API against production
       ClickHouse (read-only; the staging table has partition 127 only, so run
       against a build whose SQL names `soroban_events_staging_canonical` and
       ledgers of partition 127): first page and one cursor page of the
@@ -812,11 +819,11 @@ stage: Option<String> }` — `id`/`event_index` `None` for diagnostic events;
 Delete the unused `extract_e14_heavy`, `E14HeavyEventFields` and their test
 (`mod.rs:407`), the last producer of the flat number.
 
-- [ ] **Step 0:** `stellar_archive/mod.rs` inline tests →
+- [x] **Step 0:** `stellar_archive/mod.rs` inline tests →
       `stellar_archive/tests/stellar_archive_tests.rs` via
       `#[cfg(test)] #[path = "tests/stellar_archive_tests.rs"] mod tests;`
       (minus the deleted E14 test); `cargo test -p api stellar_archive` → green.
-- [ ] **Step 1: failing test** in a new `stellar_archive/extractors/tests.rs`
+- [x] **Step 1: failing test** in a new `stellar_archive/extractors/tests.rs`
       (`extractors.rs` gains `#[cfg(test)] mod tests;`) using the real
       `tx_0a120260` meta (ledger 62,032,880, one KALE transfer): the refund's
       `id` has transaction part 1048575, the charge's has transaction 0, the
@@ -826,8 +833,8 @@ Delete the unused `extract_e14_heavy`, `E14HeavyEventFields` and their test
       counters are covered by 2.1.) The same test asserts `contract_events`
       come back in execution order: sorted by `id` (fixed-width strings, so
       string order = numeric order) — charge, operation events, refund.
-- [ ] **Step 2:** run → fails.
-- [ ] **Step 3: implementation** — `extract_e3_heavy` computes
+- [x] **Step 2:** run → fails.
+- [x] **Step 3: implementation** — `extract_e3_heavy` computes
       `let tx_level = xdr_parser::tx_level_event_ids(ledger_seq, &tx_metas);`
       once, then `assign_event_ids(ledger_seq, (idx + 1) as u32,
 &tx_level[idx], &mut events)` before `split_events`; `split_events` maps
@@ -838,7 +845,7 @@ e.event_id.map(|i| i.event_index)`, `operation_index: e.op_index…`, then
       container order). Fix the
       `stage` doc comment: pre-23 refunds carry `after_tx` (archive meta,
       README "Fee event identity").
-- [ ] **Step 4:** `cargo test -p api stellar_archive` → pass;
+- [x] **Step 4:** `cargo test -p api stellar_archive` → pass;
       `pnpm nx run @rumblefish/api-types:generate`.
 - [ ] **Step 5: commit:** `feat(lore-0541): number transaction-page events by rpc id`
 
@@ -859,10 +866,10 @@ for fees, a position in the operation otherwise — `135, 0, 1, 12` reads as an
 error) and a short `op 1 · 0` form with the id in a tooltip (our own notation,
 the canonical id hidden).
 
-- [ ] **Step 0:** `git mv` the three test files, fix their imports,
+- [x] **Step 0:** `git mv` the three test files, fix their imports,
       `pnpm nx test @rumblefish/soroban-block-explorer-web` → green.
 
-- [ ] **Step 1: failing tests** (`sections/__tests__/EventsSection.test.tsx`;
+- [x] **Step 1: failing tests** (`sections/__tests__/EventsSection.test.tsx`;
       the file's `event()` factory changes to take the new fields)
 
 ```tsx
@@ -936,8 +943,8 @@ it('gives diagnostic entries no id', async () => {
 transaction part is 1,048,575. The existing tests of this file switch from
 `r['#']` to `r.ID` and from `op_index` to `operation_index`.)
 
-- [ ] **Step 2:** `pnpm nx test @rumblefish/soroban-block-explorer-web` → fails.
-- [ ] **Step 3: implementation**
+- [x] **Step 2:** `pnpm nx test @rumblefish/soroban-block-explorer-web` → fails.
+- [x] **Step 3: implementation**
   - header `#` → `ID` (width auto); cell: `<Box component="span"
 sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{event.id ?? '—'}</Box>`
   - row key: `key={event.id ?? 'diag-' + index}` (map callback takes `index`)
@@ -945,7 +952,7 @@ sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{event.id ?? '—'}</Box>
   - `OperationCard`: `key={event.id ?? index}`
   - `resources.ts`: fallback name `'(unnamed)'`
   - `ContractEvents`: `rowKey={(row) => row.id}`
-- [ ] **Step 4:** tests + `pnpm nx typecheck @rumblefish/soroban-block-explorer-web` → pass.
+- [x] **Step 4:** tests + `pnpm nx typecheck @rumblefish/soroban-block-explorer-web` → pass.
 - [ ] **Step 5: commit:** `feat(lore-0541): show rpc event numbers on the transaction page`
 
 ### Task 2.8: schema, backfill tooling, network check, docs
@@ -984,12 +991,12 @@ FROM transaction_participants …))`.
   guidance), `scripts/merge-*.sh` table lists (`soroban_events` shape note).
 - ADR 0059 → `accepted`, delivery checklist ticked.
 
-- [ ] **Step 1:** grep gate — `rg -n "transaction_id" -g '*.rs' crates | rg
+- [x] **Step 1:** grep gate — `rg -n "transaction_id" -g '*.rs' crates | rg
 soroban_events` and `rg -n "soroban_event_ops|event_pos_in_op|op_index"
 crates/api crates/db-clickhouse/src/persist/stage.rs` return only
       intended hits (asset_transfers keeps `op_index`/`event_pos_in_op` until
       its rebuild).
-- [ ] **Step 2:** `cargo test --workspace`; `pnpm nx run-many -t test typecheck lint`;
+- [x] **Step 2:** `cargo test --workspace`; `pnpm nx run-many -t test typecheck lint`;
       `pnpm nx run @rumblefish/api-types:check-generated`.
 - [ ] **Step 3: commit:** `docs(lore-0541): schema, tooling and docs for the rpc event id`
 - [ ] **Step 4:** PR via `/pr` — title `feat(lore-0541): key soroban_events by
@@ -998,17 +1005,31 @@ the stellar-rpc event id`, body lists phase 1 results and links this
 
 ---
 
-## Phase 3 — fill partitions 100–128
+## Phase 3 — fill partitions 100 through the head's partition
+
+> Updated 2026-09-21 (review): the head crossed into partition 129 after this
+> plan was written, and the phase now fills a second table,
+> `contract_transactions`, slice by slice after the rekey (step 3b). See
+> [S-review-and-contract-transactions](S-review-and-contract-transactions.md).
 
 **When:** after the PR is ready to release, as close to the window as the fill
 time allows — both copies of the table share the disk from the first
-partition until phase 5. Free space 360.71 GiB on 2026-09-17; the fill adds
-~169 GiB (estimate) and the server logs are not trimmed (task 0563 deferred).
-**Stop** before any partition if free space is under 120 GiB.
+partition until phase 5. Free space 360.71 GiB on 2026-09-17 and 348.50 GiB on
+2026-09-20 (~4 GiB/day, estimate from two readings); the fill adds ~170 GiB
+(estimate) and the server logs are not trimmed (task 0563 deferred). At that
+rate the finished fill sits ~2 weeks above the stop line, so the window must
+follow the fill within that. **Stop** before any partition if free space is
+under 120 GiB.
 
-Order: 100 → 128. Partition 127 is done in phase 1. Partition 128 is filled up
-to `X` = the highest multiple of 5,000 at least 50,000 ledgers below the head
-when it is reached; the rest is the window's tail.
+**Before the first partition:** the operator creates `contract_transactions`
+verbatim from `crates/db-clickhouse/schema/init.sql`, and fills partition 127's
+slices with step 3b as the index's trial; the agent then measures the
+contract-filtered list on it against the plan's gate (< 1 s, < 1 GiB).
+
+Order: 100 → the head's partition (129 on 2026-09-20). Partition 127 is done in
+phase 1. The head's partition is filled up to `X` = the highest multiple of
+5,000 at least 50,000 ledgers below the head when it is reached; the rest is
+the window's tail.
 
 Per partition `P`:
 
@@ -1028,11 +1049,20 @@ WHERE name = 'default'` ≥ 120 GiB; the day is not Sunday; no backup running
 F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
 ```
 
+3b. **Operator — `contract_transactions` for the same partition**, after step 3
+(it reads the rekeyed rows):
+
+```bash
+F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
+```
+
 4. **Agent — post-fill:** staging row count for `P` = sum of the gate's `n`;
    if larger, operator runs `chw "OPTIMIZE TABLE soroban_events_staging_canonical PARTITION $P FINAL"`
-   and the count repeats. API p95 latency during the fill is read from the
-   CloudWatch dashboard (read-only); if it rose > 2× the previous hour, the
-   next partition waits.
+   and the count repeats. For `contract_transactions`: `uniqExact(contract_id,
+ledger_sequence, application_order)` of `P` = the fill's `SELECT DISTINCT`
+   run as a count over `P` (a short count is a partial insert). API p95
+   latency during the fill is read from the CloudWatch dashboard (read-only);
+   if it rose > 2× the previous hour, the next partition waits.
 
 Estimate from phase 1: partition 127 (452 M rows, 4.3% of the table) took
 583 s of query time over 100 slices — median 5.6 s, max 10.7 s, peak 3.68 GiB
@@ -1049,11 +1079,26 @@ literals remove the doubt.
 
 ### 4.0 Preconditions (all true before starting)
 
-- Phase 3 complete up to `X`; every gate passed.
+- Phase 3 complete up to `X` for both tables; every gate passed.
+- No backfill or re-ingest touched a range below `X` since it was filled: such
+  a write lands in the old table after the copy and is lost at the swap.
+  Checked by a read — per filled partition, the old table's row count still
+  equals the pre-fill gate's `n`.
+- `contract_transactions` exists — the new indexer writes it, and a missing
+  table fails every insert: `chq "EXISTS TABLE default.contract_transactions"`
+  returns `1`.
 - PR merged to `develop`; release PR `develop → master` merged (not tagged, not
   deployed). Everything else in that release is known and wanted.
-- `chw "ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0"` done
-  (the running indexer still writes the column; the new one will not).
+- `asset_transfers.event_index` has its default — verified by a read, not
+  recalled: `chq "SELECT default_kind FROM system.columns WHERE database =
+'default' AND table = 'asset_transfers' AND name = 'event_index'"` returns
+  `DEFAULT`. If not, the operator runs
+  `chw "ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0"` (the
+  running indexer still writes the column; the new one will not). The swap does
+  not cover this table.
+- The two query shapes of the client outside this repository that read
+  `soroban_events.transaction_id` / `event_index` are handed to its owner, or
+  its outage over the window is accepted explicitly.
 - Two local checkouts ready and built once (`make -C infra` build step):
   `prod` at the last `production-*` tag, `new` at `origin/master`.
 - Not Sunday; free disk ≥ 120 GiB; SQS ingest queue and DLQ empty
@@ -1077,10 +1122,13 @@ Record the head `H`.
 ### 4.2 Tail (operator, then agent)
 
 Operator: fill loop from `X` to `H + 1` (last slice may be shorter; use
-`seq X 5000 H` and `B = min(a + 5000, H + 1)`). Agent: pre/post gates on the
-tail slices; `getEvents` comparison on 5 tail ledgers reading the **staging**
-table (they are inside the rpc window); totals: staging distinct rows per
-partition 100–128 = old table's.
+`seq X 5000 H` and `B = min(a + 5000, H + 1)`), then the
+`contract_transactions` loop over the same slices. Agent: pre/post gates on the
+tail slices of both tables; `getEvents` comparison on 5 tail ledgers reading
+the **staging** table (they are inside the rpc window); totals: staging
+distinct rows per partition 100 through the head's partition = old table's —
+the head's partition included, since it is the one a short tail loop or an
+off-by-one on `H` would land in.
 
 ### 4.3 New code, still paused (operator)
 
@@ -1120,7 +1168,10 @@ Agent verifies: ESM present; `max(sequence)` advancing; DLQ empty after 15 min;
 new rows since `H` exist with `transaction_index` set;
 `cargo test -p backfill-runner --test event_id_reconciliation` passes; ledger
 64,454,000 for `CAS3J7GY…` lists transactions in application order; one
-transaction page shows `op N` / stage and rpc numbers.
+transaction page shows `op N` / stage and rpc numbers; over the first ledgers
+the new indexer wrote, `fill_contract_transactions.sql` (run as a `SELECT`)
+returns exactly the writer's `contract_transactions` rows — `EXCEPT` both ways
+empty — the one check that the SQL fill and the Rust writer agree.
 
 ### 4.6 Rollback (only if 4.5 fails and cannot be fixed forward)
 
@@ -1131,6 +1182,12 @@ transaction page shows `op N` / stage and rpc numbers.
    `soroban_event_ops`: re-ingest them with `backfill-runner run` over that
    range from the `prod` checkout, then `repair-tier1` (`docs/backfills.md`).
 4. README records what failed.
+
+After phase 5 the old table is gone, but going back still needs no archive read:
+the old shape is derivable in ClickHouse from the new table — `transaction_id`
+through `transactions` on the position, the flat index by rank within the
+transaction, fee events first. Hours of in-database work (_estimate_), not a
+re-ingest of the whole range; the SQL is not written.
 
 ---
 

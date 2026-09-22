@@ -50,7 +50,7 @@ pub use classification::{ContractClassification, classify_contract_from_wasm_spe
 pub use contract::extract_contract_interfaces;
 pub use envelope::InnerTxRef;
 pub use error::{ParseError, ParseErrorKind};
-pub use event::extract_events;
+pub use event::{EventId, LedgerEvents, extract_events};
 pub use event_filters::{EventAsset, TokenEvent, TokenEventKind, parse_token_event, token_verb};
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;

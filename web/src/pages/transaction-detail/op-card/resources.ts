@@ -44,9 +44,11 @@ export function readResourceCounters(
   events: readonly XdrEventDto[]
 ): Map<string, number | string> {
   const out = new Map<string, number | string>();
-  for (const event of events) {
+  for (const [i, event] of events.entries()) {
     if (symTopic(event, 0) !== 'core_metrics') continue;
-    const name = symTopic(event, 1) ?? `(unnamed #${event.event_index})`;
+    // A diagnostic event has no id, so its place in the stream is what keeps
+    // two nameless counters apart.
+    const name = symTopic(event, 1) ?? `(unnamed #${i})`;
     const raw = (event.data as { value?: unknown } | null)?.value;
     out.set(
       name,

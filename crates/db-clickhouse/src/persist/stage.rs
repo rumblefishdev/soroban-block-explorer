@@ -39,7 +39,7 @@
 //! convention: `WHERE amount > 0` to recover "active trustlines"
 //! semantics.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
@@ -250,6 +250,9 @@ pub struct StagedLedger {
     pub lp_amount_rows: Vec<LpOperationAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
+    /// Per-(contract, tx) presence rows (task 0541) → `contract_transactions`,
+    /// the contract-dimension twin of `participant_rows`.
+    pub contract_tx_rows: Vec<ContractTransactionRow>,
     pub asset_rows: Vec<AssetRow>,
     /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
     pub asset_sac_rows: Vec<AssetSacRow>,
@@ -280,8 +283,6 @@ pub struct StagedLedger {
     pub asset_transfer_rows: Vec<AssetTransferRow>,
     /// Task 0540 — one row per transaction that carries a memo → `transaction_memos`.
     pub transaction_memo_rows: Vec<TransactionMemoRow>,
-    /// Task 0541 — operation attribution per event → `soroban_event_ops`.
-    pub event_op_rows: Vec<SorobanEventOpRow>,
 }
 
 /// Named, borrowed inputs to [`prepare_with_sac_overrides`].
@@ -1042,6 +1043,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // 0374 e2e caught pool state picking an intermediate write as "last" on
     // 127 of 1,410 real pairs when ordered by tx_id).
     let mut tx_id_by_hash: HashMap<String, i64> = HashMap::with_capacity(transactions.len());
+    let mut app_order_by_hash: HashMap<String, i16> = HashMap::with_capacity(transactions.len());
     for (idx, tx) in transactions.iter().enumerate() {
         let hash = decode_hash(&tx.hash, "tx.hash")?;
         let tx_id = ids::transaction_id(&hash);
@@ -1053,6 +1055,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         };
         let app_order =
             i16::try_from(idx + 1).map_err(|_| staging_err("application_order overflow (>i16)"))?;
+        app_order_by_hash.insert(tx.hash.clone(), app_order);
         let op_count = op_count_by_tx.get(tx.hash.as_str()).copied().unwrap_or(0);
 
         out.transaction_rows.push(TransactionRow {
@@ -1875,11 +1878,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
 
-    // ---- soroban_events (UNFOLDED per ADR 0044 §4a) ----
+    // ---- soroban_events (UNFOLDED per ADR 0044 §4a, keyed by rpc id per ADR 0059) ----
     let mut diagnostic_dropped: usize = 0;
     let mut contract_orphan_dropped: usize = 0;
+    // (contract, transaction) of every operation event, for
+    // `contract_transactions` below: the parser says where an event came from,
+    // so a fee event is left out by its source, not inferred from its id.
+    let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
     for (tx_hash, evs) in events {
-        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
+        let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
             continue;
         };
         for ev in evs {
@@ -1891,18 +1898,30 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 contract_orphan_dropped += 1;
                 continue;
             };
-            let event_index = i16::try_from(ev.event_index)
-                .map_err(|_| staging_err("event_index overflow (>i16)"))?;
+            // Never guessed: an id is the parser's reading of the meta, and a
+            // wrong one would silently merge two events under the RMT key.
+            let Some(id) = ev.event_id else {
+                return Err(staging_err(&format!(
+                    "event without a stellar-rpc id (tx {tx_hash}, source {:?}) — ADR 0059",
+                    ev.source
+                )));
+            };
             let topics_xdr = serde_json::to_string(&ev.topics)
                 .map_err(|e| staging_err(&format!("event topics serialize: {e}")))?;
             let data_xdr = serde_json::to_string(&ev.data)
                 .map_err(|e| staging_err(&format!("event data serialize: {e}")))?;
             let signature = extract_event_signature(&ev.topics);
+            let contract_id = ids::contract_id(contract_strkey);
+            if ev.source == EventSource::PerOp {
+                contract_txs.insert((contract_id, application_order));
+            }
             out.event_rows.push(SorobanEventRow {
-                contract_id: ids::contract_id(contract_strkey),
-                transaction_id: tx_id,
+                contract_id,
                 ledger_sequence: ledger_sequence_i64,
-                event_index,
+                transaction_index: id.transaction_index,
+                operation_index: id.operation_index,
+                event_index: id.event_index,
+                application_order,
                 event_type: ev.event_type as i16,
                 signature,
                 topics_xdr,
@@ -1978,6 +1997,43 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             amount: agg.amount,
         });
     }
+
+    // ---- contract_transactions: which contracts each transaction touched ----
+    //
+    // The union of the three ways a transaction touches a contract — an
+    // operation event it emits, an invocation, an operation naming it — which
+    // are exactly the sources the per-contract transaction list reads (task
+    // 0541). Fee events are left out: every transaction pays one to the native
+    // SAC, which would make that contract's list every transaction on the
+    // network. Invocations and operations name the transaction by its hash
+    // surrogate; the index keys it by position, as the events already do.
+    let app_order_by_tx_id: HashMap<i64, i16> = out
+        .transaction_rows
+        .iter()
+        .map(|t| (t.id, t.application_order))
+        .collect();
+    let position_of = |tx_id: i64| {
+        app_order_by_tx_id
+            .get(&tx_id)
+            .copied()
+            .ok_or_else(|| staging_err(&format!("transaction id {tx_id} is not in this ledger")))
+    };
+    for inv in &out.invocation_rows {
+        contract_txs.insert((inv.contract_id, position_of(inv.transaction_id)?));
+    }
+    for op in &out.op_rows {
+        if let Some(contract_id) = op.contract_id {
+            contract_txs.insert((contract_id, position_of(op.transaction_id)?));
+        }
+    }
+    out.contract_tx_rows = contract_txs
+        .into_iter()
+        .map(|(contract_id, application_order)| ContractTransactionRow {
+            contract_id,
+            ledger_sequence: ledger_sequence_i64,
+            application_order,
+        })
+        .collect();
 
     // ---- assets identity rows (dedup by 4-tuple) + asset_sac facet rows ----
     //
@@ -2530,17 +2586,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         ledger_sequence_i64,
     ));
 
-    // ---- asset_transfers + transaction_memos + soroban_event_ops (0540/0541) --
+    // ---- asset_transfers + transaction_memos (0540) ----
     let value_flow = super::value_flow::build_value_flow_rows(
         ledger_sequence_i64,
         transactions,
         operations,
-        events,
         asset_transfers,
     )?;
     out.asset_transfer_rows = value_flow.transfers;
     out.transaction_memo_rows = value_flow.memos;
-    out.event_op_rows = value_flow.event_ops;
 
     Ok(out)
 }
@@ -3265,21 +3319,16 @@ pub fn ledger_deltas_net_settled(
 }
 
 #[cfg(test)]
-#[path = "stage_pool_fill_amount_tests.rs"]
 mod pool_fill_amount_tests;
 
 #[cfg(test)]
-#[path = "stage_ledger_deltas_net_settled_tests.rs"]
 mod ledger_deltas_net_settled_tests;
 
 #[cfg(test)]
-#[path = "stage_derive_token_event_tests.rs"]
 mod derive_token_event_tests;
 
 #[cfg(test)]
-#[path = "stage_balance_tests.rs"]
 mod balance_tests;
 
 #[cfg(test)]
-#[path = "stage_executable_ref_tests.rs"]
 mod executable_ref_tests;
