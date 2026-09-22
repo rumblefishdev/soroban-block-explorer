@@ -1017,7 +1017,9 @@ throughout, three of its reads failing for ~6 of those minutes.
 - [x] `event_id_reconciliation` run against production and green — 5 ledgers
       written by the new indexer (64,556,788–64,556,936), 3,298 ids equal on
       all three sides: `getEvents`, the table, the parser on the archive;
-- [ ] the production site in a clean browser (Turnstile), by the operator.
+- [x] the production site in a clean browser (Turnstile), by the operator —
+      data loads; the deployed bundle carries the site key and this change's
+      frontend code.
 
 Phase 5 frees 241.98 GiB against the day's sizes: the old table 237.81 GiB,
 `soroban_event_ops` 3.38 GiB, `asset_transfers.event_index` 0.79 GiB. The
