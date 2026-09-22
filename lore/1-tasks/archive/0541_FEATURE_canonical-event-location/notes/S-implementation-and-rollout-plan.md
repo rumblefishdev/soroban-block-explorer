@@ -105,7 +105,7 @@ chw "CREATE TABLE soroban_events_staging_canonical (contract_id Int64, ledger_se
 ```
 
 ```bash
-F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; for a in $(seq -f '%.0f' 63500000 5000 63995000); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
+F=lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; for a in $(seq -f '%.0f' 63500000 5000 63995000); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
 ```
 
 ### 1.2 Agent: size
@@ -1046,14 +1046,14 @@ WHERE name = 'default'` ≥ 120 GiB; the day is not Sunday; no backup running
 3. **Operator — fill:**
 
 ```bash
-F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
+F=lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_insert.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
 ```
 
 3b. **Operator — `contract_transactions` for the same partition**, after step 3
 (it reads the rekeyed rows):
 
 ```bash
-F=lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
+F=lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql; P=101; for a in $(seq -f '%.0f' $((P*500000)) 5000 $((P*500000+495000))); do out=$(chw "$(sed -e "s/{A}/$a/g" -e "s/{B}/$((a+5000))/g" "$F")"); if printf '%s' "$out" | grep -q "DB::Exception"; then echo "FAILED at $a: $out"; break; fi; echo "ok $a"; done
 ```
 
 4. **Agent — post-fill:** staging row count for `P` = sum of the gate's `n`;
@@ -1198,10 +1198,17 @@ re-ingest of the whole range; the SQL is not written.
 Operator, after the agent confirms 4.5:
 
 ```bash
-chw "DROP TABLE soroban_events_staging_canonical"
+chw "DROP TABLE soroban_events_staging_canonical SETTINGS max_table_size_to_drop = 0"
 chw "DROP TABLE soroban_event_ops"
 chw "ALTER TABLE asset_transfers DROP COLUMN event_index"
 ```
+
+The server keeps the default 50 GB `max_table_size_to_drop`; the old table is
+237.81 GiB, so its drop needs the query-level override, or it fails with
+`TABLE_SIZE_EXCEEDS_MAX_DROP_SIZE_LIMIT` and the table stays. Both behaviours
+checked on a local 26.3 server (2026-09-22). The database is `Atomic`: the
+files go 480 s after the drop, and `UNDROP TABLE` brings the table back until
+then.
 
 Agent: disk freed (~240 GiB expected); task README closes the acceptance
 criteria; `lore-framework-tasks` completion checklist.

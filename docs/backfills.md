@@ -1077,10 +1077,10 @@ Per slice `[A, B)`, in this order:
 
 1. **`soroban_events_staging_canonical`** — the rekeyed `soroban_events`. The
    statement and its pre/post gates are in the task's notes
-   ([`fill_insert.sql`](../lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_insert.sql),
-   [`fill_gate.sql`](../lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_gate.sql)).
+   ([`fill_insert.sql`](../lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_insert.sql),
+   [`fill_gate.sql`](../lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_gate.sql)).
 2. **`contract_transactions`** — the per-(contract, transaction) presence index:
-   [`fill_contract_transactions.sql`](../lore/1-tasks/active/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql).
+   [`fill_contract_transactions.sql`](../lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql).
    A `SELECT DISTINCT` over the three ways a transaction touches a contract —
    operation events, invocations, operations naming it — mapping the hash
    surrogate to the transaction's position through `transactions`. It reads
