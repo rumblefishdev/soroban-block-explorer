@@ -2,7 +2,7 @@
 id: '0321'
 title: 'OPS: backfill native=0 tombstones for merged-account ghosts (DB-only, no S3 re-parse)'
 type: OPS
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0295', '0349']
 tags: [ops, clickhouse, layer-data, accountmerge, priority-medium, effort-small]
@@ -65,6 +65,29 @@ history:
       itself: after ADR 0055 the ghosts also inflate `balance_aggregates`,
       because `sum(amount)` ignores `closed_at_ledger` — so the fix must ZERO
       the stale amount, not merely stamp the closure.
+  - date: '2026-09-22'
+    status: completed
+    who: karolkow
+    note: >
+      Closed as obsolete — the ghosts are gone, so no backfill is written.
+      Full-population read on production: of 1,327,456 merged accounts,
+      1,322,361 (99.6%) carry a native amount of 0 at their latest version;
+      31 hold a positive amount versioned at or before their merge ledger
+      (75 XLM in total) and 5,064 hold one versioned after it. A seeded
+      sample of 30 from each group checked against the chain
+      (`getLedgerEntries`, LedgerKey::Account, ledger 64,560,946): all 60
+      accounts exist, so none of them is a ghost. Then all 31 of the first
+      group, checked the same way (ledger 64,561,019): 31 exist and 31 carry
+      exactly our native amount on chain. 28 of them never merged — every
+      AccountMerge they sourced sits in a failed transaction (hundreds of
+      failed attempts each); the other 3 merged successfully at 55.3M-57.2M
+      and were recreated before their current balance version (61.4M-62.5M).
+      They surfaced only because the measurement took the latest merge
+      ledger over failed transactions too. The second group is recreated
+      accounts. The August method gave 22 ghosts in 25 on the
+      same test. What zeroed them is inferred, not traced to a run: most
+      likely the account closures applied from the checkpoint snapshot in
+      0463 (24.5M closures).
 ---
 
 # OPS: backfill native=0 tombstones for merged ghosts
@@ -112,6 +135,17 @@ last_merge)` for each (this is an `INSERT … SELECT`, run via the write client)
 
 ## Acceptance Criteria
 
-- [ ] All merged-not-recreated accounts read native balance 0
-- [ ] Native aggregate de-inflated (~12.4M XLM removed)
-- [ ] No live / recreated account zeroed (RMT higher-ledger wins)
+- [x] All merged-not-recreated accounts read native balance 0 — 99.6% at 0;
+      the 31 positive ones all exist on chain with our exact amount: 28 never
+      merged (failed merges only), 3 recreated (2026-09-22)
+- [x] Native aggregate de-inflated — the positive tail left is 75 XLM, on
+      live accounts; no backfill ran from this task
+- [x] No live / recreated account zeroed — 30 of the 5,064 positive-after-merge
+      accounts sampled, all exist on chain and keep their balance
+
+## Resolution (2026-09-22)
+
+Obsolete: the state this task set out to repair no longer exists, so the
+`backfill-runner` subcommand was never written. Measurement and method are in
+the 2026-09-22 history entry. Caveat: the attribution to the 0463
+checkpoint closures is an inference from timing and scale, not a run log.
