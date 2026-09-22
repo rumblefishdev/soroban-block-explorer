@@ -147,8 +147,9 @@ async fn rpc_event_ids(http: &reqwest::Client, url: &str, ledger: u32) -> BTreeS
             Some(c) => serde_json::json!({ "cursor": c, "limit": 10_000 }),
             None => serde_json::json!({ "limit": 10_000 }),
         };
+        // `endLedger` is exclusive: `[ledger, ledger]` is empty.
         let mut params = serde_json::json!({
-            "endLedger": ledger,
+            "endLedger": ledger + 1,
             "filters": [],
             "pagination": pagination,
         });
