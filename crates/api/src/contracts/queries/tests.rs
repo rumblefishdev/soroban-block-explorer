@@ -101,6 +101,22 @@ fn events_page_orders_and_seeks_on_the_rpc_id() {
     assert!(!events_page_sql(None, Direction::Next).contains(") < ("));
 }
 
+/// `LIMIT 1 BY` walks every row it dedups, so it must run on the key columns
+/// alone — with the payload beside it, the native SAC's page read 1.2 GiB.
+#[test]
+fn events_page_dedups_keys_before_reading_the_payload() {
+    let sql = events_page_sql(None, Direction::Next);
+    let (outer, inner) = sql.split_once(" IN ( ").expect("keys subquery");
+    let (inner, _) = inner.split_once("LIMIT ?)").expect("subquery end");
+    assert!(inner.starts_with("SELECT se.ledger_sequence, se.transaction_index, se.operation_index, se.event_index FROM soroban_events se"));
+    assert!(inner.contains("LIMIT 1 BY se.ledger_sequence"));
+    for heavy in ["topics_xdr", "data_xdr"] {
+        assert!(!inner.contains(heavy), "{heavy} read inside the dedup");
+        assert!(outer.contains(heavy));
+    }
+    assert_eq!(sql.matches("contract_id = ?").count(), 2);
+}
+
 #[test]
 fn event_transactions_resolve_by_position() {
     let sql = event_transactions_sql(&[(10, 1), (10, 3)]);
