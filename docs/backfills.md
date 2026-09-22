@@ -1091,7 +1091,7 @@ Per slice `[A, B)`, in this order:
 The event arm tells an operation event by its id: a fee event's carries a
 sentinel, so only an operation event names its own transaction in
 `transaction_index`. The live writer needs no such inference — the parser
-states each event's source (`EventSource::PerOp`); the check after the window
+states each event's origin (`EventOrigin::Operation`); the check after the window
 (below) confirms the two agree on real rows. Measured read-only on 63,700,000–
 63,705,000 (2026-09-21): 1,554,897 pairs across 8,369 contracts, 740 ms,
 586 MiB — well inside the read profile. The sentinel test was checked on the
