@@ -13,6 +13,7 @@
 pub mod dto;
 mod handlers;
 mod queries;
+mod soroban_participants;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;

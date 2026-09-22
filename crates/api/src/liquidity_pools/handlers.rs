@@ -27,6 +27,7 @@ use super::dto::{
     SharesCursor,
 };
 use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
+use super::soroban_participants;
 
 #[utoipa::path(
     get,
@@ -69,13 +70,14 @@ pub async fn list_participants(
     // frontend can route to a "pool not found" page. An existing pool
     // with no current participants returns 200 with `data: []`.
     //
-    // Both reads derive everything from the path — the page never consumes the
-    // existence answer — so they go out together (task 0446). `exists` is still
-    // what decides the 404 and is still checked first, so responses are
-    // unchanged; the cost is one wasted page read when the pool is missing.
+    // The source lookup and the classic page both derive everything from the
+    // path, so they go out together (task 0446); the source still decides the
+    // 404 first. A soroban pool's page is a second read, because it needs the
+    // share token the lookup returns — the classic read it wasted is a seek
+    // that finds nothing.
     let ch = state.ch();
-    let (exists, fetched) = tokio::join!(
-        queries::pool_exists(&ch, &pool_id_hex),
+    let (source, classic) = tokio::join!(
+        queries::participant_source(&ch, &pool_id_hex),
         queries::fetch_participants(
             &ch,
             &pool_id_hex,
@@ -84,14 +86,39 @@ pub async fn list_participants(
             direction,
         ),
     );
-    match exists.map_err(|e| e.to_string()) {
-        Ok(true) => {}
-        Ok(false) => return errors::not_found("liquidity pool not found"),
+    let source = match source.map_err(|e| e.to_string()) {
+        Ok(Some(source)) => source,
+        Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in pool_exists");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in participant_source");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
-    }
+    };
+    let fetched = match source {
+        queries::ParticipantSource::Classic => classic,
+        queries::ParticipantSource::Soroban {
+            share_token_id: Some(share_token_id),
+        } => {
+            let own = db_clickhouse::persist::ids::contract_id(&pool_identifier(
+                &pool_id_hex,
+                domain::PoolKind::Soroban as i16,
+            ));
+            soroban_participants::fetch_soroban_participants(
+                &ch,
+                share_token_id,
+                own,
+                pagination.cursor.as_ref(),
+                fetch_limit,
+                direction,
+            )
+            .await
+        }
+        // No share token, no holders to list; the section says why from the
+        // detail response's `participant_count: null`.
+        queries::ParticipantSource::Soroban {
+            share_token_id: None,
+        } => Ok(Vec::new()),
+    };
 
     let mut rows = match fetched.map_err(|e| e.to_string()) {
         Ok(r) => r,
@@ -113,7 +140,7 @@ pub async fn list_participants(
         |dir, last| {
             cursor::encode(
                 &SharesCursor {
-                    shares: last.shares.clone(),
+                    shares: last.cursor_shares.clone(),
                     account_id: last.account_id_surrogate,
                 },
                 dir,

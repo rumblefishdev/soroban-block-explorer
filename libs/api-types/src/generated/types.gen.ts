@@ -1732,11 +1732,13 @@ export type PaginatedNftTransferItem = {
 export type PaginatedParticipantItem = {
   data: Array<{
     /**
-     * Participant account StrKey (G...).
+     * The provider's StrKey: an account (`G…`), or for a soroban pool also
+     * a contract (`C…`) — share tokens are commonly staked into one.
      */
     account: string;
     /**
-     * Ledger of the first deposit by this account into this pool.
+     * Ledger of the first deposit by this account into this pool. A soroban
+     * holder's is its first `mint` or incoming `transfer` of the share token.
      */
     first_deposit_ledger: number;
     /**
@@ -1748,14 +1750,19 @@ export type PaginatedParticipantItem = {
      * (`100 * shares / total_pool_shares`). `None` when the pool has no
      * snapshot in the freshness window (stale pool); the frontend renders
      * it as "—" in that case (matches the list-endpoint stale-pool
-     * convention from `18_get_liquidity_pools_list.sql`).
+     * convention from `18_get_liquidity_pools_list.sql`). A soroban pool's
+     * denominator is every positive balance of its share token, the pool's
+     * own locked holding included.
      */
     share_percentage?: string | null;
     /**
      * Pool-share balance carried as a decimal string preserving the
-     * underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+     * underlying `NUMERIC(28,7)` precision (no f64 round-trip). A soroban
+     * pool's is the share token's balance scaled by the token's published
+     * decimals; `null` when those are unknown, never a raw integer posing as
+     * a scaled amount.
      */
-    shares: string;
+    shares?: string | null;
   }>;
   page: PageInfo;
 };
@@ -1985,11 +1992,13 @@ export type PaginatedTransactionListItem = {
  */
 export type ParticipantItem = {
   /**
-   * Participant account StrKey (G...).
+   * The provider's StrKey: an account (`G…`), or for a soroban pool also
+   * a contract (`C…`) — share tokens are commonly staked into one.
    */
   account: string;
   /**
-   * Ledger of the first deposit by this account into this pool.
+   * Ledger of the first deposit by this account into this pool. A soroban
+   * holder's is its first `mint` or incoming `transfer` of the share token.
    */
   first_deposit_ledger: number;
   /**
@@ -2001,14 +2010,19 @@ export type ParticipantItem = {
    * (`100 * shares / total_pool_shares`). `None` when the pool has no
    * snapshot in the freshness window (stale pool); the frontend renders
    * it as "—" in that case (matches the list-endpoint stale-pool
-   * convention from `18_get_liquidity_pools_list.sql`).
+   * convention from `18_get_liquidity_pools_list.sql`). A soroban pool's
+   * denominator is every positive balance of its share token, the pool's
+   * own locked holding included.
    */
   share_percentage?: string | null;
   /**
    * Pool-share balance carried as a decimal string preserving the
-   * underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+   * underlying `NUMERIC(28,7)` precision (no f64 round-trip). A soroban
+   * pool's is the share token's balance scaled by the token's published
+   * decimals; `null` when those are unknown, never a raw integer posing as
+   * a scaled amount.
    */
-  shares: string;
+  shares?: string | null;
 };
 
 /**

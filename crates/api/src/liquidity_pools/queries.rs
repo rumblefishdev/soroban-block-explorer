@@ -218,13 +218,18 @@ fn price_leg_of(id: i64, identities: &HashMap<i64, ResolvedAsset>) -> PriceLeg {
 /// surrogate before building the API response.
 #[derive(Debug)]
 pub struct ParticipantRow {
-    /// G-StrKey resolved via JOIN on `accounts`.
+    /// G-StrKey resolved via `accounts` (or C-StrKey via `soroban_contracts`
+    /// for a soroban pool's contract holder).
     pub account: String,
     /// `accounts.id` BIGINT — used only to encode the next cursor; not
     /// exposed in the response DTO.
     pub account_id_surrogate: i64,
-    /// Numeric carried as text to preserve `NUMERIC(28,7)` precision.
-    pub shares: String,
+    /// Numeric carried as text to preserve `NUMERIC(28,7)` precision. `None`
+    /// only for a soroban share token whose scale is unknown.
+    pub shares: Option<String>,
+    /// The value the keyset compares: `shares` for a classic pool, the raw
+    /// integer balance for a soroban one. Never on the wire.
+    pub cursor_shares: String,
     /// `100 * shares / total_pool_shares`, NULL when the pool has no snapshot
     /// in the 7-day freshness window. Already a decimal string.
     pub share_percentage: Option<String>,
@@ -286,7 +291,7 @@ const FRESHNESS_WINDOW_LEDGERS: i64 = 7 * 17_280;
 /// leading `-`). Cursor `shares` is decoded from an opaque payload and inlined
 /// into the keyset SQL (to dodge the clickhouse-rs None-into-tuple bind defect,
 /// same as accounts/contracts); validating it first keeps that inline safe.
-fn is_decimal_str(s: &str) -> bool {
+pub(super) fn is_decimal_str(s: &str) -> bool {
     let body = s.strip_prefix('-').unwrap_or(s);
     !body.is_empty()
         && body.bytes().all(|b| b.is_ascii_digit() || b == b'.')
@@ -734,7 +739,7 @@ async fn fetch_last_closes(
 /// past [`MAX_SCALE`] the scale is not a fact but a hostile or broken value —
 /// two live contracts declare 43,224 — and the pad width below would otherwise
 /// be the attacker's to choose.
-fn scale_decimal_str(raw: &str, decimals: u32) -> Option<String> {
+pub(super) fn scale_decimal_str(raw: &str, decimals: u32) -> Option<String> {
     let digits = raw.strip_prefix('+').unwrap_or(raw);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) || decimals > MAX_SCALE {
         return None;
@@ -1166,26 +1171,52 @@ pub async fn fetch_pool_by_id(
     }))
 }
 
-#[derive(Debug, Row, Deserialize)]
-struct CountRow {
-    n: u64,
+/// Where a pool's participants are read from.
+pub enum ParticipantSource {
+    /// Pool-share trustlines, `lp_positions`.
+    Classic,
+    /// Holders of the share token; `None` when the pool has none — a
+    /// concentrated pool never mints one.
+    Soroban { share_token_id: Option<i64> },
 }
 
-/// `true` if a real (non-sentinel) pool with this id exists. Gates 404 vs
-/// 200-empty on participants/transactions/chart. CH `liquidity_pools` has no
+#[derive(Debug, Row, Deserialize)]
+struct ParticipantSourceChRow {
+    pool_kind: i16,
+    share_token_id: i64,
+}
+
+/// The pool's participant source, `None` when no pool has this id — the
+/// participants endpoint's 404 gate. CH `liquidity_pools` has no
 /// `created_at_ledger` sentinel column (dropped); a row's presence is the
-/// existence signal. No FINAL needed — existence is unaffected by un-merged
-/// duplicate versions.
-pub async fn pool_exists(
+/// existence signal, and `HAVING` turns "no rows" into no row. No FINAL
+/// needed — the kind is the same in every version, and `argMax` picks one.
+pub async fn participant_source(
     client: &clickhouse::Client,
     pool_id_hex: &str,
-) -> Result<bool, clickhouse::error::Error> {
+) -> Result<Option<ParticipantSource>, clickhouse::error::Error> {
     let row = client
-        .query("SELECT count() AS n FROM liquidity_pools WHERE pool_id = unhex(?)")
+        .query(
+            "SELECT toInt16(argMax(pool_kind, last_updated_ledger)) AS pool_kind, \
+                    ifNull((SELECT argMax(share_token_id, derived_at_ledger) \
+                              FROM pool_instance_state WHERE pool_id = unhex(?)), 0) \
+                        AS share_token_id \
+             FROM liquidity_pools WHERE pool_id = unhex(?) \
+             HAVING count() > 0",
+        )
         .bind(pool_id_hex)
-        .fetch_one::<CountRow>()
+        .bind(pool_id_hex)
+        .fetch_optional::<ParticipantSourceChRow>()
         .await?;
-    Ok(row.n > 0)
+    Ok(row.map(|r| {
+        if r.pool_kind == domain::PoolKind::Soroban as i16 {
+            ParticipantSource::Soroban {
+                share_token_id: (r.share_token_id != 0).then_some(r.share_token_id),
+            }
+        } else {
+            ParticipantSource::Classic
+        }
+    }))
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -1341,7 +1372,8 @@ pub async fn fetch_participants(
             Some(ParticipantRow {
                 account,
                 account_id_surrogate: r.account_id_surrogate,
-                shares: r.shares,
+                cursor_shares: r.shares.clone(),
+                shares: Some(r.shares),
                 share_percentage: r.share_percentage,
                 first_deposit_ledger: r.first_deposit_ledger,
                 last_updated_ledger: r.last_updated_ledger,

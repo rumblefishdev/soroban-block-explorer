@@ -4170,19 +4170,18 @@
               "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
               "required": [
                 "account",
-                "shares",
                 "first_deposit_ledger",
                 "last_updated_ledger"
               ],
               "properties": {
                 "account": {
                   "type": "string",
-                  "description": "Participant account StrKey (G...)."
+                  "description": "The provider's StrKey: an account (`G…`), or for a soroban pool also\na contract (`C…`) — share tokens are commonly staked into one."
                 },
                 "first_deposit_ledger": {
                   "type": "integer",
                   "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool."
+                  "description": "Ledger of the first deposit by this account into this pool. A soroban\nholder's is its first `mint` or incoming `transfer` of the share token."
                 },
                 "last_updated_ledger": {
                   "type": "integer",
@@ -4191,11 +4190,11 @@
                 },
                 "share_percentage": {
                   "type": ["string", "null"],
-                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`). A soroban pool's\ndenominator is every positive balance of its share token, the pool's\nown locked holding included."
                 },
                 "shares": {
-                  "type": "string",
-                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+                  "type": ["string", "null"],
+                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip). A soroban\npool's is the share token's balance scaled by the token's published\ndecimals; `null` when those are unknown, never a raw integer posing as\na scaled amount."
                 }
               }
             }
@@ -4439,21 +4438,16 @@
       "ParticipantItem": {
         "type": "object",
         "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
-        "required": [
-          "account",
-          "shares",
-          "first_deposit_ledger",
-          "last_updated_ledger"
-        ],
+        "required": ["account", "first_deposit_ledger", "last_updated_ledger"],
         "properties": {
           "account": {
             "type": "string",
-            "description": "Participant account StrKey (G...)."
+            "description": "The provider's StrKey: an account (`G…`), or for a soroban pool also\na contract (`C…`) — share tokens are commonly staked into one."
           },
           "first_deposit_ledger": {
             "type": "integer",
             "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool."
+            "description": "Ledger of the first deposit by this account into this pool. A soroban\nholder's is its first `mint` or incoming `transfer` of the share token."
           },
           "last_updated_ledger": {
             "type": "integer",
@@ -4462,11 +4456,11 @@
           },
           "share_percentage": {
             "type": ["string", "null"],
-            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`). A soroban pool's\ndenominator is every positive balance of its share token, the pool's\nown locked holding included."
           },
           "shares": {
-            "type": "string",
-            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+            "type": ["string", "null"],
+            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip). A soroban\npool's is the share token's balance scaled by the token's published\ndecimals; `null` when those are unknown, never a raw integer posing as\na scaled amount."
           }
         }
       },

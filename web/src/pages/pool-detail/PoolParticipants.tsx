@@ -24,7 +24,13 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     id: 'account',
     header: 'Account',
     width: 160,
-    cell: (row) => <IdentifierWithCopy value={row.account} type="account" />,
+    // A soroban pool's providers are often contracts: share tokens get staked.
+    cell: (row) => (
+      <IdentifierWithCopy
+        value={row.account}
+        type={row.account.startsWith('C') ? 'contract' : 'account'}
+      />
+    ),
   },
   {
     id: 'shares',
@@ -37,7 +43,9 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
         variant="bodySmMedium"
         sx={(theme) => ({ color: theme.palette.text.primary })}
       >
-        {formatAmount(row.shares)}
+        {/* null = the share token's scale is unknown; Share % is scale-free
+            and still reports. */}
+        {row.shares != null ? formatAmount(row.shares) : '—'}
       </Typography>
     ),
   },
@@ -120,13 +128,10 @@ export function PoolParticipants({
   } else if (isError) {
     body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
   } else if (rows.length === 0) {
-    // The KPI above counts providers from a per-asset aggregate, which this
-    // list cannot page through: a Soroban pool's providers hold its share
-    // TOKEN, and `balances` is ordered by holder, so listing the holders of
-    // one asset is a full scan (measured: 113M rows, 4.22 GiB for a single
-    // token — past the read-only profile). Saying "no participants" while the
-    // strip says 337 would be the same contradiction from the other side, so
-    // the section says which of the two it is.
+    // The KPI above counts providers from an aggregate; this list reads them
+    // one by one. They agree — but an empty list beside a count of 337 (every
+    // holder dropped as unresolvable, or the aggregate ahead of the table)
+    // must not say "no participants", so the section says which it is.
     //
     // `null` is a third fact: the API cannot count them either — a
     // concentrated pool has no share token, its providers hold positions.
@@ -149,7 +154,7 @@ export function PoolParticipants({
           }
           description={
             countedButNotListed
-              ? `This pool has ${knownParticipants} liquidity providers. Listing who they are is not indexed yet for this pool type.`
+              ? `This pool has ${knownParticipants} liquidity providers, but they could not be listed.`
               : 'This pool currently has no active liquidity providers.'
           }
         />
