@@ -2976,3 +2976,75 @@ contract's answer because of rebasing tokens or direct transfers.
 
 Decided: the Soroban activity section gets real activity, not a reworded empty
 state.
+
+## Soroban participants listed, counts made honest (2026-09-22)
+
+Owner decisions: the activity feed ports the router decoder from PR #438 into
+this PR; the participants list reads `balances` behind a bloom skip index; a
+share token's holder count reports 0 where it counted 0; the declared-plane
+read filter goes once PR #459 is merged — it was merged and deployed on
+2026-09-16.
+
+**How this project serves an asset-first read of a holder-first table.**
+Three patterns are in use: a bloom skip index for a few keys
+(`accounts.id`, `transactions.hash`, `operations_appearances.contract_id`),
+a writer-maintained asset-first table for event feeds
+(`operation_asset_appearances`, `contract_transactions`), and a refreshable
+MV into a re-ordered plain table (`accounts_recent`, `balance_aggregates`).
+A projection is not one of them: ClickHouse 26.3 refuses a projection on a
+ReplacingMergeTree (`deduplicate_merge_projection_mode = throw`, confirmed
+on production), and task 0353 rejected both allowed modes for a hot table.
+ADR 0056 §3 names the refreshable-MV companion for exactly this page.
+
+Measured on production, 2026-09-22 (`balances` 117.4M rows, 14,342 granules):
+
+| read                                                | cost                                    |
+| --------------------------------------------------- | --------------------------------------- |
+| holders of the busiest share token (641), full scan | 97 ms, 117M rows, 1.17 GiB, 7 MiB       |
+| refresh of an MV over every share token's holders   | 201 ms, 117M rows, 3.0 GiB, per refresh |
+| granules holding the busiest token                  | 2,167 of 14,342                         |
+| granules holding any share token                    | 10,552 of 14,342                        |
+| distinct `asset_id` per granule                     | 4,142 on average, 59.4M summed          |
+
+Chosen: the bloom index (`idx_bal_asset_id`, `bloom_filter(0.001)`). Its size
+follows the distinct values per granule — `accounts.id` holds 15.1 bits per
+value at the same rate — so ~112 MB (estimate), read whole on every request
+since no primary-key range bounds it. The API reads the same rows with or
+without it, so it can be added before or after the deploy.
+
+**Added on production 2026-09-22** (`ADD INDEX` + `MATERIALIZE INDEX`, run
+by the operator; 106.68 MiB). The API's page query, measured after:
+
+| share token           | before                       | after                      |
+| --------------------- | ---------------------------- | -------------------------- |
+| busiest (641 holders) | 117.4M rows, 1.17 GiB, 97 ms | 17.9M rows, 519 MiB, 98 ms |
+| 31 holders            | 117.4M rows, 1.17 GiB        | 1.16M rows, 28 MiB, 47 ms  |
+
+The busiest token's latency does not move — its holders sit in 15% of the
+granules — while a typical pool's read shrinks ~40×. Same rows returned
+before and after (641 and 30).
+
+**First deposit.** Dated from the share token's first `mint` or incoming
+`transfer` (topic 3). PR #438 had checked this on router tokens only; now
+4,152 of 4,152 positive holders across all three families (constant 2,842,
+Soroswap-shaped 634, stable 515, Phoenix-shaped 160, elastic 1), all
+resolved to an account or contract.
+
+**Verified through the local API against production:** the three largest
+router pools list 641, 337 and 215 holders — equal to `participant_count`,
+unique, descending, percentages summing to 100 ± 0.002, 0 dropped holders;
+the largest Soroswap-shaped pools list 61 and 30 (their token's 62 and 31
+holders less the pool's own locked holding); a concentrated pool returns an
+empty page with a `null` count; the largest classic pool still lists 224 of 224.
+
+**Counts.** A share token's holders are NULL only without an aggregate row.
+Of 812 soroban pools: 561 counted, 106 zero (33 pairs held only by
+themselves, 73 emptied pools with nothing outstanding), 145 unknown (47
+concentrated and 38 pair pools with no share token, 60 tokens with no
+balance rows). Shares measured at zero also read as 0, which keeps 6
+never-funded pair pools at 0 rather than unknown.
+
+**Conformance found on the way:** `queries.rs` (2,972 lines) and
+`handlers.rs` (986) carried their tests inline; the tests moved to their own
+files under `queries/`, `handlers/` and `dto/`. The soroban listing is a new
+module, not more of `queries.rs`.
