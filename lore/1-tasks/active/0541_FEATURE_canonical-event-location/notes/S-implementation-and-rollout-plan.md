@@ -1100,7 +1100,8 @@ literals remove the doubt.
   `soroban_events.transaction_id` / `event_index` are handed to its owner, or
   its outage over the window is accepted explicitly.
 - Two local checkouts ready and built once (`make -C infra` build step):
-  `prod` at the last `production-*` tag, `new` at `origin/master`.
+  `prod` at the last `production-*` tag, `new` at `origin/master` (2026-09-22:
+  `develop` at `0baddade` instead — the window deploys from `develop`).
 - Not Sunday; free disk ≥ 120 GiB; SQS ingest queue and DLQ empty
   (`aws sqs get-queue-attributes --queue-url "$(aws sqs get-queue-url --queue-name production-ledger-ingest --query QueueUrl --output text)" --attribute-names ApproximateNumberOfMessages`
   and the same for `production-ledger-processor-dlq` — read-only, agent may

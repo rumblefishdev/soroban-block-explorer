@@ -348,7 +348,14 @@ Frontend **content** is separate: `deploy-production-web`
   6. **Resume:** concurrency back to `1` — the value production runs, not the
      unset default — then deploy Compute and Web.
 
-  Remove this item once the window has run.
+  **After the swap the hold turns around:** only code that carries task 0541
+  may deploy Compute. The earlier writer still names `transaction_id`, which the
+  new `soroban_events` does not have, so a Compute deploy from `master` or a
+  `production-*` tag that predates the change stops ingest on its first ledger —
+  a hotfix included. The window deploys from `develop`; the hold lasts until
+  `master` carries the change and a `production-*` tag is cut from it.
+
+  Remove this item once that tag exists.
 
 - **A SPA build without the Turnstile site key takes production down for
   users.** With `enableAuthLayer: true` the API rejects unauthenticated

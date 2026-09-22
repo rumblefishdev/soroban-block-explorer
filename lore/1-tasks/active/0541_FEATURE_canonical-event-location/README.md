@@ -898,6 +898,21 @@ into the window's tail.
 then the release PR `develop → master`, untagged) — Tuesday at the earliest,
 Wednesday at the latest.
 
+**Decided (karolkow, 2026-09-22):**
+
+- **The window deploys from `develop`, not `master`.** PR #465 is merged
+  (`4cc95aee`); the new code is deployed from `develop` at `0baddade`, and
+  `master` takes the change later. Until a `production-*` tag carries it,
+  a Compute deploy from `master` or an older tag stops ingest after the swap —
+  recorded as the reverse hold in `docs/deployment.md`.
+- **The client outside this repository is not warned; its two query shapes
+  break at the swap**, accepted.
+
+Preconditions read on 2026-09-22: every copied partition's old row count still
+equals its gate (29 of 29 — no backfill since the copy); `contract_transactions`
+exists; `asset_transfers.event_index` reads `DEFAULT 0`; free disk 277.57 GiB;
+ingest queue and DLQ empty, retention 14 days.
+
 Phase 3 runs as one command per list of partitions,
 [`fill_partitions.zsh`](notes/fill_partitions.zsh): both tables per partition,
 disk checked before each, stop at the first error. Dry-run with a stub `chw`
