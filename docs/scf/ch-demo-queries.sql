@@ -120,6 +120,11 @@ FORMAT Vertical;
 -- form would defeat that bloom filter because the function call on the
 -- indexed column blocks index use. Empirical: ~66 ms vs ~88 s for the
 -- `lower(hex())` form.
+--
+-- Rewritten for the rekeyed `soroban_events` (task 0541, ADR 0059): an
+-- event joins its transaction by position and sorts by its stellar-rpc id,
+-- fee charge first and refund last. `milestone-1-evidence.md` records the
+-- query as it ran for the milestone, on the table's earlier shape.
 -- ----------------------------------------------------------------------
 
 WITH tx AS (
@@ -128,16 +133,18 @@ WITH tx AS (
     WHERE  hash = unhex('6cad2d49962ae5962722f1f90d4fd11f9e04bd644ad4873752ae1416fddd4740')
     LIMIT  1
 )
-SELECT e.event_index,
+SELECT e.transaction_index,
+       e.operation_index,
+       e.event_index,
        e.event_type,
        e.signature,
        e.topics_xdr,
        e.data_xdr
 FROM   soroban_events AS e
 INNER  JOIN transactions AS t
-       ON  t.id              = e.transaction_id
-       AND t.ledger_sequence = e.ledger_sequence
+       ON  t.application_order = e.application_order
+       AND t.ledger_sequence   = e.ledger_sequence
 WHERE  e.ledger_sequence = (SELECT ledger_sequence FROM tx)
   AND  t.hash            = unhex('6cad2d49962ae5962722f1f90d4fd11f9e04bd644ad4873752ae1416fddd4740')
-ORDER  BY e.event_index
+ORDER  BY e.transaction_index, e.operation_index, e.event_index
 FORMAT Vertical;
