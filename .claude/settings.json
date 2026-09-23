@@ -101,7 +101,13 @@
       "Bash(cargo clippy:*)",
       "Bash(cargo check:*)",
       "Bash(pnpm nx run @rumblefish/api-types:check-generated:*)",
-      "Bash(pnpm nx run @rumblefish/api-types:generate:*)"
+      "Bash(pnpm nx run @rumblefish/api-types:generate:*)",
+      "Bash(chq *)",
+      "Bash(git ls-tree *)",
+      "Bash(cargo tree *)",
+      "Bash(docker system df)",
+      "Bash(docker system df *)",
+      "mcp__plugin_lore-framework_lore-framework__lore-framework_validate"
     ],
     "deny": [],
     "ask": [
