@@ -398,3 +398,13 @@ request that touches `crates/`; nothing reads `web/dist/*.d.ts` (and
 the site bucket); no branch rules or required checks exist, so skipped jobs
 cannot block a merge; no workflow, Makefile or script referenced the removed
 `rust` project beyond the README.
+
+### The docs-only skip, live
+
+First try, run 35861319461 (lore-only commit `65af8069` on a green
+`2934d5fc`): every job ran, correctly. The step printed `previous run:
+success` and a pushed list of one lore file, but the base-side compare listed
+`libs/ui`, `infra` and `crates` files that `develop` had gained since the
+branch last merged it — code the previous run never tested together with
+this branch. The branch was brought up to date with `develop` (`a2a27783`,
+green run 35862179179) and this commit, lore only, is the second try.
