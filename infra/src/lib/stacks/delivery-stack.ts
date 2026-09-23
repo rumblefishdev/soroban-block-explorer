@@ -154,33 +154,32 @@ export class DeliveryStack extends cdk.Stack {
       });
     }
 
-    // Provisioned whenever EITHER the main site OR the `/api/*` SPA needs
-    // basic auth — `/api/*` gating must not depend on `enableBasicAuth`
-    // being on for the main site too.
-    let basicAuthKvs: cloudfront.KeyValueStore | undefined;
-    if (config.enableBasicAuth || config.enableApiSpaBasicAuth) {
-      basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
-        keyValueStoreName: `${config.envName}-soroban-explorer-basic-auth`,
-      });
+    // Always provisioned, even with both basic-auth flags off: its
+    // credentials are written out-of-band (never in CDK), so letting a flag
+    // flip delete the store would make re-arming either gate a manual
+    // re-seed. Shared by the main site (`enableBasicAuth`) and the `/api/*`
+    // SPA (`enableApiSpaBasicAuth`), which are gated independently.
+    const basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
+      keyValueStoreName: `${config.envName}-soroban-explorer-basic-auth`,
+    });
 
-      new cdk.CfnOutput(this, 'BasicAuthKvsArn', {
-        value: basicAuthKvs.keyValueStoreArn,
-      });
+    new cdk.CfnOutput(this, 'BasicAuthKvsArn', {
+      value: basicAuthKvs.keyValueStoreArn,
+    });
 
-      if (config.enableBasicAuth) {
-        viewerRequestFunction = new cloudfront.Function(
-          this,
-          'BasicAuthFunction',
-          {
-            functionName: `${config.envName}-soroban-explorer-basic-auth`,
-            keyValueStore: basicAuthKvs,
-            runtime: cloudfront.FunctionRuntime.JS_2_0,
-            code: cloudfront.FunctionCode.fromInline(
-              basicAuthFunctionCode(basicAuthKvs.keyValueStoreId)
-            ),
-          }
-        );
-      }
+    if (config.enableBasicAuth) {
+      viewerRequestFunction = new cloudfront.Function(
+        this,
+        'BasicAuthFunction',
+        {
+          functionName: `${config.envName}-soroban-explorer-basic-auth`,
+          keyValueStore: basicAuthKvs,
+          runtime: cloudfront.FunctionRuntime.JS_2_0,
+          code: cloudfront.FunctionCode.fromInline(
+            basicAuthFunctionCode(basicAuthKvs.keyValueStoreId)
+          ),
+        }
+      );
     }
 
     // `/api` + `/api/*` routing function — always created. SPA routing
