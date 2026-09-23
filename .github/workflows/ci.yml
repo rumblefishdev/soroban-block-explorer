@@ -123,21 +123,6 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-
-      # Nx replays a task whose inputs it has seen before — but only with its
-      # record of it: the outputs live in .nx/cache, the records in a database
-      # under .nx/workspace-data named after the machine id. Both are cached.
-      # On a runner whose machine id differs, Nx warns "Unrecognized Cache
-      # Artifacts" and runs everything, as it would without this step.
-      - uses: actions/cache@v4
-        with:
-          path: |
-            .nx/cache
-            .nx/workspace-data
-          key: nx-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
-
       - run: pnpm nx format:check --all
 
       # A pull request checks the projects its change reaches; master checks
