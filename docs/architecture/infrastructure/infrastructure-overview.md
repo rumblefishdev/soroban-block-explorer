@@ -383,7 +383,10 @@ redeploying `ApiGateway` as soon as the run ends.
   also does the basic-auth check when `enableApiSpaBasicAuth` is on,
   independent of the main site's `enableBasicAuth`/`enableOriginSecretLock`
   — sharing the KeyValueStore (not the Function itself) so there's one
-  credential to manage, not two.
+  credential to manage, not two. The KVS is provisioned even with both
+  flags off, so turning a gate off keeps its credentials for re-arming.
+  Production runs with `enableApiSpaBasicAuth=false` (the `/api` SPA is
+  public; its backend lives on a separate host).
 
 **Swagger UI**
 
