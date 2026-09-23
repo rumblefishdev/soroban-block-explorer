@@ -33,6 +33,7 @@ use crate::common::asset_identity::{
 use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
+use crate::common::strkey::decode_pool_kind;
 
 use super::dto::{ChartDataPoint, PoolActivityCursor, PoolEvent, PoolListCursor, SharesCursor};
 
@@ -48,7 +49,7 @@ pub struct PoolRow {
     /// `liquidity_pools.pool_kind` — [`domain::PoolKind`]'s discriminant, kept
     /// raw here and named at the response boundary like every other enum-like
     /// column in this API.
-    pub pool_kind: i16,
+    pub pool_kind: domain::PoolKind,
     /// The pool's legs in registration order: two for a classic pool, two to
     /// four for a soroban one.
     pub legs: Vec<PoolLegRow>,
@@ -648,15 +649,13 @@ fn priceable_legs(ctx: &PoolPriceContext) -> Vec<&PriceLeg> {
 /// over Decimal columns; anything non-parseable degrades to None, never 500).
 /// A pool's TVL: every leg's reserve times its price, summed. `None` unless
 /// EVERY leg has both — a partial sum understates the pool while looking like
-/// a real number. `reserves[i]` and `legs[i]` describe the same leg.
+/// a real number. `reserves[i]` and `legs[i]` describe the same leg: both
+/// callers build the two from one leg list.
 fn tvl_usd(
     reserves: &[Option<&str>],
     legs: &[PriceLeg],
     closes: &HashMap<PriceLeg, f64>,
 ) -> Option<f64> {
-    if legs.is_empty() || reserves.len() != legs.len() {
-        return None;
-    }
     reserves
         .iter()
         .zip(legs)
@@ -820,8 +819,8 @@ pub async fn fetch_pool_by_id(
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
     Ok(Some(PoolRow {
+        pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
         pool_id_hex: r.pool_id_hex,
-        pool_kind: r.pool_kind,
         // The snapshot is classic, and a classic pool's legs are its two
         // snapshot columns in order; a soroban pool has no snapshot row.
         legs: leg_rows(
@@ -1079,7 +1078,7 @@ impl PairedOp {
     /// missing leg read as `0` and turn a half-row into a "trade".
     fn event(&self) -> Option<PoolEvent> {
         let amounts: Vec<i64> = self.amounts.iter().copied().collect::<Option<_>>()?;
-        (!amounts.is_empty()).then(|| PoolEvent::from_signs(&amounts))
+        Some(PoolEvent::from_signs(&amounts))
     }
 }
 
@@ -1172,7 +1171,7 @@ pub async fn fetch_pool_activity(
         cursor.map(|c| (c.ledger_sequence, c.transaction_id, c.application_order));
 
     // One row per leg per operation, plus slack so the cap rarely lands mid-op.
-    let legs_per_op = legs.len().max(2) as i64;
+    let legs_per_op = legs.len() as i64;
     let mut window = (limit * legs_per_op + legs_per_op).max(64);
     let mut ops: Vec<PairedOp> = Vec::new();
 
@@ -1894,8 +1893,8 @@ pub async fn fetch_pool_list(
                 .collect();
             let tvl = tvl_usd(&reserve_strs, &legs, &closes).map(usd_str);
             PoolRow {
+                pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
                 pool_id_hex: r.pool_id_hex,
-                pool_kind: r.pool_kind,
                 legs: leg_rows(&r.legs, &identities, &icons, &reserves),
                 fee_bps: r.fee_bps,
                 fee_percent: fee_percent_str(r.fee_bps),

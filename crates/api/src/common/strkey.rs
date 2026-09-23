@@ -81,27 +81,22 @@ pub(crate) fn pool_id_from_text(raw: &str) -> Option<String> {
     }
 }
 
-/// The wire identifier for a pool ROW, from its raw stored discriminant.
+/// A pool row's stored `pool_kind`, decoded ONCE where it leaves the database;
+/// everything downstream holds a [`domain::PoolKind`].
 ///
-/// The drift fallback lives HERE and nowhere else. A discriminant outside
-/// [`domain::PoolKind`] is schema drift, and every surface has to answer the
-/// same way about it: `pool_id` is a required field, so there is no "no
-/// identifier" to return, and classic is the form all but ~1.3% of pools take.
-/// The pools handler and the search row used to spell this
-/// `unwrap_or(PoolKind::Classic)` separately, each under a comment claiming the
-/// classic encoding was used "only when the row says classic" — which is
-/// exactly what a fallback is not. It is logged as an error, so the drift is
-/// seen rather than silently rendered as a well-formed `L…`.
-pub(crate) fn pool_identifier(pool_id_hex: &str, raw_kind: i16) -> String {
-    let kind = domain::PoolKind::try_from(raw_kind).unwrap_or_else(|_| {
+/// The writer only ever stores 0 or 1 (every one of 58,095 physical rows on
+/// production, 2026-09-23), so the error arm is schema drift. It is logged,
+/// and answers classic — the form all but ~1.3% of pools take — because a
+/// row still needs an identifier.
+pub(crate) fn decode_pool_kind(pool_id_hex: &str, raw_kind: i16) -> domain::PoolKind {
+    domain::PoolKind::try_from(raw_kind).unwrap_or_else(|_| {
         tracing::error!(
             pool_id_hex,
             raw_kind,
-            "pool_kind outside PoolKind; encoded as classic"
+            "pool_kind outside PoolKind; read as classic"
         );
         domain::PoolKind::Classic
-    });
-    pool_id_hex_to_strkey(pool_id_hex, kind)
+    })
 }
 
 /// The wire form of a pool's 32 bytes, chosen by its KIND.

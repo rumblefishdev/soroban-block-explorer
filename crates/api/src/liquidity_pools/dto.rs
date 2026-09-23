@@ -154,8 +154,9 @@ pub struct PoolListParams {
 /// with its deployment state.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolAssetLeg {
-    /// `native` | `classic_credit` | `soroban`. `None` only on schema drift —
-    /// a stored discriminant outside the family domain.
+    /// `native` | `classic_credit` | `soroban`. `None` for a leg whose token
+    /// the registry has no row for (one live pool has one) — there is no
+    /// family to name.
     pub asset_type_name: Option<String>,
     pub asset_code: Option<String>,
     pub issuer: Option<String>,
@@ -195,8 +196,8 @@ pub struct PoolItem {
     /// decoration: the same 32 bytes render as a SEP-23 `L…` strkey for a
     /// classic pool and a `C…` contract address for a soroban one, and
     /// rendering one as the other yields a well-formed WRONG key rather than
-    /// an error. `None` only on schema drift.
-    pub pool_kind: Option<String>,
+    /// an error.
+    pub pool_kind: domain::PoolKind,
     /// The pool's legs in registration order — two for a classic pool, two to
     /// four for a soroban one. Replaces the `asset_a` / `asset_b` pair, which
     /// could not express a three-leg pool and forced a soroban row to write

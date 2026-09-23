@@ -28,7 +28,7 @@ fn usdc_leg() -> PoolLegRow {
 fn base_row() -> PoolRow {
     PoolRow {
         pool_id_hex: "0".repeat(64),
-        pool_kind: domain::PoolKind::Classic as i16,
+        pool_kind: domain::PoolKind::Classic,
         legs: vec![native_leg(), usdc_leg()],
         fee_bps: 30,
         fee_percent: "0.30".into(),
@@ -120,11 +120,11 @@ fn a_three_leg_pool_renders_all_three() {
 fn the_pool_id_renders_by_kind() {
     let classic = map_pool_item(base_row());
     assert!(classic.pool_id.starts_with('L'), "{}", classic.pool_id);
-    assert_eq!(classic.pool_kind.as_deref(), Some("classic"));
+    assert_eq!(classic.pool_kind, domain::PoolKind::Classic);
 
     let mut row = base_row();
-    row.pool_kind = domain::PoolKind::Soroban as i16;
+    row.pool_kind = domain::PoolKind::Soroban;
     let soroban = map_pool_item(row);
     assert!(soroban.pool_id.starts_with('C'), "{}", soroban.pool_id);
-    assert_eq!(soroban.pool_kind.as_deref(), Some("soroban"));
+    assert_eq!(soroban.pool_kind, domain::PoolKind::Soroban);
 }

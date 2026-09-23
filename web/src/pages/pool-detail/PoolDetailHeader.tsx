@@ -7,7 +7,7 @@ import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 import { PoolLegIcons } from '../pool-shared/PoolLegIcons.js';
 
 import { poolLabel } from '../pool-shared/helpers.js';
-import { poolKindMeta } from '../liquidity-pools/poolKind.js';
+import { POOL_KIND_META } from '../liquidity-pools/poolKind.js';
 
 interface PoolDetailHeaderProps {
   poolId: string;
@@ -42,8 +42,8 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
             {pool && (
               <Chip
                 size="sm"
-                color={poolKindMeta(pool.pool_kind).color}
-                label={poolKindMeta(pool.pool_kind).label}
+                color={POOL_KIND_META[pool.pool_kind].color}
+                label={POOL_KIND_META[pool.pool_kind].label}
               />
             )}
           </Stack>

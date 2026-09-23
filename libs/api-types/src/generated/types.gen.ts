@@ -1888,9 +1888,9 @@ export type PaginatedPoolItem = {
      * decoration: the same 32 bytes render as a SEP-23 `L…` strkey for a
      * classic pool and a `C…` contract address for a soroban one, and
      * rendering one as the other yields a well-formed WRONG key rather than
-     * an error. `None` only on schema drift.
+     * an error.
      */
-    pool_kind?: string | null;
+    pool_kind: PoolKind;
     total_shares?: string | null;
     /**
      * USD, decimal string rounded to cents (task 0199 compute-at-read).
@@ -2107,8 +2107,9 @@ export type PoolActivityItem = {
 export type PoolAssetLeg = {
   asset_code?: string | null;
   /**
-   * `native` | `classic_credit` | `soroban`. `None` only on schema drift —
-   * a stored discriminant outside the family domain.
+   * `native` | `classic_credit` | `soroban`. `None` for a leg whose token
+   * the registry has no row for (one live pool has one) — there is no
+   * family to name.
    */
   asset_type_name?: string | null;
   /**
@@ -2201,9 +2202,9 @@ export type PoolItem = {
    * decoration: the same 32 bytes render as a SEP-23 `L…` strkey for a
    * classic pool and a `C…` contract address for a soroban one, and
    * rendering one as the other yields a well-formed WRONG key rather than
-   * an error. `None` only on schema drift.
+   * an error.
    */
-  pool_kind?: string | null;
+  pool_kind: PoolKind;
   total_shares?: string | null;
   /**
    * USD, decimal string rounded to cents (task 0199 compute-at-read).
@@ -2221,6 +2222,8 @@ export type PoolItem = {
    */
   volume?: string | null;
 };
+
+export type PoolKind = 'classic' | 'soroban';
 
 /**
  * The classic asset a SAC contract is the contract-side facet of (ADR 0051,

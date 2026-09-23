@@ -15,8 +15,7 @@ use crate::common::filters;
 use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
 use crate::common::pool_asset_codes::normalize_asset_codes;
-use crate::common::strkey::{pool_id_from_text, pool_identifier};
-use crate::openapi::schemas::PageInfo;
+use crate::common::strkey::{pool_id_from_text, pool_id_hex_to_strkey};
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 
@@ -161,14 +160,12 @@ fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
 }
 
 fn map_pool_item(row: PoolRow) -> PoolItem {
-    let kind = domain::PoolKind::try_from(row.pool_kind).ok();
     PoolItem {
         // The same 32 bytes are an `L…` strkey for a classic pool and a `C…`
         // address for a soroban one, and the wrong form is well-formed rather
-        // than an error — so the encoding follows the kind. What an unreadable
-        // kind renders as is `pool_identifier`'s decision, not this handler's.
-        pool_id: pool_identifier(&row.pool_id_hex, row.pool_kind),
-        pool_kind: kind.map(|k| k.as_str().to_string()),
+        // than an error — so the encoding follows the kind.
+        pool_id: pool_id_hex_to_strkey(&row.pool_id_hex, row.pool_kind),
+        pool_kind: row.pool_kind,
         legs: row.legs.into_iter().map(map_leg).collect(),
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
@@ -440,12 +437,6 @@ pub async fn list_pool_activity(
         .await
         .map_err(|e| e.to_string());
     let leg_ids = match legs {
-        // A pool with no legs is not a missing pool: a row whose `legs` were
-        // never filled still exists, and saying "not found" about it
-        // contradicted the detail endpoint, which renders that same pool one
-        // call earlier. It has no amount rows to map, so the honest answer is
-        // an empty page — the same one a pool with no activity gets.
-        Ok(Some(ids)) if ids.is_empty() => return empty_activity_page(pagination.limit),
         Ok(Some(ids)) => ids,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -525,21 +516,6 @@ pub async fn list_pool_activity(
         .collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
-    cache_control::attach(&mut resp, cache_control::SHORT);
-    resp
-}
-/// The activity response for a pool that exists but has no rows to map.
-///
-/// Distinct from a 404 on purpose: the pool is real, and the caller asked a
-/// well-formed question about it. Shares the list envelope so the frontend's
-/// empty state is the one it already renders.
-fn empty_activity_page(limit: u32) -> axum::response::Response {
-    let page = PageInfo {
-        next_cursor: None,
-        prev_cursor: None,
-        limit,
-    };
-    let mut resp = Json(into_envelope(Vec::<PoolActivityItem>::new(), page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }

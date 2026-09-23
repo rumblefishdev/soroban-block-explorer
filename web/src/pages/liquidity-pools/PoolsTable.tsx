@@ -26,7 +26,7 @@ import {
 
 import { PoolLegIcons } from '../pool-shared/PoolLegIcons.js';
 
-import { poolKindMeta } from './poolKind.js';
+import { POOL_KIND_META } from './poolKind.js';
 
 export const POOL_COLUMN_COUNT = 6;
 
@@ -76,7 +76,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       // as the absence it is — secondary colour, like `Dash` — so the row does
       // not read as a pool actually called "Composition not indexed".
       const unindexed = row.legs.length === 0;
-      const kind = poolKindMeta(row.pool_kind);
+      const kind = POOL_KIND_META[row.pool_kind];
       return (
         <Stack
           direction="row"

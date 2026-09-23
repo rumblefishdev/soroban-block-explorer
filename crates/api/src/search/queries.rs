@@ -65,7 +65,7 @@ use serde::Deserialize;
 use crate::common::asset_identity::{ResolvedAsset, leg_label, resolve_asset_identities};
 use crate::common::ch::millis_to_utc;
 use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
-use crate::common::strkey::pool_identifier;
+use crate::common::strkey::{decode_pool_kind, pool_id_hex_to_strkey};
 
 use super::classifier::Classified;
 use super::dto::{EntityType, SearchHit};
@@ -447,7 +447,10 @@ fn pool_hit(p: &PoolRow, identities: &HashMap<i64, ResolvedAsset>) -> (String, S
             // pool's KIND at the boundary, because the same 32 bytes are an
             // `L…` strkey for a classic pool and a `C…` address for a soroban
             // one — and the wrong encoding is well-formed, not an error.
-            identifier: pool_identifier(&p.pool_hex, p.pool_kind),
+            identifier: pool_id_hex_to_strkey(
+                &p.pool_hex,
+                decode_pool_kind(&p.pool_hex, p.pool_kind),
+            ),
             label: p
                 .legs
                 .iter()

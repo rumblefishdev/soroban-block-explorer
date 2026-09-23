@@ -1,3 +1,4 @@
+import type { PoolKind } from '@rumblefish/api-types';
 import type { ChipProps } from '@rumblefish/soroban-block-explorer-ui';
 
 export interface PoolKindMeta {
@@ -10,19 +11,14 @@ export interface PoolKindMeta {
 /**
  * Maps the API `pool_kind` (`classic | soroban`) to a badge label and colour.
  *
- * Shaped after {@link ../assets/assetType.js assetTypeMeta} — same structure,
- * same fallback, and `soroban` keeps the emerald it already wears on the assets
- * list, so one word means one colour across the app.
+ * Keyed by the API's `PoolKind` union, so a kind without an entry is a type
+ * error rather than a runtime fallback. `soroban` keeps the emerald it already
+ * wears on the assets list, so one word means one colour across the app.
  */
-const META: Record<string, PoolKindMeta> = {
+export const POOL_KIND_META: Record<PoolKind, PoolKindMeta> = {
   classic: { label: 'Classic', color: 'neutral' },
   soroban: { label: 'Soroban', color: 'emerald' },
 };
-
-export function poolKindMeta(kind?: string | null): PoolKindMeta {
-  const meta = kind ? META[kind] : undefined;
-  return meta ?? { label: kind ?? 'Unknown', color: 'neutral' };
-}
 
 /**
  * Kind-filter options for the pools list (the chip row), mirroring

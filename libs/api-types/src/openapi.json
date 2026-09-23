@@ -4288,6 +4288,7 @@
               "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
               "required": [
                 "pool_id",
+                "pool_kind",
                 "legs",
                 "fee_bps",
                 "fee_percent",
@@ -4336,8 +4337,8 @@
                   "description": "A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract\naddress (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR\n0024); the handler encodes them by kind at the response boundary."
                 },
                 "pool_kind": {
-                  "type": ["string", "null"],
-                  "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error. `None` only on schema drift."
+                  "$ref": "#/components/schemas/PoolKind",
+                  "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
                 },
                 "total_shares": {
                   "type": ["string", "null"]
@@ -4537,7 +4538,7 @@
           },
           "asset_type_name": {
             "type": ["string", "null"],
-            "description": "`native` | `classic_credit` | `soroban`. `None` only on schema drift —\na stored discriminant outside the family domain."
+            "description": "`native` | `classic_credit` | `soroban`. `None` for a leg whose token\nthe registry has no row for (one live pool has one) — there is no\nfamily to name."
           },
           "contract_id": {
             "type": ["string", "null"],
@@ -4570,6 +4571,7 @@
         "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
         "required": [
           "pool_id",
+          "pool_kind",
           "legs",
           "fee_bps",
           "fee_percent",
@@ -4618,8 +4620,8 @@
             "description": "A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract\naddress (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR\n0024); the handler encodes them by kind at the response boundary."
           },
           "pool_kind": {
-            "type": ["string", "null"],
-            "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error. `None` only on schema drift."
+            "$ref": "#/components/schemas/PoolKind",
+            "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
           },
           "total_shares": {
             "type": ["string", "null"]
@@ -4633,6 +4635,10 @@
             "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
           }
         }
+      },
+      "PoolKind": {
+        "type": "string",
+        "enum": ["classic", "soroban"]
       },
       "SacAsset": {
         "type": "object",
