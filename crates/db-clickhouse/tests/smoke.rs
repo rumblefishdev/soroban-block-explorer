@@ -227,12 +227,12 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- transaction_participants (append-only fact) -----
     client
         .query(
-            "INSERT INTO transaction_participants (account_id, ledger_sequence, transaction_id) \
+            "INSERT INTO transaction_participants (account_id, ledger_sequence, application_order) \
              VALUES (?, ?, ?)",
         )
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
-        .bind(SMOKE_LEDGER)
+        .bind(1_i16)
         .execute()
         .await
         .expect("insert transaction_participants");

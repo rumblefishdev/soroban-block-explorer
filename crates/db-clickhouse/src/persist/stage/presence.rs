@@ -14,19 +14,20 @@ use crate::persist::ids;
 use crate::persist::rows::{OperationAssetAppearanceRow, TransactionParticipantRow};
 
 /// `transaction_participants`: one row per (account, transaction). Only
-/// `G…` accounts — contracts and muxed forms are not participants.
+/// `G…` accounts — contracts and muxed forms are not participants. The
+/// transaction is located by its position (ADR 0059), never its hash surrogate.
 pub(super) fn participant_rows(
     ledger_sequence: i64,
     transactions: &[ExtractedTransaction],
     participants_per_tx: &HashMap<String, HashSet<String>>,
-    tx_id_by_hash: &HashMap<String, i64>,
+    app_order_by_hash: &HashMap<String, i16>,
 ) -> Vec<TransactionParticipantRow> {
     let mut rows = Vec::new();
     for tx in transactions {
         let Some(set) = participants_per_tx.get(&tx.hash) else {
             continue;
         };
-        let Some(&tx_id) = tx_id_by_hash.get(&tx.hash) else {
+        let Some(&application_order) = app_order_by_hash.get(&tx.hash) else {
             continue;
         };
         for key in set {
@@ -36,7 +37,7 @@ pub(super) fn participant_rows(
             rows.push(TransactionParticipantRow {
                 account_id: ids::account_id(key),
                 ledger_sequence,
-                transaction_id: tx_id,
+                application_order,
             });
         }
     }
@@ -50,18 +51,18 @@ pub(super) fn participant_rows(
 pub(super) fn event_asset_rows(
     ledger_sequence: i64,
     event_assets_per_tx: &HashMap<String, HashSet<i64>>,
-    tx_id_by_hash: &HashMap<String, i64>,
+    app_order_by_hash: &HashMap<String, i16>,
 ) -> Vec<OperationAssetAppearanceRow> {
     let mut rows = Vec::new();
     for (tx_hash, asset_ids) in event_assets_per_tx {
-        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
+        let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
             continue;
         };
         for &asset_id in asset_ids {
             rows.push(OperationAssetAppearanceRow {
                 asset_id,
                 ledger_sequence,
-                transaction_id: tx_id,
+                application_order,
             });
         }
     }

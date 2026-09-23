@@ -144,8 +144,9 @@ SELECT
     a.account_id
 FROM transaction_participants tp FINAL
 JOIN accounts a FINAL ON a.id = tp.account_id
-WHERE tp.transaction_id = (
-    SELECT id FROM transactions FINAL WHERE hash = $1
+WHERE (tp.ledger_sequence, tp.application_order) = (
+    -- the transaction's position (task 0575)
+    SELECT ledger_sequence, application_order FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
           = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
     LIMIT 1)

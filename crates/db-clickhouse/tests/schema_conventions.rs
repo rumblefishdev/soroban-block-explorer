@@ -11,8 +11,6 @@ use db_clickhouse::INIT_SQL;
 /// entry per table it migrates; nothing is ever added here.
 const TRANSACTION_ID_ALLOWLIST: &[&str] = &[
     "operations_appearances",
-    "transaction_participants",
-    "operation_asset_appearances",
     "operation_pools",
     "lp_operation_amounts",
     "soroban_invocations_appearances",

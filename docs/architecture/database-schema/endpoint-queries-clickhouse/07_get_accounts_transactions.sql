@@ -16,16 +16,17 @@
 --     single-partition prune does NOT apply here:
 --       1. Driver: `transaction_participants` WHERE account_id = <surrogate>
 --          — `account_id` is the LEADING primary key (ORDER BY (account_id,
---          ledger_sequence, transaction_id)), so this is an account-scoped
---          SEEK, not a scan. ORDER BY (ledger_sequence, transaction_id) +
---          keyset, LIMIT.
---       2. Fetch the ≤limit transaction rows by `(ledger_sequence, id) IN
---          (keys)` — a primary-key-prefix prune per ledger that spans
---          partitions safely. Do NOT join the driver to an unpruned
+--          ledger_sequence, application_order)), so this is an account-scoped
+--          SEEK, not a scan. ORDER BY (ledger_sequence, application_order) +
+--          keyset, LIMIT — execution order inside a ledger (task 0575).
+--       2. Fetch the ≤limit transaction rows by `(ledger_sequence,
+--          application_order) IN (keys)` — the full `transactions` key, which
+--          spans partitions safely. Do NOT join the driver to an unpruned
 --          `transactions FINAL` (that merges the whole 3.6B-row table and blew
 --          the api_reader read_rows quota in the global list — CH Code: 201).
---       3. operation_types via the shared two-step aggregate; re-order rows in
---          Rust by the driver keyset order.
+--       3. operation_types via the shared two-step aggregate (keyed by the
+--          page rows' `id` until task 0538 moves `operations_appearances`);
+--          re-order rows in Rust by the driver keyset order.
 --       4. `balance_changes` (task 0540) — this account's signed per-asset
 --          movement per transaction, from `asset_transfers`, keyed on
 --          `(ledger_sequence, application_order)` which step 2 already has and
@@ -42,8 +43,9 @@
 --          the index floor get `null`, never an empty list: the table has no
 --          rows there and an absent measurement must not render as a zero.
 --          See `crates/api/src/accounts/balance_changes.rs`.
---     Cursor keys on `(ledger_sequence, transaction_id)` on CH (PG keeps
---     `(created_at, transaction_id)`); see `transactions::dto::TxListCursor`.
+--     Cursor keys on `(ledger_sequence, application_order)` — the
+--     transaction's position (task 0575); a surrogate cursor minted before
+--     answers 400 `invalid_cursor`. See `transactions::dto::TxListCursor`.
 -- ============================================================================
 -- Endpoint:     GET /accounts/:account_id/transactions
 -- Purpose:      Paginated transactions involving a given account (as source
@@ -55,10 +57,10 @@
 --   $1  :account_strkey      String   G-form account ID (StrKey)
 --   $2  :limit               Int      page size
 --   $3  :cursor_ledger       Int64    NULL on first page
---   $4  :cursor_tx_id        Int64    NULL on first page
+--   $4  :cursor_app_order    Int16    NULL on first page
 -- Indexes:      accounts ORDER BY (id) — leading CTE resolves StrKey → id.
 --               transaction_participants ORDER BY (account_id, ledger_sequence,
---                 transaction_id) — natural keyset for this scan.
+--                 application_order) — natural keyset for this scan.
 --               transactions ORDER BY (ledger_sequence, application_order, id)
 --                 + PARTITION BY intDiv(ledger_sequence, 500000).
 --               operations_appearances ORDER BY (ledger_sequence, transaction_id,
@@ -77,7 +79,7 @@
 --     after FINAL.
 --   • Cursor tuple drops `created_at` (§5.2) — natural keyset for CH
 --     transaction_participants is `(account_id, ledger_sequence,
---     transaction_id)`. We page on `(ledger_sequence, transaction_id) <
+--     application_order)`. We page on `(ledger_sequence, application_order) <
 --     ($3, $4)` since account_id is pinned in WHERE.
 --   • `operation_types[]` via correlated array subquery — CH does not
 --     support `LEFT JOIN LATERAL ... ON TRUE` cleanly; the idiomatic CH
@@ -106,16 +108,16 @@ SELECT
           AND oa.ledger_sequence = t.ledger_sequence
           AND intDiv(oa.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000)
     )                                                                                   AS operation_types,
-    t.id                                                                                AS cursor_tx_id
+    t.application_order                                                                 AS cursor_app_order
 FROM transaction_participants tp FINAL
 JOIN transactions t FINAL
-       ON t.id = tp.transaction_id
-      AND t.ledger_sequence = tp.ledger_sequence
+       ON t.ledger_sequence = tp.ledger_sequence
+      AND t.application_order = tp.application_order
 JOIN accounts src FINAL ON src.id = t.source_id
 WHERE
     tp.account_id = (SELECT id FROM accounts FINAL WHERE account_id = $1 LIMIT 1)
-    AND ($3 IS NULL OR (tp.ledger_sequence, tp.transaction_id) < ($3, $4))
+    AND ($3 IS NULL OR (tp.ledger_sequence, tp.application_order) < ($3, $4))
 -- Sort direction driven by `order` query param (`asc` | `desc`, default
 -- `desc`). `order=asc` flips the `<` above to `>` and DESC→ASC in lock-step.
-ORDER BY tp.ledger_sequence DESC, tp.transaction_id DESC
+ORDER BY tp.ledger_sequence DESC, tp.application_order DESC
 LIMIT $2;

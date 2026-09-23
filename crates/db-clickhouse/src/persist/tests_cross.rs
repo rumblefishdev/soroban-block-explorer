@@ -334,7 +334,7 @@ fn column_order_operations_appearances() {
 fn column_order_transaction_participants() {
     assert_columns::<TransactionParticipantRow>(
         "transaction_participants",
-        &["account_id", "ledger_sequence", "transaction_id"],
+        &["account_id", "ledger_sequence", "application_order"],
     );
 }
 
@@ -342,7 +342,7 @@ fn column_order_transaction_participants() {
 fn column_order_operation_asset_appearances() {
     assert_columns::<OperationAssetAppearanceRow>(
         "operation_asset_appearances",
-        &["asset_id", "ledger_sequence", "transaction_id"],
+        &["asset_id", "ledger_sequence", "application_order"],
     );
 }
 
@@ -563,7 +563,9 @@ fn prepare_surrogate_id_fk_consistency() {
     // equality.
     assert_eq!(tx_row.source_id, acc_row.id);
     assert_eq!(part_row.account_id, acc_row.id);
-    assert_eq!(part_row.transaction_id, tx_row.id);
+    // The participant locates its transaction by position (ADR 0059).
+    assert_eq!(part_row.ledger_sequence, tx_row.ledger_sequence);
+    assert_eq!(part_row.application_order, tx_row.application_order);
 
     // tx surrogate id derived from same hash bytes as `hash` column.
     assert_eq!(tx_row.id, ids::transaction_id(&tx_row.hash));
@@ -1216,10 +1218,16 @@ fn prepare_stages_operation_asset_appearances() {
         staged.op_asset_rows[1].asset_id,
         ids::asset_id(1, "USDC", ids::account_id(&issuer), 0)
     );
-    // Same tx as the legacy fold row — join-back key intact.
+    // Same tx as the legacy fold row — join-back key intact: the row's
+    // position is the position of the fold row's transaction.
+    let fold_tx = staged
+        .transaction_rows
+        .iter()
+        .find(|t| t.id == staged.op_rows[0].transaction_id)
+        .expect("fold row's transaction staged");
     assert_eq!(
-        staged.op_asset_rows[0].transaction_id,
-        staged.op_rows[0].transaction_id
+        staged.op_asset_rows[0].application_order,
+        fold_tx.application_order
     );
     // Task 0359 decision 1c: the credit-leg issuer is NOT a tx participant. The
     // asset's activity lives on its asset page (`op_asset_rows` above); flooding

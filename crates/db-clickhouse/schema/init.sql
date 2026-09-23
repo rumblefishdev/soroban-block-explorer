@@ -859,8 +859,9 @@ ORDER BY (pool_id, account_id);
 ----------------------------------------------------------------------
 
 -- transactions: surrogate `id Int64` for cheap FK joins from
--- operations_appearances, transaction_participants,
--- soroban_invocations_appearances, nft_ownership (`soroban_events` joins by
+-- operations_appearances, operation_pools, lp_operation_amounts,
+-- soroban_invocations_appearances, nft_ownership (`soroban_events`,
+-- `transaction_participants`, `operation_asset_appearances` join by
 -- `(ledger_sequence, application_order)`). Legacy: new tables join on the
 -- position, never on `id` (ADR 0059, task 0538). ORDER BY
 -- (ledger_sequence, application_order) for time-series scans.
@@ -953,14 +954,20 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, transaction_id, application_order);
 
+-- transaction_participants: per-(account, transaction) presence index. The
+-- transaction is located by its position `(ledger_sequence,
+-- application_order)` (ADR 0059, task 0575), so an account's list comes out in
+-- execution order and joins `transactions` on its full key. Codecs measured on
+-- partition 128 (task 0575): `ledger_sequence` rises within an account, Delta
+-- takes it from 2.93 to 0.77 B/row; T64 takes the position from 1.58 to 0.97.
 CREATE TABLE IF NOT EXISTS transaction_participants (
-    account_id      Int64,
-    ledger_sequence Int64,
-    transaction_id  Int64
+    account_id        Int64,
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1))
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (account_id, ledger_sequence, transaction_id);
+ORDER BY (account_id, ledger_sequence, application_order);
 
 -- operation_asset_appearances: per-(asset, transaction) presence index (task
 -- 0359). The EXACT transaction_participants shape, with asset_id for account_id.
@@ -984,23 +991,18 @@ ORDER BY (account_id, ledger_sequence, transaction_id);
 -- + `xdr_parser::net_settled`) is KEPT — it reads the authoritative LEDGER balance
 -- changes and is the input the replacement needs.
 CREATE TABLE IF NOT EXISTS operation_asset_appearances (
-    asset_id        Int64,
-    ledger_sequence Int64,
-    transaction_id  Int64
-    -- idx_oaa_transaction_id (bloom on transaction_id, planned for the 0393
-    -- "Net settled" per-tx read) REMOVED 2026-08-06: that read was withdrawn
-    -- from the API before it ever shipped (see common/ch.rs; [[0411]] owns
-    -- reinstating it), every live query on this table filters by asset_id
-    -- (the leading key), and the bloom measured 19.87 GiB on prod (fpp 0.001
-    -- over 11.25bn non-null near-unique values) for zero consumers. It was
-    -- briefly added+materialized on prod the same day, then dropped after the
-    -- consumer audit. 0411 decides between re-adding the bloom and the
-    -- (ledger, tx)-leading companion table (which supersedes it); name the
-    -- consumer here if it comes back.
+    asset_id          Int64,
+    -- Same codecs as `transaction_participants` (task 0575, partition 128):
+    -- 1.01 -> 0.17 B/row for the ledger, 1.39 -> 0.91 for the position.
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1))
+    -- No skip index. A `transaction_id` bloom (planned for the 0393 per-tx read,
+    -- 19.87 GiB on prod) was dropped 2026-08-06 for zero consumers; the
+    -- surrogate itself left with task 0575. Every read filters by `asset_id`.
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (asset_id, ledger_sequence, transaction_id);
+ORDER BY (asset_id, ledger_sequence, application_order);
 
 -- operation_pools: per-(pool, transaction) presence index (task 0365). The
 -- pool-dimension twin of operation_asset_appearances / transaction_participants,

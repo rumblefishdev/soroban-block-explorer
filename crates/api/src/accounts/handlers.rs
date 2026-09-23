@@ -277,10 +277,11 @@ pub async fn list_account_transactions(
         Err(err) => return err.into_response(),
     };
 
-    // Reject a stale cursor minted under the retired PG backend. Its keyset is
-    // meaningless under CH, so per ADR 0008 fail with `invalid_cursor` instead
-    // of silently mis-paginating. A legacy/untagged cursor already fails decode
-    // upstream in the extractor; this guards the decodes-but-wrong-intent case.
+    // Reject a cursor that anchors another keyset — a surrogate cursor minted
+    // before task 0575 moved this list to the transaction position. Per ADR
+    // 0008 fail with `invalid_cursor` instead of silently mis-paginating. A
+    // legacy/untagged cursor already fails decode upstream in the extractor;
+    // this guards the decodes-but-wrong-intent case.
     if let Some(cursor) = &pagination.cursor
         && !cursor_matches_source(cursor)
     {
@@ -413,18 +414,18 @@ async fn fetch_account_tx_for_source(
     queries::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction).await
 }
 
-/// Build the opaque account-transactions cursor for a boundary row. CH keys on
-/// `(ledger_sequence, id)` (the `transaction_participants` / `transactions`
-/// keyset).
+/// Build the opaque account-transactions cursor for a boundary row. The list
+/// keys on the transaction's position `(ledger_sequence, application_order)` —
+/// the `transaction_participants` and `transactions` key (task 0575).
 fn account_tx_cursor_for(r: &AccountTxRow) -> TxListCursor {
-    TxListCursor::ChSurrogate {
+    TxListCursor::ChPosition {
         ledger_sequence: r.ledger_sequence,
-        transaction_id: r.id,
+        application_order: r.application_order,
     }
 }
 
-/// True when the cursor anchors this list's keyset, the id surrogate. A
-/// position cursor from `/transactions` is refused (ADR 0008 fail-clean).
+/// True when the cursor anchors this list's keyset, the position. A surrogate
+/// cursor is refused (ADR 0008 fail-clean).
 fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::ChSurrogate { .. })
+    matches!(cursor, TxListCursor::ChPosition { .. })
 }

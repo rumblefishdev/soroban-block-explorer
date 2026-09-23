@@ -93,13 +93,6 @@ pub struct AssetRow {
     /// native, no-issuer, and issuer accounts that did not set
     /// `home_domain` on-chain.
     pub issuer_home_domain: Option<String>,
-    /// Surrogate key column, never on the wire. `0` stands in for "absent"
-    /// (classic-credit has no contract), matching the CH default.
-    ///
-    /// Its sibling `issuer_id` went with the old cursor: the keyset walked the
-    /// identity 4-tuple until task 0547 moved it to `(holder_rank, id)`, and
-    /// nothing else read the field.
-    pub contract_surrogate_id: i64,
     /// SAC facet (ADR 0051): the surrogate of the wrapping SAC's `C…` StrKey,
     /// or `0` when the asset has no observed SAC. Never on the wire — the
     /// handler re-derives the display StrKey from `code:issuer` when non-zero.
@@ -113,9 +106,9 @@ pub struct AssetRow {
 
 #[derive(Debug)]
 pub struct AssetTxRow {
-    pub id: i64,
     pub hash: String,
     pub ledger_sequence: i64,
+    pub application_order: i16,
     pub source_account: String,
     pub successful: bool,
     pub fee_charged: i64,
@@ -237,7 +230,6 @@ struct AssetListChRow {
     deployed_at_ledger: Option<i64>,
     icon_url: Option<String>,
     issuer_id_key: i64,
-    contract_id_key: i64,
     sac_contract_surrogate: i64,
     sac_deployed: bool,
     id: i64,
@@ -281,7 +273,6 @@ fn list_row_to_asset_row(r: AssetListChRow, iss: Option<(String, Option<String>)
         icon_url: r.icon_url,
         deployed_at_ledger: r.deployed_at_ledger,
         issuer_home_domain,
-        contract_surrogate_id: r.contract_id_key,
         sac_contract_surrogate: r.sac_contract_surrogate,
         sac_deployed: r.sac_deployed,
         id: r.id,
@@ -596,7 +587,6 @@ fn assemble_asset_row(h: AssetHydrateRow, ctx: &HashMap<i64, SorobanCtxRow>) -> 
             .or_else(|| deploy_of(h.sac_contract_surrogate)),
         icon_url: h.icon_url,
         issuer_id_key: h.issuer_id_key,
-        contract_id_key: h.contract_id_key,
         sac_contract_surrogate: h.sac_contract_surrogate,
         sac_deployed: h.sac_deployed,
         id: h.id,
@@ -1030,7 +1020,7 @@ pub async fn fetch_native(
 #[derive(Debug, Row, Deserialize)]
 struct AssetTxKeyChRow {
     ledger_sequence: i64,
-    transaction_id: i64,
+    application_order: i16,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -1038,6 +1028,7 @@ struct AssetTxPageChRow {
     id: i64,
     hash: String,
     ledger_sequence: i64,
+    application_order: i16,
     source_id: i64,
     fee_charged: i64,
     successful: bool,
@@ -1054,87 +1045,69 @@ struct AssetTxPageChRow {
 /// non-zero key; the caller guards the unresolved `id == 0` sentinel). Two-step
 /// like the accounts sub-resource: a leading-key seek over
 /// `operation_asset_appearances` (`asset_id` IS the leading PK) collapses any
-/// multi-op-per-tx fan-out (`LIMIT 1 BY (ledger_sequence, transaction_id)`) behind
-/// the `max(sequence)` commit fence, then the ≤`limit` transaction headers are
-/// fetched by `(ledger_sequence, id) IN (keys)` (PK-prefix prune,
-/// multi-partition-safe) and the `operation_types` aggregate is merged. The caller
+/// multi-op-per-tx fan-out (`LIMIT 1 BY (ledger_sequence, application_order)`)
+/// behind the `max(sequence)` commit fence, then the ≤`limit` transaction headers
+/// are fetched by `(ledger_sequence, application_order) IN (keys)` (the full
+/// `transactions` key, multi-partition-safe) and the `operation_types` aggregate
+/// is merged. Keyed by the transaction's position (task 0575), so the page is in
+/// execution order.
+///
+/// One source only: a transaction is in an asset's list when one of its
+/// operations names the asset or a token event moved it (the event-derived rows
+/// of task 0383). The second arm over the asset's contract (its own contract, or
+/// its SAC) was removed by task 0575: measured on 1,000 ledgers it added only
+/// failed Soroban calls, reads that move nothing (`balance`), and the contract's
+/// own non-token activity (oracle updates, pair swaps) — 46% of a type-3 token's
+/// rows, 1.8% of a SAC's. That activity is the contract page's. The caller
 /// passes the handler's `fetch_limit()` (already the `+1` `finalize_page` peek
 /// row), inlined raw — `asset_id` is a provably-numeric i64.
 pub async fn fetch_transactions(
     client: &clickhouse::Client,
     asset_id: i64,
-    contract_surrogate: Option<i64>,
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // Surrogate cursor only (the handler's guard rejects a position cursor).
-    // Inlined i64 — no injection surface; omitted on the first page so no NULL is
-    // bound. Unqualified columns: each seek is a single-table read, no ambiguity.
+    // Position cursor only (the handler's guard rejects a surrogate cursor).
+    // Inlined integers — no injection surface; omitted on the first page so no
+    // NULL is bound.
     let cursor_clause = match cursor {
-        Some(TxListCursor::ChSurrogate {
+        Some(TxListCursor::ChPosition {
             ledger_sequence,
-            transaction_id,
-        }) => {
-            format!(
-                " AND (ledger_sequence, transaction_id) {op} ({ledger_sequence}, {transaction_id})"
-            )
-        }
+            application_order,
+        }) => format!(
+            " AND (ledger_sequence, application_order) {op} ({ledger_sequence}, {application_order})"
+        ),
         _ => String::new(),
     };
 
-    // Step 1 — one or two keyset arms, merged (task 0359 composed read):
-    //   A. `operation_asset_appearances` on `asset_id` — classic / native activity
-    //      (empty for a pure type-3 token: no classic op names it).
-    //   B. `soroban_invocations_appearances` on the asset's single associated
-    //      contract (ADR 0051 — a type-3 token's OWN contract, or a classic/native
-    //      asset's wrapping SAC, never both). Serves the type-3 asset page (its
-    //      fan-out is empty — the #1 regression fix) and a classic asset's SAC
-    //      activity (F-F). `None` → arm A only.
-    // Same seek both arms: leading-PK range behind the `max(sequence)` fence,
-    // `LIMIT 1 BY` per tx. The union's top-`limit` (sort + dedup + truncate) is the
-    // global page; the outer `LIMIT 1 BY` drops a tx returned by both arms.
-    let seek = |table: &str, key_col: &str, key: i64| {
-        format!(
-            "SELECT ledger_sequence, transaction_id FROM {table} \
-             WHERE {key_col} = {key} \
-               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
-             ORDER BY ledger_sequence {order}, transaction_id {order} \
-             LIMIT 1 BY ledger_sequence, transaction_id \
-             LIMIT {limit}"
-        )
-    };
+    // Step 1 — leading-PK range on `asset_id` behind the `max(sequence)` fence;
+    // `LIMIT 1 BY` collapses the multi-op-per-tx fan-out to one row per tx.
+    let sql = format!(
+        "SELECT ledger_sequence, application_order FROM operation_asset_appearances \
+         WHERE asset_id = {asset_id} \
+           AND ledger_sequence <= (SELECT max(sequence) FROM ledgers){cursor_clause} \
+         ORDER BY ledger_sequence {order}, application_order {order} \
+         LIMIT 1 BY ledger_sequence, application_order \
+         LIMIT {limit}"
+    );
 
-    let arm_a = seek("operation_asset_appearances", "asset_id", asset_id);
-    let sql = match contract_surrogate {
-        // Arm A alone already IS the page — no wrapper to add.
-        None => arm_a,
-        Some(contract_id) => {
-            let arm_b = seek(
-                "soroban_invocations_appearances",
-                "contract_id",
-                contract_id,
-            );
-            union_keyset_arms(&arm_a, &arm_b, order, limit)
-        }
-    };
-
-    let keys: Vec<(i64, i64)> = client
+    let keys: Vec<(i64, i16)> = client
         .query(&sql)
         .fetch_all::<AssetTxKeyChRow>()
         .await?
         .iter()
-        .map(|r| (r.ledger_sequence, r.transaction_id))
+        .map(|r| (r.ledger_sequence, r.application_order))
         .collect();
 
     if keys.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Step 2: transaction headers for the page keys + the operation_types
-    // aggregate, concurrently. Keys are i64 — inlined.
+    // Step 2: transaction headers for the page keys. Keys are integers —
+    // inlined.
     let in_tuples = keys
         .iter()
         .map(|(ledger, tx)| format!("({ledger},{tx})"))
@@ -1153,6 +1126,7 @@ pub async fn fetch_transactions(
             t.id AS id, \
             lower(hex(t.hash)) AS hash, \
             t.ledger_sequence AS ledger_sequence, \
+            t.application_order AS application_order, \
             t.source_id AS source_id, \
             t.fee_charged AS fee_charged, \
             t.successful AS successful, \
@@ -1161,37 +1135,45 @@ pub async fn fetch_transactions(
             l.closed_at AS created_at \
          FROM transactions t \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-         WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
+         WHERE (t.ledger_sequence, t.application_order) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions})"
     );
-    let (page_rows, aggregates) = tokio::join!(
-        client.query(&page_sql).fetch_all::<AssetTxPageChRow>(),
-        ch::fetch_tx_list_aggregates(client, &keys),
-    );
-    let page_rows = page_rows?;
-    let aggregates = aggregates?;
+    let page_rows = client
+        .query(&page_sql)
+        .fetch_all::<AssetTxPageChRow>()
+        .await?;
+    // operation_types still come from `operations_appearances`, keyed by the
+    // surrogate until task 0538 reaches it — so they key off the page rows.
+    let agg_keys: Vec<(i64, i64)> = page_rows
+        .iter()
+        .map(|r| (r.ledger_sequence, r.id))
+        .collect();
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
-    // whole-`accounts` `LEFT JOIN accounts src` (task 0354).
-    let accounts =
-        resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()).await?;
+    // whole-`accounts` `LEFT JOIN accounts src` (task 0354). Independent of the
+    // aggregate — overlap the round-trips.
+    let (accounts, aggregates) = tokio::try_join!(
+        resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()),
+        ch::fetch_tx_list_aggregates(client, &agg_keys),
+    )?;
 
-    // Index by id, then emit in the driver's keyset order, merging
+    // Index by position, then emit in the driver's keyset order, merging
     // operation_types (the only aggregate an asset-transaction item carries).
-    let mut by_id: HashMap<i64, AssetTxPageChRow> = HashMap::with_capacity(page_rows.len());
+    let mut by_position: HashMap<(i64, i16), AssetTxPageChRow> =
+        HashMap::with_capacity(page_rows.len());
     for row in page_rows {
-        by_id.insert(row.id, row);
+        by_position.insert((row.ledger_sequence, row.application_order), row);
     }
     let mut out = Vec::with_capacity(keys.len());
-    for (_, tx_id) in &keys {
-        let Some(row) = by_id.remove(tx_id) else {
+    for key in &keys {
+        let Some(row) = by_position.remove(key) else {
             continue;
         };
-        let agg = aggregates.get(tx_id);
+        let agg = aggregates.get(&row.id);
         let operation_types = agg.map(|a| a.operation_types.clone()).unwrap_or_default();
         out.push(AssetTxRow {
-            id: row.id,
             hash: row.hash,
             ledger_sequence: row.ledger_sequence,
+            application_order: row.application_order,
             source_account: accounts
                 .get(&row.source_id)
                 .cloned()
@@ -1206,30 +1188,6 @@ pub async fn fetch_transactions(
         });
     }
     Ok(out)
-}
-
-/// Fold the keyset arms into ONE statement (task 0446).
-///
-/// The arms read different tables and neither consumes the other's output, so
-/// they used to be awaited one at a time and merged in Rust — two serial round
-/// trips to a ClickHouse that sits outside the AWS network (measured 14.2 ms
-/// each). ClickHouse does the same merge itself: the outer `ORDER BY` is the
-/// page direction, the outer `LIMIT 1 BY` drops a transaction both arms
-/// returned, and the outer `LIMIT` truncates to the page. Each arm keeps its own
-/// `ORDER BY`/`LIMIT` so it still returns at most `limit` rows to the union.
-///
-/// Takes the two arms directly rather than a slice: there are exactly one or
-/// two, and a slice would model that as "zero or more" — an empty one would
-/// build `FROM ()`, invalid SQL no type checks. The lone-arm case is the
-/// caller's `None`, which needs no wrapper at all (`seek` already emits its own
-/// `ORDER BY` / `LIMIT 1 BY` / `LIMIT`).
-fn union_keyset_arms(arm_a: &str, arm_b: &str, order: &str, limit: i64) -> String {
-    format!(
-        "SELECT ledger_sequence, transaction_id FROM (({arm_a}) UNION ALL ({arm_b})) \
-         ORDER BY ledger_sequence {order}, transaction_id {order} \
-         LIMIT 1 BY ledger_sequence, transaction_id \
-         LIMIT {limit}"
-    )
 }
 
 #[cfg(test)]

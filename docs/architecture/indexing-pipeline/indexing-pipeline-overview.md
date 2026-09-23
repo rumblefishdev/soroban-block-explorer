@@ -359,7 +359,10 @@ the staging event loop decodes SEP-41 / CAP-67 `transfer` / `mint` / `burn` /
 `clawback` events (`derive_token_event`, see xdr-parsing overview §5.6) and
 registers their `from` / `to` as account participants plus — for SAC-wrapped
 classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`).
-`transaction_participants` stays pure presence.
+`transaction_participants` stays pure presence. Both tables name the
+transaction by its position `(ledger_sequence, application_order)` (task
+0575), which staging takes from the ledger's own transaction order
+(`persist/stage/presence.rs`), not by the hash surrogate.
 
 `contract_transactions` (task 0541) is the contract-dimension presence index,
 built at staging from rows the ledger already produced: every contract that

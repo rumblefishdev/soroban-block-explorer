@@ -1090,7 +1090,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         ledger_sequence_i64,
         transactions,
         &participants_per_tx,
-        &tx_id_by_hash,
+        &app_order_by_hash,
     );
 
     // ---- liquidity_pools (classic; shared with `snapshot-seed`) ----
@@ -1729,7 +1729,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             // the empty-string sentinel); classic credit hashes
             // code:issuer_surrogate — both via `ids::asset_id`.
             if !op.asset_appearances.is_empty() {
-                let tx_id = tx_id_by_hash[tx_hash];
+                let application_order = app_order_by_hash[tx_hash];
                 for asset in &op.asset_appearances {
                     let asset_id = match asset {
                         AssetRef::Native => ids::NATIVE_ASSET_ID,
@@ -1739,8 +1739,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                         out.op_asset_rows.push(OperationAssetAppearanceRow {
                             asset_id,
                             ledger_sequence: ledger_sequence_i64,
-                            transaction_id: tx_id,
-                            // `Some(v)` = reduced; `None` (-> NULL) = touched but
+                            application_order,
                         });
                     }
                 }
@@ -1849,7 +1848,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     out.op_asset_rows.extend(presence::event_asset_rows(
         ledger_sequence_i64,
         &event_assets_per_tx,
-        &tx_id_by_hash,
+        &app_order_by_hash,
     ));
 
     // ---- soroban_events (UNFOLDED per ADR 0044 §4a, keyed by rpc id per ADR 0059) ----
