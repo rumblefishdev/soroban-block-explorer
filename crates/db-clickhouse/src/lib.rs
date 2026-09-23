@@ -190,10 +190,11 @@ mod tests {
         // the `soroban_events` key (ADR 0059). 40 → 39.
         // task 0541: added `contract_transactions` — the per-(contract, tx)
         // presence index the contract-filtered transaction list seeks. 39 → 40.
+        // task 0396: dropped `transaction_hash_dict` — never called. 40 → 39.
         assert_eq!(
             stmts.len(),
-            40,
-            "expected 37 tables + 2 materialized views + 1 dictionary, got {}",
+            39,
+            "expected 37 tables + 2 materialized views, got {}",
             stmts.len()
         );
     }
