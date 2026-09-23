@@ -32,7 +32,7 @@ history:
 **Related:**
 
 - [Task 0541: canonical event location](../1-tasks/archive/0541_FEATURE_canonical-event-location/README.md)
-- [Task 0538: canonical transaction and event location (programme)](../1-tasks/backlog/0538_EPIC_canonical-transaction-and-event-location/README.md)
+- [Task 0538: canonical transaction and event location (programme)](../1-tasks/active/0538_EPIC_canonical-transaction-and-event-location/README.md)
 - [ADR 0044: ClickHouse store, full-content `soroban_events`](./0044_clickhouse-pilot-parallel-store.md)
 - [ADR 0057: the network is the arbiter](./0057_network-is-the-arbiter-snapshot-reconciliation.md)
 

@@ -2,9 +2,9 @@
 id: '0538'
 title: 'EPIC: locate every transaction, operation and event by its canonical position — replace the surrogate transaction id project-wide'
 type: EPIC
-status: backlog
-related_adr: []
-related_tasks: ['0393', '0417', '0541']
+status: active
+related_adr: ['0059']
+related_tasks: ['0393', '0417', '0541', '0558', '0575']
 tags:
   [
     'clickhouse',
@@ -49,6 +49,27 @@ history:
       location, with 0541 as its first table. Scope widened by a second defect
       found while checking reads — lists order rows inside a ledger by the
       surrogate, i.e. by hash, not by execution order.
+  - date: 2026-09-23
+    status: active
+    who: karolkow
+    note: >
+      Promoted. Steps 1 and 3 are done: ADR 0059 names the positions, and task
+      0541 keyed `soroban_events` by the rpc event id (−242 GiB with the drops).
+      Step 5 starts with task 0575 (`transaction_participants` +
+      `operation_asset_appearances`, 170.13 GiB of `transaction_id`). The
+      target shape is measured on production as `contract_transactions`:
+      `application_order` behind a leading id costs 1.31 B/row against 8.03.
+      Re-measured below.
+  - date: 2026-09-23
+    status: active
+    who: karolkow
+    note: >
+      The rule was written only as one line of ADR 0059, while the `init.sql`
+      header still presented `transactions.id` as the FK hub and ADR 0056
+      rule 4 read as "new tables key on surrogates". Guard added (decision
+      karolkow, 2026-09-23, option B): `tests/schema_conventions.rs` fails on
+      a `transaction_id` column outside a shrinking allowlist; `init.sql`
+      header, `CLAUDE.md` and ADR 0056 rule 4 now say the same thing.
 ---
 
 # EPIC: canonical location for transactions, operations and events
@@ -124,6 +145,9 @@ never two copies of two tables at once. Every struct change ships with
 - [ ] ADR adopted; `application_order` means one thing
 - [ ] Partition-level measurement and join benchmark recorded before step 4
 - [ ] No table carries `transaction_id`; `transactions.id` dropped
+- [x] No new table can add `transaction_id`: `crates/db-clickhouse/tests/schema_conventions.rs`
+      (allowlist of the 8 tables that still carry it; each migrated table
+      removes its entry — the test fails on a stale one) — 2026-09-23
 - [ ] `nft_ownership` carries the canonical event location; its per-token
       `event_order` is no longer used as event identity
 - [ ] Every list returns rows in execution order inside a ledger — verified on
@@ -270,3 +294,61 @@ event id is `TOID(ledger, tx application order, op) + event in op`), so the
 natural key is not only cheaper but the one outside tools speak.
 
 **First table:** `soroban_events`, via task 0541 (decided 2026-09-16).
+
+## Re-measured 2026-09-23 (production, after 0541)
+
+Database 1011.88 GiB / 62.10 bn rows; free 482.58 GiB of 1.72 TiB.
+
+| Table                             | `transaction_id` | B/row | rows     |
+| --------------------------------- | ---------------- | ----- | -------- |
+| `operation_asset_appearances`     | 88.06 GiB        | 8.03  | 11.77 bn |
+| `transaction_participants`        | 82.07 GiB        | 8.03  | 10.97 bn |
+| `operations_appearances`          | 33.24 GiB        | 5.08  | 7.02 bn  |
+| `soroban_invocations_appearances` | 8.41 GiB         | 8.03  | 1.13 bn  |
+| `operation_pools`                 | 4.77 GiB         | 8.03  | 0.64 bn  |
+| `lp_operation_amounts`            | 4.45 GiB         | 4.82  | 0.99 bn  |
+| **all**                           | **220.99 GiB**   |       |          |
+
+Plus `transactions.id` 31.54 GiB; `transactions.hash` 126.13 GiB,
+`transaction_hash_index.hash` 153.73 GiB (5.14 bn rows = 4.22 bn transactions
+
+- 0.92 bn fee-bump inner hashes, so the index is not a plain copy).
+
+**Step 2 answered by a table that already exists.** `contract_transactions`
+(0541) has exactly the presence shape — `(contract_id, ledger_sequence,
+application_order)` — on 2.99 bn rows: `application_order` 1.31 B/row (ratio
+1.5), `ledger_sequence` 1.97 B/row. Its 203 parts are unmerged, so both are
+upper bounds. Projected per table at 1.31 B/row (_estimate_):
+`operation_asset_appearances` −74 GiB, `transaction_participants` −69 GiB,
+`soroban_invocations_appearances` −7 GiB, `operation_pools` −4 GiB;
+`operations_appearances` (position right after the ledger, ~0.23 B/row) −32 GiB.
+The per-table trial partition stays, now to choose a codec for
+`ledger_sequence` (2.83 B/row behind `account_id`), not to settle whether the
+position pays.
+
+**Next table:** `transaction_participants` + `operation_asset_appearances`,
+task 0575 (decided karolkow, 2026-09-23).
+
+**Trial partition, 0575 (2026-09-23).** Partition 128 of both tables rebuilt
+locally, row counts equal to production: the position alone takes the row
+from 11.19 / 9.09 B to 4.72 / 2.44 B; with `Delta, ZSTD(1)` on
+`ledger_sequence` and `T64, ZSTD(1)` on `application_order` to 1.95 / 1.12 B.
+Codecs matter as much as the position once the hash is gone — every later
+table in this programme should try the same two.
+
+**`soroban_invocations_appearances` — measured 2026-09-23, left for a later
+step (decision karolkow, option C).** Its presence is fully covered by
+`contract_transactions` (0 invocations missing on 1,000 ledgers), but
+"invoked" is narrower than "touched" — for a SAC only 24% of
+`contract_transactions` rows are invocations, so the Invocations tab and the
+invocation counts cannot read `contract_transactions` as is. Of its 14.47 GiB:
+`transaction_id` 8.42, `caller_id` 4.61 (the only value nothing else holds —
+the Invocations tab's caller and "Unique callers"; the first invocation's
+caller only), `caller_contract_id` 0.62 and `amount` 0.58 **read by nothing**
+(`crates/`, `web/`), key columns 0.49. The transaction page's
+`soroban_invocations` field is served but the frontend does not read it.
+Options when this step comes: rekey to the position and drop the two dead
+columns (~9.6 GiB, _estimate_), or fold an `invoked` flag and `caller_id` into
+`contract_transactions` and drop the table (~10 GiB, but the table stops being
+pure presence and the SAC Invocations tab reads ~4× the rows). Task 0575
+already stopped reading it for the asset list.
