@@ -7,7 +7,7 @@ import {
   isLedgerSequence,
   isPoolId,
   isTransactionHash,
-} from './validators.js';
+} from '../validators.js';
 
 const VALID_ACCOUNT =
   'GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOUJ3K4MOMNGEE36';

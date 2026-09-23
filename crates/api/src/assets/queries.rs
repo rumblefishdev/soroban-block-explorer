@@ -1233,11 +1233,9 @@ fn union_keyset_arms(arm_a: &str, arm_b: &str, order: &str, limit: i64) -> Strin
 }
 
 #[cfg(test)]
-#[path = "queries_tests.rs"]
 mod tests;
 
 /// Live-CH decode smoke for the asset-transactions keyset read — see the module
 /// docs in the file itself.
 #[cfg(test)]
-#[path = "queries_decode_smoke.rs"]
 mod decode_smoke;

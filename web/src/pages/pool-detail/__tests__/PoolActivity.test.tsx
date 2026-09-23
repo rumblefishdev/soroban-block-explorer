@@ -2,7 +2,7 @@ import type { PoolActivityItem, PoolItem } from '@rumblefish/api-types';
 import { screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithProviders } from '../../test-utils.js';
+import { renderWithProviders } from '../../../test-utils.js';
 
 import {
   activityRowKey,
@@ -10,12 +10,12 @@ import {
   PoolActivity,
   poolAmountLegs,
   tradeRate,
-} from './PoolActivity.js';
+} from '../PoolActivity.js';
 
 const hookMock = vi.hoisted(() => ({ usePoolActivity: vi.fn() }));
 
-vi.mock('../../api/index.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../api/index.js')>()),
+vi.mock('../../../api/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../api/index.js')>()),
   usePoolActivity: hookMock.usePoolActivity,
 }));
 
