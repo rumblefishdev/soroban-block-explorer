@@ -69,3 +69,17 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 # TOML parsing (SEP-1 stellar.toml files per task 0188).
 toml = "0.8"
+
+# Debug info: file:line for our crates (panic backtraces stay readable), none
+# for dependencies. Full debug info costs ~20% more target/ and build CPU and
+# nothing here uses it; `cargo test --profile debugging` restores it for a
+# debugger session.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
