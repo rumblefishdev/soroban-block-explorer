@@ -118,8 +118,9 @@ workspace; record both.
       the develop tip: no clippy; an unknown remote sha: clippy)
 - [x] Empty/irrelevant `git commit` hook overhead measured before/after —
       the Nx part: 11.4 s → 0.07 s
-- [ ] TS job runs only affected projects; Playwright cache hit shown on a
-      re-run — on this pull request's CI
+- [x] TS job runs only affected projects; Playwright cache hit shown on a
+      re-run — run 35855921396: the job took 3 min 01 s (10 min 41 s on the
+      0573 pull request) and restored `ms-playwright-Linux-1.62.1`
 - [x] Workspace `target/` size + clean build time measured before/after the
       profile change — below
 - [x] **Docs updated** — N/A — CI/tooling only; no file under `docs/`
@@ -341,3 +342,19 @@ record read as "Unrecognized Cache Artifacts", a warning, and every task
 runs. The TypeScript job therefore caches both. Whether a GitHub runner keeps
 its machine id from run to run decides whether this pays; if it does not,
 the step comes out again before merge.
+
+**Measured, and removed.** Run 35855921396 saved both directories; its
+rerun restored them by the exact key and Nx answered "Unrecognized Cache
+Artifacts" — a GitHub runner does not keep its machine id, so the records
+never match and nothing replays. The step is gone. A shared Nx cache in CI
+needs a remote cache (Nx Cloud, or the self-hosted HTTP cache Nx 22
+supports through `NX_SELF_HOSTED_REMOTE_CACHE_SERVER`), not `actions/cache`.
+
+**Found on the rerun: `web:build` races `web:typecheck`.** The rerun failed
+in `vite build` with `ENOTEMPTY: directory not empty, rmdir
+'web/dist/pages'`. `typecheck` runs `tsc --build --emitDeclarationOnly`
+with `tsconfig.lib.json`'s `outDir: dist`, which writes 237 `.d.ts` files
+into `web/dist` — the directory `vite build` empties at start. Nx runs the
+two in parallel, so a declaration landing mid-cleanup fails the build. It
+predates this task (`run-many` ran them in parallel too); the first run of
+the same commit passed.
