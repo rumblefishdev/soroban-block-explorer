@@ -2,7 +2,7 @@
 id: '0396'
 title: 'REFACTOR: resolve transaction_hash_dict redundancy — finish (Rust→dictGet) or remove (dead-but-prod-wired)'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0395', '0397']
 tags: [clickhouse, tech-debt, effort-small, priority-low]
@@ -40,6 +40,13 @@ history:
       Recommendation: remove, not finish. Finishing would mean routing the Rust
       path through `dictGet` to justify 40 MiB, when a PK seek on
       `transaction_hash_index` already answers the same question for free.
+  - date: 2026-09-23
+    status: active
+    who: karolkow
+    note: >
+      Decided: remove. Production reads NOT_LOADED, 0 elements; task 0580
+      re-keys transaction_hash_index by a hash prefix, which the dictionary's
+      String key could not follow anyway. PR 1 of task 0580's split.
 ---
 
 # REFACTOR: transaction_hash_dict — finish or remove
@@ -80,9 +87,44 @@ Footprint (removal is multi-file, incl. prod ops):
 
 ## Acceptance Criteria
 
-- [ ] Decision recorded (finish vs remove) with rationale.
+- [x] Decision recorded (finish vs remove) with rationale — remove, whole footprint (below).
 - [ ] If finish: `lookup_hash_ledger` uses `dictGet`; smoke test still green;
       measured 244k→~0 on the by-hash lookup.
 - [ ] If remove: all listed references reconciled (incl. ops script + docs +
       runbook); prod `DROP DICTIONARY` handed to ops; docs/architecture updated
       per ADR 0032.
+
+## Removal (2026-09-23)
+
+**Decided (karolkow): remove, the whole footprint in one PR** — the
+dictionary and its `dict_reader` user, config file and compose mounts, not
+the dictionary alone. Production read on 2026-09-23: `NOT_LOADED`,
+0 elements, nothing calls it; task 0580 re-keys its source table, which the
+dictionary's `String` key could not follow.
+
+Branch `refactor/0396-remove-transaction-hash-dict`, 19 files, +76 / −228:
+`CREATE DICTIONARY` out of `init.sql`; `users.d/dict.xml` removed and its
+mounts out of `docker-compose.yml` / `docker-compose.prod.yml`; the reload
+step out of `scripts/merge-attach-hetzner.sh`; the `dictGet` section out of
+the `smoke` test; every doc that named it (`clickhouse-pilot.md` §4e,
+`database-schema-overview.md`, canonical SQL 03 and 22 and their README,
+`clickhouse-rbac.md` — also its `read_only_lan` profile, which existed only
+in that doc —, runbook 0228 step 1.3, both READMEs, `.env.example`). Left as
+they were: `docs/scf/milestone-1-evidence.md` and the 2026-05-21 validation
+artifact, records of their day.
+
+Verified: `smoke` green on a fresh ClickHouse 26.3 (0 dictionaries after
+`init.sql`); both compose files parse, the production one with no
+`dict.xml` mount.
+
+**Rollout (the operator's), after the merge:**
+
+1. `DROP DICTIONARY transaction_hash_dict` — before the deploy, because the
+   deploy's init sidecar re-applies `init.sql`, and the dictionary must not
+   outlive its user.
+2. Hetzner `--tags app` from a worktree at the merge: the rsync deletes
+   `users.d/dict.xml`; the changed ClickHouse mounts recreate the container
+   (three alarms page once and clear in 5–7 min).
+
+Overlaps task 0381's "Dead dictionary + `idx_tx_hash_bloom` removal": the
+bloom went in task 0579, the dictionary here.
