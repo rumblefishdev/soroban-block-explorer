@@ -8,7 +8,7 @@ status: mature
 
 ## Step 2 — writer — writer (2026-09-23)
 
-Done, uncommitted on `docs/0575-presence-tables-canonical-position`:
+Done on `refactor/0575-presence-tables-canonical-position` (draft PR #483):
 
 - **Refactor first (pure move, own commit):** the participant loop and the
   event-derived asset loop left `stage.rs` (3,380 → 3,360 lines, over the
@@ -37,7 +37,7 @@ step 3 lands in the same PR.
 
 ## Step 3 — readers — readers (2026-09-23)
 
-Done, uncommitted, same branch:
+Done, same branch:
 
 - **Account list** (`accounts/queries.rs`, `handlers.rs`): driver seeks
   `(ledger_sequence, application_order)`, the page fetches `transactions` by

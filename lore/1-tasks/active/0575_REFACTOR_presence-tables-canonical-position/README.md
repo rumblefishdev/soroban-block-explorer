@@ -148,7 +148,9 @@ after the checks (`max_table_size_to_drop` override, as in 0541 phase 5).
   [notes/R-trial-partition-128.md](notes/R-trial-partition-128.md). Row
   11.19 → 1.95 B (`transaction_participants`), 9.09 → 1.12 B
   (`operation_asset_appearances`); 0 rows without a position.
-- **Steps 2–3 — writer and readers:** done, uncommitted;
+- **Steps 2–3 — writer and readers:** done on branch
+  `refactor/0575-presence-tables-canonical-position`, draft PR #483 — merged
+  only right before the window (`docs/deployment.md`);
   [notes/S-implementation-log.md](notes/S-implementation-log.md). 881 tests
   green; decode smokes run against a real ClickHouse.
 - **Step 4 — fill and swap (the operator's):** runbook ready —
