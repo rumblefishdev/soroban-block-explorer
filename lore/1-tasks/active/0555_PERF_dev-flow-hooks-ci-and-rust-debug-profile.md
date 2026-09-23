@@ -34,7 +34,8 @@ history:
 ## Summary
 
 Cut the time and disk every commit, push and CI run pays for work that did
-not change code. Four independent changes, one PR each or one combined PR.
+not change code. Four independent changes, delivered in one pull request
+(#484), plus a cache cleanup at pull request close.
 
 ## Context
 
@@ -226,3 +227,38 @@ are indicative; the size is not affected.
 - **Husky prepends `~/.cargo/bin`** through `~/.config/husky/init.sh`, so a
   stub `cargo` on `PATH` does not intercept the hook's clippy; the hook test
   hit the real one on its last range, which is the expected branch.
+
+## Review (2026-09-23)
+
+A two-axis review (standards, spec) of #484 found two ways the docs-only
+skip could skip CI for a push that changed code. Both fixed (karolkow: fix
+now, in this pull request):
+
+- **A force-push.** `compare/A...B` lists what B changed since its merge base
+  with A, not the difference between their trees; a force-push that drops a
+  code commit and adds a document read as documents only. The pushed commit
+  must now be `ahead` of the tested one, or the run is full.
+- **A swallowed API error.** The two compares ran in one loop inside `$(…)`,
+  whose status is the last call's; a failed pushed-range compare left only
+  the base's list. Each compare is now its own assignment, so an error fails
+  the step, and a failed step is a full run.
+
+Tested against the API: an `ahead` docs-only range lists its files, a
+`behind` one reads `not-comparable`. Locally `grep` is `ugrep`, whose `-q -v`
+answers differently from GNU and BSD grep; the decision was checked with
+`/usr/bin/grep` (CI runs GNU grep).
+
+Fixed in passing: `local`/`remote` renamed `local_sha`/`remote_sha` in the
+hook (`local` is a shell builtin); `Cargo.toml`'s comment carries the
+workspace measurement instead of the single-crate one; the cleanup workflow's
+job has a name and fails when the cache listing fails.
+
+Decided (karolkow):
+
+- **`.nx/cache` stays off** (plan step 3): no target in `nx.json` is
+  cacheable, and task 0389 measured it slower (481 s → 621 s).
+- **The task stays a single file** although it is over the ~150-line mark.
+
+Left as judgement calls: "documentation" is defined as `lore/`, `docs/`,
+`*.md` in CI and as `*.md` in the commit hook (each fits its job); the
+e2e condition repeats on five steps.
