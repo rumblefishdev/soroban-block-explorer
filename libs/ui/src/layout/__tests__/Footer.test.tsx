@@ -4,9 +4,9 @@ import { userEvent } from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createExplorerTheme } from '../theme/theme.js';
+import { createExplorerTheme } from '../../theme/theme.js';
 
-import { Footer } from './Footer.js';
+import { Footer } from '../Footer.js';
 
 const THEME = createExplorerTheme('dark');
 
@@ -30,5 +30,14 @@ describe('Footer', () => {
     await user.click(screen.getByRole('link', { name: 'Cookie Settings' }));
 
     expect(window._hsp).toEqual([['showBanner']]);
+  });
+
+  it('links the Prices API portal under /api/', () => {
+    render(withTheme(<Footer logo={<span>logo</span>} navItems={[]} />));
+
+    expect(screen.getByRole('link', { name: 'Prices API' })).toHaveAttribute(
+      'href',
+      '/api/'
+    );
   });
 });

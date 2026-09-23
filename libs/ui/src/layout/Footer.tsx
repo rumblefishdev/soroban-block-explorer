@@ -4,6 +4,8 @@ import Typography from '@mui/material/Typography';
 
 import { grid } from '../theme/grid.js';
 
+import { PRICES_API_URL } from './links.js';
+
 export interface FooterNavItem {
   label: string;
   href?: string;
@@ -25,6 +27,7 @@ declare global {
 }
 
 const RESOURCES: FooterNavItem[] = [
+  { label: 'Prices API', href: PRICES_API_URL },
   {
     label: 'GitHub',
     href: 'https://github.com/rumblefishdev/soroban-block-explorer',
