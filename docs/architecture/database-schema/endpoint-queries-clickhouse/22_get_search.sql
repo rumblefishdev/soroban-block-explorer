@@ -42,8 +42,7 @@
 --   • Asset issuer StrKey is resolved by a bloom-pruned `accounts WHERE id IN
 --     (page ids)` key-seek (`idx_acc_id`), NEVER `LEFT JOIN accounts` — the
 --     full-table hash-side build OOMs (CH Code 241, the 0317 trap).
---   • Transaction lookup is a `transaction_hash_index` PK seek (the
---     `transaction_hash_dict` Dictionary is a deferred O(1) optimisation).
+--   • Transaction lookup is a `transaction_hash_index` PK seek.
 --   • All Replacing state tables read FINAL (or argMax for the enrichment
 --     side-tables); `nullIf(...)` maps a JOIN miss to NULL (api_reader runs
 --     readonly=1 → no `SETTINGS join_use_nulls`).

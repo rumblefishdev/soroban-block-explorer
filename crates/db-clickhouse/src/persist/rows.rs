@@ -418,7 +418,8 @@ pub struct TransactionRow {
     pub parse_error: bool,
 }
 
-/// `transaction_hash_index` — fact, backs `transaction_hash_dict`.
+/// `transaction_hash_index` — fact: transaction hash (outer or fee-bump inner)
+/// → ledger, read by search and the transaction page.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct TransactionHashIndexRow {
     pub hash: [u8; 32],

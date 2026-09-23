@@ -29,10 +29,8 @@
 //! `crates/db-clickhouse/schema/init.sql` and the live CH read modules)
 //!
 //! - **Transaction lookup** reads `transaction_hash_index` (ORDER BY `hash`,
-//!   PK point-seek), mirroring [`crate::transactions::queries`]. The
-//!   canonical `22_get_search.sql` proposes the `transaction_hash_dict`
-//!   Dictionary hot path; that is a CH-only optimisation layerable later
-//!   without changing this contract. `successful` + `last_activity_at` are
+//!   PK point-seek), mirroring [`crate::transactions::queries`].
+//!   `successful` + `last_activity_at` are
 //!   resolved (PG parity) via a partition-pruned `transactions` seek + a
 //!   `ledgers` PK join — both single-row, so the cost is two point-seeks.
 //! - **NFT name** lives in `nft_enrichment`, NOT `nfts.name` (vestigial NULL on

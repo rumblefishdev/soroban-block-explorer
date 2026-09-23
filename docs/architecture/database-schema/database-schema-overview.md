@@ -1819,12 +1819,7 @@ CH read-acceleration model has four layers, all declared in
    | `operations_appearances` | `idx_oa_pool_ids`    | `bloom_filter(0.001)` | sparse-pool regime of the pool-transactions scan (task 0365)                                                                   |
    | `operations_appearances` | `idx_oa_contract_id` | `bloom_filter(0.001)` | sparse-contract regime of the contract-filtered tx list (task 0333; the 2026-06-29 quota blowout)                              |
 
-3. **A `Dictionary`** (`transaction_hash_dict`) serves hot
-   hash → `(ledger_sequence, application_order)` point lookups without
-   touching the base table (§4e in `clickhouse-pilot.md`, task 0204). Its
-   `ComplexKeyCache` layout reports `element_count` as _currently cached_
-   entries, not source size — 1 on a cold cache is healthy, not broken.
-4. **Projections: none, by constraint.** ClickHouse 26.3 refuses projections
+3. **Projections: none, by constraint.** ClickHouse 26.3 refuses projections
    on `ReplacingMergeTree` (`Code 344`, measured in task 0353); anything a
    projection would have served is done with an MV or a skip index instead.
 

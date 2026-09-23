@@ -19,20 +19,20 @@
 --                           the full-content table (§5.1, §5.5 win).
 -- Inputs:
 --   $1  :hash     FixedString(32)  raw 32-byte transaction hash
--- Indexes:      transaction_hash_dict (Dictionary, hash → ledger_sequence),
---                 §4.9 / §5.5 — replaces PG transaction_hash_index PK seek.
+-- Indexes:      transaction_hash_index (ORDER BY hash → ledger_sequence),
+--                 the PG transaction_hash_index PK seek, 1:1.
 --               transactions ORDER BY (ledger_sequence, application_order, id)
 --                 + PARTITION BY intDiv. Once we have ledger_sequence from
---                 the Dict, the planner uses one partition + sparse-PK granule.
+--                 the index, the planner uses one partition + sparse-PK granule.
 --               operations_appearances, transaction_participants, soroban_events,
 --                 soroban_invocations_appearances — all PARTITION BY intDiv
 --                 + ORDER BY with transaction_id in the prefix.
 --               accounts, soroban_contracts — Replacing state, FINAL.
 -- CH Engine:    All Replacing — FINAL on every read. ledgers MergeTree only.
--- CH Pattern:   6 statements like PG. A uses `dictGet`; subsequent
+-- CH Pattern:   6 statements like PG. A seeks the hash index; subsequent
 --                 statements use the resolved `(ledger_sequence, transaction_id)`
 --                 for partition prune + sparse-PK granule seek.
--- ADR 0044 §:   §4.9 + §5.5 (Dictionary hot path), §4.2/§4.3 (Replacing
+-- ADR 0044 §:   §4.9, §4.2/§4.3 (Replacing
 --                 partitioned), §4.4 (soroban_events full payload — §5.1
 --                 divergence: E reads full payload not just appearance index),
 --                 §4.5 (state Replacing), §5.2 (closed_at via JOIN ledgers
@@ -41,11 +41,9 @@
 --   • Six statements. The API runs them sequentially, threading
 --     `(transaction_id, ledger_sequence)` from statement B into C-F.
 --   • Statement A is the partition-pruning shortcut: hash → ledger_sequence
---     via the `transaction_hash_dict` Dictionary. **Hot path** — no scan
---     of `transaction_hash_index` needed; the Dict caches the lookup.
---   • The Dict attribute is `String` (not FixedString — §4.9 implementation
---     constraint). Callers pass `toString(unhex(hex_str))` for hex input,
---     or `toString($hash)` if the param is already FixedString(32).
+--     via a `transaction_hash_index` PK seek. (A `transaction_hash_dict`
+--     Dictionary over it was never called by the API and was removed in
+--     task 0396.)
 --   • Statement E (events) is the major §5.1 divergence: returns FULL
 --     event payload (`topics_xdr`, `data_xdr`, `event_type`, `signature`)
 --     inline. PG E03 statement E only returns the appearance index +
@@ -58,10 +56,9 @@
 --   • `closed_at` for the header comes via JOIN to `ledgers` (§5.2).
 
 -- ============================================================================
--- A. Resolve hash → ledger_sequence via Dictionary (hot path, §5.5).
+-- A. Resolve hash → ledger_sequence (transaction_hash_index PK seek).
 -- ============================================================================
-SELECT
-    dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)) AS ledger_sequence;
+SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1;
 
 -- @@ split @@
 
@@ -92,13 +89,13 @@ JOIN accounts src FINAL ON src.id = t.source_id
 JOIN ledgers   l        ON l.sequence = t.ledger_sequence
 WHERE t.hash = $1
   AND intDiv(t.ledger_sequence, 500000)
-      = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000);
+      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000);
 
 -- @@ split @@
 
 -- ============================================================================
 -- C. Operations (appearance rows for this tx).
---    Inputs: $1 = hash (used for partition pruning via Dict lookup).
+--    Inputs: $1 = hash (used for partition pruning via the index lookup).
 --    PR #175 dropped `operations_appearances.id` surrogate; rows are
 --    identified by (transaction_id, application_order). Frontend gets
 --    a stable per-op id by combining the natural key.
@@ -126,10 +123,10 @@ JOIN      ledgers           l         ON l.sequence = oa.ledger_sequence
 WHERE oa.transaction_id = (
     SELECT id FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
-          = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
+          = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
     LIMIT 1)
   AND intDiv(oa.ledger_sequence, 500000)
-      = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
+      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
 -- ORDER BY natural shape: application_order is unique within (transaction_id, ledger_sequence)
 -- per PR #175 schema, so this single column gives stable ordering — no oa.id tiebreaker needed.
 ORDER BY oa.application_order ASC NULLS LAST;
@@ -138,7 +135,7 @@ ORDER BY oa.application_order ASC NULLS LAST;
 
 -- ============================================================================
 -- D. Participants (accounts touched by this tx).
---    Inputs: $1 = hash (Dict lookup for partition prune).
+--    Inputs: $1 = hash (index lookup for partition prune).
 -- ============================================================================
 SELECT
     a.account_id
@@ -148,17 +145,17 @@ WHERE (tp.ledger_sequence, tp.application_order) = (
     -- the transaction's position (task 0575)
     SELECT ledger_sequence, application_order FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
-          = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
+          = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
     LIMIT 1)
   AND intDiv(tp.ledger_sequence, 500000)
-      = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
+      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
 ORDER BY a.account_id;
 
 -- @@ split @@
 
 -- ============================================================================
 -- E. Soroban events (FULL PAYLOAD per §5.1 — major divergence vs PG).
---    Inputs: $1 = hash (Dict lookup for partition prune).
+--    Inputs: $1 = hash (index lookup for partition prune).
 --    Unlike PG, CH `soroban_events` is the full table — `topics_xdr`,
 --    `data_xdr`, `event_type`, `signature` are inlined. No Archive overlay
 --    required for events on the CH-backed path.
@@ -180,10 +177,10 @@ JOIN ledgers l ON l.sequence = se.ledger_sequence
 WHERE (se.ledger_sequence, se.application_order) = (
     SELECT ledger_sequence, application_order FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
-          = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
+          = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
     LIMIT 1)
   AND intDiv(se.ledger_sequence, 500000)
-      = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
+      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
 ORDER BY se.ledger_sequence, sc.contract_id, se.transaction_index, se.operation_index, se.event_index;
 
 -- The filter is the transaction's POSITION (ADR 0059): a fee refund's rpc id
@@ -194,7 +191,7 @@ ORDER BY se.ledger_sequence, sc.contract_id, se.transaction_index, se.operation_
 
 -- ============================================================================
 -- F. Soroban invocation appearances (per ADR 0034 + task 0183).
---    Inputs: $1 = hash (Dict lookup for partition prune).
+--    Inputs: $1 = hash (index lookup for partition prune).
 --    function_name/args/return_value still come from Archive XDR — those are
 --    not stored in CH either (ADR 0029 boundary applies to both stores).
 -- ============================================================================
@@ -214,8 +211,8 @@ JOIN      ledgers           l                     ON l.sequence = sia.ledger_seq
 WHERE sia.transaction_id = (
     SELECT id FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
-          = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
+          = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
     LIMIT 1)
   AND intDiv(sia.ledger_sequence, 500000)
-      = intDiv(dictGet('transaction_hash_dict', 'ledger_sequence', toString($1)), 500000)
+      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
 ORDER BY sia.ledger_sequence, sc.contract_id;
