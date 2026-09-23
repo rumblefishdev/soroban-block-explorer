@@ -59,12 +59,22 @@ export {
  *      Truncated with the app-wide standard so it reads like every other
  *      address reference.
  *
- * Returns `null` only when NOTHING identifies the asset — schema drift, not a
- * nameless token. Callers pick their own empty rendering for it.
+ * Returns `null` only when NOTHING identifies the asset: a token the registry
+ * never got a row for (task 0542), so the API has no code, symbol or address
+ * to send. Callers render {@link UNREGISTERED_TOKEN_LABEL} for it.
  *
  * An empty-string code counts as absent: the ledger writes native's code that
  * way, and no other asset has one.
  */
+/**
+ * The name of a token {@link assetDisplayCode} cannot name. It says
+ * UNREGISTERED, not "unnamed" and not a dash: the movement or the pool leg IS
+ * indexed, and the token is one the registry never got a row for, because that
+ * row comes from the classifier's guess at the WASM's function names rather
+ * than from the evidence that the contract moved an amount (task 0542).
+ */
+export const UNREGISTERED_TOKEN_LABEL = 'Unregistered token';
+
 export function assetDisplayCode(asset: {
   asset_type_name?: string | null;
   asset_code?: string | null;

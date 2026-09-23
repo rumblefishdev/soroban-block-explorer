@@ -1,5 +1,21 @@
 use super::ResolvedPoolListParams;
 use super::*;
+
+/// Every leg's DISPLAYED code, upper-cased. Native renders as `XLM`, which
+/// the ledger does not store, so it cannot be read off the column — the
+/// same alias the filter itself applies.
+fn leg_codes(p: &PoolRow) -> Vec<String> {
+    p.legs
+        .iter()
+        .map(|l| {
+            if l.family == domain::AssetFamily::Native as i16 {
+                "XLM".to_string()
+            } else {
+                l.asset_code.as_deref().unwrap_or_default().to_uppercase()
+            }
+        })
+        .collect()
+}
 use crate::common::cursor::Direction;
 
 fn client() -> Option<clickhouse::Client> {
@@ -79,10 +95,7 @@ async fn lp_ch_rows_decode() {
     let params = ResolvedPoolListParams {
         limit: 5,
         cursor: None,
-        asset_a_code: None,
-        asset_a_issuer: None,
-        asset_b_code: None,
-        asset_b_issuer: None,
+        pool_kind: None,
         pool_id_hex: None,
         asset_codes: Vec::new(),
     };
@@ -165,10 +178,7 @@ async fn asset_code_filter_matches_substring() {
     let params = ResolvedPoolListParams {
         limit: 10,
         cursor: None,
-        asset_a_code: None,
-        asset_a_issuer: None,
-        asset_b_code: None,
-        asset_b_issuer: None,
+        pool_kind: None,
         // Deliberately a proper prefix of a real code: an exact-match
         // predicate returns zero rows here, a substring one does not.
         pool_id_hex: None,
@@ -183,11 +193,10 @@ async fn asset_code_filter_matches_substring() {
         "`USD` matched no pool — substring filter regressed to exact match"
     );
     for p in &pools {
-        let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
-        let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
+        let codes = leg_codes(p);
         assert!(
-            a.contains("USD") || b.contains("USD"),
-            "pool {} has neither leg containing USD ({a:?} / {b:?}) — filter not applied",
+            codes.iter().any(|c| c.contains("USD")),
+            "pool {} has no leg containing USD ({codes:?}) — filter not applied",
             p.pool_id_hex
         );
     }
@@ -208,10 +217,7 @@ async fn asset_code_filter_finds_native_xlm() {
     let params = ResolvedPoolListParams {
         limit: 25,
         cursor: None,
-        asset_a_code: None,
-        asset_a_issuer: None,
-        asset_b_code: None,
-        asset_b_issuer: None,
+        pool_kind: None,
         pool_id_hex: None,
         asset_codes: vec!["XLM".to_string()],
     };
@@ -220,9 +226,11 @@ async fn asset_code_filter_finds_native_xlm() {
         .expect("filtered list decodes");
 
     assert!(
-        pools
-            .iter()
-            .any(|p| p.asset_a_type == 0 || p.asset_b_type == 0),
+        pools.iter().any(|p| {
+            p.legs
+                .iter()
+                .any(|l| l.family == domain::AssetFamily::Native as i16)
+        }),
         "`XLM` returned {} pool(s) but none holds native XLM — the native \
          alias regressed and the filter is answering with look-alike \
          credit assets only",
@@ -244,10 +252,7 @@ async fn asset_code_filter_pair_is_order_insensitive() {
     let pair = |a: &str, b: &str| ResolvedPoolListParams {
         limit: 25,
         cursor: None,
-        asset_a_code: None,
-        asset_a_issuer: None,
-        asset_b_code: None,
-        asset_b_issuer: None,
+        pool_kind: None,
         pool_id_hex: None,
         asset_codes: vec![a.to_string(), b.to_string()],
     };
@@ -305,11 +310,12 @@ async fn asset_code_filter_pair_is_order_insensitive() {
         .await
         .expect("repeated needle decodes");
     for p in &both_legs {
-        let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
-        let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
+        let codes = leg_codes(p);
+        // The pair rule assigns each needle its OWN leg, so TWO legs have
+        // to match — not one leg matching twice.
         assert!(
-            a.contains("USDC") && b.contains("USDC"),
-            "pool {} came back for `USDC/USDC` with legs {a:?} / {b:?} — one \
+            codes.iter().filter(|c| c.contains("USDC")).count() >= 2,
+            "pool {} came back for `USDC/USDC` with legs {codes:?} — one \
              asset is satisfying both needles",
             p.pool_id_hex
         );

@@ -35,32 +35,56 @@ fn no_needles_means_no_clause() {
 }
 
 #[test]
-fn single_needle_tests_both_legs_and_binds_twice() {
+fn a_single_needle_asks_the_legs_once() {
     let (sql, binds) = asset_codes_predicate(&codes("kale")).expect("clause");
-    assert_eq!(binds, vec!["KALE", "KALE"]);
-    assert_eq!(sql.matches('?').count(), 2);
-    assert!(sql.contains(" OR "));
-    assert!(!sql.contains(" AND "));
+    assert_eq!(binds, vec!["KALE"]);
+    assert_eq!(sql.matches('?').count(), 1);
+    assert!(sql.contains("arrayExists"), "{sql}");
+    assert!(
+        !sql.contains("arrayCount"),
+        "one needle needs no distinctness"
+    );
 }
 
+/// Order does not matter because neither needle is tied to a position —
+/// they are tied to DISTINCT legs, which the count enforces.
 #[test]
-fn pair_binds_both_assignments_so_order_does_not_matter() {
+fn a_pair_needs_two_distinct_legs() {
     let (sql, binds) = asset_codes_predicate(&codes("xlm/kale")).expect("clause");
-    assert_eq!(binds, vec!["XLM", "KALE", "KALE", "XLM"]);
+    assert_eq!(binds, vec!["XLM", "KALE", "XLM", "KALE"]);
     assert_eq!(sql.matches('?').count(), 4);
+    assert!(
+        sql.contains(">= 2"),
+        "the distinctness clause is missing: {sql}"
+    );
 }
 
+/// The case the distinctness clause exists for: one leg cannot answer both
+/// halves of `USDC/USDC`.
 #[test]
-fn native_leg_is_matched_by_type_not_by_code() {
-    // Load-bearing: without the `type = 0` arm, `XLM` matches impostor
-    // codes and misses every real XLM pool (task 0440).
-    //
+fn a_repeated_needle_still_needs_two_legs() {
+    let (sql, binds) = asset_codes_predicate(&codes("usdc/usdc")).expect("clause");
+    assert_eq!(binds, vec!["USDC", "USDC", "USDC", "USDC"]);
+    assert!(sql.contains("arrayCount"), "{sql}");
+}
+
+/// Load-bearing: without the `type = 0` arm, `XLM` matches impostor codes
+/// and misses every real XLM pool (task 0440).
+#[test]
+fn native_is_matched_by_type_not_by_code() {
     let (sql, _) = asset_codes_predicate(&codes("xlm")).expect("clause");
-    for side in ['a', 'b'] {
-        let shown = leg_shown(side, "lp");
-        assert!(
-            sql.contains(&shown),
-            "leg {side} lost the native alias: {sql}"
-        );
-    }
+    assert!(
+        sql.contains("if(asset_type = 0, 'XLM'"),
+        "the native alias is gone: {sql}"
+    );
+}
+
+/// The predicate reads `legs`, never the legacy pair columns — which is
+/// what makes it answer for a soroban pool at all.
+#[test]
+fn it_reads_legs_and_not_the_pair_columns() {
+    let (sql, _) = asset_codes_predicate(&codes("usdc")).expect("clause");
+    assert!(sql.contains("lp.legs"), "{sql}");
+    assert!(!sql.contains("asset_a_"), "{sql}");
+    assert!(!sql.contains("asset_b_"), "{sql}");
 }

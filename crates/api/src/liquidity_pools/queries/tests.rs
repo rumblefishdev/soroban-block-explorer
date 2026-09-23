@@ -1,4 +1,9 @@
 use super::*;
+// Still needed HERE and nowhere else: the read path stopped computing
+// leg surrogates when it started reading the stored ones, but the test
+// below still pins that the writer's formula is the one the amount
+// rows are keyed by.
+use db_clickhouse::persist::ids;
 
 #[test]
 fn hex_pool_id_validation() {
@@ -11,14 +16,18 @@ fn hex_pool_id_validation() {
     assert!(!is_hex_pool_id(&"'; DROP--".repeat(8)));
 }
 
-/// The pool-leg surrogates this module computes from `liquidity_pools`
-/// columns MUST equal the ones the indexer writes into
-/// `lp_operation_amounts.asset_id` from a claim atom's asset string
-/// (`stage.rs::claim_atom_asset_id` → `ids::credit_asset_id` /
-/// `NATIVE_ASSET_ID`). They meet only through this equality: if it breaks,
-/// no row ever matches a leg and the Amount column silently goes blank
-/// instead of failing. The bridge is `asset_a_issuer_id`, which the writer
-/// fills with `ids::account_id(issuer_strkey)`.
+/// The leg surrogates the indexer stores in `liquidity_pools.legs` MUST
+/// equal the ones it writes into `lp_operation_amounts.asset_id` from a
+/// claim atom's asset string (`stage.rs::claim_atom_asset_id` →
+/// `ids::credit_asset_id` / `NATIVE_ASSET_ID`). They meet only through this
+/// equality: if it breaks, no row ever matches a leg and the Amount column
+/// silently goes blank instead of failing.
+///
+/// This is now the ONLY reason the read path still knows the writer's
+/// formula. It stopped COMPUTING leg surrogates when it started reading the
+/// stored ones (task 0374), so the equality has no other witness — which is
+/// exactly why the test stays here, pinning the two producers against each
+/// other rather than against a constant.
 ///
 /// Every XDR asset type a pool leg can hold is covered here on purpose.
 /// The first version of this test used `"TF"` — `credit_alphanum4`, XDR
@@ -82,42 +91,6 @@ fn pool_leg_surrogates_match_production_rows() {
     }
 }
 
-/// The SAC joins on both pool reads must not filter a leg out for having an
-/// empty `asset_code` (task 0470).
-///
-/// An empty code is native XLM's real, stored identity — not a missing
-/// value — and native has a deployed SAC. An `asset_code != ''` guard was
-/// added deliberately in `a19ac8f6` to match Postgres, which returned NULL
-/// there; Postgres is retired and `/v1/assets/native` publishes that same
-/// SAC, so the guard left one asset describing itself two ways depending on
-/// the endpoint.
-///
-/// Pinned on the module source because both queries are inline string
-/// literals — there is no builder to call. That is the honest limit of this
-/// guard: it catches the exact regression (a re-added `!= ''` on a leg
-/// code) and nothing subtler. A behavioural test needs the queries
-/// extracted first, which is recorded as an acceptance criterion on 0470.
-#[test]
-fn no_leg_code_guard_can_exclude_the_native_leg_from_its_sac() {
-    // Only the production half — the test module below quotes the guard it
-    // is looking for, and would match itself.
-    let src = include_str!("queries.rs");
-    let production = src.split("#[cfg(test)]").next().unwrap_or(src);
-    // Count only the leg-code guards; other `!= ''` comparisons in this
-    // module are about different columns and are none of this test's
-    // business.
-    let guards = production
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .filter(|l| l.contains("asset_a_code != ''") || l.contains("asset_b_code != ''"))
-        .count();
-    assert_eq!(
-        guards, 0,
-        "a leg-code guard is back: it silently drops native XLM's SAC, \
-         which /v1/assets/native still reports"
-    );
-}
-
 #[test]
 fn fee_percent_formats() {
     assert_eq!(fee_percent_str(30), "0.3");
@@ -139,13 +112,22 @@ fn decimal_str_validation() {
     assert!(!is_decimal_str("abc"));
 }
 
+/// The leg's kind label comes from the domain enum, not from a local match
+/// — the local one spoke the XDR vocabulary while the sibling endpoint
+/// spoke the family one, and only `native` coincided.
 #[test]
-fn asset_type_names() {
-    assert_eq!(asset_type_name(0).as_deref(), Some("native"));
-    assert_eq!(asset_type_name(1).as_deref(), Some("credit_alphanum4"));
-    assert_eq!(asset_type_name(2).as_deref(), Some("credit_alphanum12"));
-    assert_eq!(asset_type_name(3).as_deref(), Some("pool_share"));
-    assert_eq!(asset_type_name(9), None);
+fn a_leg_is_named_in_the_family_vocabulary() {
+    let name = |t: i16| {
+        domain::AssetFamily::try_from(t)
+            .ok()
+            .map(|f| f.as_str().to_string())
+    };
+    assert_eq!(name(0).as_deref(), Some("native"));
+    assert_eq!(name(1).as_deref(), Some("classic_credit"));
+    assert_eq!(name(3).as_deref(), Some("soroban"));
+    // 2 is the retired SAC facet (ADR 0051) and 9 is nothing at all.
+    assert_eq!(name(2), None);
+    assert_eq!(name(9), None);
 }
 
 /// The prices JOIN key contract (views.sql, pinned 2026-06-16):

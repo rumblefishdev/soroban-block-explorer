@@ -139,6 +139,22 @@ fn pool_id_strkey_valid_accepted_and_decoded_to_lowercase_hex() {
     );
 }
 
+/// A Soroban pool IS a contract, so its identifier is the `C…` address.
+/// This route accepted `L…` only, which 404'd every Soroban pool the list
+/// itself linked to — found by running the UI against production data.
+#[test]
+fn pool_id_accepts_the_contract_form_a_soroban_pool_uses() {
+    let c = "CB5D4HH5S6HZKJKANFAE5QZSJQLEQ65J26TFH42D2ZTS33XZVC7DBDBN";
+    let hex = pool_id_strkey(c, "pool_id").expect("a soroban pool id must parse");
+    assert_eq!(hex.len(), 64);
+    // Same 32 bytes either way — only the version byte differs.
+    let l = crate::common::strkey::pool_id_hex_to_strkey(&hex, domain::PoolKind::Classic);
+    assert_eq!(
+        pool_id_strkey(&l, "pool_id").expect("the classic form still parses"),
+        hex
+    );
+}
+
 #[tokio::test]
 async fn pool_id_strkey_hex_rejected_with_strkey_hint() {
     // Hex form was the legacy wire shape; rejected post-0264 with an
@@ -149,7 +165,7 @@ async fn pool_id_strkey_hex_rejected_with_strkey_hint() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(json["code"], "invalid_pool_id");
     assert_eq!(json["details"]["param"], "pool_id");
-    assert_eq!(json["details"]["expected_prefix"], "L");
+    assert_eq!(json["details"]["expected_prefix"], "L or C");
 }
 
 #[tokio::test]

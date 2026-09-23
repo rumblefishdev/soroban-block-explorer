@@ -7,6 +7,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 
+use crate::common::asset_identity::sac_strkey;
 use crate::common::cache_control;
 use crate::common::cursor;
 use crate::common::errors;
@@ -15,7 +16,8 @@ use crate::common::filters;
 use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
 use crate::common::pool_asset_codes::normalize_asset_codes;
-use crate::common::strkey::{pool_id_from_text, pool_id_hex_to_strkey};
+use crate::common::strkey::{pool_id_from_text, pool_identifier};
+use crate::openapi::schemas::PageInfo;
 use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 
@@ -24,7 +26,7 @@ use super::dto::{
     PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolListCursor, PoolListParams,
     SharesCursor,
 };
-use super::queries::{self, PoolRow, ResolvedPoolListParams};
+use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
 
 #[utoipa::path(
     get,
@@ -32,7 +34,7 @@ use super::queries::{self, PoolRow, ResolvedPoolListParams};
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -145,25 +147,43 @@ pub async fn list_participants(
 // so they now sit in one module together. The `splitn(2)` bound, the
 // empty-needle drop and the pair semantics are documented there.
 
-fn map_pool_item(row: PoolRow) -> PoolItem {
+/// Finish one leg at the response boundary.
+///
+/// The SAC mirror's address is derived HERE and nowhere else (ADR 0051 — never
+/// stored, never looked up), because the network id lives on the app state.
+/// `/v1/assets` splits it at the same seam, through the same helper.
+fn map_leg(leg: PoolLegRow, network_id: &[u8; 32]) -> PoolAssetLeg {
+    PoolAssetLeg {
+        asset_type_name: domain::AssetFamily::try_from(leg.family)
+            .ok()
+            .map(|f| f.as_str().to_string()),
+        sac_contract_id: sac_strkey(
+            leg.sac_observed,
+            leg.asset_code.as_deref().unwrap_or_default(),
+            leg.issuer.as_deref().unwrap_or_default(),
+            network_id,
+        ),
+        asset_code: leg.asset_code,
+        issuer: leg.issuer,
+        contract_id: leg.contract_id,
+        icon_url: leg.icon_url,
+    }
+}
+
+fn map_pool_item(row: PoolRow, network_id: &[u8; 32]) -> PoolItem {
+    let kind = domain::PoolKind::try_from(row.pool_kind).ok();
     PoolItem {
-        pool_id: pool_id_hex_to_strkey(&row.pool_id_hex),
-        asset_a: PoolAssetLeg {
-            asset_type_name: row.asset_a_type_name,
-            asset_type: row.asset_a_type,
-            asset_code: row.asset_a_code,
-            issuer: row.asset_a_issuer,
-            contract_id: row.asset_a_contract_id,
-            icon_url: row.asset_a_icon_url,
-        },
-        asset_b: PoolAssetLeg {
-            asset_type_name: row.asset_b_type_name,
-            asset_type: row.asset_b_type,
-            asset_code: row.asset_b_code,
-            issuer: row.asset_b_issuer,
-            contract_id: row.asset_b_contract_id,
-            icon_url: row.asset_b_icon_url,
-        },
+        // The same 32 bytes are an `L…` strkey for a classic pool and a `C…`
+        // address for a soroban one, and the wrong form is well-formed rather
+        // than an error — so the encoding follows the kind. What an unreadable
+        // kind renders as is `pool_identifier`'s decision, not this handler's.
+        pool_id: pool_identifier(&row.pool_id_hex, row.pool_kind),
+        pool_kind: kind.map(|k| k.as_str().to_string()),
+        legs: row
+            .legs
+            .into_iter()
+            .map(|l| map_leg(l, network_id))
+            .collect(),
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
@@ -203,54 +223,6 @@ pub async fn list_pools(
     pagination: Pagination<PoolListCursor>,
     Query(params): Query<PoolListParams>,
 ) -> Response {
-    if let Err(resp) = filters::strkey_opt(
-        params.filter_asset_a_issuer.as_deref(),
-        'G',
-        "asset_a_issuer",
-    ) {
-        return resp;
-    }
-    if let Err(resp) = filters::strkey_opt(
-        params.filter_asset_b_issuer.as_deref(),
-        'G',
-        "asset_b_issuer",
-    ) {
-        return resp;
-    }
-
-    // Asset-leg filter pairing: classic identity is `(code, issuer)`. Native
-    // legs have no code AND no issuer. Mixed (one set, one absent) is
-    // ambiguous — canonical SQL 18 §46-49 says "API validates inputs
-    // upstream"; this is that validator. Without it, `?filter[asset_a_code]=USDC`
-    // alone would match every USDC-coded pool regardless of issuer (the wrong
-    // USDC issuer included).
-    let a_code_set = params.filter_asset_a_code.is_some();
-    let a_issuer_set = params.filter_asset_a_issuer.is_some();
-    if a_code_set != a_issuer_set {
-        return errors::bad_request_with_details(
-            errors::INVALID_FILTER,
-            "filter[asset_a_code] and filter[asset_a_issuer] must be supplied together \
-             (classic identity) or both omitted",
-            serde_json::json!({
-                "filter[asset_a_code]": params.filter_asset_a_code,
-                "filter[asset_a_issuer]": params.filter_asset_a_issuer,
-            }),
-        );
-    }
-    let b_code_set = params.filter_asset_b_code.is_some();
-    let b_issuer_set = params.filter_asset_b_issuer.is_some();
-    if b_code_set != b_issuer_set {
-        return errors::bad_request_with_details(
-            errors::INVALID_FILTER,
-            "filter[asset_b_code] and filter[asset_b_issuer] must be supplied together \
-             (classic identity) or both omitted",
-            serde_json::json!({
-                "filter[asset_b_code]": params.filter_asset_b_code,
-                "filter[asset_b_issuer]": params.filter_asset_b_issuer,
-            }),
-        );
-    }
-
     // `filter[min_tvl]` is REJECTED, not ignored and not silently empty.
     //
     // Its SQL pre-filter reads `liquidity_pool_snapshots.tvl`, a column task
@@ -289,13 +261,27 @@ pub async fn list_pools(
     } else {
         normalize_asset_codes(params.filter_asset_code)
     };
+    // An unknown kind is a 400, never a silent pass-through: dropping the
+    // filter would answer with a page that contradicts the request, which is
+    // the same failure the rejected `filter[min_tvl]` produced.
+    let pool_kind = match params.filter_pool_kind.as_deref() {
+        None => None,
+        Some(raw) => match raw.parse::<domain::PoolKind>() {
+            Ok(k) => Some(k),
+            Err(_) => {
+                return errors::bad_request_with_details(
+                    errors::INVALID_FILTER,
+                    "filter[pool_kind] must be `classic` or `soroban`",
+                    serde_json::json!({ "filter[pool_kind]": raw }),
+                );
+            }
+        },
+    };
+
     let resolved = ResolvedPoolListParams {
         limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
-        asset_a_code: params.filter_asset_a_code,
-        asset_a_issuer: params.filter_asset_a_issuer,
-        asset_b_code: params.filter_asset_b_code,
-        asset_b_issuer: params.filter_asset_b_issuer,
+        pool_kind,
         asset_codes,
         pool_id_hex,
     };
@@ -329,7 +315,10 @@ pub async fn list_pools(
             )
         },
     );
-    let data: Vec<PoolItem> = rows.into_iter().map(map_pool_item).collect();
+    let data: Vec<PoolItem> = rows
+        .into_iter()
+        .map(|r| map_pool_item(r, &state.network_id))
+        .collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
@@ -342,7 +331,7 @@ pub async fn list_pools(
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
     ),
     responses(
         (status = 200, description = "Pool detail", body = PoolItem),
@@ -376,16 +365,11 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     // NULL ("stale") state. The error log is the operator signal (a missing
     // `prices.*` SELECT grant lands here, not in a 500).
     let ctx = queries::PoolPriceContext {
-        leg_a: queries::price_leg(
-            row.asset_a_type,
-            row.asset_a_code.as_deref(),
-            row.asset_a_issuer.as_deref(),
-        ),
-        leg_b: queries::price_leg(
-            row.asset_b_type,
-            row.asset_b_code.as_deref(),
-            row.asset_b_issuer.as_deref(),
-        ),
+        legs: row
+            .legs
+            .iter()
+            .map(|l| queries::price_leg(l.family, l.asset_code.as_deref(), l.issuer.as_deref()))
+            .collect(),
         fee_bps: row.fee_bps,
     };
     match queries::fetch_pool_usd_analytics(
@@ -407,7 +391,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         }
     }
 
-    let mut resp = Json(map_pool_item(row)).into_response();
+    let mut resp = Json(map_pool_item(row, &state.network_id)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
@@ -437,7 +421,7 @@ const ALLOWED_EVENTS: [&str; 3] = [
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -473,7 +457,20 @@ pub async fn list_pool_activity(
         .await
         .map_err(|e| e.to_string());
     let asset_ids = match legs {
-        Ok(Some(ids)) => ids,
+        // The activity feed reads `lp_operation_amounts`, whose rows come from
+        // CLASSIC operations — and a classic pool has exactly two legs. Taking
+        // the first two is therefore exact for every pool this endpoint can
+        // serve.
+        //
+        // A pool with FEWER is not a missing pool: a row whose `legs` were
+        // never filled still exists, and saying "not found" about it
+        // contradicted the detail endpoint, which renders that same pool one
+        // call earlier. It has no amount rows to map, so the honest answer is
+        // an empty page — the same one a pool with no activity gets.
+        Ok(Some(ids)) => match ids.as_slice() {
+            [a, b, ..] => (*a, *b),
+            _ => return empty_activity_page(pagination.limit),
+        },
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
             tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_asset_ids");
@@ -556,6 +553,22 @@ pub async fn list_pool_activity(
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
+/// The activity response for a pool that exists but has no rows to map.
+///
+/// Distinct from a 404 on purpose: the pool is real, and the caller asked a
+/// well-formed question about it. Shares the list envelope so the frontend's
+/// empty state is the one it already renders.
+fn empty_activity_page(limit: u32) -> axum::response::Response {
+    let page = PageInfo {
+        next_cursor: None,
+        prev_cursor: None,
+        limit,
+    };
+    let mut resp = Json(into_envelope(Vec::<PoolActivityItem>::new(), page)).into_response();
+    cache_control::attach(&mut resp, cache_control::SHORT);
+    resp
+}
+
 const ALLOWED_INTERVALS: &[&str] = &["1h", "1d", "1w"];
 
 /// Hard cap on the number of buckets a single chart request can produce.
@@ -586,7 +599,7 @@ fn interval_seconds(interval: &str) -> i64 {
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ChartParams,
     ),
     responses(
