@@ -171,13 +171,20 @@ pub struct PoolAssetLeg {
     /// in task 0310 after measuring 0 of 411,654 rows populated. `None` for an
     /// asset with no enriched icon — the frontend falls back to the initial.
     pub icon_url: Option<String>,
+    /// What the pool holds of this leg: raw units as a decimal string (a JSON
+    /// number is a browser double and a big reserve would lose digits). On the
+    /// leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
+    /// four legs. `null` when no source knows it — never `0`. Read from the
+    /// latest classic snapshot; a soroban pool has none, so its legs are
+    /// `null` until its own state is read.
+    pub reserve: Option<String>,
 }
 
 /// One pool row returned by the list endpoint. Shape pinned to canonical
 /// SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
 /// in the freshness window come back with `null` for every dynamic field
-/// (`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,
-/// `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
+/// (each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,
+/// `latest_snapshot_*`); frontend renders these as "stale".
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolItem {
     /// A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
@@ -206,8 +213,6 @@ pub struct PoolItem {
     /// `tvl`/`volume`/`fee_revenue` are NULL).
     pub participant_count: i64,
     pub latest_snapshot_ledger: Option<i64>,
-    pub reserve_a: Option<String>,
-    pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
     /// USD, decimal string rounded to cents (task 0199 compute-at-read).
     /// Populated on **both** the list (Phase A2, one batched price lookup
@@ -248,20 +253,20 @@ pub enum PoolEvent {
 }
 
 impl PoolEvent {
-    /// The whole classifier: the sign pair of an operation's two legs.
+    /// The whole classifier: the signs of an operation's leg amounts.
     ///
-    /// Both amounts are signed from the pool's perspective, so a leg that
-    /// entered the pool is positive. Anything that is not "both in" or "both
+    /// Every amount is signed from the pool's perspective, so a leg that
+    /// entered the pool is positive. Anything that is not "all in" or "all
     /// out" moved value across the pool in opposite directions, which is a
     /// trade — including the zero-amount edge a dust swap can produce, since
     /// it is still not a deposit and not a withdrawal.
     ///
-    /// Callers must only reach here with BOTH legs present; a half-row has no
+    /// Callers must only reach here with EVERY leg present; a half-row has no
     /// event (see [`PoolActivityItem::event`]).
-    pub fn from_signs(amount_a: i64, amount_b: i64) -> Self {
-        if amount_a > 0 && amount_b > 0 {
+    pub fn from_signs(amounts: &[i64]) -> Self {
+        if amounts.iter().all(|&a| a > 0) {
             Self::Deposit
-        } else if amount_a < 0 && amount_b < 0 {
+        } else if amounts.iter().all(|&a| a < 0) {
             Self::Withdrawal
         } else {
             Self::Trade
@@ -350,21 +355,23 @@ pub struct PoolActivityItem {
     /// `application_order`), and the `#op-N` anchor on the transaction detail
     /// page this row links to (task 0482).
     pub application_order: i16,
-    /// `null` only for the malformed case where the pool's two legs did not
-    /// both land in `lp_operation_amounts`. Unreachable by construction — an
-    /// op that touches a pool moves both legs — but the read stays total
-    /// rather than classifying a half-row.
+    /// `null` only for the malformed case where not every leg of the pool
+    /// landed in `lp_operation_amounts`. Unreachable by construction — a
+    /// classic op that touches a pool moves both of its legs — but the read
+    /// stays total rather than classifying a half-row.
     pub event: Option<PoolEvent>,
+    /// One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
+    /// what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
+    /// reason the pool's legs are one: a Soroban pool has two to four.
+    ///
     /// Signed from the POOL's perspective: positive entered the pool, negative
-    /// left it. Raw stroops as a decimal string, scaled by 7 at render like
-    /// every other amount here — a JSON number is a double in the browser, so
-    /// a leg above 2^53 stroops would silently lose digits.
+    /// left it. Raw units as a decimal string — a JSON number is a double in
+    /// the browser, so an amount above 2^53 would silently lose digits.
     ///
     /// The sign is the payload, not decoration: it is what names `event`, so
     /// the frontend must not take an absolute value before deciding direction.
-    /// `null` on both legs in the malformed case above.
-    pub amount_a: Option<String>,
-    pub amount_b: Option<String>,
+    /// Every entry is `null` in the malformed case above.
+    pub amounts: Vec<Option<String>>,
     /// Who performed THIS OPERATION — the operation's own source account when
     /// it declares one, otherwise the transaction's, which is what an absent
     /// `Operation.sourceAccount` means in the XDR.

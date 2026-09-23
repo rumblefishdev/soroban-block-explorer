@@ -4,15 +4,18 @@ use super::PoolEvent;
 /// only be checked against a live ClickHouse; in Rust it is the one thing
 /// this endpoint gets wrong most visibly, so it gets the table.
 #[test]
-fn sign_pair_names_the_event() {
-    let cases = [
-        (120, 3, PoolEvent::Deposit),
-        (-4, -9, PoolEvent::Withdrawal),
-        (120, -4, PoolEvent::Trade),
-        (-4, 120, PoolEvent::Trade),
+fn the_signs_name_the_event() {
+    let cases: [(&[i64], PoolEvent); 6] = [
+        (&[120, 3], PoolEvent::Deposit),
+        (&[-4, -9], PoolEvent::Withdrawal),
+        (&[120, -4], PoolEvent::Trade),
+        (&[-4, 120], PoolEvent::Trade),
+        // Three legs, as a Soroban stable pool has: the rule is the same.
+        (&[5, 6, 7], PoolEvent::Deposit),
+        (&[5, -6, 7], PoolEvent::Trade),
     ];
-    for (a, b, want) in cases {
-        assert_eq!(PoolEvent::from_signs(a, b), want, "({a}, {b})");
+    for (amounts, want) in cases {
+        assert_eq!(PoolEvent::from_signs(amounts), want, "{amounts:?}");
     }
 }
 
@@ -20,9 +23,9 @@ fn sign_pair_names_the_event() {
 /// rather than to whichever branch happens to be first.
 #[test]
 fn zero_leg_is_not_a_deposit() {
-    assert_eq!(PoolEvent::from_signs(0, 5), PoolEvent::Trade);
-    assert_eq!(PoolEvent::from_signs(0, -5), PoolEvent::Trade);
-    assert_eq!(PoolEvent::from_signs(0, 0), PoolEvent::Trade);
+    assert_eq!(PoolEvent::from_signs(&[0, 5]), PoolEvent::Trade);
+    assert_eq!(PoolEvent::from_signs(&[0, -5]), PoolEvent::Trade);
+    assert_eq!(PoolEvent::from_signs(&[0, 0]), PoolEvent::Trade);
 }
 
 /// `as_param` feeds the `allowed` list a rejection returns and

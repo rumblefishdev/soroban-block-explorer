@@ -814,9 +814,9 @@ Expanded behavior:
 ### 6.14 Liquidity Pool (`/liquidity-pools/:id`)
 
 - Pool summary - pool ID (full, copyable), the pool's legs, fee percentage,
-  total shares, reserves per leg, participant count (task 0246). Reserves are
-  still pair-shaped in storage, so a Soroban pool's third and fourth legs list
-  without an amount rather than disappearing from the composition.
+  total shares, reserves per leg (`legs[i].reserve`), participant count (task
+  0246). A leg with no known reserve lists with "—" rather than disappearing
+  from the composition.
 - Charts - TVL over time, volume over time, fee revenue
 - Pool participants - table of liquidity providers and their share
 - Recent transactions - deposits, withdrawals, and trades involving this pool

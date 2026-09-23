@@ -4219,16 +4219,17 @@
                 "transaction_hash",
                 "ledger_sequence",
                 "application_order",
+                "amounts",
                 "source_account",
                 "created_at"
               ],
               "properties": {
-                "amount_a": {
-                  "type": ["string", "null"],
-                  "description": "Signed from the POOL's perspective: positive entered the pool, negative\nleft it. Raw stroops as a decimal string, scaled by 7 at render like\nevery other amount here — a JSON number is a double in the browser, so\na leg above 2^53 stroops would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\n`null` on both legs in the malformed case above."
-                },
-                "amount_b": {
-                  "type": ["string", "null"]
+                "amounts": {
+                  "type": "array",
+                  "items": {
+                    "type": ["string", "null"]
+                  },
+                  "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nEvery entry is `null` in the malformed case above."
                 },
                 "application_order": {
                   "type": "integer",
@@ -4246,7 +4247,7 @@
                     },
                     {
                       "$ref": "#/components/schemas/PoolEvent",
-                      "description": "`null` only for the malformed case where the pool's two legs did not\nboth land in `lp_operation_amounts`. Unreachable by construction — an\nop that touches a pool moves both legs — but the read stays total\nrather than classifying a half-row."
+                      "description": "`null` only for the malformed case where not every leg of the pool\nlanded in `lp_operation_amounts`. Unreachable by construction — a\nclassic op that touches a pool moves both of its legs — but the read\nstays total rather than classifying a half-row."
                     }
                   ]
                 },
@@ -4284,7 +4285,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
               "required": [
                 "pool_id",
                 "legs",
@@ -4337,12 +4338,6 @@
                 "pool_kind": {
                   "type": ["string", "null"],
                   "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error. `None` only on schema drift."
-                },
-                "reserve_a": {
-                  "type": ["string", "null"]
-                },
-                "reserve_b": {
-                  "type": ["string", "null"]
                 },
                 "total_shares": {
                   "type": ["string", "null"]
@@ -4482,16 +4477,17 @@
           "transaction_hash",
           "ledger_sequence",
           "application_order",
+          "amounts",
           "source_account",
           "created_at"
         ],
         "properties": {
-          "amount_a": {
-            "type": ["string", "null"],
-            "description": "Signed from the POOL's perspective: positive entered the pool, negative\nleft it. Raw stroops as a decimal string, scaled by 7 at render like\nevery other amount here — a JSON number is a double in the browser, so\na leg above 2^53 stroops would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\n`null` on both legs in the malformed case above."
-          },
-          "amount_b": {
-            "type": ["string", "null"]
+          "amounts": {
+            "type": "array",
+            "items": {
+              "type": ["string", "null"]
+            },
+            "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nEvery entry is `null` in the malformed case above."
           },
           "application_order": {
             "type": "integer",
@@ -4509,7 +4505,7 @@
               },
               {
                 "$ref": "#/components/schemas/PoolEvent",
-                "description": "`null` only for the malformed case where the pool's two legs did not\nboth land in `lp_operation_amounts`. Unreachable by construction — an\nop that touches a pool moves both legs — but the read stays total\nrather than classifying a half-row."
+                "description": "`null` only for the malformed case where not every leg of the pool\nlanded in `lp_operation_amounts`. Unreachable by construction — a\nclassic op that touches a pool moves both of its legs — but the read\nstays total rather than classifying a half-row."
               }
             ]
           },
@@ -4554,6 +4550,10 @@
           "issuer": {
             "type": ["string", "null"]
           },
+          "reserve": {
+            "type": ["string", "null"],
+            "description": "What the pool holds of this leg: raw units as a decimal string (a JSON\nnumber is a browser double and a big reserve would lose digits). On the\nleg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to\nfour legs. `null` when no source knows it — never `0`. Read from the\nlatest classic snapshot; a soroban pool has none, so its legs are\n`null` until its own state is read."
+          },
           "symbol": {
             "type": ["string", "null"],
             "description": "The token's self-declared SEP-41 symbol, from contract metadata — what\nnames a soroban leg that has no classic code. Not unique: many\ncontracts claim the same one, so `contract_id` stays the identity."
@@ -4567,7 +4567,7 @@
       },
       "PoolItem": {
         "type": "object",
-        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
         "required": [
           "pool_id",
           "legs",
@@ -4620,12 +4620,6 @@
           "pool_kind": {
             "type": ["string", "null"],
             "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error. `None` only on schema drift."
-          },
-          "reserve_a": {
-            "type": ["string", "null"]
-          },
-          "reserve_b": {
-            "type": ["string", "null"]
           },
           "total_shares": {
             "type": ["string", "null"]

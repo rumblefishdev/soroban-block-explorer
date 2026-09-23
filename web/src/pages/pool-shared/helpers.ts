@@ -1,4 +1,4 @@
-import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
+import type { PoolAssetLeg } from '@rumblefish/api-types';
 
 import { assetColor } from '../assets/assetColor.js';
 import {
@@ -70,25 +70,6 @@ export const UNINDEXED_POOL_LABEL = 'Composition not indexed';
 export function poolLabel(legs: readonly PoolAssetLeg[]): string {
   if (legs.length === 0) return UNINDEXED_POOL_LABEL;
   return legs.map(assetLegLabel).join(' / ');
-}
-
-/**
- * Each leg paired with the reserve it holds.
- *
- * The snapshot the amounts come from is still pair-shaped (`reserve_a` /
- * `reserve_b`), so only the first two legs can carry one — a soroban pool's
- * third and fourth reserves are not indexed yet. Such a leg is listed with
- * `undefined` rather than dropped, so the pool's composition still reads in
- * full and the missing amount renders as the same "—" a stale pool shows,
- * instead of the leg silently disappearing.
- */
-export function poolReserves(
-  pool: Pick<PoolItem, 'legs' | 'reserve_a' | 'reserve_b'>
-): { leg: PoolAssetLeg; amount: string | null }[] {
-  const amounts = [pool.reserve_a, pool.reserve_b];
-  // `null`, not `undefined`: every consumer renders "no amount" the same way,
-  // so a third state would only be visible to a test.
-  return pool.legs.map((leg, i) => ({ leg, amount: amounts[i] ?? null }));
 }
 
 /**

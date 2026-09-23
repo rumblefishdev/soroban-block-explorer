@@ -69,8 +69,8 @@ SELECT
     lp.last_updated_ledger,
     (SELECT min(ledger_sequence) FROM liquidity_pool_snapshots FINAL WHERE pool_id = $1)  AS created_at_ledger_derived,
     s.latest_ledger_sequence                                                        AS latest_snapshot_ledger,
-    s.reserve_a,
-    s.reserve_b,
+    s.reserve_a,                -- → legs[0].reserve (a classic pool's two legs, in order)
+    s.reserve_b,                -- → legs[1].reserve
     s.total_shares,
     -- s.tvl / s.volume / s.fee_revenue: not read (task 0199 — see Notes;
     -- USD analytics come from the separate compute-at-read query)

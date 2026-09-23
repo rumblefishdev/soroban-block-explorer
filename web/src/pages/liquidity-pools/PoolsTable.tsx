@@ -21,7 +21,6 @@ import {
   assetLegLabel,
   legHref,
   poolLabel,
-  poolReserves,
   reserveDotColor,
 } from '../pool-shared/helpers.js';
 
@@ -127,16 +126,14 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       // render an em-dash rather than "0". A pool whose legs are not indexed
       // yet gets the same treatment: the amounts cannot be attributed to
       // anything, so there is nothing honest to label them with.
-      const reserves = poolReserves(row);
-      if (reserves.length === 0) return <Dash />;
-      if (row.reserve_a == null && row.reserve_b == null) return <Dash />;
+      if (row.legs.every((leg) => leg.reserve == null)) return <Dash />;
       return (
         <Stack spacing={0.5}>
-          {reserves.map(({ leg, amount }, i) => (
+          {row.legs.map((leg, i) => (
             <Stack key={i} direction="row" spacing={1} alignItems="center">
               <AssetDot color={reserveDotColor(leg)} />
               <Typography variant="bodyXsMedium" component="span">
-                {amount != null ? formatCompactAmount(amount) : '—'}{' '}
+                {leg.reserve != null ? formatCompactAmount(leg.reserve) : '—'}{' '}
                 {assetCodeNode(leg)}
               </Typography>
             </Stack>

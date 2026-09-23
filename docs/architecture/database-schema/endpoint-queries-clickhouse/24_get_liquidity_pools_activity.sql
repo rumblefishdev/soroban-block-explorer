@@ -19,8 +19,9 @@
 -- ADR 0044 §:   §4.1 (RMT), §5.2 (ledgers holds the timestamp)
 -- Notes:
 --   • NO GROUP BY and NO FINAL — both measured, see the ⚠️ blocks below.
---   • The event has NO type column: it is the sign pair of the two legs, and
---     it is decided in Rust (`PoolEvent::from_signs`), not here.
+--   • The event has NO type column: it is the signs of the op's leg amounts,
+--     and it is decided in Rust (`PoolEvent::from_signs`), not here. Amounts
+--     are grouped per operation into one slot per pool leg (`legs` order).
 --   • An operation with no amount rows is NOT listed (failed LP ops).
 -- ============================================================================
 --

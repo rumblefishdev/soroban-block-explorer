@@ -1786,17 +1786,19 @@ export type PaginatedParticipantItem = {
 export type PaginatedPoolActivityItem = {
   data: Array<{
     /**
+     * One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
+     * what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
+     * reason the pool's legs are one: a Soroban pool has two to four.
+     *
      * Signed from the POOL's perspective: positive entered the pool, negative
-     * left it. Raw stroops as a decimal string, scaled by 7 at render like
-     * every other amount here — a JSON number is a double in the browser, so
-     * a leg above 2^53 stroops would silently lose digits.
+     * left it. Raw units as a decimal string — a JSON number is a double in
+     * the browser, so an amount above 2^53 would silently lose digits.
      *
      * The sign is the payload, not decoration: it is what names `event`, so
      * the frontend must not take an absolute value before deciding direction.
-     * `null` on both legs in the malformed case above.
+     * Every entry is `null` in the malformed case above.
      */
-    amount_a?: string | null;
-    amount_b?: string | null;
+    amounts: Array<string | null>;
     /**
      * The operation's 1-based position in its transaction (Horizon's
      * `application_order`), and the `#op-N` anchor on the transaction detail
@@ -1889,8 +1891,6 @@ export type PaginatedPoolItem = {
      * an error. `None` only on schema drift.
      */
     pool_kind?: string | null;
-    reserve_a?: string | null;
-    reserve_b?: string | null;
     total_shares?: string | null;
     /**
      * USD, decimal string rounded to cents (task 0199 compute-at-read).
@@ -2008,17 +2008,19 @@ export type ParticipantItem = {
  */
 export type PoolActivityItem = {
   /**
+   * One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
+   * what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
+   * reason the pool's legs are one: a Soroban pool has two to four.
+   *
    * Signed from the POOL's perspective: positive entered the pool, negative
-   * left it. Raw stroops as a decimal string, scaled by 7 at render like
-   * every other amount here — a JSON number is a double in the browser, so
-   * a leg above 2^53 stroops would silently lose digits.
+   * left it. Raw units as a decimal string — a JSON number is a double in
+   * the browser, so an amount above 2^53 would silently lose digits.
    *
    * The sign is the payload, not decoration: it is what names `event`, so
    * the frontend must not take an absolute value before deciding direction.
-   * `null` on both legs in the malformed case above.
+   * Every entry is `null` in the malformed case above.
    */
-  amount_a?: string | null;
-  amount_b?: string | null;
+  amounts: Array<string | null>;
   /**
    * The operation's 1-based position in its transaction (Horizon's
    * `application_order`), and the `#op-N` anchor on the transaction detail
@@ -2123,6 +2125,15 @@ export type PoolAssetLeg = {
   icon_url?: string | null;
   issuer?: string | null;
   /**
+   * What the pool holds of this leg: raw units as a decimal string (a JSON
+   * number is a browser double and a big reserve would lose digits). On the
+   * leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
+   * four legs. `null` when no source knows it — never `0`. Read from the
+   * latest classic snapshot; a soroban pool has none, so its legs are
+   * `null` until its own state is read.
+   */
+  reserve?: string | null;
+  /**
    * The token's self-declared SEP-41 symbol, from contract metadata — what
    * names a soroban leg that has no classic code. Not unique: many
    * contracts claim the same one, so `contract_id` stays the identity.
@@ -2147,8 +2158,8 @@ export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
  * One pool row returned by the list endpoint. Shape pinned to canonical
  * SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
  * in the freshness window come back with `null` for every dynamic field
- * (`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,
- * `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
+ * (each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,
+ * `latest_snapshot_*`); frontend renders these as "stale".
  */
 export type PoolItem = {
   created_at_ledger: number;
@@ -2193,8 +2204,6 @@ export type PoolItem = {
    * an error. `None` only on schema drift.
    */
   pool_kind?: string | null;
-  reserve_a?: string | null;
-  reserve_b?: string | null;
   total_shares?: string | null;
   /**
    * USD, decimal string rounded to cents (task 0199 compute-at-read).

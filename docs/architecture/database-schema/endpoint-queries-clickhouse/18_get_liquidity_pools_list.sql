@@ -98,8 +98,8 @@ SELECT
     toDecimal64(lp.fee_bps, 2) / 100                                                AS fee_percent,
     lp.last_updated_ledger                                                          AS last_updated_ledger,
     s.latest_ledger_sequence                                                        AS latest_snapshot_ledger,
-    s.reserve_a,
-    s.reserve_b,
+    s.reserve_a,                -- → legs[0].reserve (a classic pool's two legs, in order)
+    s.reserve_b,                -- → legs[1].reserve
     s.total_shares,
     -- tvl / volume / fee_revenue are NOT projected from snapshots (task 0199):
     -- those columns are never written. The API adds a compute-at-read USD

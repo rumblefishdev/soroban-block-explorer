@@ -2,13 +2,7 @@ import type { PoolAssetLeg } from '@rumblefish/api-types';
 import { formatCompactAmount } from '@rumblefish/soroban-block-explorer-ui';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  assetLegLabel,
-  isPoolStale,
-  legHref,
-  poolLabel,
-  poolReserves,
-} from '../helpers.js';
+import { assetLegLabel, isPoolStale, legHref, poolLabel } from '../helpers.js';
 import { UNREGISTERED_TOKEN_LABEL } from '../../assets/assetType.js';
 
 function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
@@ -173,35 +167,6 @@ describe('poolLabel', () => {
         makeLeg({ asset_code: 'EURC' }),
       ])
     ).toBe('XLM / USDC / EURC');
-  });
-});
-
-describe('poolReserves', () => {
-  it('pairs each reserve with the leg that holds it', () => {
-    const legs = [
-      makeLeg({ asset_type_name: 'native', asset_code: null }),
-      makeLeg({ asset_code: 'USDC' }),
-    ];
-    expect(
-      poolReserves({ legs, reserve_a: '100.0', reserve_b: '25.0' })
-    ).toEqual([
-      { leg: legs[0], amount: '100.0' },
-      { leg: legs[1], amount: '25.0' },
-    ]);
-  });
-
-  // The snapshot table is still pair-shaped, so a third leg has no reserve
-  // column. It stays in the list with no amount rather than vanishing — the
-  // pool's composition must still read in full.
-  it('keeps a leg the snapshot cannot describe', () => {
-    const legs = [
-      makeLeg({ asset_code: 'USDC' }),
-      makeLeg({ asset_code: 'EURC' }),
-      makeLeg({ asset_code: 'DAI' }),
-    ];
-    const rows = poolReserves({ legs, reserve_a: '1', reserve_b: '2' });
-    expect(rows).toHaveLength(3);
-    expect(rows[2]).toEqual({ leg: legs[2], amount: null });
   });
 });
 

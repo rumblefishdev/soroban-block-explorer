@@ -91,7 +91,7 @@ export interface AmountLegPart {
  * What ONE operation moved through this pool, as ordered display parts — or
  * `null` when it carries no readable leg.
  *
- * `amount_a` / `amount_b` are raw stroops **signed from the pool's side**:
+ * `amounts[i]` is what moved in `legs[i]`, raw and **signed from the pool's side**:
  * positive = the asset entered the pool. That sign is the whole direction
  * story. One leg in and one out is a swap (`swap: true`) and the parts come
  * ordered from what entered the pool to what left it; two legs pointing the
@@ -108,18 +108,11 @@ export interface AmountLegPart {
  * A leg that is `null` did not move in this operation — never rendered as `0`.
  */
 export function poolAmountLegs(
-  op: Pick<PoolActivityItem, 'amount_a' | 'amount_b'>,
+  op: Pick<PoolActivityItem, 'amounts'>,
   pool: Pick<PoolItem, 'legs'>
 ): { legs: AmountLegPart[]; swap: boolean } | null {
-  // `lp_operation_amounts` is pair-shaped and holds classic pools only
-  // (measured: zero soroban pools across 53,368 distinct ids), so the two
-  // amounts belong to the first two legs.
-  const legs = (
-    [
-      [op.amount_a, pool.legs[0]],
-      [op.amount_b, pool.legs[1]],
-    ] as const
-  ).flatMap(([amount, leg]) => {
+  const legs = op.amounts.flatMap((amount, i) => {
+    const leg = pool.legs[i];
     if (leg == null) return [];
     if (amount == null || amount === '') return [];
     const raw = amount.replace(/^-/, '');
@@ -138,6 +131,9 @@ export function poolAmountLegs(
   });
   if (legs.length === 0) return null;
 
+  // ponytail: a swap is two legs in opposite directions — the only shape
+  // classic data has. A three- or four-leg Soroban swap gets its own reading
+  // when Soroban activity is served; until then it joins with `+`.
   const swap = legs.length === 2 && legs[0].incoming !== legs[1].incoming;
   // A swap reads from what entered the pool to what left it.
   const ordered = swap && !legs[0].incoming ? [...legs].reverse() : legs;
@@ -147,7 +143,7 @@ export function poolAmountLegs(
 /** The plain-text form of the same parts — the amount cell's `aria-label`,
  *  and the shape the unit tests pin. */
 export function formatPoolAmount(
-  op: Pick<PoolActivityItem, 'amount_a' | 'amount_b'>,
+  op: Pick<PoolActivityItem, 'amounts'>,
   pool: Pick<PoolItem, 'legs'>
 ): string | null {
   const parts = poolAmountLegs(op, pool);

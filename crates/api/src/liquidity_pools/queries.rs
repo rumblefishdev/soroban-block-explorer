@@ -64,8 +64,6 @@ pub struct PoolRow {
     /// Task 0246 — see DTO doc for surfacing rules.
     pub participant_count: i64,
     pub latest_snapshot_ledger: Option<i64>,
-    pub reserve_a: Option<String>,
-    pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
     pub tvl: Option<String>,
     pub volume: Option<String>,
@@ -89,6 +87,8 @@ pub struct PoolLegRow {
     /// that has no classic code.
     pub symbol: Option<String>,
     pub icon_url: Option<String>,
+    /// What the pool holds of this leg, raw units — see `PoolAssetLeg::reserve`.
+    pub reserve: Option<String>,
 }
 
 /// Turn one pool's stored leg surrogates into the rows the handler finishes.
@@ -101,10 +101,13 @@ fn leg_rows(
     leg_ids: &[i64],
     identities: &HashMap<i64, ResolvedAsset>,
     icons: &HashMap<i64, String>,
+    reserves: &[Option<String>],
 ) -> Vec<PoolLegRow> {
     leg_ids
         .iter()
-        .map(|id| {
+        .enumerate()
+        .map(|(i, id)| {
+            let reserve = reserves.get(i).cloned().flatten();
             match identities.get(id) {
                 Some(r) if r.known => PoolLegRow {
                     family: r.asset_type,
@@ -118,6 +121,7 @@ fn leg_rows(
                         .flatten(),
                     symbol: r.symbol.clone(),
                     icon_url: icons.get(id).cloned(),
+                    reserve,
                 },
                 // Unknown to `assets`: no family, no code — only the contract
                 // and its symbol, which `soroban_contracts` and its metadata
@@ -129,6 +133,7 @@ fn leg_rows(
                     contract_id: other.and_then(|r| r.contract_strkey.clone()),
                     symbol: other.and_then(|r| r.symbol.clone()),
                     icon_url: None,
+                    reserve,
                 },
             }
         })
@@ -193,8 +198,8 @@ pub struct PoolActivityRow {
     pub transaction_id: i64,
     pub application_order: i16,
     pub event: Option<PoolEvent>,
-    pub amount_a: Option<String>,
-    pub amount_b: Option<String>,
+    /// One per leg, in `legs` order — see `PoolActivityItem::amounts`.
+    pub amounts: Vec<Option<String>>,
     pub source_account: String,
     /// How many pools the whole operation crossed (`length(pool_ids)` off the
     /// same appearance seek that resolves the op source). `None` = unknowable
@@ -504,8 +509,7 @@ pub async fn fetch_pool_usd_analytics(
     client: &clickhouse::Client,
     pool_id_hex: &str,
     ctx: &PoolPriceContext,
-    reserve_a: Option<&str>,
-    reserve_b: Option<&str>,
+    reserves: &[Option<&str>],
 ) -> Result<PoolUsdAnalytics, clickhouse::error::Error> {
     let legs = priceable_legs(ctx);
     let (closes, vol24_raw) = tokio::join!(
@@ -513,10 +517,8 @@ pub async fn fetch_pool_usd_analytics(
         fetch_pool_volume_24h(client, pool_id_hex),
     );
     let closes = closes?;
-    let (spot_a, spot_b) = match priced_pair(ctx) {
-        Some((a, b)) => (closes.get(a).copied(), closes.get(b).copied()),
-        None => (None, None),
-    };
+    // Volume is still leg-A-only: the snapshot counts it on one leg.
+    let spot_a = priced_pair(ctx).and_then(|(a, _)| closes.get(a).copied());
     // SQL NULL (no snapshot rows in the window, or no swaps among them) is a
     // genuine zero-volume day. A row that IS present but unparseable is NOT —
     // it is an unknown, and must not be reported as "$0.00 traded".
@@ -525,15 +527,7 @@ pub async fn fetch_pool_usd_analytics(
         Some(raw) => parse_f64(raw),
     };
 
-    let tvl = match (
-        reserve_a.and_then(parse_f64),
-        reserve_b.and_then(parse_f64),
-        spot_a,
-        spot_b,
-    ) {
-        (Some(ra), Some(rb), Some(pa), Some(pb)) => Some(ra * pa + rb * pb),
-        _ => None,
-    };
+    let tvl = tvl_usd(reserves, &ctx.legs, &closes);
     let volume = match (spot_a, vol24_units) {
         (Some(pa), Some(units)) => Some(units * pa),
         _ => None,
@@ -652,6 +646,24 @@ fn priceable_legs(ctx: &PoolPriceContext) -> Vec<&PriceLeg> {
 
 /// Strict decimal-string → f64 (the wire strings come from CH `toString`
 /// over Decimal columns; anything non-parseable degrades to None, never 500).
+/// A pool's TVL: every leg's reserve times its price, summed. `None` unless
+/// EVERY leg has both — a partial sum understates the pool while looking like
+/// a real number. `reserves[i]` and `legs[i]` describe the same leg.
+fn tvl_usd(
+    reserves: &[Option<&str>],
+    legs: &[PriceLeg],
+    closes: &HashMap<PriceLeg, f64>,
+) -> Option<f64> {
+    if legs.is_empty() || reserves.len() != legs.len() {
+        return None;
+    }
+    reserves
+        .iter()
+        .zip(legs)
+        .map(|(r, leg)| Some(r.and_then(parse_f64)? * closes.get(leg).copied()?))
+        .sum()
+}
+
 fn parse_f64(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
@@ -810,7 +822,14 @@ pub async fn fetch_pool_by_id(
     Ok(Some(PoolRow {
         pool_id_hex: r.pool_id_hex,
         pool_kind: r.pool_kind,
-        legs: leg_rows(&r.legs, &identities, &icons),
+        // The snapshot is classic, and a classic pool's legs are its two
+        // snapshot columns in order; a soroban pool has no snapshot row.
+        legs: leg_rows(
+            &r.legs,
+            &identities,
+            &icons,
+            &[r.reserve_a.clone(), r.reserve_b.clone()],
+        ),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
         created_at_ledger: r.created_at_ledger,
@@ -818,8 +837,6 @@ pub async fn fetch_pool_by_id(
         cursor_ledger: r.created_at_ledger,
         participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
-        reserve_a: r.reserve_a,
-        reserve_b: r.reserve_b,
         total_shares: r.total_shares,
         // Filled by the handler from `fetch_pool_usd_analytics` (0199
         // compute-at-read); the snapshot columns are not read.
@@ -1047,30 +1064,28 @@ struct OpSourceChRow {
     pools_crossed: u64,
 }
 
-/// One operation's two legs, paired out of the key-ordered leg stream.
+/// One operation's leg amounts, grouped out of the key-ordered leg stream.
+/// `amounts[i]` belongs to the pool's `legs[i]`.
 struct PairedOp {
     ls: i64,
     tid: i64,
     ao: i16,
-    amount_a: Option<i64>,
-    amount_b: Option<i64>,
+    amounts: Vec<Option<i64>>,
 }
 
 impl PairedOp {
-    /// `None` unless BOTH legs landed — the read stays total rather than
+    /// `None` unless EVERY leg landed — the read stays total rather than
     /// classifying a half-row. `anyIf`-style defaulting would have made a
     /// missing leg read as `0` and turn a half-row into a "trade".
     fn event(&self) -> Option<PoolEvent> {
-        match (self.amount_a, self.amount_b) {
-            (Some(a), Some(b)) => Some(PoolEvent::from_signs(a, b)),
-            _ => None,
-        }
+        let amounts: Vec<i64> = self.amounts.iter().copied().collect::<Option<_>>()?;
+        (!amounts.is_empty()).then(|| PoolEvent::from_signs(&amounts))
     }
 }
 
 /// Fold the key-ordered leg stream into operations.
 ///
-/// The two legs of one operation are ADJACENT by construction: `asset_id` is
+/// The legs of one operation are ADJACENT by construction: `asset_id` is
 /// the last component of the sort key, so rows sharing
 /// `(ledger_sequence, transaction_id, application_order)` are neighbours. That
 /// is the whole reason this can be a fold instead of an aggregation.
@@ -1078,25 +1093,23 @@ impl PairedOp {
 /// `truncated` means the read hit its row cap, so the final group may be
 /// missing a leg that simply did not fit — it is dropped and re-read from the
 /// previous complete key on the next window.
-fn pair_legs(rows: Vec<PoolLegChRow>, legs: (i64, i64), truncated: bool) -> Vec<PairedOp> {
-    let (asset_a, asset_b) = legs;
+fn pair_legs(rows: Vec<PoolLegChRow>, legs: &[i64], truncated: bool) -> Vec<PairedOp> {
     let mut out: Vec<PairedOp> = Vec::new();
     for r in rows {
-        match out.last_mut() {
-            Some(last) if last.ls == r.ls && last.tid == r.tid && last.ao == r.ao => {
-                if r.asset_id == asset_a {
-                    last.amount_a = Some(r.amount);
-                } else if r.asset_id == asset_b {
-                    last.amount_b = Some(r.amount);
-                }
-            }
-            _ => out.push(PairedOp {
+        let same_op = out
+            .last()
+            .is_some_and(|last| (last.ls, last.tid, last.ao) == (r.ls, r.tid, r.ao));
+        if !same_op {
+            out.push(PairedOp {
                 ls: r.ls,
                 tid: r.tid,
                 ao: r.ao,
-                amount_a: (r.asset_id == asset_a).then_some(r.amount),
-                amount_b: (r.asset_id == asset_b).then_some(r.amount),
-            }),
+                amounts: vec![None; legs.len()],
+            });
+        }
+        // An asset that is not one of the pool's legs has no slot to land in.
+        if let (Some(op), Some(i)) = (out.last_mut(), legs.iter().position(|&l| l == r.asset_id)) {
+            op.amounts[i] = Some(r.amount);
         }
     }
     if truncated {
@@ -1144,7 +1157,7 @@ fn pair_legs(rows: Vec<PoolLegChRow>, legs: (i64, i64), truncated: bool) -> Vec<
 pub async fn fetch_pool_activity(
     client: &clickhouse::Client,
     pool_id_hex: &str,
-    asset_ids: (i64, i64),
+    legs: &[i64],
     limit: i64,
     cursor: Option<&PoolActivityCursor>,
     direction: Direction,
@@ -1158,8 +1171,9 @@ pub async fn fetch_pool_activity(
     let mut after: Option<(i64, i64, i16)> =
         cursor.map(|c| (c.ledger_sequence, c.transaction_id, c.application_order));
 
-    // Two legs per operation, plus slack so the cap rarely lands mid-op.
-    let mut window = (limit * 2 + 2).max(64);
+    // One row per leg per operation, plus slack so the cap rarely lands mid-op.
+    let legs_per_op = legs.len().max(2) as i64;
+    let mut window = (limit * legs_per_op + legs_per_op).max(64);
     let mut ops: Vec<PairedOp> = Vec::new();
 
     // One pass when unfiltered (the common case). With `filter[event]` the
@@ -1195,7 +1209,7 @@ pub async fn fetch_pool_activity(
             .await?;
 
         let exhausted = (rows.len() as i64) < window;
-        let batch = pair_legs(rows, asset_ids, !exhausted);
+        let batch = pair_legs(rows, legs, !exhausted);
         if let Some(last) = batch.last() {
             after = Some((last.ls, last.tid, last.ao));
         }
@@ -1327,8 +1341,11 @@ pub async fn fetch_pool_activity(
                 transaction_id: o.tid,
                 application_order: o.ao,
                 event,
-                amount_a: event.and(o.amount_a).map(|v| v.to_string()),
-                amount_b: event.and(o.amount_b).map(|v| v.to_string()),
+                amounts: o
+                    .amounts
+                    .iter()
+                    .map(|a| event.and(*a).map(|v| v.to_string()))
+                    .collect(),
                 source_account,
                 pools_crossed,
                 created_at: millis_to_utc(tx.created_at_ms),
@@ -1868,37 +1885,24 @@ pub async fn fetch_pool_list(
         .into_iter()
         .zip(page_legs)
         .map(|(r, legs)| {
-            // TVL needs one reserve per leg, and the wire carries exactly two
-            // reserves — so the slice pattern gates it on a two-leg pool rather
-            // than silently pricing the first two legs of a three-leg one. Pools
-            // with more legs are soroban, whose reserves this endpoint does not
-            // read at all, so the arm is unreachable today and stays honest if
-            // that changes.
-            let tvl = match (
-                r.reserve_a.as_deref().and_then(parse_f64),
-                r.reserve_b.as_deref().and_then(parse_f64),
-                legs.as_slice(),
-            ) {
-                (Some(ra), Some(rb), [leg_a, leg_b]) => {
-                    match (closes.get(leg_a).copied(), closes.get(leg_b).copied()) {
-                        (Some(pa), Some(pb)) => Some(usd_str(ra * pa + rb * pb)),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
+            // The snapshot is classic: its two columns are a classic pool's
+            // two legs, in order. A soroban pool has no snapshot row, so its
+            // legs carry no reserve and its TVL stays unknown.
+            let reserves = [r.reserve_a.clone(), r.reserve_b.clone()];
+            let reserve_strs: Vec<Option<&str>> = (0..legs.len())
+                .map(|i| reserves.get(i).and_then(|r| r.as_deref()))
+                .collect();
+            let tvl = tvl_usd(&reserve_strs, &legs, &closes).map(usd_str);
             PoolRow {
                 pool_id_hex: r.pool_id_hex,
                 pool_kind: r.pool_kind,
-                legs: leg_rows(&r.legs, &identities, &icons),
+                legs: leg_rows(&r.legs, &identities, &icons, &reserves),
                 fee_bps: r.fee_bps,
                 fee_percent: fee_percent_str(r.fee_bps),
                 created_at_ledger: r.created_at_ledger,
                 cursor_ledger: r.cursor_ledger,
                 participant_count: r.participant_count,
                 latest_snapshot_ledger: r.latest_snapshot_ledger,
-                reserve_a: r.reserve_a,
-                reserve_b: r.reserve_b,
                 total_shares: r.total_shares,
                 tvl,
                 volume: None,

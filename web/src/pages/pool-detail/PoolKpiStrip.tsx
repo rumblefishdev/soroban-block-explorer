@@ -13,7 +13,6 @@ import {
   assetLegLabel,
   isPoolStale,
   legHref,
-  poolReserves,
   reserveDotColor,
 } from '../pool-shared/helpers.js';
 
@@ -66,13 +65,13 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
         value={formatCompactAmount(pool.total_shares)}
         caption={stale ? STALE_SUBTITLE : 'shares outstanding'}
       />
-      {poolReserves(pool).map(({ leg, amount }, i) => {
+      {pool.legs.map((leg, i) => {
         const code = assetLegLabel(leg);
         return (
           <KpiCell
             key={i}
             label={`${code} reserve`}
-            value={formatCompactAmount(amount)}
+            value={formatCompactAmount(leg.reserve)}
             caption={stale ? STALE_SUBTITLE : assetSubtitle(leg, code)}
             valueColor={reserveDotColor(leg)}
           />

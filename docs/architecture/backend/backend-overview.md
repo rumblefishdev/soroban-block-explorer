@@ -548,9 +548,11 @@ is never written, so it silently returned an empty page. Filter and projection
 semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 
 **`GET /liquidity-pools/:id`** - Pool detail: legs, kind, fee, reserves, total
-shares, TVL, plus `participant_count` (task 0246). `reserve_a` / `reserve_b`
-stay pair-shaped — the snapshot table is — so on a three- or four-leg Soroban
-pool the later legs list without an amount rather than being dropped. Reserves / total shares come from
+shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
+leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
+read the snapshot's two reserve columns in order, and a Soroban pool's legs
+carry `null` until its own state is read. TVL sums every leg's reserve × price
+and is `null` unless every leg has both. Reserves / total shares come from
 the latest snapshot row; clients that care about freshness read
 `latest_snapshot_at` in the response. `participant_count` is independent of
 snapshot freshness — populated even on stale pools. The money fields
@@ -562,12 +564,13 @@ three fields to `null` — it never fails the request.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
 pool. Each row carries `amounts` (task 0279): **one entry per operation**, in
-application order, each with `amount_a` / `amount_b` for the pool's canonical
-legs as raw-stroop decimal **strings** (same reason as `reserve_a` — a JSON
-number is a browser double and a big leg would lose digits), **signed from the
-pool's side** — positive = the asset entered the pool. A trade reads `+/-`, a
-deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the direction and no
-event-type field is needed.
+application order, each with `amounts` — one entry per pool leg, in the order
+of the pool's `legs` (`amounts[i]` moved in `legs[i]`), a list rather than an
+`a` / `b` pair because a Soroban pool has two to four legs — as raw decimal
+**strings** (same reason as a leg's `reserve` — a JSON number is a browser double and
+a big leg would lose digits), **signed from the pool's side** — positive = the
+asset entered the pool. A trade reads `+/-`, a deposit `+/+`, a withdrawal
+`-/-`, so the sign alone gives the direction.
 
 Per operation rather than summed per transaction because **8.2% of (pool,
 transaction) pairs run more than one operation against the same pool** (measured

@@ -156,6 +156,7 @@ fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
         contract_id: leg.contract_id,
         symbol: leg.symbol,
         icon_url: leg.icon_url,
+        reserve: leg.reserve,
     }
 }
 
@@ -174,8 +175,6 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         created_at_ledger: row.created_at_ledger,
         participant_count: row.participant_count,
         latest_snapshot_ledger: row.latest_snapshot_ledger,
-        reserve_a: row.reserve_a,
-        reserve_b: row.reserve_b,
         total_shares: row.total_shares,
         tvl: row.tvl,
         volume: row.volume,
@@ -358,8 +357,10 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         &state.ch(),
         &pool_id_hex,
         &ctx,
-        row.reserve_a.as_deref(),
-        row.reserve_b.as_deref(),
+        &row.legs
+            .iter()
+            .map(|l| l.reserve.as_deref())
+            .collect::<Vec<_>>(),
     )
     .await
     {
@@ -431,28 +432,21 @@ pub async fn list_pool_activity(
         Err(resp) => return resp,
     };
 
-    // The pool's two leg surrogates, which double as this path's existence
+    // The pool's leg surrogates, which double as this path's existence
     // check: the driver pivots `lp_operation_amounts.asset_id` onto them, so
     // the read cannot run without them and a missing pool is one seek away
     // (task 0279's pairing, kept).
     let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
-    let asset_ids = match legs {
-        // The activity feed reads `lp_operation_amounts`, whose rows come from
-        // CLASSIC operations — and a classic pool has exactly two legs. Taking
-        // the first two is therefore exact for every pool this endpoint can
-        // serve.
-        //
-        // A pool with FEWER is not a missing pool: a row whose `legs` were
+    let leg_ids = match legs {
+        // A pool with no legs is not a missing pool: a row whose `legs` were
         // never filled still exists, and saying "not found" about it
         // contradicted the detail endpoint, which renders that same pool one
         // call earlier. It has no amount rows to map, so the honest answer is
         // an empty page — the same one a pool with no activity gets.
-        Ok(Some(ids)) => match ids.as_slice() {
-            [a, b, ..] => (*a, *b),
-            _ => return empty_activity_page(pagination.limit),
-        },
+        Ok(Some(ids)) if ids.is_empty() => return empty_activity_page(pagination.limit),
+        Ok(Some(ids)) => ids,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
             tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_asset_ids");
@@ -484,7 +478,7 @@ pub async fn list_pool_activity(
     let fetched = queries::fetch_pool_activity(
         &state.ch(),
         &pool_id_hex,
-        asset_ids,
+        &leg_ids,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         pagination.direction,
@@ -523,8 +517,7 @@ pub async fn list_pool_activity(
             ledger_sequence: r.ledger_sequence,
             application_order: r.application_order,
             event: r.event,
-            amount_a: r.amount_a,
-            amount_b: r.amount_b,
+            amounts: r.amounts,
             source_account: r.source_account,
             pools_crossed: r.pools_crossed,
             created_at: r.created_at,

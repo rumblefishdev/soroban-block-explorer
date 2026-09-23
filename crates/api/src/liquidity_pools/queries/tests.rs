@@ -200,3 +200,61 @@ fn fee_revenue_math() {
     assert_eq!(fee_revenue_usd(0.0, 30), 0.0);
     assert_eq!(fee_revenue_usd(500.0, 0), 0.0);
 }
+
+/// Amounts land in the slot of the leg they belong to, for any number of legs,
+/// and a leg that did not move stays `None` — a three-leg pool is the case the
+/// old `a` / `b` pair could not express.
+#[test]
+fn pair_legs_slots_each_amount_by_its_leg() {
+    let row = |ao: i16, asset_id: i64, amount: i64| PoolLegChRow {
+        ls: 10,
+        tid: 1,
+        ao,
+        asset_id,
+        amount,
+    };
+    let legs = [7, 8, 9];
+    // Op 1 moved legs 9 and 7 (out of order in the stream); op 2 moved all three.
+    let rows = vec![
+        row(1, 9, -5),
+        row(1, 7, 4),
+        row(2, 7, 1),
+        row(2, 8, 2),
+        row(2, 9, 3),
+    ];
+    let ops = pair_legs(rows, &legs, false);
+    assert_eq!(ops.len(), 2);
+    assert_eq!(ops[0].amounts, vec![Some(4), None, Some(-5)]);
+    // Not every leg landed, so no event is claimed for it.
+    assert_eq!(ops[0].event(), None);
+    assert_eq!(ops[1].amounts, vec![Some(1), Some(2), Some(3)]);
+    assert_eq!(ops[1].event(), Some(PoolEvent::Deposit));
+}
+
+/// TVL is every leg's reserve × price, and nothing when any leg lacks either —
+/// a partial sum would understate the pool while looking like a real number.
+#[test]
+fn tvl_needs_every_leg_priced_and_reserved() {
+    let xlm = price_leg(0, None, None);
+    let usdc = price_leg(
+        1,
+        Some("USDC"),
+        Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+    );
+    let closes: HashMap<PriceLeg, f64> = [(xlm.clone(), 0.5), (usdc.clone(), 1.0)].into();
+    let legs = [xlm, usdc];
+
+    assert_eq!(tvl_usd(&[Some("10"), Some("3")], &legs, &closes), Some(8.0));
+    assert_eq!(tvl_usd(&[Some("10"), None], &legs, &closes), None);
+    // A third leg with no price makes the whole pool unpriced.
+    let dai = price_leg(
+        1,
+        Some("DAI"),
+        Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+    );
+    let three = [legs[0].clone(), legs[1].clone(), dai];
+    assert_eq!(
+        tvl_usd(&[Some("10"), Some("3"), Some("1")], &three, &closes),
+        None
+    );
+}

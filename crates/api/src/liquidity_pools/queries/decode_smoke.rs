@@ -151,7 +151,7 @@ async fn lp_ch_rows_decode() {
     }
 
     // detail USD analytics — `Vol24ChRow` + `LastCloseChRow`.
-    fetch_pool_usd_analytics(&ch, &pool, &ctx, None, None)
+    fetch_pool_usd_analytics(&ch, &pool, &ctx, &[None, None])
         .await
         .expect("usd-analytics rows decode");
 

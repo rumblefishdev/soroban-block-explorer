@@ -9,6 +9,7 @@ fn native_leg() -> PoolLegRow {
         contract_id: None,
         symbol: None,
         icon_url: None,
+        reserve: None,
     }
 }
 
@@ -20,6 +21,7 @@ fn usdc_leg() -> PoolLegRow {
         contract_id: None,
         symbol: None,
         icon_url: None,
+        reserve: None,
     }
 }
 
@@ -34,8 +36,6 @@ fn base_row() -> PoolRow {
         cursor_ledger: 100,
         participant_count: 0,
         latest_snapshot_ledger: None,
-        reserve_a: None,
-        reserve_b: None,
         total_shares: None,
         tvl: None,
         volume: None,
@@ -70,6 +70,7 @@ fn a_soroban_leg_carries_its_symbol() {
         contract_id: Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB".into()),
         symbol: Some("USDx".into()),
         icon_url: None,
+        reserve: None,
     };
     let item = map_pool_item(row);
     assert_eq!(item.legs[1].symbol.as_deref(), Some("USDx"));
@@ -101,6 +102,7 @@ fn a_three_leg_pool_renders_all_three() {
         contract_id: Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB".into()),
         symbol: None,
         icon_url: None,
+        reserve: None,
     });
     let item = map_pool_item(row);
     assert_eq!(item.legs.len(), 3);

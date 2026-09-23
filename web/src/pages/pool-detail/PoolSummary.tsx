@@ -12,7 +12,6 @@ import { SummaryRow } from '../detail/SummaryRow.js';
 import {
   assetLegLabel,
   legHref,
-  poolReserves,
   reserveDotColor,
 } from '../pool-shared/helpers.js';
 
@@ -89,8 +88,6 @@ interface PoolSummaryProps {
  *   • One reserve cell (dot + amount) per leg, two to a row
  */
 export function PoolSummary({ pool }: PoolSummaryProps) {
-  const reserves = poolReserves(pool);
-
   return (
     <SectionCard title="Summary">
       <SummaryRow
@@ -120,16 +117,16 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
       {/* `SummaryRow` lays out two cells per row, which the pair shape hit
           exactly. A three- or four-leg pool needs the legs chunked into rows
           instead — one row of two, then the remainder. */}
-      {chunkPairs(reserves).map((row, i) => (
+      {chunkPairs(pool.legs).map((row, i) => (
         <SummaryRow
           key={i}
-          cells={row.map(({ leg, amount }) => {
+          cells={row.map((leg) => {
             const code = assetLegLabel(leg);
             return {
               label: `${code} reserve`,
               value: (
                 <AssetReserveCell
-                  amount={amount}
+                  amount={leg.reserve ?? null}
                   code={code}
                   dotColor={reserveDotColor(leg)}
                   href={legHref(leg)}

@@ -46,8 +46,6 @@ function makePool(overrides: Partial<PoolItem> = {}): PoolItem {
     created_at_ledger: 50_000_000,
     participant_count: 12,
     latest_snapshot_ledger: 63_000_000,
-    reserve_a: '1000.0000000',
-    reserve_b: '250.0000000',
     total_shares: '500.0000000',
     tvl: '1250.00',
     volume: null,
@@ -131,7 +129,7 @@ describe('LiquidityPoolsListPage', () => {
   });
 
   it('says a pool has no indexed legs instead of naming it nothing', () => {
-    mockOk([makePool({ legs: [], reserve_a: '1000.0', reserve_b: '250.0' })]);
+    mockOk([makePool({ legs: [] })]);
 
     renderWithProviders(<LiquidityPoolsListPage />, {
       initialEntries: ['/liquidity-pools'],
