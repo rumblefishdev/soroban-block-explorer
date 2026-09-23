@@ -262,3 +262,31 @@ Decided (karolkow):
 Left as judgement calls: "documentation" is defined as `lore/`, `docs/`,
 `*.md` in CI and as `*.md` in the commit hook (each fits its job); the
 e2e condition repeats on five steps.
+
+### `run-affected-checks.mjs` rewritten (karolkow: rewrite in this pull request)
+
+The script came from a generic template (March 2026) and was never fitted to
+this repository. Three findings:
+
+- **A new branch's first push checked almost everything.** Without an
+  upstream the base fell back to `origin/HEAD`, which is `origin/master`, 99
+  commits and 146 files behind `develop`. Measured on #484: the first push ran
+  lint, typecheck and test for all 4 projects, the next (with an upstream) for
+  1. The fallback is now `origin/develop`, as in `pre-push`.
+- **Half the file was fallbacks for branches that do not exist here**
+  (`origin/main`, `main`, `HEAD~1`, `HEAD`) and three helpers that served only
+  them. 139 lines → 67.
+- **A staged deletion ran no checks.** Only added and modified files were
+  passed on (`--diff-filter=ACMR` plus `existsSync`), so deleting a file
+  another one imports went unnoticed until CI. Nx maps a path to its project
+  whether or not the file exists (`web/src/does-not-exist.ts` → web), so every
+  staged path is passed on now.
+
+Checked through `pnpm run -s verify:staged` / `verify:push` (the hooks'
+commands; bare `node` has no `nx` on its PATH): nothing staged exits in
+0.06 s; a staged deletion of `infra/scripts/deploy-scope.sh` checks the infra
+project; a push with an upstream compares with it; a branch without one
+compares with `origin/develop`. On this branch that still reaches all 4
+projects — deleting `rust/project.json` changes the project graph, which
+Nx counts against every project; `Cargo.toml`, `ci.yml` and the script
+itself reach none.
