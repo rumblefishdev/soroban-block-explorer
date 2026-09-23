@@ -5,5 +5,23 @@ own="$(git rev-parse --show-toplevel)/.husky/$(basename "$0")"
 [ "$0" -ef "$own" ] || { [ -f "$own" ] && exec sh -e "$own" "$@"; exit 0; }
 
 set -e
-SQLX_OFFLINE=true cargo clippy --all-targets -- -D warnings
+
+# Clippy only when the push carries Rust. Git hands the pushed refs on stdin,
+# one "<local ref> <local sha> <remote ref> <remote sha>" per line. A new
+# branch is compared from where it left develop; anything git cannot diff
+# counts as Rust.
+zero=0000000000000000000000000000000000000000
+rust=no
+while read -r _ local _ remote; do
+  [ "$local" = "$zero" ] && continue
+  if [ "$remote" = "$zero" ]; then
+    remote="$(git merge-base origin/develop "$local" 2>/dev/null)" || { rust=yes; break; }
+  fi
+  changed="$(git diff --name-only "$remote" "$local" -- crates Cargo.toml Cargo.lock rust-toolchain.toml 2>/dev/null)" || { rust=yes; break; }
+  if [ -n "$changed" ]; then rust=yes; break; fi
+done
+
+if [ "$rust" = yes ]; then
+  SQLX_OFFLINE=true cargo clippy --all-targets -- -D warnings
+fi
 pnpm run -s verify:push

@@ -4,7 +4,6 @@ import { existsSync } from 'node:fs';
 
 const mode = process.argv[2];
 const supportedModes = new Set(['staged', 'push']);
-const targetCandidates = ['lint', 'typecheck', 'test'];
 
 if (!supportedModes.has(mode)) {
   console.error('Expected mode to be one of: staged, push.');
@@ -45,19 +44,6 @@ const getStagedFiles = () =>
     .split('\0')
     .filter(Boolean)
     .filter((file) => existsSync(file));
-
-const getAvailableTargets = () =>
-  targetCandidates.filter((target) => {
-    const output = execFileSync(
-      'nx',
-      ['show', 'projects', '--withTarget', target, '--json'],
-      {
-        encoding: 'utf8',
-      }
-    );
-    const projects = JSON.parse(output);
-    return Array.isArray(projects) && projects.length > 0;
-  });
 
 const refExists = (ref) =>
   run('git', ['rev-parse', '--verify', '--quiet', ref]).status === 0;
@@ -102,16 +88,21 @@ const resolveBaseRef = () => {
   return 'HEAD';
 };
 
-const targets = getAvailableTargets();
-
-if (targets.length === 0) {
-  process.exit(0);
-}
-
-const nxArgs = ['affected', '-t', ...targets, '--outputStyle=static'];
+// A target no project has is skipped by `nx affected`, so the list needs no
+// discovery pass (it started Nx three times on every commit).
+const nxArgs = [
+  'affected',
+  '-t',
+  'lint',
+  'typecheck',
+  'test',
+  '--outputStyle=static',
+];
 
 if (mode === 'staged') {
-  const stagedFiles = getStagedFiles();
+  // Markdown feeds no lint, typecheck or test; lint-staged has already
+  // formatted it. A commit of documents alone never starts Nx.
+  const stagedFiles = getStagedFiles().filter((file) => !file.endsWith('.md'));
 
   if (stagedFiles.length === 0) {
     process.exit(0);
