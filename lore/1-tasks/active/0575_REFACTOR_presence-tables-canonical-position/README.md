@@ -136,9 +136,12 @@ after the checks (`max_table_size_to_drop` override, as in 0541 phase 5).
 - [x] Neither table carries `transaction_id`; saving re-measured per table —
       swapped 2026-09-23: 112.04 → 20.12 GiB, 100.76 → 12.39 GiB; old
       tables dropped the same day
-- [ ] Account and asset lists in execution order inside a ledger — checked on
-      ledger 64 454 000 and on one account, one asset
-- [ ] `transaction_id` still has no new consumer added by this change
+- [x] Account and asset lists in execution order inside a ledger — checked on
+      ledger 64 454 000 and on one account, one asset (after the swap, below)
+- [x] `transaction_id` still has no new consumer added by this change — the
+      PR's added lines name it only where `operation_types` is still keyed by
+      it (`operations_appearances`, the same consumer as before, now keyed
+      off the page rows), a moved `init.sql` comment and one test
 - [x] **Docs updated** — `database-schema/**`: overview §4.5 / §4.5.1,
       ClickHouse pilot, endpoint queries 03, 07, 10 (02: N/A — the global list
       does not read either table); `indexing-pipeline/**`; `docs/backfills.md`;
@@ -221,6 +224,23 @@ touched the old tables after their slices were copied. A full re-gate over
 the old and new tables was stopped for the drop at 110 complete slices
 (4.52 bn keys, 0 differences); the hash ↔ position map in `transactions` had
 no conflict in the 81 slices checked.
+
+**After the drop:** free disk 447 → 658.70 GiB of 1.72 TiB (+211.7 GiB, at
+14:20 UTC).
+
+**Read benchmark on the swapped tables** (first page of 26, best of 3,
+driver plus page fetch; staging figures from
+[notes/R-fill-and-read-benchmark.md](notes/R-fill-and-read-benchmark.md) in
+brackets): hottest account 468.9 MiB, 0.118 s (639.4); mid account 22.8 MiB
+(21.9); sparse account 29.4 MiB (30.0); native XLM 318.6 MiB, 0.098 s (516;
+production before the change 1451); abUSDC 60.8 MiB (65); sparse asset
+21.8 MiB (22). Every list under the gate.
+
+**Execution order, ledger 64,454,000:** an account with four transactions in
+the ledger lists them at positions 183, 177, 134, 58 — the old hash order
+would have been 134, 183, 177, 58. Native XLM appears in 135 of the ledger's
+transactions, each at a position `transactions` holds, listed 188, 186,
+185, 184, 182, …
 
 ## Design Decisions
 
