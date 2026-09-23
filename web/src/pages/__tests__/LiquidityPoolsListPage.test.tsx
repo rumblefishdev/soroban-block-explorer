@@ -128,18 +128,6 @@ describe('LiquidityPoolsListPage', () => {
     expect(screen.getByText('XLM / CAQC…RZQB')).toBeInTheDocument();
   });
 
-  it('says a pool has no indexed legs instead of naming it nothing', () => {
-    mockOk([makePool({ legs: [] })]);
-
-    renderWithProviders(<LiquidityPoolsListPage />, {
-      initialEntries: ['/liquidity-pools'],
-    });
-
-    // A pool whose legs were never filled must not get a blank name, which
-    // would read as a pool that holds nothing.
-    expect(screen.getByText('Composition not indexed')).toBeInTheDocument();
-  });
-
   it('badges each row with its kind, which no other column shows', () => {
     mockOk([
       makePool({ pool_kind: 'soroban', pool_id: 'C'.padEnd(56, 'A') }),

@@ -72,10 +72,6 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Pool',
     width: 260,
     cell: (row) => {
-      // A pool whose legs are not backfilled yet has no name to show. Render it
-      // as the absence it is — secondary colour, like `Dash` — so the row does
-      // not read as a pool actually called "Composition not indexed".
-      const unindexed = row.legs.length === 0;
       const kind = POOL_KIND_META[row.pool_kind];
       return (
         <Stack
@@ -93,11 +89,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
               // inherit one. Two legs never reached the edge; a pool named by
               // truncated contract addresses does.
               noWrap
-              sx={(theme) => ({
-                color: unindexed
-                  ? theme.palette.text.secondary
-                  : theme.palette.text.primary,
-              })}
+              sx={(theme) => ({ color: theme.palette.text.primary })}
             >
               {poolLabel(row.legs)}
             </Typography>

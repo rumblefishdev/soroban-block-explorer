@@ -56,19 +56,11 @@ export function assetLegLabel(leg: PoolAssetLeg): string {
 }
 
 /**
- * Shown for a pool whose legs are not in the index yet. An empty name would
- * read as a pool that holds nothing — a plausible-looking wrong answer, which
- * is worse than saying the data is missing.
- */
-export const UNINDEXED_POOL_LABEL = 'Composition not indexed';
-
-/**
  * The pool's name — its legs' labels, in registration order. Two for a classic
  * pool, up to four for a soroban one, so the separator repeats rather than
  * joining a fixed left and right.
  */
 export function poolLabel(legs: readonly PoolAssetLeg[]): string {
-  if (legs.length === 0) return UNINDEXED_POOL_LABEL;
   return legs.map(assetLegLabel).join(' / ');
 }
 

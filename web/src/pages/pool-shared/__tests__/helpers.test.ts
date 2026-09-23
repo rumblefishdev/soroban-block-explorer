@@ -153,12 +153,6 @@ describe('assetLegLabel', () => {
 });
 
 describe('poolLabel', () => {
-  // A pool whose legs are not backfilled yet must not read as a pool that
-  // holds nothing — an empty name is a plausible-looking wrong answer.
-  it('says so when the legs are not indexed, rather than rendering blank', () => {
-    expect(poolLabel([])).toBe('Composition not indexed');
-  });
-
   it('joins every leg, not just a left and a right', () => {
     expect(
       poolLabel([

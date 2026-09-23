@@ -40,11 +40,6 @@ export function PoolLegIcons({
         '& .MuiAvatar-root:not(:first-of-type)': { marginLeft: '-8px' },
       })}
     >
-      {/* A pool with no indexed legs still gets one avatar: without it the
-          column loses its left anchor and every text line in that row shifts,
-          which reads as a layout bug rather than as missing data. `AssetIcon`
-          renders a nameless asset as `?`. */}
-      {legs.length === 0 && <AssetIcon code={null} size={size} />}
       {legs.map((leg, i) => (
         <AssetIcon
           // Legs are positional and an asset can repeat across pools but not

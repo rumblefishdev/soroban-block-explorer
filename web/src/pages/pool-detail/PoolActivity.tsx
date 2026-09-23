@@ -112,8 +112,8 @@ export function poolAmountLegs(
   pool: Pick<PoolItem, 'legs'>
 ): { legs: AmountLegPart[]; swap: boolean } | null {
   const legs = op.amounts.flatMap((amount, i) => {
+    // `amounts[i]` is what moved in `legs[i]`; the API sends one per leg.
     const leg = pool.legs[i];
-    if (leg == null) return [];
     if (amount == null || amount === '') return [];
     const raw = amount.replace(/^-/, '');
     // The sign is carried by the ordering and the separator, not the digits.
