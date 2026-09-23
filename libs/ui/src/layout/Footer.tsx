@@ -2,12 +2,18 @@ import type { ReactNode } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
+import { useLinkComponent } from '../identifiers/LinkComponentContext.js';
 import { grid } from '../theme/grid.js';
+
+import { PRICES_API_URL, PRIVACY_POLICY_URL } from './links.js';
 
 export interface FooterNavItem {
   label: string;
   href?: string;
   onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+  /** A route of this app: rendered through the app's router link, so it opens
+   *  in the same tab without a page reload. */
+  internal?: boolean;
 }
 
 export interface FooterProps {
@@ -25,6 +31,7 @@ declare global {
 }
 
 const RESOURCES: FooterNavItem[] = [
+  { label: 'Prices API', href: PRICES_API_URL },
   {
     label: 'GitHub',
     href: 'https://github.com/rumblefishdev/soroban-block-explorer',
@@ -35,10 +42,7 @@ const RESOURCES: FooterNavItem[] = [
     href: 'https://developers.stellar.org/docs/build/smart-contracts',
   },
   { label: 'Stellar dashboard', href: 'https://dashboard.stellar.org/' },
-  {
-    label: 'Privacy Policy',
-    href: 'https://www.rumblefish.dev/privacy-policy/',
-  },
+  { label: 'Privacy Policy', href: PRIVACY_POLICY_URL, internal: true },
   {
     // Opens the consent banner rather than navigating anywhere. `#` +
     // preventDefault keeps it a real anchor — focusable and hover-styled like
@@ -52,13 +56,14 @@ const RESOURCES: FooterNavItem[] = [
   },
 ];
 
-function FooterLink({ label, href, onClick }: FooterNavItem) {
+function FooterLink({ label, href, onClick, internal }: FooterNavItem) {
+  const RouterLink = useLinkComponent();
   return (
     <Box
-      component={href ? 'a' : 'span'}
+      component={internal ? RouterLink : href ? 'a' : 'span'}
       {...(href ? { href } : {})}
       {...(onClick ? { onClick } : {})}
-      {...(href && !onClick
+      {...(href && !onClick && !internal
         ? { target: '_blank', rel: 'noopener noreferrer' }
         : {})}
       sx={(theme) => ({

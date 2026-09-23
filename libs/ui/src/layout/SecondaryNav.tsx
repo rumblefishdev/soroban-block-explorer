@@ -9,25 +9,38 @@ import MenuIcon from '@mui/icons-material/Menu';
 
 import { grid } from '../theme/grid.js';
 
+import { PRICES_API_URL } from './links.js';
 import { NavButton, type NavButtonSize } from './NavButton.js';
 import { ThemeToggle } from './ThemeToggle.js';
 
-/** Below this width the inline nav collapses behind a hamburger drawer. */
-const NAV_COLLAPSE_BREAKPOINT = 'md';
+/** Below this width the inline nav collapses behind a hamburger drawer. The
+ *  inline nav needs ~1115px (measured in task 0574), so `md` (900px) let the
+ *  links overlap. */
+const NAV_COLLAPSE_BREAKPOINT = 'lg';
 
 const REPORT_BUG_URL =
   'https://github.com/rumblefishdev/soroban-block-explorer/issues/new';
 
-/** Feedback affordance — deliberately outside `navItems` so it reads as an
- *  action, not a section (task 0407). Sizing mirrors {@link NavButton} so it
- *  sits flush with the nav links inline and with the drawer items at `lg`. */
-function ReportBugLink({ size = 'md' }: { size?: NavButtonSize }) {
+/** A link out of the explorer, in a new tab — deliberately outside
+ *  `navItems`, whose clicks go through the router: "Report a bug" is an
+ *  action, not a section (task 0407), and the Prices API is a separate SPA
+ *  (task 0574). Sizing mirrors {@link NavButton} so it sits flush with the
+ *  nav links inline and with the drawer items at `lg`. */
+function ExternalNavLink({
+  href,
+  label,
+  size = 'md',
+}: {
+  href: string;
+  label: string;
+  size?: NavButtonSize;
+}) {
   const isLg = size === 'lg';
 
   return (
     <Box
       component="a"
-      href={REPORT_BUG_URL}
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
       sx={(theme) => ({
@@ -51,7 +64,7 @@ function ReportBugLink({ size = 'md' }: { size?: NavButtonSize }) {
         color="inherit"
         noWrap
       >
-        Report a bug
+        {label}
       </Typography>
       <ArrowOutwardIcon sx={{ fontSize: isLg ? 16 : 14 }} />
     </Box>
@@ -134,7 +147,7 @@ export function SecondaryNav({
             gap: 1,
           }}
         >
-          {/* Inline nav — desktop only (≥md). */}
+          {/* Inline nav — desktop only (≥lg). */}
           <Box
             display="flex"
             alignItems="stretch"
@@ -156,8 +169,8 @@ export function SecondaryNav({
             ))}
           </Box>
 
-          {/* "Report a bug" + its separator — desktop only; on mobile it
-              sits at the bottom of the drawer. */}
+          {/* External links + their separator — desktop only; on mobile
+              they sit at the bottom of the drawer. */}
           <Box
             sx={{
               display: { xs: 'none', [NAV_COLLAPSE_BREAKPOINT]: 'flex' },
@@ -173,13 +186,14 @@ export function SecondaryNav({
                 flexShrink: 0,
               })}
             />
-            <ReportBugLink />
+            <ExternalNavLink href={PRICES_API_URL} label="Prices API" />
+            <ExternalNavLink href={REPORT_BUG_URL} label="Report a bug" />
           </Box>
 
           {/* Theme switch — visible on every breakpoint (task 0351 F19). */}
           <ThemeToggle />
 
-          {/* Hamburger toggle — mobile/tablet only (<md). */}
+          {/* Hamburger toggle — mobile/tablet only (<lg). */}
           <IconButton
             aria-label={
               menuOpen ? 'Close navigation menu' : 'Open navigation menu'
@@ -199,7 +213,7 @@ export function SecondaryNav({
         </Box>
       </Box>
 
-      {/* Slim right drawer (<md). Backdrop + Escape close it — no separate
+      {/* Slim right drawer (<lg). Backdrop + Escape close it — no separate
           close button; the same hamburger flips to ✕ while open. */}
       <Drawer
         anchor="right"
@@ -243,9 +257,21 @@ export function SecondaryNav({
               mt: 1,
               pt: 1,
               borderTop: `1px solid ${theme.palette.stroke.default}`,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
             })}
           >
-            <ReportBugLink size="lg" />
+            <ExternalNavLink
+              href={PRICES_API_URL}
+              label="Prices API"
+              size="lg"
+            />
+            <ExternalNavLink
+              href={REPORT_BUG_URL}
+              label="Report a bug"
+              size="lg"
+            />
           </Box>
         </Box>
       </Drawer>

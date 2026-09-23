@@ -486,7 +486,7 @@ async fn fetch_participants_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<String>, clickhouse::error::Error> {
-    queries::fetch_participants(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_participants(&state.ch(), tx.ledger_sequence, tx.application_order).await
 }
 
 async fn fetch_events_for_source(

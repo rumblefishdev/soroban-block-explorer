@@ -2069,6 +2069,29 @@ live and under `--only`; one fn keys legs and contract-held balances; runbook
 - **Not closable yet:** the read side does not show soroban legs until the
   read PRs of the split land; issue #405 stays open.
 
+### Pool as legs — PR 3 of the split (2026-09-23)
+
+PR #479 (`feat/0374-pool-legs`): the list and detail endpoints read `legs`,
+`filter[pool_kind]` replaces the four positional leg filters, a Soroban pool is
+addressed by its `C…` contract, and the frontend renders every leg with a
+kind chip row and badge.
+
+- **Measured before it:** 770 Soroban pools list on production as `XLM / XLM`
+  under a wrong `L…` id (positions 21,329 onward in the default order) — their
+  pair columns hold placeholders and develop's list has no kind filter.
+- **No data step:** `legs` is filled for every row (0 empty of 54,303; 11
+  Soroban pools with more than two legs).
+- **Found while rebuilding it:** a leg nothing identifies made
+  `assetLegLabel` throw outside any section boundary, which blanks the app.
+  One live pool has one (`CCH6A2JC…`, the inert pool whose leg has no `assets`
+  row). It now reads `Unregistered token`, one label shared with the
+  balance-change cell.
+- **DECIDED (karolkow, 2026-09-23): deploy PR 3 together with PR 4 and PR 5.**
+  Until those land a Soroban pool shows `—` for reserves, TVL and shares, and
+  the participant and activity sections show zeros that are not measurements.
+  The zeros are on production today as well, under the wrong pair, but the
+  kind filter would make them easy to reach.
+
 ## 2026-09-17 (karolkow) — can a Soroban pool delete a key we read? No deployed one can
 
 Spawned from task 0210's pool-removal fix: the classic extractor stored a
@@ -2111,3 +2134,49 @@ snapshots. The same question for the six Soroban-side extractors that skip
   four-function sweep contract and is still in the pool registry;
   `soroban_contracts` shows `f74d87d7…` for `CBENABXP…`, which runs `6fe099b6…`
   (task 0320's stale-hash symptom). Both under audit.
+
+## 2026-09-22 — joining or leaving a classic pool is not a pool operation
+
+Open, found in an audit of values we could derive instead of storing, looking
+up or omitting.
+
+- **`change_trust` on a pool share carries no pool id.** For
+  `ChangeTrustAsset::PoolShare` the parser writes only the variant name —
+  `{"type": "liquidityPool", "params": "LiquidityPoolConstantProduct"}`
+  (`crates/xdr-parser/src/operation.rs`, `format_change_trust_asset`). The
+  pool id is derivable from the parameters the operation carries: CAP-38
+  defines it as `SHA256(LiquidityPoolParameters)` (asset pair + fee), the same
+  identity `extract_liquidity_pools` already relies on. `operation_pools`
+  takes a pool id only from `liquidityPoolId` or `poolIds`
+  (`crates/db-clickhouse/src/persist/stage.rs`, `OpTyped::from_details`), so
+  opening or closing a pool-share trustline is missing from the pool's
+  activity, and the transaction detail shows a generic label instead of the
+  pool. Fix: derive the id in the parser, emit it as `liquidityPoolId`; history
+  needs a re-parse. Scale not measured — operation details are not in
+  ClickHouse.
+- **No oracle pins the derivation.** Nothing recomputes
+  `SHA256(LiquidityPoolParameters)` and compares it with the
+  `liquidity_pool_id` of a real `LiquidityPoolEntry`. A corpus test with no
+  network would pin the function the fix above adds.
+
+### One-legged activity rows are round trips, not lost data (2026-09-23)
+
+Found while reviewing PR 3 (#479): `PoolActivityItem.event` was documented as
+null only in an "unreachable" malformed case. Measured in the 100k ledgers to
+64,576,995: **350 of 6.09M** operations carry one leg only in
+`lp_operation_amounts`.
+
+- **Every one is a multi-pool path payment** (types 2 and 13, routes through
+  2–5 pools), and the stored leg is always positive — the asset ENTERED the
+  pool.
+- **Cause, verified on one transaction** (`0d22447e…`, strict receive through
+  5 pools): the route crosses pool `1746987b…` (EURC/yXLM) twice in a row, there
+  and back — hop 3 takes 415,847 yXLM and pays 37,745 EURC, hop 4 takes the same
+  37,745 EURC and pays 413,354 yXLM. EURC nets to exactly zero, and
+  `pool_fill_amounts` drops a leg that nets to zero (`stage.rs:185`); what is
+  left is +2,493 yXLM, the pool's take on the round trip.
+- **Not an indexer defect:** the row is the op's true net effect on the pool.
+- **Open for the activity PR (split PR 7):** such a row has `event = null` and
+  renders `—`. It is a trade in substance; whether to classify a round trip as
+  one (and how to show a leg that moved and came back) is a display decision.
+  PR 3 corrects the DTO comment to say the case is real and keeps the handling.

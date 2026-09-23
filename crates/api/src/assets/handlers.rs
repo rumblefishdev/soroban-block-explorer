@@ -335,12 +335,8 @@ fn find_currency<'a>(
         .find(|c| c.code.as_deref() == Some(asset_code) && c.issuer.as_deref() == Some(issuer))
 }
 
-/// `:id/transactions` dispatch — the composed read (task 0359): the
-/// `operation_asset_appearances` fan-out on `id` UNION the
-/// `soroban_invocations_appearances` activity of the asset's contract
-/// surrogate(s). The surrogates make EVERY asset type complete: a Soroban-native
-/// (type-3) token's own contract (its fan-out is empty — the F2/#1 fix), and a
-/// classic/native asset's SAC facet (its SAC-contract activity — F-F).
+/// `:id/transactions` dispatch — the `operation_asset_appearances` fan-out on
+/// `id` (task 0359): operations naming the asset and token events moving it.
 async fn fetch_asset_tx_for_source(
     state: &AppState,
     row: &AssetRow,
@@ -348,40 +344,23 @@ async fn fetch_asset_tx_for_source(
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
-    // ADR 0051: an asset has ONE associated contract, never both — its own
-    // contract if it is a Soroban-native (type-3) token, else the wrapping SAC of
-    // a classic / native asset. Arm B seeks that contract's invocations.
-    let contract_surrogate = if row.contract_surrogate_id != 0 {
-        Some(row.contract_surrogate_id)
-    } else if row.sac_contract_surrogate != 0 {
-        Some(row.sac_contract_surrogate)
-    } else {
-        None
-    };
-    queries::fetch_transactions(
-        &state.ch(),
-        row.id,
-        contract_surrogate,
-        limit,
-        cursor,
-        direction,
-    )
-    .await
+    queries::fetch_transactions(&state.ch(), row.id, limit, cursor, direction).await
 }
 
-/// Build the opaque asset-transactions cursor for a boundary row. CH keys on
-/// `(ledger_sequence, id)`.
+/// Build the opaque asset-transactions cursor for a boundary row. The list keys
+/// on the transaction's position `(ledger_sequence, application_order)` (task
+/// 0575).
 fn asset_tx_cursor_for(r: &AssetTxRow) -> TxListCursor {
-    TxListCursor::ChSurrogate {
+    TxListCursor::ChPosition {
         ledger_sequence: r.ledger_sequence,
-        transaction_id: r.id,
+        application_order: r.application_order,
     }
 }
 
-/// True when the cursor anchors this list's keyset, the id surrogate. A
-/// position cursor from `/transactions` is refused (ADR 0008 fail-clean).
+/// True when the cursor anchors this list's keyset, the position. A surrogate
+/// cursor is refused (ADR 0008 fail-clean).
 fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::ChSurrogate { .. })
+    matches!(cursor, TxListCursor::ChPosition { .. })
 }
 
 #[utoipa::path(

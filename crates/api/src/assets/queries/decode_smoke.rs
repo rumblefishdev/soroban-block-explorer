@@ -1,13 +1,9 @@
 //! Live-CH **decode** smoke for the asset-transactions keyset read.
 //!
-//! The two-arm `UNION ALL` (task 0446) is the class of SQL an offline build
-//! cannot validate: the outer `ORDER BY … LIMIT 1 BY … LIMIT` over a
-//! parenthesised union parses only against a real server, and the unit tests
-//! above assert its shape as a string, not that ClickHouse accepts it. The
-//! other read modules guard their generated SQL the same way.
-//!
-//! Exercises BOTH shapes — the lone arm (no associated contract) and the union
-//! (an asset with one) — in both page directions.
+//! The keyset seek, the page fetch by position and the cursor round-trip only
+//! parse against a real server; the unit tests cannot see a column that does
+//! not exist. Walks two pages in both directions, feeding the first page's
+//! boundary row back as the cursor.
 //!
 //! **Skips cleanly when `CH_URL` is unset**, so CI (no CH access) is green.
 //! Run against a reachable CH (local replica or SSH tunnel):
@@ -18,14 +14,6 @@
 //! ```
 
 use super::*;
-
-/// Bootstrap row: any asset, plus its associated contract surrogate if it
-/// has one (ADR 0051 — a type-3 token's own contract, else a SAC wrapper).
-#[derive(Debug, Row, Deserialize)]
-struct BootAssetRow {
-    id: i64,
-    contract_surrogate: i64,
-}
 
 /// Task 0485. The ranking that puts native XLM first is a SORT DIRECTION,
 /// and a direction is invisible to the SQL-shape tests — they pin the
@@ -83,39 +71,41 @@ async fn code_search_returns_native_first() {
 }
 
 #[tokio::test]
-async fn asset_tx_keyset_union_decodes() {
+async fn asset_tx_keyset_decodes_and_pages() {
     let Some(ch) = crate::common::ch::test_client_from_env() else {
         eprintln!("CH_URL unset — skipping asset-tx keyset decode smoke");
         return;
     };
-
-    // An asset that HAS an associated contract, so the union arm is real.
-    let boot = ch
-        .query(
-            "SELECT a.id AS id, max(sc.sac_contract_id) AS contract_surrogate \
-             FROM assets a INNER JOIN asset_sac sc \
-               ON sc.asset_type = a.asset_type AND sc.asset_code = a.asset_code \
-              AND sc.issuer_id = a.issuer_id AND sc.contract_id = a.contract_id \
-             WHERE sc.sac_contract_id != 0 \
-             GROUP BY a.id LIMIT 1",
-        )
-        .fetch_optional::<BootAssetRow>()
+    let asset: Option<i64> = ch
+        .query("SELECT asset_id FROM operation_asset_appearances LIMIT 1")
+        .fetch_optional()
         .await
         .expect("bootstrap asset query must run");
+    let Some(asset) = asset else {
+        eprintln!("no asset appearance in this CH — asset-tx smoke not exercised");
+        return;
+    };
 
     for direction in [Direction::Next, Direction::Prev] {
-        // Lone arm: `None` skips the wrapper entirely.
-        fetch_transactions(&ch, 1, None, 21, None, direction)
+        let first = fetch_transactions(&ch, asset, 2, None, direction)
             .await
-            .unwrap_or_else(|e| panic!("lone-arm keyset failed ({direction:?}): {e}"));
-
-        if let Some(b) = &boot {
-            fetch_transactions(&ch, b.id, Some(b.contract_surrogate), 21, None, direction)
-                .await
-                .unwrap_or_else(|e| panic!("union keyset failed ({direction:?}): {e}"));
-        }
-    }
-    if boot.is_none() {
-        eprintln!("no SAC-backed asset in this CH — union arm not exercised");
+            .unwrap_or_else(|e| panic!("first page failed ({direction:?}): {e}"));
+        let Some(last) = first.last() else {
+            continue;
+        };
+        let cursor = TxListCursor::ChPosition {
+            ledger_sequence: last.ledger_sequence,
+            application_order: last.application_order,
+        };
+        let second = fetch_transactions(&ch, asset, 2, Some(&cursor), direction)
+            .await
+            .unwrap_or_else(|e| panic!("cursor page failed ({direction:?}): {e}"));
+        assert!(
+            second
+                .iter()
+                .all(|r| (r.ledger_sequence, r.application_order)
+                    != (last.ledger_sequence, last.application_order)),
+            "the cursor row must not repeat on the next page"
+        );
     }
 }

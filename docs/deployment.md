@@ -357,6 +357,51 @@ Frontend **content** is separate: `deploy-production-web`
 
   Remove this item once that tag exists.
 
+- **Presence tables by position (task 0575): no `production-*` tag between
+  the merge and the window.** The task-0575 writer names `application_order`
+  instead of `transaction_id` in `transaction_participants` and
+  `operation_asset_appearances`, and its API reads the same. Against the tables
+  as they stand before the window, the clickhouse-rs 0.15 client refuses both
+  inserts on every ledger (the 0310 outage class). A `DEFAULT` cannot bridge
+  it: `transaction_id` is in the sort key, so only a swap removes it. Order:
+
+  0. **Both staging tables exist and every whole partition below the head is
+     filled and gated** ([backfills.md](./backfills.md), "Presence tables by
+     transaction position"). Created from `init.sql` under the staging name —
+     extract, do not retype:
+     ```bash
+     for t in transaction_participants operation_asset_appearances; do
+       awk "/CREATE TABLE IF NOT EXISTS $t \\(/,/^ORDER BY/" crates/db-clickhouse/schema/init.sql \
+         | sed "s/EXISTS $t (/EXISTS ${t}_staging_position (/"
+     done
+     ```
+  1. **Read benchmark on the staging tables** (read-only): the account and
+     asset transaction lists pointed at `*_staging_position`, on the hottest
+     account, native XLM and one mid asset — each statement under 1 s and
+     1 GiB. A failure stops here; the staging tables are dropped.
+  2. **Pause durably:** `indexerLambdaConcurrency = 0`, deployed from a
+     checkout at the last `production-*` tag.
+  3. **Fill the tail** from the first unfilled ledger up to the paused head
+     (`A-B` with `B = max(sequence) + 1` from `ledgers`) for both tables, gated.
+  4. **Deploy the new code, still at concurrency 0.**
+  5. **Swap both:**
+     `EXCHANGE TABLES transaction_participants AND transaction_participants_staging_position`,
+     then the same for `operation_asset_appearances`. Between step 4 and this
+     step the account and asset transaction lists answer errors; keep it short.
+  6. **Resume:** concurrency back to `1`, then deploy Compute. Check that
+     `ledgers` advances, the DLQ stays empty, and every row the new writer adds
+     names a transaction that exists (a `NOT IN` against `transactions` over
+     the new ledgers returns 0).
+  7. **Drop the old tables** — now under the staging names — only after the
+     checks and the production pages look right:
+     `DROP TABLE <table>_staging_position SETTINGS max_table_size_to_drop = 0`
+     (the server keeps the default 50 GB limit). Until then, rollback is the
+     reverse `EXCHANGE` plus a Compute deploy of the previous code.
+
+  **After the swap the hold turns around:** only code that carries task 0575
+  may deploy Compute — an earlier writer still names `transaction_id`. The hold
+  lasts until a `production-*` tag carries the change. Remove this item then.
+
 - **A SPA build without the Turnstile site key takes production down for
   users.** With `enableAuthLayer: true` the API rejects unauthenticated
   requests; a bundle built without `VITE_TURNSTILE_SITE_KEY` ships an

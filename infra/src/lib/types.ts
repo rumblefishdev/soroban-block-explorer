@@ -138,9 +138,8 @@ export interface EnvironmentConfig {
    *
    * Shares the same CloudFront Function code and KeyValueStore as
    * `enableBasicAuth` when both are true (one construct, one set of
-   * credentials) — but the KVS/function are provisioned whenever EITHER
-   * flag is true, since `/api/*` may need the gate while the main site
-   * does not.
+   * credentials). The KVS is provisioned unconditionally so flipping
+   * both flags off never deletes the out-of-band-seeded credentials.
    */
   readonly enableApiSpaBasicAuth: boolean;
 

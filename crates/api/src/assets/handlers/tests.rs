@@ -25,7 +25,6 @@ fn asset_row(
         icon_url: None,
         deployed_at_ledger: None,
         issuer_home_domain: None,
-        contract_surrogate_id: 0,
         sac_contract_surrogate: 0,
         sac_deployed: false,
         id: 0,

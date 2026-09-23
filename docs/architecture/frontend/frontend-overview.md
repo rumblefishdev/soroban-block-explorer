@@ -266,6 +266,10 @@ Navigation rules:
 - exact search hits should resolve directly to the detail page when confidence is high
 - broad or ambiguous matches should remain on a grouped search results page
 - list routes should preserve filters and cursor state in the URL when practical
+- `/api` and `/api/*` are not explorer routes: CloudFront serves the Stellar Prices
+  API portal there, a separate SPA. The navbar and the footer link it with a plain
+  anchor (`PRICES_API_URL`), never through the router, and no explorer route may live
+  under `/api`
 
 ## 6. Routes and Pages
 
@@ -287,6 +291,7 @@ Navigation rules:
 | `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                      |
 | `/liquidity-pools/:id`   | Liquidity Pool  | `GET /liquidity-pools/:id`                                                  |
 | `/search?q=`             | Search Results  | `GET /search`                                                               |
+| `/privacy-policy`        | Privacy Policy  | none (static text)                                                          |
 
 Each route should be implemented as a dedicated page module with:
 

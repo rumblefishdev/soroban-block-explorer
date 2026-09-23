@@ -1,18 +1,6 @@
 use super::*;
 
 #[test]
-fn union_keyset_arms_merges_both_arms_in_one_statement() {
-    // task 0446: the two arms are independent reads; they must cost ONE round
-    // trip, with the merge (order, cross-arm dedup, truncate) pushed into CH.
-    let sql = union_keyset_arms("SELECT a", "SELECT b", "DESC", 21);
-    assert!(sql.contains("(SELECT a) UNION ALL (SELECT b)"));
-    assert!(sql.contains("ORDER BY ledger_sequence DESC, transaction_id DESC"));
-    // Drops a transaction returned by BOTH arms — the old Rust `keys.dedup()`.
-    assert!(sql.contains("LIMIT 1 BY ledger_sequence, transaction_id"));
-    assert!(sql.ends_with("LIMIT 21"));
-}
-
-#[test]
 fn asset_key_tuples_inlines_type_code_issuer_contract() {
     let keys = vec![
         AssetKeyChRow {

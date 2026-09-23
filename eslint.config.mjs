@@ -7,6 +7,7 @@ export default [
   {
     ignores: [
       '**/dist',
+      '**/out-tsc',
       '**/build',
       '**/coverage',
       '**/vite.config.*.timestamp*',

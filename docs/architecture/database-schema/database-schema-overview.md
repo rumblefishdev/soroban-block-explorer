@@ -538,14 +538,13 @@ Design notes:
 
 ```sql
 CREATE TABLE transaction_participants (
-    transaction_id BIGINT      NOT NULL,
-    account_id     BIGINT      NOT NULL REFERENCES accounts(id),     -- ADR 0026
-    created_at     TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (account_id, created_at, transaction_id),
-    FOREIGN KEY (transaction_id, created_at)
-        REFERENCES transactions (id, created_at) ON DELETE CASCADE
-) PARTITION BY RANGE (created_at);
-CREATE INDEX idx_tp_tx ON transaction_participants (transaction_id);
+    account_id        Int64,                        -- accounts.id surrogate, ADR 0026
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1))     -- the transaction's position
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (account_id, ledger_sequence, application_order);
 ```
 
 Purpose:
@@ -562,12 +561,17 @@ Design notes:
   (via `source_id`, `destination_id`, `asset_issuer_id`) and `transactions.source_id`,
   which is where the UI already gets them. `transaction_participants` is a pure
   account-feed index
-- PK `(account_id, created_at, transaction_id)` is designed for the
-  account-feed read pattern (`WHERE account_id = $1 ORDER BY created_at DESC`);
-  the secondary `idx_tp_tx` supports the reverse direction
-- partitioned on `created_at`, mirrors `transactions` partitions exactly;
-  cascade driven by the composite FK back to `transactions`
-- `account_id` is the surrogate BIGINT FK per
+- the transaction is located by its position `(ledger_sequence,
+application_order)` — the `transactions` key — not the `transaction_id` hash
+  surrogate ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md),
+  task 0575). The account feed therefore pages in execution order inside a
+  ledger, and the surrogate's 8 B/row (ratio 1.0) is gone: measured on
+  partition 128, the row went from 11.19 B to 1.95 B with the two codecs
+- key `(account_id, ledger_sequence, application_order)` is the account-feed
+  read pattern (`WHERE account_id = ? ORDER BY ledger_sequence DESC,
+application_order DESC`); `ledger_sequence` rises within an account, which is
+  what `Delta` exploits
+- `account_id` is the surrogate `Int64` of
   [ADR 0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md)
 
 ### 4.5.1 Operation Asset Appearances (task 0359)
@@ -578,22 +582,20 @@ presence index so a per-asset activity page is a PK-prefix seek.
 
 ```sql
 CREATE TABLE operation_asset_appearances (
-    asset_id        Int64,   -- ids::asset_id surrogate; native = ids::asset_id(0,'',0,0)
-    ledger_sequence Int64,
-    transaction_id  Int64,
-    INDEX idx_oaa_transaction_id transaction_id TYPE bloom_filter(0.001) GRANULARITY 1
+    asset_id          Int64,   -- ids::asset_id surrogate; native = ids::asset_id(0,'',0,0)
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1))   -- the transaction's position (task 0575)
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (asset_id, ledger_sequence, transaction_id);
+ORDER BY (asset_id, ledger_sequence, application_order);
 ```
 
-> **Read-path.** The tx-list value read filters `(ledger, tx)` on this
-> `asset_id`-leading table — not a prefix seek, so unaided it is a partition scan
-> (~26 M rows/page on a full partition). Mitigated by the `idx_oaa_transaction_id` > **bloom skip index** (task 0393), which prunes granules holding none of a page's
-> tx_ids (~10×); same pattern as `idx_oa_contract_id`. A projection is not a
-> candidate (CH 26.3 refuses projections on a ReplacingMergeTree, and a `(ledger,
-tx)`-ordered companion would re-store the incompressible `transaction_id` ~85 GiB)
+> **Read-path.** Every read filters by `asset_id`, the leading key: the asset
+> transaction list seeks it and fetches the page's transactions by their
+> position, the `transactions` key. The `idx_oaa_transaction_id` bloom (task 0393) was dropped on 2026-08-06 for zero consumers (19.87 GiB), and the
+> surrogate column itself left with task 0575 (row 9.09 B → 1.12 B on
+> partition 128).
 > **`net_settled` was REMOVED (2026-09-04).** The per-(transaction, asset) aggregate
 > `max(Σ+, Σ−)` carried no direction and no account, so on an account page an
 > inbound and an outbound transfer rendered identically. It is replaced by a
