@@ -46,9 +46,7 @@ use super::dto::{ChartDataPoint, PoolActivityCursor, PoolEvent, PoolListCursor, 
 #[derive(Debug, Clone)]
 pub struct PoolRow {
     pub pool_id_hex: String,
-    /// `liquidity_pools.pool_kind` — [`domain::PoolKind`]'s discriminant, kept
-    /// raw here and named at the response boundary like every other enum-like
-    /// column in this API.
+    /// `liquidity_pools.pool_kind`, decoded once by `decode_pool_kind`.
     pub pool_kind: domain::PoolKind,
     /// The pool's legs in registration order: two for a classic pool, two to
     /// four for a soroban one.
@@ -645,8 +643,6 @@ fn priceable_legs(ctx: &PoolPriceContext) -> Vec<&PriceLeg> {
     ctx.legs.iter().filter(|l| !l.kind.is_empty()).collect()
 }
 
-/// Strict decimal-string → f64 (the wire strings come from CH `toString`
-/// over Decimal columns; anything non-parseable degrades to None, never 500).
 /// A pool's TVL: every leg's reserve times its price, summed. `None` unless
 /// EVERY leg has both — a partial sum understates the pool while looking like
 /// a real number. `reserves[i]` and `legs[i]` describe the same leg: both
@@ -663,6 +659,8 @@ fn tvl_usd(
         .sum()
 }
 
+/// Strict decimal-string → f64 (the wire strings come from CH `toString`
+/// over Decimal columns; anything non-parseable degrades to None, never 500).
 fn parse_f64(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
@@ -726,18 +724,6 @@ pub async fn fetch_pool_by_id(
     // detail is single-pool and CH dislikes correlated subqueries. Each `?`
     // consumes one positional bind; all are the same value, so order is moot.
     //
-    // `legs` resolves the pool's two `(code, issuer_id)` pairs once; `iss` and
-    // `sac` both fan out from it.
-    //
-    // **Issuer resolution is a restricted `iss` CTE, NOT `accounts FINAL`
-    // joins.** `accounts` is `ORDER BY (account_id)`, so the surrogate `id` is a
-    // non-PK reverse lookup; a plain `LEFT JOIN accounts FINAL` builds the whole
-    // 14M-row table into the hash — and detail does it for BOTH legs, blowing
-    // the 3.73 GiB per-query cap (box-confirmed `Code 241`). Restricting to the
-    // pool's ≤2 issuer ids + `GROUP BY id` (no FINAL — account_id is stable
-    // across RMT versions, `any()` is safe) scans the id column but builds a
-    // ≤2-row hash. Same shape as `fetch_pool_list`'s `iss` CTE.
-    //
     // **Leg identity is resolved in Rust, not joined here.** This used to carry
     // three pair-keyed CTEs — `legs` (the pool's four pair columns), `iss` (a
     // bounded issuer seek) and `sac` (the SAC mirror + icon, two hops through
@@ -745,8 +731,8 @@ pub async fn fetch_pool_by_id(
     // it keyed on `(asset_code, issuer_id)`, which only a classic row has.
     // `legs` stores `assets.id` surrogates for both pool kinds, so the same
     // work is one batched call to the shared resolver, which already carries
-    // the shapes those joins had to get right. The SAC address is DERIVED at
-    // the boundary (ADR 0051), so `soroban_contracts` is not consulted at all.
+    // the shapes those joins had to get right — including the issuer seek that
+    // must never be an `accounts FINAL` join (a 14M-row hash, `Code 241`).
     //
     // **Latest snapshot subquery — NO `FINAL`** (0356 / PR #318). The indexer now
     // writes exactly one deterministic row per `(pool_id, ledger_sequence)`, so
@@ -1842,10 +1828,9 @@ pub async fn fetch_pool_list(
     }
     let rows = query.fetch_all::<PoolListChRow>().await?;
 
-    // One batched identity resolution for every leg on the page, then the two
-    // display extras. Both key on `assets.id`, which is exactly what `legs`
-    // stores — so the issuer StrKey arrives with the identity instead of
-    // costing its own round trip.
+    // One batched identity resolution for every leg on the page, with the
+    // icons read alongside it. Both key on `assets.id`, which is exactly what
+    // `legs` stores.
     let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 

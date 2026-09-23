@@ -356,10 +356,10 @@ pub struct PoolActivityItem {
     /// `application_order`), and the `#op-N` anchor on the transaction detail
     /// page this row links to (task 0482).
     pub application_order: i16,
-    /// `null` only for the malformed case where not every leg of the pool
-    /// landed in `lp_operation_amounts`. Unreachable by construction — a
-    /// classic op that touches a pool moves both of its legs — but the read
-    /// stays total rather than classifying a half-row.
+    /// `null` when not every leg of the pool landed in `lp_operation_amounts`
+    /// for this operation. Rare but real: 350 of 6.09M operations in the
+    /// 100k ledgers to 64,576,995 carry one leg only. The read stays total
+    /// rather than classifying a half-row.
     pub event: Option<PoolEvent>,
     /// One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
     /// what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
