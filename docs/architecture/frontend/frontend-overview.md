@@ -291,6 +291,7 @@ Navigation rules:
 | `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                      |
 | `/liquidity-pools/:id`   | Liquidity Pool  | `GET /liquidity-pools/:id`                                                  |
 | `/search?q=`             | Search Results  | `GET /search`                                                               |
+| `/privacy-policy`        | Privacy Policy  | none (static text)                                                          |
 
 Each route should be implemented as a dedicated page module with:
 
