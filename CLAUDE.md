@@ -19,12 +19,13 @@
     the file, use `#[cfg(test)] #[path = "tests/<name>_tests.rs"] mod tests;`.
   - TS/TSX: `__tests__/foo.test.ts(x)` next to `foo.ts(x)`, importing
     `../foo`.
-  - Existing `foo_tests.rs` / `foo.test.tsx` siblings move when a task touches
-    them (task 0525), never in a sweep.
 - Verification-only code (oracles, corpus checks) belongs in the crate's
   `tests/` directory, not in the production module it verifies.
-- Touching a file that exceeds the limit? Extract at least its tests in the
-  same PR. New files must not be born over the limit.
+- Touching a file with inline or sibling tests? Move them to their proper
+  place in the same PR, as a separate `refactor(...)` commit. New files
+  must not be born over the limit.
+- Touching a file over the limit? It must not grow: first move the topic
+  you edit into its own file, so the file ends shorter than you found it.
 - The existing stock shrinks incrementally — task 0525 tracks the backlog —
   never in a big-bang refactor.
 
@@ -77,6 +78,16 @@ followed by `openapi-ts` codegen. Stage the resulting changes (`openapi.json` +
 
 CI runs `nx run @rumblefish/api-types:check-generated` (a `git diff --exit-code`
 on those paths). Skipping the regen → red `API types freshness` check.
+
+## Schema — locate transactions by position, never by `transaction_id`
+
+A new table or column never carries `transaction_id` (the hash64 surrogate).
+Locate a transaction by `(ledger_sequence, application_order)`, an operation
+by `operation_index`, an event by its stellar-rpc id
+([ADR 0059](./lore/2-adrs/0059_canonical-event-identity-and-location-names.md)).
+The surrogate is a hash: it compresses at ratio 1.0 and is ~220 GiB of the
+database; task 0538 removes it table by table. Enforced by
+`crates/db-clickhouse/tests/schema_conventions.rs` — its allowlist only shrinks.
 
 ## Evergreen Architecture Docs
 

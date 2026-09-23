@@ -2069,6 +2069,29 @@ live and under `--only`; one fn keys legs and contract-held balances; runbook
 - **Not closable yet:** the read side does not show soroban legs until the
   read PRs of the split land; issue #405 stays open.
 
+### Pool as legs — PR 3 of the split (2026-09-23)
+
+PR #479 (`feat/0374-pool-legs`): the list and detail endpoints read `legs`,
+`filter[pool_kind]` replaces the four positional leg filters, a Soroban pool is
+addressed by its `C…` contract, and the frontend renders every leg with a
+kind chip row and badge.
+
+- **Measured before it:** 770 Soroban pools list on production as `XLM / XLM`
+  under a wrong `L…` id (positions 21,329 onward in the default order) — their
+  pair columns hold placeholders and develop's list has no kind filter.
+- **No data step:** `legs` is filled for every row (0 empty of 54,303; 11
+  Soroban pools with more than two legs).
+- **Found while rebuilding it:** a leg nothing identifies made
+  `assetLegLabel` throw outside any section boundary, which blanks the app.
+  One live pool has one (`CCH6A2JC…`, the inert pool whose leg has no `assets`
+  row). It now reads `Unregistered token`, one label shared with the
+  balance-change cell.
+- **DECIDED (karolkow, 2026-09-23): deploy PR 3 together with PR 4 and PR 5.**
+  Until those land a Soroban pool shows `—` for reserves, TVL and shares, and
+  the participant and activity sections show zeros that are not measurements.
+  The zeros are on production today as well, under the wrong pair, but the
+  kind filter would make them easy to reach.
+
 ## 2026-09-17 (karolkow) — can a Soroban pool delete a key we read? No deployed one can
 
 Spawned from task 0210's pool-removal fix: the classic extractor stored a
@@ -2112,25 +2135,26 @@ snapshots. The same question for the six Soroban-side extractors that skip
   `soroban_contracts` shows `f74d87d7…` for `CBENABXP…`, which runs `6fe099b6…`
   (task 0320's stale-hash symptom). Both under audit.
 
-### Pool as legs — PR 3 of the split (2026-09-23)
+## 2026-09-22 — joining or leaving a classic pool is not a pool operation
 
-PR #479 (`feat/0374-pool-legs`): the list and detail endpoints read `legs`,
-`filter[pool_kind]` replaces the four positional leg filters, a Soroban pool is
-addressed by its `C…` contract, and the frontend renders every leg with a
-kind chip row and badge.
+Open, found in an audit of values we could derive instead of storing, looking
+up or omitting.
 
-- **Measured before it:** 770 Soroban pools list on production as `XLM / XLM`
-  under a wrong `L…` id (positions 21,329 onward in the default order) — their
-  pair columns hold placeholders and develop's list has no kind filter.
-- **No data step:** `legs` is filled for every row (0 empty of 54,303; 11
-  Soroban pools with more than two legs).
-- **Found while rebuilding it:** a leg nothing identifies made
-  `assetLegLabel` throw outside any section boundary, which blanks the app.
-  One live pool has one (`CCH6A2JC…`, the inert pool whose leg has no `assets`
-  row). It now reads `Unregistered token`, one label shared with the
-  balance-change cell.
-- **DECIDED (karolkow, 2026-09-23): deploy PR 3 together with PR 4 and PR 5.**
-  Until those land a Soroban pool shows `—` for reserves, TVL and shares, and
-  the participant and activity sections show zeros that are not measurements.
-  The zeros are on production today as well, under the wrong pair, but the
-  kind filter would make them easy to reach.
+- **`change_trust` on a pool share carries no pool id.** For
+  `ChangeTrustAsset::PoolShare` the parser writes only the variant name —
+  `{"type": "liquidityPool", "params": "LiquidityPoolConstantProduct"}`
+  (`crates/xdr-parser/src/operation.rs`, `format_change_trust_asset`). The
+  pool id is derivable from the parameters the operation carries: CAP-38
+  defines it as `SHA256(LiquidityPoolParameters)` (asset pair + fee), the same
+  identity `extract_liquidity_pools` already relies on. `operation_pools`
+  takes a pool id only from `liquidityPoolId` or `poolIds`
+  (`crates/db-clickhouse/src/persist/stage.rs`, `OpTyped::from_details`), so
+  opening or closing a pool-share trustline is missing from the pool's
+  activity, and the transaction detail shows a generic label instead of the
+  pool. Fix: derive the id in the parser, emit it as `liquidityPoolId`; history
+  needs a re-parse. Scale not measured — operation details are not in
+  ClickHouse.
+- **No oracle pins the derivation.** Nothing recomputes
+  `SHA256(LiquidityPoolParameters)` and compares it with the
+  `liquidity_pool_id` of a real `LiquidityPoolEntry`. A corpus test with no
+  network would pin the function the fix above adds.

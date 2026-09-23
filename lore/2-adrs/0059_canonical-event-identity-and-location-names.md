@@ -32,7 +32,7 @@ history:
 **Related:**
 
 - [Task 0541: canonical event location](../1-tasks/archive/0541_FEATURE_canonical-event-location/README.md)
-- [Task 0538: canonical transaction and event location (programme)](../1-tasks/backlog/0538_EPIC_canonical-transaction-and-event-location/README.md)
+- [Task 0538: canonical transaction and event location (programme)](../1-tasks/active/0538_EPIC_canonical-transaction-and-event-location/README.md)
 - [ADR 0044: ClickHouse store, full-content `soroban_events`](./0044_clickhouse-pilot-parallel-store.md)
 - [ADR 0057: the network is the arbiter](./0057_network-is-the-arbiter-snapshot-reconciliation.md)
 
@@ -118,7 +118,10 @@ Stellar also names the positions, and the project does not follow it:
 
 6. **Surrogate transaction ids are not used for new keys**; existing tables
    move to the location as the 0538 programme reaches them, one table at a
-   time.
+   time. Enforced since 2026-09-23 by
+   `crates/db-clickhouse/tests/schema_conventions.rs`: a `transaction_id`
+   column outside its allowlist fails the build, and the allowlist only
+   shrinks.
 
 7. **`getEvents` is the arbiter** (ADR 0057): a runnable check compares ids
    read from our tables with `getEvents` on recent ledgers.
