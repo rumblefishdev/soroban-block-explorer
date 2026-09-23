@@ -19,12 +19,13 @@
     the file, use `#[cfg(test)] #[path = "tests/<name>_tests.rs"] mod tests;`.
   - TS/TSX: `__tests__/foo.test.ts(x)` next to `foo.ts(x)`, importing
     `../foo`.
-  - Existing `foo_tests.rs` / `foo.test.tsx` siblings move when a task touches
-    them (task 0525), never in a sweep.
 - Verification-only code (oracles, corpus checks) belongs in the crate's
   `tests/` directory, not in the production module it verifies.
-- Touching a file that exceeds the limit? Extract at least its tests in the
-  same PR. New files must not be born over the limit.
+- Touching a file with inline or sibling tests? Move them to their proper
+  place in the same PR, as a separate `refactor(...)` commit. New files
+  must not be born over the limit.
+- Touching a file over the limit? It must not grow: first move the topic
+  you edit into its own file, so the file ends shorter than you found it.
 - The existing stock shrinks incrementally — task 0525 tracks the backlog —
   never in a big-bang refactor.
 
