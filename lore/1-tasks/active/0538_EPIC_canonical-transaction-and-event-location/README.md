@@ -352,3 +352,22 @@ columns (~9.6 GiB, _estimate_), or fold an `invoked` flag and `caller_id` into
 `contract_transactions` and drop the table (~10 GiB, but the table stops being
 pure presence and the SAC Invocations tab reads ~4× the rows). Task 0575
 already stopped reading it for the asset list.
+
+## Step 5a done — task 0575 (2026-09-23)
+
+`transaction_participants` and `operation_asset_appearances` keyed by
+`(ledger_sequence, application_order)` with `Delta` / `T64` codecs, swapped in
+one window (ingest paused 13:02–13:53 UTC) and the old tables dropped the same
+day: 112.04 → 20.12 GiB and 100.76 → 12.39 GiB, +211.7 GiB free on the
+volume. The account and asset lists now page in execution order inside a
+ledger (checked on ledger 64,454,000 for one account and native XLM).
+[Task 0575](../../archive/0575_REFACTOR_presence-tables-canonical-position/README.md).
+
+`transaction_id` left on production after it (`system.parts_columns`):
+`operations_appearances` 33.26 GiB, `soroban_invocations_appearances` 8.42,
+`operation_pools` 4.78, `lp_operation_amounts` 4.46, `nft_ownership` +
+`_pending` ~0; plus `transactions.id` 31.57 GiB.
+
+**Before every later window:** check whether stellar-prices-api reads the
+table — its users' grants (`users.d/services.xml`) and the users that queried
+it in `system.query_log` (decision karolkow, 2026-09-23). For 0575: none.

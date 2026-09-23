@@ -1118,10 +1118,10 @@ and filled from what ClickHouse already holds — no S3, no re-parse: the old
 row's surrogate is joined to `transactions` for the position.
 
 - **Statement and gate:**
-  [`fill_presence.sql`](../lore/1-tasks/active/0575_REFACTOR_presence-tables-canonical-position/notes/fill_presence.sql),
-  [`gate_presence.sql`](../lore/1-tasks/active/0575_REFACTOR_presence-tables-canonical-position/notes/gate_presence.sql);
+  [`fill_presence.sql`](../lore/1-tasks/archive/0575_REFACTOR_presence-tables-canonical-position/notes/fill_presence.sql),
+  [`gate_presence.sql`](../lore/1-tasks/archive/0575_REFACTOR_presence-tables-canonical-position/notes/gate_presence.sql);
   the loop that runs both per slice and stops at the first mismatch:
-  [`fill_presence.zsh`](../lore/1-tasks/active/0575_REFACTOR_presence-tables-canonical-position/notes/fill_presence.zsh).
+  [`fill_presence.zsh`](../lore/1-tasks/archive/0575_REFACTOR_presence-tables-canonical-position/notes/fill_presence.zsh).
 - **Slice width 50,000 ledgers.** The gate's `uniqExact` over a 100,000-ledger
   slice of `transaction_participants` exceeds the read profile's 3.73 GiB
   memory cap. The account- / asset-leading key does not prune on the ledger, so
