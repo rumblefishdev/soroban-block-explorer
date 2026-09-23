@@ -10,7 +10,6 @@ links:
   - '.github/workflows/ci.yml'
   - '.husky/pre-commit'
   - '.husky/pre-push'
-  - '.github/workflows/cleanup-pr-caches.yml'
   - 'Cargo.toml'
 history:
   - date: '2026-09-15'
@@ -45,7 +44,8 @@ history:
 
 Cut the time and disk every commit, push and CI run pays for work that did
 not change code. Four independent changes, delivered in one pull request
-(#484), plus a cache cleanup at pull request close.
+(#484). A cache cleanup at pull request close shipped with it and was
+withdrawn after merge (see the end).
 
 ## Context
 
@@ -158,13 +158,15 @@ decision.
   a Rust-only change because those files are already one of its inputs (see
   Implementation).
 - **The Playwright browser is cached** (step 3): 47 s per run today.
-- **New — a workflow deletes a pull request's caches when it closes**, and a
-  one-off prune runs first. Measured 2026-09-23 through `gh api`: 9.73 GB of
+- ~~**New — a workflow deletes a pull request's caches when it closes**, and a
+  one-off prune runs first.~~ Reversed after merge: the premise was wrong,
+  see "Cache cleanup withdrawn". Measured 2026-09-23 through `gh api`: 9.73 GB of
   the 10 GB cache is in use and 5.9 GB of it is dead — 3.8 GB belongs to two
   pull requests merged on 2026-09-16, 2.1 GB to an older `Cargo.lock` on
-  `master`. A pull request keeps writing its own cache while it is open; the
-  cleanup at close is what reclaims the space. `develop` still needs no cache
-  of its own, because a pull request reads the default branch's.
+  `master`. ~~A pull request keeps writing its own cache while it is open;
+  the cleanup at close is what reclaims the space.~~ GitHub reclaims it
+  anyway, least recently used first. `develop` still needs no cache of its
+  own, because a pull request reads the default branch's.
 - **The debug profile lands in `Cargo.toml`** (step 4), and `ci.yml`'s
   `CARGO_PROFILE_DEV_DEBUG: '1'` goes with it, so one place states it for
   every checkout. Nothing in the repository configures a debugger — no
@@ -194,8 +196,8 @@ Branch `perf/0555_dev-flow`, one pull request.
   `run-many`. Playwright's browser is cached per
   Playwright version, and the e2e steps run only when the web project is
   affected.
-- **`.github/workflows/cleanup-pr-caches.yml`** deletes a pull request's
-  caches when it closes.
+- **`.github/workflows/cleanup-pr-caches.yml`** deleted a pull request's
+  caches when it closed (removed after merge, see "Cache cleanup withdrawn").
 - **`Cargo.toml`** carries the debug profile; `ci.yml` drops
   `CARGO_PROFILE_DEV_DEBUG`.
 
@@ -457,8 +459,8 @@ for the whole run, against about 6 minutes for a full one.
    decision 5; master keeps `run-many`.
 5. **Playwright browser cached** (step 3).
 6. **Debug profile in `Cargo.toml`** (step 4), `CARGO_PROFILE_DEV_DEBUG` gone.
-7. **Cache cleanup workflow at pull request close**, plus a one-off prune
-   (8 caches, 5.9 GB; usage 4.75 GB after).
+7. ~~**Cache cleanup workflow at pull request close**, plus a one-off prune
+   (8 caches, 5.9 GB; usage 4.75 GB after).~~ Withdrawn after merge.
 
 ### Emerged
 
@@ -482,3 +484,16 @@ for the whole run, against about 6 minutes for a full one.
 
 - `libs/ui` has the same typecheck/build `dist` race, and there the
   declarations are what web compiles against → **0578**.
+
+## Cache cleanup withdrawn (karolkow, 2026-09-23)
+
+The cleanup workflow rested on a claim that dead pull request caches crowd
+out live ones — "at the 10 GB cap GitHub drops the oldest, often master's".
+GitHub's documentation says otherwise: over the limit it deletes "in order of
+last access date, from oldest to most recent", and it removes anything
+unused for 7 days. Master's caches are read by every pull request run, so
+they are the last to go; a closed pull request's caches are read by nobody,
+so they are the first. Dead caches never push out live ones — the workflow
+only sped up by at most a week what GitHub does anyway, and cost a job per
+closed pull request plus an `actions: write` token. Removed. The one-off
+prune of 8 caches was harmless and equally unnecessary.
