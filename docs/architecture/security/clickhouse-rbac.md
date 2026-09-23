@@ -151,6 +151,10 @@ returns as 403 before any backend hop.
 - `unlimited` — sidecar + dev laptops + emergency.
 - `api_throttle` — 10000 queries / hour, 50B read_rows, 1 TiB
   read_bytes, 1000 s execution_time.
+- `dev_read` — human ad-hoc reads: 200B read_rows, 4 TiB read_bytes,
+  queries and execution_time unlimited (task 0575 doubled both caps
+  for the staging-fill gates). Kept apart from `api_throttle` so a
+  teammate's query can never spend the API's budget.
 - `high_write` — unbounded queries / read, 1 PB written_bytes
   ceiling (sanity cap, not a real throttle).
 - `prices_write` — caps copied verbatim from `high_write`; a dedicated
@@ -166,14 +170,16 @@ returns as 403 before any backend hop.
 
 ### Rate limiting on proxy-trust path
 
-CH-side quotas in `quotas.xml` are enforced on the host-side
-connection path (sidecar, backup, SSH→docker exec). Rate limiting
-on the Caddy-proxied path is delegated to upstream and in-query
-layers: AWS API Gateway throttle, profile `max_execution_time`,
-profile `max_memory_usage`, and Caddy's request body cap. Quotas
-remain defined for the host-side path and as a forward-compatible
-hook should the proxy-trust enforcement story change. See task
-0250 for the active investigation.
+CH-side quotas in `quotas.xml` are enforced on the Caddy-proxied
+path too: the proxy asserts the CH user, and quotas are per user.
+Measured twice — `prices_reader` got Code 201 through the proxy on
+2026-09-03 (task 0561), and `dev_read` via `chq` on 2026-09-23
+(task 0575). This supersedes the 2026-05 probe in task 0250, which
+saw the counter stay at 0 for `X-ClickHouse-User` header auth — the
+header path Caddy still uses. Caddy adds no rate limit of its own; beyond the quotas,
+the guards are the AWS API Gateway throttle, profile
+`max_execution_time` / `max_memory_usage`, and Caddy's request body
+cap.
 
 ### Box-level admin access
 
