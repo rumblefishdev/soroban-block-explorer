@@ -53,7 +53,7 @@ CREATE TABLE transaction_hash_index (
     ledger_sequence Int64 CODEC(T64, ZSTD(1))
 ) ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY hash_prefix;
+ORDER BY (hash_prefix, ledger_sequence);
 ```
 
 The reader takes **every** ledger with the prefix, never `LIMIT 1`: two hashes
@@ -85,3 +85,49 @@ real ClickHouse.
 - [ ] stellar-prices-api check recorded before the window (done: not a reader)
 - [ ] **Docs updated** — `database-schema/**`, endpoint queries 03 and 22,
       `docs/backfills.md`, `docs/deployment.md`
+
+## Progress
+
+- **PR 1 (task 0396):** [#488](https://github.com/rumblefishdev/soroban-block-explorer/pull/488),
+  draft. CI found a statement-count unit test (`init_sql_parses_into_statements`,
+  40 → 39) the local run had skipped; fixed in `8b2ffd37`.
+- **PR 2:** [#489](https://github.com/rumblefishdev/soroban-block-explorer/pull/489),
+  draft, stacked on PR 1; commits `bcef1a4a` (refactor), `1b8ad65d` (re-key),
+  `13fab680` (search by inner hash).
+  1. `refactor`: `search/queries.rs` inline tests and decode smoke moved to
+     `search/queries/{tests,decode_smoke}.rs` (1,332 → 989 lines);
+     `lookup_hash_ledger` moved to `transactions/queries/hash_lookup.rs`.
+  2. The change: DDL, `TransactionHashIndexRow::new`, both readers take every
+     candidate ledger (`lookup_hash_ledgers`; search loops per ledger), tests,
+     docs (schema overview §4.3, pilot, canonical SQL 03 / 22 and README,
+     endpoint runner, SCF demo query, `backfills.md`, `deployment.md`).
+  - Verified: `api` 617 tests, `db-clickhouse` all but the PR 1 count test;
+    clippy clean; `api-types:generate` no diff; `persist_e2e` (Rust prefix =
+    SQL prefix, bytes `01..08`), `smoke` (two ledgers under one prefix survive
+    `OPTIMIZE FINAL`), `g9`, `claimable_balance_holdings` on a fresh
+    ClickHouse 26.3.
+- **Window runbook:** [`fill_hash_prefix.sql`](notes/fill_hash_prefix.sql),
+  [`gate_hash_prefix.sql`](notes/gate_hash_prefix.sql),
+  [`fill_hash_prefix.zsh`](notes/fill_hash_prefix.zsh). Loop dry-run with
+  stubbed `chw` / `chq` (10 fills, 80 gate queries for `129:64550000` plus a
+  range); fill statement and gate old side read-only on production,
+  64,000,000–64,012,500: 5,983,289 rows = 5,983,289 distinct keys.
+
+## Design Decisions
+
+### Emerged
+
+1. **The ledger is in the sort key.** Found by a local test: with
+   `ORDER BY hash_prefix` alone the ReplacingMergeTree collapses two hashes
+   that share a prefix in different ledgers into one row, keeping one ledger —
+   the other transaction would answer "not found". `(hash_prefix,
+ledger_sequence)` keeps both; two sharing it in one ledger collapse
+   harmlessly, the ledger is the answer either way. Pinned by the `smoke` test.
+2. **Readers take every candidate, newest ledger first**, and stop at the
+   first whose `transactions` row carries the full hash — a loop over what is
+   nearly always one ledger, instead of a multi-ledger `IN` query.
+3. **Search finds a fee-bump by its inner hash** (decision karolkow,
+   2026-09-23, in this PR as its own commit). The index always mapped the
+   inner hash and the transaction page matched `hash OR inner_tx_hash`, but
+   search checked `t.hash` only, so an inner hash found nothing. Production,
+   ledger 64,578,112: the old condition 0 rows, the new 1.
