@@ -110,9 +110,9 @@ workspace; record both.
 
 ## Acceptance Criteria
 
-- [ ] A lore-only push to an open pull request triggers no Rust/TS/API-types
-      jobs after a green run — logic dry-run against real commits through the
-      API; to be seen on this pull request's own docs push
+- [x] A lore-only push to an open pull request triggers no Rust/TS/API-types
+      jobs after a green run — run 35862923296 (`4cf52c57`): every job but
+      "Detect changes" skipped, the run took 11 s
 - [x] A docs-only `git push` does not invoke `cargo` — hook run through
       `git hook run pre-push` on three ranges (docs-only and a new branch at
       the develop tip: no clippy; an unknown remote sha: clippy)
@@ -408,3 +408,8 @@ success` and a pushed list of one lore file, but the base-side compare listed
 branch last merged it — code the previous run never tested together with
 this branch. The branch was brought up to date with `develop` (`a2a27783`,
 green run 35862179179) and this commit, lore only, is the second try.
+
+Second try, run 35862923296 (`4cf52c57` on the up-to-date, green
+`a2a27783`): "Detect changes" ran, and Rust fmt, Rust (clippy, test), Rust
+(lambda build), TypeScript and API types freshness were all skipped — 11 s
+for the whole run, against about 6 minutes for a full one.
