@@ -2,7 +2,7 @@
 id: '0519'
 title: 'FEATURE: separate /api SPA bucket + CloudFront behavior, basic-auth gated'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0273', '0302']
 tags: [infra, cloudfront, s3, security, priority-medium, effort-small]
@@ -73,6 +73,25 @@ history:
       config; synthesized template inspected directly to confirm the
       function code, KVS association, and both `/api`/`/api/*` behaviors
       are wired as intended.
+  - date: '2026-09-23'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Basic auth taken off the /api portal SPA (PR #480, merge 8e41e528):
+      `enableApiSpaBasicAuth: false` in production.json. The portal's
+      backend routes already live on prices-api.sorobanscan.rumblefish.dev,
+      so this only exposes the static page; the main site was already public
+      (enableBasicAuth off since 0405). `BasicAuthKvs` is now provisioned
+      unconditionally — with both flags off the old condition would have
+      deleted the store and its out-of-band-seeded credentials. `cdk diff
+      --strict` showed only ApiSpaRoutingFunction changing and CloudFormation
+      drift detection was IN_SYNC; deployed Explorer-production-Delivery from
+      the branch (80 s) and verified anonymously: /api → 301 /api/; /api/,
+      /api/dashboard, /api/docs → 200 with the portal index.html; hashed
+      asset 200; / still 200; KVS READY. NOTE: commit 2f24beec on develop
+      carries this task's message ("make the /api SPA public, keep the auth
+      KVS") but contains only the 0574 task move — see Issues Encountered;
+      the real change is #480. Archived.
 ---
 
 # FEATURE: separate /api SPA bucket + CloudFront behavior, basic-auth gated
@@ -85,9 +104,13 @@ a second, independently-built SPA can be deployed under that path prefix on
 the existing distribution. Gate it with the existing CloudFront Function
 basic-auth mechanism, behind a new independent config flag.
 
-## Status: Active
+The gate was lifted on 2026-09-23 (PR #480): the `/api` SPA is public. The
+flag and the shared KVS stay, so re-arming is a flag flip + Delivery deploy.
 
-**Current state:** design agreed, implementation starting.
+## Status: Completed
+
+**Current state:** deployed; `/api` portal SPA public since 2026-09-23 (basic
+auth off, KVS kept).
 
 ## Context
 
@@ -160,15 +183,58 @@ section per ADR 0032.
       exact-match behavior since `/api/*` requires the literal slash
 - [x] CI/CD deploy role granted S3 permissions on the new bucket
       (`cicd-stack.ts`)
-- [ ] Deployed to production and verified live (redirect + deep-link
-      fallback + auth still enforced)
+- [x] Deployed to production and verified live — redirect + deep-link
+      fallback verified 2026-09-23; auth was enforced (401, realm "API") until
+      #480 turned it off on purpose that day
+- [x] Basic auth removed from `/api/*` without deleting the shared KVS
+      (PR #480)
+
+## Issues Encountered
+
+- **Mislabeled commit on `develop` (2026-09-23).** A parallel session
+  promoting 0574 stashed the uncommitted #480 work and switched the shared
+  main checkout to `develop`; this task's `git commit` ran 12 s later and
+  committed that session's staged 0574 task move under this task's message.
+  Result: `2f24beec` on `origin/develop` ("make the /api SPA public, keep the
+  auth KVS") holds only the 0574 file move. The work was recovered from the
+  stash in a dedicated worktree and shipped as #480 (merge `8e41e528`).
+  Left unrewritten: fixing the message means force-pushing `develop`, and
+  `feat/0574_prices-api-link-in-nav-and-footer` is built on top of it.
+- **`pnpm: command not found`** from `make -C infra deploy-production-delivery`
+  in a terminal on nvm's node 24, which has corepack but no `pnpm` shim.
+  Fix: `corepack enable pnpm`. Not a repo problem.
+- **Delivery synth bundles every Compute Rust Lambda**, although Delivery has
+  no stack dependencies — ~6 min in a fresh worktree before CloudFormation
+  starts. Slow, harmless.
+
+## Design Decisions
+
+### From Plan
+
+1. **One shared KVS, independent flags**: the main site and `/api/*` gate
+   separately (`enableBasicAuth` / `enableApiSpaBasicAuth`) against one set
+   of credentials; `/api` routing and auth share one viewer-request function
+   because CloudFront allows one per behavior (see 2026-08-28 history).
+
+### Emerged
+
+2. **KVS provisioned unconditionally (#480)**: turning off the `/api` gate
+   with the main gate already off would have dropped the store with its
+   out-of-band credentials, so re-arming would need a manual re-seed.
+   Production is the only environment and already had the store, so this
+   adds no resource anywhere.
+3. **Deployed from the PR branch before merge**, after `cdk diff --strict`
+   and drift detection showed nothing else pending on Delivery; merged right
+   after, so `develop` matches production.
 
 ## Notes
 
 Deliberately out of scope for this task (raised and deferred in chat):
 
 - No long-TTL sub-behaviors for `/api/assets/*`-style hashed paths yet — add
-  once the new SPA's build tool/base-path convention is known.
+  once the new SPA's build tool/base-path convention is known. **Now known
+  (2026-09-23):** the portal ships hashed `/api/assets/index-<hash>.js`, so a
+  long-TTL `/api/assets/*` behavior is implementable; not filed as a task yet.
 
 Previously deferred, now resolved (2026-08-28, see history): the
 `errorResponses`/deep-link gap. `/api/*` routing now has its own CloudFront
