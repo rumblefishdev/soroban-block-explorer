@@ -13,8 +13,10 @@ import { PRICES_API_URL } from './links.js';
 import { NavButton, type NavButtonSize } from './NavButton.js';
 import { ThemeToggle } from './ThemeToggle.js';
 
-/** Below this width the inline nav collapses behind a hamburger drawer. */
-const NAV_COLLAPSE_BREAKPOINT = 'md';
+/** Below this width the inline nav collapses behind a hamburger drawer. The
+ *  inline nav needs ~1115px (measured in task 0574), so `md` (900px) let the
+ *  links overlap. */
+const NAV_COLLAPSE_BREAKPOINT = 'lg';
 
 const REPORT_BUG_URL =
   'https://github.com/rumblefishdev/soroban-block-explorer/issues/new';
@@ -145,7 +147,7 @@ export function SecondaryNav({
             gap: 1,
           }}
         >
-          {/* Inline nav — desktop only (≥md). */}
+          {/* Inline nav — desktop only (≥lg). */}
           <Box
             display="flex"
             alignItems="stretch"
@@ -191,7 +193,7 @@ export function SecondaryNav({
           {/* Theme switch — visible on every breakpoint (task 0351 F19). */}
           <ThemeToggle />
 
-          {/* Hamburger toggle — mobile/tablet only (<md). */}
+          {/* Hamburger toggle — mobile/tablet only (<lg). */}
           <IconButton
             aria-label={
               menuOpen ? 'Close navigation menu' : 'Open navigation menu'
@@ -211,7 +213,7 @@ export function SecondaryNav({
         </Box>
       </Box>
 
-      {/* Slim right drawer (<md). Backdrop + Escape close it — no separate
+      {/* Slim right drawer (<lg). Backdrop + Escape close it — no separate
           close button; the same hamburger flips to ✕ while open. */}
       <Drawer
         anchor="right"
