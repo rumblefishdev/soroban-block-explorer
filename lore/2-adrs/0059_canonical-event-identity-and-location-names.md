@@ -118,7 +118,10 @@ Stellar also names the positions, and the project does not follow it:
 
 6. **Surrogate transaction ids are not used for new keys**; existing tables
    move to the location as the 0538 programme reaches them, one table at a
-   time.
+   time. Enforced since 2026-09-23 by
+   `crates/db-clickhouse/tests/schema_conventions.rs`: a `transaction_id`
+   column outside its allowlist fails the build, and the allowlist only
+   shrinks.
 
 7. **`getEvents` is the arbiter** (ADR 0057): a runnable check compares ids
    read from our tables with `getEvents` on recent ledgers.

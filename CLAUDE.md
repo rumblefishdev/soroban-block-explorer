@@ -79,6 +79,16 @@ followed by `openapi-ts` codegen. Stage the resulting changes (`openapi.json` +
 CI runs `nx run @rumblefish/api-types:check-generated` (a `git diff --exit-code`
 on those paths). Skipping the regen → red `API types freshness` check.
 
+## Schema — locate transactions by position, never by `transaction_id`
+
+A new table or column never carries `transaction_id` (the hash64 surrogate).
+Locate a transaction by `(ledger_sequence, application_order)`, an operation
+by `operation_index`, an event by its stellar-rpc id
+([ADR 0059](./lore/2-adrs/0059_canonical-event-identity-and-location-names.md)).
+The surrogate is a hash: it compresses at ratio 1.0 and is ~220 GiB of the
+database; task 0538 removes it table by table. Enforced by
+`crates/db-clickhouse/tests/schema_conventions.rs` — its allowlist only shrinks.
+
 ## Evergreen Architecture Docs
 
 Per [ADR 0032](./lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md),

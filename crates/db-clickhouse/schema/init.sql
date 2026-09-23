@@ -11,7 +11,17 @@
 --   - `soroban_contracts.id`   ← cityhash64(contract_id StrKey)
 --   - `transactions.id`        ← cityhash64(hash bytes)
 --
--- These three are the **central FK hubs** — referenced by 6–8
+-- **Transactions are the exception — do not add `transaction_id` to a new
+-- table.** Locate a transaction by its position `(ledger_sequence,
+-- application_order)`, an operation by `operation_index`, an event by its
+-- stellar-rpc id (ADR 0059). `transactions.id` is being retired (task 0538):
+-- a hash never compresses (ratio 1.0, 8.03 B/row, ~220 GiB across the
+-- tables that still carry it, 2026-09-23), while the position costs
+-- 0.07–1.3 B/row and sorts in execution order. Lookups by hash go through
+-- `transaction_hash_index`. `tests/schema_conventions.rs` fails on a new
+-- `transaction_id` column.
+--
+-- Accounts and contracts are the **central FK hubs** — referenced by 6–8
 -- downstream tables each. Tens of millions of unique values at full
 -- mainnet scale. Empirical measurement (10k-ledger smoke):
 -- plain-String / LowCardinality FK columns added ~500 MB on disk vs
@@ -40,8 +50,8 @@
 --   `account_id` / `deployer_id` / etc. across the schema is
 --   `cityhash64(strkey)` of the referenced account; every
 --   `contract_id` FK column is `cityhash64(strkey)` of the
---   referenced contract; every `transaction_id` FK column is
---   `cityhash64(tx_hash_bytes)`.
+--   referenced contract; every remaining `transaction_id` column is
+--   `cityhash64(tx_hash_bytes)` (legacy, see above).
 --
 -- Hash algorithm: `cityhash-rs::cityhash_102_128` (CityHash v1.0.2
 -- 128-bit) lower 64 bits. **Not bit-equivalent to CH SQL
@@ -851,7 +861,8 @@ ORDER BY (pool_id, account_id);
 -- transactions: surrogate `id Int64` for cheap FK joins from
 -- operations_appearances, transaction_participants,
 -- soroban_invocations_appearances, nft_ownership (`soroban_events` joins by
--- `(ledger_sequence, application_order)`). ORDER BY
+-- `(ledger_sequence, application_order)`). Legacy: new tables join on the
+-- position, never on `id` (ADR 0059, task 0538). ORDER BY
 -- (ledger_sequence, application_order) for time-series scans.
 CREATE TABLE IF NOT EXISTS transactions (
     id                Int64,
