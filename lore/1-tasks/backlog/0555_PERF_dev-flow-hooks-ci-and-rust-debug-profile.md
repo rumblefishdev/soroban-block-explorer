@@ -110,3 +110,37 @@ workspace; record both.
 - [ ] **Docs updated** — N/A — CI/tooling only, no change to described architecture
 - [ ] **API types regenerated** — `Cargo.toml` changes → run
       `pnpm nx run @rumblefish/api-types:generate`; expect an empty diff
+
+## Decided (karolkow, 2026-09-23), with what was measured for it
+
+Every step is approved. Two items are new, and one reverses an earlier
+decision.
+
+- **`pre-push` runs clippy only for a push that carries Rust** (step 2).
+  Measured 2026-09-22: pushing a single `.md` took 4 min 26 s, all of it the
+  unconditional `cargo clippy --all-targets`, in a worktree whose `target/`
+  had gone stale.
+- **`pre-commit` returns before Nx starts when nothing relevant is staged**
+  (step 2). The script asks Nx three times which projects have `lint`,
+  `typecheck` and `test` _before_ it looks at the staged list.
+- **CI skips the Rust, TypeScript and API-types jobs for a docs-only push**
+  (step 1).
+- **The TypeScript job runs only the affected projects** (step 3). This
+  reverses task 0389's decision 5, "full `run-many` always". The infra
+  declared-vs-emitted test (task 0455) reads `crates/**`, so that project
+  needs an explicit dependency on those files or it stops running on a
+  Rust-only change.
+- **The Playwright browser is cached** (step 3): 47 s per run today.
+- **New — a workflow deletes a pull request's caches when it closes**, and a
+  one-off prune runs first. Measured 2026-09-23 through `gh api`: 9.73 GB of
+  the 10 GB cache is in use and 5.9 GB of it is dead — 3.8 GB belongs to two
+  pull requests merged on 2026-09-16, 2.1 GB to an older `Cargo.lock` on
+  `master`. A pull request keeps writing its own cache while it is open; the
+  cleanup at close is what reclaims the space. `develop` still needs no cache
+  of its own, because a pull request reads the default branch's.
+- **The debug profile lands in `Cargo.toml`** (step 4), and `ci.yml`'s
+  `CARGO_PROFILE_DEV_DEBUG: '1'` goes with it, so one place states it for
+  every checkout. Nothing in the repository configures a debugger — no
+  `launch.json`, no mention of `lldb` or `gdb` — and CI has built with
+  trimmed debug info since task 0389. The `debugging` profile stays for the
+  day someone wants variables.
