@@ -13,14 +13,15 @@ set -e
 # Nx for the projects they reach.
 #
 # Both check the files on disk, so they only speak for the checked-out commit.
-# A ref pointing elsewhere — another branch, a tag object — is left to CI.
+# A ref pointing elsewhere — another branch, a tag object — is not checked
+# here; CI checks it once it reaches a pull request or master.
 zero=0000000000000000000000000000000000000000
 head="$(git rev-parse HEAD)"
 rust=no
 while read -r local_ref local_sha _ remote_sha; do
   [ "$local_sha" = "$zero" ] && continue # a branch deletion
   if [ "$local_sha" != "$head" ]; then
-    echo "pre-push: $local_ref is not the checked-out commit; not checked here, CI checks it."
+    echo "pre-push: $local_ref is not the checked-out commit; not checked here (CI checks it through a pull request)."
     continue
   fi
   if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
