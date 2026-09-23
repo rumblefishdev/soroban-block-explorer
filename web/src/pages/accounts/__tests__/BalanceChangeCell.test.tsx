@@ -2,9 +2,9 @@ import type { AccountBalanceChange } from '@rumblefish/api-types';
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { renderWithProviders } from '../../test-utils.js';
+import { renderWithProviders } from '../../../test-utils.js';
 
-import { BalanceChangeCell } from './BalanceChangeCell.js';
+import { BalanceChangeCell } from '../BalanceChangeCell.js';
 
 const USDC = 'USDC-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
 const NFT_CONTRACT = 'CBHUX3RSBKAL7MJUOUA3PPW3TA65YRFLCGASJ5TNHY7HDLXCHWZQA6GR';
@@ -174,6 +174,22 @@ describe('BalanceChangeCell', () => {
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
+  it('names a symbol-less token by its contract, as its asset page does', () => {
+    // 605 of 4 463 soroban assets publish no symbol (production, 2026-09-22).
+    // Their contract IS their identity, and the asset page shows it — this row
+    // has the same string in `asset`, so it must not say something else.
+    renderWithProviders(
+      <BalanceChangeCell
+        changes={[
+          change({ asset: NFT_CONTRACT, asset_code: null, amount: '1' }),
+        ]}
+      />
+    );
+
+    expect(screen.getByText('CBHU…A6GR')).toBeInTheDocument();
+    expect(screen.queryByText('Unregistered token')).not.toBeInTheDocument();
+  });
+
   it('names an unregistered token rather than borrowing XLM’s ticker', () => {
     // A bespoke token with no on-chain symbol has no code at all. Falling
     // through to the native label would put someone else's asset on screen.
@@ -183,7 +199,7 @@ describe('BalanceChangeCell', () => {
       />
     );
 
-    expect(screen.getByText('Unnamed token')).toBeInTheDocument();
+    expect(screen.getByText('Unregistered token')).toBeInTheDocument();
     expect(screen.queryByText('XLM')).not.toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
