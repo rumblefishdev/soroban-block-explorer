@@ -358,3 +358,18 @@ into `web/dist` — the directory `vite build` empties at start. Nx runs the
 two in parallel, so a declaration landing mid-cleanup fails the build. It
 predates this task (`run-many` ran them in parallel too); the first run of
 the same commit passed.
+
+**Fixed (karolkow: fix in this pull request).** `web/tsconfig.lib.json` and
+`web/tsconfig.spec.json` write to `out-tsc/` instead of `dist/`; nothing reads
+web's declarations (it is an app), so only `vite build` writes `web/dist`
+now. `out-tsc` joins the ESLint and Prettier ignores, as `dist` is (it is
+already in `.gitignore`); without that, lint picked up a warning from a
+generated `.d.ts` and a local `format:check` failed on all 237 of them.
+Checked from a clean `web/dist`: typecheck and build in parallel, both green;
+`web/dist` holds no `.d.ts`, `web/out-tsc` 237; web lint back to its 4
+warnings, 376 tests pass, `format:check --all` clean.
+
+`libs/ui` has the same shape — typecheck and `vite build` (`emptyOutDir:
+true`) share `libs/ui/dist` — but there the declarations are what web
+compiles against, so moving them is a change to how the library is consumed,
+not a path fix. Not touched here.
