@@ -74,6 +74,32 @@ async fn search_ch_rows_decode() {
     )
     .await
     .expect("transaction/pool bucket rows must decode");
+
+    // A fee-bump's inner hash finds its transaction too (task 0580), as the
+    // transaction page already did.
+    let inner = ch
+        .query(
+            "SELECT lower(hex(assumeNotNull(inner_tx_hash))) AS hash_hex FROM transactions \
+             WHERE inner_tx_hash IS NOT NULL LIMIT 1",
+        )
+        .fetch_optional::<HashHexRow>()
+        .await
+        .expect("inner hash query must run");
+    if let Some(inner) = inner {
+        let hits = fetch_search(
+            &ch,
+            &inner.hash_hex,
+            &classifier::classify(&inner.hash_hex),
+            &all,
+            5,
+        )
+        .await
+        .expect("inner-hash search must decode");
+        assert!(
+            hits.iter().any(|(bucket, _)| bucket == "transaction"),
+            "an inner hash must find its fee-bump transaction"
+        );
+    }
 }
 
 /// Task 0485. The tier ranking is only visible in the ORDER of the rows,

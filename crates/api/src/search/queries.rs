@@ -269,7 +269,9 @@ async fn search_transactions(
 }
 
 /// `successful` + the ledger's `closed_at` of the transaction with this full
-/// hash in `ledger`, if there is one.
+/// hash in `ledger`, if there is one — as its own hash or as a fee-bump's
+/// inner hash, which the index also maps and the transaction page resolves
+/// the same way.
 async fn fetch_tx_meta(
     client: &clickhouse::Client,
     ledger: i64,
@@ -294,12 +296,13 @@ async fn fetch_tx_meta(
                  ON l.sequence = t.ledger_sequence \
          WHERE t.ledger_sequence = {ledger} \
            AND intDiv(t.ledger_sequence, {LEDGER_PARTITION_SIZE}) = {partition} \
-           AND t.hash = unhex(?) \
+           AND (t.hash = unhex(?) OR t.inner_tx_hash = unhex(?)) \
          ORDER BY t.application_order \
          LIMIT 1"
     );
     client
         .query(&sql)
+        .bind(hash_hex)
         .bind(hash_hex)
         .fetch_optional::<TxMetaRow>()
         .await
