@@ -452,7 +452,7 @@ mod tests {
             .write(&TransactionParticipantRow {
                 account_id: acct_id,
                 ledger_sequence: early,
-                transaction_id: 1,
+                application_order: 1,
             })
             .await
             .expect("write early participant");
@@ -460,7 +460,7 @@ mod tests {
             .write(&TransactionParticipantRow {
                 account_id: acct_id,
                 ledger_sequence: later,
-                transaction_id: 2,
+                application_order: 2,
             })
             .await
             .expect("write later participant");
@@ -572,7 +572,7 @@ mod tests {
             .write(&TransactionParticipantRow {
                 account_id: acct_id,
                 ledger_sequence: early,
-                transaction_id: 11,
+                application_order: 11,
             })
             .await
             .expect("write early participant");
@@ -580,7 +580,7 @@ mod tests {
             .write(&TransactionParticipantRow {
                 account_id: acct_id,
                 ledger_sequence: later,
-                transaction_id: 12,
+                application_order: 12,
             })
             .await
             .expect("write later participant");

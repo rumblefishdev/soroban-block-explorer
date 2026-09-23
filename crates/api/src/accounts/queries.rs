@@ -14,9 +14,10 @@
 //!   active over time), so the single-partition prune used by the global
 //!   `/transactions` list does NOT apply here. Instead the page is driven off
 //!   `transaction_participants` (ORDER BY `(account_id, ledger_sequence,
-//!   transaction_id)` → an account-scoped primary-key seek), then the ≤ `limit`
-//!   transaction rows are fetched by `(ledger_sequence, id) IN (keys)`
-//!   (primary-key-prefix prune per ledger, multi-partition-safe) and re-ordered
+//!   application_order)` → an account-scoped primary-key seek), then the ≤
+//!   `limit` transaction rows are fetched by `(ledger_sequence,
+//!   application_order) IN (keys)` (the full `transactions` primary key,
+//!   multi-partition-safe) and re-ordered
 //!   in Rust. No unpruned `transactions FINAL` join — that would merge the
 //!   whole 3.6B-row table (the read_rows-quota trap fixed in the global list).
 
@@ -84,7 +85,6 @@ pub struct AccountBalanceRow {
 
 #[derive(Debug)]
 pub struct AccountTxRow {
-    pub id: i64,
     pub hash: String,
     pub ledger_sequence: i64,
     pub application_order: i16,
@@ -593,7 +593,7 @@ pub async fn fetch_balances(
 #[derive(Debug, Row, Deserialize)]
 struct ParticipantKeyRow {
     ledger_sequence: i64,
-    transaction_id: i64,
+    application_order: i16,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -611,10 +611,10 @@ struct AccountTxPageChRow {
 }
 
 /// `account_id` is the surrogate from [`fetch_account`]; caller passes
-/// `limit + 1` (the peek row drives forward-continuation detection). The CH
-/// cursor keys on `(ledger_sequence, transaction_id)` — a `Pg`-variant cursor
-/// never reaches here (`list_account_transactions` rejects a cross-datasource
-/// cursor before dispatch), so the `_` arm only ever means "first page".
+/// `limit + 1` (the peek row drives forward-continuation detection). The
+/// cursor keys on the transaction's position `(ledger_sequence,
+/// application_order)` (task 0575) — `list_account_transactions` rejects any
+/// other cursor before dispatch, so the `_` arm only ever means "first page".
 pub async fn fetch_transactions(
     client: &clickhouse::Client,
     account_id: i64,
@@ -623,11 +623,11 @@ pub async fn fetch_transactions(
     sort: SortOrder,
     direction: Direction,
 ) -> Result<Vec<AccountTxRow>, clickhouse::error::Error> {
-    let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match cursor {
-        Some(TxListCursor::ChSurrogate {
+    let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i16>) = match cursor {
+        Some(TxListCursor::ChPosition {
             ledger_sequence,
-            transaction_id,
-        }) => (Some(*ledger_sequence), Some(*transaction_id)),
+            application_order,
+        }) => (Some(*ledger_sequence), Some(*application_order)),
         _ => (None, None),
     };
     let (op, order) = keyset_sql(sort, direction);
@@ -636,7 +636,7 @@ pub async fn fetch_transactions(
     // 0.15 bound-parameter path returns an empty result when `None` is bound
     // into a tuple keyset comparison — the same defect that forced the
     // transactions B/C statements to inline (a bound first page silently
-    // returned 0 rows). Values are i64 / None→NULL, so no injection surface.
+    // returned 0 rows). Values are integers / None→NULL, so no injection surface.
     let cl = cursor_ledger.map_or_else(|| "NULL".to_string(), |v| v.to_string());
     let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
 
@@ -644,17 +644,18 @@ pub async fn fetch_transactions(
     // `transaction_participants`. FINAL is dropped: on a hot account it merges
     // the account's rows across every part — measured 1.16B vs 327M rows read
     // (3.5x), and one such FINAL page is ~11% of the hourly read_rows quota.
-    // `LIMIT 1 BY (ledger_sequence, transaction_id)` collapses any rare
+    // `LIMIT 1 BY (ledger_sequence, application_order)` collapses any rare
     // re-ingest duplicate, so the page still yields `limit` distinct keys
-    // (box-verified: 21/21 distinct on the hottest account).
+    // (box-verified: 21/21 distinct on the hottest account). The key is the
+    // transaction's position, so the page comes out in execution order.
     let driver_sql = format!(
-        "SELECT tp.ledger_sequence AS ledger_sequence, tp.transaction_id AS transaction_id \
+        "SELECT tp.ledger_sequence AS ledger_sequence, tp.application_order AS application_order \
          FROM transaction_participants tp \
          WHERE tp.account_id = ? \
            AND tp.ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
-           AND ({cl} IS NULL OR (tp.ledger_sequence, tp.transaction_id) {op} ({cl}, {ct})) \
-         ORDER BY tp.ledger_sequence {order}, tp.transaction_id {order} \
-         LIMIT 1 BY tp.ledger_sequence, tp.transaction_id \
+           AND ({cl} IS NULL OR (tp.ledger_sequence, tp.application_order) {op} ({cl}, {ct})) \
+         ORDER BY tp.ledger_sequence {order}, tp.application_order {order} \
+         LIMIT 1 BY tp.ledger_sequence, tp.application_order \
          LIMIT ?"
     );
     let key_rows = client
@@ -668,15 +669,15 @@ pub async fn fetch_transactions(
         return Ok(Vec::new());
     }
 
-    let keys: Vec<(i64, i64)> = key_rows
+    let keys: Vec<(i64, i16)> = key_rows
         .iter()
-        .map(|r| (r.ledger_sequence, r.transaction_id))
+        .map(|r| (r.ledger_sequence, r.application_order))
         .collect();
 
-    // Step 2: fetch the ≤limit transaction rows by `(ledger_sequence, id) IN
-    // (keys)` (primary-key-prefix prune per ledger; spans partitions safely),
-    // concurrently with the operation_types aggregate for the same keys.
-    // Keys are `i64`, inlined directly — no injection surface.
+    // Step 2: fetch the ≤limit transaction rows by `(ledger_sequence,
+    // application_order) IN (keys)` — the full `transactions` primary key
+    // (spans partitions safely). Keys are integers, inlined directly — no
+    // injection surface.
     let in_tuples = keys
         .iter()
         .map(|(ledger, tx)| format!("({ledger},{tx})"))
@@ -704,15 +705,13 @@ pub async fn fetch_transactions(
             l.closed_at AS created_at \
          FROM transactions t \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-         WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
+         WHERE (t.ledger_sequence, t.application_order) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions})"
     );
-    let (page_rows, aggregates) = tokio::join!(
-        client.query(&page_sql).fetch_all::<AccountTxPageChRow>(),
-        ch::fetch_tx_list_aggregates(client, &keys),
-    );
-    let page_rows = page_rows?;
-    let aggregates = aggregates?;
+    let page_rows = client
+        .query(&page_sql)
+        .fetch_all::<AccountTxPageChRow>()
+        .await?;
 
     // Step 2b: this account's per-asset balance change for the same page
     // (task 0540). Keyed on `(ledger_sequence, application_order)` — the
@@ -727,31 +726,39 @@ pub async fn fetch_transactions(
         })
         .collect();
 
+    // operation_types still come from `operations_appearances`, keyed by the
+    // surrogate until task 0538 reaches it — so they key off the page rows.
+    let agg_keys: Vec<(i64, i64)> = page_rows
+        .iter()
+        .map(|r| (r.ledger_sequence, r.id))
+        .collect();
+
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … ON src.id = t.source_id` (task 0345).
-    // Independent of the balance-change read — overlap the round-trips.
-    let (accounts, mut flows) = tokio::try_join!(
+    // Independent of each other — overlap the round-trips.
+    let (accounts, mut flows, aggregates) = tokio::try_join!(
         resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()),
         fetch_balance_changes(client, account_id, &flow_keys),
+        ch::fetch_tx_list_aggregates(client, &agg_keys),
     )?;
 
-    // Step 3: index page rows by id (a re-ingested tx collapses — values are
-    // immutable), then emit in the driver's keyset order, merging
+    // Step 3: index page rows by position (a re-ingested tx collapses — values
+    // are immutable), then emit in the driver's keyset order, merging
     // operation_types (the only aggregate the item carries).
-    let mut by_id: HashMap<i64, AccountTxPageChRow> = HashMap::with_capacity(page_rows.len());
+    let mut by_position: HashMap<(i64, i16), AccountTxPageChRow> =
+        HashMap::with_capacity(page_rows.len());
     for row in page_rows {
-        by_id.insert(row.id, row);
+        by_position.insert((row.ledger_sequence, row.application_order), row);
     }
 
     let mut out = Vec::with_capacity(keys.len());
-    for (_, tx_id) in &keys {
-        let Some(row) = by_id.remove(tx_id) else {
+    for key in &keys {
+        let Some(row) = by_position.remove(key) else {
             continue;
         };
-        let agg = aggregates.get(tx_id);
+        let agg = aggregates.get(&row.id);
         let operation_types = agg.map(|a| a.operation_types.clone()).unwrap_or_default();
         out.push(AccountTxRow {
-            id: row.id,
             hash: row.hash,
             ledger_sequence: row.ledger_sequence,
             application_order: row.application_order,
@@ -777,5 +784,7 @@ pub async fn fetch_transactions(
 }
 
 #[cfg(test)]
-#[path = "queries_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod decode_smoke;

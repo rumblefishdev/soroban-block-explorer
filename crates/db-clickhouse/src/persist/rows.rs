@@ -448,12 +448,13 @@ pub struct OperationAppearanceRow {
     pub ledger_sequence: i64,
 }
 
-/// `transaction_participants` — fact.
+/// `transaction_participants` — fact. The transaction is located by its
+/// position in the ledger (ADR 0059, task 0575), not the hash surrogate.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct TransactionParticipantRow {
     pub account_id: i64,
     pub ledger_sequence: i64,
-    pub transaction_id: i64,
+    pub application_order: i16,
 }
 
 /// `operation_asset_appearances` — fact, the per-(asset, transaction) presence
@@ -461,12 +462,13 @@ pub struct TransactionParticipantRow {
 /// in place of `account_id` → a per-asset activity page is a PK-prefix seek.
 /// Native XLM is a first-class key (`ids::asset_id(0,"",0,0)`), never an empty
 /// sentinel. Pure presence: which assets a transaction touched; duplicate
-/// (asset, tx) rows collapse in the RMT.
+/// (asset, tx) rows collapse in the RMT. Keyed by the transaction's position
+/// (ADR 0059, task 0575).
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
 pub struct OperationAssetAppearanceRow {
     pub asset_id: i64,
     pub ledger_sequence: i64,
-    pub transaction_id: i64,
+    pub application_order: i16,
 }
 
 /// `operation_pools` — fact, the per-(pool, transaction) presence index

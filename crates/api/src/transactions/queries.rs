@@ -871,21 +871,22 @@ pub async fn fetch_operations(
         .collect())
 }
 
+/// The transaction's participants, located by its position (task 0575).
 pub async fn fetch_participants(
     client: &clickhouse::Client,
-    transaction_id: i64,
     ledger_sequence: i64,
+    application_order: i16,
 ) -> Result<Vec<String>, clickhouse::error::Error> {
     let raw = client
         .query(
             "SELECT tp.account_id AS id \
              FROM transaction_participants tp FINAL \
-             WHERE tp.transaction_id = ? \
-               AND tp.ledger_sequence = ? \
+             WHERE tp.ledger_sequence = ? \
+               AND tp.application_order = ? \
                AND intDiv(tp.ledger_sequence, 500000) = intDiv(?, 500000)",
         )
-        .bind(transaction_id)
         .bind(ledger_sequence)
+        .bind(application_order)
         .bind(ledger_sequence)
         .fetch_all::<SurrogateIdRow>()
         .await?;

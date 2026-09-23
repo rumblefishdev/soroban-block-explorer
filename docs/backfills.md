@@ -1108,6 +1108,35 @@ merges them). The id format and its sentinels:
 that statement run over the same range must return exactly the writer's rows
 (`EXCEPT` both ways is empty) — the one check that the SQL and the Rust agree.
 
+## Presence tables by transaction position (task 0575) — in-DB, per 50k-ledger slice
+
+`transaction_participants` and `operation_asset_appearances` are rebuilt keyed
+by the transaction's position `(ledger_sequence, application_order)` instead of
+the `transaction_id` surrogate. Each gets a staging copy, created from the
+table's definition in `init.sql` under the name `<table>_staging_position`,
+and filled from what ClickHouse already holds — no S3, no re-parse: the old
+row's surrogate is joined to `transactions` for the position.
+
+- **Statement and gate:**
+  [`fill_presence.sql`](../lore/1-tasks/active/0575_REFACTOR_presence-tables-canonical-position/notes/fill_presence.sql),
+  [`gate_presence.sql`](../lore/1-tasks/active/0575_REFACTOR_presence-tables-canonical-position/notes/gate_presence.sql);
+  the loop that runs both per slice and stops at the first mismatch:
+  [`fill_presence.zsh`](../lore/1-tasks/active/0575_REFACTOR_presence-tables-canonical-position/notes/fill_presence.zsh).
+- **Slice width 50,000 ledgers.** The gate's `uniqExact` over a 100,000-ledger
+  slice of `transaction_participants` exceeds the read profile's 3.73 GiB
+  memory cap. The account- / asset-leading key does not prune on the ledger, so
+  a slice reads more than its rows: ~109 M / ~51 M rows for the fill, ~93 M /
+  ~35 M for the gate's old side (measured 2026-09-23).
+- **Gate per slice:** `uniqExact` of the old key equals `uniqExact` of the new
+  key. The fill uses `INNER JOIN`, so a row without its transaction would show
+  up as a short new count; 0 such rows were measured on partition 128 of both
+  tables.
+- **The indexer keeps running** while whole partitions below the head are
+  filled — it writes the old tables, and the staging copies are static. The
+  head's partition and the tail are filled with an explicit range after the
+  indexer is paused, inside the window ([deployment.md](./deployment.md),
+  "Presence tables by position").
+
 ## Superseded — do not follow
 
 - [`lore/3-wiki/backfill-execution-plan.md`](../lore/3-wiki/backfill-execution-plan.md)
