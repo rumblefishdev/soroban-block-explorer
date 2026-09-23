@@ -402,6 +402,46 @@ Frontend **content** is separate: `deploy-production-web`
   may deploy Compute — an earlier writer still names `transaction_id`. The hold
   lasts until a `production-*` tag carries the change. Remove this item then.
 
+- **Hash index by prefix (task 0580): no Compute deploy from `develop`
+  between the merge and the window.** The task-0580 writer names
+  `hash_prefix` instead of `hash` in `transaction_hash_index`, and its API
+  reads the same. Against the table as it stands before the window, the
+  clickhouse-rs 0.15 client refuses the insert on every ledger (the 0310
+  outage class); the old API would find nothing by hash after it. The key
+  changes, so only a swap moves it. Order:
+
+  0. **The staging table exists and every whole partition below the head is
+     filled and gated** ([backfills.md](./backfills.md), "Hash index by
+     prefix"). Created from `init.sql` under the staging name — extract, do
+     not retype:
+     ```bash
+     awk "/CREATE TABLE IF NOT EXISTS transaction_hash_index \\(/,/^ORDER BY/" crates/db-clickhouse/schema/init.sql \
+       | sed "s/EXISTS transaction_hash_index (/EXISTS transaction_hash_index_staging_prefix (/"
+     ```
+  1. **Pause durably:** `indexerLambdaConcurrency = 0`, deployed from a
+     checkout of the commit production runs — read the Lambda's
+     `LastModified` and the task that deployed it; it need not be the last
+     `production-*` tag.
+  2. **Fill the tail** from the first unfilled ledger up to the paused head
+     (`A-B` with `B = max(sequence) + 1` from `ledgers`), gated.
+  3. **Deploy the new code, still at concurrency 0.**
+  4. **Swap:**
+     `EXCHANGE TABLES transaction_hash_index AND transaction_hash_index_staging_prefix`.
+     Between step 3 and this step search by hash and the transaction page
+     answer "not found"; keep it short.
+  5. **Resume:** concurrency back to `1`, then deploy Compute. Check that
+     `ledgers` advances, the DLQ stays empty, and a hash from a ledger the new
+     writer added — outer and fee-bump inner — resolves on search and on the
+     transaction page.
+  6. **Drop the old index** — now under the staging name — only after the
+     checks: `DROP TABLE transaction_hash_index_staging_prefix SETTINGS
+max_table_size_to_drop = 0`. Until then, rollback is the reverse
+     `EXCHANGE` plus a Compute deploy of the previous code.
+
+  **After the swap the hold turns around:** only code that carries task 0580
+  may deploy Compute. The hold lasts until a `production-*` tag carries the
+  change. Remove this item then.
+
 - **A SPA build without the Turnstile site key takes production down for
   users.** With `enableAuthLayer: true` the API rejects unauthenticated
   requests; a bundle built without `VITE_TURNSTILE_SITE_KEY` ships an

@@ -1137,6 +1137,27 @@ row's surrogate is joined to `transactions` for the position.
   indexer is paused, inside the window ([deployment.md](./deployment.md),
   "Presence tables by position").
 
+## Hash index by prefix (task 0580) — in-DB, per 50k-ledger slice
+
+`transaction_hash_index` is rebuilt keyed by the first 8 bytes of the hash,
+`(hash_prefix, ledger_sequence)`, instead of the full 32-byte hash. The
+staging copy is created from the table's definition in `init.sql` under the
+name `transaction_hash_index_staging_prefix` and filled from the old index
+itself — no join, no S3: the prefix is computed from the stored hash.
+
+- **Statement and gate:**
+  [`fill_hash_prefix.sql`](../lore/1-tasks/active/0580_REFACTOR_hash-index-by-prefix/notes/fill_hash_prefix.sql),
+  [`gate_hash_prefix.sql`](../lore/1-tasks/active/0580_REFACTOR_hash-index-by-prefix/notes/gate_hash_prefix.sql);
+  the loop that runs both per slice and stops at the first mismatch:
+  [`fill_hash_prefix.zsh`](../lore/1-tasks/active/0580_REFACTOR_hash-index-by-prefix/notes/fill_hash_prefix.zsh).
+- **Gate per slice:** distinct `(prefix, ledger)` of the old index, computed
+  from its full hash, equals distinct `(hash_prefix, ledger_sequence)` of the
+  copy — counted per quarter slice, one query each, as task 0575 learned. Two
+  hashes sharing a prefix in one ledger count once on both sides.
+- **The indexer keeps running** while whole partitions below the head are
+  filled; the head's partition and the tail are filled with an explicit range
+  after the pause ([deployment.md](./deployment.md), "Hash index by prefix").
+
 ## Superseded — do not follow
 
 - [`lore/3-wiki/backfill-execution-plan.md`](../lore/3-wiki/backfill-execution-plan.md)

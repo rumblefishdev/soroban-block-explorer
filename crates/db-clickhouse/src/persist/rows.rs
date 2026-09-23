@@ -419,11 +419,26 @@ pub struct TransactionRow {
 }
 
 /// `transaction_hash_index` — fact: transaction hash (outer or fee-bump inner)
-/// → ledger, read by search and the transaction page.
+/// → ledger, read by search and the transaction page. Keyed by an 8-byte
+/// prefix of the hash (task 0580); the reader checks the full hash in
+/// `transactions`.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct TransactionHashIndexRow {
-    pub hash: [u8; 32],
+    pub hash_prefix: u64,
     pub ledger_sequence: i64,
+}
+
+impl TransactionHashIndexRow {
+    /// `hash_prefix` is the little-endian `u64` of the hash's first 8 bytes —
+    /// what ClickHouse computes as `reinterpretAsUInt64(substring(hash, 1, 8))`.
+    pub fn new(hash: &[u8; 32], ledger_sequence: i64) -> Self {
+        let mut prefix = [0u8; 8];
+        prefix.copy_from_slice(&hash[..8]);
+        Self {
+            hash_prefix: u64::from_le_bytes(prefix),
+            ledger_sequence,
+        }
+    }
 }
 
 /// `operations_appearances` — fact, no surrogate id. ORDER BY

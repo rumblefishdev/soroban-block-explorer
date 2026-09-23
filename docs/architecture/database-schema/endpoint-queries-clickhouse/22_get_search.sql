@@ -42,7 +42,8 @@
 --   • Asset issuer StrKey is resolved by a bloom-pruned `accounts WHERE id IN
 --     (page ids)` key-seek (`idx_acc_id`), NEVER `LEFT JOIN accounts` — the
 --     full-table hash-side build OOMs (CH Code 241, the 0317 trap).
---   • Transaction lookup is a `transaction_hash_index` PK seek.
+--   • Transaction lookup is a `transaction_hash_index` seek on the hash's
+--     8-byte prefix; every candidate ledger is checked for the full hash.
 --   • All Replacing state tables read FINAL (or argMax for the enrichment
 --     side-tables); `nullIf(...)` maps a JOIN miss to NULL (api_reader runs
 --     readonly=1 → no `SETTINGS join_use_nulls`).
@@ -50,9 +51,12 @@
 -- The per-bucket reference queries below mirror the Rust implementation 1:1.
 
 -- ── transaction bucket (hash_bytes mode) ────────────────────────────────────
--- Step 1: hash → ledger_sequence (immutable mapping, no FINAL).
-SELECT ledger_sequence FROM transaction_hash_index
-WHERE hash = unhex(:q_hex) LIMIT 1;
+-- Step 1: hash → candidate ledgers (immutable mapping, no FINAL; more than one
+-- only when two hashes share the 8-byte prefix — task 0580).
+SELECT DISTINCT ledger_sequence FROM transaction_hash_index
+WHERE hash_prefix = reinterpretAsUInt64(substring(unhex(:q_hex), 1, 8))
+ORDER BY ledger_sequence DESC;
+-- Step 2 runs per candidate, newest first, until one carries the full hash.
 -- Step 2: successful + ledger closed_at (PG `tx_hits` enrichment). Single-row
 -- seek: leading-PK `ledger_sequence` (one ledger is one granule) + partition prune.
 -- closed_at via a BOUNDED `ledgers WHERE sequence = :ledger` sub-select (PK point

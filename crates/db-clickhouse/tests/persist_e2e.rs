@@ -55,6 +55,9 @@ fn fixture_ledger() -> ExtractedLedger {
 
 fn fixture_tx() -> ExtractedTransaction {
     let mut bytes = vec![0u8; 32];
+    // A distinct first 8 bytes, so the index prefix check below pins the byte
+    // order, not a zero (task 0580).
+    bytes[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
     bytes[31] = 0x42;
     ExtractedTransaction {
         hash: hex::encode(&bytes),
@@ -193,6 +196,27 @@ async fn persist_ledger_clickhouse_writes_and_dedupes() {
     assert!(
         acct_rows >= 1,
         "source account hub row written, got {acct_rows}"
+    );
+
+    // The hash index row the writer computed in Rust is the one ClickHouse
+    // finds from the full hash — the readers' `reinterpretAsUInt64(substring(
+    // …, 1, 8))` (task 0580).
+    let prefix: u64 = cl
+        .query(
+            "SELECT hash_prefix FROM transaction_hash_index \
+             WHERE ledger_sequence = ? \
+               AND hash_prefix = (SELECT reinterpretAsUInt64(substring(hash, 1, 8)) \
+                                  FROM transactions WHERE ledger_sequence = ? LIMIT 1) \
+             LIMIT 1",
+        )
+        .bind(E2E_LEDGER)
+        .bind(E2E_LEDGER)
+        .fetch_one()
+        .await
+        .expect("hash index row found by the SQL prefix of the transaction's hash");
+    assert_eq!(
+        prefix, 0x0807_0605_0403_0201,
+        "little-endian u64 of bytes 0..8"
     );
 
     // ---- replay: re-deliver the same S3 event (same ledger) ----

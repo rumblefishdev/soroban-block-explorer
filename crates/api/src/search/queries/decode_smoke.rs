@@ -57,12 +57,12 @@ async fn search_ch_rows_decode() {
 
     // Bootstrap a real tx hash so the transaction + pool buckets decode.
     let boot = ch
-        .query("SELECT lower(hex(hash)) AS hash_hex FROM transaction_hash_index LIMIT 1")
+        .query("SELECT lower(hex(hash)) AS hash_hex FROM transactions LIMIT 1")
         .fetch_optional::<HashHexRow>()
         .await
         .expect("bootstrap hash query must run");
     let Some(boot) = boot else {
-        eprintln!("transaction_hash_index empty — text-mode decode ok, skipping hash mode");
+        eprintln!("transactions empty — text-mode decode ok, skipping hash mode");
         return;
     };
     fetch_search(

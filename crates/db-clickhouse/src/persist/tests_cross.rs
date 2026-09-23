@@ -306,7 +306,7 @@ fn column_order_transactions() {
 fn column_order_transaction_hash_index() {
     assert_columns::<TransactionHashIndexRow>(
         "transaction_hash_index",
-        &["hash", "ledger_sequence"],
+        &["hash_prefix", "ledger_sequence"],
     );
 }
 
@@ -577,8 +577,10 @@ fn prepare_surrogate_id_fk_consistency() {
 fn prepare_fee_bump_indexes_inner_hash() {
     let ledger = synthetic_ledger();
     let mut tx = synthetic_tx(0x10);
+    // The inner hash differs in its first byte, so the two index rows carry
+    // different 8-byte prefixes (task 0580).
     let mut inner = vec![0u8; 32];
-    inner[31] = 0x20;
+    inner[0] = 0x20;
     tx.inner_tx_hash = Some(hex::encode(&inner));
 
     let staged = stage::prepare(
@@ -602,22 +604,14 @@ fn prepare_fee_bump_indexes_inner_hash() {
     // Two index rows: outer + inner, both → the tx's ledger.
     assert_eq!(staged.hash_index_rows.len(), 2);
     let seq = staged.transaction_rows[0].ledger_sequence;
-    let mut outer = [0u8; 32];
-    outer[31] = 0x10;
-    assert!(
-        staged
-            .hash_index_rows
-            .iter()
-            .any(|r| r.hash == outer && r.ledger_sequence == seq)
-    );
-    let mut inner_bytes = [0u8; 32];
-    inner_bytes[31] = 0x20;
-    assert!(
-        staged
-            .hash_index_rows
-            .iter()
-            .any(|r| r.hash == inner_bytes && r.ledger_sequence == seq)
-    );
+    let keys: Vec<(u64, i64)> = staged
+        .hash_index_rows
+        .iter()
+        .map(|r| (r.hash_prefix, r.ledger_sequence))
+        .collect();
+    // Outer hash 00…0010: prefix bytes all zero. Inner 20 00…: little-endian
+    // u64 of `20 00 00 00 00 00 00 00`.
+    assert_eq!(keys, vec![(0, seq), (0x20, seq)]);
 }
 
 #[test]

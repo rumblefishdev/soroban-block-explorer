@@ -886,13 +886,27 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, application_order);
 
+-- transaction_hash_index: transaction hash → ledger, for every outer hash and
+-- every fee-bump inner hash. Keyed by the first 8 bytes of the hash, not the
+-- whole 32: a hash is random, so the full key compressed at ratio 1.0 and was
+-- 154 GiB of a 175 GiB table (2026-09-23). A prefix can name more than one
+-- ledger (~0.7 shared prefixes expected over 5 bn hashes), so a reader takes
+-- EVERY ledger with the prefix and `transactions` decides by the full hash
+-- (task 0580). `hash_prefix` is the little-endian `u64` of bytes 0..8 —
+-- `reinterpretAsUInt64(substring(hash, 1, 8))` in SQL,
+-- `TransactionHashIndexRow::new` in Rust. `T64` on the ledger: behind a
+-- random prefix it has no order to delta, only a narrow range. The ledger is
+-- in the sort key on purpose: the ReplacingMergeTree collapses rows with equal
+-- keys, and keyed by the prefix alone two hashes sharing it in different
+-- ledgers would lose one ledger — a false "not found". Two sharing it in the
+-- same ledger collapse harmlessly: the ledger is the answer either way.
 CREATE TABLE IF NOT EXISTS transaction_hash_index (
-    hash            FixedString(32),
-    ledger_sequence Int64
+    hash_prefix     UInt64,
+    ledger_sequence Int64 CODEC(T64, ZSTD(1))
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (hash);
+ORDER BY (hash_prefix, ledger_sequence);
 
 -- `amount` is a **fold count** of identity-tuple duplicates (task 0163 /
 -- ADR 0033 PG-side convention; CH inherits same semantic): the number of

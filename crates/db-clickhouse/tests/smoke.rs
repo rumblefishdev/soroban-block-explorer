@@ -182,11 +182,11 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- transaction_hash_index (append-only fact, source for Dictionary) -----
+    // ----- transaction_hash_index (append-only fact, keyed by a hash prefix) -----
     client
         .query(
-            "INSERT INTO transaction_hash_index (hash, ledger_sequence) \
-             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000aa'), ?)",
+            "INSERT INTO transaction_hash_index (hash_prefix, ledger_sequence) \
+             VALUES (reinterpretAsUInt64(substring(unhex('00000000000000000000000000000000000000000000000000000000000000aa'), 1, 8)), ?)",
         )
         .bind(SMOKE_LEDGER)
         .execute()
@@ -197,6 +197,32 @@ async fn smoke_inserts_and_reads_each_table() {
         "transaction_hash_index",
         &format!("ledger_sequence = {SMOKE_LEDGER}"),
         1,
+    )
+    .await;
+    // Two hashes sharing the 8-byte prefix in different ledgers must both
+    // survive a merge — the ledger is part of the sort key (task 0580).
+    client
+        .query(
+            "INSERT INTO transaction_hash_index (hash_prefix, ledger_sequence) \
+             VALUES (reinterpretAsUInt64(substring(unhex('00000000000000000000000000000000000000000000000000000000000000bb'), 1, 8)), ?)",
+        )
+        .bind(SMOKE_LEDGER - 1)
+        .execute()
+        .await
+        .expect("insert a second ledger under the same prefix");
+    client
+        .query("OPTIMIZE TABLE transaction_hash_index FINAL")
+        .execute()
+        .await
+        .expect("merge transaction_hash_index");
+    assert_count(
+        &client,
+        "transaction_hash_index",
+        &format!(
+            "hash_prefix = 0 AND ledger_sequence IN ({SMOKE_LEDGER}, {})",
+            SMOKE_LEDGER - 1
+        ),
+        2,
     )
     .await;
 
@@ -550,7 +576,7 @@ async fn cleanup(client: &clickhouse::Client) {
         format!("ALTER TABLE soroban_contracts DELETE WHERE id = {l}"),
         "ALTER TABLE wasm_interface_metadata DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {l}"),
-        format!("ALTER TABLE transaction_hash_index DELETE WHERE ledger_sequence = {l}"),
+        format!("ALTER TABLE transaction_hash_index DELETE WHERE ledger_sequence IN ({l}, {l} - 1)"),
         format!("ALTER TABLE operations_appearances DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {l}"),

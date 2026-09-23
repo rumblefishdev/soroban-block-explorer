@@ -111,7 +111,8 @@ FORMAT Vertical;
 -- trade (see header).
 --
 -- Uses the dedicated `transaction_hash_index` table for a PK lookup on
--- `hash` (ORDER BY hash → μs), then propagates the resolved
+-- the hash's 8-byte prefix (task 0580; the `t.hash` filter below keeps the
+-- full-hash check), then propagates the resolved
 -- `ledger_sequence` as a scalar constant. That partition-prunes
 -- `soroban_events` (`PARTITION BY intDiv(ledger_sequence, 500000)`) to
 -- a single 500k-ledger part, and `t.hash = unhex(...)` compares the raw
@@ -127,7 +128,7 @@ FORMAT Vertical;
 WITH tx AS (
     SELECT ledger_sequence
     FROM   transaction_hash_index FINAL
-    WHERE  hash = unhex('6cad2d49962ae5962722f1f90d4fd11f9e04bd644ad4873752ae1416fddd4740')
+    WHERE  hash_prefix = reinterpretAsUInt64(substring(unhex('6cad2d49962ae5962722f1f90d4fd11f9e04bd644ad4873752ae1416fddd4740'), 1, 8))
     LIMIT  1
 )
 SELECT e.transaction_index,

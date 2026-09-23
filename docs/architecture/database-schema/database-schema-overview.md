@@ -104,7 +104,7 @@ Backbone timeline:
 
 - `ledgers` — ledger-close timeline (anchor)
 - `transactions` — primary explorer activity entity (partitioned by `created_at`)
-- `transaction_hash_index` — unpartitioned hash-to-ledger lookup for direct detail routes
+- `transaction_hash_index` — hash (8-byte prefix) → ledger lookup for the transaction page and search
 - `operations_appearances` — transaction-scoped appearance index for classic and
   mixed transaction inspection (partitioned; per-op detail recovered from XDR on
   demand per task 0163)
@@ -419,24 +419,31 @@ Design notes:
 
 ```sql
 CREATE TABLE transaction_hash_index (
-    hash            BYTEA       PRIMARY KEY,         -- 32-byte tx hash (ADR 0024)
-    ledger_sequence BIGINT      NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL,
-    CONSTRAINT ck_thi_hash_len CHECK (octet_length(hash) = 32)
-);
+    hash_prefix     UInt64,                     -- bytes 0..8 of the hash, little-endian
+    ledger_sequence Int64 CODEC(T64, ZSTD(1))
+) ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (hash_prefix, ledger_sequence);
 ```
 
 Purpose:
 
-- resolve a transaction hash to its `(ledger_sequence, created_at)` coordinates so
-  the partitioned `transactions` row can be located with a partition-pruned lookup
-- act as the uniqueness enforcement point for transaction hashes (partitioned parent
-  cannot carry a hash-only `UNIQUE` constraint)
+- resolve a transaction hash — the outer hash, or a fee-bump's inner hash — to
+  the ledger that holds it, so `transactions` is read with a partition-pruned
+  seek (`ledger_sequence` leads its key)
 
 Design notes:
 
-- small, unpartitioned, hot-cached — every `/transactions/:hash` lookup goes through
-  it before touching the partitioned parent
+- **keyed by an 8-byte prefix, not the 32-byte hash** (task 0580): a hash is
+  random, so the full key compressed at ratio 1.0 and was 154 GiB of a
+  175 GiB table (2026-09-23); the row went from 36.24 to 10.22 B
+- a prefix can name more than one ledger (~0.7 shared prefixes expected over
+  5 bn hashes), so the readers take **every** ledger with the prefix and
+  `transactions` decides by the full hash (`hash OR inner_tx_hash` on the
+  transaction page); the ledger is in the sort key so the ReplacingMergeTree
+  never collapses two such ledgers into one
+- the prefix is `reinterpretAsUInt64(substring(hash, 1, 8))` in SQL and
+  `TransactionHashIndexRow::new` in the writer
 
 ### 4.4 Operations — Appearance Index
 
@@ -1968,8 +1975,8 @@ It carries the table-by-table logical shape described above, with five
 deliberate divergences from the former PG schema (full-content `soroban_events`
 replacing `soroban_events_appearances`, `created_at` dropped from every table
 except `ledgers`, `nfts.metadata` dropped, `_sqlx_migrations` replaced by an
-idempotent `init.sql`, `transaction_hash_index` also exposed as a `Dictionary`
-for hot point lookups).
+idempotent `init.sql`; `transaction_hash_index` keyed by an 8-byte hash
+prefix since task 0580).
 
 The store lives in `crates/db-clickhouse/` (schema `init.sql`) and runs as the
 `clickhouse` service in `docker-compose.yml`. The full physical schema reference,

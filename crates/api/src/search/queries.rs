@@ -213,12 +213,14 @@ struct TxMetaRow {
     created_at_ms: i64,
 }
 
-/// Fires only for a hash-shaped query. Step 1 resolves `hash → ledger_sequence`
-/// off `transaction_hash_index` (ORDER BY `hash`; immutable mapping, no FINAL).
-/// Step 2 reads `successful` + the ledger `closed_at` via a single-partition,
-/// single-row seek on `transactions` (`ledger_sequence` leading PK — one
-/// ledger is one granule) joined to `ledgers` — the PG `tx_hits`
-/// enrichment, at the cost of two point-seeks.
+/// Fires only for a hash-shaped query. Step 1 takes the candidate ledgers off
+/// `transaction_hash_index` (ORDER BY the hash's 8-byte prefix; immutable
+/// mapping, no FINAL — more than one only when two hashes share the prefix,
+/// task 0580). Step 2, per candidate until one carries the full hash, reads
+/// `successful` + the ledger `closed_at` via a single-partition, single-row
+/// seek on `transactions` (`ledger_sequence` leading PK — one ledger is one
+/// granule) joined to `ledgers` — the PG `tx_hits` enrichment, at the cost of
+/// two point-seeks.
 async fn search_transactions(
     client: &clickhouse::Client,
     classified: &Classified,
@@ -232,19 +234,47 @@ async fn search_transactions(
     };
     let hash_hex = hex::encode(bytes);
 
-    let ledger = client
+    let ledgers = client
         .query(
-            "SELECT ledger_sequence FROM transaction_hash_index \
-             WHERE hash = unhex(?) LIMIT 1",
+            "SELECT DISTINCT ledger_sequence FROM transaction_hash_index \
+             WHERE hash_prefix = reinterpretAsUInt64(substring(unhex(?), 1, 8)) \
+             ORDER BY ledger_sequence DESC",
         )
         .bind(&hash_hex)
-        .fetch_optional::<LedgerSeqRow>()
-        .await?
-        .map(|r| r.ledger_sequence);
-    let Some(ledger) = ledger else {
-        return Ok(Vec::new());
-    };
+        .fetch_all::<LedgerSeqRow>()
+        .await?;
+    for LedgerSeqRow {
+        ledger_sequence: ledger,
+    } in ledgers
+    {
+        if let Some(meta) = fetch_tx_meta(client, ledger, &hash_hex).await? {
+            return Ok(vec![(
+                "transaction".to_string(),
+                SearchHit {
+                    entity_type: EntityType::Transaction,
+                    identifier: hash_hex,
+                    label: String::new(),
+                    route_token: None,
+                    successful: Some(meta.successful),
+                    last_activity_at: Some(millis_to_utc(meta.created_at_ms)),
+                    contract_id: None,
+                    token_id: None,
+                },
+            )]);
+        }
+    }
+    // No candidate, or an index row whose transaction row is missing — no hit
+    // rather than a half-populated redirect target.
+    Ok(Vec::new())
+}
 
+/// `successful` + the ledger's `closed_at` of the transaction with this full
+/// hash in `ledger`, if there is one.
+async fn fetch_tx_meta(
+    client: &clickhouse::Client,
+    ledger: i64,
+    hash_hex: &str,
+) -> Result<Option<TxMetaRow>, clickhouse::error::Error> {
     // `ledger` is from our own index seek (i64), inlined for partition pruning —
     // no injection surface. `hash` is bound. `successful` is immutable across
     // re-ingest, so `LIMIT 1` (no FINAL) is correct. `closed_at` is resolved via
@@ -268,30 +298,11 @@ async fn search_transactions(
          ORDER BY t.application_order \
          LIMIT 1"
     );
-    let Some(meta) = client
+    client
         .query(&sql)
-        .bind(&hash_hex)
+        .bind(hash_hex)
         .fetch_optional::<TxMetaRow>()
-        .await?
-    else {
-        // Index row present but the transaction row is missing — treat as no
-        // hit rather than emit a half-populated redirect target.
-        return Ok(Vec::new());
-    };
-
-    Ok(vec![(
-        "transaction".to_string(),
-        SearchHit {
-            entity_type: EntityType::Transaction,
-            identifier: hash_hex,
-            label: String::new(),
-            route_token: None,
-            successful: Some(meta.successful),
-            last_activity_at: Some(millis_to_utc(meta.created_at_ms)),
-            contract_id: None,
-            token_id: None,
-        },
-    )])
+        .await
 }
 
 // ---------------------------------------------------------------------------
