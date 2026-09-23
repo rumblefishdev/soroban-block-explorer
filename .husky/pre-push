@@ -6,22 +6,24 @@ own="$(git rev-parse --show-toplevel)/.husky/$(basename "$0")"
 
 set -e
 
-# Clippy only when the push carries Rust. Git hands the pushed refs on stdin,
-# one "<local ref> <local sha> <remote ref> <remote sha>" per line. A new
-# branch is compared from where it left develop; anything git cannot diff
-# counts as Rust.
+# Git hands the pushed refs on stdin, one "<local ref> <local sha> <remote ref>
+# <remote sha>" per line. The commits a ref adds run from what the remote has
+# to the local sha; a new branch, or a remote commit this clone lacks, counts
+# from where the branch left develop. Clippy runs when any of them touch Rust,
+# Nx for the projects they reach.
 zero=0000000000000000000000000000000000000000
 rust=no
 while read -r _ local_sha _ remote_sha; do
-  [ "$local_sha" = "$zero" ] && continue
-  if [ "$remote_sha" = "$zero" ]; then
-    remote_sha="$(git merge-base origin/develop "$local_sha" 2>/dev/null)" || { rust=yes; break; }
+  [ "$local_sha" = "$zero" ] && continue # a branch deletion
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    remote_sha="$(git merge-base origin/develop "$local_sha")"
   fi
-  changed="$(git diff --name-only "$remote_sha" "$local_sha" -- crates Cargo.toml Cargo.lock rust-toolchain.toml 2>/dev/null)" || { rust=yes; break; }
-  if [ -n "$changed" ]; then rust=yes; break; fi
+  if [ -n "$(git diff --name-only "$remote_sha" "$local_sha" -- crates Cargo.toml Cargo.lock rust-toolchain.toml)" ]; then
+    rust=yes
+  fi
+  pnpm exec nx affected -t lint typecheck test --base="$remote_sha" --head="$local_sha" --outputStyle=static </dev/null
 done
 
 if [ "$rust" = yes ]; then
   SQLX_OFFLINE=true cargo clippy --all-targets -- -D warnings
 fi
-pnpm run -s verify:push
