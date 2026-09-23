@@ -28,10 +28,10 @@ Every file must:
 - Read against a **canonical ADR 0044 table** (`crates/db-clickhouse/schema/init.sql`); never against the local `ch-mirror` exploration container — its schema differs deliberately
 - Use `FINAL` on every `ReplacingMergeTree` read (see [§FINAL discipline](#final-discipline))
 - Partition-prune via `intDiv(ledger_sequence, 500000) BETWEEN ...` on the 8 partitioned tables wherever the input gives a ledger range
-- Resolve `transactions.hash → ledger_sequence` via the `transaction_hash_dict` Dictionary (`dictGet`), not by scanning `transaction_hash_index` directly
+- Resolve `transactions.hash → ledger_sequence` with a `transaction_hash_index` PK seek (`WHERE hash = …`), never by scanning `transactions`
 - JOIN `ledgers` for `closed_at` display — per ADR 0044 §5.2 only `ledgers` retains a timestamp column; all other fact tables dropped `created_at`
 - Use keyset (cursor) pagination — never `OFFSET`, never full-history `COUNT(*)`
-- Declare expected indexes + Dictionaries in the header
+- Declare expected indexes in the header
 - Compare enum columns to `Int16` literals in `WHERE` (enum decoding happens in the API layer — CH has no `*_name(smallint)` SQL helper)
 
 ## Header
@@ -48,7 +48,7 @@ Every file must:
 --   ...
 -- Indexes:      <PK / Dictionary / bloom filter list>
 -- CH Engine:    <ReplacingMergeTree(version_col) | MergeTree | Dictionary>
--- CH Pattern:   <dictGet / FINAL / intDiv prune / LEAD window / scalar subquery>
+-- CH Pattern:   <FINAL / intDiv prune / LEAD window / scalar subquery>
 -- ADR 0044 §:   §4.N (engine), §5.N (divergence vs PG)
 -- Notes:
 --   • <CH-specific caveat>
@@ -57,28 +57,27 @@ Every file must:
 
 ## FINAL discipline
 
-| Table                                | Engine                                         | `FINAL` required?                                                                                                                                                               |
-| ------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ledgers`                            | `ReplacingMergeTree` (no version)              | no — unique/immutable per `sequence`; dedup-on-merge (lore-0293, was `MergeTree`)                                                                                               |
-| `liquidity_pools`                    | `ReplacingMergeTree(last_updated_ledger)`      | **yes** (doc was stale: schema is RMT since task 0208)                                                                                                                          |
-| `wasm_interface_metadata`            | `ReplacingMergeTree` (no version)              | no — immutable per `wasm_hash`; dedup-on-merge (lore-0293, was `MergeTree`)                                                                                                     |
-| `transaction_hash_dict` (Dictionary) | `Dictionary`                                   | no (`dictGet` returns latest by Dict lifecycle)                                                                                                                                 |
-| `accounts`                           | `ReplacingMergeTree(last_seen_ledger)`         | **yes**                                                                                                                                                                         |
-| `assets`                             | `ReplacingMergeTree` (no version)              | **yes** — identity only since lore-0310; supply/holders come from `balance_aggregates`, name/icon from `asset_enrichment`                                                       |
-| `asset_aggregates`                   | `MergeTree` (refreshable MV from balances)     | no — pre-computed per-asset `total_supply`/`holder_count`, read via a 1:1 LEFT JOIN; `Nullable` cols (NULL on miss). Refreshed on a cadence (eventually consistent) (lore-0293) |
-| `account_balances_current`           | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                                                                         |
-| `soroban_contracts`                  | `ReplacingMergeTree(wasm_uploaded_at_ledger)`  | **yes**                                                                                                                                                                         |
-| `nfts`                               | `ReplacingMergeTree(current_owner_ledger)`     | **yes**                                                                                                                                                                         |
-| `lp_positions`                       | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                                                                         |
-| `transactions`                       | `ReplacingMergeTree` (no version, partitioned) | **yes**                                                                                                                                                                         |
-| `transaction_hash_index`             | `ReplacingMergeTree` (no version, partitioned) | **yes** — but use `dictGet` on hash lookups                                                                                                                                     |
-| `operations_appearances`             | same                                           | **yes**                                                                                                                                                                         |
-| `transaction_participants`           | same                                           | **yes**                                                                                                                                                                         |
-| `soroban_events`                     | same                                           | **yes** (ORDER BY is unique by the rpc event id `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)`; FINAL ensures replay idempotency)            |
-| `soroban_invocations_appearances`    | same                                           | **yes**                                                                                                                                                                         |
-| `nft_ownership`                      | same                                           | **yes**                                                                                                                                                                         |
-| `liquidity_pool_snapshots`           | same                                           | **yes**                                                                                                                                                                         |
-| `lp_operation_amounts`               | `ReplacingMergeTree` (no version, partitioned) | no — the producer is deterministic (schema header's single-writer argument), so an unmerged duplicate is byte-identical to its twin; the `GROUP BY` in 24 collapses it for free |
+| Table                             | Engine                                         | `FINAL` required?                                                                                                                                                               |
+| --------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ledgers`                         | `ReplacingMergeTree` (no version)              | no — unique/immutable per `sequence`; dedup-on-merge (lore-0293, was `MergeTree`)                                                                                               |
+| `liquidity_pools`                 | `ReplacingMergeTree(last_updated_ledger)`      | **yes** (doc was stale: schema is RMT since task 0208)                                                                                                                          |
+| `wasm_interface_metadata`         | `ReplacingMergeTree` (no version)              | no — immutable per `wasm_hash`; dedup-on-merge (lore-0293, was `MergeTree`)                                                                                                     |
+| `accounts`                        | `ReplacingMergeTree(last_seen_ledger)`         | **yes**                                                                                                                                                                         |
+| `assets`                          | `ReplacingMergeTree` (no version)              | **yes** — identity only since lore-0310; supply/holders come from `balance_aggregates`, name/icon from `asset_enrichment`                                                       |
+| `asset_aggregates`                | `MergeTree` (refreshable MV from balances)     | no — pre-computed per-asset `total_supply`/`holder_count`, read via a 1:1 LEFT JOIN; `Nullable` cols (NULL on miss). Refreshed on a cadence (eventually consistent) (lore-0293) |
+| `account_balances_current`        | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                                                                         |
+| `soroban_contracts`               | `ReplacingMergeTree(wasm_uploaded_at_ledger)`  | **yes**                                                                                                                                                                         |
+| `nfts`                            | `ReplacingMergeTree(current_owner_ledger)`     | **yes**                                                                                                                                                                         |
+| `lp_positions`                    | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                                                                         |
+| `transactions`                    | `ReplacingMergeTree` (no version, partitioned) | **yes**                                                                                                                                                                         |
+| `transaction_hash_index`          | `ReplacingMergeTree` (no version, partitioned) | no — `hash → ledger_sequence` is immutable                                                                                                                                      |
+| `operations_appearances`          | same                                           | **yes**                                                                                                                                                                         |
+| `transaction_participants`        | same                                           | **yes**                                                                                                                                                                         |
+| `soroban_events`                  | same                                           | **yes** (ORDER BY is unique by the rpc event id `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)`; FINAL ensures replay idempotency)            |
+| `soroban_invocations_appearances` | same                                           | **yes**                                                                                                                                                                         |
+| `nft_ownership`                   | same                                           | **yes**                                                                                                                                                                         |
+| `liquidity_pool_snapshots`        | same                                           | **yes**                                                                                                                                                                         |
+| `lp_operation_amounts`            | `ReplacingMergeTree` (no version, partitioned) | no — the producer is deterministic (schema header's single-writer argument), so an unmerged duplicate is byte-identical to its twin; the `GROUP BY` in 24 collapses it for free |
 
 **Rationale:** `ReplacingMergeTree` deduplicates by ORDER BY key on background
 merges. Between ingestion and merge, the same logical row can appear N times.
@@ -88,29 +87,6 @@ acceptable for partitioned fact tables when the WHERE clause restricts to
 narrow `(ledger_sequence)` ranges. If a downstream perf task replaces `FINAL`
 with `argMax`-aggregation, that's a separate change and out of scope here.
 
-## Dictionary use (E03 hot path)
-
-`transaction_hash_dict` is a `COMPLEX_KEY_CACHE` Dictionary over
-`transaction_hash_index`, RAM-bounded (1 000 000 cells), refreshes every
-5 minutes. Replaces the Postgres `transaction_hash_index` partition-PK seek
-([ADR 0044 §5.5](../../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md)).
-
-```sql
--- Resolve hash → (ledger_sequence) without scanning any partition.
-SELECT
-    dictGet('transaction_hash_dict', 'ledger_sequence', toString(unhex($1))) AS ledger_sequence
-FROM (SELECT 1);  -- dictGet is a function, but a scalar wrapper is the idiomatic form.
-```
-
-The dictionary attribute is declared as `String` (not `FixedString`) because
-CH 26.x rejects FixedString in dictionary attribute slots; the source table
-keeps `FixedString(32)` and the loader coerces transparently. Callers pass
-`toString(unhex(hex_param))` so the conversion is explicit.
-
-On Dictionary miss (cache eviction + concurrent read), the fallback is
-`transaction_hash_index` for the ledger, then `transactions` by that ledger —
-but the canonical pattern stays `dictGet`.
-
 ## ADR 0044 §5 divergences quick-ref
 
 | §                                          | PG                                                                                | CH                                                                                                                           |
@@ -119,7 +95,6 @@ but the canonical pattern stays `dictGet`.
 | §5.2 `created_at` dropped except `ledgers` | every partitioned table carries `created_at` for partition prune                  | only `ledgers.closed_at` exists; partition prune via `intDiv(ledger_sequence, 500000)`; closed_at displayed via JOIN ledgers |
 | §5.3 `nfts.metadata` dropped               | `nfts.metadata JSONB`                                                             | column absent — project as `NULL` or via off-chain enrichment table                                                          |
 | §5.4 `_sqlx_migrations` dropped            | exists                                                                            | absent (init.sql IS the migration)                                                                                           |
-| §5.5 `transaction_hash_index` → Dictionary | per-partition PK on (hash)                                                        | base table preserved; Dictionary `transaction_hash_dict` overlays for hot path                                               |
 
 ## Cursor encoding
 
@@ -176,7 +151,7 @@ docker compose up -d clickhouse db-clickhouse-init
 # Verify schema:
 docker compose exec clickhouse clickhouse-client \
     --user=default --password=clickhouse --query="SHOW TABLES"
-# 17 tables + transaction_hash_dict expected.
+# one row per table in init.sql expected.
 
 # Run a single endpoint:
 ./run_endpoint_ch.sh 03                 # E03 tx by hash
@@ -224,27 +199,24 @@ Per-query checklist when reviewing a new or modified `.sql` file here:
 5. **§5.3 anti-pattern.** No `nfts.metadata` projection. The column is
    absent. Metadata is fetched at the API layer via Soroban RPC
    `token_uri()` (ADR 0043).
-6. **§5.5 hot path.** For hash → ledger_sequence lookups, prefer
-   `dictGet('transaction_hash_dict', 'ledger_sequence', toString($1))`
-   over a full scan of `transaction_hash_index`.
-7. **Partition predicate.** Every read against a partitioned fact table
+6. **Partition predicate.** Every read against a partitioned fact table
    that has a ledger range available should include
    `intDiv(ledger_sequence, 500000) BETWEEN intDiv($a, 500000) AND intDiv($b, 500000)`
    (or `=` for single-ledger queries). Missing the predicate forces the
    planner to scan all partitions.
-8. **Cursor shape.** Keyset cursors drop the `created_at` term that
+7. **Cursor shape.** Keyset cursors drop the `created_at` term that
    PG-side equivalents use. CH cursors are tuples of integer columns
    (`ledger_sequence`, `application_order`, `id`, etc.).
-9. **Enum decoding.** SMALLINT enum columns (`asset_type`, `event_type`,
+8. **Enum decoding.** SMALLINT enum columns (`asset_type`, `event_type`,
    `contract_type`, etc.) project as raw `Int16` — no `*_name()` SQL
    helper exists in CH; decode happens in the API layer.
-10. **`pg_trgm` regression awareness (§R3).** Substring search uses
-    `positionCaseInsensitiveUTF8(col, $q) > 0` not `ILIKE '%q%'`. The
-    cost is a linear scan after FINAL — acceptable for small tables
-    (assets, NFTs) only.
-11. **Tier 1 parse-check.** Reviewer runs `./run_endpoint_ch.sh <id> --syntax-only`
+9. **`pg_trgm` regression awareness (§R3).** Substring search uses
+   `positionCaseInsensitiveUTF8(col, $q) > 0` not `ILIKE '%q%'`. The
+   cost is a linear scan after FINAL — acceptable for small tables
+   (assets, NFTs) only.
+10. **Tier 1 parse-check.** Reviewer runs `./run_endpoint_ch.sh <id> --syntax-only`
     against a populated local CH. Exit 0 = parses + plans cleanly.
-12. **Anti-pattern grep.** `grep -nE 'NOW\(\)|encode\(|decode\(|ILIKE|::float8|::bigint|created_at|ON CONFLICT|soroban_events_appearances|n\.metadata|nfts\.metadata|LATERAL' NN_*.sql` should return no hits (PG idioms / §5 violations).
+11. **Anti-pattern grep.** `grep -nE 'NOW\(\)|encode\(|decode\(|ILIKE|::float8|::bigint|created_at|ON CONFLICT|soroban_events_appearances|n\.metadata|nfts\.metadata|LATERAL' NN_*.sql` should return no hits (PG idioms / §5 violations).
 
 ## Adding a new query
 

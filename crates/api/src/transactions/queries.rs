@@ -639,10 +639,8 @@ pub async fn fetch_list(
 /// Resolve a transaction hash → parent `ledger_sequence`.
 ///
 /// Reads `transaction_hash_index` directly (PK seek on `hash`), mirroring
-/// the PG `lookup_hash_index`. Canonical SQL 03 uses the
-/// `transaction_hash_dict` Dictionary as the O(1) hot path; that is a
-/// CH-only optimization that can be layered on later without changing this
-/// signature. `hash → ledger_sequence` is immutable, so no `FINAL` is
+/// the PG `lookup_hash_index`. `hash → ledger_sequence` is immutable, so no
+/// `FINAL` is
 /// required on the ReplacingMergeTree index.
 pub async fn lookup_hash_ledger(
     client: &clickhouse::Client,

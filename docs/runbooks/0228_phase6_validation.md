@@ -137,17 +137,9 @@ union range had no Nft-classified contracts. Verify with the audit
 trail from `nft_reclassify` — if `promoted_nfts = 0` reported, these
 two empty is expected.)
 
-### Step 1.3 — Dictionary loaded
+### Step 1.3 — (retired)
 
-```sql
-SELECT name, status, element_count, last_successful_update_time
-  FROM system.dictionaries
- WHERE database = 'default'
- FORMAT Vertical
-```
-
-**Pass criteria**: `transaction_hash_dict` status = `LOADED`,
-`element_count` matches `count() FROM transaction_hash_index`.
+The `transaction_hash_dict` check is gone with the dictionary (task 0396).
 
 ### Step 1.4 — No-FINAL invariant for state tables
 

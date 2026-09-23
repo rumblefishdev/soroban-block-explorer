@@ -254,7 +254,7 @@ run_one() {
         ;;
 
     03)
-        # 6 statements; A=dictGet(hash→ledger_sequence), B=header,
+        # 6 statements; A=hash index seek (hash→ledger_sequence), B=header,
         # C=ops, D=participants, E=events (full payload §5.1), F=invocations.
         # All take $1=hash (FixedString(32) — pass as unhex(hex)).
         [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E03: GET /transactions/:hash ==="

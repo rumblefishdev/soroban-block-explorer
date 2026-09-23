@@ -259,20 +259,12 @@ The pilot uses an idempotent `init.sql` (every statement is
 `CREATE … IF NOT EXISTS`), not a numbered migration ladder. PG continues
 to use `sqlx` migrations as today.
 
-### 4e. `transaction_hash_index` exposed as a Dictionary
+### 4e. `transaction_hash_index` read directly
 
 The PG `transaction_hash_index` table exists in CH 1:1 (minus
-`created_at`), and a `transaction_hash_dict` `DICTIONARY` is layered on
-top with `complex_key_cache` layout, RAM-bounded
-(`SIZE_IN_CELLS 1000000`), refreshing every 5 minutes. API reads do
-`dictGet('transaction_hash_dict', 'ledger_sequence', tuple(toString(hash)))`
-for microsecond-class point lookups; misses fall through to scanning the
-source table.
-
-The dictionary's source clause carries inline `USER`/`PASSWORD` literals
-matching the docker-compose default (`default` / `clickhouse`) — for the
-pilot only. Production deployment would replace this with a named
-collection so the credential is not version-controlled.
+`created_at`); API reads seek it by `hash` for the ledger, then read
+`transactions` in that ledger. A `transaction_hash_dict` `DICTIONARY` was
+layered on top for the pilot, never called by the API, and removed in task 0396.
 
 ### Cosmetic non-translatable PG features (CH-side OMIT)
 

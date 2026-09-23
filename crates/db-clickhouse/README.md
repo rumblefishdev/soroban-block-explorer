@@ -34,10 +34,6 @@ If something already binds `8123` / `9000` on your host (e.g. an unrelated
 ClickHouse container), bump the host ports — e.g. `CLICKHOUSE_HTTP_PORT=8124`,
 `CLICKHOUSE_NATIVE_PORT=9001`, `CLICKHOUSE_URL=http://localhost:8124`.
 
-> **Do not change `CLICKHOUSE_PASSWORD`** without also editing the literal
-> in `crates/db-clickhouse/schema/init.sql` (`transaction_hash_dict` SOURCE
-> clause). Diverging breaks the dictionary load.
-
 ### 2. Bring up the stack
 
 ```bash
@@ -54,7 +50,7 @@ Two containers come up:
 ### 3. Verify
 
 ```bash
-# 18 = 17 tables + transaction_hash_dict
+# one row per table in init.sql
 docker exec sorban-block-explorer-clickhouse-1 \
   clickhouse-client --user=default --password=clickhouse \
   -q "SELECT count() FROM system.tables WHERE database='default'"
@@ -385,7 +381,7 @@ posture — no production secrets in the file). Override via
 17 tables + 1 Dictionary, mirroring the Postgres `public` schema snapshot
 taken on 2026-05-08
 ([sources/db-schema-snapshot.md](../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/sources/db-schema-snapshot.md))
-with the five deliberate divergences from
+with the four deliberate divergences from
 [ADR 0044 §Decision §4](../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md):
 
 1. `soroban_events_appearances` is replaced by full-content
@@ -394,11 +390,7 @@ with the five deliberate divergences from
    time is recovered via JOIN to `ledgers.closed_at` when needed.
 3. `nfts.metadata` is dropped (CH only).
 4. `_sqlx_migrations` is not mirrored — `init.sql` is the migration.
-5. `transaction_hash_index` is exposed as a `Dictionary`
-   (`transaction_hash_dict`, complex_key_cache layout) for fast
-   `hash → ledger_sequence` lookups.
-
-**Postgres is unchanged by all five divergences.**
+**Postgres is unchanged by all four divergences.**
 
 The full table-by-table ENGINE / PARTITION BY / ORDER BY matrix lives in
 [`notes/G-clickhouse-schema-er.md`](../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/notes/G-clickhouse-schema-er.md).
@@ -484,9 +476,6 @@ Quick start above.
 - Applies `init.sql` to the target ClickHouse (idempotent)
 - Inserts one sentinel row into each of the 17 tables
 - Reads the row back via `SELECT count() … WHERE …`
-- Reloads `transaction_hash_dict` and verifies
-  `dictGet('transaction_hash_dict', 'ledger_sequence', tuple(...))`
-  returns the expected `ledger_sequence`
 - Cleans up via `ALTER TABLE … DELETE` (sync mutation) before and after,
   so a previous failed run does not poison the next attempt
 
