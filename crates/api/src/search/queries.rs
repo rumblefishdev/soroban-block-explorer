@@ -62,7 +62,7 @@ use std::collections::{BTreeSet, HashMap};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::asset_identity::{ResolvedAsset, leg_label, resolve_asset_identities_unlinked};
+use crate::common::asset_identity::{ResolvedAsset, leg_label, resolve_asset_identities};
 use crate::common::ch::millis_to_utc;
 use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
 use crate::common::strkey::pool_identifier;
@@ -397,7 +397,7 @@ async fn search_pools_by_asset_code(
     let rows = query.bind(per_group_limit).fetch_all::<PoolRow>().await?;
 
     let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|p| p.legs.iter().copied()).collect();
-    let identities = resolve_asset_identities_unlinked(client, &leg_ids).await?;
+    let identities = resolve_asset_identities(client, &leg_ids).await?;
     Ok(rows
         .into_iter()
         .map(|p| pool_hit(&p, &identities))
@@ -432,7 +432,7 @@ async fn search_pool_by_id(
     };
 
     let leg_ids: BTreeSet<i64> = p.legs.iter().copied().collect();
-    let identities = resolve_asset_identities_unlinked(client, &leg_ids).await?;
+    let identities = resolve_asset_identities(client, &leg_ids).await?;
     Ok(vec![pool_hit(&p, &identities)])
 }
 

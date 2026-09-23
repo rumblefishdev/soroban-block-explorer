@@ -18,7 +18,7 @@ function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
     contract_id: null,
     issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
     icon_url: null,
-    sac_contract_id: null,
+    symbol: null,
     ...overrides,
   };
 }
@@ -124,6 +124,21 @@ describe('assetLegLabel', () => {
         })
       )
     ).toBe('CAQC…RZQB');
+  });
+
+  it('names a code-less soroban leg by its symbol when it publishes one', () => {
+    expect(
+      assetLegLabel(
+        makeLeg({
+          asset_type_name: 'soroban',
+          asset_code: null,
+          issuer: null,
+          symbol: 'USDx',
+          contract_id:
+            'CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB',
+        })
+      )
+    ).toBe('USDx');
   });
 
   // A leg with no registry row carries nothing the ladder can name. It must

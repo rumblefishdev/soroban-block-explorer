@@ -50,13 +50,13 @@ fn the_shown_code_names_native_by_its_type() {
     assert!(shown_code_sql("").contains("if(asset_type = 0"));
 }
 
-/// An identity the dimension does not know carries no display extras, and must
-/// not reach the statement at all: `known == false` is the NFT-collection case
+/// An identity the dimension does not know has no icon key, and must not reach
+/// the statement at all: `known == false` is the NFT-collection case
 /// and the unclassified-contract case, both real and both legitimately blank.
 /// Its empty code and zero issuer would also widen the bounds if they did.
 #[test]
-fn unknown_identities_get_no_display_key() {
-    let rows = vec![
+fn unknown_identities_get_no_icon_key() {
+    let rows = [
         AssetIdentityChRow {
             id: 1,
             known: true,
@@ -80,16 +80,16 @@ fn unknown_identities_get_no_display_key() {
             decimals: 7,
         },
     ];
-    let keys = display_keys(&rows);
-    assert_eq!(keys.len(), 1, "the unknown row must not produce a key");
-    assert_eq!(keys[0], (1, (1i16, "USDC".to_string(), 42, 0)));
+    let keys: Vec<_> = rows.iter().map(icon_key).collect();
+    assert_eq!(keys[0], Some((1i16, "USDC".to_string(), 42, 0)));
+    assert_eq!(keys[1], None, "the unknown row must not produce a key");
 }
 
 /// Native's code is EMPTY on the ledger, and the tuple carries it that way —
 /// the side tables key on the stored value, not on the displayed `XLM`.
 #[test]
 fn a_native_key_carries_the_empty_stored_code() {
-    let rows = vec![AssetIdentityChRow {
+    let rows = [AssetIdentityChRow {
         id: -1,
         known: true,
         asset_type: 0,
@@ -100,5 +100,5 @@ fn a_native_key_carries_the_empty_stored_code() {
         symbol: None,
         decimals: 7,
     }];
-    assert_eq!(display_keys(&rows)[0].1, (0i16, String::new(), 0, 0));
+    assert_eq!(icon_key(&rows[0]), Some((0i16, String::new(), 0, 0)));
 }

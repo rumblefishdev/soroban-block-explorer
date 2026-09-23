@@ -7,7 +7,6 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 
-use crate::common::asset_identity::sac_strkey;
 use crate::common::cache_control;
 use crate::common::cursor;
 use crate::common::errors;
@@ -147,30 +146,20 @@ pub async fn list_participants(
 // so they now sit in one module together. The `splitn(2)` bound, the
 // empty-needle drop and the pair semantics are documented there.
 
-/// Finish one leg at the response boundary.
-///
-/// The SAC mirror's address is derived HERE and nowhere else (ADR 0051 — never
-/// stored, never looked up), because the network id lives on the app state.
-/// `/v1/assets` splits it at the same seam, through the same helper.
-fn map_leg(leg: PoolLegRow, network_id: &[u8; 32]) -> PoolAssetLeg {
+fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
     PoolAssetLeg {
         asset_type_name: domain::AssetFamily::try_from(leg.family)
             .ok()
             .map(|f| f.as_str().to_string()),
-        sac_contract_id: sac_strkey(
-            leg.sac_observed,
-            leg.asset_code.as_deref().unwrap_or_default(),
-            leg.issuer.as_deref().unwrap_or_default(),
-            network_id,
-        ),
         asset_code: leg.asset_code,
         issuer: leg.issuer,
         contract_id: leg.contract_id,
+        symbol: leg.symbol,
         icon_url: leg.icon_url,
     }
 }
 
-fn map_pool_item(row: PoolRow, network_id: &[u8; 32]) -> PoolItem {
+fn map_pool_item(row: PoolRow) -> PoolItem {
     let kind = domain::PoolKind::try_from(row.pool_kind).ok();
     PoolItem {
         // The same 32 bytes are an `L…` strkey for a classic pool and a `C…`
@@ -179,11 +168,7 @@ fn map_pool_item(row: PoolRow, network_id: &[u8; 32]) -> PoolItem {
         // kind renders as is `pool_identifier`'s decision, not this handler's.
         pool_id: pool_identifier(&row.pool_id_hex, row.pool_kind),
         pool_kind: kind.map(|k| k.as_str().to_string()),
-        legs: row
-            .legs
-            .into_iter()
-            .map(|l| map_leg(l, network_id))
-            .collect(),
+        legs: row.legs.into_iter().map(map_leg).collect(),
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
@@ -315,10 +300,7 @@ pub async fn list_pools(
             )
         },
     );
-    let data: Vec<PoolItem> = rows
-        .into_iter()
-        .map(|r| map_pool_item(r, &state.network_id))
-        .collect();
+    let data: Vec<PoolItem> = rows.into_iter().map(map_pool_item).collect();
 
     let mut resp = Json(into_envelope(data, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
@@ -391,7 +373,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         }
     }
 
-    let mut resp = Json(map_pool_item(row, &state.network_id)).into_response();
+    let mut resp = Json(map_pool_item(row)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }

@@ -23,7 +23,7 @@ const NATIVE_LEG = {
   asset_code: null,
   issuer: null,
   contract_id: null,
-  sac_contract_id: null,
+  symbol: null,
   icon_url: null,
 };
 

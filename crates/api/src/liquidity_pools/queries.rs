@@ -28,7 +28,7 @@ use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
 use crate::common::asset_identity::{
-    AssetDisplay, ResolvedAsset, resolve_asset_identities, resolve_identities_and_display,
+    ResolvedAsset, resolve_asset_identities, resolve_identities_and_icons,
 };
 use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
@@ -73,14 +73,8 @@ pub struct PoolRow {
     pub latest_snapshot_at: Option<DateTime<Utc>>,
 }
 
-/// One leg, resolved as far as the query layer can take it.
-///
-/// It stops one step short of [`super::dto::PoolAssetLeg`] on purpose: the SAC
-/// mirror's address is DERIVED from `code:issuer` and the network id (ADR 0051
-/// — never stored, never looked up), and the network id lives on the app state,
-/// not here. `/v1/assets` splits it at exactly this seam, deriving in its
-/// handler; doing the same keeps one derivation for the whole API instead of a
-/// second one that could drift.
+/// One leg as the query layer resolved it. The handler names `family` for the
+/// wire; the raw discriminant stays here because the price join keys on it.
 #[derive(Debug, Clone)]
 pub struct PoolLegRow {
     /// `assets.asset_type` — the AssetFamily discriminant, named at the
@@ -91,10 +85,9 @@ pub struct PoolLegRow {
     pub issuer: Option<String>,
     /// The token's own `C…` contract — a soroban leg only.
     pub contract_id: Option<String>,
-    /// Whether a SAC facet was observed for this asset. Gates the derivation:
-    /// deriving unconditionally would hand out a link to a contract that may
-    /// not exist.
-    pub sac_observed: bool,
+    /// The token's self-declared SEP-41 symbol — what names a soroban leg
+    /// that has no classic code.
+    pub symbol: Option<String>,
     pub icon_url: Option<String>,
 }
 
@@ -107,12 +100,11 @@ pub struct PoolLegRow {
 fn leg_rows(
     leg_ids: &[i64],
     identities: &HashMap<i64, ResolvedAsset>,
-    display: &HashMap<i64, AssetDisplay>,
+    icons: &HashMap<i64, String>,
 ) -> Vec<PoolLegRow> {
     leg_ids
         .iter()
         .map(|id| {
-            let d = display.get(id);
             match identities.get(id) {
                 Some(r) if r.known => PoolLegRow {
                     family: r.asset_type,
@@ -124,17 +116,18 @@ fn leg_rows(
                     contract_id: (r.asset_type == domain::AssetFamily::Soroban as i16)
                         .then(|| r.contract_strkey.clone())
                         .flatten(),
-                    sac_observed: d.is_some_and(|d| d.sac_observed),
-                    icon_url: d.and_then(|d| d.icon_url.clone()),
+                    symbol: r.symbol.clone(),
+                    icon_url: icons.get(id).cloned(),
                 },
-                // Unknown to `assets`: no family, no code — only the contract,
-                // which `soroban_contracts` still names.
+                // Unknown to `assets`: no family, no code — only the contract
+                // and its symbol, which `soroban_contracts` and its metadata
+                // still name.
                 other => PoolLegRow {
                     family: -1,
                     asset_code: None,
                     issuer: None,
                     contract_id: other.and_then(|r| r.contract_strkey.clone()),
-                    sac_observed: false,
+                    symbol: other.and_then(|r| r.symbol.clone()),
                     icon_url: None,
                 },
             }
@@ -650,13 +643,6 @@ fn priced_pair(ctx: &PoolPriceContext) -> Option<(&PriceLeg, &PriceLeg)> {
     }
 }
 
-/// The identity that matches no prices row — what an unpriceable leg binds as.
-/// Produced by [`price_leg`] rather than spelled out, so it cannot drift from
-/// the value that function returns for an out-of-domain asset.
-fn unpriceable_leg() -> PriceLeg {
-    price_leg(-1, None, None)
-}
-
 /// The two legs of a pool as a `fetch_last_closes` input, with unpriceable
 /// legs (empty `kind`) dropped — they match no prices row by construction,
 /// so asking for them is pure waste.
@@ -819,12 +805,12 @@ pub async fn fetch_pool_by_id(
 
     let Some(r) = row else { return Ok(None) };
     let leg_ids: BTreeSet<i64> = r.legs.iter().copied().collect();
-    let (identities, display) = resolve_identities_and_display(client, &leg_ids).await?;
+    let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
     Ok(Some(PoolRow {
         pool_id_hex: r.pool_id_hex,
         pool_kind: r.pool_kind,
-        legs: leg_rows(&r.legs, &identities, &display),
+        legs: leg_rows(&r.legs, &identities, &icons),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
         created_at_ledger: r.created_at_ledger,
@@ -1555,7 +1541,7 @@ pub async fn fetch_pool_chart(
 
     let (chart_leg_a, chart_leg_b) = match priced_pair(ctx) {
         Some((a, b)) => (a.clone(), b.clone()),
-        None => (unpriceable_leg(), unpriceable_leg()),
+        None => (price_leg(-1, None, None), price_leg(-1, None, None)),
     };
     let rows = client
         .query(&sql)
@@ -1845,7 +1831,7 @@ pub async fn fetch_pool_list(
     // stores — so the issuer StrKey arrives with the identity instead of
     // costing its own round trip.
     let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
-    let (identities, display) = resolve_identities_and_display(client, &leg_ids).await?;
+    let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
     // endpoint (latest reserves × last 1h close per leg; both legs required)
@@ -1904,7 +1890,7 @@ pub async fn fetch_pool_list(
             PoolRow {
                 pool_id_hex: r.pool_id_hex,
                 pool_kind: r.pool_kind,
-                legs: leg_rows(&r.legs, &identities, &display),
+                legs: leg_rows(&r.legs, &identities, &icons),
                 fee_bps: r.fee_bps,
                 fee_percent: fee_percent_str(r.fee_bps),
                 created_at_ledger: r.created_at_ledger,

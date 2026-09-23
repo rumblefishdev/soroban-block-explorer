@@ -146,15 +146,12 @@ pub struct PoolListParams {
 ///   * `contract_id` → `/assets/{contract_id}`, for a soroban token, whose
 ///     contract IS its asset identity.
 ///
-/// `sac_contract_id` is **not** a link target. It is the C-strkey of the SAC
-/// mirror a classic or native leg has (ADR 0051), published because the same
-/// asset already publishes it on `/v1/assets` and withholding it here made one
-/// asset describe itself two ways depending on the endpoint (task 0470).
-/// Routing to it answers 404 — the asset endpoint pins a contract lookup to the
-/// soroban family, so a SAC address resolves nothing (measured 2026-08-13,
-/// after an earlier contract-first order sent ~93k classic legs to a dead
-/// page). That is why it is a separate field from `contract_id` instead of one
-/// field carrying two meanings.
+/// A classic or native leg's SAC mirror is not published here. It is not a
+/// link target — the asset endpoint pins a contract lookup to the soroban
+/// family, so a SAC address resolves nothing (measured 2026-08-13, after an
+/// earlier contract-first order sent ~93k classic legs to a dead page) — and
+/// no pool surface renders it. The asset's own page (`/v1/assets`) carries it
+/// with its deployment state.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolAssetLeg {
     /// `native` | `classic_credit` | `soroban`. `None` only on schema drift —
@@ -163,11 +160,12 @@ pub struct PoolAssetLeg {
     pub asset_code: Option<String>,
     pub issuer: Option<String>,
     /// The token's own contract, set ONLY for a `soroban` leg. `None` for
-    /// native and classic credit, whose mirror (if any) is `sac_contract_id`.
+    /// native and classic credit.
     pub contract_id: Option<String>,
-    /// The SAC mirror of a classic or native leg (ADR 0051) — context, never a
-    /// route. `None` when the asset has no observed SAC, and for a soroban leg.
-    pub sac_contract_id: Option<String>,
+    /// The token's self-declared SEP-41 symbol, from contract metadata — what
+    /// names a soroban leg that has no classic code. Not unique: many
+    /// contracts claim the same one, so `contract_id` stays the identity.
+    pub symbol: Option<String>,
     /// Asset icon URL from `asset_enrichment` (ADR 0050), so pool avatars match
     /// the assets list. NOT from `assets`, whose `icon_url` column was dropped
     /// in task 0310 after measuring 0 of 411,654 rows populated. `None` for an

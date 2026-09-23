@@ -90,12 +90,18 @@ pub(crate) fn pool_id_from_text(raw: &str) -> Option<String> {
 /// The pools handler and the search row used to spell this
 /// `unwrap_or(PoolKind::Classic)` separately, each under a comment claiming the
 /// classic encoding was used "only when the row says classic" — which is
-/// exactly what a fallback is not.
+/// exactly what a fallback is not. It is logged as an error, so the drift is
+/// seen rather than silently rendered as a well-formed `L…`.
 pub(crate) fn pool_identifier(pool_id_hex: &str, raw_kind: i16) -> String {
-    pool_id_hex_to_strkey(
-        pool_id_hex,
-        domain::PoolKind::try_from(raw_kind).unwrap_or(domain::PoolKind::Classic),
-    )
+    let kind = domain::PoolKind::try_from(raw_kind).unwrap_or_else(|_| {
+        tracing::error!(
+            pool_id_hex,
+            raw_kind,
+            "pool_kind outside PoolKind; encoded as classic"
+        );
+        domain::PoolKind::Classic
+    });
+    pool_id_hex_to_strkey(pool_id_hex, kind)
 }
 
 /// The wire form of a pool's 32 bytes, chosen by its KIND.

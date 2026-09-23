@@ -38,9 +38,9 @@
 --     The identities behind those surrogates are NOT joined here: the API
 --     collects the page's distinct leg ids and resolves them in ONE batched
 --     statement (`common::asset_identity`, shared with the account
---     balance-change rows), which also carries the icon and the observed-SAC
---     flag. The SAC address itself is DERIVED at the response boundary from
---     `(code, issuer, network)`, never looked up (ADR 0051).
+--     balance-change rows), plus one `asset_enrichment` read for the icons.
+--     A leg publishes no SAC address: nothing on a pool page renders it, and
+--     the asset's own page carries it with its deployment state (ADR 0051).
 --   • **task 0199:** `tvl` / `volume` / `fee_revenue` are NO LONGER read
 --     from the snapshot columns (never populated — pre-0199 design). The
 --     handler runs a second, small query and computes USD in Rust:
