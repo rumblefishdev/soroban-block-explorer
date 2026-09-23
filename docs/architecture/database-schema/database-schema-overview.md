@@ -1816,7 +1816,6 @@ CH read-acceleration model has four layers, all declared in
    | `ledgers`                | `closed_at_mm`       | `minmax`              | time-window → ledger-range resolution (LP chart); measured 77.9M → 26.3M read_rows/req on the 2026-07-17 load test (task 0357) |
    | `accounts`               | `idx_acc_id`         | `bloom_filter(0.001)` | surrogate-id → StrKey seeks: tx-list/search in `crates/api` + SEP-1 issuer resolve in the enrichment worker (tasks 0290, 0397) |
    | `soroban_contracts`      | `idx_sc_id`          | `bloom_filter(0.001)` | tx-detail surrogate-id → `contract_id` resolve (task 0344)                                                                     |
-   | `transactions`           | `idx_tx_hash_bloom`  | `bloom_filter(0.01)`  | point lookup by hash within the partition named by `transaction_hash_index`                                                    |
    | `operations_appearances` | `idx_oa_pool_ids`    | `bloom_filter(0.001)` | sparse-pool regime of the pool-transactions scan (task 0365)                                                                   |
    | `operations_appearances` | `idx_oa_contract_id` | `bloom_filter(0.001)` | sparse-contract regime of the contract-filtered tx list (task 0333; the 2026-06-29 quota blowout)                              |
 

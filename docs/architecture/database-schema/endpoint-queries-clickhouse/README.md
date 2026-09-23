@@ -107,9 +107,9 @@ CH 26.x rejects FixedString in dictionary attribute slots; the source table
 keeps `FixedString(32)` and the loader coerces transparently. Callers pass
 `toString(unhex(hex_param))` so the conversion is explicit.
 
-On Dictionary miss (cache eviction + concurrent read), the bloom filter
-`idx_tx_hash_bloom` on `transactions` is the fallback — but the canonical
-pattern stays `dictGet`.
+On Dictionary miss (cache eviction + concurrent read), the fallback is
+`transaction_hash_index` for the ledger, then `transactions` by that ledger —
+but the canonical pattern stays `dictGet`.
 
 ## ADR 0044 §5 divergences quick-ref
 

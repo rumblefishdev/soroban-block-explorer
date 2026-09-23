@@ -55,7 +55,7 @@
 SELECT ledger_sequence FROM transaction_hash_index
 WHERE hash = unhex(:q_hex) LIMIT 1;
 -- Step 2: successful + ledger closed_at (PG `tx_hits` enrichment). Single-row
--- seek: leading-PK `ledger_sequence` + partition prune + `idx_tx_hash_bloom`.
+-- seek: leading-PK `ledger_sequence` (one ledger is one granule) + partition prune.
 -- closed_at via a BOUNDED `ledgers WHERE sequence = :ledger` sub-select (PK point
 -- seek) — NOT a plain `INNER JOIN ledgers`, which builds its hash side from the
 -- whole ~3.6M-row ledgers table on prod.

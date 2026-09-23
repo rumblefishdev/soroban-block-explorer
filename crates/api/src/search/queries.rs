@@ -218,8 +218,8 @@ struct TxMetaRow {
 /// Fires only for a hash-shaped query. Step 1 resolves `hash → ledger_sequence`
 /// off `transaction_hash_index` (ORDER BY `hash`; immutable mapping, no FINAL).
 /// Step 2 reads `successful` + the ledger `closed_at` via a single-partition,
-/// single-row seek on `transactions` (`ledger_sequence` leading PK + the
-/// `idx_tx_hash_bloom` filter) joined to `ledgers` — the PG `tx_hits`
+/// single-row seek on `transactions` (`ledger_sequence` leading PK — one
+/// ledger is one granule) joined to `ledgers` — the PG `tx_hits`
 /// enrichment, at the cost of two point-seeks.
 async fn search_transactions(
     client: &clickhouse::Client,

@@ -876,8 +876,11 @@ CREATE TABLE IF NOT EXISTS transactions (
     successful        Bool,
     operation_count   Int16,
     has_soroban       Bool,
-    parse_error       Bool,
-    INDEX idx_tx_hash_bloom hash TYPE bloom_filter(0.01) GRANULARITY 1
+    parse_error       Bool
+    -- No hash bloom: every read by hash pins `ledger_sequence` first (the
+    -- ledger comes from `transaction_hash_index`), and one ledger fits one
+    -- granule. `idx_tx_hash_bloom` kept 1 of 1 granules and cost 4.93 GiB;
+    -- dropped 2026-09-23 (task 0579).
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
