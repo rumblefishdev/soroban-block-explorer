@@ -373,3 +373,28 @@ warnings, 376 tests pass, `format:check --all` clean.
 true`) share `libs/ui/dist` — but there the declarations are what web
 compiles against, so moving them is a change to how the library is consumed,
 not a path fix. Not touched here.
+
+## Devil's-advocate review (2026-09-23)
+
+Verdict "ship with changes"; all four taken (karolkow):
+
+- **`crates/backfill-runner/README.md`** still named `pnpm nx build/test/lint
+rust`, dead since the `rust` project went; it names cargo now.
+- **The `debugging` profile left dependencies without debug info**:
+  `inherits = "dev"` carries the `package."*"` override along. It now sets
+  `debug = true` for them too — `domain` and `serde` both build with
+  `-C debuginfo=2`.
+- **`pre-push` checked the working tree for every pushed ref.** Nx and clippy
+  read the files on disk, so a push of another branch or a tag object was
+  judged on the wrong code. Refs that are not the checked-out commit are now
+  named and left to CI. `pre-commit` lists staged paths with `--no-renames`,
+  so a file moved between projects checks the one it leaves as well.
+- **The docs-only skip had never fired live** — this very commit, lore only,
+  on top of a green run, is its first test.
+
+Found sound by the review: CI still runs clippy and the tests on every pull
+request that touches `crates/`; nothing reads `web/dist/*.d.ts` (and
+`infra/Makefile`'s `aws s3 sync web/dist/ … --delete` no longer ships them to
+the site bucket); no branch rules or required checks exist, so skipped jobs
+cannot block a merge; no workflow, Makefile or script referenced the removed
+`rust` project beyond the README.
