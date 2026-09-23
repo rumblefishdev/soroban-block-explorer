@@ -2,9 +2,9 @@
 id: '0555'
 title: 'PERF: dev-flow efficiency — docs-only CI, git hooks, TS job cache, Rust debug profile'
 type: PERF
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0389', '0455', '0480', '0532']
+related_tasks: ['0389', '0455', '0480', '0532', '0577', '0578']
 tags: ['area-ci', 'area-dx', 'priority-medium', 'effort-medium']
 links:
   - '.github/workflows/ci.yml'
@@ -26,6 +26,17 @@ history:
     note: >
       Every step approved, plus a cache cleanup at pull request close; one
       pull request, branch perf/0555_dev-flow.
+  - date: '2026-09-23'
+    status: completed
+    who: karolkow
+    note: >
+      Merged in #484 (99f7a4e0). pre-commit with nothing relevant staged
+      11.4 s → 0.3 s; no clippy on pushes without Rust; CI TypeScript job
+      10 min 41 s → 3 min 01 s (the Nx project `rust` and its duplicate
+      cargo build removed); a docs-only push after a green run finishes in
+      11 s; target/ −36% (6.42 → 4.11 GiB); GitHub cache 9.73 → 4.75 GB
+      and cleaned per pull request; web build race fixed. Nx cache in CI
+      measured and dropped. Follow-up 0578 (libs/ui dist race).
 ---
 
 # PERF: dev-flow efficiency
@@ -413,3 +424,61 @@ Second try, run 35862923296 (`4cf52c57` on the up-to-date, green
 `a2a27783`): "Detect changes" ran, and Rust fmt, Rust (clippy, test), Rust
 (lambda build), TypeScript and API types freshness were all skipped — 11 s
 for the whole run, against about 6 minutes for a full one.
+
+## Issues Encountered
+
+- **The docs-only skip had two ways to skip a code push** (force-push compare
+  from the merge base; a swallowed API error). Found by the two-axis review,
+  fixed before merge. See "Review".
+- **Nx cache premise was wrong**: plugins infer `cache: true`; and even so
+  `actions/cache` never replays across GitHub runners (machine-id-keyed
+  database). Measured, step removed. See "Nx cache in CI".
+- **`web:build` raced `web:typecheck`** in the shared `web/dist` (ENOTEMPTY on
+  a CI rerun). Predates this task; fixed by moving tsc output to `out-tsc`.
+- **Local `grep` is ugrep**, whose `-v` exit codes differ from GNU/BSD: a
+  local dry run of the CI decision read "skip" for everything until rerun
+  with `/usr/bin/grep`.
+- **Husky's `~/.config/husky/init.sh` prepends `~/.cargo/bin`**, so a `cargo`
+  stub on `PATH` does not intercept the hooks; hook tests use real tools.
+- **The first live docs-only push ran in full, correctly**: `develop` had new
+  code since the branch last merged it. It fired once the branch was current.
+
+**Modified tests:** none.
+
+## Design Decisions
+
+### From Plan
+
+1. **Clippy in `pre-push` only for a push that touches Rust** (step 2).
+2. **No Nx start for an irrelevant commit** (step 2).
+3. **CI skips Rust, TypeScript and API-types jobs for a docs-only push**
+   (step 1), evaluated against the pushed range.
+4. **TypeScript job on `nx affected`** (step 3), reversing task 0389's
+   decision 5; master keeps `run-many`.
+5. **Playwright browser cached** (step 3).
+6. **Debug profile in `Cargo.toml`** (step 4), `CARGO_PROFILE_DEV_DEBUG` gone.
+7. **Cache cleanup workflow at pull request close**, plus a one-off prune
+   (8 caches, 5.9 GB; usage 4.75 GB after).
+
+### Emerged
+
+8. **The docs-only skip requires a green previous run and an `ahead` push,
+   and counts the base branch's new files**: skipping must never cover
+   untested code; a red, cancelled or force-pushed history runs in full.
+9. **The Nx project `rust` removed, not excluded** (karolkow): it compiled the
+   workspace a second time in the TypeScript job (~6.5 of 10.7 min) and would
+   have run the whole cargo suite from `pre-push` on a `package.json` change.
+10. **`run-affected-checks.mjs` removed** (karolkow): the hooks call
+    `nx affected` directly with git's own inputs; the script only guessed the
+    pushed range a second time (and, for a new branch, against master).
+11. **`pre-push` checks only refs at the checked-out commit**: Nx and clippy
+    read the files on disk; other refs are left to CI.
+12. **`.nx/cache` in CI tried and removed** (karolkow: add and measure).
+13. **Web's tsc output moved to `out-tsc`** (karolkow), to end the build race.
+14. **The `/pr` skill's verify step rewritten**: it named scripts that no longer
+    (or never) existed and told to amend.
+
+## Future Work
+
+- `libs/ui` has the same typecheck/build `dist` race, and there the
+  declarations are what web compiles against → **0578**.
