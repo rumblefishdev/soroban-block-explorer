@@ -216,8 +216,9 @@ are indicative; the size is not affected.
   `test` target already lists `{workspaceRoot}/crates/**/*.rs` as an input,
   and Nx 22 counts inputs for `affected`: a change to one `.rs` file affects
   `@rumblefish/soroban-block-explorer-aws-cdk` and nothing else.
-- **`.nx/cache` stays uncached**, unlike step 3's proposal: task 0389
-  measured it a no-op (no target in `nx.json` is cacheable) and slower.
+- ~~**`.nx/cache` stays uncached**, unlike step 3's proposal: task 0389
+  measured it a no-op (no target in `nx.json` is cacheable) and slower.~~
+  Wrong, see "Nx cache in CI" below.
 - **The develop→master pull request is open only around a release.** The
   docs-only skip pays most on feature pull requests that are up to date with
   their base. One branched from an older develop sees develop's code changes
@@ -255,8 +256,9 @@ job has a name and fails when the cache listing fails.
 
 Decided (karolkow):
 
-- **`.nx/cache` stays off** (plan step 3): no target in `nx.json` is
-  cacheable, and task 0389 measured it slower (481 s → 621 s).
+- ~~**`.nx/cache` stays off** (plan step 3): no target in `nx.json` is
+  cacheable, and task 0389 measured it slower (481 s → 621 s).~~ Taken on a
+  wrong premise and reversed, see "Nx cache in CI" below.
 - **The task stays a single file** although it is over the ~150-line mark.
 
 Left as judgement calls: "documentation" is defined as `lore/`, `docs/`,
@@ -321,3 +323,21 @@ Checked through `git hook run`: nothing staged, 0.3 s; a staged deletion of
 `infra/scripts/deploy-scope.sh` checks the infra project; a docs-only pushed
 range runs no tasks and no clippy; an unknown remote sha falls back to
 develop; a range touching `crates/` checks the infra project and runs clippy.
+
+### Nx cache in CI (karolkow: add it here and measure)
+
+The premise behind keeping `.nx/cache` off was wrong. `nx.json` marks no
+target cacheable, but the Nx plugins infer `cache: true` for what they
+create: `lint`, `typecheck`, `test` and `build` all carry it in the web and
+infra projects (`nx show project … --json`), and a local commit replayed 13
+of 13 tasks from the cache. Task 0389's measurement most likely predates the
+inferred targets.
+
+Nx 22 needs two directories for a hit, per its own source
+(`node_modules/nx/src/tasks-runner/cache.js`, `assertCacheIsValid`): the
+outputs in `.nx/cache`, and the records of them in a database under
+`.nx/workspace-data`, named after the machine id. Outputs without their
+record read as "Unrecognized Cache Artifacts", a warning, and every task
+runs. The TypeScript job therefore caches both. Whether a GitHub runner keeps
+its machine id from run to run decides whether this pays; if it does not,
+the step comes out again before merge.
