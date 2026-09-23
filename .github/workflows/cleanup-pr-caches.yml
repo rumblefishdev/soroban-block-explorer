@@ -1,0 +1,27 @@
+name: Clean up pull request caches
+
+# A pull request's CI writes caches under its own ref (refs/pull/N/merge) that
+# no other branch can read. GitHub drops a cache only after 7 days unused, or
+# the oldest ones once the repository reaches its 10 GB cap — often master's.
+# On 2026-09-23, 3.8 GB of the 9.73 GB in use belonged to two pull requests
+# merged a week earlier. Deleting them when the pull request closes keeps the
+# space for caches someone can still read.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          for id in $(gh cache list --ref "$REF" --limit 100 --json id --jq '.[].id'); do
+            gh cache delete "$id" && echo "deleted $id"
+          done
