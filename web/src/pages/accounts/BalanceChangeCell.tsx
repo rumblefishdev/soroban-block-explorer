@@ -238,18 +238,33 @@ function AssetLink({
 /**
  * Display code — the app-wide {@link assetDisplayCode} ladder, adapted to the
  * shape an operation carries: the asset arrives as a STRING (`'native'` |
- * `'CODE:ISSUER'`) rather than as an asset row, so the native rung has to be
- * fed from `isNativeAssetString` instead of a family name.
+ * `'CODE:ISSUER'` | a `C…` contract StrKey) rather than as an asset row, so
+ * the native rung is fed from `isNativeAssetString` instead of a family name
+ * and the contract rung from that same string.
  *
- * A bespoke token with no on-chain symbol must NOT inherit XLM's name — with
- * no contract address on this row either, the ladder bottoms out and the
- * unnamed marker is the honest answer, not a wrong ticker.
+ * Feeding the contract rung is what makes this row agree with the asset page:
+ * a token with no classic code and no on-chain symbol reads `CB2T…3B5R` in
+ * both, instead of a marker here and its address there. 605 of 4 463 soroban
+ * assets publish no symbol (production, 2026-09-22).
+ *
+ * The marker survives for the one case that has nothing left: `asset` is EMPTY
+ * when the API refuses the link (no `assets` row, so `/assets/{id}` answers
+ * 404), and then the row carries no code, no symbol and no address — 66 tokens
+ * and 274 transfers on production, all fungible; a non-fungible row keeps its
+ * address.
+ *
+ * It says UNREGISTERED, not "unnamed" and not a dash: the movement IS indexed,
+ * and the token is one the registry never got a row for, because that row comes
+ * from the classifier's guess at the WASM's function names rather than from the
+ * evidence that the contract moved an amount (task 0542).
  */
 function assetLabel(change: AccountBalanceChange): string {
+  const native = isNativeAssetString(change.asset);
   return (
     assetDisplayCode({
-      asset_type_name: isNativeAssetString(change.asset) ? 'native' : null,
+      asset_type_name: native ? 'native' : null,
       asset_code: change.asset_code,
-    }) ?? 'Unnamed token'
+      contract_id: native ? null : change.asset,
+    }) ?? 'Unregistered token'
   );
 }
