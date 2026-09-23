@@ -11,7 +11,6 @@ links:
   - '.husky/pre-commit'
   - '.husky/pre-push'
   - '.github/workflows/cleanup-pr-caches.yml'
-  - 'tools/scripts/run-affected-checks.mjs'
   - 'Cargo.toml'
 history:
   - date: '2026-09-15'
@@ -167,9 +166,10 @@ Branch `perf/0555_dev-flow`, one pull request.
 
 - **`.husky/pre-push`** reads the pushed refs from stdin and runs clippy only
   when the range touches `crates/`, `Cargo.toml`, `Cargo.lock` or
-  `rust-toolchain.toml`. A new branch is compared from its merge base with
-  `origin/develop`; a range that cannot be diffed counts as Rust.
-- **`tools/scripts/run-affected-checks.mjs`** lost its target discovery (three
+  `rust-toolchain.toml`. A new branch, or a remote commit this clone lacks,
+  is compared from its merge base with `origin/develop`.
+- **`tools/scripts/run-affected-checks.mjs`** (later removed, see below) lost
+  its target discovery (three
   `nx show projects` calls on every commit and push; `nx affected` skips a
   target no project has anyway). A commit of `.md` files alone exits before
   Nx starts.
@@ -290,3 +290,34 @@ compares with `origin/develop`. On this branch that still reaches all 4
 projects — deleting `rust/project.json` changes the project graph, which
 Nx counts against every project; `Cargo.toml`, `ci.yml` and the script
 itself reach none.
+
+### The script removed (karolkow: hooks call Nx directly)
+
+The rewritten script still only glued two things that already do the work:
+Nx takes a file list (`--stdin`) or a commit range (`--base`/`--head`) and
+finds the projects itself, and git hands `pre-push` the exact pushed range —
+which the hook already read for clippy while the script guessed the same
+range a second way, through the upstream. The published Nx hook setups call
+`nx affected` straight from the hook, with lint-staged for formatting only.
+
+- **`pre-commit`**: lint-staged formats; the staged paths (deletions
+  included, `.md` excluded) go to `nx affected --stdin`; an empty list starts
+  no Nx.
+- **`pre-push`**: one range per pushed ref — from the remote sha, or from the
+  merge base with `origin/develop` for a new branch or a remote commit this
+  clone lacks — drives both `nx affected --base --head` and the clippy
+  decision.
+- `tools/scripts/run-affected-checks.mjs` and the `verify:staged` /
+  `verify:push` scripts are gone. The `/pr` skill's verify step named them
+  and a `format:staged` script that never existed, and told to amend; it now
+  says the hooks run the checks and a failure is fixed in a new commit.
+
+Rejected: a lint-staged function for `pre-commit` (lint-staged passes no
+deleted files by default, feeding them in would hand them to prettier too,
+and it splits long lists so Nx could run several times); moving to lefthook
+(declarative, but a rebuild of the whole hook setup — its own task).
+
+Checked through `git hook run`: nothing staged, 0.3 s; a staged deletion of
+`infra/scripts/deploy-scope.sh` checks the infra project; a docs-only pushed
+range runs no tasks and no clippy; an unknown remote sha falls back to
+develop; a range touching `crates/` checks the infra project and runs clippy.
