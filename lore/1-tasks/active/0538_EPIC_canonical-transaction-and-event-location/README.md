@@ -371,3 +371,45 @@ ledger (checked on ledger 64,454,000 for one account and native XLM).
 **Before every later window:** check whether stellar-prices-api reads the
 table — its users' grants (`users.d/services.xml`) and the users that queried
 it in `system.query_log` (decision karolkow, 2026-09-23). For 0575: none.
+
+## Database size — the whole list (decided karolkow, 2026-09-23)
+
+This epic is also the umbrella for every schema-level space saving, not only
+the transaction location (the same tables and the same windows). Survey:
+[notes/R-whole-database-survey-2026-09-23.md](notes/R-whole-database-survey-2026-09-23.md).
+Estimates until a trial measures them.
+
+| candidate                                                                                                                   | saving     | window                                      | where                                       |
+| --------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------- | ------------------------------------------- |
+| `transaction_hash_index` keyed by an 8-byte hash prefix; the full hash checked in `transactions`                            | ~120 GiB   | yes                                         | step 8; task 0396 (`transaction_hash_dict`) |
+| `operations_appearances` by position, `pool_ids` dropped, codecs                                                            | ~40–50 GiB | yes                                         | step 5; task 0372                           |
+| `transactions.id` dropped                                                                                                   | 31.57 GiB  | yes                                         | step 7                                      |
+| `soroban_invocations_appearances` folded into `contract_transactions` (below)                                               | ~8–9 GiB   | yes                                         | step 5                                      |
+| `operation_pools`, `lp_operation_amounts` by position                                                                       | ~9 GiB     | yes                                         | step 5                                      |
+| codecs on integer columns without one (`soroban_events`, `contract_transactions`, `transaction_hash_index.ledger_sequence`) | ~15–25 GiB | no (`MODIFY CODEC`, parts rewrite on merge) | —                                           |
+| `transactions.idx_tx_hash_bloom` dropped                                                                                    | 4.93 GiB   | no (`DROP INDEX`)                           | —                                           |
+| `soroban_events` payload as raw XDR instead of JSON text                                                                    | unknown    | yes                                         | tasks 0572, 0416; prices-api reads the JSON |
+| account hash surrogates → dense ids (~99 GiB of columns)                                                                    | unknown    | everywhere                                  | research only                               |
+| prices-api backup tables (`rollout_0286_bak_*`, `price_ohlcv_*_bak`)                                                        | 48.53 GiB  | —                                           | theirs to drop                              |
+
+**`soroban_invocations_appearances` is a subset of `contract_transactions`.**
+Same grain — one row per (contract, transaction); the invocation tree is
+folded into `amount`. Ledgers 64,000,000–64,010,000: 1,978,709 invocation
+pairs, 2,915,824 `contract_transactions` pairs, 0 invocation pairs missing
+from it (68% of the pairs are invocations). What only the invocations table
+carries: `caller_id`, `caller_contract_id`, the fold count. Its readers: the
+contract list's and detail's invocation stats (count, unique callers), the
+Invocations tab (driver + caller), the transaction page's invocations.
+**Decided (karolkow, 2026-09-23): fold it into `contract_transactions`** —
+`caller_id`, `caller_contract_id` and the fold count become columns there
+(count 0 = touched by an event or an operation only), and the invocations
+table goes. The 937,115 pairs of that range found only in
+`contract_transactions` all come from classic transactions (SAC events of
+classic payments and trades since protocol 23).
+
+**`transactions.idx_tx_hash_bloom` added nothing — dropped 2026-09-23**
+(task 0579). Both reads of
+`transactions` by hash (`search/queries.rs:263`, `transactions/queries.rs:729`)
+pin `ledger_sequence` first, and one ledger fits one granule. The detail read
+matches `hash OR inner_tx_hash`, which is how an inner hash found through
+`transaction_hash_index` resolves.
