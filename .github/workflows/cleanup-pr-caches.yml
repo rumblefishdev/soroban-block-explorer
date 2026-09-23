@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   cleanup:
+    name: Delete the pull request's caches
     runs-on: ubuntu-latest
     steps:
       - env:
@@ -22,6 +23,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           REF: refs/pull/${{ github.event.pull_request.number }}/merge
         run: |
-          for id in $(gh cache list --ref "$REF" --limit 100 --json id --jq '.[].id'); do
+          # Listed first so a failed listing fails the job, not an empty loop.
+          ids=$(gh cache list --ref "$REF" --limit 100 --json id --jq '.[].id')
+          for id in $ids; do
             gh cache delete "$id" && echo "deleted $id"
           done

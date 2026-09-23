@@ -89,14 +89,18 @@ jobs:
             --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml")][0].conclusion')
           echo "previous run: ${previous:-none}"
           [ "$previous" = success ] || exit 0
-          # compare A...B lists what B changed since it left A; 300 is the
-          # API's cap on files, so a list that reaches it is not trusted.
-          files=$(for range in "$BEFORE...$AFTER" "$BEFORE...$BASE"; do
-            gh api "repos/$GITHUB_REPOSITORY/compare/$range" \
-              --jq 'if (.files | length) >= 300 then "too-many" else .files[].filename end'
-          done)
-          echo "$files"
-          if ! echo "$files" | grep -qvE '^(lore|docs)/|\.md$'; then
+          # compare A...B lists what B changed since it left A. The pushed
+          # commit must descend from the tested one ("ahead"): after a
+          # force-push the list starts at the merge base and misses code the
+          # push dropped. 300 is the API's cap on files, so a list that
+          # reaches it is not trusted. An API error fails the assignment,
+          # and with it the step: a full run.
+          pushed=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$AFTER" \
+            --jq 'if .status != "ahead" or (.files | length) >= 300 then "not-comparable" else .files[].filename end')
+          base=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$BASE" \
+            --jq 'if (.files | length) >= 300 then "too-many" else .files[].filename end')
+          printf '%s\n%s\n' "$pushed" "$base"
+          if ! printf '%s\n%s\n' "$pushed" "$base" | grep -qvE '^$|^(lore|docs)/|\.md$'; then
             echo "only=true" >> "$GITHUB_OUTPUT"
           fi
 

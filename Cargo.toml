@@ -71,9 +71,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 toml = "0.8"
 
 # Debug info: file:line for our crates (panic backtraces stay readable), none
-# for dependencies. Full debug info costs ~20% more target/ and build CPU and
-# nothing here uses it; `cargo test --profile debugging` restores it for a
-# debugger session.
+# for dependencies. Full debug info made a clean test build's target/ 56%
+# larger (6.42 vs 4.11 GiB, task 0555) and nothing here uses it;
+# `cargo test --profile debugging` restores it for a debugger session.
 [profile.dev]
 debug = "line-tables-only"
 

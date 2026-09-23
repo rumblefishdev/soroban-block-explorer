@@ -12,12 +12,12 @@ set -e
 # counts as Rust.
 zero=0000000000000000000000000000000000000000
 rust=no
-while read -r _ local _ remote; do
-  [ "$local" = "$zero" ] && continue
-  if [ "$remote" = "$zero" ]; then
-    remote="$(git merge-base origin/develop "$local" 2>/dev/null)" || { rust=yes; break; }
+while read -r _ local_sha _ remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  if [ "$remote_sha" = "$zero" ]; then
+    remote_sha="$(git merge-base origin/develop "$local_sha" 2>/dev/null)" || { rust=yes; break; }
   fi
-  changed="$(git diff --name-only "$remote" "$local" -- crates Cargo.toml Cargo.lock rust-toolchain.toml 2>/dev/null)" || { rust=yes; break; }
+  changed="$(git diff --name-only "$remote_sha" "$local_sha" -- crates Cargo.toml Cargo.lock rust-toolchain.toml 2>/dev/null)" || { rust=yes; break; }
   if [ -n "$changed" ]; then rust=yes; break; fi
 done
 
