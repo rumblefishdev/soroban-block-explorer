@@ -2111,3 +2111,26 @@ snapshots. The same question for the six Soroban-side extractors that skip
   four-function sweep contract and is still in the pool registry;
   `soroban_contracts` shows `f74d87d7…` for `CBENABXP…`, which runs `6fe099b6…`
   (task 0320's stale-hash symptom). Both under audit.
+
+### Pool as legs — PR 3 of the split (2026-09-23)
+
+PR #479 (`feat/0374-pool-legs`): the list and detail endpoints read `legs`,
+`filter[pool_kind]` replaces the four positional leg filters, a Soroban pool is
+addressed by its `C…` contract, and the frontend renders every leg with a
+kind chip row and badge.
+
+- **Measured before it:** 770 Soroban pools list on production as `XLM / XLM`
+  under a wrong `L…` id (positions 21,329 onward in the default order) — their
+  pair columns hold placeholders and develop's list has no kind filter.
+- **No data step:** `legs` is filled for every row (0 empty of 54,303; 11
+  Soroban pools with more than two legs).
+- **Found while rebuilding it:** a leg nothing identifies made
+  `assetLegLabel` throw outside any section boundary, which blanks the app.
+  One live pool has one (`CCH6A2JC…`, the inert pool whose leg has no `assets`
+  row). It now reads `Unregistered token`, one label shared with the
+  balance-change cell.
+- **DECIDED (karolkow, 2026-09-23): deploy PR 3 together with PR 4 and PR 5.**
+  Until those land a Soroban pool shows `—` for reserves, TVL and shares, and
+  the participant and activity sections show zeros that are not measurements.
+  The zeros are on production today as well, under the wrong pair, but the
+  kind filter would make them easy to reach.
