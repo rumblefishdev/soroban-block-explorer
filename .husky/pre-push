@@ -5,5 +5,34 @@ own="$(git rev-parse --show-toplevel)/.husky/$(basename "$0")"
 [ "$0" -ef "$own" ] || { [ -f "$own" ] && exec sh -e "$own" "$@"; exit 0; }
 
 set -e
-SQLX_OFFLINE=true cargo clippy --all-targets -- -D warnings
-pnpm run -s verify:push
+
+# Git hands the pushed refs on stdin, one "<local ref> <local sha> <remote ref>
+# <remote sha>" per line. The commits a ref adds run from what the remote has
+# to the local sha; a new branch, or a remote commit this clone lacks, counts
+# from where the branch left develop. Clippy runs when any of them touch Rust,
+# Nx for the projects they reach.
+#
+# Both check the files on disk, so they only speak for the checked-out commit.
+# A ref pointing elsewhere — another branch, a tag object — is not checked
+# here; CI checks it once it reaches a pull request or master.
+zero=0000000000000000000000000000000000000000
+head="$(git rev-parse HEAD)"
+rust=no
+while read -r local_ref local_sha _ remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue # a branch deletion
+  if [ "$local_sha" != "$head" ]; then
+    echo "pre-push: $local_ref is not the checked-out commit; not checked here (CI checks it through a pull request)."
+    continue
+  fi
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    remote_sha="$(git merge-base origin/develop "$local_sha")"
+  fi
+  if [ -n "$(git diff --name-only "$remote_sha" "$local_sha" -- crates Cargo.toml Cargo.lock rust-toolchain.toml)" ]; then
+    rust=yes
+  fi
+  pnpm exec nx affected -t lint typecheck test --base="$remote_sha" --head="$local_sha" --outputStyle=static </dev/null
+done
+
+if [ "$rust" = yes ]; then
+  SQLX_OFFLINE=true cargo clippy --all-targets -- -D warnings
+fi

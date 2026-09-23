@@ -20,10 +20,13 @@ jobs:
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # the previous commit's run, below
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      typescript: ${{ steps.filter.outputs.typescript }}
-      api_types_codegen: ${{ steps.filter.outputs.api_types_codegen }}
+      rust: ${{ steps.docs.outputs.only != 'true' && steps.filter.outputs.rust || 'false' }}
+      typescript: ${{ steps.docs.outputs.only != 'true' && steps.filter.outputs.typescript || 'false' }}
+      api_types_codegen: ${{ steps.docs.outputs.only != 'true' && steps.filter.outputs.api_types_codegen || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
@@ -65,6 +68,42 @@ jobs:
               - 'pnpm-workspace.yaml'
               - '.github/workflows/ci.yml'
 
+      # On a pull request the filter above sees the whole pull request, so a
+      # documentation commit pushed to an open one re-ran every job — most
+      # often the develop→master release, which every lore commit on develop
+      # moves. Such a push tests nothing new when the code is the one the
+      # previous commit's run already passed: nothing but documents since that
+      # commit, and nothing on the base branch that commit lacks. A red or
+      # cancelled previous run re-tests everything.
+      - name: Documentation-only push after a green run
+        id: docs
+        if: github.event.action == 'synchronize'
+        continue-on-error: true # any failure here means a full run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.base_ref }} # the branch, so its tip now
+        run: |
+          previous=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$BEFORE&event=pull_request" \
+            --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml")][0].conclusion')
+          echo "previous run: ${previous:-none}"
+          [ "$previous" = success ] || exit 0
+          # compare A...B lists what B changed since it left A. The pushed
+          # commit must descend from the tested one ("ahead"): after a
+          # force-push the list starts at the merge base and misses code the
+          # push dropped. 300 is the API's cap on files, so a list that
+          # reaches it is not trusted. An API error fails the assignment,
+          # and with it the step: a full run.
+          pushed=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$AFTER" \
+            --jq 'if .status != "ahead" or (.files | length) >= 300 then "not-comparable" else .files[].filename end')
+          base=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$BASE" \
+            --jq 'if (.files | length) >= 300 then "too-many" else .files[].filename end')
+          printf '%s\n%s\n' "$pushed" "$base"
+          if ! printf '%s\n%s\n' "$pushed" "$base" | grep -qvE '^$|^(lore|docs)/|\.md$'; then
+            echo "only=true" >> "$GITHUB_OUTPUT"
+          fi
+
   typescript:
     name: TypeScript (lint, build, typecheck)
     needs: changes
@@ -85,21 +124,49 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm nx format:check --all
-      - run: pnpm nx run-many -t lint build typecheck test
+
+      # A pull request checks the projects its change reaches; master checks
+      # all of them. Cargo is not an Nx target: the Rust jobs below run it
+      # with their cache. (An Nx project that wrapped cargo made this job
+      # compile the workspace a second time, uncached — ~6.5 min of it on
+      # 2026-09-22; task 0555 removed it.) The infra test that reads crates/
+      # (task 0455) still runs on a Rust-only change: crates/**/*.rs is one of
+      # its inputs.
+      - name: Lint, build, typecheck, test (affected)
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm nx affected -t lint build typecheck test --base="origin/$GITHUB_BASE_REF" --head=HEAD
+          echo "e2e=$(pnpm -s nx show projects --affected --withTarget e2e --base="origin/$GITHUB_BASE_REF" --head=HEAD --json)" >> "$GITHUB_ENV"
+      - name: Lint, build, typecheck, test (all)
+        if: github.event_name != 'pull_request'
+        run: |
+          pnpm nx run-many -t lint build typecheck test
+          echo "e2e=all" >> "$GITHUB_ENV"
 
       # Browser regression for the account page (issue #377, task 0463). The
       # three assertions there are the ones jsdom cannot make — real history
       # for the Back button, real layout for the 1,015-row pager — so the
-      # suite needs a real browser, and the runner image ships none. ~95 MB.
-      #
-      # Not cached: one download per run beats cache-key bookkeeping while
-      # this is a single-browser, three-test suite. Add actions/cache on
-      # ~/.cache/ms-playwright if the suite or the browser list grows.
+      # suite needs a real browser, and the runner image ships none. ~95 MB,
+      # cached per Playwright version; the system libraries it needs are not
+      # in the cache and install either way.
       #
       # The API is intercepted inside the tests (page.route), so this needs no
       # ClickHouse certificate and no network beyond the browser download.
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm nx run @rumblefish/soroban-block-explorer-web:e2e
+      - name: Playwright version
+        if: env.e2e != '[]'
+        run: echo "playwright=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        if: env.e2e != '[]'
+        id: browsers
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ env.playwright }}
+      - if: env.e2e != '[]' && steps.browsers.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+      - if: env.e2e != '[]' && steps.browsers.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+      - if: env.e2e != '[]'
+        run: pnpm nx run @rumblefish/soroban-block-explorer-web:e2e
 
       # The release tag → deploy scope mapping. Cheap, and the only guard on
       # the case that matters: a plain `production-*` tag must stay
@@ -155,10 +222,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     env:
       SQLX_OFFLINE: 'true'
-      # line-tables debug: keeps file:line in panic backtraces (readable CI logs)
-      # without the full debug info the build doesn't need. RUST_BACKTRACE so a
-      # failing test actually prints where it panicked.
-      CARGO_PROFILE_DEV_DEBUG: '1'
+      # The debug info comes from Cargo.toml's dev profile (file:line only).
+      # RUST_BACKTRACE so a failing test actually prints where it panicked.
       RUST_BACKTRACE: '1'
     steps:
       - uses: actions/checkout@v4

@@ -13,8 +13,6 @@
     "test": "nx run-many -t test",
     "typecheck": "nx run-many -t typecheck",
     "prepare": "husky",
-    "verify:staged": "node tools/scripts/run-affected-checks.mjs staged",
-    "verify:push": "node tools/scripts/run-affected-checks.mjs push",
     "board": "node tools/scripts/generate-lore-board.mjs",
     "db:tunnel": "./tools/scripts/db-tunnel.sh",
     "infra:bootstrap": "make -C infra bootstrap",

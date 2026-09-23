@@ -69,3 +69,21 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 # TOML parsing (SEP-1 stellar.toml files per task 0188).
 toml = "0.8"
+
+# Debug info: file:line for our crates (panic backtraces stay readable), none
+# for dependencies. Full debug info made a clean test build's target/ 56%
+# larger (6.42 vs 4.11 GiB, task 0555) and nothing here uses it;
+# `cargo test --profile debugging` restores it for a debugger session.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
+
+# `inherits` carries the dependency override above along; undo it here.
+[profile.debugging.package."*"]
+debug = true
