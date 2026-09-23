@@ -133,7 +133,9 @@ after the checks (`max_table_size_to_drop` override, as in 0541 phase 5).
 - [x] Read benchmark recorded; no list over the gate (< 1 s, < 1 GiB) —
       staging, 2026-09-23; native XLM 1451 → 516 MiB, hottest account
       639 MiB (re-measure after the swap)
-- [ ] Neither table carries `transaction_id`; saving re-measured per table
+- [x] Neither table carries `transaction_id`; saving re-measured per table —
+      swapped 2026-09-23: 112.04 → 20.12 GiB, 100.76 → 12.39 GiB; old
+      tables dropped the same day
 - [ ] Account and asset lists in execution order inside a ledger — checked on
       ledger 64 454 000 and on one account, one asset
 - [ ] `transaction_id` still has no new consumer added by this change
@@ -168,6 +170,57 @@ after the checks (`max_table_size_to_drop` override, as in 0541 phase 5).
   (−180 GiB). Head partition 129 is the window's. Numbers, gate history and
   the read benchmark:
   [notes/R-fill-and-read-benchmark.md](notes/R-fill-and-read-benchmark.md).
+
+## The window (2026-09-23)
+
+PR #483 merged (`cb7ea315`) right before it. Run from one local checkout,
+`window-0575`: first at `9a89d35c` — the code production ran, deployed
+2026-09-22 15:26 UTC, not the last `production-*` tag — then at `cb7ea315`.
+Ingest stood still for ~51 minutes, most of it the first Lambda build.
+
+| UTC      | step                                                                                                                               |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 13:02    | Pause: Compute from `9a89d35c` with `indexerLambdaConcurrency: 0`. **H = 64,576,549** (closed 13:02:03); both old tables end at H. |
+| 13:46    | Tail: `fill_presence.zsh … 64500000-64576550`, both tables, gated.                                                                 |
+| 13:51    | New code, still paused: Compute from `cb7ea315`, concurrency 0.                                                                    |
+| ~13:52   | Swap: `EXCHANGE TABLES` for both. Between 13:51 and the swap the account and asset transaction lists returned errors.              |
+| 13:53:36 | Resume: Compute from `cb7ea315`, concurrency 1; the trigger enabled.                                                               |
+
+**Checks before the swap** (read-only): partition 129 old = staging on rows
+(54,074,792 and 34,295,186) and on distinct keys; both span 64,500,000–H,
+all 76,550 ledgers present. Partitions 100–128: 281 of 281 slices present in
+both tables, same first and last ledger; where the row counts differ the gap
+is the old table's unmerged duplicates (checked exactly on the two worst
+slices: distinct keys equal). The writer against the target DDL: the
+production persist path (`persist_e2e`, two more e2e tests) on a local
+ClickHouse 26.3 with the merged `init.sql`, plus one direct
+`operation_asset_appearances` insert; the row structs equal the staging
+tables' `system.columns` on production.
+
+**After the swap:** `transaction_participants` 10.96 bn rows, 20.12 GiB
+(was 112.04); `operation_asset_appearances` 11.82 bn, 12.39 GiB (was
+100.76). The old tables stay under the `_staging_position` names until
+step 7.
+
+**Checks after the resume** (read-only, first ~50 ledgers after H): the
+indexer and API Lambdas 0 errors, the DLQ empty; rows after H land only in
+the new tables (0 in the old); 0 rows of either table without a transaction
+at their position; every transaction's source account is a participant
+(15,234 of 15,234); every asset of `asset_transfers` appears in
+`operation_asset_appearances` (16,588 of 16,588, as before H: 35,001 of
+35,001); the account and asset driver seeks return the new head.
+
+**Old tables dropped the same day** (step 7, ~14:12 UTC, decision karolkow:
+drop once the check is exact, no week-long rollback horizon). Before the
+drop, `system.query_log` since 2026-09-22 00:00 showed two writers to either
+table: `ingestion_writer` — 54,260 inserts against 27,131 ledgers closed in
+that time (one per ledger per table), all ≥ 64,549,885, i.e. partition 129,
+re-copied after the pause — and the operator's fill (`dev_shared`, reading
+the old tables into the staging ones, 09:46–13:46). No backfill or repair
+touched the old tables after their slices were copied. A full re-gate over
+the old and new tables was stopped for the drop at 110 complete slices
+(4.52 bn keys, 0 differences); the hash ↔ position map in `transactions` had
+no conflict in the 81 slices checked.
 
 ## Design Decisions
 
