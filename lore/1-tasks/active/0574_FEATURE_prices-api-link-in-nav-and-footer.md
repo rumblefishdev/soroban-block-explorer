@@ -2,7 +2,7 @@
 id: '0574'
 title: 'FEATURE: link to the Prices API from the navbar and the footer'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0519', '0407', '0494']
 tags: [frontend, nav, footer, priority-medium, effort-small]
@@ -16,6 +16,10 @@ history:
       navbar and the footer. No existing task covered it (searched
       backlog/active/blocked on develop, all remote branches, and open
       GitHub issues).
+  - date: '2026-09-23'
+    status: active
+    who: stkrolikiewicz
+    note: 'Promoted to active; implementation starting.'
 ---
 
 # FEATURE: link to the Prices API from the navbar and the footer
@@ -25,10 +29,9 @@ history:
 The explorer does not link to the Prices API anywhere. Add one link in the
 top navigation and one in the footer, so users can find it from any page.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** not started. The target URL is not decided yet (see Open
-questions).
+**Current state:** implementation starting.
 
 ## Context
 
