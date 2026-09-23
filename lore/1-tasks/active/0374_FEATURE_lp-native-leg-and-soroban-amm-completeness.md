@@ -2158,3 +2158,25 @@ up or omitting.
   `SHA256(LiquidityPoolParameters)` and compares it with the
   `liquidity_pool_id` of a real `LiquidityPoolEntry`. A corpus test with no
   network would pin the function the fix above adds.
+
+### One-legged activity rows are round trips, not lost data (2026-09-23)
+
+Found while reviewing PR 3 (#479): `PoolActivityItem.event` was documented as
+null only in an "unreachable" malformed case. Measured in the 100k ledgers to
+64,576,995: **350 of 6.09M** operations carry one leg only in
+`lp_operation_amounts`.
+
+- **Every one is a multi-pool path payment** (types 2 and 13, routes through
+  2–5 pools), and the stored leg is always positive — the asset ENTERED the
+  pool.
+- **Cause, verified on one transaction** (`0d22447e…`, strict receive through
+  5 pools): the route crosses pool `1746987b…` (EURC/yXLM) twice in a row, there
+  and back — hop 3 takes 415,847 yXLM and pays 37,745 EURC, hop 4 takes the same
+  37,745 EURC and pays 413,354 yXLM. EURC nets to exactly zero, and
+  `pool_fill_amounts` drops a leg that nets to zero (`stage.rs:185`); what is
+  left is +2,493 yXLM, the pool's take on the round trip.
+- **Not an indexer defect:** the row is the op's true net effect on the pool.
+- **Open for the activity PR (split PR 7):** such a row has `event = null` and
+  renders `—`. It is a trade in substance; whether to classify a round trip as
+  one (and how to show a leg that moved and came back) is a display decision.
+  PR 3 corrects the DTO comment to say the case is real and keeps the handling.
