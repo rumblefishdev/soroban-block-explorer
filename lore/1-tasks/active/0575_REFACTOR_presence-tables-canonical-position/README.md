@@ -130,7 +130,9 @@ after the checks (`max_table_size_to_drop` override, as in 0541 phase 5).
 ## Acceptance Criteria
 
 - [x] Trial partition measured, codec choice recorded with numbers (partition 128, 2026-09-23)
-- [ ] Read benchmark recorded; no list over the gate (< 1 s, < 1 GiB)
+- [x] Read benchmark recorded; no list over the gate (< 1 s, < 1 GiB) —
+      staging, 2026-09-23; native XLM 1451 → 516 MiB, hottest account
+      639 MiB (re-measure after the swap)
 - [ ] Neither table carries `transaction_id`; saving re-measured per table
 - [ ] Account and asset lists in execution order inside a ledger — checked on
       ledger 64 454 000 and on one account, one asset
@@ -161,6 +163,11 @@ after the checks (`max_table_size_to_drop` override, as in 0541 phase 5).
   window in `docs/deployment.md` ("Presence tables by position"). Fill
   statement and gate dry-run read-only on production (64,450,000–64,460,000:
   keys equal, 0 without a position); the loop dry-run with stubbed `chw`/`chq`.
+  **Staging filled 2026-09-23** for partitions 100–128 of both tables, every
+  50k slice gated; 112.03 → 19.97 GiB and 100.75 → 12.35 GiB before merges
+  (−180 GiB). Head partition 129 is the window's. Numbers, gate history and
+  the read benchmark:
+  [notes/R-fill-and-read-benchmark.md](notes/R-fill-and-read-benchmark.md).
 
 ## Design Decisions
 
