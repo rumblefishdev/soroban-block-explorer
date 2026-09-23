@@ -30,6 +30,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import { usePagedRows, usePoolActivity } from '../../api/index.js';
 import { AssetIcon } from '../assets/AssetIcon.js';
+import { assetDisplayCode } from '../assets/assetType.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { assetLegLabel, legHref } from '../pool-shared/helpers.js';
@@ -261,7 +262,7 @@ function activityColumns(
                     {l.amount}
                   </Typography>
                   <AssetIcon
-                    code={assetLegLabel(l.leg)}
+                    code={assetDisplayCode(l.leg)}
                     iconUrl={l.leg.icon_url}
                     size={16}
                   />

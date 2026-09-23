@@ -2,7 +2,7 @@ import { Box } from '@mui/material';
 import type { PoolAssetLeg } from '@rumblefish/api-types';
 
 import { AssetIcon } from '../assets/AssetIcon.js';
-import { assetLegLabel } from './helpers.js';
+import { assetDisplayCode } from '../assets/assetType.js';
 
 /**
  * A pool's legs as overlapping coin avatars. Each uses the shared `AssetIcon`,
@@ -45,7 +45,9 @@ export function PoolLegIcons({
           // Legs are positional and an asset can repeat across pools but not
           // within one; the index is the only stable identity a leg has.
           key={i}
-          code={assetLegLabel(leg)}
+          // The ladder's null, not the unregistered label: an avatar lettered
+          // "U" would read as a real ticker's initial. `AssetIcon` shows `?`.
+          code={assetDisplayCode(leg)}
           iconUrl={leg.icon_url}
           size={size}
         />
