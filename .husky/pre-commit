@@ -9,9 +9,10 @@ pnpm exec lint-staged
 
 # Lint, typecheck and test the Nx projects the staged files belong to, deleted
 # files included: Nx maps a path to its project whether or not the file still
-# exists. Markdown feeds none of the three, so a commit of documents alone
+# exists. A move lists both paths (--no-renames), so the project it leaves is
+# checked too. Markdown feeds none of the three, so a commit of documents alone
 # never starts Nx.
-files="$(git diff --cached --name-only | grep -v '\.md$' || true)"
+files="$(git diff --cached --name-only --no-renames | grep -v '\.md$' || true)"
 if [ -n "$files" ]; then
   printf '%s\n' "$files" |
     pnpm exec nx affected -t lint typecheck test --stdin --outputStyle=static

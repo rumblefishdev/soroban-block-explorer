@@ -439,10 +439,10 @@ Reference throughput per partition is **to be measured** on a `us-east-1`
 instance against the production DB. Update this section after the first
 dry-run.
 
-## Nx targets
+## Build, test, lint
 
 ```bash
-pnpm nx build rust     # cargo build --workspace
-pnpm nx test rust      # cargo test --workspace
-pnpm nx lint rust      # cargo clippy --workspace -- -D warnings
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```

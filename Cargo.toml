@@ -83,3 +83,7 @@ debug = false
 [profile.debugging]
 inherits = "dev"
 debug = true
+
+# `inherits` carries the dependency override above along; undo it here.
+[profile.debugging.package."*"]
+debug = true
