@@ -718,12 +718,6 @@ struct IssuerRow {
 /// statement comment). Step 2 resolves the page's issuer surrogates → G-StrKey
 /// via a bloom-pruned `accounts WHERE id IN (...)` seek (NEVER a full-table
 /// `accounts` join — the Code 241 trap). `route_token` is then composed in Rust.
-/// The displayed code of an asset row — native's `XLM` standing in for its
-/// empty stored code. See the note in the function body before changing it.
-fn shown() -> String {
-    crate::common::asset_identity::shown_code_sql("a.")
-}
-
 async fn search_assets(
     client: &clickhouse::Client,
     q: &str,
@@ -825,7 +819,7 @@ async fn search_assets(
                  bagg.holder_count DESC NULLS LAST, \
                  a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC \
              LIMIT {per_group_limit}",
-            shown = shown(),
+            shown = crate::common::asset_identity::shown_code_sql("a."),
         );
         // One bind for the match, two for the tier — left to right, same needle.
         client

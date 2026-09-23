@@ -112,7 +112,7 @@ fn native_is_matched_by_type_not_by_stored_code() {
     };
     let sql = build_list_seek_sql(&params, Direction::Next);
     assert!(
-        sql.contains(&shown()),
+        sql.contains(&crate::common::asset_identity::shown_code_sql("a.")),
         "the needle must be matched against the DISPLAYED code, so native \
          XLM is reachable; got: {sql}"
     );

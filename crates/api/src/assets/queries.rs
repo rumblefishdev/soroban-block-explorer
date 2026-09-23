@@ -693,12 +693,6 @@ const SEEK_OVERFETCH: i64 = 8;
 /// count stay unit-testable: `code_clause` (0 or **3**), then `cursor_clause`
 /// (0 or 4). The trailing `LIMIT` is inlined. Only `sac_only` / search pull side
 /// tables into the seek; the default page is a pure `assets` PK walk.
-/// The displayed code of an asset row — native's `XLM` standing in for its
-/// empty stored code. One producer, in `common::asset_identity`.
-fn shown() -> String {
-    crate::common::asset_identity::shown_code_sql("a.")
-}
-
 fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> String {
     // Ordered by holders, not by the identity 4-tuple (task 0547). The old key
     // was the `assets` primary key, so the page was a prefix walk — but as a
@@ -770,7 +764,7 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
                 " AND (position({shown}, lower(?)) > 0 \
                    OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
                    OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0)",
-                shown = shown(),
+                shown = crate::common::asset_identity::shown_code_sql("a."),
             ),
         )
     } else {
