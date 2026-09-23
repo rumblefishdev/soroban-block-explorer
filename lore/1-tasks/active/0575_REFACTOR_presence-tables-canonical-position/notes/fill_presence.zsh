@@ -54,7 +54,10 @@
         print -r -- "FAILED fill $T [$a, $b): $out"
         return 1
       fi
-      g=$(chq "$(sed -e "s/{T}/$T/g" -e "s/{K}/$K/g" -e "s/{A}/$a/g" -e "s/{B}/$b/g" "$N/gate_presence.sql")" 2>&1)
+      # stdout only: a shell warning on stderr (e.g. a deleted working
+      # directory) must not read as a count. A transport error leaves stdout
+      # empty and fails the format check below.
+      g=$(chq "$(sed -e "s/{T}/$T/g" -e "s/{K}/$K/g" -e "s/{A}/$a/g" -e "s/{B}/$b/g" "$N/gate_presence.sql")" 2>/dev/null)
       if [[ $g != <->$'\t'<-> ]] || [[ ${g%%$'\t'*} != ${g#*$'\t'} ]]; then
         print -r -- "FAILED gate $T [$a, $b): old/new keys '$g'"
         return 1

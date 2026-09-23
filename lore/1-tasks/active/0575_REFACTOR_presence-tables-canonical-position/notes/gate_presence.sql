@@ -9,13 +9,19 @@
 -- position is unique in its ledger, so two old keys can never fold into one
 -- new key. Equal counts therefore mean the same set of (entity, transaction).
 --
--- Keys are counted as a 64-bit hash: uniqExact over the 3-column tuple ran out
--- of the read profile's 3.73 GiB on a 54 M-key slice (2026-09-23); over the
--- hash it takes 1.3–1.7 s there. A hash collision (~1e-4 per slice) can only
--- lower one side's count, so it fails the gate rather than passing a bad slice.
+-- Counted exactly, over the key tuple, in two halves of the slice. History
+-- (2026-09-23): the whole-slice tuple count ran out of the read profile's
+-- 3.73 GiB at 54 M keys; a 64-bit hash of the key fitted but collided once
+-- (59,350,000–59,400,000: 42,772,224 vs 42,772,225, the tuple counts equal).
+-- A key includes the ledger, so the halves are disjoint and their sum is the
+-- slice's count.
 SELECT
-    (SELECT uniqExact(cityHash64({K}, ledger_sequence, transaction_id)) FROM {T}
-     WHERE ledger_sequence >= {A} AND ledger_sequence < {B})                AS old_keys,
-    (SELECT uniqExact(cityHash64({K}, ledger_sequence, application_order)) FROM {T}_staging_position
-     WHERE ledger_sequence >= {A} AND ledger_sequence < {B})                AS new_keys
+    (SELECT uniqExact({K}, ledger_sequence, transaction_id) FROM {T}
+     WHERE ledger_sequence >= {A} AND ledger_sequence < ({A} + {B}) / 2)
+  + (SELECT uniqExact({K}, ledger_sequence, transaction_id) FROM {T}
+     WHERE ledger_sequence >= ({A} + {B}) / 2 AND ledger_sequence < {B})    AS old_keys,
+    (SELECT uniqExact({K}, ledger_sequence, application_order) FROM {T}_staging_position
+     WHERE ledger_sequence >= {A} AND ledger_sequence < ({A} + {B}) / 2)
+  + (SELECT uniqExact({K}, ledger_sequence, application_order) FROM {T}_staging_position
+     WHERE ledger_sequence >= ({A} + {B}) / 2 AND ledger_sequence < {B})    AS new_keys
 FORMAT TSV
