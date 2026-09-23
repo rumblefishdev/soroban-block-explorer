@@ -17,7 +17,7 @@
 # ReplacingMergeTree collapses repeated rows). Stops before any partition when
 # free disk is under 120 GiB.
 () {
-  local N=${1:A:h} which=$2 T K item P A B a b from to out free g
+  local N=${1:A:h} which=$2 T K item P A B a b from to out free g q lo hi side tbl col old new
   shift 2
   case $which in
     participants)      T=transaction_participants;    K=account_id ;;
@@ -54,12 +54,25 @@
         print -r -- "FAILED fill $T [$a, $b): $out"
         return 1
       fi
-      # stdout only: a shell warning on stderr (e.g. a deleted working
-      # directory) must not read as a count. A transport error leaves stdout
-      # empty and fails the format check below.
-      g=$(chq "$(sed -e "s/{T}/$T/g" -e "s/{K}/$K/g" -e "s/{A}/$a/g" -e "s/{B}/$b/g" "$N/gate_presence.sql")" 2>/dev/null)
-      if [[ $g != <->$'\t'<-> ]] || [[ ${g%%$'\t'*} != ${g#*$'\t'} ]]; then
-        print -r -- "FAILED gate $T [$a, $b): old/new keys '$g'"
+      # Gate: distinct keys of the slice, old table against staging copy,
+      # counted per quarter so no single query nears the memory cap. stdout
+      # only: a shell warning on stderr (a deleted working directory) must not
+      # read as a count; a transport error leaves it empty and fails below.
+      old=0; new=0
+      for q in 0 1 2 3; do
+        lo=$((a + (b - a) * q / 4)); hi=$((a + (b - a) * (q + 1) / 4))
+        for side in old new; do
+          if [[ $side == old ]]; then tbl=$T; col=transaction_id; else tbl=${T}_staging_position; col=application_order; fi
+          g=$(chq "$(sed -e "s/{TBL}/$tbl/g" -e "s/{K}/$K/g" -e "s/{C}/$col/g" -e "s/{LO}/$lo/g" -e "s/{HI}/$hi/g" "$N/gate_presence.sql")" 2>/dev/null)
+          if [[ $g != <-> ]]; then
+            print -r -- "FAILED gate $T [$lo, $hi) $side: '$g'"
+            return 1
+          fi
+          if [[ $side == old ]]; then old=$((old + g)); else new=$((new + g)); fi
+        done
+      done
+      if (( old != new )); then
+        print -r -- "FAILED gate $T [$a, $b): old keys $old, new keys $new"
         return 1
       fi
     done
