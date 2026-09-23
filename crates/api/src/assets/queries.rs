@@ -36,7 +36,7 @@
 //!   `.bind()`-ed (user-controlled); `asset_type` is interpolated (typed `i16`).
 //!
 //! `/transactions` (canonical 10) keys on the datasource-tagged `TxListCursor`
-//! (`ChSurrogate { ledger_sequence, transaction_id }`), mirroring the accounts sub-resource. It
+//! (`ChPosition { ledger_sequence, application_order }`), mirroring the accounts sub-resource. It
 //! seeks the `operation_asset_appearances` fan-out on its `asset_id`-leading PK
 //! (task 0359) — a bounded PK-prefix range read behind the `max(sequence)` commit
 //! fence, so a hot asset early-terminates near the tip and a rare asset stays a

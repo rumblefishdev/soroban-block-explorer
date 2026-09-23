@@ -14,9 +14,10 @@
 //!   active over time), so the single-partition prune used by the global
 //!   `/transactions` list does NOT apply here. Instead the page is driven off
 //!   `transaction_participants` (ORDER BY `(account_id, ledger_sequence,
-//!   transaction_id)` → an account-scoped primary-key seek), then the ≤ `limit`
-//!   transaction rows are fetched by `(ledger_sequence, id) IN (keys)`
-//!   (primary-key-prefix prune per ledger, multi-partition-safe) and re-ordered
+//!   application_order)` → an account-scoped primary-key seek), then the ≤
+//!   `limit` transaction rows are fetched by `(ledger_sequence,
+//!   application_order) IN (keys)` (the full `transactions` primary key,
+//!   multi-partition-safe) and re-ordered
 //!   in Rust. No unpruned `transactions FINAL` join — that would merge the
 //!   whole 3.6B-row table (the read_rows-quota trap fixed in the global list).
 
