@@ -28,6 +28,7 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *   below can't do this for `/api/*` since custom error pages are resolved
  *   through the _default_ behavior's origin, not the originating one
  * - CloudFront distribution with SPA routing fallback
+ * - S3 bucket for the distribution's standard logs, kept 30 days (task 0576)
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
  *   (main behaviors) and `config.enableApiSpaBasicAuth` (`/api/*` only)
@@ -74,6 +75,28 @@ export class DeliveryStack extends cdk.Stack {
       bucketName: `${config.envName}-soroban-explorer-api-spa`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy:
+        config.envName === 'production'
+          ? cdk.RemovalPolicy.RETAIN
+          : cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: config.envName !== 'production',
+    });
+
+    // ---------------------
+    // S3 Bucket (CloudFront standard logs — task 0576)
+    // ---------------------
+    // Legacy standard logging writes through ACLs, so the bucket needs
+    // OBJECT_WRITER ownership; the S3 default (BUCKET_OWNER_ENFORCED)
+    // disables ACLs and delivery fails. Objects expire after 30 days: every
+    // line carries a viewer IP, and the Prices portal's privacy policy
+    // (served from this distribution under `/api/*`) keeps technical logs
+    // for up to 30 days.
+    const logBucket = new s3.Bucket(this, 'LogBucket', {
+      bucketName: `${config.envName}-soroban-explorer-cf-logs`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
+      lifecycleRules: [{ expiration: cdk.Duration.days(30) }],
       removalPolicy:
         config.envName === 'production'
           ? cdk.RemovalPolicy.RETAIN
@@ -308,6 +331,8 @@ export class DeliveryStack extends cdk.Stack {
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+      enableLogging: true,
+      logBucket,
       defaultBehavior: {
         ...sharedBehaviorProps,
         cachePolicy: shortTtlCachePolicy,

@@ -2,9 +2,9 @@
 id: '0250'
 title: 'RESEARCH: ClickHouse quota enforcement gap on `X-ClickHouse-User` header auth path'
 type: RESEARCH
-status: backlog
+status: completed
 related_adr: []
-related_tasks: ['0240']
+related_tasks: ['0240', '0561', '0575']
 tags:
   [
     priority-high,
@@ -30,6 +30,14 @@ history:
       declares per-user caps that the production auth path (X-ClickHouse-User
       header via Caddy) does not enforce at all, so one unbounded query can
       exhaust the server the API depends on. Kept in the 0455 umbrella.
+  - date: '2026-09-23'
+    status: completed
+    who: karolkow
+    note: >
+      Closed: the premise does not hold on production today. Quotas ARE
+      enforced on the Caddy header path, on the same CH 26.3.10.60 the
+      2026-05 probe ran on. Evidence in "Resolution". No fix needed; the
+      "Known limitations" section of clickhouse-rbac.md now says so.
 ---
 
 # RESEARCH: ClickHouse quota enforcement gap on `X-ClickHouse-User` header auth path
@@ -42,6 +50,28 @@ proxy-trust → `X-ClickHouse-User: <user>` header) therefore bypasses
 the per-user query / row / bytes / execution-time caps declared in
 `users.d/quotas.xml`. Decide whether to fix (and how) or accept as
 permanent — document the answer.
+
+## Resolution (2026-09-23)
+
+The gap is not there. Quotas are counted and enforced for requests
+Caddy authenticates with `X-ClickHouse-User` (Caddyfile still sets the
+user that way, `header_up X-ClickHouse-User {ch_user}`), on
+ClickHouse `26.3.10.60` — the version the 2026-05 probe used.
+
+- `dev_read` through `chq` (mTLS → Caddy → header auth), 2026-09-23:
+  `SHOW QUOTA` for the 11:00–12:00 UTC window showed 1614 queries,
+  99.67B read_rows, 2.199 TB read_bytes, and ClickHouse refused the
+  next query with Code 201 (`Quota for user dev_read … exceeded`).
+  The 12:00 window's `queries` counter kept counting (103 by 12:10).
+  This includes the `queries` counter the probe saw stuck at 0.
+- `prices_reader` (external client, same proxy path), 2026-09-03:
+  ClickHouse refused 28,853 queries with Code 201 once the 10,000/h
+  query cap tripped (task 0561).
+
+Why the 2026-05 probe saw a zero counter was not investigated: same
+server version, same auth path. The questions below (upstream fix,
+Caddy URL rewrite, `max_concurrent_queries_for_user`) are moot, so no
+follow-up was spawned.
 
 ## Context
 
@@ -117,6 +147,10 @@ investigation answers whether and how to close the gap.
 
 ## Acceptance Criteria
 
+Resolved without the research below: the premise was refuted on
+production (see "Resolution"), so the notes and sandbox retests are
+N/A. Only the docs criterion applies, and it is done.
+
 - [ ] Notes in `notes/R-*.md` summarising the upstream investigation
       (existing issues, fixed versions, release-note pointers).
 - [ ] Notes in `notes/R-*.md` summarising empirical retest of the
@@ -136,7 +170,7 @@ investigation answers whether and how to close the gap.
       this task's frontmatter `related_tasks`.
 - [ ] **API types regenerated** — N/A (no `crates/api/**` /
       `libs/api-types/**` changes from a research task).
-- [ ] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
+- [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`
       "Known limitations" section refreshed with the conclusion
       (either confirming the permanent acceptance with stronger
       justification, or pointing at the spawned FEATURE task that
