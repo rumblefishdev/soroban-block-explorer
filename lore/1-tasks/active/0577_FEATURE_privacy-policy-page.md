@@ -2,7 +2,7 @@
 id: '0577'
 title: 'FEATURE: Soroban Scan privacy policy page + footer link'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0437', '0451', '0384']
 tags: [frontend, footer, privacy, priority-medium, effort-small]
@@ -16,6 +16,10 @@ history:
       policy, text supplied in chat (dated September 23, 2026). No existing
       task covered it (searched backlog/active/blocked on develop and all
       remote branches; 0437 and 0451 are archived).
+  - date: '2026-09-23'
+    status: active
+    who: stkrolikiewicz
+    note: 'Promoted to active; implementation starting.'
 ---
 
 # FEATURE: Soroban Scan privacy policy page + footer link
@@ -26,9 +30,9 @@ The footer's `Privacy Policy` link points at the generic rumblefish.dev
 policy. Publish the explorer's own policy as an in-app page at
 `/privacy-policy` and point the footer link at it.
 
-## Status: Backlog
+## Status: Active
 
-**Current state:** not started. The text is supplied and final.
+**Current state:** implementation starting.
 
 ## Context
 
