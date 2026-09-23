@@ -1,9 +1,10 @@
 import { ThemeProvider } from '@mui/material/styles';
 import { render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import type { ReactNode } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { LinkComponentProvider } from '../../identifiers/LinkComponentContext.js';
 import { createExplorerTheme } from '../../theme/theme.js';
 
 import { Footer } from '../Footer.js';
@@ -39,5 +40,25 @@ describe('Footer', () => {
       'href',
       '/api/'
     );
+  });
+
+  // The policy is a route of this app: it goes through the router's link
+  // (same tab, no reload), not out to a new tab like the external resources.
+  it('links the privacy policy through the router, in the same tab', () => {
+    const RouterLink = (props: ComponentProps<'a'>) => (
+      <a data-router-link="" {...props} />
+    );
+    render(
+      withTheme(
+        <LinkComponentProvider value={RouterLink}>
+          <Footer logo={<span>logo</span>} navItems={[]} />
+        </LinkComponentProvider>
+      )
+    );
+
+    const link = screen.getByRole('link', { name: 'Privacy Policy' });
+    expect(link).toHaveAttribute('href', '/privacy-policy');
+    expect(link).toHaveAttribute('data-router-link');
+    expect(link).not.toHaveAttribute('target');
   });
 });
