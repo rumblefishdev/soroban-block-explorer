@@ -777,5 +777,4 @@ pub async fn fetch_transactions(
 }
 
 #[cfg(test)]
-#[path = "queries_tests.rs"]
 mod tests;

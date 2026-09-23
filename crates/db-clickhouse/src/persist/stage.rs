@@ -1086,24 +1086,12 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     }
 
     // ---- transaction_participants ----
-    for tx in transactions {
-        let Some(set) = participants_per_tx.get(&tx.hash) else {
-            continue;
-        };
-        let Some(&tx_id) = tx_id_by_hash.get(&tx.hash) else {
-            continue;
-        };
-        for key in set {
-            if !is_strkey_account(key) {
-                continue;
-            }
-            out.participant_rows.push(TransactionParticipantRow {
-                account_id: ids::account_id(key),
-                ledger_sequence: ledger_sequence_i64,
-                transaction_id: tx_id,
-            });
-        }
-    }
+    out.participant_rows = presence::participant_rows(
+        ledger_sequence_i64,
+        transactions,
+        &participants_per_tx,
+        &tx_id_by_hash,
+    );
 
     // ---- liquidity_pools (classic; shared with `snapshot-seed`) ----
     out.pool_rows = super::classic_pools::build_pool_rows(liquidity_pools)?;
@@ -1858,21 +1846,11 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     }
 
     // ---- operation_asset_appearances: event-derived (task 0383, K3-4) ----
-    // SAC / bespoke token moves (transfer / mint / burn / clawback) make the
-    // moved asset appear in the tx. Same (asset, tx) grain as the op-derived
-    // rows above; the RMT collapses any overlap. Presence only (model A).
-    for (tx_hash, asset_ids) in &event_assets_per_tx {
-        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
-            continue;
-        };
-        for &asset_id in asset_ids {
-            out.op_asset_rows.push(OperationAssetAppearanceRow {
-                asset_id,
-                ledger_sequence: ledger_sequence_i64,
-                transaction_id: tx_id,
-            });
-        }
-    }
+    out.op_asset_rows.extend(presence::event_asset_rows(
+        ledger_sequence_i64,
+        &event_assets_per_tx,
+        &tx_id_by_hash,
+    ));
 
     // ---- soroban_events (UNFOLDED per ADR 0044 §4a, keyed by rpc id per ADR 0059) ----
     let mut diagnostic_dropped: usize = 0;
@@ -3360,6 +3338,8 @@ pub fn ledger_deltas_net_settled(
         .collect();
     xdr_parser::net_settled(&resolved)
 }
+
+mod presence;
 
 #[cfg(test)]
 mod stage_tests;
