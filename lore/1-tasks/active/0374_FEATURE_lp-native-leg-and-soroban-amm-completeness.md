@@ -2180,3 +2180,14 @@ null only in an "unreachable" malformed case. Measured in the 100k ledgers to
   renders `—`. It is a trade in substance; whether to classify a round trip as
   one (and how to show a leg that moved and came back) is a display decision.
   PR 3 corrects the DTO comment to say the case is real and keeps the handling.
+
+### Pool as legs merged (2026-09-24)
+
+PR #479 merged (`3cebd913`), ten commits: the test moves and the base change, plus
+the SAC field dropped from legs, activity amounts and reserves keyed by leg,
+dead guards removed on both sides, a plain rewrite of the pool code filter
+(SQL byte-identical) and the unnamed-leg avatar fixed. **Not deployed — held
+for PR 4 and PR 5 (decision 2026-09-23).** Follow-ups recorded elsewhere: one
+display name from API to frontend (0546), rank pool results so `XLM` lists
+native pools first (0485), filter pools by asset identity (0470 stage 3,
+undecided), round-trip activity rows (this task, for PR 7).
