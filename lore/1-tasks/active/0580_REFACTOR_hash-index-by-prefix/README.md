@@ -158,3 +158,37 @@ B/row), a `_part_offset` one 37.24 plus 25.06 for the inner hash; the leanest,
 a `MATERIALIZED` prefix column plus a projection, comes to ~104 GiB
 (_estimate_) against ~49 GiB for the table, and needs a rewrite of all of
 `transactions`. The table stays.
+
+## Step 1 deployed, history fill (2026-09-24)
+
+- **#492 merged and deployed** (Compute 09:33:48 UTC). The first ledger the
+  indexer dual-wrote is **64,591,331**; on 64,591,331–64,591,349 the old and
+  new index hold the same keys, 9,075 = 7,129 transactions + 1,946 fee-bump
+  inner hashes. Queue, DLQ and indexer errors 0.
+- **Fill:** partitions 100–125 copied and gated per slice (11:41–12:21 local),
+  then the `dev_read` hourly read quota (4 TiB) ran out on the gate of
+  slice 63,350,000. Resume: `126:63350000 127 128`, then
+  `64500000-64591331`.
+- **Why the quota went — a lesson for any fill:** the loop slices by ledger,
+  but `transaction_hash_index` is sorted by hash, so a ledger-range filter
+  cannot use its key and every statement reads the whole partition — 10 fill
+  and 40 gate statements per partition, ~160 GB each instead of the ~20
+  estimated. The same loop was cheap in task 0575 because those tables lead
+  with the ledger. **Slice along the source table's sort key.** Correctness
+  was not affected; only reading cost.
+- **Fill complete** (11:17 UTC): `126:63350000 127 128` and
+  `64500000-64591331` all gated ok. `system.parts`, active rows per
+  partition, old against new: equal in every partition 100–129 except 126
+  (+23,791,762 in the new table — slice 63,350,000 was inserted before the
+  quota stopped its gate and inserted again on resume; ReplacingMergeTree
+  collapses the copies on merge). Size: old 175.14 GiB, new **50.32 GiB**.
+- **Lookup, new against old** (production, `X-ClickHouse-Summary`):
+
+  | hash                     | old read               | new read              | ledger |
+  | ------------------------ | ---------------------- | --------------------- | ------ |
+  | outer, ledger 64,000,000 | 197,409 rows / 6.38 MB | 16,886 rows / 0.20 MB | same   |
+  | inner, ledger 57,000,000 | 8,694 rows / 0.29 MB   | 8,694 rows / 0.10 MB  | same   |
+
+  Both ~5–7 ms, dominated by round trip. The inner hash of the 64,000,000
+  fee-bump and the outer hash at 57,000,000 also resolve to the same ledger
+  in both tables.
