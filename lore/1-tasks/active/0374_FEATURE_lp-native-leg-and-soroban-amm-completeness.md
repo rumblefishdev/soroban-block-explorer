@@ -2245,3 +2245,33 @@ again with `LEFT JOIN pool_activity`, ordered by
   `pool_kind`). Between the two the pool list crashed on the old SPA — task 0582. Until 4b–4d and PR 5 ship, a Soroban pool on production shows `—` for
   reserves, TVL and shares, zeros for participants and activity, and sits
   deep in the default order (reachable through the kind filter).
+
+### 4c — Soroban reserves, shares and TVL (2026-09-24)
+
+Branch `feat/0374-soroban-pool-reserves`. Measured through the local API
+against production, all 770 Soroban pools:
+
+|                         | before 4c | after 4c                         |
+| ----------------------- | --------- | -------------------------------- |
+| legs with a reserve     | 0 / 1,553 | 1,549 (269 of them `0`)          |
+| pools with total shares | 0 / 770   | 705 (130 of them a measured `0`) |
+| pools with a TVL        | 0 / 770   | 527                              |
+
+- **Reserves** come from `pool_state_changes` on the plane the pool declares
+  (95 C: every reader carries the filter, with a comment saying why), scaled
+  only by decimals that are a fact. Unscalable: 4 legs of Soroban tokens with
+  no published metadata and 1 unknown asset. Verified against on-chain
+  `get_reserves` for 4 pools (constant, stable 3-leg, concentrated) — exact.
+- **Total shares** from `pool_instance_state`, scaled by the share token's
+  decimals (NULL when unpublished — 0 today). Decision 96 A: a stored 0 reads
+  `0` for a pair-factory pool or a pool whose every reserve is 0, else `null`.
+  Measured: 83 of 84 constant and 39 of 39 stable router pools with a 0 hold
+  nothing; two sampled on chain answer `get_total_shares() = 0`; the one
+  constant pool holding reserves (`CALL3ZZS…`) has no `get_total_shares`.
+- **Volume** on a Soroban detail is `null` instead of `$0.00` — nothing
+  records it, and an empty window used to read as a zero-volume day.
+- **Cost:** a 20-row Soroban list page reads 8.1M rows (4b shape 7.5M); the
+  reserve read is bounded by the page's oldest activity (0.25M rows instead
+  of 2.66M). Detail 0.6M rows / ~130 ms.
+- **Tests:** the CH-gated list test now also pins the reserve plane filter
+  (red without it: the foreign row's `99999` / `0.0000001`).
