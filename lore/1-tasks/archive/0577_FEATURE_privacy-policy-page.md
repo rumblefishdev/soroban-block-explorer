@@ -2,7 +2,7 @@
 id: '0577'
 title: 'FEATURE: Soroban Scan privacy policy page + footer link'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0437', '0451', '0384']
 tags: [frontend, footer, privacy, priority-medium, effort-small]
@@ -28,6 +28,16 @@ history:
       JSX), one route constant shared by the router and the footer, footer
       link through the router in the same tab. 1 new test, mutation-checked.
       Open until the SPA deploy.
+  - date: '2026-09-24'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      PR #486 merged 2026-09-23 11:31 UTC (6cf9d467). SPA deployed from
+      develop a5d62b80 at 12:12:50-12:13:03 UTC with the Nx cache skipped;
+      Turnstile arming check passed; invalidation done 12:13:23 UTC. Live:
+      /privacy-policy renders (h1 + 17 sections), the footer link is the
+      in-app route, and data renders after Turnstile in a clean browser.
+      Archived.
 ---
 
 # FEATURE: Soroban Scan privacy policy page + footer link
@@ -38,9 +48,12 @@ The footer's `Privacy Policy` link points at the generic rumblefish.dev
 policy. Publish the explorer's own policy as an in-app page at
 `/privacy-policy` and point the footer link at it.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** implemented, PR open. Complete after the SPA deploy.
+**Current state:** live on production since 2026-09-23 12:13 UTC.
+
+> ⚠️ Shipped from `develop`. Until `develop` reaches `master`, a
+> `production-*` tag cut from `master` rebuilds the SPA without this page.
 
 ## Context
 
@@ -106,6 +119,16 @@ the same tab. Add the route to the route inventory in
 - Checked in the dev server: footer click navigates client-side (no
   reload), a deep link loads the page, dark and light themes, 375px wide
   without horizontal overflow.
+- Deploy: `make -C infra deploy-production-web` from develop `a5d62b80`,
+  with `NX_SKIP_NX_CACHE=true` as `docs/deployment.md` asks for an isolated
+  build. #486 was the only change under `web/` or `libs/` since the 08:06 UTC
+  SPA deploy (develop `e0479d29`), and no build inputs had changed. The
+  arming check found the Turnstile key in the bundle, and invalidation
+  `I7MAJVNH32CVNLCGXKG1OTIQT1` completed at 12:13:23 UTC.
+- Live check: the bundle `index-CG4OxREA.js` holds
+  `PRIVACY_POLICY_URL = "/privacy-policy"` with `internal: true` on the footer
+  item; the page renders its `h1` and 17 section headings with no error
+  boundary; the footer link has no `target`.
 
 ## Design Decisions
 
@@ -145,6 +168,12 @@ the same tab. Add the route to the route inventory in
   `.d.ts.map` files without their `.d.ts`. Moved `dist` to the main
   checkout's `.trash/`, ran `nx reset`, re-ran serially: green. Not caused
   by this change.
+- **The post-deploy check needs a human.** An agent's automated browser gets
+  Turnstile's interactive challenge (`appearance: 'interaction-only'`), which
+  it does not solve. Its API calls then answer 401, and the home page shows
+  OFFLINE. A person in a clean browser confirmed that data renders after the
+  checkbox. This is not a regression: API Gateway shows the same 3 × 401
+  pattern at 11:15 and 11:45 UTC, before the deploy.
 
 **Modified tests:** `Footer.test.tsx` gains one case. No existing
 assertion changed.
