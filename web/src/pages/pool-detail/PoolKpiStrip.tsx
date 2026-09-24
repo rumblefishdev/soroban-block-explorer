@@ -30,8 +30,7 @@ interface PoolKpiStripProps {
  * A missing value renders "—" captioned "not indexed". There is no staleness
  * caption: the API returns a pool's latest state whatever its age, and a
  * classic pool writes a snapshot on every change, so an old snapshot is a
- * quiet pool's CURRENT state, not an outdated one. (A 7-day "no recent
- * snapshot" caption here outlived the rule it described — see task 0374.)
+ * quiet pool's CURRENT state, not an outdated one.
  */
 function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);

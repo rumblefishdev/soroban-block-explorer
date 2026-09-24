@@ -72,9 +72,10 @@ struct PoolListChRow {
     /// A soroban pool's latest reserves, raw and in leg order; empty for a
     /// classic pool, which has none there.
     state_reserves: Vec<String>,
-    /// A soroban pool's raw instance-state shares, scaled in Rust (a `u128`).
+    /// A soroban pool's raw instance-state shares, scaled in Rust (a `u128`)
+    /// by its share token's decimals.
     instance_shares: Option<String>,
-    instance_shares_decimals: Option<u32>,
+    share_token_id: i64,
 }
 
 /// The ordering value the list pages on: the pool's LAST ACTIVITY.
@@ -285,7 +286,7 @@ pub async fn fetch_pool_list(
              lp.pool_type_raw                                AS pool_type_raw, \
              sr.reserves                                     AS state_reserves, \
              inst.shares_raw                                 AS instance_shares, \
-             inst.shares_decimals                            AS instance_shares_decimals \
+             inst.share_token_id                             AS share_token_id \
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
@@ -354,9 +355,15 @@ pub async fn fetch_pool_list(
 
     // One batched identity resolution for every leg on the page, with the
     // icons read alongside it. Both key on `assets.id`, which is exactly what
-    // `legs` stores.
-    let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
-    let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
+    // `legs` stores; a soroban share token is a contract surrogate, the same
+    // id space.
+    // The soroban share tokens ride along: their decimals scale the shares.
+    let asset_ids: BTreeSet<i64> = rows
+        .iter()
+        .flat_map(|r| r.legs.iter().copied().chain(Some(r.share_token_id)))
+        .filter(|id| *id != 0)
+        .collect();
+    let (identities, icons) = resolve_identities_and_icons(client, &asset_ids).await?;
 
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
     // endpoint (latest reserves × last 1h close per leg; both legs required)
@@ -407,7 +414,7 @@ pub async fn fetch_pool_list(
             let total_shares = pool_total_shares(
                 r.total_shares,
                 r.instance_shares.as_deref(),
-                r.instance_shares_decimals,
+                identities.get(&r.share_token_id).and_then(|t| t.decimals),
                 &r.pool_type_raw,
                 &r.state_reserves,
             );

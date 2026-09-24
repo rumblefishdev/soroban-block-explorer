@@ -32,7 +32,6 @@ function pool(overrides: Partial<PoolItem>): PoolItem {
 describe('PoolKpiStrip captions', () => {
   it('captions a present value by what it is', () => {
     renderWithProviders(<PoolKpiStrip pool={pool({})} />);
-    expect(screen.queryByText('no recent snapshot')).toBeNull();
     expect(screen.getByText('shares outstanding')).toBeInTheDocument();
   });
 
@@ -46,21 +45,5 @@ describe('PoolKpiStrip captions', () => {
       />
     );
     expect(screen.getAllByText('not indexed')).toHaveLength(2);
-    expect(screen.queryByText('no recent snapshot')).toBeNull();
-  });
-
-  // A classic pool writes a snapshot on every change, so an old snapshot is
-  // a quiet pool's current state — its values are shown plainly.
-  it('shows an old classic snapshot without a staleness caption', () => {
-    renderWithProviders(
-      <PoolKpiStrip
-        pool={pool({
-          latest_snapshot_ledger: 50_000_000,
-          latest_snapshot_at: '2024-01-01T00:00:00Z',
-        })}
-      />
-    );
-    expect(screen.queryByText('no recent snapshot')).toBeNull();
-    expect(screen.getByText('shares outstanding')).toBeInTheDocument();
   });
 });

@@ -26,14 +26,11 @@ struct PoolDetailChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
-    /// Verbatim family marker; read only by `pool_total_shares`.
+    // The four soroban columns: see `list_pools::PoolListChRow`.
     pool_type_raw: String,
-    /// A soroban pool's latest reserves, raw and in leg order; empty for a
-    /// classic pool, which has none there.
     state_reserves: Vec<String>,
-    /// A soroban pool's raw instance-state shares, scaled in Rust (a `u128`).
     instance_shares: Option<String>,
-    instance_shares_decimals: Option<u32>,
+    share_token_id: i64,
 }
 
 /// `GET /v1/liquidity-pools/:id` — single-pool detail. Mirrors the PG
@@ -44,12 +41,10 @@ pub async fn fetch_pool_by_id(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
-    // `unhex(?)` appears 8×: the created_at-ledger and participant-count
-    // subqueries, the latest-snapshot and ledger seeks, the soroban reserves
-    // (twice) and shares joins, and the outer WHERE. All scoped to the literal
-    // pool id (NOT correlated to `lp`) since detail is single-pool and CH
-    // dislikes correlated subqueries. Each `?` consumes one positional bind;
-    // all are the same value, so order is moot.
+    // Every `unhex(?)` is scoped to the literal pool id (NOT correlated to
+    // `lp`) since detail is single-pool and CH dislikes correlated subqueries.
+    // Each `?` consumes one positional bind; all are the same value, so order
+    // is moot and the count is read off the statement.
     //
     // **Leg identity is resolved in Rust, not joined here.** This used to carry
     // three pair-keyed CTEs — `legs` (the pool's four pair columns), `iss` (a
@@ -101,7 +96,7 @@ pub async fn fetch_pool_by_id(
                 lp.pool_type_raw                     AS pool_type_raw, \
                 sr.reserves                          AS state_reserves, \
                 inst.shares_raw                      AS instance_shares, \
-                inst.shares_decimals                 AS instance_shares_decimals \
+                inst.share_token_id                  AS share_token_id \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN ( \
                  SELECT pool_id, \
@@ -127,14 +122,21 @@ pub async fn fetch_pool_by_id(
         shares = instance_shares_sql("unhex(?)"),
     );
     let mut query = client.query(&sql);
-    for _ in 0..8 {
+    for _ in 0..sql.matches('?').count() {
         query = query.bind(pool_id_hex);
     }
     let row = query.fetch_optional::<PoolDetailChRow>().await?;
 
     let Some(r) = row else { return Ok(None) };
-    let leg_ids: BTreeSet<i64> = r.legs.iter().copied().collect();
-    let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
+    // The soroban share token rides along: its decimals scale the shares.
+    let asset_ids: BTreeSet<i64> = r
+        .legs
+        .iter()
+        .copied()
+        .chain(Some(r.share_token_id))
+        .filter(|id| *id != 0)
+        .collect();
+    let (identities, icons) = resolve_identities_and_icons(client, &asset_ids).await?;
 
     Ok(Some(PoolRow {
         pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
@@ -161,7 +163,7 @@ pub async fn fetch_pool_by_id(
         total_shares: pool_total_shares(
             r.total_shares,
             r.instance_shares.as_deref(),
-            r.instance_shares_decimals,
+            identities.get(&r.share_token_id).and_then(|t| t.decimals),
             &r.pool_type_raw,
             &r.state_reserves,
         ),

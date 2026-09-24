@@ -101,10 +101,7 @@ fn leg_rows(
         .enumerate()
         .map(|(i, id)| {
             // A raw soroban reserve scales only by decimals that are a fact.
-            let scale = identities
-                .get(id)
-                .filter(|r| r.decimals_known)
-                .map(|r| r.decimals);
+            let scale = identities.get(id).and_then(|r| r.decimals);
             let reserve = reserves.at(i, scale);
             match identities.get(id) {
                 Some(r) if r.known => PoolLegRow {

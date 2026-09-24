@@ -393,7 +393,9 @@ fn balance_change_identity(r: &ResolvedAsset) -> AssetIdentity {
     AssetIdentity {
         asset,
         asset_code,
-        decimals: r.decimals,
+        // ponytail: a guessed 7 when nothing publishes the scale — wrong for
+        // an 18-decimal token; task 0473 owns rendering it as unknown.
+        decimals: r.decimals.unwrap_or(7),
         resolves_on_asset_page: r.known,
     }
 }

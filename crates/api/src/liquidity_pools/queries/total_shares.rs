@@ -49,31 +49,23 @@ fn zero_shares_is_measured(pool_type_raw: &str, raw_reserves: &[String]) -> bool
     pool_type_raw.is_empty() || (!raw_reserves.is_empty() && raw_reserves.iter().all(|r| r == "0"))
 }
 
-/// Each soroban pool's instance-state shares and its share token's decimals,
-/// for the pools in `pool_ids` (the body of an `IN (…)`). The instance read is
-/// bounded to those pools; the two dimension hops read `soroban_contracts` and
-/// `soroban_contract_metadata` whole, which measured 0.25M rows for a page.
+/// Each soroban pool's instance-state shares and its share token, for the
+/// pools in `pool_ids` (the body of an `IN (…)`). The share token is a contract
+/// surrogate, so its decimals come from the same identity resolution as the
+/// legs (`common::asset_identity`) — one rule for "the scale is a fact".
 ///
-/// `toNullable` on the projected columns: with `join_use_nulls = 0` an
-/// unmatched LEFT JOIN yields the column DEFAULT, so a plain `String` would
-/// arrive as `''` and refuse to decode into an `Option` (the task 0324 class).
-/// Decimals stay NULL when the share token publishes none — never a guessed 7.
+/// `toNullable` on the shares: with `join_use_nulls = 0` an unmatched LEFT
+/// JOIN yields the column DEFAULT, so a plain `String` would arrive as `''`
+/// and refuse to decode into an `Option` (the task 0324 class). An unmatched
+/// share token arrives as `0`, which resolves to nothing.
 pub(super) fn instance_shares_sql(pool_ids: &str) -> String {
     format!(
-        "SELECT s.pool_id AS pool_id, \
-                toNullable(toString(s.total_shares)) AS shares_raw, \
-                CAST(m.decimals AS Nullable(UInt32)) AS shares_decimals \
-         FROM (SELECT pool_id, \
-                      argMax(share_token_id, derived_at_ledger) AS share_token_id, \
-                      argMax(total_shares, derived_at_ledger) AS total_shares \
-               FROM pool_instance_state \
-               WHERE pool_id IN ({pool_ids}) \
-               GROUP BY pool_id) s \
-         LEFT JOIN (SELECT id, contract_id FROM soroban_contracts LIMIT 1 BY id) c \
-             ON c.id = s.share_token_id \
-         LEFT JOIN (SELECT contract_id, toNullable(argMax(decimals, version)) AS decimals \
-                    FROM soroban_contract_metadata GROUP BY contract_id) m \
-             ON m.contract_id = c.contract_id"
+        "SELECT pool_id, \
+                toNullable(toString(argMax(total_shares, derived_at_ledger))) AS shares_raw, \
+                argMax(share_token_id, derived_at_ledger) AS share_token_id \
+         FROM pool_instance_state \
+         WHERE pool_id IN ({pool_ids}) \
+         GROUP BY pool_id"
     )
 }
 

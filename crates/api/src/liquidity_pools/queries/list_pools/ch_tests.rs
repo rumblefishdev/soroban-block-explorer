@@ -141,44 +141,36 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
         "list must order by last activity, counting only the declared plane"
     );
 
+    let listed = |pool: &str| {
+        rows.iter()
+            .find(|r| r.pool_id_hex == pool)
+            .expect("pool listed")
+    };
+    let reserves = |row: &PoolRow| -> Vec<Option<String>> {
+        row.legs.iter().map(|l| l.reserve.clone()).collect()
+    };
+    let some = |v: [&str; 2]| v.map(|s| Some(s.to_string())).to_vec();
+
     // The reserves come from the declared plane too: its latest row (1, 2 at
     // 7 decimals), never the foreign plane's newer one.
-    let spoofed = rows
-        .iter()
-        .find(|r| r.pool_id_hex == SOROBAN_SPOOFED)
-        .expect("spoofed pool listed");
-    let reserves: Vec<Option<&str>> = spoofed.legs.iter().map(|l| l.reserve.as_deref()).collect();
-    assert_eq!(reserves, vec![Some("1"), Some("2")]);
+    let spoofed = listed(SOROBAN_SPOOFED);
+    assert_eq!(reserves(spoofed), some(["1", "2"]));
     // Shares scale by the share token's own decimals; the pair-factory 0 is real.
     assert_eq!(spoofed.total_shares.as_deref(), Some("25264.7541418"));
-    let active = rows
-        .iter()
-        .find(|r| r.pool_id_hex == SOROBAN_ACTIVE)
-        .expect("active pool listed");
-    assert_eq!(active.total_shares.as_deref(), Some("0"));
+    assert_eq!(listed(SOROBAN_ACTIVE).total_shares.as_deref(), Some("0"));
 
     // The reserve read's lower bound. LATE's latest row (120) is older than
     // every activity key on the page (lowest 150), so a bound on that key hides
     // it; UNREFRESHED has no `pool_activity` entry, which must lift the bound.
-    for (pool, want) in [
-        (SOROBAN_LATE, [Some("3"), Some("4")]),
-        (SOROBAN_UNREFRESHED, [Some("5"), Some("6")]),
-    ] {
-        let row = rows
-            .iter()
-            .find(|r| r.pool_id_hex == pool)
-            .expect("pool listed");
-        let reserves: Vec<Option<&str>> = row.legs.iter().map(|l| l.reserve.as_deref()).collect();
-        assert_eq!(reserves, want, "reserves of {pool}");
-    }
+    assert_eq!(reserves(listed(SOROBAN_LATE)), some(["3", "4"]));
+    assert_eq!(reserves(listed(SOROBAN_UNREFRESHED)), some(["5", "6"]));
 
     // The detail reads the same values through its own statement (8 binds).
     let detail = crate::liquidity_pools::queries::fetch_pool_by_id(&ch, SOROBAN_SPOOFED)
         .await
         .expect("detail query runs")
         .expect("pool found");
-    let reserves: Vec<Option<&str>> = detail.legs.iter().map(|l| l.reserve.as_deref()).collect();
-    assert_eq!(reserves, vec![Some("1"), Some("2")]);
+    assert_eq!(reserves(&detail), some(["1", "2"]));
     assert_eq!(detail.total_shares.as_deref(), Some("25264.7541418"));
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
