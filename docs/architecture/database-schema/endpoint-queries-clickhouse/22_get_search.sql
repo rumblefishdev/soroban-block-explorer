@@ -42,8 +42,7 @@
 --   • Asset issuer StrKey is resolved by a bloom-pruned `accounts WHERE id IN
 --     (page ids)` key-seek (`idx_acc_id`), NEVER `LEFT JOIN accounts` — the
 --     full-table hash-side build OOMs (CH Code 241, the 0317 trap).
---   • Transaction lookup is a `transaction_hash_index` PK seek (the
---     `transaction_hash_dict` Dictionary is a deferred O(1) optimisation).
+--   • Transaction lookup is a `transaction_hash_index` PK seek.
 --   • All Replacing state tables read FINAL (or argMax for the enrichment
 --     side-tables); `nullIf(...)` maps a JOIN miss to NULL (api_reader runs
 --     readonly=1 → no `SETTINGS join_use_nulls`).
@@ -55,7 +54,7 @@
 SELECT ledger_sequence FROM transaction_hash_index
 WHERE hash = unhex(:q_hex) LIMIT 1;
 -- Step 2: successful + ledger closed_at (PG `tx_hits` enrichment). Single-row
--- seek: leading-PK `ledger_sequence` + partition prune + `idx_tx_hash_bloom`.
+-- seek: leading-PK `ledger_sequence` (one ledger is one granule) + partition prune.
 -- closed_at via a BOUNDED `ledgers WHERE sequence = :ledger` sub-select (PK point
 -- seek) — NOT a plain `INNER JOIN ledgers`, which builds its hash side from the
 -- whole ~3.6M-row ledgers table on prod.
@@ -65,7 +64,7 @@ INNER JOIN (SELECT sequence, closed_at FROM ledgers WHERE sequence = :ledger) l
         ON l.sequence = t.ledger_sequence
 WHERE t.ledger_sequence = :ledger
   AND intDiv(t.ledger_sequence, 500000) = :partition
-  AND t.hash = unhex(:q_hex)
+  AND (t.hash = unhex(:q_hex) OR t.inner_tx_hash = unhex(:q_hex))  -- a fee-bump by its inner hash too
 ORDER BY t.application_order LIMIT 1;
 -- → identifier = q_hex, label = '' (PG parity), successful/last_activity_at set.
 

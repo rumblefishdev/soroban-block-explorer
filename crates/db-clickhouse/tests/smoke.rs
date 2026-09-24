@@ -6,10 +6,6 @@
 //! verifies the round-trip, and deletes the test data via partition
 //! drop or `ALTER TABLE … DELETE`.
 //!
-//! Also exercises the `transaction_hash_dict` Dictionary: inserts a row
-//! into `transaction_hash_index`, reloads the dictionary, and checks
-//! `dictGet(...)` returns the expected `ledger_sequence`.
-//!
 //! Gated on `CLICKHOUSE_URL` env: skipped cleanly if unset, so CI
 //! without a ClickHouse instance is green.
 
@@ -382,27 +378,6 @@ async fn smoke_inserts_and_reads_each_table() {
         1,
     )
     .await;
-
-    // ----- transaction_hash_dict Dictionary -----
-    // Force the cache to refresh against the row we just inserted.
-    client
-        .query("SYSTEM RELOAD DICTIONARY transaction_hash_dict")
-        .execute()
-        .await
-        .expect("reload dict");
-
-    let resolved: i64 = client
-        .query(
-            "SELECT dictGet('transaction_hash_dict', 'ledger_sequence', \
-             tuple(toString(unhex('00000000000000000000000000000000000000000000000000000000000000aa'))))",
-        )
-        .fetch_one()
-        .await
-        .expect("dictGet");
-    assert_eq!(
-        resolved, SMOKE_LEDGER,
-        "dictGet must resolve hash → ledger_sequence"
-    );
 
     cleanup(&client).await;
 }

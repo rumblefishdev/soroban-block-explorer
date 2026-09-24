@@ -304,11 +304,6 @@ struct SurrogateIdRow {
     id: i64,
 }
 
-#[derive(Debug, Row, Deserialize)]
-struct LedgerSeqRow {
-    ledger_sequence: i64,
-}
-
 // ---------------------------------------------------------------------------
 // Shared projection fragments
 // ---------------------------------------------------------------------------
@@ -635,29 +630,6 @@ pub async fn fetch_list(
 // ---------------------------------------------------------------------------
 // Detail
 // ---------------------------------------------------------------------------
-
-/// Resolve a transaction hash → parent `ledger_sequence`.
-///
-/// Reads `transaction_hash_index` directly (PK seek on `hash`), mirroring
-/// the PG `lookup_hash_index`. Canonical SQL 03 uses the
-/// `transaction_hash_dict` Dictionary as the O(1) hot path; that is a
-/// CH-only optimization that can be layered on later without changing this
-/// signature. `hash → ledger_sequence` is immutable, so no `FINAL` is
-/// required on the ReplacingMergeTree index.
-pub async fn lookup_hash_ledger(
-    client: &clickhouse::Client,
-    hash_hex: &str,
-) -> Result<Option<i64>, clickhouse::error::Error> {
-    let row = client
-        .query(
-            "SELECT ledger_sequence FROM transaction_hash_index \
-             WHERE hash = unhex(?) LIMIT 1",
-        )
-        .bind(hash_hex)
-        .fetch_optional::<LedgerSeqRow>()
-        .await?;
-    Ok(row.map(|r| r.ledger_sequence))
-}
 
 #[derive(Debug, Row, Deserialize)]
 struct TxDetailRawRow {
@@ -1123,6 +1095,9 @@ async fn resolve_contract_surrogate(
         .await?;
     Ok(row.map(|r| r.id))
 }
+
+mod hash_lookup;
+pub use hash_lookup::lookup_hash_ledger;
 
 #[cfg(test)]
 mod tests;

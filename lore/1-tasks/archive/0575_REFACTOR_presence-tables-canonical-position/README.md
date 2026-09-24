@@ -2,7 +2,7 @@
 id: '0575'
 title: 'REFACTOR: key transaction_participants and operation_asset_appearances by the transaction position — drop their transaction_id'
 type: REFACTOR
-status: active
+status: done
 related_adr: ['0059']
 related_tasks: ['0538', '0541']
 tags:
@@ -32,6 +32,14 @@ history:
     note: >
       Promoted. Step 1 starts: one partition of each table rebuilt locally
       from production reads, codec variants side by side.
+  - date: 2026-09-23
+    status: done
+    who: karolkow
+    note: >
+      Swapped and old tables dropped the same day. transaction_participants
+      112.04 -> 20.12 GiB, operation_asset_appearances 100.76 -> 12.39 GiB;
+      +211.7 GiB free. PR #483 (cb7ea315), 881 tests; window 13:02-13:53 UTC,
+      H = 64,576,549. Asset list lost its contract-activity arm (decision 1).
 ---
 
 # Key `transaction_participants` and `operation_asset_appearances` by the transaction position
@@ -242,6 +250,28 @@ would have been 134, 183, 177, 58. Native XLM appears in 135 of the ledger's
 transactions, each at a position `transactions` holds, listed 188, 186,
 185, 184, 182, …
 
+## Issues Encountered
+
+- **The gate outgrew the per-query memory cap three times** (exact tuple
+  count, hash collision, two halves in one query); one exact query per
+  quarter slice held. Details in
+  [notes/R-fill-and-read-benchmark.md](notes/R-fill-and-read-benchmark.md).
+- **Two parallel fills spent the `dev_read` hourly read quota** (2 TiB then);
+  the quota went to 4 TiB/h on the same day (commit 18c86442).
+- **A local trial load filled the laptop disk** and stopped Docker; the trial
+  was redone with a disk budget.
+- **Editing the running fill scripts broke a terminal mid-run** (zsh reads a
+  sourced file lazily, the loop re-reads its SQL per slice); fixes ship under
+  a new name or after the runs stop.
+- **Production Compute ran a develop commit, not the last tag** (`9a89d35c`,
+  2026-09-22 15:26 UTC), so the pause was deployed from that commit, not from
+  `production-2026.09.21-1` as `docs/deployment.md` says; read the Lambda's
+  deploy time before a window.
+- **The first Lambda build of the window took ~10 min**, most of the ~51-minute
+  ingest pause.
+- **Turnstile blocks the in-app browser on production**; the lists were checked
+  through `api --bin local` against production ClickHouse instead.
+
 ## Design Decisions
 
 ### Emerged
@@ -267,3 +297,14 @@ transactions, each at a position `transactions` holds, listed 188, 186,
    `AssetListChRow.contract_id_key` lost their only reader and are removed.
 2. **The aggregate follows the page** instead of running beside it: its keys
    are `t.id`, which only the page knows now.
+3. **Old tables dropped the same day** instead of after the next Sunday backup
+   (decision karolkow): the query log showed no writer to the old tables
+   after their slices were copied, other than the indexer on the re-copied
+   head partition.
+
+## Future Work
+
+The rest of the 0538 programme — `operations_appearances`, the three small
+presence tables, `nft_ownership`, `transactions.id`, the duplicate hash — is
+tracked in the epic; the next step is chosen from a whole-database survey
+(2026-09-23).

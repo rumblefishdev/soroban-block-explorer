@@ -25,10 +25,7 @@
 #      RMT duplicates from the cross-machine merge (the partition straddles
 #      at CH partition boundaries 100 / 110 / 120 per the 0228 plan need
 #      this collapse to ship correct state).
-#   4. After `transaction_hash_index` parts attach, runs
-#      `SYSTEM RELOAD DICTIONARY transaction_hash_dict` so the
-#      `hash → ledger_sequence` cache picks up the new entries.
-#   5. Writes an audit JSON of attached part counts + post-attach row counts
+#   4. Writes an audit JSON of attached part counts + post-attach row counts
 #      per table to `<artifact-dir>/attach_<worker>_<snapshot>.json`.
 #
 # Worker ordering
@@ -551,15 +548,6 @@ fi
 done
 
 log "ATTACH phase complete: $ATTACHED_COUNT new, $SKIPPED_COUNT already-attached"
-
-# ────────────────────────────────────────────────────────────────────────────
-# Dictionary reload (after transaction_hash_index attaches)
-# ────────────────────────────────────────────────────────────────────────────
-
-if [[ -n "${TABLE_PARTS_COUNT[transaction_hash_index]:-}" ]]; then
-  log "reloading dictionary transaction_hash_dict (sources transaction_hash_index)"
-  ch_query "SYSTEM RELOAD DICTIONARY transaction_hash_dict"
-fi
 
 # ────────────────────────────────────────────────────────────────────────────
 # Per-partition OPTIMIZE FINAL

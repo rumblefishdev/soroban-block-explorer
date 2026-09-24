@@ -29,10 +29,8 @@
 //! `crates/db-clickhouse/schema/init.sql` and the live CH read modules)
 //!
 //! - **Transaction lookup** reads `transaction_hash_index` (ORDER BY `hash`,
-//!   PK point-seek), mirroring [`crate::transactions::queries`]. The
-//!   canonical `22_get_search.sql` proposes the `transaction_hash_dict`
-//!   Dictionary hot path; that is a CH-only optimisation layerable later
-//!   without changing this contract. `successful` + `last_activity_at` are
+//!   PK point-seek), mirroring [`crate::transactions::queries`].
+//!   `successful` + `last_activity_at` are
 //!   resolved (PG parity) via a partition-pruned `transactions` seek + a
 //!   `ledgers` PK join — both single-row, so the cost is two point-seeks.
 //! - **NFT name** lives in `nft_enrichment`, NOT `nfts.name` (vestigial NULL on
@@ -218,9 +216,11 @@ struct TxMetaRow {
 
 /// Fires only for a hash-shaped query. Step 1 resolves `hash → ledger_sequence`
 /// off `transaction_hash_index` (ORDER BY `hash`; immutable mapping, no FINAL).
-/// Step 2 reads `successful` + the ledger `closed_at` via a single-partition,
-/// single-row seek on `transactions` (`ledger_sequence` leading PK + the
-/// `idx_tx_hash_bloom` filter) joined to `ledgers` — the PG `tx_hits`
+/// The index maps a fee-bump's inner hash too (task 0375), so step 2 matches
+/// the hash as the transaction's own or as its inner hash, as the transaction
+/// page does. Step 2 reads `successful` + the ledger `closed_at` via a
+/// single-partition, single-row seek on `transactions` (`ledger_sequence` leading PK — one
+/// ledger is one granule) joined to `ledgers` — the PG `tx_hits`
 /// enrichment, at the cost of two point-seeks.
 async fn search_transactions(
     client: &clickhouse::Client,
@@ -267,12 +267,13 @@ async fn search_transactions(
                  ON l.sequence = t.ledger_sequence \
          WHERE t.ledger_sequence = {ledger} \
            AND intDiv(t.ledger_sequence, {LEDGER_PARTITION_SIZE}) = {partition} \
-           AND t.hash = unhex(?) \
+           AND (t.hash = unhex(?) OR t.inner_tx_hash = unhex(?)) \
          ORDER BY t.application_order \
          LIMIT 1"
     );
     let Some(meta) = client
         .query(&sql)
+        .bind(&hash_hex)
         .bind(&hash_hex)
         .fetch_optional::<TxMetaRow>()
         .await?
@@ -990,18 +991,5 @@ async fn search_nfts(
 #[cfg(test)]
 mod tests;
 
-/// Live-CH decode smoke for the search read path. The curl `FORMAT` box smokes
-/// do NOT exercise the clickhouse-rs RowBinary decoder, so a wire-type↔struct
-/// mismatch (e.g. a Nullable column decoded into a non-Option field, or a
-/// positional reorder) passes a curl check yet 500s the live endpoint. This
-/// decodes rows a real CH produced for every bucket's Row struct.
-///
-/// **Skips cleanly when `CH_URL` is unset**, so CI (no CH access) is green.
-/// Run against a reachable CH (local replica or SSH tunnel):
-///
-/// ```text
-/// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
-///   cargo test -p api --lib search::queries::decode_smoke -- --nocapture
-/// ```
 #[cfg(test)]
 mod decode_smoke;

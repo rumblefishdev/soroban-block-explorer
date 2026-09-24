@@ -165,7 +165,6 @@ services:
       # paths have to be redeclared because !override wiped them).
       - ./crates/db-clickhouse/config.d/timeouts.xml:/etc/clickhouse-server/config.d/timeouts.xml:ro
       - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
-      - ./crates/db-clickhouse/users.d/dict.xml:/etc/clickhouse-server/users.d/dict.xml:ro
       # Per-service RBAC users + profiles + quotas (task 0240).
       # `services.xml` defines proxy-trust users (`dev_shared`,
       # `galexie`, `api_reader`, `ingestion_writer`, `partition_admin`,

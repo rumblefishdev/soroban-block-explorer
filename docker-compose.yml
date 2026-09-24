@@ -45,9 +45,6 @@ services:
       # whitelists `log_comment` under readonly=1 for B2 correlation.
       - ./crates/db-clickhouse/config.d/access-control.xml:/etc/clickhouse-server/config.d/access-control.xml:ro
       - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
-      # `dict_reader` user definition. Required because init.sql's
-      # `transaction_hash_dict` SOURCE clause references it.
-      - ./crates/db-clickhouse/users.d/dict.xml:/etc/clickhouse-server/users.d/dict.xml:ro
       # Per-service RBAC users + profiles + quotas (task 0240).
       - ./crates/db-clickhouse/users.d/profiles.xml:/etc/clickhouse-server/users.d/profiles.xml:ro
       - ./crates/db-clickhouse/users.d/quotas.xml:/etc/clickhouse-server/users.d/quotas.xml:ro

@@ -876,8 +876,11 @@ CREATE TABLE IF NOT EXISTS transactions (
     successful        Bool,
     operation_count   Int16,
     has_soroban       Bool,
-    parse_error       Bool,
-    INDEX idx_tx_hash_bloom hash TYPE bloom_filter(0.01) GRANULARITY 1
+    parse_error       Bool
+    -- No hash bloom: every read by hash pins `ledger_sequence` first (the
+    -- ledger comes from `transaction_hash_index`), and one ledger fits one
+    -- granule. `idx_tx_hash_bloom` kept 1 of 1 granules and cost 4.93 GiB;
+    -- dropped 2026-09-23 (task 0579).
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
@@ -1393,40 +1396,3 @@ FROM (
     )
 )
 GROUP BY asset_id;
-
-----------------------------------------------------------------------
--- Dictionary: hot path for `hash → ledger_sequence` lookups
-----------------------------------------------------------------------
-
--- The dictionary SOURCE clause reads via an inner CH→CH client
--- connection. We use the dedicated `dict_reader` user defined in
--- `users.d/dict.xml` instead of `default`: that user has an empty
--- password (safe — restricted to the loopback interface by its
--- `<networks>` ACL) so this DDL stays free of any committed
--- credential, and a future password rotation on `default` does
--- not require rewriting the schema.
---
--- CONNECT_TIMEOUT / SEND_TIMEOUT / RECEIVE_TIMEOUT in the SOURCE
--- clause govern the dict-load connection's socket timeouts. CH
--- user-profile timeouts apply to QUERY execution but not to the
--- internal client connection an external dictionary opens — so
--- the safe place to bound a stuck dict load is here, in the
--- DDL. 60 s is generous for a loopback intra-container fetch of
--- a single-column index.
-CREATE DICTIONARY IF NOT EXISTS transaction_hash_dict (
-    hash            String,
-    ledger_sequence Int64
-)
-PRIMARY KEY hash
-SOURCE(CLICKHOUSE(
-    HOST '127.0.0.1'
-    PORT 9000
-    TABLE 'transaction_hash_index'
-    DB 'default'
-    USER 'dict_reader'
-    CONNECT_TIMEOUT 5
-    SEND_TIMEOUT 60
-    RECEIVE_TIMEOUT 60
-))
-LIFETIME(MIN 300 MAX 360)
-LAYOUT(COMPLEX_KEY_CACHE(SIZE_IN_CELLS 1000000));

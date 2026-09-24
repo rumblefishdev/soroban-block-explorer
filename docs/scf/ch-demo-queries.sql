@@ -114,12 +114,9 @@ FORMAT Vertical;
 -- `hash` (ORDER BY hash → μs), then propagates the resolved
 -- `ledger_sequence` as a scalar constant. That partition-prunes
 -- `soroban_events` (`PARTITION BY intDiv(ledger_sequence, 500000)`) to
--- a single 500k-ledger part, and `t.hash = unhex(...)` (raw
--- FixedString(32) compare) activates the bloom-filter index
--- `idx_tx_hash_bloom` on `transactions.hash`. A `lower(hex(t.hash))`
--- form would defeat that bloom filter because the function call on the
--- indexed column blocks index use. Empirical: ~66 ms vs ~88 s for the
--- `lower(hex())` form.
+-- a single 500k-ledger part, and `t.hash = unhex(...)` compares the raw
+-- FixedString(32). (The `idx_tx_hash_bloom` this query once relied on was
+-- dropped in task 0579; measured after the drop: 13.7 M rows, 0.12 s.)
 --
 -- Rewritten for the rekeyed `soroban_events` (task 0541, ADR 0059): an
 -- event joins its transaction by position and sorts by its stellar-rpc id,

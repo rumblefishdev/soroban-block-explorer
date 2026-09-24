@@ -1,3 +1,17 @@
+//! Live-CH decode smoke for the search read path. The curl `FORMAT` box smokes
+//! do NOT exercise the clickhouse-rs RowBinary decoder, so a wire-type↔struct
+//! mismatch (e.g. a Nullable column decoded into a non-Option field, or a
+//! positional reorder) passes a curl check yet 500s the live endpoint. This
+//! decodes rows a real CH produced for every bucket's Row struct.
+//!
+//! **Skips cleanly when `CH_URL` is unset**, so CI (no CH access) is green.
+//! Run against a reachable CH (local replica or SSH tunnel):
+//!
+//! ```text
+//! CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
+//!   cargo test -p api --lib search::queries::decode_smoke -- --nocapture
+//! ```
+
 use super::super::classifier;
 use super::*;
 
@@ -60,6 +74,32 @@ async fn search_ch_rows_decode() {
     )
     .await
     .expect("transaction/pool bucket rows must decode");
+
+    // A fee-bump's inner hash finds its transaction too, as the transaction
+    // page already did.
+    let inner = ch
+        .query(
+            "SELECT lower(hex(assumeNotNull(inner_tx_hash))) AS hash_hex FROM transactions \
+             WHERE inner_tx_hash IS NOT NULL LIMIT 1",
+        )
+        .fetch_optional::<HashHexRow>()
+        .await
+        .expect("inner hash query must run");
+    if let Some(inner) = inner {
+        let hits = fetch_search(
+            &ch,
+            &inner.hash_hex,
+            &classifier::classify(&inner.hash_hex),
+            &all,
+            5,
+        )
+        .await
+        .expect("inner-hash search must decode");
+        assert!(
+            hits.iter().any(|(bucket, _)| bucket == "transaction"),
+            "an inner hash must find its fee-bump transaction"
+        );
+    }
 }
 
 /// Task 0485. The tier ranking is only visible in the ORDER of the rows,
