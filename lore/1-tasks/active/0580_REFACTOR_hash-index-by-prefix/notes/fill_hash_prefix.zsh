@@ -1,25 +1,25 @@
-# Task 0580: fill transaction_hash_index_staging_prefix from the old index,
-# slice by slice, gating each slice. Writes production, so the operator runs
-# it, from the shell where `chw` / `chq` are defined (shell functions, hence
-# `source`):
+# Task 0580: fill transaction_hash_prefix_index from the old index, slice by
+# slice, gating each slice. Runs while the indexer dual-writes both tables.
+# Writes production, so the operator runs it, from the shell where `chw` /
+# `chq` are defined (shell functions, hence `source`):
 #
 #   source <path>/fill_hash_prefix.zsh 100 101 102
 #
 # Items:
 #   P        whole partition P (ledgers P*500000 .. P*500000+499999)
 #   P:A      resume partition P at slice A (a multiple of 50,000 inside P)
-#   A-B      explicit ledger range [A, B) — the head's partition and the tail
-#            after the indexer is paused; B is exclusive
+#   A-B      explicit ledger range [A, B) — the head's partition, up to
+#            max(sequence) + 1; B is exclusive
 #
 # Per slice [a, a+50000) (clipped to B in range mode): fill_hash_prefix.sql
 # through chw, then the gate through chq — distinct (prefix, ledger) of the old
-# index, computed from its full hash, against the staging copy, per quarter
+# index, computed from its full hash, against the new index, per quarter
 # slice so no query nears the memory cap. Stops at the first error or
-# mismatch, naming the slice. Re-running a slice is safe (the staging
+# mismatch, naming the slice. Re-running a slice is safe (the
 # ReplacingMergeTree collapses repeated rows). Stops before any partition when
 # free disk is under 120 GiB.
 () {
-  local N=${1:A:h} T=transaction_hash_index S=transaction_hash_index_staging_prefix item P A B a b from to out free g q lo hi side tbl key old new
+  local N=${1:A:h} T=transaction_hash_index S=transaction_hash_prefix_index item P A B a b from to out free g q lo hi side tbl key old new
   shift
   for item in "$@"; do
     if [[ $item == <->-<-> ]]; then

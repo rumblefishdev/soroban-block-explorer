@@ -131,3 +131,30 @@ ledger_sequence)` keeps both; two sharing it in one ledger collapse
    inner hash and the transaction page matched `hash OR inner_tx_hash`, but
    search checked `t.hash` only, so an inner hash found nothing. Production,
    ledger 64,578,112: the old condition 0 rows, the new 1.
+
+## Replanned as a parallel change (2026-09-24)
+
+**Decided (karolkow):** no swap window. The re-key ships as four ordinary
+deploys — a new table under a new name, written beside the old one — after a
+devil's-advocate pass found the design sound and the window the risk (task
+0575's ingest stood 51 minutes). PR #489 (swap under the same name) closed as
+superseded; its code carried over. The rule is now in `docs/deployment.md`
+for every later table change.
+
+| PR  | scope                                                             | state                                                                            |
+| --- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| A   | search finds a fee-bump by its inner hash (+ the moves it needed) | [#491](https://github.com/rumblefishdev/soroban-block-explorer/pull/491), merged |
+| B   | `transaction_hash_prefix_index` + the indexer writes both         | branch `feat/0580-hash-prefix-index-dual-write`                                  |
+| C   | both readers on the new table                                     | —                                                                                |
+| D   | stop writing the old index, drop it                               | —                                                                                |
+
+**Projections checked instead of a table (2026-09-24, local ClickHouse
+26.3):** they do run on a ReplacingMergeTree with
+`deduplicate_merge_projection_mode = 'rebuild'` (task 0395 had this already;
+the "refused" claim was the default), and one keyed by the prefix is used by
+the planner (8,192 of 20 M rows read). But a projection stores its source
+column: an expression projection on the prefix kept the full hash (36.19
+B/row), a `_part_offset` one 37.24 plus 25.06 for the inner hash; the leanest,
+a `MATERIALIZED` prefix column plus a projection, comes to ~104 GiB
+(_estimate_) against ~49 GiB for the table, and needs a rewrite of all of
+`transactions`. The table stays.
