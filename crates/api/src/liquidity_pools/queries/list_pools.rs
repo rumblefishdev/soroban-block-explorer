@@ -10,7 +10,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
-use super::pricing::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
+use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
 

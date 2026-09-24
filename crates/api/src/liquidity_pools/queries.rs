@@ -129,19 +129,19 @@ fn leg_rows(
         .collect()
 }
 
-mod activity;
-mod chart;
-mod detail;
-mod list;
-mod participants;
-mod pricing;
+mod get_pool;
+mod get_pool_chart;
+mod list_participants;
+mod list_pool_activity;
+mod list_pools;
+mod usd_analytics;
 
-pub use activity::{fetch_pool_activity, fetch_pool_asset_ids};
-pub use chart::fetch_pool_chart;
-pub use detail::fetch_pool_by_id;
-pub use list::{ResolvedPoolListParams, fetch_pool_list};
-pub use participants::{fetch_participants, pool_exists};
-pub use pricing::{
+pub use get_pool::fetch_pool_by_id;
+pub use get_pool_chart::fetch_pool_chart;
+pub use list_participants::{fetch_participants, pool_exists};
+pub use list_pool_activity::{fetch_pool_activity, fetch_pool_asset_ids};
+pub use list_pools::{ResolvedPoolListParams, fetch_pool_list};
+pub use usd_analytics::{
     PoolPriceContext, fetch_pool_price_context, fetch_pool_usd_analytics, price_leg,
 };
 

@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::common::ch::millis_to_utc;
 
-use super::pricing::{
+use super::usd_analytics::{
     MAX_PRICE_CARRY_SECONDS, PoolPriceContext, fee_revenue_usd, price_leg, priced_pair, usd_str,
 };
 use crate::liquidity_pools::dto::ChartDataPoint;
