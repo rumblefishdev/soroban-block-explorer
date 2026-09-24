@@ -104,7 +104,8 @@ Backbone timeline:
 
 - `ledgers` — ledger-close timeline (anchor)
 - `transactions` — primary explorer activity entity (partitioned by `created_at`)
-- `transaction_hash_index` — unpartitioned hash-to-ledger lookup for direct detail routes
+- `transaction_hash_prefix_index` — hash-prefix-to-ledger lookup for direct detail routes
+  and search (replaces `transaction_hash_index`, task 0580)
 - `operations_appearances` — transaction-scoped appearance index for classic and
   mixed transaction inspection (partitioned; per-op detail recovered from XDR on
   demand per task 0163)
@@ -455,7 +456,9 @@ instead of all 32, which compress at ratio 1.0 (154 GiB of the old index's
 so the reader takes every candidate and `transactions` decides by the full
 hash; the ledger is in the sort key so the ReplacingMergeTree never collapses
 two candidates. Written beside the old index as a parallel change
-(`docs/deployment.md`); the readers move in a later step.
+(`docs/deployment.md`). The API reads only the new table (transaction page
+and search, both through `lookup_hash_ledgers`); the old index is still
+written until it is dropped.
 
 ### 4.4 Operations — Appearance Index
 

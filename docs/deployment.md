@@ -379,6 +379,12 @@ Frontend **content** is separate: `deploy-production-web`
   Then deploy Compute, then fill the history ([backfills.md](./backfills.md),
   "Hash prefix index"). No pause; the readers still use the old index.
 
+- **Hash prefix index, step 2: the readers switch.** Deploy Compute only
+  after the history fill is gated over every partition — the API then finds
+  a transaction through `transaction_hash_prefix_index` alone, so an unfilled
+  ledger answers 404. Nothing to run on ClickHouse; the rollback is the
+  previous deploy.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and

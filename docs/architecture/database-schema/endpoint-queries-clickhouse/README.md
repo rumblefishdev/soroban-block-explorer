@@ -28,7 +28,7 @@ Every file must:
 - Read against a **canonical ADR 0044 table** (`crates/db-clickhouse/schema/init.sql`); never against the local `ch-mirror` exploration container — its schema differs deliberately
 - Use `FINAL` on every `ReplacingMergeTree` read (see [§FINAL discipline](#final-discipline))
 - Partition-prune via `intDiv(ledger_sequence, 500000) BETWEEN ...` on the 8 partitioned tables wherever the input gives a ledger range
-- Resolve `transactions.hash → ledger_sequence` with a `transaction_hash_index` PK seek (`WHERE hash = …`), never by scanning `transactions`
+- Resolve `transactions.hash → ledger_sequence` with a `transaction_hash_prefix_index` seek on the hash's first 8 bytes (`WHERE hash_prefix = reinterpretAsUInt64(substring(…, 1, 8))`), then check the full hash in `transactions` — never scan `transactions` by hash
 - JOIN `ledgers` for `closed_at` display — per ADR 0044 §5.2 only `ledgers` retains a timestamp column; all other fact tables dropped `created_at`
 - Use keyset (cursor) pagination — never `OFFSET`, never full-history `COUNT(*)`
 - Declare expected indexes in the header
@@ -70,7 +70,7 @@ Every file must:
 | `nfts`                            | `ReplacingMergeTree(current_owner_ledger)`     | **yes**                                                                                                                                                                         |
 | `lp_positions`                    | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                                                                         |
 | `transactions`                    | `ReplacingMergeTree` (no version, partitioned) | **yes**                                                                                                                                                                         |
-| `transaction_hash_index`          | `ReplacingMergeTree` (no version, partitioned) | no — `hash → ledger_sequence` is immutable                                                                                                                                      |
+| `transaction_hash_prefix_index`   | `ReplacingMergeTree` (no version, partitioned) | no — `hash_prefix → ledger_sequence` is immutable; `DISTINCT` folds unmerged copies                                                                                             |
 | `operations_appearances`          | same                                           | **yes**                                                                                                                                                                         |
 | `transaction_participants`        | same                                           | **yes**                                                                                                                                                                         |
 | `soroban_events`                  | same                                           | **yes** (ORDER BY is unique by the rpc event id `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)`; FINAL ensures replay idempotency)            |

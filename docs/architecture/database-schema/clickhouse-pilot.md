@@ -259,11 +259,13 @@ The pilot uses an idempotent `init.sql` (every statement is
 `CREATE … IF NOT EXISTS`), not a numbered migration ladder. PG continues
 to use `sqlx` migrations as today.
 
-### 4e. `transaction_hash_index` read directly
+### 4e. Hash lookup read directly, by an 8-byte prefix
 
-The PG `transaction_hash_index` table exists in CH 1:1 (minus
-`created_at`); API reads seek it by `hash` for the ledger, then read
-`transactions` in that ledger. A `transaction_hash_dict` `DICTIONARY` was
+The PG `transaction_hash_index` table existed in CH 1:1 (minus
+`created_at`). Task 0580 replaced it for reads with
+`transaction_hash_prefix_index`, keyed by the hash's first 8 bytes: API
+reads seek it for every candidate ledger, then read `transactions` in each
+until one carries the full hash (own or fee-bump inner). A `transaction_hash_dict` `DICTIONARY` was
 layered on top for the pilot, never called by the API, and removed in task 0396.
 
 ### Cosmetic non-translatable PG features (CH-side OMIT)

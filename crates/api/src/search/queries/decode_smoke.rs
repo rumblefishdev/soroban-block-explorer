@@ -57,15 +57,17 @@ async fn search_ch_rows_decode() {
 
     // Bootstrap a real tx hash so the transaction + pool buckets decode.
     let boot = ch
-        .query("SELECT lower(hex(hash)) AS hash_hex FROM transaction_hash_index LIMIT 1")
+        .query("SELECT lower(hex(hash)) AS hash_hex FROM transactions LIMIT 1")
         .fetch_optional::<HashHexRow>()
         .await
         .expect("bootstrap hash query must run");
     let Some(boot) = boot else {
-        eprintln!("transaction_hash_index empty — text-mode decode ok, skipping hash mode");
+        eprintln!("transactions empty — text-mode decode ok, skipping hash mode");
         return;
     };
-    fetch_search(
+    // The hash comes from `transactions`, so finding it proves the prefix
+    // index reaches it — not only that the rows decode.
+    let hits = fetch_search(
         &ch,
         &boot.hash_hex,
         &classifier::classify(&boot.hash_hex),
@@ -74,6 +76,10 @@ async fn search_ch_rows_decode() {
     )
     .await
     .expect("transaction/pool bucket rows must decode");
+    assert!(
+        hits.iter().any(|(bucket, _)| bucket == "transaction"),
+        "a transaction's own hash must find it through the prefix index"
+    );
 
     // A fee-bump's inner hash finds its transaction too, as the transaction
     // page already did.

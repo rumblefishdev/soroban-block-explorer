@@ -4,6 +4,9 @@ pub mod dto;
 mod handlers;
 mod queries;
 
+/// Hash → candidate ledgers; search's transaction bucket reads it too.
+pub(crate) use queries::lookup_hash_ledgers;
+
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 

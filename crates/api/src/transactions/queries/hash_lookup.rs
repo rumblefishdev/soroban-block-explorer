@@ -8,22 +8,26 @@ struct LedgerSeqRow {
     ledger_sequence: i64,
 }
 
-/// Resolve a transaction hash → parent `ledger_sequence`.
+/// The ledgers a transaction hash — outer, or a fee-bump's inner — may live
+/// in, newest first.
 ///
-/// Reads `transaction_hash_index` directly (PK seek on `hash`), mirroring
-/// the PG `lookup_hash_index`. `hash → ledger_sequence` is immutable, so no
-/// `FINAL` is required on the ReplacingMergeTree index.
-pub async fn lookup_hash_ledger(
+/// `transaction_hash_prefix_index` is keyed by the hash's first 8 bytes (task
+/// 0580), so a seek returns more than one ledger when two hashes share the
+/// prefix; the caller keeps the one whose `transactions` row carries the full
+/// hash. Nearly always one ledger, or none. `hash → ledger_sequence` is
+/// immutable, so no `FINAL`; `DISTINCT` folds a re-ingested duplicate.
+pub async fn lookup_hash_ledgers(
     client: &clickhouse::Client,
     hash_hex: &str,
-) -> Result<Option<i64>, clickhouse::error::Error> {
-    let row = client
+) -> Result<Vec<i64>, clickhouse::error::Error> {
+    let rows = client
         .query(
-            "SELECT ledger_sequence FROM transaction_hash_index \
-             WHERE hash = unhex(?) LIMIT 1",
+            "SELECT DISTINCT ledger_sequence FROM transaction_hash_prefix_index \
+             WHERE hash_prefix = reinterpretAsUInt64(substring(unhex(?), 1, 8)) \
+             ORDER BY ledger_sequence DESC",
         )
         .bind(hash_hex)
-        .fetch_optional::<LedgerSeqRow>()
+        .fetch_all::<LedgerSeqRow>()
         .await?;
-    Ok(row.map(|r| r.ledger_sequence))
+    Ok(rows.into_iter().map(|r| r.ledger_sequence).collect())
 }
