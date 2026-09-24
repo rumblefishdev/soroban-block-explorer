@@ -189,6 +189,18 @@ a `MATERIALIZED` prefix column plus a projection, comes to ~104 GiB
   | outer, ledger 64,000,000 | 197,409 rows / 6.38 MB | 16,886 rows / 0.20 MB | same   |
   | inner, ledger 57,000,000 | 8,694 rows / 0.29 MB   | 8,694 rows / 0.10 MB  | same   |
 
-  Both ~5–7 ms, dominated by round trip. The inner hash of the 64,000,000
+  Both ~5–7 ms, dominated by round trip.
+
+## Step 2 deployed, readers on the prefix index (2026-09-24)
+
+- **#493 merged and deployed** (Compute, API Lambda 12:22:11 UTC, with #495;
+  the indexer unchanged, still writing both tables). Checked through the
+  deployed API (Vite dev proxy, dev API key): search and the transaction
+  page find a fee-bump at the head (64,593,473) by outer and by inner hash,
+  the same at 64,000,000 and the oldest filled range (50,600,000); an
+  absent hash sharing no row answers 404 / no hit.
+- `system.query_log`, `api_reader` since the deploy: 12 reads of
+  `transaction_hash_prefix_index`, **0 of `transaction_hash_index`**, 0
+  exceptions. Next: PR D — stop the dual write, drop the old index. The inner hash of the 64,000,000
   fee-bump and the outer hash at 57,000,000 also resolve to the same ledger
   in both tables.
