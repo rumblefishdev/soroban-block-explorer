@@ -2,7 +2,7 @@
 id: '0580'
 title: 'REFACTOR: key transaction_hash_index by an 8-byte hash prefix — the full hash is checked in transactions'
 type: REFACTOR
-status: active
+status: done
 related_adr: ['0059']
 related_tasks: ['0538', '0396', '0579']
 tags: ['clickhouse', 'storage', 'effort-medium', 'priority-high']
@@ -16,6 +16,15 @@ history:
       Batch 2 of the 0538 database-size list, chosen for the best saving per
       day of work (~120 GiB, estimate). Two PRs: the unused
       transaction_hash_dict removed first (task 0396), then the index itself.
+  - date: 2026-09-24
+    status: done
+    who: karolkow
+    note: >
+      Shipped as a parallel change in four deploys, no swap window: #491
+      (search by inner hash), #492 (new table + dual write, history filled
+      and gated), #493 (readers), #497 (write stopped); the old index was
+      dropped on production. Freed 175.3 GiB of disk; the new table holds
+      50.33 GiB, a net saving of 124.8 GiB against the ~120 GiB estimate.
 ---
 
 # Key `transaction_hash_index` by an 8-byte hash prefix
@@ -78,15 +87,20 @@ real ClickHouse.
 ## Acceptance Criteria
 
 - [x] Trial recorded: B/row, codec, collisions — [notes/R-trial-partition-128.md](notes/R-trial-partition-128.md): 36.24 → 10.22 B/row, `T64, ZSTD(1)` on the ledger, 0 collisions in 156.9 M rows
-- [ ] `transaction_hash_dict` gone (task 0396)
-- [ ] Search and the transaction page find a transaction by outer and by inner
-      hash on production after the swap
-- [ ] Index re-measured; saving reported
-- [ ] stellar-prices-api check recorded before the window (done: not a reader)
-- [ ] **Docs updated** — `database-schema/**`, endpoint queries 03 and 22,
-      `docs/backfills.md`, `docs/deployment.md`
+- [x] `transaction_hash_dict` gone (task 0396, #488; `DROP DICTIONARY` on production)
+- [x] Search and the transaction page find a transaction by outer and by inner
+      hash on production after the switch (step 2 below)
+- [x] Index re-measured; saving reported (step 3 below: −124.8 GiB net)
+- [x] stellar-prices-api check recorded before the change: not a reader
+      (grants and `query_log`, Context above)
+- [x] **Docs updated** — schema overview, pilot, backend overview, endpoint
+      queries 03 and 22 and README, endpoint runner, SCF demo query,
+      `docs/backfills.md`, `docs/deployment.md`, runbooks (#492, #493, #497)
 
 ## Progress
+
+_Superseded by the parallel change below: #488 merged as task 0396, #489
+closed; the plan's window never happened._
 
 - **PR 1 (task 0396):** [#488](https://github.com/rumblefishdev/soroban-block-explorer/pull/488),
   draft. CI found a statement-count unit test (`init_sql_parses_into_statements`,
@@ -131,6 +145,14 @@ ledger_sequence)` keeps both; two sharing it in one ledger collapse
    inner hash and the transaction page matched `hash OR inner_tx_hash`, but
    search checked `t.hash` only, so an inner hash found nothing. Production,
    ledger 64,578,112: the old condition 0 rows, the new 1.
+4. **Parallel change instead of a swap window** (decision karolkow,
+   2026-09-24) — see below; now the rule in `docs/deployment.md`.
+5. **Search reuses the transaction page's `lookup_hash_ledgers`** (#493
+   review) — one query to change, not two.
+6. **Rebuild recipe from `transactions`** in `docs/backfills.md`: the prefix
+   index is derived from `transactions` alone; checked against production,
+   545,555 = 545,555 keys on 1,000 ledgers.
+7. **Dead `domain::TransactionHashIndex` removed** (#497, gardening).
 
 ## Replanned as a parallel change (2026-09-24)
 
@@ -141,12 +163,12 @@ devil's-advocate pass found the design sound and the window the risk (task
 superseded; its code carried over. The rule is now in `docs/deployment.md`
 for every later table change.
 
-| PR  | scope                                                             | state                                                                            |
-| --- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| A   | search finds a fee-bump by its inner hash (+ the moves it needed) | [#491](https://github.com/rumblefishdev/soroban-block-explorer/pull/491), merged |
-| B   | `transaction_hash_prefix_index` + the indexer writes both         | branch `feat/0580-hash-prefix-index-dual-write`                                  |
-| C   | both readers on the new table                                     | —                                                                                |
-| D   | stop writing the old index, drop it                               | —                                                                                |
+| PR  | scope                                                             | state                                                                              |
+| --- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| A   | search finds a fee-bump by its inner hash (+ the moves it needed) | [#491](https://github.com/rumblefishdev/soroban-block-explorer/pull/491), merged   |
+| B   | `transaction_hash_prefix_index` + the indexer writes both         | [#492](https://github.com/rumblefishdev/soroban-block-explorer/pull/492), deployed |
+| C   | both readers on the new table                                     | [#493](https://github.com/rumblefishdev/soroban-block-explorer/pull/493), deployed |
+| D   | stop writing the old index, drop it                               | [#497](https://github.com/rumblefishdev/soroban-block-explorer/pull/497), deployed |
 
 **Projections checked instead of a table (2026-09-24, local ClickHouse
 26.3):** they do run on a ReplacingMergeTree with
@@ -189,7 +211,9 @@ a `MATERIALIZED` prefix column plus a projection, comes to ~104 GiB
   | outer, ledger 64,000,000 | 197,409 rows / 6.38 MB | 16,886 rows / 0.20 MB | same   |
   | inner, ledger 57,000,000 | 8,694 rows / 0.29 MB   | 8,694 rows / 0.10 MB  | same   |
 
-  Both ~5–7 ms, dominated by round trip.
+  Both ~5–7 ms, dominated by round trip. The inner hash of the 64,000,000
+  fee-bump and the outer hash at 57,000,000 also resolve to the same ledger
+  in both tables.
 
 ## Step 2 deployed, readers on the prefix index (2026-09-24)
 
@@ -201,6 +225,42 @@ a `MATERIALIZED` prefix column plus a projection, comes to ~104 GiB
   absent hash sharing no row answers 404 / no hit.
 - `system.query_log`, `api_reader` since the deploy: 12 reads of
   `transaction_hash_prefix_index`, **0 of `transaction_hash_index`**, 0
-  exceptions. Next: PR D — stop the dual write, drop the old index. The inner hash of the 64,000,000
-  fee-bump and the outer hash at 57,000,000 also resolve to the same ledger
-  in both tables.
+  exceptions.
+- Review of #493 before merge (standards + spec) found the branch without
+  step 1's table in `init.sql` (merged develop in), stale docs, canonical
+  SQL 03 matching the outer hash only, and search carrying its own copy of
+  the lookup — all fixed in the PR. Collision behaviour checked on a local
+  ClickHouse: two hashes sharing 8 bytes in two ledgers each resolve to
+  their own transaction.
+
+## Step 3 deployed, old index dropped (2026-09-24)
+
+- **#497 merged and deployed** (indexer Lambda 13:25:10 UTC). `query_log`:
+  the last write to `transaction_hash_index` at 13:25:10, none after;
+  the prefix index kept up with the head, 0 ingest exceptions.
+- **Dropped by the operator:** `DROP TABLE transaction_hash_index SETTINGS
+max_table_size_to_drop = 0` (a table over 50 GB needs the override).
+  ClickHouse deletes the files after `database_atomic_delay_before_drop_table_sec`
+  (480 s).
+- **Measured:** free disk 613.28 → **788.57 GiB (+175.3 GiB)**; the prefix
+  index 50.33 GiB; net saving **124.8 GiB** (estimate ~120). Active data in
+  `default`: 703.6 GiB, against 976.4 GiB in the 2026-09-23 survey (with task
+  0575).
+
+## Issues Encountered
+
+- **Read quota during the fill.** Slicing a hash-sorted source by ledger
+  read the whole partition per statement; the `dev_read` 4 TiB/h quota ran
+  out at partition 126. Resumed after the reset; lesson in step 1 above.
+- **One slice inserted twice** (quota stopped the gate after the insert);
+  harmless — ReplacingMergeTree collapses it, readers use `DISTINCT`.
+- **Docs gave a bare `DROP TABLE`**, which the server refuses above 50 GB;
+  corrected in `docs/deployment.md` as a general rule of the parallel change.
+- **Turnstile blocks post-deploy checks in the browser**; the deployed API
+  was checked through the Vite dev proxy and its dev API key instead.
+
+**Modified tests:** `init_sql_parses_into_statements` count 39 → 40 (#492)
+and 42 → 41 (#497), intentional; the fee-bump staging test now asserts
+prefix rows, with an inner hash that differs in its first 8 bytes (#497);
+`decode_smoke` asserts a hash finds its transaction, verified red with the
+prefix index empty (#493).
