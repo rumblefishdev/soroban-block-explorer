@@ -634,7 +634,8 @@ returned 0 in search while the pools page returned 58.
 Behaviour:
 
 - when `q` is a fully-typed entity id (64-hex hash, full G-StrKey, full C-StrKey) **and**
-  an exact row exists in `transaction_hash_index` / `liquidity_pools` / `accounts` /
+  an exact row exists (a transaction by its own or fee-bump inner hash, found through
+  `transaction_hash_prefix_index`) in `transactions` / `liquidity_pools` / `accounts` /
   `soroban_contracts`, the response is `{ "type": "redirect", "entity_type", "entity_id" }`
   and the frontend navigates directly to the entity page.
 - otherwise the response is `{ "type": "results", "groups": {...} }` with up to `limit`

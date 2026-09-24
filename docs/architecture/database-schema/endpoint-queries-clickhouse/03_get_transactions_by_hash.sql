@@ -18,7 +18,9 @@
 --                           CH side skips that since `soroban_events` is
 --                           the full-content table (§5.1, §5.5 win).
 -- Inputs:
---   $1  :hash     FixedString(32)  raw 32-byte transaction hash
+--   $1  :hash     FixedString(32)  raw 32-byte transaction hash — the
+--                                  transaction's own, or a fee-bump's inner
+--                                  hash (`hash OR inner_tx_hash`)
 -- Indexes:      transaction_hash_prefix_index (ORDER BY (hash_prefix,
 --                 ledger_sequence) — the hash's first 8 bytes → candidate
 --                 ledgers, task 0580).
@@ -92,7 +94,7 @@ SELECT
 FROM transactions t FINAL
 JOIN accounts src FINAL ON src.id = t.source_id
 JOIN ledgers   l        ON l.sequence = t.ledger_sequence
-WHERE t.hash = $1
+WHERE (t.hash = $1 OR t.inner_tx_hash = $1)
   AND intDiv(t.ledger_sequence, 500000)
       IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
           WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)));
@@ -127,7 +129,7 @@ LEFT JOIN soroban_contracts sc  FINAL ON sc.id  = oa.contract_id        AND oa.c
 LEFT JOIN accounts          iss FINAL ON iss.id = oa.asset_issuer_id    AND oa.asset_issuer_id   IS NOT NULL
 JOIN      ledgers           l         ON l.sequence = oa.ledger_sequence
 WHERE oa.transaction_id = (
-    SELECT id FROM transactions FINAL WHERE hash = $1
+    SELECT id FROM transactions FINAL WHERE (hash = $1 OR inner_tx_hash = $1)
       AND intDiv(ledger_sequence, 500000)
           IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
           WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
@@ -151,7 +153,7 @@ FROM transaction_participants tp FINAL
 JOIN accounts a FINAL ON a.id = tp.account_id
 WHERE (tp.ledger_sequence, tp.application_order) = (
     -- the transaction's position (task 0575)
-    SELECT ledger_sequence, application_order FROM transactions FINAL WHERE hash = $1
+    SELECT ledger_sequence, application_order FROM transactions FINAL WHERE (hash = $1 OR inner_tx_hash = $1)
       AND intDiv(ledger_sequence, 500000)
           IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
           WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
@@ -185,7 +187,7 @@ FROM soroban_events se FINAL
 JOIN soroban_contracts sc FINAL ON sc.id = se.contract_id
 JOIN ledgers l ON l.sequence = se.ledger_sequence
 WHERE (se.ledger_sequence, se.application_order) = (
-    SELECT ledger_sequence, application_order FROM transactions FINAL WHERE hash = $1
+    SELECT ledger_sequence, application_order FROM transactions FINAL WHERE (hash = $1 OR inner_tx_hash = $1)
       AND intDiv(ledger_sequence, 500000)
           IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
           WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
@@ -221,7 +223,7 @@ LEFT JOIN accounts          caller          FINAL ON caller.id          = sia.ca
 LEFT JOIN soroban_contracts caller_contract FINAL ON caller_contract.id = sia.caller_contract_id
 JOIN      ledgers           l                     ON l.sequence = sia.ledger_sequence
 WHERE sia.transaction_id = (
-    SELECT id FROM transactions FINAL WHERE hash = $1
+    SELECT id FROM transactions FINAL WHERE (hash = $1 OR inner_tx_hash = $1)
       AND intDiv(ledger_sequence, 500000)
           IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
           WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
