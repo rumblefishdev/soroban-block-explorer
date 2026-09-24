@@ -262,8 +262,8 @@ run_one() {
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             hex="$DUMMY_HASH_HEX"
         else
-            hex=$(ch_oneshot "SELECT lower(hex(hash)) FROM transaction_hash_index FINAL ORDER BY ledger_sequence DESC LIMIT 1")
-            require_value "$hex" "transaction_hash_index" || return 1
+            hex=$(ch_oneshot "SELECT lower(hex(hash)) FROM transactions WHERE ledger_sequence = (SELECT max(ledger_sequence) FROM transactions) LIMIT 1")
+            require_value "$hex" "transactions" || return 1
             echo "  hash = $hex"
         fi
         local stmt_idx

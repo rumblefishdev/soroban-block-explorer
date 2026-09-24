@@ -110,9 +110,9 @@ FORMAT Vertical;
 -- hashes"). The transaction is the pre-picked multi-hop Aquarius router
 -- trade (see header).
 --
--- Uses the dedicated `transaction_hash_index` table for a PK lookup on
--- `hash` (ORDER BY hash → μs), then propagates the resolved
--- `ledger_sequence` as a scalar constant. That partition-prunes
+-- Uses `transaction_hash_prefix_index` for a PK lookup on the hash's
+-- first 8 bytes (task 0580), then propagates the resolved
+-- `ledger_sequence` as a scalar constant (one candidate for this hash). That partition-prunes
 -- `soroban_events` (`PARTITION BY intDiv(ledger_sequence, 500000)`) to
 -- a single 500k-ledger part, and `t.hash = unhex(...)` compares the raw
 -- FixedString(32). (The `idx_tx_hash_bloom` this query once relied on was
@@ -126,8 +126,8 @@ FORMAT Vertical;
 
 WITH tx AS (
     SELECT ledger_sequence
-    FROM   transaction_hash_index FINAL
-    WHERE  hash = unhex('6cad2d49962ae5962722f1f90d4fd11f9e04bd644ad4873752ae1416fddd4740')
+    FROM   transaction_hash_prefix_index
+    WHERE  hash_prefix = reinterpretAsUInt64(substring(unhex('6cad2d49962ae5962722f1f90d4fd11f9e04bd644ad4873752ae1416fddd4740'), 1, 8))
     LIMIT  1
 )
 SELECT e.transaction_index,

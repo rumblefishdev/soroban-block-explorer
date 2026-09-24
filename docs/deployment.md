@@ -367,23 +367,14 @@ Frontend **content** is separate: `deploy-production-web`
   writing the old table and drop it. Every step is an ordinary deploy, and
   until the drop the rollback is the previous deploy.
 
-- **Hash prefix index (task 0580), step 1 of that pattern.** The indexer
-  writes `transaction_hash_prefix_index` beside `transaction_hash_index`.
-  Create the table on production **before** the Compute deploy that carries
-  the writer — without it the client refuses the insert on every ledger:
+- **Hash prefix index (task 0580), last step: the old index goes.** The
+  indexer stops writing `transaction_hash_index`. Deploy Compute **first**;
+  only then drop the table — the previous writer still inserts into it, and
+  a drop before the deploy stops ingest on the next ledger:
 
-  ```bash
-  awk "/CREATE TABLE IF NOT EXISTS transaction_hash_prefix_index \\(/,/^ORDER BY/" crates/db-clickhouse/schema/init.sql
+  ```sql
+  DROP TABLE transaction_hash_index
   ```
-
-  Then deploy Compute, then fill the history ([backfills.md](./backfills.md),
-  "Hash prefix index"). No pause; the readers still use the old index.
-
-- **Hash prefix index, step 2: the readers switch.** Deploy Compute only
-  after the history fill is gated over every partition — the API then finds
-  a transaction through `transaction_hash_prefix_index` alone, so an unfilled
-  ledger answers 404. Nothing to run on ClickHouse; the rollback is the
-  previous deploy.
 
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`

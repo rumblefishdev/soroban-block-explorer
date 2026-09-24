@@ -22,7 +22,7 @@ CH state post-crash, per `db_clickhouse::persist::writer.rs:40-48`
 (commit-marker pattern):
 
 - **18 streaming tables** (`transactions`, `operations_appearances`,
-  `soroban_events`, `transaction_participants`, `transaction_hash_index`,
+  `soroban_events`, `transaction_participants`, `transaction_hash_prefix_index`,
   `soroban_invocations_appearances`, `assets`, `nfts`, `nft_ownership`,
   `nfts_pending`, `nft_ownership_pending`, `account_balances_current`,
   `accounts`, `soroban_contracts`, `wasm_interface_metadata`,
@@ -97,7 +97,7 @@ ALTER TABLE operations_appearances             DELETE WHERE ledger_sequence > <l
 ALTER TABLE soroban_events                     DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE soroban_invocations_appearances    DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE transaction_participants           DELETE WHERE ledger_sequence > <last_complete_ledger>;
-ALTER TABLE transaction_hash_index             DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE transaction_hash_prefix_index      DELETE WHERE ledger_sequence > <last_complete_ledger>;
 -- accounts / soroban_contracts / assets / nfts / nft_ownership rows
 -- carry last_seen_ledger / wasm_uploaded_at_ledger / current_owner_ledger
 -- — adjust column per table; consult crates/db-clickhouse/schema/init.sql.
@@ -124,7 +124,7 @@ SELECT command, is_done, latest_fail_reason, create_time
   FROM system.mutations
  WHERE table IN ('transactions','operations_appearances','soroban_events',
                  'soroban_invocations_appearances','transaction_participants',
-                 'transaction_hash_index','accounts','soroban_contracts',
+                 'transaction_hash_prefix_index','accounts','soroban_contracts',
                  'account_balances_current','nfts','nft_ownership',
                  'nfts_pending','nft_ownership_pending','lp_positions',
                  'liquidity_pools','liquidity_pool_snapshots')

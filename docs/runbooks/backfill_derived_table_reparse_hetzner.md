@@ -263,7 +263,7 @@ done
 
 # BOX — collapse RMT dups on "done" partitions (partition = intDiv(ledger_sequence, 500000))
 for p in $(seq 100 126); do
-  for t in operation_asset_appearances transactions transaction_hash_index soroban_events \
+  for t in operation_asset_appearances transactions transaction_hash_prefix_index soroban_events \
            operations_appearances transaction_participants liquidity_pool_snapshots; do
     docker exec app-clickhouse-1 clickhouse-client --receive_timeout 3600 \
       -q "OPTIMIZE TABLE $t PARTITION ID '$p' FINAL SETTINGS optimize_skip_merged_partitions=1"
