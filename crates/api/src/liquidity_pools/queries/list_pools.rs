@@ -397,3 +397,6 @@ pub async fn fetch_pool_list(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod ch_tests;
