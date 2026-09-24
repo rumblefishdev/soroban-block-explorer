@@ -193,10 +193,12 @@ mod tests {
         // task 0396: dropped `transaction_hash_dict` — never called. 40 → 39.
         // task 0580: added `transaction_hash_prefix_index` — the hash index
         // keyed by an 8-byte prefix. 39 → 40.
+        // task 0374: added `pool_activity` + its refreshable MV — the soroban
+        // pool's last reserve change, the pool list's order key. 40 → 42.
         assert_eq!(
             stmts.len(),
-            40,
-            "expected 38 tables + 2 materialized views, got {}",
+            42,
+            "expected 39 tables + 3 materialized views, got {}",
             stmts.len()
         );
     }

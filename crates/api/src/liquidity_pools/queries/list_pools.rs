@@ -57,7 +57,7 @@ struct PoolListChRow {
     legs: Vec<i64>,
     fee_bps: i32,
     created_at_ledger: i64,
-    /// `last_updated_ledger` — the list sort/cursor key (see fn doc).
+    /// [`ACTIVITY_LEDGER`] — the list sort/cursor key.
     cursor_ledger: i64,
     participant_count: i64,
     latest_snapshot_ledger: Option<i64>,
@@ -67,12 +67,31 @@ struct PoolListChRow {
     latest_snapshot_at_ms: Option<i64>,
 }
 
+/// The ordering value the list pages on: the pool's LAST ACTIVITY.
+///
+/// `last_updated_ledger` is the RMT version, and it means two different things.
+/// A classic pool's row is rewritten on every deposit, withdrawal and trade, so
+/// there it IS the last activity. A soroban pool's row is written once, at
+/// registration, and never again — its activity lives in `pool_state_changes`,
+/// kept per pool in `pool_activity` by a refreshable MV (schema `init.sql`).
+/// Measured on production 2026-09-24: for 699 of 770 soroban pools the real
+/// activity is NEWER than the column, by 250 days on average and 801 at worst,
+/// and no soroban pool reached the first 5,000 rows of the list.
+///
+/// `greatest` rather than a per-kind branch: a classic pool has no
+/// `pool_activity` row, so the join misses and the column wins — read live, it
+/// never lags the MV's refresh; a soroban pool's column is its registration,
+/// which its activity is never earlier than. A join miss yields `0`, not NULL
+/// (`join_use_nulls` is refused for the read-only user), which `greatest`
+/// ignores.
+const ACTIVITY_LEDGER: &str = "greatest(lp.last_updated_ledger, pa.last_activity_ledger)";
+
 /// `GET /v1/liquidity-pools` — paginated pool list. Mirrors the PG
 /// `fetch_pool_list` projection, with two CH-specific structural choices
 /// driven by the box-measured read cost (`liquidity_pool_snapshots` = 268 M
 /// rows):
 ///
-/// - **Order key = `last_updated_ledger` (NOT `created_at_ledger`).** PG keys
+/// - **Order key = [`ACTIVITY_LEDGER`] (NOT `created_at_ledger`).** PG keys
 ///   on `created_at_ledger` (pool creation). CH `liquidity_pools` dropped that
 ///   column (PR #175); its only in-window proxy — `min(snapshot
 ///   ledger_sequence)` — is clamped to the frozen backfill floor (≈ L50.4M)
@@ -106,16 +125,17 @@ pub async fn fetch_pool_list(
 ) -> Result<Vec<PoolRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // Keyset on `(last_updated_ledger, pool_id)`, expanded to scalar
+    // Keyset on `(activity_ledger, pool_id)`, expanded to scalar
     // comparisons. The cursor's `created_at_ledger` slot carries
-    // `last_updated_ledger` on the CH path (opaque, ADR 0008). Bounds inlined:
+    // the activity ledger on the CH path (opaque, ADR 0008). Bounds inlined:
     // `cursor_ledger` is i64 (no injection); `pool_id_hex` is validated hex.
     // A tampered/non-hex cursor degrades to "no keyset" (first page).
     let keyset = match params.cursor.as_ref() {
         Some(c) if is_hex_pool_id(&c.pool_id_hex) => format!(
-            "AND ((lp.last_updated_ledger {op} {cl}) \
-                  OR (lp.last_updated_ledger = {cl} \
+            "AND (({act} {op} {cl}) \
+                  OR ({act} = {cl} \
                       AND lower(hex(lp.pool_id)) {op} '{ph}'))",
+            act = ACTIVITY_LEDGER,
             op = op,
             cl = c.created_at_ledger,
             ph = c.pool_id_hex,
@@ -187,14 +207,18 @@ pub async fn fetch_pool_list(
     }
 
     // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
-    // `ledger_sequence` band around the page's `last_updated_ledger` range (the
-    // `band` CTE, ±10k). Page pools are the most-recently-updated, so their
-    // latest snapshot sits in that band — a bounded seek (~0.5M rows / ~50ms)
+    // `ledger_sequence` band around the page's activity range (the `band` CTE,
+    // ±10k). Page pools are the most-recently-active, so their latest snapshot
+    // sits in that band — a bounded seek (~0.5M rows / ~50ms)
     // instead of a full per-pool history scan (30M rows, which OOMed the 4 GB
     // read-only profile as PR #335's `LIMIT 1 BY` sort). NO `FINAL`: the band's
     // max ledger per page pool is recent (post-0356/#318 single-image) so
     // per-column `argMax` can't tear; only a pool whose latest snapshot predates
     // #318 (inactive for weeks → deep pages) could, which is accepted.
+    // The band follows the activity key, not `last_updated_ledger`: for a
+    // classic pool the two are equal, while a soroban pool's column is its
+    // registration — possibly years back — and would stretch the band over
+    // every classic pool on the page, for a pool that has no snapshot at all.
     // `created_at_ledger` = `min(ledger_sequence)` in the `cr` subquery (cheap
     // narrow streaming scan, dup-invariant → no `FINAL`); `l_snap` seeks
     // `ledgers` by the page's ~20 `last_updated_ledger`s (a full `ledgers` join
@@ -219,15 +243,17 @@ pub async fn fetch_pool_list(
          page AS ( \
              SELECT lp.pool_id AS pool_id, lp.pool_kind AS pool_kind, \
                     lp.legs AS legs, lp.fee_bps AS fee_bps, \
-                    lp.last_updated_ledger AS last_updated_ledger \
+                    lp.last_updated_ledger AS last_updated_ledger, \
+                    {act} AS activity_ledger \
              FROM liquidity_pools lp FINAL \
+             LEFT JOIN pool_activity pa ON pa.pool_id = lp.pool_id \
              WHERE 1 = 1{filters} {keyset} \
-             ORDER BY last_updated_ledger {order}, pool_id {order} \
+             ORDER BY activity_ledger {order}, pool_id {order} \
              LIMIT {limit} \
          ), \
          band AS ( \
-             SELECT min(last_updated_ledger) - 10000 AS lo, \
-                    max(last_updated_ledger) + 10000 AS hi FROM page \
+             SELECT min(activity_ledger) - 10000 AS lo, \
+                    max(activity_ledger) + 10000 AS hi FROM page \
          ) \
          SELECT \
              lower(hex(lp.pool_id))                          AS pool_id_hex, \
@@ -235,7 +261,7 @@ pub async fn fetch_pool_list(
              lp.legs                                         AS legs, \
              lp.fee_bps                                      AS fee_bps, \
              ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
-             lp.last_updated_ledger                          AS cursor_ledger, \
+             lp.activity_ledger                              AS cursor_ledger, \
              toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
              toString(s.reserve_a)                           AS reserve_a, \
@@ -283,7 +309,11 @@ pub async fn fetch_pool_list(
              WHERE sequence IN (SELECT last_updated_ledger FROM page) \
              GROUP BY sequence \
          ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
-         ORDER BY lp.last_updated_ledger {order}, lp.pool_id {order}",
+         /* The outer ORDER BY must repeat the CTE's, or the page holds the \
+            right rows in the wrong order and `finalize_page` cuts the cursor \
+            from the wrong last row — pages then overlap. */ \
+         ORDER BY lp.activity_ledger {order}, lp.pool_id {order}",
+        act = ACTIVITY_LEDGER,
         filters = filters,
         keyset = keyset,
         order = order,
@@ -367,3 +397,6 @@ pub async fn fetch_pool_list(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod ch_tests;

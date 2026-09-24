@@ -242,6 +242,14 @@ Derived explorer entities:
   an authority. A Soroban token IS an LP share exactly when it appears here
   (`share_token_id = 0` is structural for concentrated pools, which never mint
   one)
+- `pool_activity` (+ refreshable MV `pool_activity_mv`, every 2 minutes) —
+  each Soroban pool's last reserve change, `max(ledger_sequence)` over its own
+  plane's `pool_state_changes` rows. The pool list orders on
+  `greatest(liquidity_pools.last_updated_ledger, last_activity_ledger)`: a
+  Soroban pool's `liquidity_pools` row is written once at registration, while
+  a classic pool's row already moves with every trade and has no row here.
+  Full recompute + atomic EXCHANGE (the `accounts_recent` pattern), so it needs
+  no backfill and heals from a source rebuild on the next refresh
 
 **Reserve provenance is a READ-TIME predicate, not just a stored column.** A
 plane entry names its pool in a key payload the writing contract chooses
@@ -280,7 +288,8 @@ liquidity_pools                       # classic (pool_kind=0) + soroban AMM (poo
   ├─ liquidity_pool_snapshots (partitioned)   # classic only
   ├─ lp_positions                             # classic only
   ├─ pool_state_changes (partitioned)         # soroban reserves, one row per (pool, ledger)
-  └─ pool_instance_state                      # soroban pool's own declaration: plane + share token
+  ├─ pool_instance_state                      # soroban pool's own declaration: plane + share token
+  └─ pool_activity (refreshable MV)           # soroban pool's last reserve change — list order key
 
 claimable_balance_holdings                  # value held by a B… balance, balances' shape (0210)
 

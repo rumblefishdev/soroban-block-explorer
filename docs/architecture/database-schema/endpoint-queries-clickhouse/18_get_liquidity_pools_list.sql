@@ -8,7 +8,7 @@
 -- Data sources: DB-only.
 -- Inputs:
 --   $1  :limit                          Int     page size
---   $2  :cursor_last_updated_ledger     Int64   NULL on first page
+--   $2  :cursor_activity_ledger         Int64   NULL on first page
 --   $3  :cursor_pool_id                 String  NULL on first page (hex, optional)
 --   $4  :asset_code                     String  NULL = no filter; substring of
 --                                               a leg's DISPLAYED code, or
@@ -59,10 +59,23 @@
 --     filter page membership without TVL for ALL pools per request; that
 --     needs the prices-side identity-keyed materialized series. Until then
 --     the API says so explicitly rather than answering "no pools".
---   • Cursor ordering switched from `created_at_ledger DESC` to
---     `last_updated_ledger DESC`. UI label changes from "newest pools
---     first" to "most recently active first" — different semantic but
---     a more useful default for users browsing active LPs.
+--   • Cursor ordering is `activity_ledger DESC` — "most recently active
+--     first", for BOTH kinds — where `activity_ledger` is
+--     `greatest(last_updated_ledger, pool_activity.last_activity_ledger)`.
+--     `last_updated_ledger` alone does not mean that: it is the RMT version,
+--     bumped on every change to a CLASSIC pool's entry but written once at
+--     registration for a soroban pool, whose activity lives in
+--     `pool_state_changes`. Measured 2026-09-24: for 699 of 770 soroban pools
+--     the real activity is newer than the column, by 250 days on average, and
+--     no soroban pool reached the first 5,000 rows of the list (127 do now).
+--     `greatest` needs no `pool_kind` branch: a classic pool has no
+--     `pool_activity` row, so the column wins.
+--   • `pool_activity` is a refreshable MV (every 2 min) over
+--     `pool_state_changes`, keeping only the plane each pool declares. Taking
+--     the max per request instead re-scanned that table on every page: the
+--     API references its page CTE six times and ClickHouse re-evaluates a
+--     `WITH` subquery at each reference, so it cost 37-45M rows per page
+--     against 8-10M without the key (measured 2026-09-24).
 --   • argMax over GROUP BY rather than correlated scalar — CH 26.x
 --     rejects correlated subqueries with ORDER BY/LIMIT in JOIN.
 --   • **Pair filtering is a distinctness condition, not two column tests.**
@@ -97,6 +110,7 @@ SELECT
     lp.fee_bps,
     toDecimal64(lp.fee_bps, 2) / 100                                                AS fee_percent,
     lp.last_updated_ledger                                                          AS last_updated_ledger,
+    greatest(lp.last_updated_ledger, pa.last_activity_ledger)                       AS activity_ledger,
     s.latest_ledger_sequence                                                        AS latest_snapshot_ledger,
     s.reserve_a,                -- → legs[0].reserve (a classic pool's two legs, in order)
     s.reserve_b,                -- → legs[1].reserve
@@ -107,6 +121,7 @@ SELECT
     -- `fee_revenue` stay null on the list — detail-only.
     l_snap.closed_at                                                                AS latest_snapshot_at
 FROM liquidity_pools lp FINAL
+LEFT JOIN pool_activity pa ON pa.pool_id = lp.pool_id
 LEFT JOIN (
     SELECT
         pool_id,
@@ -119,7 +134,7 @@ LEFT JOIN (
 ) s ON s.pool_id = lp.pool_id
 LEFT JOIN ledgers l_snap ON l_snap.sequence = s.latest_ledger_sequence
 WHERE
-    ($2 IS NULL OR (lp.last_updated_ledger, lower(hex(lp.pool_id))) < ($2, $3))
+    ($2 IS NULL OR (activity_ledger, lower(hex(lp.pool_id))) < ($2, $3))
     -- One needle: any leg matches. A pair ($4 = 'A/B') adds the distinctness
     -- clause — see Notes.
     AND ($4 IS NULL OR arrayExists(x -> x IN (
@@ -128,5 +143,5 @@ WHERE
         ), lp.legs))
     AND ($5 IS NULL OR lp.pool_kind = $5)
     -- No min-TVL predicate: `filter[min_tvl]` is rejected with 400 (see Notes).
-ORDER BY lp.last_updated_ledger DESC, lp.pool_id DESC
+ORDER BY activity_ledger DESC, lp.pool_id DESC
 LIMIT $1;
