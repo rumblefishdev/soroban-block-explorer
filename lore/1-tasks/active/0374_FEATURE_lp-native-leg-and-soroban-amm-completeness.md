@@ -2286,6 +2286,21 @@ against production, all 770 Soroban pools:
   reproduced: 0 of 813 pools in `pool_instance_state` have ever declared a
   second plane (production, 2026-09-24). Empty, never wrong, so no code
   change.
+- **Simplify pass (2026-09-24).** An asset's decimals are one `Option<u32>`
+  (`None` = not a fact) instead of a number plus a trust flag; a share
+  token's decimals come from the shared identity resolution, dropping a
+  per-request whole-table read of `soroban_contracts` and
+  `soroban_contract_metadata`.
+- **For 4d (decision 109 A):** the Soroban volume guard sits in the detail
+  handler, but the cause is `usd_analytics`, which reads "no snapshot rows"
+  as a zero-volume day and still runs the volume query for a Soroban pool.
+  Move the rule into `PoolPriceContext` when the chart needs it.
+- **Known limitation (decision 110 A):** the writer stores `total_shares = 0`
+  when the pool's key is absent, so the API infers from the pool type and
+  reserves whether a 0 was measured (96 A). The root fix (a nullable
+  column, an indexer change and a backfill) is not worth a task while the
+  rule covers every measured case; pools that keep their supply on the
+  share token would read 0 even then.
 
 ### The 7-day "freshness window" is a leftover — removed from 4c, one left for PR 5 (2026-09-24)
 
