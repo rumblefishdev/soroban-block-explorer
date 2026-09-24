@@ -167,6 +167,9 @@ async fn cleanup(cl: &clickhouse::Client, contracts: &[&str]) {
         format!("ALTER TABLE ledgers DELETE WHERE sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE transaction_hash_index DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
+        format!(
+            "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence = {E2E_LEDGER}"
+        ),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE operations_appearances DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {E2E_LEDGER}"),

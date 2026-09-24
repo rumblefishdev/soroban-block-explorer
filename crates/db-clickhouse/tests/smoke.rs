@@ -200,6 +200,36 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
+    // ----- transaction_hash_prefix_index (task 0580) -----
+    // Two hashes sharing the 8-byte prefix in different ledgers must both
+    // survive a merge — the ledger is part of the sort key.
+    client
+        .query(
+            "INSERT INTO transaction_hash_prefix_index (hash_prefix, ledger_sequence) VALUES \
+             (reinterpretAsUInt64(substring(unhex('00000000000000000000000000000000000000000000000000000000000000aa'), 1, 8)), ?), \
+             (reinterpretAsUInt64(substring(unhex('00000000000000000000000000000000000000000000000000000000000000bb'), 1, 8)), ?)",
+        )
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER - 1)
+        .execute()
+        .await
+        .expect("insert transaction_hash_prefix_index");
+    client
+        .query("OPTIMIZE TABLE transaction_hash_prefix_index FINAL")
+        .execute()
+        .await
+        .expect("merge transaction_hash_prefix_index");
+    assert_count(
+        &client,
+        "transaction_hash_prefix_index",
+        &format!(
+            "hash_prefix = 0 AND ledger_sequence IN ({SMOKE_LEDGER}, {})",
+            SMOKE_LEDGER - 1
+        ),
+        2,
+    )
+    .await;
+
     // ----- operations_appearances (append-only fact) — no surrogate `id` -----
     client
         .query(
@@ -551,6 +581,9 @@ async fn cleanup(client: &clickhouse::Client) {
         "ALTER TABLE wasm_interface_metadata DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE transaction_hash_index DELETE WHERE ledger_sequence = {l}"),
+        format!(
+            "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence IN ({l}, {l} - 1)"
+        ),
         format!("ALTER TABLE operations_appearances DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {l}"),

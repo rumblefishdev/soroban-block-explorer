@@ -1137,6 +1137,28 @@ row's surrogate is joined to `transactions` for the position.
   indexer is paused, inside the window ([deployment.md](./deployment.md),
   "Presence tables by position").
 
+## Hash prefix index (task 0580) — in-DB, per 50k-ledger slice
+
+`transaction_hash_prefix_index` holds what `transaction_hash_index` holds,
+keyed by the hash's first 8 bytes. Once the indexer writes both (the first
+step in [deployment.md](./deployment.md), "Hash prefix index"), the history is
+copied from the old index itself — no join, no S3, the prefix computed from the
+stored hash. The indexer keeps running; ledgers it already dual-wrote are
+copied again and collapse in the ReplacingMergeTree.
+
+- **Statement and gate:**
+  [`fill_hash_prefix.sql`](../lore/1-tasks/active/0580_REFACTOR_hash-index-by-prefix/notes/fill_hash_prefix.sql),
+  [`gate_hash_prefix.sql`](../lore/1-tasks/active/0580_REFACTOR_hash-index-by-prefix/notes/gate_hash_prefix.sql);
+  the loop that runs both per slice and stops at the first mismatch:
+  [`fill_hash_prefix.zsh`](../lore/1-tasks/active/0580_REFACTOR_hash-index-by-prefix/notes/fill_hash_prefix.zsh).
+- **Gate per slice:** distinct `(prefix, ledger)` of the old index, computed
+  from its full hash, equals distinct `(hash_prefix, ledger_sequence)` of the
+  new one — per quarter slice, one query each (the task 0575 lesson). Two
+  hashes sharing a prefix in one ledger count once on both sides.
+- **Order:** whole partitions from the floor up, then the head's partition as
+  an `A-B` range up to `max(sequence) + 1` — no pause needed, the writer
+  already covers everything after its deploy.
+
 ## Superseded — do not follow
 
 - [`lore/3-wiki/backfill-execution-plan.md`](../lore/3-wiki/backfill-execution-plan.md)

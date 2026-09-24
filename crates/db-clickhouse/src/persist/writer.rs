@@ -91,6 +91,8 @@ struct TableInserts {
     executable_refs: Option<Insert<ContractExecutableRefRow>>,
     transactions: Option<Insert<TransactionRow>>,
     hash_index: Option<Insert<TransactionHashIndexRow>>,
+    /// Task 0580 — written beside `hash_index` until the readers move to it.
+    hash_prefix: Option<Insert<TransactionHashPrefixRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
     op_pools: Option<Insert<OperationPoolRow>>,
@@ -349,6 +351,15 @@ impl PartitionWriter {
             &hash_index_rows,
         )
         .await?;
+        let hash_prefix_rows: Vec<TransactionHashPrefixRow> =
+            hash_index_rows.iter().map(Into::into).collect();
+        write_rows(
+            &self.client,
+            &mut self.inserts.hash_prefix,
+            "transaction_hash_prefix_index",
+            &hash_prefix_rows,
+        )
+        .await?;
         write_rows(
             &self.client,
             &mut self.inserts.participants,
@@ -548,6 +559,7 @@ impl PartitionWriter {
             executable_refs,
             transactions,
             hash_index,
+            hash_prefix,
             participants,
             op_assets,
             op_pools,
@@ -580,6 +592,7 @@ impl PartitionWriter {
         end(executable_refs).await?;
         end(transactions).await?;
         end(hash_index).await?;
+        end(hash_prefix).await?;
         end(participants).await?;
         end(op_assets).await?;
         end(op_pools).await?;

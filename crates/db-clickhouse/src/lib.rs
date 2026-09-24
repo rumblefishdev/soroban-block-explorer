@@ -191,10 +191,12 @@ mod tests {
         // task 0541: added `contract_transactions` — the per-(contract, tx)
         // presence index the contract-filtered transaction list seeks. 39 → 40.
         // task 0396: dropped `transaction_hash_dict` — never called. 40 → 39.
+        // task 0580: added `transaction_hash_prefix_index` — the hash index
+        // keyed by an 8-byte prefix. 39 → 40.
         assert_eq!(
             stmts.len(),
-            39,
-            "expected 37 tables + 2 materialized views, got {}",
+            40,
+            "expected 38 tables + 2 materialized views, got {}",
             stmts.len()
         );
     }

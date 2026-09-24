@@ -438,6 +438,16 @@ Design notes:
 - small, unpartitioned, hot-cached — every `/transactions/:hash` lookup goes through
   it before touching the partitioned parent
 
+**ClickHouse, task 0580:** being replaced by `transaction_hash_prefix_index`
+`(hash_prefix UInt64, ledger_sequence Int64 CODEC(T64, ZSTD(1)))`, `ORDER BY
+(hash_prefix, ledger_sequence)` — the hash's first 8 bytes (little-endian)
+instead of all 32, which compress at ratio 1.0 (154 GiB of the old index's
+175, 2026-09-23; 36.24 → 10.22 B/row). A prefix can name more than one ledger,
+so the reader takes every candidate and `transactions` decides by the full
+hash; the ledger is in the sort key so the ReplacingMergeTree never collapses
+two candidates. Written beside the old index as a parallel change
+(`docs/deployment.md`); the readers move in a later step.
+
 ### 4.4 Operations — Appearance Index
 
 Per task 0163, `operations` was collapsed to an appearance index and renamed
