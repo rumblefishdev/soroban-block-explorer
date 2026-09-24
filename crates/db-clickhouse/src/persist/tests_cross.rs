@@ -311,6 +311,26 @@ fn column_order_transaction_hash_index() {
 }
 
 #[test]
+fn column_order_transaction_hash_prefix_index() {
+    assert_columns::<TransactionHashPrefixRow>(
+        "transaction_hash_prefix_index",
+        &["hash_prefix", "ledger_sequence"],
+    );
+}
+
+/// Little-endian `u64` of bytes 0..8 — ClickHouse's
+/// `reinterpretAsUInt64(substring(hash, 1, 8))` (task 0580; the e2e pins the
+/// SQL side against a real server).
+#[test]
+fn hash_prefix_is_little_endian_first_eight_bytes() {
+    let mut hash = [0xffu8; 32];
+    hash[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let row = TransactionHashPrefixRow::new(&hash, 42);
+    assert_eq!(row.hash_prefix, 0x0807_0605_0403_0201);
+    assert_eq!(row.ledger_sequence, 42);
+}
+
+#[test]
 fn column_order_operations_appearances() {
     assert_columns::<OperationAppearanceRow>(
         "operations_appearances",
