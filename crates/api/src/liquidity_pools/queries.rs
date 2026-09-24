@@ -24,13 +24,16 @@
 
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
-use db_clickhouse::persist::ids;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
+use crate::common::asset_identity::{
+    ResolvedAsset, resolve_asset_identities, resolve_identities_and_icons,
+};
 use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
+use crate::common::strkey::decode_pool_kind;
 
 use super::dto::{ChartDataPoint, PoolActivityCursor, PoolEvent, PoolListCursor, SharesCursor};
 
@@ -43,23 +46,11 @@ use super::dto::{ChartDataPoint, PoolActivityCursor, PoolEvent, PoolListCursor, 
 #[derive(Debug, Clone)]
 pub struct PoolRow {
     pub pool_id_hex: String,
-    pub asset_a_type: i16,
-    pub asset_a_type_name: Option<String>,
-    pub asset_a_code: Option<String>,
-    pub asset_a_issuer: Option<String>,
-    /// C-strkey of the SAC mirror for the asset-A leg. `None` otherwise (task 0263).
-    pub asset_a_contract_id: Option<String>,
-    /// `icon_url` for the asset-A leg, from `asset_enrichment` (ADR 0050).
-    /// NOT from `assets` — task 0310 dropped that dead column from prod.
-    pub asset_a_icon_url: Option<String>,
-    pub asset_b_type: i16,
-    pub asset_b_type_name: Option<String>,
-    pub asset_b_code: Option<String>,
-    pub asset_b_issuer: Option<String>,
-    /// C-strkey of the SAC mirror for the asset-B leg. See `asset_a_contract_id`.
-    pub asset_b_contract_id: Option<String>,
-    /// `icon_url` for the asset-B leg. See `asset_a_icon_url`.
-    pub asset_b_icon_url: Option<String>,
+    /// `liquidity_pools.pool_kind`, decoded once by `decode_pool_kind`.
+    pub pool_kind: domain::PoolKind,
+    /// The pool's legs in registration order: two for a classic pool, two to
+    /// four for a soroban one.
+    pub legs: Vec<PoolLegRow>,
     pub fee_bps: i32,
     pub fee_percent: String,
     pub created_at_ledger: i64,
@@ -72,13 +63,88 @@ pub struct PoolRow {
     /// Task 0246 — see DTO doc for surfacing rules.
     pub participant_count: i64,
     pub latest_snapshot_ledger: Option<i64>,
-    pub reserve_a: Option<String>,
-    pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
     pub tvl: Option<String>,
     pub volume: Option<String>,
     pub fee_revenue: Option<String>,
     pub latest_snapshot_at: Option<DateTime<Utc>>,
+}
+
+/// One leg as the query layer resolved it. The handler names `family` for the
+/// wire; the raw discriminant stays here because the price join keys on it.
+#[derive(Debug, Clone)]
+pub struct PoolLegRow {
+    /// `assets.asset_type` — the AssetFamily discriminant, named at the
+    /// boundary via [`domain::AssetFamily`] rather than by a local match.
+    pub family: i16,
+    pub asset_code: Option<String>,
+    /// `G…` StrKey, resolved from the surrogate by the shared bloom seek.
+    pub issuer: Option<String>,
+    /// The token's own `C…` contract — a soroban leg only.
+    pub contract_id: Option<String>,
+    /// The token's self-declared SEP-41 symbol — what names a soroban leg
+    /// that has no classic code.
+    pub symbol: Option<String>,
+    pub icon_url: Option<String>,
+    /// What the pool holds of this leg, raw units — see `PoolAssetLeg::reserve`.
+    pub reserve: Option<String>,
+}
+
+/// Turn one pool's stored leg surrogates into the rows the handler finishes.
+///
+/// A surrogate the asset dimension does not know still yields a leg: the pool
+/// genuinely holds that token, and dropping it would silently shorten the pool.
+/// It renders by whatever identity survives — the contract address — which is
+/// the honest answer rather than a missing leg.
+fn leg_rows(
+    leg_ids: &[i64],
+    identities: &HashMap<i64, ResolvedAsset>,
+    icons: &HashMap<i64, String>,
+    reserves: &[Option<String>],
+) -> Vec<PoolLegRow> {
+    leg_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let reserve = reserves.get(i).cloned().flatten();
+            match identities.get(id) {
+                Some(r) if r.known => PoolLegRow {
+                    family: r.asset_type,
+                    asset_code: r.asset_code.clone(),
+                    issuer: r.issuer.clone(),
+                    // The contract is the asset identity only for a Soroban
+                    // token; a classic leg's contract column is its SAC, which
+                    // is not a route (see `PoolAssetLeg`).
+                    contract_id: (r.asset_type == domain::AssetFamily::Soroban as i16)
+                        .then(|| r.contract_strkey.clone())
+                        .flatten(),
+                    symbol: r.symbol.clone(),
+                    icon_url: icons.get(id).cloned(),
+                    reserve,
+                },
+                // Unknown to `assets`: no family, no code — only the contract
+                // and its symbol, which `soroban_contracts` and its metadata
+                // still name.
+                other => PoolLegRow {
+                    family: -1,
+                    asset_code: None,
+                    issuer: None,
+                    contract_id: other.and_then(|r| r.contract_strkey.clone()),
+                    symbol: other.and_then(|r| r.symbol.clone()),
+                    icon_url: None,
+                    reserve,
+                },
+            }
+        })
+        .collect()
+}
+
+/// The prices identity of one leg, from the identity already resolved for it.
+fn price_leg_of(id: i64, identities: &HashMap<i64, ResolvedAsset>) -> PriceLeg {
+    match identities.get(&id).filter(|r| r.known) {
+        Some(r) => price_leg(r.asset_type, r.asset_code.as_deref(), r.issuer.as_deref()),
+        None => price_leg(-1, None, None),
+    }
 }
 
 /// One current LP participant (a positive-shares position). Handler strips the
@@ -103,10 +169,9 @@ pub struct ParticipantRow {
 pub struct ResolvedPoolListParams {
     pub limit: i64,
     pub cursor: Option<PoolListCursor>,
-    pub asset_a_code: Option<String>,
-    pub asset_a_issuer: Option<String>,
-    pub asset_b_code: Option<String>,
-    pub asset_b_issuer: Option<String>,
+    /// `classic` | `soroban`, already parsed. The one distinction a pool
+    /// filter can make that the leg codes cannot: which protocol built it.
+    pub pool_kind: Option<domain::PoolKind>,
     /// Free-text asset filter (task 0246, widened in 0440) — trimmed and
     /// uppercased at the handler boundary, then split on `/` into at most two
     /// needles. Every needle must appear on *some* leg, which makes a pair
@@ -132,8 +197,8 @@ pub struct PoolActivityRow {
     pub transaction_id: i64,
     pub application_order: i16,
     pub event: Option<PoolEvent>,
-    pub amount_a: Option<String>,
-    pub amount_b: Option<String>,
+    /// One per leg, in `legs` order — see `PoolActivityItem::amounts`.
+    pub amounts: Vec<Option<String>>,
     pub source_account: String,
     /// How many pools the whole operation crossed (`length(pool_ids)` off the
     /// same appearance seek that resolves the op source). `None` = unknowable
@@ -170,23 +235,6 @@ fn is_hex_pool_id(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-/// `asset_type` SMALLINT → label, matching the PG `asset_type_name()` SQL
-/// function (migration `20260422000000_enum_label_functions`) — the XDR
-/// `AssetType`, which is what LP legs carry. NOT `asset_family_name`
-/// (native/classic_credit/sac/soroban); the `PoolAssetLeg` doc-comment quotes
-/// that sibling function and is misleading for pool legs. Box-confirmed: a
-/// 9-char code (`WGUARDIAN`) is `asset_type = 2` = credit_alphanum12, not sac.
-/// Out-of-range → `None` (PG `CASE` returns NULL with no `ELSE`).
-fn asset_type_name(asset_type: i16) -> Option<String> {
-    match asset_type {
-        0 => Some("native".to_string()),
-        1 => Some("credit_alphanum4".to_string()),
-        2 => Some("credit_alphanum12".to_string()),
-        3 => Some("pool_share".to_string()),
-        _ => None,
-    }
 }
 
 /// `fee_bps / 100` as a decimal string (e.g. 30 → "0.3", 25 → "0.25",
@@ -319,75 +367,50 @@ pub fn price_leg(asset_type: i16, code: Option<&str>, issuer: Option<&str>) -> P
 /// (doubles as the 404 existence gate).
 #[derive(Debug, Clone)]
 pub struct PoolPriceContext {
-    pub leg_a: PriceLeg,
-    pub leg_b: PriceLeg,
+    /// Every leg, in pool order. A pool prices only when ALL of them do — a
+    /// partial sum understates it, which is why this is a vector rather than a
+    /// pair even though the two-leg case is the common one.
+    pub legs: Vec<PriceLeg>,
     pub fee_bps: i32,
 }
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
 #[derive(Debug, Row, Deserialize)]
 struct PriceContextChRow {
-    asset_a_type: i16,
-    asset_a_code: String,
-    asset_a_issuer: String,
-    asset_b_type: i16,
-    asset_b_code: String,
-    asset_b_issuer: String,
+    legs: Vec<i64>,
     fee_bps: i32,
 }
 
 /// Resolve the pool's leg identities + `fee_bps`. `None` = pool unknown
 /// (the chart handler's 404 gate — replaces `pool_exists` there).
 ///
-/// Issuer resolution reuses the detail query's restricted-`iss` idiom:
-/// never `accounts FINAL` joins (14M-row hash build, box-confirmed
-/// Code 241) — restrict to the pool's ≤2 issuer ids, `GROUP BY id` +
-/// `any()` (account_id is stable across RMT versions).
+/// Leg identity comes from the shared resolver, which carries the issuer
+/// StrKey with it — so the restricted-`iss` CTE this used to run (never
+/// `accounts FINAL`: a 14M-row hash build, box-confirmed Code 241) is gone
+/// along with the pair columns it keyed on.
 pub async fn fetch_pool_price_context(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolPriceContext>, clickhouse::error::Error> {
     let row = client
         .query(
-            "WITH legs AS ( \
-                 SELECT asset_a_type, asset_a_code, asset_a_issuer_id, \
-                        asset_b_type, asset_b_code, asset_b_issuer_id, fee_bps \
-                 FROM liquidity_pools FINAL WHERE pool_id = unhex(?) \
-             ), \
-             iss AS ( \
-                 SELECT id, any(account_id) AS account_id FROM accounts \
-                 WHERE id IN (SELECT asset_a_issuer_id FROM legs WHERE asset_a_issuer_id != 0 \
-                              UNION ALL SELECT asset_b_issuer_id FROM legs WHERE asset_b_issuer_id != 0) \
-                 GROUP BY id \
-             ) \
-             SELECT \
-                legs.asset_a_type            AS asset_a_type, \
-                legs.asset_a_code            AS asset_a_code, \
-                iss_a.account_id             AS asset_a_issuer, \
-                legs.asset_b_type            AS asset_b_type, \
-                legs.asset_b_code            AS asset_b_code, \
-                iss_b.account_id             AS asset_b_issuer, \
-                legs.fee_bps                 AS fee_bps \
-             FROM legs \
-             LEFT JOIN iss iss_a ON iss_a.id = legs.asset_a_issuer_id \
-             LEFT JOIN iss iss_b ON iss_b.id = legs.asset_b_issuer_id \
-             LIMIT 1",
+            "SELECT legs, fee_bps FROM liquidity_pools FINAL \
+             WHERE pool_id = unhex(?) LIMIT 1",
         )
         .bind(pool_id_hex)
         .fetch_optional::<PriceContextChRow>()
         .await?;
 
-    Ok(row.map(|r| PoolPriceContext {
-        leg_a: price_leg(
-            r.asset_a_type,
-            Some(&r.asset_a_code),
-            Some(&r.asset_a_issuer),
-        ),
-        leg_b: price_leg(
-            r.asset_b_type,
-            Some(&r.asset_b_code),
-            Some(&r.asset_b_issuer),
-        ),
+    let Some(r) = row else { return Ok(None) };
+    let leg_ids: BTreeSet<i64> = r.legs.iter().copied().collect();
+    let identities = resolve_asset_identities(client, &leg_ids).await?;
+
+    Ok(Some(PoolPriceContext {
+        legs: r
+            .legs
+            .iter()
+            .map(|id| price_leg_of(*id, &identities))
+            .collect(),
         fee_bps: r.fee_bps,
     }))
 }
@@ -485,8 +508,7 @@ pub async fn fetch_pool_usd_analytics(
     client: &clickhouse::Client,
     pool_id_hex: &str,
     ctx: &PoolPriceContext,
-    reserve_a: Option<&str>,
-    reserve_b: Option<&str>,
+    reserves: &[Option<&str>],
 ) -> Result<PoolUsdAnalytics, clickhouse::error::Error> {
     let legs = priceable_legs(ctx);
     let (closes, vol24_raw) = tokio::join!(
@@ -494,8 +516,8 @@ pub async fn fetch_pool_usd_analytics(
         fetch_pool_volume_24h(client, pool_id_hex),
     );
     let closes = closes?;
-    let spot_a = closes.get(&ctx.leg_a).copied();
-    let spot_b = closes.get(&ctx.leg_b).copied();
+    // Volume is still leg-A-only: the snapshot counts it on one leg.
+    let spot_a = priced_pair(ctx).and_then(|(a, _)| closes.get(a).copied());
     // SQL NULL (no snapshot rows in the window, or no swaps among them) is a
     // genuine zero-volume day. A row that IS present but unparseable is NOT —
     // it is an unknown, and must not be reported as "$0.00 traded".
@@ -504,15 +526,7 @@ pub async fn fetch_pool_usd_analytics(
         Some(raw) => parse_f64(raw),
     };
 
-    let tvl = match (
-        reserve_a.and_then(parse_f64),
-        reserve_b.and_then(parse_f64),
-        spot_a,
-        spot_b,
-    ) {
-        (Some(ra), Some(rb), Some(pa), Some(pb)) => Some(ra * pa + rb * pb),
-        _ => None,
-    };
+    let tvl = tvl_usd(reserves, &ctx.legs, &closes);
     let volume = match (spot_a, vol24_units) {
         (Some(pa), Some(units)) => Some(units * pa),
         _ => None,
@@ -603,14 +617,46 @@ async fn fetch_last_closes(
         .collect())
 }
 
+/// The pool's two legs, or `None` for a pool that does not have exactly two.
+///
+/// The price join is CLASSIC-shaped: two reserves, two closes, summed. A pool
+/// with three or four legs is soroban, and pricing its first two would report a
+/// TVL that understates the pool while looking like a real number — the
+/// misleading-fallback class. `None` degrades the analytics to NULL, the same
+/// answer an untracked asset gets.
+///
+/// This is the property [`PoolPriceContext`] promises ("a pool prices only when
+/// ALL of them do"), so it lives on the context rather than at each of the
+/// three call sites. It used to be a per-index accessor whose own doc claimed
+/// this guarantee while `get(0)` / `get(1)` quietly provided the opposite.
+fn priced_pair(ctx: &PoolPriceContext) -> Option<(&PriceLeg, &PriceLeg)> {
+    match ctx.legs.as_slice() {
+        [a, b] => Some((a, b)),
+        _ => None,
+    }
+}
+
 /// The two legs of a pool as a `fetch_last_closes` input, with unpriceable
 /// legs (empty `kind`) dropped — they match no prices row by construction,
 /// so asking for them is pure waste.
 fn priceable_legs(ctx: &PoolPriceContext) -> Vec<&PriceLeg> {
-    [&ctx.leg_a, &ctx.leg_b]
-        .into_iter()
-        .filter(|l| !l.kind.is_empty())
-        .collect()
+    ctx.legs.iter().filter(|l| !l.kind.is_empty()).collect()
+}
+
+/// A pool's TVL: every leg's reserve times its price, summed. `None` unless
+/// EVERY leg has both — a partial sum understates the pool while looking like
+/// a real number. `reserves[i]` and `legs[i]` describe the same leg: both
+/// callers build the two from one leg list.
+fn tvl_usd(
+    reserves: &[Option<&str>],
+    legs: &[PriceLeg],
+    closes: &HashMap<PriceLeg, f64>,
+) -> Option<f64> {
+    reserves
+        .iter()
+        .zip(legs)
+        .map(|(r, leg)| Some(r.and_then(parse_f64)? * closes.get(leg).copied()?))
+        .sum()
 }
 
 /// Strict decimal-string → f64 (the wire strings come from CH `toString`
@@ -652,16 +698,8 @@ fn fee_revenue_usd(volume_usd: f64, fee_bps: i32) -> f64 {
 #[derive(Debug, Row, Deserialize)]
 struct PoolDetailChRow {
     pool_id_hex: String,
-    asset_a_type: i16,
-    asset_a_code: Option<String>,
-    asset_a_issuer: Option<String>,
-    asset_a_contract_id: Option<String>,
-    asset_a_icon_url: Option<String>,
-    asset_b_type: i16,
-    asset_b_code: Option<String>,
-    asset_b_issuer: Option<String>,
-    asset_b_contract_id: Option<String>,
-    asset_b_icon_url: Option<String>,
+    pool_kind: i16,
+    legs: Vec<i64>,
     fee_bps: i32,
     created_at_ledger: i64,
     participant_count: i64,
@@ -686,37 +724,15 @@ pub async fn fetch_pool_by_id(
     // detail is single-pool and CH dislikes correlated subqueries. Each `?`
     // consumes one positional bind; all are the same value, so order is moot.
     //
-    // `legs` resolves the pool's two `(code, issuer_id)` pairs once; `iss` and
-    // `sac` both fan out from it.
-    //
-    // **Issuer resolution is a restricted `iss` CTE, NOT `accounts FINAL`
-    // joins.** `accounts` is `ORDER BY (account_id)`, so the surrogate `id` is a
-    // non-PK reverse lookup; a plain `LEFT JOIN accounts FINAL` builds the whole
-    // 14M-row table into the hash — and detail does it for BOTH legs, blowing
-    // the 3.73 GiB per-query cap (box-confirmed `Code 241`). Restricting to the
-    // pool's ≤2 issuer ids + `GROUP BY id` (no FINAL — account_id is stable
-    // across RMT versions, `any()` is safe) scans the id column but builds a
-    // ≤2-row hash. Same shape as `fetch_pool_list`'s `iss` CTE.
-    //
-    // SAC mirror + icon_url (task 0263 + 0274 gap #5 → ADR 0051): the `sac` CTE
-    // resolves `(asset_code, issuer_id)` → `(contract_id, icon_url)` once per leg,
-    // deduped by GROUP BY so a leg cannot fan the result out (the inline-join
-    // form did, masked only by the outer LIMIT 1). Post-ADR 0051 the SAC handle
-    // is a FACET in the `asset_sac` side table (not a column on `assets`, and not
-    // a separate `asset_type = 2`) — so the deployed SAC's `C…` StrKey resolves by
-    // two hops: leg `(code, issuer)` → `asset_sac.sac_contract_id` (surrogate) →
-    // `soroban_contracts.contract_id` (un-deployed SACs have no contract row →
-    // NULL, as before). The classic carrier is `asset_type IN (0, 1)`.
-    //
-    // **Native legs are IN the join** (task 0470). They used to be excluded by an
-    // `asset_code != ''` guard on every arm, on the assumption that an empty code
-    // could match nothing — but native XLM has a deployed SAC like any other
-    // classic asset, so the guard was hiding a real answer: the leg reported a
-    // NULL `contract_id` for an asset that has one. `('', 0)` is a safe join key
-    // here, measured: it is exactly one asset across `asset_type IN (0, 1)`,
-    // since a classic credit code is 1–12 characters by protocol. The icon stays
-    // NULL, but because `asset_enrichment` holds no native row at all — not
-    // because a guard forbids the lookup.
+    // **Leg identity is resolved in Rust, not joined here.** This used to carry
+    // three pair-keyed CTEs — `legs` (the pool's four pair columns), `iss` (a
+    // bounded issuer seek) and `sac` (the SAC mirror + icon, two hops through
+    // `asset_sac` and `soroban_contracts`) — plus four joins onto them. All of
+    // it keyed on `(asset_code, issuer_id)`, which only a classic row has.
+    // `legs` stores `assets.id` surrogates for both pool kinds, so the same
+    // work is one batched call to the shared resolver, which already carries
+    // the shapes those joins had to get right — including the issuer seek that
+    // must never be an `accounts FINAL` join (a 14M-row hash, `Code 241`).
     //
     // **Latest snapshot subquery — NO `FINAL`** (0356 / PR #318). The indexer now
     // writes exactly one deterministic row per `(pool_id, ledger_sequence)`, so
@@ -739,57 +755,10 @@ pub async fn fetch_pool_by_id(
     // 500'd (Code 48) the moment the server profile carried anything else.
     let row = client
         .query(
-            "WITH legs AS ( \
-                 SELECT asset_a_code, asset_a_issuer_id, asset_b_code, asset_b_issuer_id \
-                 FROM liquidity_pools FINAL WHERE pool_id = unhex(?) \
-             ), \
-             iss AS ( \
-                 SELECT id, any(account_id) AS account_id FROM accounts \
-                 WHERE id IN (SELECT asset_a_issuer_id FROM legs WHERE asset_a_issuer_id != 0 \
-                              UNION ALL SELECT asset_b_issuer_id FROM legs WHERE asset_b_issuer_id != 0) \
-                 GROUP BY id \
-             ), \
-             sac AS ( \
-                 SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
-                        max(sc.contract_id)      AS contract_id, \
-                        nullIf(max(ae.icon_url), '') AS icon_url \
-                 FROM assets a \
-                 LEFT JOIN ( \
-                     SELECT asset_type, asset_code, issuer_id, contract_id, \
-                            max(sac_contract_id) AS sac_contract_id \
-                     FROM asset_sac GROUP BY asset_type, asset_code, issuer_id, contract_id \
-                 ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
-                       AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
-                 /* 0548: deployed-only ON PURPOSE. PoolAssetLeg.contract_id is documented as None for a leg without a DEPLOYED SAC mirror, and asset_sac also carries surrogates of un-deployed SACs, so this reads soroban_contracts, which holds only contracts observed being deployed. */ LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
-                 LEFT JOIN ( \
-                     SELECT asset_type, asset_code, issuer_id, contract_id, \
-                            argMax(icon_url, version) AS icon_url \
-                     FROM asset_enrichment \
-                     WHERE asset_type IN (0, 1) AND asset_code IN ( \
-                         SELECT asset_a_code FROM legs \
-                         UNION ALL SELECT asset_b_code FROM legs) \
-                     GROUP BY asset_type, asset_code, issuer_id, contract_id \
-                 ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
-                     AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
-                 WHERE a.asset_type IN (0, 1) \
-                   AND (a.asset_code, a.issuer_id) IN ( \
-                       SELECT asset_a_code, asset_a_issuer_id FROM legs \
-                       UNION ALL \
-                       SELECT asset_b_code, asset_b_issuer_id FROM legs) \
-                 GROUP BY a.asset_code, a.issuer_id \
-             ) \
-             SELECT \
+            "SELECT \
                 lower(hex(lp.pool_id))               AS pool_id_hex, \
-                lp.asset_a_type                      AS asset_a_type, \
-                nullIf(lp.asset_a_code, '')          AS asset_a_code, \
-                nullIf(iss_a.account_id, '')         AS asset_a_issuer, \
-                nullIf(sac_a.contract_id, '')        AS asset_a_contract_id, \
-                sac_a.icon_url                       AS asset_a_icon_url, \
-                lp.asset_b_type                      AS asset_b_type, \
-                nullIf(lp.asset_b_code, '')          AS asset_b_code, \
-                nullIf(iss_b.account_id, '')         AS asset_b_issuer, \
-                nullIf(sac_b.contract_id, '')        AS asset_b_contract_id, \
-                sac_b.icon_url                       AS asset_b_icon_url, \
+                toInt16(lp.pool_kind)                AS pool_kind, \
+                lp.legs                              AS legs, \
                 lp.fee_bps                           AS fee_bps, \
                 ifNull( \
                     (SELECT min(ledger_sequence) FROM liquidity_pool_snapshots \
@@ -804,12 +773,6 @@ pub async fn fetch_pool_by_id(
                 toString(s.total_shares)             AS total_shares, \
                 nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms \
              FROM liquidity_pools lp FINAL \
-             LEFT JOIN iss iss_a ON iss_a.id = lp.asset_a_issuer_id \
-             LEFT JOIN iss iss_b ON iss_b.id = lp.asset_b_issuer_id \
-             LEFT JOIN sac sac_a ON sac_a.asset_code = lp.asset_a_code \
-                                AND sac_a.issuer_id = lp.asset_a_issuer_id \
-             LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
-                                AND sac_b.issuer_id = lp.asset_b_issuer_id \
              LEFT JOIN ( \
                  SELECT pool_id, \
                         toNullable(ledger_sequence) AS ledger_sequence, \
@@ -834,24 +797,24 @@ pub async fn fetch_pool_by_id(
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
-        .bind(pool_id_hex)
         .fetch_optional::<PoolDetailChRow>()
         .await?;
 
-    Ok(row.map(|r| PoolRow {
+    let Some(r) = row else { return Ok(None) };
+    let leg_ids: BTreeSet<i64> = r.legs.iter().copied().collect();
+    let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
+
+    Ok(Some(PoolRow {
+        pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
         pool_id_hex: r.pool_id_hex,
-        asset_a_type: r.asset_a_type,
-        asset_a_type_name: asset_type_name(r.asset_a_type),
-        asset_a_code: r.asset_a_code,
-        asset_a_issuer: r.asset_a_issuer,
-        asset_a_contract_id: r.asset_a_contract_id,
-        asset_a_icon_url: r.asset_a_icon_url,
-        asset_b_type: r.asset_b_type,
-        asset_b_type_name: asset_type_name(r.asset_b_type),
-        asset_b_code: r.asset_b_code,
-        asset_b_issuer: r.asset_b_issuer,
-        asset_b_contract_id: r.asset_b_contract_id,
-        asset_b_icon_url: r.asset_b_icon_url,
+        // The snapshot is classic, and a classic pool's legs are its two
+        // snapshot columns in order; a soroban pool has no snapshot row.
+        legs: leg_rows(
+            &r.legs,
+            &identities,
+            &icons,
+            &[r.reserve_a.clone(), r.reserve_b.clone()],
+        ),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
         created_at_ledger: r.created_at_ledger,
@@ -859,8 +822,6 @@ pub async fn fetch_pool_by_id(
         cursor_ledger: r.created_at_ledger,
         participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
-        reserve_a: r.reserve_a,
-        reserve_b: r.reserve_b,
         total_shares: r.total_shares,
         // Filled by the handler from `fetch_pool_usd_analytics` (0199
         // compute-at-read); the snapshot columns are not read.
@@ -895,47 +856,34 @@ pub async fn pool_exists(
 
 #[derive(Debug, Row, Deserialize)]
 struct PoolLegsChRow {
-    asset_a_type: i16,
-    asset_a_code: String,
-    asset_a_issuer_id: i64,
-    asset_b_type: i16,
-    asset_b_code: String,
-    asset_b_issuer_id: i64,
+    legs: Vec<i64>,
 }
 
-/// The pool's two legs as `ids::asset_id` surrogates — the key
-/// `lp_operation_amounts.asset_id` is written with (task 0279), so a row's
-/// asset maps onto the A/B legs the page already renders. `None` when the pool
-/// does not exist, which is also this seek's existence check (it replaces a
-/// separate [`pool_exists`] round-trip on that path).
+/// The pool's leg surrogates — the key `lp_operation_amounts.asset_id` is
+/// written with (task 0279), so an amount row maps onto the legs the page
+/// renders. `None` when the pool does not exist, which is also this seek's
+/// existence check (it replaces a separate `pool_exists` round-trip).
 ///
-/// Resolved in Rust, not SQL: the surrogate is `cityhash_102_128`'s lower half
-/// and CH's builtin `cityHash64` is a DIFFERENT algorithm (see the schema
-/// header), so the writer's helper is the only way to reproduce the key.
-///
-/// Via [`ids::pool_leg_asset_id`], NOT `ids::asset_id` — `liquidity_pools`
-/// stores the XDR asset type, where `2` is `credit_alphanum12`, while
-/// `asset_id` reads `2` as the retired SAC facet and returns `0` for it.
+/// This used to RECOMPUTE the surrogates in Rust from the pair columns, with a
+/// comment explaining that SQL could not: our surrogate is `cityhash_102_128`'s
+/// lower half and ClickHouse's builtin `cityHash64` is a different algorithm.
+/// All of that is still true and no longer relevant — the writer now stores the
+/// surrogates it computed, so this reads the column instead of reproducing it.
+/// Verified against production before the change: 171,268 of 171,268
+/// `lp_operation_amounts.asset_id` values match a leg in `legs`, zero orphans.
 pub async fn fetch_pool_asset_ids(
     client: &clickhouse::Client,
     pool_id_hex: &str,
-) -> Result<Option<(i64, i64)>, clickhouse::error::Error> {
+) -> Result<Option<Vec<i64>>, clickhouse::error::Error> {
     let rows = client
         .query(
-            "SELECT asset_a_type, asset_a_code, asset_a_issuer_id, \
-                    asset_b_type, asset_b_code, asset_b_issuer_id \
-             FROM liquidity_pools WHERE pool_id = unhex(?) \
+            "SELECT legs FROM liquidity_pools WHERE pool_id = unhex(?) \
              ORDER BY last_updated_ledger DESC LIMIT 1",
         )
         .bind(pool_id_hex)
         .fetch_all::<PoolLegsChRow>()
         .await?;
-    Ok(rows.first().map(|r| {
-        (
-            ids::pool_leg_asset_id(r.asset_a_type, &r.asset_a_code, r.asset_a_issuer_id),
-            ids::pool_leg_asset_id(r.asset_b_type, &r.asset_b_code, r.asset_b_issuer_id),
-        )
-    }))
+    Ok(rows.into_iter().next().map(|r| r.legs))
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -1101,30 +1049,28 @@ struct OpSourceChRow {
     pools_crossed: u64,
 }
 
-/// One operation's two legs, paired out of the key-ordered leg stream.
+/// One operation's leg amounts, grouped out of the key-ordered leg stream.
+/// `amounts[i]` belongs to the pool's `legs[i]`.
 struct PairedOp {
     ls: i64,
     tid: i64,
     ao: i16,
-    amount_a: Option<i64>,
-    amount_b: Option<i64>,
+    amounts: Vec<Option<i64>>,
 }
 
 impl PairedOp {
-    /// `None` unless BOTH legs landed — the read stays total rather than
+    /// `None` unless EVERY leg landed — the read stays total rather than
     /// classifying a half-row. `anyIf`-style defaulting would have made a
     /// missing leg read as `0` and turn a half-row into a "trade".
     fn event(&self) -> Option<PoolEvent> {
-        match (self.amount_a, self.amount_b) {
-            (Some(a), Some(b)) => Some(PoolEvent::from_signs(a, b)),
-            _ => None,
-        }
+        let amounts: Vec<i64> = self.amounts.iter().copied().collect::<Option<_>>()?;
+        Some(PoolEvent::from_signs(&amounts))
     }
 }
 
 /// Fold the key-ordered leg stream into operations.
 ///
-/// The two legs of one operation are ADJACENT by construction: `asset_id` is
+/// The legs of one operation are ADJACENT by construction: `asset_id` is
 /// the last component of the sort key, so rows sharing
 /// `(ledger_sequence, transaction_id, application_order)` are neighbours. That
 /// is the whole reason this can be a fold instead of an aggregation.
@@ -1132,25 +1078,23 @@ impl PairedOp {
 /// `truncated` means the read hit its row cap, so the final group may be
 /// missing a leg that simply did not fit — it is dropped and re-read from the
 /// previous complete key on the next window.
-fn pair_legs(rows: Vec<PoolLegChRow>, legs: (i64, i64), truncated: bool) -> Vec<PairedOp> {
-    let (asset_a, asset_b) = legs;
+fn pair_legs(rows: Vec<PoolLegChRow>, legs: &[i64], truncated: bool) -> Vec<PairedOp> {
     let mut out: Vec<PairedOp> = Vec::new();
     for r in rows {
-        match out.last_mut() {
-            Some(last) if last.ls == r.ls && last.tid == r.tid && last.ao == r.ao => {
-                if r.asset_id == asset_a {
-                    last.amount_a = Some(r.amount);
-                } else if r.asset_id == asset_b {
-                    last.amount_b = Some(r.amount);
-                }
-            }
-            _ => out.push(PairedOp {
+        let same_op = out
+            .last()
+            .is_some_and(|last| (last.ls, last.tid, last.ao) == (r.ls, r.tid, r.ao));
+        if !same_op {
+            out.push(PairedOp {
                 ls: r.ls,
                 tid: r.tid,
                 ao: r.ao,
-                amount_a: (r.asset_id == asset_a).then_some(r.amount),
-                amount_b: (r.asset_id == asset_b).then_some(r.amount),
-            }),
+                amounts: vec![None; legs.len()],
+            });
+        }
+        // An asset that is not one of the pool's legs has no slot to land in.
+        if let (Some(op), Some(i)) = (out.last_mut(), legs.iter().position(|&l| l == r.asset_id)) {
+            op.amounts[i] = Some(r.amount);
         }
     }
     if truncated {
@@ -1198,7 +1142,7 @@ fn pair_legs(rows: Vec<PoolLegChRow>, legs: (i64, i64), truncated: bool) -> Vec<
 pub async fn fetch_pool_activity(
     client: &clickhouse::Client,
     pool_id_hex: &str,
-    asset_ids: (i64, i64),
+    legs: &[i64],
     limit: i64,
     cursor: Option<&PoolActivityCursor>,
     direction: Direction,
@@ -1212,8 +1156,9 @@ pub async fn fetch_pool_activity(
     let mut after: Option<(i64, i64, i16)> =
         cursor.map(|c| (c.ledger_sequence, c.transaction_id, c.application_order));
 
-    // Two legs per operation, plus slack so the cap rarely lands mid-op.
-    let mut window = (limit * 2 + 2).max(64);
+    // One row per leg per operation, plus slack so the cap rarely lands mid-op.
+    let legs_per_op = legs.len() as i64;
+    let mut window = (limit * legs_per_op + legs_per_op).max(64);
     let mut ops: Vec<PairedOp> = Vec::new();
 
     // One pass when unfiltered (the common case). With `filter[event]` the
@@ -1249,7 +1194,7 @@ pub async fn fetch_pool_activity(
             .await?;
 
         let exhausted = (rows.len() as i64) < window;
-        let batch = pair_legs(rows, asset_ids, !exhausted);
+        let batch = pair_legs(rows, legs, !exhausted);
         if let Some(last) = batch.last() {
             after = Some((last.ls, last.tid, last.ao));
         }
@@ -1381,8 +1326,11 @@ pub async fn fetch_pool_activity(
                 transaction_id: o.tid,
                 application_order: o.ao,
                 event,
-                amount_a: event.and(o.amount_a).map(|v| v.to_string()),
-                amount_b: event.and(o.amount_b).map(|v| v.to_string()),
+                amounts: o
+                    .amounts
+                    .iter()
+                    .map(|a| event.and(*a).map(|v| v.to_string()))
+                    .collect(),
                 source_account,
                 pools_crossed,
                 created_at: millis_to_utc(tx.created_at_ms),
@@ -1593,6 +1541,10 @@ pub async fn fetch_pool_chart(
         carry = MAX_PRICE_CARRY_SECONDS,
     );
 
+    let (chart_leg_a, chart_leg_b) = match priced_pair(ctx) {
+        Some((a, b)) => (a.clone(), b.clone()),
+        None => (price_leg(-1, None, None), price_leg(-1, None, None)),
+    };
     let rows = client
         .query(&sql)
         .bind(pool_id_hex)
@@ -1601,14 +1553,14 @@ pub async fn fetch_pool_chart(
         .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
         .bind(from.timestamp_millis()) // ledgers dedup subquery: closed_at >= from
         .bind(to.timestamp_millis()) // ledgers dedup subquery: closed_at <  to
-        .bind(ctx.leg_a.kind) // pa: identity
-        .bind(ctx.leg_a.code.as_str())
-        .bind(ctx.leg_a.issuer.as_str())
+        .bind(chart_leg_a.kind) // pa: identity
+        .bind(chart_leg_a.code.as_str())
+        .bind(chart_leg_a.issuer.as_str())
         .bind(from.timestamp_millis()) // pa: bucket >= floor(from)
         .bind(to.timestamp_millis()) // pa: bucket < to
-        .bind(ctx.leg_b.kind) // pb: identity
-        .bind(ctx.leg_b.code.as_str())
-        .bind(ctx.leg_b.issuer.as_str())
+        .bind(chart_leg_b.kind) // pb: identity
+        .bind(chart_leg_b.code.as_str())
+        .bind(chart_leg_b.issuer.as_str())
         .bind(from.timestamp_millis()) // pb: bucket >= floor(from)
         .bind(to.timestamp_millis()) // pb: bucket < to
         .fetch_all::<ChartChRow>()
@@ -1630,16 +1582,11 @@ pub async fn fetch_pool_chart(
 #[derive(Debug, Row, Deserialize)]
 struct PoolListChRow {
     pool_id_hex: String,
-    asset_a_type: i16,
-    asset_a_code: Option<String>,
-    asset_a_issuer_id: i64,
-    asset_a_contract_id: Option<String>,
-    asset_a_icon_url: Option<String>,
-    asset_b_type: i16,
-    asset_b_code: Option<String>,
-    asset_b_issuer_id: i64,
-    asset_b_contract_id: Option<String>,
-    asset_b_icon_url: Option<String>,
+    pool_kind: i16,
+    /// Leg ASSET surrogates in registration order. Resolved to identities in
+    /// Rust rather than joined here: the dimensions key on `assets.id`, and the
+    /// shared resolver already carries the shapes those joins have to get right.
+    legs: Vec<i64>,
     fee_bps: i32,
     created_at_ledger: i64,
     /// `last_updated_ledger` — the list sort/cursor key (see fn doc).
@@ -1720,27 +1667,15 @@ pub async fn fetch_pool_list(
     // the densest SQL in the change, for five look-alikes on page one.
     let mut binds: Vec<String> = Vec::new();
     let mut filters = String::new();
-    if let Some(code) = params.asset_a_code.as_ref() {
-        filters.push_str(" AND lp.asset_a_code = ?");
-        binds.push(code.clone());
-    }
-    if let Some(iss) = params.asset_a_issuer.as_ref() {
-        filters.push_str(
-            " AND lp.asset_a_issuer_id = \
-              (SELECT id FROM accounts FINAL WHERE account_id = ? LIMIT 1)",
-        );
-        binds.push(iss.clone());
-    }
-    if let Some(code) = params.asset_b_code.as_ref() {
-        filters.push_str(" AND lp.asset_b_code = ?");
-        binds.push(code.clone());
-    }
-    if let Some(iss) = params.asset_b_issuer.as_ref() {
-        filters.push_str(
-            " AND lp.asset_b_issuer_id = \
-              (SELECT id FROM accounts FINAL WHERE account_id = ? LIMIT 1)",
-        );
-        binds.push(iss.clone());
+    // The per-leg POSITIONAL filters (`filter[asset_a_code]` + its issuer, and
+    // the same for `b`) are gone. They named a leg by its position in a pair,
+    // which a list of two-to-four legs has no equivalent for, and no caller
+    // used them: the frontend's only pool filter is the free-text code box,
+    // and no other client holds a key to this API. The code needle below
+    // answers the same question without pinning a position.
+    if let Some(kind) = params.pool_kind {
+        filters.push_str(" AND lp.pool_kind = ?");
+        binds.push((kind as i16).to_string());
     }
     // Asset-code needles (0440 / issue #366).
     //
@@ -1814,11 +1749,8 @@ pub async fn fetch_pool_list(
     let sql = format!(
         "WITH \
          page AS ( \
-             SELECT lp.pool_id AS pool_id, lp.asset_a_type AS asset_a_type, \
-                    lp.asset_a_code AS asset_a_code, \
-                    lp.asset_a_issuer_id AS asset_a_issuer_id, \
-                    lp.asset_b_type AS asset_b_type, lp.asset_b_code AS asset_b_code, \
-                    lp.asset_b_issuer_id AS asset_b_issuer_id, lp.fee_bps AS fee_bps, \
+             SELECT lp.pool_id AS pool_id, lp.pool_kind AS pool_kind, \
+                    lp.legs AS legs, lp.fee_bps AS fee_bps, \
                     lp.last_updated_ledger AS last_updated_ledger \
              FROM liquidity_pools lp FINAL \
              WHERE 1 = 1{filters} {keyset} \
@@ -1828,51 +1760,11 @@ pub async fn fetch_pool_list(
          band AS ( \
              SELECT min(last_updated_ledger) - 10000 AS lo, \
                     max(last_updated_ledger) + 10000 AS hi FROM page \
-         ), \
-         codes AS ( \
-             SELECT asset_a_code AS c FROM page \
-             UNION ALL SELECT asset_b_code FROM page \
-         ), \
-         sac AS ( \
-             SELECT a.asset_code AS asset_code, a.issuer_id AS issuer_id, \
-                    max(sc.contract_id)      AS contract_id, \
-                    nullIf(max(ae.icon_url), '') AS icon_url \
-             FROM assets a \
-             LEFT JOIN ( \
-                 SELECT asset_type, asset_code, issuer_id, contract_id, \
-                        max(sac_contract_id) AS sac_contract_id \
-                 FROM asset_sac \
-                 WHERE asset_type IN (0, 1) AND asset_code IN (SELECT c FROM codes) \
-                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
-             ) asac ON asac.asset_type = a.asset_type AND asac.asset_code = a.asset_code \
-                   AND asac.issuer_id = a.issuer_id AND asac.contract_id = a.contract_id \
-             /* 0548: deployed-only ON PURPOSE. PoolAssetLeg.contract_id is documented as None for a leg without a DEPLOYED SAC mirror, and asset_sac also carries surrogates of un-deployed SACs, so this reads soroban_contracts, which holds only contracts observed being deployed. */ LEFT JOIN soroban_contracts sc ON sc.id = asac.sac_contract_id AND asac.sac_contract_id != 0 \
-             LEFT JOIN ( \
-                 SELECT asset_type, asset_code, issuer_id, contract_id, \
-                        argMax(icon_url, version) AS icon_url \
-                 FROM asset_enrichment \
-                 WHERE asset_type IN (0, 1) AND asset_code IN (SELECT c FROM codes) \
-                 GROUP BY asset_type, asset_code, issuer_id, contract_id \
-             ) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code \
-                 AND ae.issuer_id = a.issuer_id AND ae.contract_id = a.contract_id \
-             WHERE a.asset_type IN (0, 1) AND a.asset_code IN (SELECT c FROM codes) \
-               AND (a.asset_code, a.issuer_id) IN ( \
-                   SELECT asset_a_code, asset_a_issuer_id FROM page \
-                   UNION ALL SELECT asset_b_code, asset_b_issuer_id FROM page) \
-             GROUP BY a.asset_code, a.issuer_id \
          ) \
          SELECT \
              lower(hex(lp.pool_id))                          AS pool_id_hex, \
-             lp.asset_a_type                                 AS asset_a_type, \
-             nullIf(lp.asset_a_code, '')                     AS asset_a_code, \
-             lp.asset_a_issuer_id                            AS asset_a_issuer_id, \
-             nullIf(sac_a.contract_id, '')                   AS asset_a_contract_id, \
-             sac_a.icon_url                                  AS asset_a_icon_url, \
-             lp.asset_b_type                                 AS asset_b_type, \
-             nullIf(lp.asset_b_code, '')                     AS asset_b_code, \
-             lp.asset_b_issuer_id                            AS asset_b_issuer_id, \
-             nullIf(sac_b.contract_id, '')                   AS asset_b_contract_id, \
-             sac_b.icon_url                                  AS asset_b_icon_url, \
+             toInt16(lp.pool_kind)                           AS pool_kind, \
+             lp.legs                                         AS legs, \
              lp.fee_bps                                      AS fee_bps, \
              ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
              lp.last_updated_ledger                          AS cursor_ledger, \
@@ -1905,10 +1797,6 @@ pub async fn fetch_pool_list(
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
              GROUP BY pool_id \
          ) pc ON pc.pool_id = lp.pool_id \
-         LEFT JOIN sac sac_a ON sac_a.asset_code = lp.asset_a_code \
-                            AND sac_a.issuer_id = lp.asset_a_issuer_id \
-         LEFT JOIN sac sac_b ON sac_b.asset_code = lp.asset_b_code \
-                            AND sac_b.issuer_id = lp.asset_b_issuer_id \
          /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
             duplicate rows): without it this LEFT JOIN doubled every page row \
             whose latest snapshot ledger falls in the duplicated range, doubling \
@@ -1940,18 +1828,11 @@ pub async fn fetch_pool_list(
     }
     let rows = query.fetch_all::<PoolListChRow>().await?;
 
-    // Resolve issuer StrKeys by surrogate id (bloom seek). The old in-query `iss`
-    // CTE used `WHERE id IN (SELECT … FROM page)` — the subquery form does not
-    // trigger the `idx_acc_id` bloom, so it scanned `accounts.id` (task 0345).
-    let issuer_ids = rows
-        .iter()
-        .flat_map(|r| [r.asset_a_issuer_id, r.asset_b_issuer_id])
-        // Exclude the native sentinel `0` — the old `iss` CTE filtered
-        // `WHERE … != 0`. A no-op on real data (`accounts.id = cityhash64(strkey)`
-        // is never 0), but keeps the resolution unconditionally identical.
-        .filter(|&id| id != 0)
-        .collect();
-    let accounts = resolve_accounts(client, issuer_ids).await?;
+    // One batched identity resolution for every leg on the page, with the
+    // icons read alongside it. Both key on `assets.id`, which is exactly what
+    // `legs` stores.
+    let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
+    let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
     // endpoint (latest reserves × last 1h close per leg; both legs required)
@@ -1959,20 +1840,18 @@ pub async fn fetch_pool_list(
     // `volume`/`fee_revenue` stay NULL on the list — detail-only semantics.
     // A prices error degrades every row to NULL TVL (error-logged), it does
     // not fail the list: same resilience contract as the detail endpoint.
-    let page_legs: Vec<(PriceLeg, PriceLeg)> = rows
+    let page_legs: Vec<Vec<PriceLeg>> = rows
         .iter()
         .map(|r| {
-            let issuer_a = accounts.get(&r.asset_a_issuer_id).map(String::as_str);
-            let issuer_b = accounts.get(&r.asset_b_issuer_id).map(String::as_str);
-            (
-                price_leg(r.asset_a_type, r.asset_a_code.as_deref(), issuer_a),
-                price_leg(r.asset_b_type, r.asset_b_code.as_deref(), issuer_b),
-            )
+            r.legs
+                .iter()
+                .map(|id| price_leg_of(*id, &identities))
+                .collect()
         })
         .collect();
     let mut unique_legs: Vec<&PriceLeg> = page_legs
         .iter()
-        .flat_map(|(a, b)| [a, b])
+        .flatten()
         .filter(|l| !l.kind.is_empty())
         .collect();
     unique_legs
@@ -1989,44 +1868,25 @@ pub async fn fetch_pool_list(
     Ok(rows
         .into_iter()
         .zip(page_legs)
-        .map(|(r, (leg_a, leg_b))| {
-            let tvl = match (
-                r.reserve_a.as_deref().and_then(parse_f64),
-                r.reserve_b.as_deref().and_then(parse_f64),
-                closes.get(&leg_a).copied(),
-                closes.get(&leg_b).copied(),
-            ) {
-                (Some(ra), Some(rb), Some(pa), Some(pb)) => Some(usd_str(ra * pa + rb * pb)),
-                _ => None,
-            };
+        .map(|(r, legs)| {
+            // The snapshot is classic: its two columns are a classic pool's
+            // two legs, in order. A soroban pool has no snapshot row, so its
+            // legs carry no reserve and its TVL stays unknown.
+            let reserves = [r.reserve_a.clone(), r.reserve_b.clone()];
+            let reserve_strs: Vec<Option<&str>> = (0..legs.len())
+                .map(|i| reserves.get(i).and_then(|r| r.as_deref()))
+                .collect();
+            let tvl = tvl_usd(&reserve_strs, &legs, &closes).map(usd_str);
             PoolRow {
+                pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
                 pool_id_hex: r.pool_id_hex,
-                asset_a_type: r.asset_a_type,
-                asset_a_type_name: asset_type_name(r.asset_a_type),
-                asset_a_code: r.asset_a_code,
-                asset_a_issuer: accounts
-                    .get(&r.asset_a_issuer_id)
-                    .cloned()
-                    .filter(|s| !s.is_empty()),
-                asset_a_contract_id: r.asset_a_contract_id,
-                asset_a_icon_url: r.asset_a_icon_url,
-                asset_b_type: r.asset_b_type,
-                asset_b_type_name: asset_type_name(r.asset_b_type),
-                asset_b_code: r.asset_b_code,
-                asset_b_issuer: accounts
-                    .get(&r.asset_b_issuer_id)
-                    .cloned()
-                    .filter(|s| !s.is_empty()),
-                asset_b_contract_id: r.asset_b_contract_id,
-                asset_b_icon_url: r.asset_b_icon_url,
+                legs: leg_rows(&r.legs, &identities, &icons, &reserves),
                 fee_bps: r.fee_bps,
                 fee_percent: fee_percent_str(r.fee_bps),
                 created_at_ledger: r.created_at_ledger,
                 cursor_ledger: r.cursor_ledger,
                 participant_count: r.participant_count,
                 latest_snapshot_ledger: r.latest_snapshot_ledger,
-                reserve_a: r.reserve_a,
-                reserve_b: r.reserve_b,
                 total_shares: r.total_shares,
                 tvl,
                 volume: None,
@@ -2038,228 +1898,7 @@ pub async fn fetch_pool_list(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hex_pool_id_validation() {
-        assert!(is_hex_pool_id(&"a".repeat(64)));
-        assert!(is_hex_pool_id(&"0123456789abcdef".repeat(4)));
-        assert!(!is_hex_pool_id(&"a".repeat(63)));
-        assert!(!is_hex_pool_id(&"a".repeat(65)));
-        assert!(!is_hex_pool_id(&"A".repeat(64)), "uppercase rejected");
-        assert!(!is_hex_pool_id("xyz"));
-        assert!(!is_hex_pool_id(&"'; DROP--".repeat(8)));
-    }
-
-    /// The pool-leg surrogates this module computes from `liquidity_pools`
-    /// columns MUST equal the ones the indexer writes into
-    /// `lp_operation_amounts.asset_id` from a claim atom's asset string
-    /// (`stage.rs::claim_atom_asset_id` → `ids::credit_asset_id` /
-    /// `NATIVE_ASSET_ID`). They meet only through this equality: if it breaks,
-    /// no row ever matches a leg and the Amount column silently goes blank
-    /// instead of failing. The bridge is `asset_a_issuer_id`, which the writer
-    /// fills with `ids::account_id(issuer_strkey)`.
-    ///
-    /// Every XDR asset type a pool leg can hold is covered here on purpose.
-    /// The first version of this test used `"TF"` — `credit_alphanum4`, XDR
-    /// type 1 — and so agreed with the buggy resolution: type 2 is
-    /// `credit_alphanum12` in `liquidity_pools`, but the retired SAC facet in
-    /// `ids::asset_id`, which answered `0` for it. 59% of pools carry a type-2
-    /// leg and the suite stayed green (task 0489). A code of each width is now
-    /// pinned, so the next type-space mix-up fails here.
-    #[test]
-    fn pool_leg_surrogates_match_the_written_asset_ids() {
-        const ISSUER: &str = "GB5WIXCUO5DWAJSVLVIJH5SBWGIRKGD27YYHLPOISGBO7MW2UH3EJXLM";
-        let issuer_id = ids::account_id(ISSUER);
-        // Native leg: type 0, empty code, issuer_id 0.
-        assert_eq!(ids::pool_leg_asset_id(0, "", 0), ids::NATIVE_ASSET_ID);
-        // credit_alphanum4 (XDR type 1) and credit_alphanum12 (XDR type 2) are
-        // both classic credit, so both must land on the surrogate the writer
-        // computes from the StrKey the claim atom carries.
-        for (asset_type, code) in [(1i16, "TF"), (2i16, "CETES")] {
-            assert_eq!(
-                ids::pool_leg_asset_id(asset_type, code, issuer_id),
-                ids::credit_asset_id(code, ISSUER),
-                "leg {code} (XDR type {asset_type}) must match the written asset_id",
-            );
-        }
-        // The bug this replaced: a type-2 leg resolved to 0, and 0 is an id no
-        // row is ever stored under, so the leg could never match.
-        assert_ne!(ids::pool_leg_asset_id(2, "CETES", issuer_id), 0);
-    }
-
-    /// The same equality against REAL production values, so the pin does not
-    /// rest on this module's own arithmetic being self-consistent.
-    ///
-    /// Pool `8CA53441…` (yXLM / CETES) is the one that exposed task 0489: a
-    /// `credit_alphanum4` leg beside a `credit_alphanum12` one, so the page
-    /// rendered the first and dropped the second. Left column read from
-    /// `liquidity_pools`, right column the `DISTINCT asset_id` that
-    /// `lp_operation_amounts` actually holds for that pool — both captured
-    /// from prod on 2026-08-17. Static values, no network.
-    #[test]
-    fn pool_leg_surrogates_match_production_rows() {
-        // (asset_type, code, issuer_id) -> the asset_id stored on prod
-        for (asset_type, code, issuer_id, stored) in [
-            (
-                1i16,
-                "yXLM",
-                -5_950_609_493_839_131_376i64,
-                258_332_573_254_456_524i64,
-            ),
-            (
-                2i16,
-                "CETES",
-                1_238_723_897_090_515_379i64,
-                4_032_595_941_348_833_451i64,
-            ),
-        ] {
-            assert_eq!(
-                ids::pool_leg_asset_id(asset_type, code, issuer_id),
-                stored,
-                "leg {code} must resolve to the asset_id production stores",
-            );
-        }
-    }
-
-    /// The SAC joins on both pool reads must not filter a leg out for having an
-    /// empty `asset_code` (task 0470).
-    ///
-    /// An empty code is native XLM's real, stored identity — not a missing
-    /// value — and native has a deployed SAC. An `asset_code != ''` guard was
-    /// added deliberately in `a19ac8f6` to match Postgres, which returned NULL
-    /// there; Postgres is retired and `/v1/assets/native` publishes that same
-    /// SAC, so the guard left one asset describing itself two ways depending on
-    /// the endpoint.
-    ///
-    /// Pinned on the module source because both queries are inline string
-    /// literals — there is no builder to call. That is the honest limit of this
-    /// guard: it catches the exact regression (a re-added `!= ''` on a leg
-    /// code) and nothing subtler. A behavioural test needs the queries
-    /// extracted first, which is recorded as an acceptance criterion on 0470.
-    #[test]
-    fn no_leg_code_guard_can_exclude_the_native_leg_from_its_sac() {
-        // Only the production half — the test module below quotes the guard it
-        // is looking for, and would match itself.
-        let src = include_str!("queries.rs");
-        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
-        // Count only the leg-code guards; other `!= ''` comparisons in this
-        // module are about different columns and are none of this test's
-        // business.
-        let guards = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .filter(|l| l.contains("asset_a_code != ''") || l.contains("asset_b_code != ''"))
-            .count();
-        assert_eq!(
-            guards, 0,
-            "a leg-code guard is back: it silently drops native XLM's SAC, \
-             which /v1/assets/native still reports"
-        );
-    }
-
-    #[test]
-    fn fee_percent_formats() {
-        assert_eq!(fee_percent_str(30), "0.3");
-        assert_eq!(fee_percent_str(25), "0.25");
-        assert_eq!(fee_percent_str(100), "1");
-        assert_eq!(fee_percent_str(0), "0");
-        assert_eq!(fee_percent_str(5), "0.05");
-    }
-
-    #[test]
-    fn decimal_str_validation() {
-        assert!(is_decimal_str("0"));
-        assert!(is_decimal_str("123.4567890"));
-        assert!(is_decimal_str("-5.5"));
-        assert!(!is_decimal_str(""));
-        assert!(!is_decimal_str("1.2.3"));
-        assert!(!is_decimal_str("1e9"));
-        assert!(!is_decimal_str("'; DROP"));
-        assert!(!is_decimal_str("abc"));
-    }
-
-    #[test]
-    fn asset_type_names() {
-        assert_eq!(asset_type_name(0).as_deref(), Some("native"));
-        assert_eq!(asset_type_name(1).as_deref(), Some("credit_alphanum4"));
-        assert_eq!(asset_type_name(2).as_deref(), Some("credit_alphanum12"));
-        assert_eq!(asset_type_name(3).as_deref(), Some("pool_share"));
-        assert_eq!(asset_type_name(9), None);
-    }
-
-    /// The prices JOIN key contract (views.sql, pinned 2026-06-16):
-    /// native = ('native','XLM',''), classic = ('credit', code, issuer).
-    /// A wrong mapping here silently prices legs off the wrong row — the
-    /// exact failure mode the raw-`prices.assets` join produced (task 0199
-    /// activation note, bogus 96.4% coverage).
-    #[test]
-    fn price_leg_mapping() {
-        let native = price_leg(0, None, None);
-        assert_eq!(
-            (native.kind, native.code.as_str(), native.issuer.as_str()),
-            ("native", "XLM", "")
-        );
-        // Native ignores whatever code/issuer the row carries ('' / surrogate-0 artifacts).
-        let native2 = price_leg(0, Some(""), Some(""));
-        assert_eq!(native2.kind, "native");
-
-        let usdc = price_leg(
-            1,
-            Some("USDC"),
-            Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
-        );
-        assert_eq!(usdc.kind, "credit");
-        assert_eq!(usdc.code, "USDC");
-        assert!(usdc.issuer.starts_with('G'));
-
-        let alphanum12 = price_leg(2, Some("WGUARDIAN"), Some("GABC"));
-        assert_eq!(alphanum12.kind, "credit");
-
-        // Unpriceable degradations: missing identity parts or unexpected type
-        // must match NO prices row (empty kind), never guess.
-        assert_eq!(price_leg(1, None, Some("GABC")).kind, "");
-        assert_eq!(price_leg(1, Some("USDC"), None).kind, "");
-        assert_eq!(price_leg(1, Some(""), Some("GABC")).kind, "");
-        assert_eq!(price_leg(3, Some("X"), Some("G")).kind, "");
-        assert_eq!(price_leg(9, None, None).kind, "");
-    }
-
-    #[test]
-    fn usd_helpers() {
-        assert_eq!(parse_f64("123.4567890"), Some(123.456789));
-        assert_eq!(parse_f64("0"), Some(0.0));
-        assert_eq!(parse_f64(""), None);
-        assert_eq!(parse_f64("abc"), None);
-        assert_eq!(parse_f64("inf"), None, "non-finite rejected");
-        assert_eq!(usd_str(1234.5678), "1234.57");
-        assert_eq!(usd_str(0.0), "0.00");
-        // Sub-cent values must not collapse to "0.00" — a client cannot
-        // tell that apart from a genuine zero (fee_revenue lives here).
-        assert_eq!(usd_str(0.003), "0.0030");
-        assert_eq!(usd_str(0.00009), "0.000090");
-        assert_eq!(usd_str(-0.003), "-0.0030");
-        // At or above a cent the plain money form still applies.
-        assert_eq!(usd_str(0.01), "0.01");
-        assert_eq!(usd_str(0.5), "0.50");
-        // Fixed 2 decimals on every path — CH's toString(round(x, 2)) would
-        // emit "25" / "1.5" / "0" here and split the wire shape between the
-        // chart and the detail endpoint.
-        assert_eq!(usd_str(25.0), "25.00");
-        assert_eq!(usd_str(1.5), "1.50");
-    }
-
-    /// `fee_bps` is basis points: 30 bps = 0.30%, so the divisor is 10 000.
-    /// A /100 or /1000 slip inflates reported LP earnings 100× / 10×.
-    #[test]
-    fn fee_revenue_math() {
-        assert_eq!(fee_revenue_usd(1_000_000.0, 30), 3_000.0);
-        assert_eq!(fee_revenue_usd(1_000.0, 100), 10.0);
-        assert_eq!(fee_revenue_usd(0.0, 30), 0.0);
-        assert_eq!(fee_revenue_usd(500.0, 0), 0.0);
-    }
-}
+mod tests;
 
 /// Live-CH **decode** smoke for the LP read path.
 ///
@@ -2286,322 +1925,4 @@ mod tests {
 /// lands, so exercising it here would blow the read quota. Its row struct is all
 /// direct, non-null columns (audited — no Nullable-decode risk).
 #[cfg(test)]
-mod decode_smoke {
-    use super::ResolvedPoolListParams;
-    use super::*;
-    use crate::common::cursor::Direction;
-
-    fn client() -> Option<clickhouse::Client> {
-        let url = std::env::var("CH_URL").ok()?;
-        let mut c = clickhouse::Client::default().with_url(url);
-        if let Ok(u) = std::env::var("CH_USER") {
-            c = c.with_user(u);
-        }
-        if let Ok(p) = std::env::var("CH_PASSWORD") {
-            c = c.with_password(p);
-        }
-        if let Ok(d) = std::env::var("CH_DATABASE") {
-            c = c.with_database(d);
-        }
-        Some(c)
-    }
-
-    /// `ChartChRow` reads money as `Nullable(Float64)` (task 0199 moved
-    /// formatting to Rust so chart and detail share one wire shape). That is
-    /// precisely the wire-type↔struct contract a pure-Rust test cannot check,
-    /// so assert it against a real server — including the NULL arm, which is
-    /// what an unpriced bucket returns.
-    ///
-    /// Needs no schema, so any ClickHouse will do:
-    /// `docker run -d --rm -p 8123:8123 -e CLICKHOUSE_PASSWORD=probe clickhouse/clickhouse-server:26.3`
-    #[tokio::test]
-    async fn chart_row_decodes_nullable_floats() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping chart row decode smoke");
-            return;
-        };
-
-        // The union is wrapped: ClickHouse resolves a top-level ORDER BY
-        // against the union's own scope, where the branch aliases are not
-        // visible (`Unknown expression identifier`).
-        let rows = ch
-            .query(
-                "SELECT bucket_ms, tvl, volume, samples_in_bucket FROM ( \
-                     SELECT toInt64(1700000000000)     AS bucket_ms, \
-                            CAST(?, 'Nullable(Float64)')    AS tvl, \
-                            CAST(?, 'Nullable(Float64)')    AS volume, \
-                            toUInt64(7)                AS samples_in_bucket \
-                     UNION ALL \
-                     SELECT toInt64(1700000086400000)  AS bucket_ms, \
-                            CAST(NULL, 'Nullable(Float64)') AS tvl, \
-                            CAST(NULL, 'Nullable(Float64)') AS volume, \
-                            toUInt64(0)                AS samples_in_bucket \
-                 ) ORDER BY bucket_ms",
-            )
-            .bind(25.31_f64)
-            .bind(1.985_f64)
-            .fetch_all::<ChartChRow>()
-            .await
-            .expect("ChartChRow decodes Nullable(Float64) from a real CH");
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].tvl, Some(25.31));
-        assert_eq!(rows[0].volume, Some(1.985));
-        assert_eq!(rows[0].samples_in_bucket, 7);
-        // The unpriced bucket: NULL must survive as None, not decode as 0.0.
-        assert_eq!(rows[1].tvl, None);
-        assert_eq!(rows[1].volume, None);
-    }
-
-    /// Every LP CH row struct must decode the rows a real CH emits.
-    #[tokio::test]
-    async fn lp_ch_rows_decode() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping LP CH decode smoke");
-            return;
-        };
-
-        // `list` returns rows on any populated CH → always exercises the
-        // `PoolListChRow` decode, and bootstraps a guaranteed-real pool id for
-        // the per-pool fetches below (an env-default pool might not exist on the
-        // target CH → detail would return None and skip the decode entirely).
-        let params = ResolvedPoolListParams {
-            limit: 5,
-            cursor: None,
-            asset_a_code: None,
-            asset_a_issuer: None,
-            asset_b_code: None,
-            asset_b_issuer: None,
-            pool_id_hex: None,
-            asset_codes: Vec::new(),
-        };
-        let pools = fetch_pool_list(&ch, &params, Direction::Next)
-            .await
-            .expect("list rows decode");
-
-        let pool = match std::env::var("CH_TEST_POOL_HEX") {
-            Ok(h) => h,
-            Err(_) => match pools.first() {
-                Some(r) => r.pool_id_hex.clone(),
-                None => {
-                    eprintln!("CH has no liquidity pools — skipping per-pool decode");
-                    return;
-                }
-            },
-        };
-
-        // detail — `PoolDetailChRow`, incl. the Nullable-scalar `participant_count`.
-        fetch_pool_by_id(&ch, &pool)
-            .await
-            .expect("detail row decodes");
-
-        // participants — `ParticipantChRow`.
-        fetch_participants(&ch, &pool, None, 5, Direction::Next)
-            .await
-            .expect("participant rows decode");
-
-        // price context — `PriceContextChRow` (chart's 404 gate).
-        let ctx = fetch_pool_price_context(&ch, &pool)
-            .await
-            .expect("price-context row decodes")
-            .expect("bootstrapped pool exists");
-
-        // The remaining two read `prices.*`, which the explorer does not own
-        // and `schema/init.sql` does not create — a CH bootstrapped from this
-        // repo alone has no such database. Probe once and skip rather than
-        // fail, so the documented local-replica run still validates every
-        // explorer-owned decode above. Against prod (or any CH with the
-        // prices tenant) the probe passes and both are exercised — which also
-        // proves the API user can read that database. No grant is needed
-        // there: `api_reader` carries no `<grants>` block in
-        // `users.d/services.xml` (unlike `prices_writer`/`prices_reader`,
-        // where grants NARROW access), verified on the box 2026-08-04.
-        if ch
-            .query("SELECT 1 FROM prices.price_usd_series_1h LIMIT 1")
-            .fetch_all::<u8>()
-            .await
-            .is_err()
-        {
-            eprintln!("`prices` database unreachable — skipping USD-analytics + chart decode");
-            return;
-        }
-
-        // detail USD analytics — `Vol24ChRow` + `LastCloseChRow`.
-        fetch_pool_usd_analytics(&ch, &pool, &ctx, None, None)
-            .await
-            .expect("usd-analytics rows decode");
-
-        // chart — `ChartChRow`, incl. the `samples_in_bucket` UInt64.
-        let to = chrono::Utc::now();
-        let from = to - chrono::Duration::days(90);
-        fetch_pool_chart(&ch, &pool, &ctx, "1d", from, to)
-            .await
-            .expect("chart rows decode");
-    }
-
-    /// `filter[asset_code]` is a substring of either leg, not an exact code
-    /// (0440 / issue #366). The regression this guards is the original
-    /// behaviour: `USD` returning nothing while the list is full of `USDC`
-    /// pools. Asserting the returned legs actually contain the needle also
-    /// catches the opposite failure — a predicate that stopped filtering.
-    #[tokio::test]
-    async fn asset_code_filter_matches_substring() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping LP asset-code substring smoke");
-            return;
-        };
-
-        let params = ResolvedPoolListParams {
-            limit: 10,
-            cursor: None,
-            asset_a_code: None,
-            asset_a_issuer: None,
-            asset_b_code: None,
-            asset_b_issuer: None,
-            // Deliberately a proper prefix of a real code: an exact-match
-            // predicate returns zero rows here, a substring one does not.
-            pool_id_hex: None,
-            asset_codes: vec!["USD".to_string()],
-        };
-        let pools = fetch_pool_list(&ch, &params, Direction::Next)
-            .await
-            .expect("filtered list decodes");
-
-        assert!(
-            !pools.is_empty(),
-            "`USD` matched no pool — substring filter regressed to exact match"
-        );
-        for p in &pools {
-            let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
-            let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
-            assert!(
-                a.contains("USD") || b.contains("USD"),
-                "pool {} has neither leg containing USD ({a:?} / {b:?}) — filter not applied",
-                p.pool_id_hex
-            );
-        }
-    }
-
-    /// `XLM` must reach the pools that hold *native* XLM. Native legs carry an
-    /// empty stored code, so a plain column match silently returns only the
-    /// credit assets minted under the code `XLM` — a wrong answer that looks
-    /// like a right one. Guards the `if(asset_type = 0, 'XLM', code)` alias.
-
-    #[tokio::test]
-    async fn asset_code_filter_finds_native_xlm() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping LP native-XLM smoke");
-            return;
-        };
-
-        let params = ResolvedPoolListParams {
-            limit: 25,
-            cursor: None,
-            asset_a_code: None,
-            asset_a_issuer: None,
-            asset_b_code: None,
-            asset_b_issuer: None,
-            pool_id_hex: None,
-            asset_codes: vec!["XLM".to_string()],
-        };
-        let pools = fetch_pool_list(&ch, &params, Direction::Next)
-            .await
-            .expect("filtered list decodes");
-
-        assert!(
-            pools
-                .iter()
-                .any(|p| p.asset_a_type == 0 || p.asset_b_type == 0),
-            "`XLM` returned {} pool(s) but none holds native XLM — the native \
-             alias regressed and the filter is answering with look-alike \
-             credit assets only",
-            pools.len()
-        );
-    }
-
-    /// A pair query constrains both legs and does not care which order the user
-    /// typed, nor which leg the chain assigned. Runs the same pair twice,
-    /// reversed, and requires identical results — the cheapest way to catch a
-    /// predicate that quietly became order-sensitive.
-    #[tokio::test]
-    async fn asset_code_filter_pair_is_order_insensitive() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping LP pair-filter smoke");
-            return;
-        };
-
-        let pair = |a: &str, b: &str| ResolvedPoolListParams {
-            limit: 25,
-            cursor: None,
-            asset_a_code: None,
-            asset_a_issuer: None,
-            asset_b_code: None,
-            asset_b_issuer: None,
-            pool_id_hex: None,
-            asset_codes: vec![a.to_string(), b.to_string()],
-        };
-
-        let ids = |rows: Vec<PoolRow>| {
-            let mut v: Vec<String> = rows.into_iter().map(|r| r.pool_id_hex).collect();
-            v.sort();
-            v
-        };
-
-        let forward = ids(fetch_pool_list(&ch, &pair("XLM", "USDC"), Direction::Next)
-            .await
-            .expect("forward pair decodes"));
-        let reversed = ids(fetch_pool_list(&ch, &pair("USDC", "XLM"), Direction::Next)
-            .await
-            .expect("reversed pair decodes"));
-
-        assert_eq!(forward, reversed, "pair filter is order-sensitive");
-        assert!(
-            !forward.is_empty(),
-            "`XLM/USDC` matched no pool — the AND-ed needles are over-constraining"
-        );
-
-        // Both needles must bind: a pair that shares only one leg with any pool
-        // has to come back empty, otherwise the second needle is being dropped.
-        let impossible = fetch_pool_list(&ch, &pair("USDC", "ZZZZNOPE"), Direction::Next)
-            .await
-            .expect("impossible pair decodes");
-        assert!(
-            impossible.is_empty(),
-            "pair with an unmatchable second needle returned {} pool(s) — the \
-             needles are OR-ed, not AND-ed",
-            impossible.len()
-        );
-
-        // Three codes. `normalize_asset_codes` splits `USDC/XLM/BTC` into
-        // `USDC` and the literal `XLM/BTC` (see its unit tests); a pool has two
-        // legs, so no asset code can carry that second needle and the answer is
-        // empty. Asserted here so the query side cannot start "helpfully"
-        // ignoring the remainder.
-        let three = fetch_pool_list(&ch, &pair("USDC", "XLM/BTC"), Direction::Next)
-            .await
-            .expect("three-code query decodes");
-        assert!(
-            three.is_empty(),
-            "a three-code query returned {} pool(s) — the third code is being \
-             dropped instead of narrowing to nothing",
-            three.len()
-        );
-
-        // Each needle claims its own leg. Repeating one therefore means "both
-        // legs", not "matches somewhere, twice" — a pool with USDC on one side
-        // and anything else on the other must not come back.
-        let both_legs = fetch_pool_list(&ch, &pair("USDC", "USDC"), Direction::Next)
-            .await
-            .expect("repeated needle decodes");
-        for p in &both_legs {
-            let a = p.asset_a_code.as_deref().unwrap_or_default().to_uppercase();
-            let b = p.asset_b_code.as_deref().unwrap_or_default().to_uppercase();
-            assert!(
-                a.contains("USDC") && b.contains("USDC"),
-                "pool {} came back for `USDC/USDC` with legs {a:?} / {b:?} — one \
-                 asset is satisfying both needles",
-                p.pool_id_hex
-            );
-        }
-    }
-}
+mod decode_smoke;

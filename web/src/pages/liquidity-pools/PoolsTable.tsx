@@ -1,6 +1,7 @@
 import { Box, Stack, Typography } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
+  Chip,
   Dash,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
@@ -13,17 +14,19 @@ import {
 import type { ReactNode } from 'react';
 
 import { routes } from '../../router/routes.js';
-// `assetLegLabel` + `legHref` live in the detail-page helpers but the
-// labelling + linking rules apply equally to the list — reuse the
-// shared helpers rather than duplicating, to keep native-asset / SAC
-// mirror / classic-credit precedence in one place.
+// The labelling + linking rules apply equally to the list and the detail
+// page — reuse the shared helpers rather than duplicating, to keep the
+// native-asset / SAC-mirror / classic-credit precedence in one place.
 import {
   assetLegLabel,
   legHref,
+  poolLabel,
   reserveDotColor,
 } from '../pool-shared/helpers.js';
 
-import { PoolAssetPair } from '../pool-shared/PoolAssetPair.js';
+import { PoolLegIcons } from '../pool-shared/PoolLegIcons.js';
+
+import { POOL_KIND_META } from './poolKind.js';
 
 export const POOL_COLUMN_COUNT = 6;
 
@@ -69,9 +72,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Pool',
     width: 260,
     cell: (row) => {
-      const pair = `${assetLegLabel(row.asset_a)} / ${assetLegLabel(
-        row.asset_b
-      )}`;
+      const kind = POOL_KIND_META[row.pool_kind];
       return (
         <Stack
           direction="row"
@@ -79,19 +80,30 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
           alignItems="center"
           sx={{ minWidth: 0 }}
         >
-          <PoolAssetPair a={row.asset_a} b={row.asset_b} />
+          <PoolLegIcons legs={row.legs} />
           <Stack spacing={0.25} sx={{ minWidth: 0 }}>
             <Typography
               variant="bodySmMedium"
+              // Without `noWrap` the name is hard-clipped mid-character: the
+              // cell owns the ellipsis, and a flex child inside it does not
+              // inherit one. Two legs never reached the edge; a pool named by
+              // truncated contract addresses does.
+              noWrap
               sx={(theme) => ({ color: theme.palette.text.primary })}
             >
-              {pair}
+              {poolLabel(row.legs)}
             </Typography>
-            <IdentifierDisplay
-              value={row.pool_id}
-              type="pool"
-              href={routes.pool(row.pool_id)}
-            />
+            <Stack direction="row" spacing={1} alignItems="center">
+              <IdentifierDisplay
+                value={row.pool_id}
+                type="pool"
+                href={routes.pool(row.pool_id)}
+              />
+              {/* The two kinds are indistinguishable in every other column,
+                  and the filter above can select between them — so the row has
+                  to say which one it is. Same badge the assets list wears. */}
+              <Chip size="sm" color={kind.color} label={kind.label} />
+            </Stack>
           </Stack>
         </Stack>
       );
@@ -103,24 +115,21 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     width: 150,
     cell: (row) => {
       // Stale pools (no fresh snapshot) come back with null reserves —
-      // render an em-dash rather than "0".
-      if (row.reserve_a == null && row.reserve_b == null) return <Dash />;
+      // render an em-dash rather than "0". A pool whose legs are not indexed
+      // yet gets the same treatment: the amounts cannot be attributed to
+      // anything, so there is nothing honest to label them with.
+      if (row.legs.every((leg) => leg.reserve == null)) return <Dash />;
       return (
         <Stack spacing={0.5}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <AssetDot color={reserveDotColor(row.asset_a)} />
-            <Typography variant="bodyXsMedium" component="span">
-              {row.reserve_a != null ? formatCompactAmount(row.reserve_a) : '—'}{' '}
-              {assetCodeNode(row.asset_a)}
-            </Typography>
-          </Stack>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <AssetDot color={reserveDotColor(row.asset_b)} />
-            <Typography variant="bodyXsMedium" component="span">
-              {row.reserve_b != null ? formatCompactAmount(row.reserve_b) : '—'}{' '}
-              {assetCodeNode(row.asset_b)}
-            </Typography>
-          </Stack>
+          {row.legs.map((leg, i) => (
+            <Stack key={i} direction="row" spacing={1} alignItems="center">
+              <AssetDot color={reserveDotColor(leg)} />
+              <Typography variant="bodyXsMedium" component="span">
+                {leg.reserve != null ? formatCompactAmount(leg.reserve) : '—'}{' '}
+                {assetCodeNode(leg)}
+              </Typography>
+            </Stack>
+          ))}
         </Stack>
       );
     },

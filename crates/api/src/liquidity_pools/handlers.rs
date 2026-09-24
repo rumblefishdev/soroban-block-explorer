@@ -24,7 +24,7 @@ use super::dto::{
     PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolListCursor, PoolListParams,
     SharesCursor,
 };
-use super::queries::{self, PoolRow, ResolvedPoolListParams};
+use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
 
 #[utoipa::path(
     get,
@@ -32,7 +32,7 @@ use super::queries::{self, PoolRow, ResolvedPoolListParams};
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -145,32 +145,33 @@ pub async fn list_participants(
 // so they now sit in one module together. The `splitn(2)` bound, the
 // empty-needle drop and the pair semantics are documented there.
 
+fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
+    PoolAssetLeg {
+        asset_type_name: domain::AssetFamily::try_from(leg.family)
+            .ok()
+            .map(|f| f.as_str().to_string()),
+        asset_code: leg.asset_code,
+        issuer: leg.issuer,
+        contract_id: leg.contract_id,
+        symbol: leg.symbol,
+        icon_url: leg.icon_url,
+        reserve: leg.reserve,
+    }
+}
+
 fn map_pool_item(row: PoolRow) -> PoolItem {
     PoolItem {
-        pool_id: pool_id_hex_to_strkey(&row.pool_id_hex),
-        asset_a: PoolAssetLeg {
-            asset_type_name: row.asset_a_type_name,
-            asset_type: row.asset_a_type,
-            asset_code: row.asset_a_code,
-            issuer: row.asset_a_issuer,
-            contract_id: row.asset_a_contract_id,
-            icon_url: row.asset_a_icon_url,
-        },
-        asset_b: PoolAssetLeg {
-            asset_type_name: row.asset_b_type_name,
-            asset_type: row.asset_b_type,
-            asset_code: row.asset_b_code,
-            issuer: row.asset_b_issuer,
-            contract_id: row.asset_b_contract_id,
-            icon_url: row.asset_b_icon_url,
-        },
+        // The same 32 bytes are an `L…` strkey for a classic pool and a `C…`
+        // address for a soroban one, and the wrong form is well-formed rather
+        // than an error — so the encoding follows the kind.
+        pool_id: pool_id_hex_to_strkey(&row.pool_id_hex, row.pool_kind),
+        pool_kind: row.pool_kind,
+        legs: row.legs.into_iter().map(map_leg).collect(),
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
         participant_count: row.participant_count,
         latest_snapshot_ledger: row.latest_snapshot_ledger,
-        reserve_a: row.reserve_a,
-        reserve_b: row.reserve_b,
         total_shares: row.total_shares,
         tvl: row.tvl,
         volume: row.volume,
@@ -203,54 +204,6 @@ pub async fn list_pools(
     pagination: Pagination<PoolListCursor>,
     Query(params): Query<PoolListParams>,
 ) -> Response {
-    if let Err(resp) = filters::strkey_opt(
-        params.filter_asset_a_issuer.as_deref(),
-        'G',
-        "asset_a_issuer",
-    ) {
-        return resp;
-    }
-    if let Err(resp) = filters::strkey_opt(
-        params.filter_asset_b_issuer.as_deref(),
-        'G',
-        "asset_b_issuer",
-    ) {
-        return resp;
-    }
-
-    // Asset-leg filter pairing: classic identity is `(code, issuer)`. Native
-    // legs have no code AND no issuer. Mixed (one set, one absent) is
-    // ambiguous — canonical SQL 18 §46-49 says "API validates inputs
-    // upstream"; this is that validator. Without it, `?filter[asset_a_code]=USDC`
-    // alone would match every USDC-coded pool regardless of issuer (the wrong
-    // USDC issuer included).
-    let a_code_set = params.filter_asset_a_code.is_some();
-    let a_issuer_set = params.filter_asset_a_issuer.is_some();
-    if a_code_set != a_issuer_set {
-        return errors::bad_request_with_details(
-            errors::INVALID_FILTER,
-            "filter[asset_a_code] and filter[asset_a_issuer] must be supplied together \
-             (classic identity) or both omitted",
-            serde_json::json!({
-                "filter[asset_a_code]": params.filter_asset_a_code,
-                "filter[asset_a_issuer]": params.filter_asset_a_issuer,
-            }),
-        );
-    }
-    let b_code_set = params.filter_asset_b_code.is_some();
-    let b_issuer_set = params.filter_asset_b_issuer.is_some();
-    if b_code_set != b_issuer_set {
-        return errors::bad_request_with_details(
-            errors::INVALID_FILTER,
-            "filter[asset_b_code] and filter[asset_b_issuer] must be supplied together \
-             (classic identity) or both omitted",
-            serde_json::json!({
-                "filter[asset_b_code]": params.filter_asset_b_code,
-                "filter[asset_b_issuer]": params.filter_asset_b_issuer,
-            }),
-        );
-    }
-
     // `filter[min_tvl]` is REJECTED, not ignored and not silently empty.
     //
     // Its SQL pre-filter reads `liquidity_pool_snapshots.tvl`, a column task
@@ -289,13 +242,27 @@ pub async fn list_pools(
     } else {
         normalize_asset_codes(params.filter_asset_code)
     };
+    // An unknown kind is a 400, never a silent pass-through: dropping the
+    // filter would answer with a page that contradicts the request, which is
+    // the same failure the rejected `filter[min_tvl]` produced.
+    let pool_kind = match params.filter_pool_kind.as_deref() {
+        None => None,
+        Some(raw) => match raw.parse::<domain::PoolKind>() {
+            Ok(k) => Some(k),
+            Err(_) => {
+                return errors::bad_request_with_details(
+                    errors::INVALID_FILTER,
+                    "filter[pool_kind] must be `classic` or `soroban`",
+                    serde_json::json!({ "filter[pool_kind]": raw }),
+                );
+            }
+        },
+    };
+
     let resolved = ResolvedPoolListParams {
         limit: pagination.fetch_limit(),
         cursor: pagination.cursor,
-        asset_a_code: params.filter_asset_a_code,
-        asset_a_issuer: params.filter_asset_a_issuer,
-        asset_b_code: params.filter_asset_b_code,
-        asset_b_issuer: params.filter_asset_b_issuer,
+        pool_kind,
         asset_codes,
         pool_id_hex,
     };
@@ -342,7 +309,7 @@ pub async fn list_pools(
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
     ),
     responses(
         (status = 200, description = "Pool detail", body = PoolItem),
@@ -376,24 +343,21 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     // NULL ("stale") state. The error log is the operator signal (a missing
     // `prices.*` SELECT grant lands here, not in a 500).
     let ctx = queries::PoolPriceContext {
-        leg_a: queries::price_leg(
-            row.asset_a_type,
-            row.asset_a_code.as_deref(),
-            row.asset_a_issuer.as_deref(),
-        ),
-        leg_b: queries::price_leg(
-            row.asset_b_type,
-            row.asset_b_code.as_deref(),
-            row.asset_b_issuer.as_deref(),
-        ),
+        legs: row
+            .legs
+            .iter()
+            .map(|l| queries::price_leg(l.family, l.asset_code.as_deref(), l.issuer.as_deref()))
+            .collect(),
         fee_bps: row.fee_bps,
     };
     match queries::fetch_pool_usd_analytics(
         &state.ch(),
         &pool_id_hex,
         &ctx,
-        row.reserve_a.as_deref(),
-        row.reserve_b.as_deref(),
+        &row.legs
+            .iter()
+            .map(|l| l.reserve.as_deref())
+            .collect::<Vec<_>>(),
     )
     .await
     {
@@ -437,7 +401,7 @@ const ALLOWED_EVENTS: [&str; 3] = [
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
@@ -465,14 +429,14 @@ pub async fn list_pool_activity(
         Err(resp) => return resp,
     };
 
-    // The pool's two leg surrogates, which double as this path's existence
+    // The pool's leg surrogates, which double as this path's existence
     // check: the driver pivots `lp_operation_amounts.asset_id` onto them, so
     // the read cannot run without them and a missing pool is one seek away
     // (task 0279's pairing, kept).
     let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
-    let asset_ids = match legs {
+    let leg_ids = match legs {
         Ok(Some(ids)) => ids,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
@@ -505,7 +469,7 @@ pub async fn list_pool_activity(
     let fetched = queries::fetch_pool_activity(
         &state.ch(),
         &pool_id_hex,
-        asset_ids,
+        &leg_ids,
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         pagination.direction,
@@ -544,8 +508,7 @@ pub async fn list_pool_activity(
             ledger_sequence: r.ledger_sequence,
             application_order: r.application_order,
             event: r.event,
-            amount_a: r.amount_a,
-            amount_b: r.amount_b,
+            amounts: r.amounts,
             source_account: r.source_account,
             pools_crossed: r.pools_crossed,
             created_at: r.created_at,
@@ -556,6 +519,7 @@ pub async fn list_pool_activity(
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
+
 const ALLOWED_INTERVALS: &[&str] = &["1h", "1d", "1w"];
 
 /// Hard cap on the number of buckets a single chart request can produce.
@@ -586,7 +550,7 @@ fn interval_seconds(interval: &str) -> i64 {
     tag = "liquidity-pools",
     params(
         ("pool_id" = String, Path,
-         description = "Pool ID — SEP-23 strkey (`L...`, 56 chars)."),
+         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
         ChartParams,
     ),
     responses(
@@ -732,157 +696,7 @@ pub async fn get_pool_chart(
 }
 
 #[cfg(test)]
-mod normalize_asset_code_tests {
-    use super::normalize_asset_codes;
-
-    #[test]
-    fn none_passes_through() {
-        assert!(normalize_asset_codes(None).is_empty());
-    }
-
-    #[test]
-    fn empty_string_becomes_none() {
-        assert!(normalize_asset_codes(Some(String::new())).is_empty());
-        assert!(normalize_asset_codes(Some("   ".into())).is_empty());
-    }
-
-    #[test]
-    fn lowercase_is_uppercased() {
-        assert_eq!(normalize_asset_codes(Some("usdc".into())), ["USDC"]);
-    }
-
-    #[test]
-    fn mixed_case_is_uppercased() {
-        assert_eq!(normalize_asset_codes(Some("UsDc".into())), ["USDC"]);
-    }
-
-    #[test]
-    fn surrounding_whitespace_is_trimmed() {
-        assert_eq!(normalize_asset_codes(Some("  xlm  ".into())), ["XLM"]);
-    }
-
-    #[test]
-    fn pair_splits_into_two_needles() {
-        assert_eq!(
-            normalize_asset_codes(Some("usdc/xlm".into())),
-            ["USDC", "XLM"]
-        );
-    }
-
-    #[test]
-    fn pair_tolerates_spaces_around_the_slash() {
-        assert_eq!(
-            normalize_asset_codes(Some(" usdc / xlm ".into())),
-            ["USDC", "XLM"]
-        );
-    }
-
-    #[test]
-    fn half_written_pair_keeps_the_written_half() {
-        // Mid-typing state: the field debounces and fires on `USDC/`.
-        assert_eq!(normalize_asset_codes(Some("USDC/".into())), ["USDC"]);
-        assert_eq!(normalize_asset_codes(Some("/XLM".into())), ["XLM"]);
-        assert!(normalize_asset_codes(Some("/".into())).is_empty());
-    }
-
-    #[test]
-    fn third_code_stays_inside_the_second_needle() {
-        // `splitn(2)` bounds the needle count. The remainder is not discarded —
-        // it becomes a needle no asset code can contain, so the query returns
-        // nothing rather than silently answering a narrower question.
-        assert_eq!(
-            normalize_asset_codes(Some("USDC/XLM/BTC".into())),
-            ["USDC", "XLM/BTC"]
-        );
-        assert!(normalize_asset_codes(Some("/".repeat(5_000))).len() <= 2);
-    }
-
-    #[test]
-    fn unicode_lower_uppercases_too() {
-        // Stellar codes are ASCII-only in practice, but the normalizer
-        // should not panic on UTF-8 — `String::to_uppercase` handles it.
-        assert_eq!(normalize_asset_codes(Some("usdc🪙".into())), ["USDC🪙"]);
-    }
-}
+mod normalize_asset_code_tests;
 
 #[cfg(test)]
-mod map_pool_item_tests {
-    use super::*;
-    use crate::liquidity_pools::queries::PoolRow;
-
-    fn base_row() -> PoolRow {
-        PoolRow {
-            pool_id_hex: "0".repeat(64),
-            asset_a_type: 0,
-            asset_a_type_name: Some("native".into()),
-            asset_a_code: None,
-            asset_a_issuer: None,
-            asset_a_contract_id: None,
-            asset_a_icon_url: None,
-            asset_b_type: 1,
-            asset_b_type_name: Some("credit_alphanum4".into()),
-            asset_b_code: Some("USDC".into()),
-            asset_b_issuer: Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".into()),
-            asset_b_contract_id: None,
-            asset_b_icon_url: None,
-            fee_bps: 30,
-            fee_percent: "0.30".into(),
-            created_at_ledger: 100,
-            cursor_ledger: 100,
-            participant_count: 0,
-            latest_snapshot_ledger: None,
-            reserve_a: None,
-            reserve_b: None,
-            total_shares: None,
-            tvl: None,
-            volume: None,
-            fee_revenue: None,
-            latest_snapshot_at: None,
-        }
-    }
-
-    #[test]
-    fn native_leg_has_no_contract_id() {
-        let item = map_pool_item(base_row());
-        assert_eq!(item.asset_a.asset_type, 0, "asset_a is native");
-        assert_eq!(item.asset_a.contract_id, None);
-        assert_eq!(item.asset_b.asset_type, 1, "asset_b is classic credit");
-    }
-
-    #[test]
-    fn icon_url_propagates_per_leg() {
-        // gap #5: each leg's icon_url threads from the row to the DTO leg,
-        // independently. Native leg (no icon) stays None.
-        let mut row = base_row();
-        row.asset_b_icon_url = Some("https://cdn.example.test/icons/usdc.svg".into());
-        let item = map_pool_item(row);
-        assert_eq!(item.asset_a.icon_url, None, "native leg has no icon");
-        assert_eq!(
-            item.asset_b.icon_url.as_deref(),
-            Some("https://cdn.example.test/icons/usdc.svg")
-        );
-    }
-
-    #[test]
-    fn classic_credit_leg_surfaces_issuer_and_no_sac_mirror() {
-        let item = map_pool_item(base_row());
-        assert_eq!(item.asset_b.asset_code.as_deref(), Some("USDC"));
-        assert!(item.asset_b.issuer.is_some());
-        assert_eq!(
-            item.asset_b.contract_id, None,
-            "no SAC mirror in `assets` → contract_id stays None"
-        );
-    }
-
-    #[test]
-    fn sac_mirror_contract_id_propagates_to_response() {
-        let mut row = base_row();
-        row.asset_b_contract_id =
-            Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB".into());
-        let item = map_pool_item(row);
-        assert_eq!(
-            item.asset_b.contract_id.as_deref(),
-            Some("CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB")
-        );
-    }
-}
+mod map_pool_item_tests;

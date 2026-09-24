@@ -54,132 +54,155 @@ pub struct ParticipantItem {
 
 /// `filter[...]` query parameters for `GET /v1/liquidity-pools`.
 ///
-/// Two asset-filter modes coexist:
+/// Two filters, on two different axes, combining additively:
 ///   * **`filter[asset_code]`** — free text, case-insensitive **substring**
-///     match against either leg. Convenience for the list filter (frontend
+///     match against any leg. Convenience for the list filter (frontend
 ///     §6.13) where the user types just `USDC` / `XLM` — or `USD`, which
 ///     matches every `USDC` pool, or `USDC/XLM` for a pair.
-///   * **Per-leg `asset_a_code` / `asset_a_issuer` / `asset_b_code` /
-///     `asset_b_issuer`** — kept for API consumers that need exact
-///     issuer disambiguation (`code, issuer` is the classic identity).
+///   * **`filter[pool_kind]`** — which protocol built the pool.
 ///
-/// Both modes can combine — the WHERE clause is additive. `limit` /
-/// `cursor` are read by a sibling `Pagination<PoolListCursor>` extractor.
+/// `limit` / `cursor` are read by a sibling `Pagination<PoolListCursor>`
+/// extractor.
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct PoolListParams {
-    /// Free-text asset filter — case-insensitive substring of either
-    /// `asset_a_code` or `asset_b_code` (input is trimmed before the
-    /// query). The needle is matched literally: `%`, `_` and regex
-    /// metacharacters have no special meaning.
+    /// Free-text asset filter — case-insensitive substring of any leg's
+    /// displayed code (input is trimmed before the query). The needle is
+    /// matched literally: `%`, `_` and regex metacharacters have no special
+    /// meaning.
     ///
     /// A `/` makes it a **pair** query: `USDC/XLM` requires both codes to be
-    /// present, one on each leg, and the typed order does not matter. Only the
-    /// first `/` splits, so `USDC/XLM/BTC` searches for the literal second code
-    /// `XLM/BTC` and therefore matches nothing — a pool has two legs.
+    /// present on TWO DIFFERENT legs, and the typed order does not matter.
+    /// Only the first `/` splits, so `USDC/XLM/BTC` searches for the literal
+    /// second code `XLM/BTC` and therefore matches nothing.
     ///
     /// Native legs match on `XLM` even though they store an empty code, so
     /// `XLM` returns the pools that actually hold native XLM. Note that it
     /// *also* returns credit assets minted under the code `XLM` — asset codes
     /// are not unique on Stellar, and this filter matches codes, not asset
-    /// identity. Callers needing one specific issuer's asset should use the
-    /// per-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.
+    /// identity.
     ///
-    /// A pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,
-    /// the one canonical form (task 0264) — and selects that single pool
+    /// A pool IDENTIFIER is also accepted here — a classic pool's `L…` SEP-23
+    /// StrKey or a soroban pool's `C…` contract address — and selects that
+    /// single pool
     /// instead of matching asset codes (task 0470). Previously an identifier
     /// was matched as a substring of an asset code, found nothing, and the
     /// list answered "no pools" about a pool that exists.
     #[serde(rename = "filter[asset_code]")]
     pub filter_asset_code: Option<String>,
-    #[serde(rename = "filter[asset_a_code]")]
-    pub filter_asset_a_code: Option<String>,
-    #[serde(rename = "filter[asset_a_issuer]")]
-    pub filter_asset_a_issuer: Option<String>,
-    #[serde(rename = "filter[asset_b_code]")]
-    pub filter_asset_b_code: Option<String>,
-    #[serde(rename = "filter[asset_b_issuer]")]
-    pub filter_asset_b_issuer: Option<String>,
+    /// `classic` | `soroban` — which protocol built the pool.
+    ///
+    /// Replaces the four per-leg POSITIONAL filters
+    /// (`filter[asset_a_code]` + issuer, and the same for `b`). Those named a
+    /// leg by its position in a pair, which a list of two-to-four legs has no
+    /// equivalent for; `filter[asset_code]` answers the same question without
+    /// pinning a position. No client used them — the frontend's only pool
+    /// filter is the free-text code box.
+    ///
+    /// An unknown value is rejected with 400 rather than ignored: a silently
+    /// dropped filter returns a page that contradicts what was asked for.
+    #[serde(rename = "filter[pool_kind]")]
+    pub filter_pool_kind: Option<String>,
     /// Minimum TVL threshold as a decimal string (matches the underlying
     /// `NUMERIC(28,7)` column without an f64 round-trip).
     #[serde(rename = "filter[min_tvl]")]
     pub filter_min_tvl: Option<String>,
 }
 
-/// One leg of an LP's asset pair. Surfaces both the decoded
-/// `asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`
-/// SMALLINT — same contract as `assets/dto::AssetItem`.
+/// One leg of a pool.
 ///
-/// Linkable identifiers (task 0263 / F-K-9). All link targets are the
-/// **asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic
-/// and accepts both C-strkey (SAC) and `code-issuer` composite, so all
-/// non-native legs resolve to the same asset row.
+/// An element of [`PoolItem::legs`], never half of a pair: a classic pool has
+/// exactly two legs, a soroban pool has two to four (three- and four-leg stable
+/// pools exist on mainnet).
 ///
-///   * `asset_type == 0` — native XLM; routes to `/assets/native`, the
-///     reserved token for the classic XLM singleton (it has no `code-issuer`
-///     identity to compose).
-///   * `contract_id` — C-strkey of the SAC mirror for a classic credit OR
-///     native leg (populated when the leg's `(asset_code, issuer)`
-///     classic_credit / native `assets` row carries a deployed SAC facet —
-///     `sac_contract_id` resolving a `soroban_contracts.contract_id`,
-///     ADR 0051). `None` for legs without a deployed SAC mirror.
+/// # Which vocabulary the kind speaks
 ///
-///     Native legs were excluded from this until task 0470. The exclusion was
-///     deliberate (`a19ac8f6`) and its reason was Postgres parity — PG returned
-///     NULL there. Postgres is retired, and the same native `assets` row
-///     already publishes that SAC as `sac_contract_id` on `/v1/assets/native`
-///     and in the assets list, which the frontend renders. Withholding it here
-///     alone made one asset describe itself two ways depending on the endpoint.
-///     Pool legs only carry XDR `AssetType` (native /
-///     credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
-///     so SAC / Soroban legs are not directly representable here;
-///     `contract_id` surfaces the SAC mirror look-up so the FE can
-///     route to the asset detail page via `/assets/${contract_id}`.
-///   * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE
-///     routes to `/assets/${asset_code}-${issuer}` (composite form
-///     accepted by `parse_asset_id`).
+/// `asset_type_name` speaks the asset **FAMILY** domain — `native` |
+/// `classic_credit` | `soroban` — the same three labels `/v1/assets` emits and
+/// the frontend already maps. It used to speak the XDR `AssetType` domain here
+/// (`credit_alphanum4` / `credit_alphanum12` / `pool_share`) while the sibling
+/// endpoint spoke the family one: one field name, two vocabularies, coinciding
+/// on the single word `native`. The rule it now follows is the one task 0496
+/// paid for in production — a renderer may only use the vocabulary of the enum
+/// its value came from — and the value is produced by
+/// [`domain::AssetFamily::as_str`] rather than by a local match, so there is no
+/// copy to drift.
+///
+/// The raw discriminant is deliberately NOT published beside the label. It was,
+/// and it carried nothing the label does not (the label is a pure function of
+/// it) while inviting exactly the mismatch above. The alphanum4/alphanum12
+/// width it distinguished is rendered nowhere in the app, and is recoverable
+/// from the code's length if it is ever wanted. It also has no honest value for
+/// a soroban token: XDR has no slot for one, and its `3` already means
+/// `pool_share`.
+///
+/// # Linkable identifiers
+///
+/// Every link target is the asset detail page. The precedence is not a
+/// preference — each rung is the only form that resolves for its kind:
+///
+///   * native → `/assets/native`, the reserved token for the XLM singleton,
+///     which has no `code-issuer` identity to compose.
+///   * `asset_code` + `issuer` → `/assets/{code}-{issuer}`.
+///   * `contract_id` → `/assets/{contract_id}`, for a soroban token, whose
+///     contract IS its asset identity.
+///
+/// A classic or native leg's SAC mirror is not published here. It is not a
+/// link target — the asset endpoint pins a contract lookup to the soroban
+/// family, so a SAC address resolves nothing (measured 2026-08-13, after an
+/// earlier contract-first order sent ~93k classic legs to a dead page) — and
+/// no pool surface renders it. The asset's own page (`/v1/assets`) carries it
+/// with its deployment state.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolAssetLeg {
-    /// Label in the **XDR `AssetType`** vocabulary — this is a pool LEG, and
-    /// leg types come from `liquidity_pools.asset_a_type`/`asset_b_type`,
-    /// which store the protocol discriminant: `native` |
-    /// `credit_alphanum4` | `credit_alphanum12`. `null` only on schema drift.
-    /// (Task 0496 mirror: this doc used to carry the `AssetFamily` legend,
-    /// declaring 2 "retired" — while 54 456 production legs carry
-    /// 2 = `credit_alphanum12`.)
+    /// `native` | `classic_credit` | `soroban`. `None` for a leg whose token
+    /// the registry has no row for (one live pool has one) — there is no
+    /// family to name.
     pub asset_type_name: Option<String>,
-    /// Raw SMALLINT, XDR `AssetType`: 0=native, 1=credit_alphanum4,
-    /// 2=credit_alphanum12. Not the `assets.asset_type` family domain.
-    pub asset_type: i16,
     pub asset_code: Option<String>,
     pub issuer: Option<String>,
-    /// C-strkey of the deployed SAC mirror for the leg's `(asset_code, issuer)`
-    /// classic_credit / native asset (ADR 0051 — resolved via the row's
-    /// `sac_contract_id` facet). `None` only when no SAC is deployed for that
-    /// asset. Native XLM has one, and reports it here (task 0470) exactly as
-    /// `/v1/assets/native` already did.
+    /// The token's own contract, set ONLY for a `soroban` leg. `None` for
+    /// native and classic credit.
     pub contract_id: Option<String>,
-    /// Asset icon URL, resolved from `asset_enrichment` (ADR 0050) so pool
-    /// avatars render the same icon as the assets list. Until task 0310 this
-    /// read the dead `assets.icon_url` column, which was never populated —
-    /// every leg icon came back `None`. Still `None` for assets without an
-    /// enriched icon — the FE falls back to the asset-code initial.
+    /// The token's self-declared SEP-41 symbol, from contract metadata — what
+    /// names a soroban leg that has no classic code. Not unique: many
+    /// contracts claim the same one, so `contract_id` stays the identity.
+    pub symbol: Option<String>,
+    /// Asset icon URL from `asset_enrichment` (ADR 0050), so pool avatars match
+    /// the assets list. NOT from `assets`, whose `icon_url` column was dropped
+    /// in task 0310 after measuring 0 of 411,654 rows populated. `None` for an
+    /// asset with no enriched icon — the frontend falls back to the initial.
     pub icon_url: Option<String>,
+    /// What the pool holds of this leg: raw units as a decimal string (a JSON
+    /// number is a browser double and a big reserve would lose digits). On the
+    /// leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
+    /// four legs. `null` when no source knows it — never `0`. Read from the
+    /// latest classic snapshot; a soroban pool has none, so its legs are
+    /// `null` until its own state is read.
+    pub reserve: Option<String>,
 }
 
 /// One pool row returned by the list endpoint. Shape pinned to canonical
 /// SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
 /// in the freshness window come back with `null` for every dynamic field
-/// (`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,
-/// `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
+/// (each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,
+/// `latest_snapshot_*`); frontend renders these as "stale".
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolItem {
-    /// SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-    /// 0024; the handler encodes to strkey at the response boundary so
-    /// the wire shape matches the Stellar ecosystem canonical form
-    /// (CAP-38 / SEP-23).
+    /// A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
+    /// address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
+    /// 0024); the handler encodes them by kind at the response boundary.
     pub pool_id: String,
-    pub asset_a: PoolAssetLeg,
-    pub asset_b: PoolAssetLeg,
+    /// `classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not
+    /// decoration: the same 32 bytes render as a SEP-23 `L…` strkey for a
+    /// classic pool and a `C…` contract address for a soroban one, and
+    /// rendering one as the other yields a well-formed WRONG key rather than
+    /// an error.
+    pub pool_kind: domain::PoolKind,
+    /// The pool's legs in registration order — two for a classic pool, two to
+    /// four for a soroban one. Replaces the `asset_a` / `asset_b` pair, which
+    /// could not express a three-leg pool and forced a soroban row to write
+    /// placeholder values that read as native XLM downstream.
+    pub legs: Vec<PoolAssetLeg>,
     pub fee_bps: i32,
     /// `fee_bps / 100` as decimal string. Conversion done server-side so
     /// the frontend can render directly (frontend §6.13/§6.14).
@@ -191,8 +214,6 @@ pub struct PoolItem {
     /// `tvl`/`volume`/`fee_revenue` are NULL).
     pub participant_count: i64,
     pub latest_snapshot_ledger: Option<i64>,
-    pub reserve_a: Option<String>,
-    pub reserve_b: Option<String>,
     pub total_shares: Option<String>,
     /// USD, decimal string rounded to cents (task 0199 compute-at-read).
     /// Populated on **both** the list (Phase A2, one batched price lookup
@@ -233,20 +254,20 @@ pub enum PoolEvent {
 }
 
 impl PoolEvent {
-    /// The whole classifier: the sign pair of an operation's two legs.
+    /// The whole classifier: the signs of an operation's leg amounts.
     ///
-    /// Both amounts are signed from the pool's perspective, so a leg that
-    /// entered the pool is positive. Anything that is not "both in" or "both
+    /// Every amount is signed from the pool's perspective, so a leg that
+    /// entered the pool is positive. Anything that is not "all in" or "all
     /// out" moved value across the pool in opposite directions, which is a
     /// trade — including the zero-amount edge a dust swap can produce, since
     /// it is still not a deposit and not a withdrawal.
     ///
-    /// Callers must only reach here with BOTH legs present; a half-row has no
+    /// Callers must only reach here with EVERY leg present; a half-row has no
     /// event (see [`PoolActivityItem::event`]).
-    pub fn from_signs(amount_a: i64, amount_b: i64) -> Self {
-        if amount_a > 0 && amount_b > 0 {
+    pub fn from_signs(amounts: &[i64]) -> Self {
+        if amounts.iter().all(|&a| a > 0) {
             Self::Deposit
-        } else if amount_a < 0 && amount_b < 0 {
+        } else if amounts.iter().all(|&a| a < 0) {
             Self::Withdrawal
         } else {
             Self::Trade
@@ -276,46 +297,7 @@ impl PoolEvent {
 }
 
 #[cfg(test)]
-mod pool_event_tests {
-    use super::PoolEvent;
-
-    /// The classifier itself. It used to live in SQL as a `multiIf` and could
-    /// only be checked against a live ClickHouse; in Rust it is the one thing
-    /// this endpoint gets wrong most visibly, so it gets the table.
-    #[test]
-    fn sign_pair_names_the_event() {
-        let cases = [
-            (120, 3, PoolEvent::Deposit),
-            (-4, -9, PoolEvent::Withdrawal),
-            (120, -4, PoolEvent::Trade),
-            (-4, 120, PoolEvent::Trade),
-        ];
-        for (a, b, want) in cases {
-            assert_eq!(PoolEvent::from_signs(a, b), want, "({a}, {b})");
-        }
-    }
-
-    /// A zero leg is not a deposit and not a withdrawal, so it falls to trade
-    /// rather than to whichever branch happens to be first.
-    #[test]
-    fn zero_leg_is_not_a_deposit() {
-        assert_eq!(PoolEvent::from_signs(0, 5), PoolEvent::Trade);
-        assert_eq!(PoolEvent::from_signs(0, -5), PoolEvent::Trade);
-        assert_eq!(PoolEvent::from_signs(0, 0), PoolEvent::Trade);
-    }
-
-    /// `as_param` feeds the `allowed` list a rejection returns and
-    /// `from_param` reads the caller's value back, so drift between them would
-    /// advertise a value the endpoint then refuses.
-    #[test]
-    fn filter_value_round_trips() {
-        for e in [PoolEvent::Trade, PoolEvent::Deposit, PoolEvent::Withdrawal] {
-            assert_eq!(PoolEvent::from_param(e.as_param()), Some(e), "{e:?}");
-        }
-        assert_eq!(PoolEvent::from_param("swap"), None);
-        assert_eq!(PoolEvent::from_param(""), None);
-    }
-}
+mod pool_event_tests;
 
 /// `filter[...]` query parameters for `GET /v1/liquidity-pools/{id}/activity`.
 #[derive(Debug, Deserialize, IntoParams)]
@@ -374,21 +356,23 @@ pub struct PoolActivityItem {
     /// `application_order`), and the `#op-N` anchor on the transaction detail
     /// page this row links to (task 0482).
     pub application_order: i16,
-    /// `null` only for the malformed case where the pool's two legs did not
-    /// both land in `lp_operation_amounts`. Unreachable by construction — an
-    /// op that touches a pool moves both legs — but the read stays total
+    /// `null` when not every leg of the pool landed in `lp_operation_amounts`
+    /// for this operation. Rare but real: 350 of 6.09M operations in the
+    /// 100k ledgers to 64,576,995 carry one leg only. The read stays total
     /// rather than classifying a half-row.
     pub event: Option<PoolEvent>,
+    /// One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
+    /// what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
+    /// reason the pool's legs are one: a Soroban pool has two to four.
+    ///
     /// Signed from the POOL's perspective: positive entered the pool, negative
-    /// left it. Raw stroops as a decimal string, scaled by 7 at render like
-    /// every other amount here — a JSON number is a double in the browser, so
-    /// a leg above 2^53 stroops would silently lose digits.
+    /// left it. Raw units as a decimal string — a JSON number is a double in
+    /// the browser, so an amount above 2^53 would silently lose digits.
     ///
     /// The sign is the payload, not decoration: it is what names `event`, so
     /// the frontend must not take an absolute value before deciding direction.
-    /// `null` on both legs in the malformed case above.
-    pub amount_a: Option<String>,
-    pub amount_b: Option<String>,
+    /// Every entry is `null` in the malformed case above.
+    pub amounts: Vec<Option<String>>,
     /// Who performed THIS OPERATION — the operation's own source account when
     /// it declares one, otherwise the transaction's, which is what an absent
     /// `Operation.sourceAccount` means in the XDR.
@@ -469,8 +453,8 @@ pub struct ChartDataPoint {
 /// `GET /v1/liquidity-pools/:id/chart` response.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartResponse {
-    /// Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
-    /// client supplied in the path.
+    /// Echoed pool ID — `L…` or `C…`, same form the client supplied in the
+    /// path.
     pub pool_id: String,
     pub interval: String,
     pub from: DateTime<Utc>,

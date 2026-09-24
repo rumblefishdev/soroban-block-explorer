@@ -2,7 +2,7 @@ import type { PoolActivityItem, PoolItem } from '@rumblefish/api-types';
 import { screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithProviders } from '../../test-utils.js';
+import { renderWithProviders } from '../../../test-utils.js';
 
 import {
   activityRowKey,
@@ -10,53 +10,49 @@ import {
   PoolActivity,
   poolAmountLegs,
   tradeRate,
-} from './PoolActivity.js';
+} from '../PoolActivity.js';
 
 const hookMock = vi.hoisted(() => ({ usePoolActivity: vi.fn() }));
 
-vi.mock('../../api/index.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../api/index.js')>()),
+vi.mock('../../../api/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../api/index.js')>()),
   usePoolActivity: hookMock.usePoolActivity,
 }));
 
-/** An XLM / USDC pool, in canonical leg order. */
+/** An XLM / USDC pool, in registration order. */
 const pool = {
-  asset_a: { asset_type_name: 'native', asset_type: 0, asset_code: null },
-  asset_b: {
-    asset_type_name: 'credit_alphanum4',
-    asset_type: 1,
-    asset_code: 'USDC',
-  },
+  legs: [
+    { asset_type_name: 'native', asset_code: null },
+    { asset_type_name: 'classic_credit', asset_code: 'USDC' },
+  ],
 } as Parameters<typeof formatPoolAmount>[1];
 
 describe('formatPoolAmount', () => {
   it('reads a swap from what entered the pool to what left it', () => {
     expect(
-      formatPoolAmount({ amount_a: '1200000000', amount_b: '-5000000' }, pool)
+      formatPoolAmount({ amounts: ['1200000000', '-5000000'] }, pool)
     ).toBe('120 XLM → 0.5 USDC');
   });
 
   it('orders a swap by direction, not by leg', () => {
     expect(
-      formatPoolAmount({ amount_a: '-1200000000', amount_b: '5000000' }, pool)
+      formatPoolAmount({ amounts: ['-1200000000', '5000000'] }, pool)
     ).toBe('0.5 USDC → 120 XLM');
   });
 
   it('joins both legs of a deposit', () => {
-    expect(
-      formatPoolAmount({ amount_a: '1200000000', amount_b: '5000000' }, pool)
-    ).toBe('120 XLM + 0.5 USDC');
+    expect(formatPoolAmount({ amounts: ['1200000000', '5000000'] }, pool)).toBe(
+      '120 XLM + 0.5 USDC'
+    );
   });
 
   it('renders nothing when neither leg is known', () => {
-    expect(
-      formatPoolAmount({ amount_a: null, amount_b: null }, pool)
-    ).toBeNull();
+    expect(formatPoolAmount({ amounts: [null, null] }, pool)).toBeNull();
   });
 
   it('keeps a leg above 2^53 stroops exact', () => {
     expect(
-      formatPoolAmount({ amount_a: '90071992547409910', amount_b: null }, pool)
+      formatPoolAmount({ amounts: ['90071992547409910', null] }, pool)
     ).toBe('9,007,199,254.740991 XLM');
   });
 });
@@ -65,29 +61,21 @@ describe('tradeRate', () => {
   /** Quoted as out-per-in, the way stellar.expert does — the real fbdfc7ec
    *  trade reads `at 3,063 KALE/XLM` there and must read the same here. */
   it('quotes a swap as out per in, 4 significant figures', () => {
-    const parts = poolAmountLegs(
-      { amount_a: '1253398', amount_b: '-3839199963' },
-      pool
-    );
+    const parts = poolAmountLegs({ amounts: ['1253398', '-3839199963'] }, pool);
     expect(tradeRate(parts)).toBe('3,063 USDC/XLM');
   });
 
   it('keeps sub-one rates readable instead of rounding them to zero', () => {
-    const parts = poolAmountLegs(
-      { amount_a: '-62441', amount_b: '192417893' },
-      pool
-    );
+    const parts = poolAmountLegs({ amounts: ['-62441', '192417893'] }, pool);
     expect(tradeRate(parts)).toBe('0.0003245 XLM/USDC');
   });
 
   it('has no rate for a deposit and no rate against a zero leg', () => {
     expect(
-      tradeRate(
-        poolAmountLegs({ amount_a: '1200000000', amount_b: '5000000' }, pool)
-      )
+      tradeRate(poolAmountLegs({ amounts: ['1200000000', '5000000'] }, pool))
     ).toBeNull();
     expect(
-      tradeRate(poolAmountLegs({ amount_a: '0', amount_b: '-5000000' }, pool))
+      tradeRate(poolAmountLegs({ amounts: ['0', '-5000000'] }, pool))
     ).toBeNull();
   });
 });
@@ -106,16 +94,14 @@ describe('activityRowKey', () => {
 });
 
 describe('PoolActivity table', () => {
-  // `asset_type` matters: `legHref` keys native routing off `asset_type === 0`,
-  // so a fixture without it renders a plain unlinked code and the link test
-  // passes vacuously against nothing.
+  // `asset_type_name` matters: `legHref` keys native routing off it, so a
+  // fixture without it renders a plain unlinked code and the link test passes
+  // vacuously against nothing.
   const poolItem = {
-    asset_a: { asset_type_name: 'native', asset_type: 0, asset_code: null },
-    asset_b: {
-      asset_type_name: 'credit_alphanum4',
-      asset_type: 1,
-      asset_code: 'USDC',
-    },
+    legs: [
+      { asset_type_name: 'native', asset_code: null },
+      { asset_type_name: 'classic_credit', asset_code: 'USDC' },
+    ],
   } as PoolItem;
 
   const makeRow = (over: Partial<PoolActivityItem> = {}) =>
@@ -124,8 +110,7 @@ describe('PoolActivity table', () => {
       ledger_sequence: 63_904_097,
       application_order: 1,
       event: 'trade',
-      amount_a: '1200000000',
-      amount_b: '-5000000',
+      amounts: ['1200000000', '-5000000'],
       source_account: 'G'.repeat(56),
       created_at: '2026-08-11T14:26:36Z',
       ...over,
@@ -144,7 +129,11 @@ describe('PoolActivity table', () => {
 
   it('renders one row per operation, each with its own event and figure', () => {
     mockRows([
-      makeRow({ application_order: 1, event: 'deposit', amount_b: '5000000' }),
+      makeRow({
+        application_order: 1,
+        event: 'deposit',
+        amounts: ['1200000000', '5000000'],
+      }),
       makeRow({ application_order: 2, event: 'trade' }),
     ]);
     renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
@@ -177,7 +166,7 @@ describe('PoolActivity table', () => {
   });
 
   it('renders no figure for a row whose legs did not both land', () => {
-    mockRows([makeRow({ event: null, amount_a: null, amount_b: null })]);
+    mockRows([makeRow({ event: null, amounts: [null, null] })]);
     renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
 
     // Not a zero and not a dash — "not known" is not "nothing moved".

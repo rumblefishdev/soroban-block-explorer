@@ -9,7 +9,11 @@ import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
-import { assetDisplayCode, isNativeAssetString } from '../assets/assetType.js';
+import {
+  assetDisplayCode,
+  isNativeAssetString,
+  UNREGISTERED_TOKEN_LABEL,
+} from '../assets/assetType.js';
 
 /** The dimmed weight this cell uses for everything that is not a movement. */
 function Muted({
@@ -253,10 +257,6 @@ function AssetLink({
  * and 274 transfers on production, all fungible; a non-fungible row keeps its
  * address.
  *
- * It says UNREGISTERED, not "unnamed" and not a dash: the movement IS indexed,
- * and the token is one the registry never got a row for, because that row comes
- * from the classifier's guess at the WASM's function names rather than from the
- * evidence that the contract moved an amount (task 0542).
  */
 function assetLabel(change: AccountBalanceChange): string {
   const native = isNativeAssetString(change.asset);
@@ -265,6 +265,6 @@ function assetLabel(change: AccountBalanceChange): string {
       asset_type_name: native ? 'native' : null,
       asset_code: change.asset_code,
       contract_id: native ? null : change.asset,
-    }) ?? 'Unregistered token'
+    }) ?? UNREGISTERED_TOKEN_LABEL
   );
 }

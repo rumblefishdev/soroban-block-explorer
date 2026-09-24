@@ -2,15 +2,17 @@ import type { PoolAssetLeg } from '@rumblefish/api-types';
 import { formatCompactAmount } from '@rumblefish/soroban-block-explorer-ui';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { assetLegLabel, isPoolStale, legHref } from './helpers.js';
+import { assetLegLabel, isPoolStale, legHref, poolLabel } from '../helpers.js';
+import { UNREGISTERED_TOKEN_LABEL } from '../../assets/assetType.js';
 
 function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
   return {
     asset_code: 'USDC',
-    asset_type: 1,
     asset_type_name: 'classic_credit',
     contract_id: null,
     issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    icon_url: null,
+    symbol: null,
     ...overrides,
   };
 }
@@ -21,7 +23,7 @@ describe('legHref', () => {
   // which retired the "native has no address" rationale this rule was built
   // on. XLM was the only leg in the app that rendered as dead text.
   it('links native legs to the canonical /assets/native token', () => {
-    expect(legHref(makeLeg({ asset_type: 0, asset_type_name: 'native' }))).toBe(
+    expect(legHref(makeLeg({ asset_type_name: 'native' }))).toBe(
       '/assets/native'
     );
   });
@@ -30,7 +32,6 @@ describe('legHref', () => {
     expect(
       legHref(
         makeLeg({
-          asset_type: 0,
           asset_type_name: 'native',
           asset_code: null,
           issuer: null,
@@ -66,7 +67,6 @@ describe('legHref', () => {
         makeLeg({
           asset_code: null,
           issuer: null,
-          asset_type: 3,
           asset_type_name: 'soroban',
           contract_id:
             'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
@@ -94,9 +94,7 @@ describe('legHref', () => {
 describe('assetLegLabel', () => {
   it('returns "XLM" for the native leg', () => {
     expect(
-      assetLegLabel(
-        makeLeg({ asset_type: 0, asset_type_name: 'native', asset_code: null })
-      )
+      assetLegLabel(makeLeg({ asset_type_name: 'native', asset_code: null }))
     ).toBe('XLM');
   });
 
@@ -105,12 +103,64 @@ describe('assetLegLabel', () => {
     expect(assetLegLabel(makeLeg({ asset_code: 'EURC' }))).toBe('EURC');
   });
 
-  it('throws on schema drift (non-native leg with no asset_code)', () => {
-    expect(() =>
+  // The case that made this worth changing: a soroban token publishes no
+  // classic code, and this used to throw for every one of them — which would
+  // have taken down the whole list the moment soroban pools appeared in it.
+  it('names a code-less soroban leg by its truncated contract address', () => {
+    expect(
       assetLegLabel(
-        makeLeg({ asset_code: null, asset_type_name: 'classic_credit' })
+        makeLeg({
+          asset_type_name: 'soroban',
+          asset_code: null,
+          issuer: null,
+          contract_id:
+            'CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB',
+        })
       )
-    ).toThrow(/no asset_code/);
+    ).toBe('CAQC…RZQB');
+  });
+
+  it('names a code-less soroban leg by its symbol when it publishes one', () => {
+    expect(
+      assetLegLabel(
+        makeLeg({
+          asset_type_name: 'soroban',
+          asset_code: null,
+          issuer: null,
+          symbol: 'USDx',
+          contract_id:
+            'CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB',
+        })
+      )
+    ).toBe('USDx');
+  });
+
+  // A leg with no registry row carries nothing the ladder can name. It must
+  // say so rather than throw: the list renders outside any section boundary,
+  // so a throw here blanked the whole app.
+  it('names a leg nothing identifies as an unregistered token', () => {
+    expect(
+      assetLegLabel(
+        makeLeg({
+          asset_code: null,
+          issuer: null,
+          contract_id: null,
+          asset_type_name: null,
+        })
+      )
+    ).toBe(UNREGISTERED_TOKEN_LABEL);
+  });
+});
+
+describe('poolLabel', () => {
+  it('joins every leg, not just a left and a right', () => {
+    expect(
+      poolLabel([
+        makeLeg({ asset_type_name: 'native', asset_code: null }),
+        makeLeg({ asset_code: 'USDC' }),
+        makeLeg({ asset_code: 'EURC' }),
+      ])
+    ).toBe('XLM / USDC / EURC');
   });
 });
 

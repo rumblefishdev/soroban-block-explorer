@@ -519,21 +519,40 @@ matches the `USDC` pools; `A/B` is a pair query where each needle claims its own
 leg in either order; native legs match on `XLM` despite storing an empty code —
 tasks 0246/0440. The same parameter also accepts a pool **identifier** in the
 `L…` SEP-23 form, which selects that one pool instead of matching codes —
-task 0470), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
-`filter[asset_b_code]`, `filter[asset_b_issuer]` (G-StrKey),
-`filter[min_tvl]` (decimal). Per-leg `(code, issuer)` must be supplied paired
-or both omitted (classic identity). The single-asset and per-leg modes coexist
-additively. Each `PoolItem` carries `participant_count` (count of active LP
-positions; task 0246) alongside the snapshot fields, plus a compute-at-read
+task 0470), `filter[pool_kind]` (`classic` | `soroban`; an unknown value is
+**rejected with 400**, never ignored — a silently dropped filter returns a page
+that contradicts the request), and `filter[min_tvl]` (decimal). The two filters
+combine additively.
+
+The four per-leg positional filters (`filter[asset_a_code]` / `[asset_a_issuer]`
+and the same for `b`) were **removed in task 0374**: they named a leg by its
+position in a pair, which a list of two to four legs has no equivalent for, and
+no client held a key to use them.
+
+Each `PoolItem` carries `legs` — the pool's assets in registration order, two
+for a classic pool and two to four for a Soroban one, replacing the
+`asset_a` / `asset_b` pair — plus `pool_kind`, `participant_count` (count of
+active LP positions; task 0246), the snapshot fields, and a compute-at-read
 USD `tvl` (task 0199 Phase A2 — one batched price lookup per page; `volume`
 and `fee_revenue` stay `null` on the list, they are detail-only).
+
+A leg names its asset family in the **same vocabulary `/v1/assets` uses**
+(`native` | `classic_credit` | `soroban`). It used to speak the XDR `AssetType`
+domain here (`credit_alphanum4` / `pool_share`) while the sibling endpoint spoke
+the family one — one field name, two vocabularies, coinciding on the single word
+`native`. The raw discriminant is no longer published beside the label: the
+label is a pure function of it, and it has no honest value for a Soroban token.
 `filter[min_tvl]` is **rejected with 400**: a value computed at read cannot
 filter page membership, and the old SQL pre-filter read a snapshot column that
 is never written, so it silently returned an empty page. Filter and projection
 semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 
-**`GET /liquidity-pools/:id`** - Pool detail: asset pair, fee, reserves, total shares,
-TVL, plus `participant_count` (task 0246). Reserves / total shares come from
+**`GET /liquidity-pools/:id`** - Pool detail: legs, kind, fee, reserves, total
+shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
+leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
+read the snapshot's two reserve columns in order, and a Soroban pool's legs
+carry `null` until its own state is read. TVL sums every leg's reserve × price
+and is `null` unless every leg has both. Reserves / total shares come from
 the latest snapshot row; clients that care about freshness read
 `latest_snapshot_at` in the response. `participant_count` is independent of
 snapshot freshness — populated even on stale pools. The money fields
@@ -545,12 +564,13 @@ three fields to `null` — it never fails the request.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
 pool. Each row carries `amounts` (task 0279): **one entry per operation**, in
-application order, each with `amount_a` / `amount_b` for the pool's canonical
-legs as raw-stroop decimal **strings** (same reason as `reserve_a` — a JSON
-number is a browser double and a big leg would lose digits), **signed from the
-pool's side** — positive = the asset entered the pool. A trade reads `+/-`, a
-deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the direction and no
-event-type field is needed.
+application order, each with `amounts` — one entry per pool leg, in the order
+of the pool's `legs` (`amounts[i]` moved in `legs[i]`), a list rather than an
+`a` / `b` pair because a Soroban pool has two to four legs — as raw decimal
+**strings** (same reason as a leg's `reserve` — a JSON number is a browser double and
+a big leg would lose digits), **signed from the pool's side** — positive = the
+asset entered the pool. A trade reads `+/-`, a deposit `+/+`, a withdrawal
+`-/-`, so the sign alone gives the direction.
 
 Per operation rather than summed per transaction because **8.2% of (pool,
 transaction) pairs run more than one operation against the same pool** (measured

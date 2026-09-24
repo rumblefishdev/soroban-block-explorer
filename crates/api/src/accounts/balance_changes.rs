@@ -473,11 +473,9 @@ fn balance_change_delta_sql(account_id: i64, in_tuples: &str, partitions: &str) 
 }
 
 #[cfg(test)]
-#[path = "balance_changes_tests.rs"]
 mod tests;
 
 /// Wire-type contract, asserted against a REAL ClickHouse — see the module
 /// docs in the file itself.
 #[cfg(test)]
-#[path = "balance_changes_decode_smoke.rs"]
 mod decode_smoke;

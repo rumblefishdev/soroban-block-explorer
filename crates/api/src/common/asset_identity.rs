@@ -45,6 +45,7 @@ pub(crate) struct AssetIdentityChRow {
     pub(crate) asset_type: i16,
     pub(crate) asset_code: Option<String>,
     pub(crate) issuer_id: i64,
+    pub(crate) contract_id: i64,
     pub(crate) contract_strkey: Option<String>,
     pub(crate) symbol: Option<String>,
     pub(crate) decimals: u32,
@@ -112,45 +113,48 @@ pub(crate) async fn resolve_asset_identities(
     client: &clickhouse::Client,
     ids: &BTreeSet<i64>,
 ) -> Result<HashMap<i64, ResolvedAsset>, clickhouse::error::Error> {
-    let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT ids.id                        AS id, \
-                toBool(a.id != 0)             AS known, \
-                a.asset_type                  AS asset_type, \
-                nullIf(a.asset_code, '')      AS asset_code, \
-                a.issuer_id                   AS issuer_id, \
-                nullIf(sc.contract_id, '')    AS contract_strkey, \
-                nullIf(m.symbol, '')          AS symbol, \
-                coalesce(m.decimals, 7)       AS decimals \
-         FROM (SELECT arrayJoin(CAST([{in_list}] AS Array(Int64))) AS id) ids \
-         LEFT JOIN (SELECT id, asset_type, asset_code, issuer_id FROM assets \
-                    WHERE id IN ({in_list}) LIMIT 1 BY id) a ON a.id = ids.id \
-         LEFT JOIN (SELECT id, contract_id FROM soroban_contracts \
-                    WHERE id IN ({in_list}) LIMIT 1 BY id) sc ON sc.id = ids.id \
-         LEFT JOIN (SELECT contract_id, \
-                           argMax(symbol, version)   AS symbol, \
-                           argMax(decimals, version) AS decimals \
-                    FROM soroban_contract_metadata GROUP BY contract_id) m \
-                ON m.contract_id = sc.contract_id"
-    );
+    let rows = fetch_identity_rows(client, ids).await?;
+    let issuers = resolve_issuers(client, &rows).await?;
+    Ok(assemble(rows, &issuers))
+}
 
-    let rows = client.query(&sql).fetch_all::<AssetIdentityChRow>().await?;
+/// Identities AND each asset's icon, for a surface that draws avatars.
+///
+/// The `accounts` seek and the `asset_enrichment` read both hang off the
+/// statement above and neither depends on the other, so they run concurrently.
+pub(crate) async fn resolve_identities_and_icons(
+    client: &clickhouse::Client,
+    ids: &BTreeSet<i64>,
+) -> Result<(HashMap<i64, ResolvedAsset>, HashMap<i64, String>), clickhouse::error::Error> {
+    let rows = fetch_identity_rows(client, ids).await?;
+    let (issuers, icons) =
+        futures::try_join!(resolve_issuers(client, &rows), resolve_icons(client, &rows),)?;
+    Ok((assemble(rows, &issuers), icons))
+}
 
-    // A classic asset's link identity is `CODE-ISSUER`, and the issuer is a
-    // surrogate here — resolved by the shared bloom seek rather than by an
-    // `accounts` join, which would have to be bounded through `assets` and so
-    // would cost the scan above a second time.
-    let issuers = super::ch::resolve_accounts(
+/// A classic asset's link identity is `CODE-ISSUER`, and the issuer is a
+/// surrogate on the row — resolved by the shared bloom seek rather than by an
+/// `accounts` join, which would have to be bounded through `assets` and so
+/// would cost the statement's scan a second time.
+async fn resolve_issuers(
+    client: &clickhouse::Client,
+    rows: &[AssetIdentityChRow],
+) -> Result<HashMap<i64, String>, clickhouse::error::Error> {
+    super::ch::resolve_accounts(
         client,
         rows.iter()
             .filter(|r| r.known && r.asset_type == 1 && r.issuer_id != 0)
             .map(|r| r.issuer_id)
             .collect(),
     )
-    .await?;
+    .await
+}
 
-    Ok(rows
-        .into_iter()
+fn assemble(
+    rows: Vec<AssetIdentityChRow>,
+    issuers: &HashMap<i64, String>,
+) -> HashMap<i64, ResolvedAsset> {
+    rows.into_iter()
         .map(|r| {
             let issuer = issuers.get(&r.issuer_id).filter(|s| !s.is_empty()).cloned();
             (
@@ -166,5 +170,183 @@ pub(crate) async fn resolve_asset_identities(
                 },
             )
         })
+        .collect()
+}
+
+async fn fetch_identity_rows(
+    client: &clickhouse::Client,
+    ids: &BTreeSet<i64>,
+) -> Result<Vec<AssetIdentityChRow>, clickhouse::error::Error> {
+    let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT ids.id                        AS id, \
+                toBool(a.id != 0)             AS known, \
+                a.asset_type                  AS asset_type, \
+                nullIf(a.asset_code, '')      AS asset_code, \
+                a.issuer_id                   AS issuer_id, \
+                a.contract_id                 AS contract_id, \
+                nullIf(sc.contract_id, '')    AS contract_strkey, \
+                nullIf(m.symbol, '')          AS symbol, \
+                coalesce(m.decimals, 7)       AS decimals \
+         FROM (SELECT arrayJoin(CAST([{in_list}] AS Array(Int64))) AS id) ids \
+         LEFT JOIN (SELECT id, asset_type, asset_code, issuer_id, contract_id \
+                    FROM assets \
+                    WHERE id IN ({in_list}) LIMIT 1 BY id) a ON a.id = ids.id \
+         LEFT JOIN (SELECT id, contract_id FROM soroban_contracts \
+                    WHERE id IN ({in_list}) LIMIT 1 BY id) sc ON sc.id = ids.id \
+         LEFT JOIN (SELECT contract_id, \
+                           argMax(symbol, version)   AS symbol, \
+                           argMax(decimals, version) AS decimals \
+                    FROM soroban_contract_metadata GROUP BY contract_id) m \
+                ON m.contract_id = sc.contract_id"
+    );
+
+    client.query(&sql).fetch_all::<AssetIdentityChRow>().await
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct IconChRow {
+    asset_type: i16,
+    asset_code: String,
+    issuer_id: i64,
+    contract_id: i64,
+    /// `Nullable(String)` on the table, so `argMax` over it is nullable too —
+    /// decoding it as a bare `String` is refused by the driver, and only on a
+    /// page that actually MATCHES an enrichment row (an empty result decodes
+    /// nothing and passes). Every other reader of this column already declares
+    /// it optional; this one had diverged.
+    icon_url: Option<String>,
+}
+
+/// The identity tuple `asset_enrichment` keys on, for an asset the dimension
+/// knows. An unknown one — an NFT collection, an unclassified contract — has no
+/// tuple, and its empty code and zero issuer would widen the read's bounds.
+/// Native keys on its STORED empty code, not the displayed `XLM`.
+fn icon_key(r: &AssetIdentityChRow) -> Option<(i16, String, i64, i64)> {
+    r.known.then(|| {
+        (
+            r.asset_type,
+            r.asset_code.clone().unwrap_or_default(),
+            r.issuer_id,
+            r.contract_id,
+        )
+    })
+}
+
+/// Each known asset's icon, from `asset_enrichment` (ADR 0050) — never from
+/// `assets`, whose `icon_url` column was dropped in task 0310 after measuring 0
+/// of 411,654 rows populated.
+///
+/// Keyed on the four-part identity tuple because the table is; re-deriving it
+/// with a second `assets` read is the double scan the statement above exists to
+/// avoid. The read is bounded on all three tuple components, so a Soroban asset
+/// (empty code, issuer 0) cannot drag in every other Soroban asset's row, and
+/// the exact tuple is matched here.
+async fn resolve_icons(
+    client: &clickhouse::Client,
+    rows: &[AssetIdentityChRow],
+) -> Result<HashMap<i64, String>, clickhouse::error::Error> {
+    let keys: Vec<(i64, (i16, String, i64, i64))> = rows
+        .iter()
+        .filter_map(|r| Some((r.id, icon_key(r)?)))
+        .collect();
+    if keys.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let codes: BTreeSet<&str> = keys.iter().map(|(_, k)| k.1.as_str()).collect();
+    let id_list = |ids: BTreeSet<i64>| ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    // Codes are bound; the two id lists are `i64` and inline by type.
+    let sql = format!(
+        "SELECT asset_type, asset_code, issuer_id, contract_id, \
+                argMax(icon_url, version) AS icon_url \
+         FROM asset_enrichment \
+         WHERE asset_code IN ({codes}) AND issuer_id IN ({issuers}) \
+           AND contract_id IN ({contracts}) \
+         GROUP BY asset_type, asset_code, issuer_id, contract_id",
+        codes = vec!["?"; codes.len()].join(","),
+        issuers = id_list(keys.iter().map(|(_, k)| k.2).collect()),
+        contracts = id_list(keys.iter().map(|(_, k)| k.3).collect()),
+    );
+    let mut query = client.query(&sql);
+    for code in &codes {
+        query = query.bind(*code);
+    }
+    let icons: HashMap<(i16, String, i64, i64), String> = query
+        .fetch_all::<IconChRow>()
+        .await?
+        .into_iter()
+        .filter_map(|r| {
+            let url = r.icon_url.filter(|u| !u.is_empty())?;
+            Some((
+                (r.asset_type, r.asset_code, r.issuer_id, r.contract_id),
+                url,
+            ))
+        })
+        .collect();
+
+    Ok(keys
+        .into_iter()
+        .filter_map(|(id, key)| Some((id, icons.get(&key)?.clone())))
         .collect())
 }
+
+/// The code an `assets` row DISPLAYS as, as a SQL expression over `alias`.
+///
+/// The `asset_type = 0` arm is load-bearing and is the whole reason this is one
+/// function: native carries an EMPTY code on the ledger, so a plain column
+/// match returns only the credit assets minted under the code `XLM` — a wrong
+/// answer that looks like a right one (task 0440). Three modules matched and
+/// ranked on this rule with three copies of the expression, each carrying a
+/// "change one, change all three" note; the pools copy lost its note when the
+/// pair columns died, at which point nothing tied them together.
+///
+/// `alias` is the table alias plus its dot (`"a."`), or empty when the query
+/// does not alias `assets`.
+pub(crate) fn shown_code_sql(alias: &str) -> String {
+    format!("lower(if({alias}asset_type = 0, 'XLM', toString({alias}asset_code)))")
+}
+
+/// What one leg is CALLED, for a label the API composes itself.
+///
+/// The ladder, in the only order that never invents a name: a classic asset by
+/// its code (native's code is `XLM`, which the ledger does not store), a
+/// Soroban token by its self-declared symbol, and otherwise by the truncated
+/// contract address — the identity that always exists.
+///
+/// The last rung is not a fallback, it is the honest answer: a Soroban token's
+/// symbol is self-declared and NOT unique (measured on production: 2,276
+/// contracts call themselves `SMOL`, and three distinct contracts among our own
+/// pool legs claim `USDC`), so the address is the only thing that
+/// discriminates. An asset the dimension does not know at all reaches the same
+/// rung, for the same reason.
+///
+/// Nothing left to name it is a token the registry never got a row for (task
+/// 0542); it reads [`UNREGISTERED_TOKEN_LABEL`], the words the frontend uses.
+pub(crate) fn leg_label(identity: Option<&ResolvedAsset>) -> String {
+    let Some(r) = identity else {
+        return String::from(UNREGISTERED_TOKEN_LABEL);
+    };
+    if r.known && r.asset_type == domain::AssetFamily::Native as i16 {
+        return String::from("XLM");
+    }
+    if let Some(code) = r.asset_code.as_deref().filter(|c| !c.is_empty()) {
+        return code.to_string();
+    }
+    if let Some(sym) = r.symbol.as_deref().filter(|s| !s.is_empty()) {
+        return sym.to_string();
+    }
+    match r.contract_strkey.as_deref() {
+        Some(c) if c.len() > 8 => format!("{}…{}", &c[..4], &c[c.len() - 4..]),
+        Some(c) => c.to_string(),
+        None => String::from(UNREGISTERED_TOKEN_LABEL),
+    }
+}
+
+/// The frontend's `UNREGISTERED_TOKEN_LABEL`, for labels composed here.
+pub(crate) const UNREGISTERED_TOKEN_LABEL: &str = "Unregistered token";
+
+#[cfg(test)]
+mod decode_smoke;
+
+#[cfg(test)]
+mod tests;

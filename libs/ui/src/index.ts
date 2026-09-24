@@ -146,6 +146,7 @@ export {
   isContractId,
   isLedgerSequence,
   isPoolId,
+  isPoolIdentifier,
   isTransactionHash,
   NATIVE_ASSET_CODE,
   isNativeAssetString,
