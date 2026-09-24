@@ -102,6 +102,22 @@
 --     balance-change rows), plus one `asset_enrichment` read for the icons.
 --     A leg publishes no SAC address: nothing on a pool page renders it, and
 --     the asset's own page carries it with its deployment state (ADR 0051).
+--   • **Soroban reserves and shares (task 0374).** A Soroban pool has no
+--     snapshot row. The API joins, bounded to the page's pools:
+--       reserves = argMax(reserves, ledger_sequence) FROM pool_state_changes,
+--                  keeping only rows whose plane_id matches the plane the pool
+--                  declares (argMax(plane_id, derived_at_ledger) FROM
+--                  pool_instance_state) — a plane names its pool in a key any
+--                  contract can write, so the filter is required, and
+--                  ledger_sequence >= the page's oldest activity (no page
+--                  pool's latest row can precede it);
+--       shares   = argMax(total_shares, derived_at_ledger) FROM
+--                  pool_instance_state, with the share token's decimals from
+--                  soroban_contract_metadata (NULL when it publishes none).
+--     Raw integers are scaled in Rust by each leg's decimals, and only when
+--     they are a fact (protocol 7 for classic/native, published metadata for
+--     a Soroban token). A stored 0 in shares reads 0 only for a pair-factory
+--     pool (empty pool_type_raw) or a pool whose every reserve is 0.
 
 SELECT
     lower(hex(lp.pool_id))                                                          AS pool_id_hex,

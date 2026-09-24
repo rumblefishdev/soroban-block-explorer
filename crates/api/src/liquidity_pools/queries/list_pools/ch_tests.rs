@@ -1,4 +1,5 @@
-//! ClickHouse-backed check of the list's activity order (task 0374).
+//! ClickHouse-backed check of the list's activity order and soroban reserves
+//! (task 0374).
 //!
 //! The order key comes from `pool_activity`, which a refreshable MV fills from
 //! `pool_state_changes`. That MV keeps only rows of the plane the pool itself
@@ -26,11 +27,15 @@ async fn seed(ch: &clickhouse::Client) {
         // A classic pool's own row moves with every trade: last activity 200.
         // Both soroban rows sit at their registration ledgers (100, 110).
         format!(
-            "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind) VALUES \
-             (unhex('{CLASSIC}'), 30, 200, 0), \
-             (unhex('{SOROBAN_SPOOFED}'), 30, 100, 1), \
-             (unhex('{SOROBAN_ACTIVE}'), 30, 110, 1)"
+            "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs) VALUES \
+             (unhex('{CLASSIC}'), 30, 200, 0, []), \
+             (unhex('{SOROBAN_SPOOFED}'), 30, 100, 1, [1001, 1002]), \
+             (unhex('{SOROBAN_ACTIVE}'), 30, 110, 1, [])"
         ),
+        // Two classic legs, so both scale by the protocol's 7 decimals.
+        "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, id) VALUES \
+         (0, '', 0, 0, 1001), (1, 'USDC', 42, 0, 1002)"
+            .to_string(),
         // Each soroban pool declares its plane: 7 and 8.
         format!(
             "INSERT INTO pool_instance_state (pool_id, plane_id, share_token_id, total_shares, derived_at_ledger) VALUES \
@@ -41,8 +46,8 @@ async fn seed(ch: &clickhouse::Client) {
         // publishes rows under its id at 900. The active pool moved at 300.
         format!(
             "INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id) VALUES \
-             (unhex('{SOROBAN_SPOOFED}'), 150, [1, 2], 7), \
-             (unhex('{SOROBAN_SPOOFED}'), 900, [1, 2], 666), \
+             (unhex('{SOROBAN_SPOOFED}'), 150, [10000000, 20000000], 7), \
+             (unhex('{SOROBAN_SPOOFED}'), 900, [999990000000, 1], 666), \
              (unhex('{SOROBAN_ACTIVE}'), 300, [1, 2], 8)"
         ),
     ] {
@@ -107,6 +112,15 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
         ],
         "list must order by last activity, counting only the declared plane"
     );
+
+    // The reserves come from the declared plane too: its latest row (1, 2 at
+    // 7 decimals), never the foreign plane's newer one.
+    let spoofed = rows
+        .iter()
+        .find(|r| r.pool_id_hex == SOROBAN_SPOOFED)
+        .expect("spoofed pool listed");
+    let reserves: Vec<Option<&str>> = spoofed.legs.iter().map(|l| l.reserve.as_deref()).collect();
+    assert_eq!(reserves, vec![Some("1"), Some("2")]);
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
         .execute()

@@ -1891,20 +1891,29 @@ export type PaginatedPoolItem = {
      * an error.
      */
     pool_kind: PoolKind;
+    /**
+     * Pool shares outstanding, in units, as a decimal string. A classic pool's
+     * come from its latest snapshot; a soroban pool's from the pool contract's
+     * own storage, scaled by the share token's decimals. `0` only when it is a
+     * measurement — a pair-factory pool, or a pool holding nothing; `null` when
+     * the contract does not record it (concentrated and config-factory pools,
+     * older router versions) or no snapshot is fresh.
+     */
     total_shares?: string | null;
     /**
      * USD, decimal string rounded to cents (task 0199 compute-at-read).
      * Populated on **both** the list (Phase A2, one batched price lookup
      * per page) and the detail endpoint. `tvl` = latest reserves × each
      * leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
-     * stale); `null` unless both legs price (never a one-leg partial) —
-     * untracked assets and stale pools read `null`.
+     * stale); `null` unless every leg has both a reserve and a price (never a
+     * partial sum) — untracked assets and stale pools read `null`.
      */
     tvl?: string | null;
     /**
      * USD, decimal string rounded to cents. **Detail endpoint only.**
      * Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-     * at the leg-A last hourly close; `null` when the pool is unpriceable.
+     * at the leg-A last hourly close; `null` when the pool is unpriceable,
+     * and on a soroban pool, whose volume nothing records.
      */
     volume?: string | null;
   }>;
@@ -2126,12 +2135,14 @@ export type PoolAssetLeg = {
   icon_url?: string | null;
   issuer?: string | null;
   /**
-   * What the pool holds of this leg: raw units as a decimal string (a JSON
+   * What the pool holds of this leg, in units, as a decimal string (a JSON
    * number is a browser double and a big reserve would lose digits). On the
    * leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
-   * four legs. `null` when no source knows it — never `0`. Read from the
-   * latest classic snapshot; a soroban pool has none, so its legs are
-   * `null` until its own state is read.
+   * four legs. A classic pool's comes from its latest snapshot; a soroban
+   * pool's from its latest state change on the plane the pool itself
+   * declares, scaled by the leg's own decimals. `null` when no source knows
+   * it — including a soroban token that publishes no decimals, where a
+   * guessed 7 would be off by up to 10^11. An empty leg is `0`.
    */
   reserve?: string | null;
   /**
@@ -2205,20 +2216,29 @@ export type PoolItem = {
    * an error.
    */
   pool_kind: PoolKind;
+  /**
+   * Pool shares outstanding, in units, as a decimal string. A classic pool's
+   * come from its latest snapshot; a soroban pool's from the pool contract's
+   * own storage, scaled by the share token's decimals. `0` only when it is a
+   * measurement — a pair-factory pool, or a pool holding nothing; `null` when
+   * the contract does not record it (concentrated and config-factory pools,
+   * older router versions) or no snapshot is fresh.
+   */
   total_shares?: string | null;
   /**
    * USD, decimal string rounded to cents (task 0199 compute-at-read).
    * Populated on **both** the list (Phase A2, one batched price lookup
    * per page) and the detail endpoint. `tvl` = latest reserves × each
    * leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
-   * stale); `null` unless both legs price (never a one-leg partial) —
-   * untracked assets and stale pools read `null`.
+   * stale); `null` unless every leg has both a reserve and a price (never a
+   * partial sum) — untracked assets and stale pools read `null`.
    */
   tvl?: string | null;
   /**
    * USD, decimal string rounded to cents. **Detail endpoint only.**
    * Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-   * at the leg-A last hourly close; `null` when the pool is unpriceable.
+   * at the leg-A last hourly close; `null` when the pool is unpriceable,
+   * and on a soroban pool, whose volume nothing records.
    */
   volume?: string | null;
 };

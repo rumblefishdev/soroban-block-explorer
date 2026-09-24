@@ -550,11 +550,20 @@ semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 **`GET /liquidity-pools/:id`** - Pool detail: legs, kind, fee, reserves, total
 shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
 leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
-read the snapshot's two reserve columns in order, and a Soroban pool's legs
-carry `null` until its own state is read. TVL sums every leg's reserve × price
-and is `null` unless every leg has both. Reserves / total shares come from
-the latest snapshot row; clients that care about freshness read
-`latest_snapshot_at` in the response. `participant_count` is independent of
+read the snapshot's two reserve columns in order. A Soroban pool has no
+snapshot: its legs read the latest `pool_state_changes` row from the plane the
+pool itself declares in `pool_instance_state` (a plane names its pool in a key
+any contract can write, so every read of that table carries this filter),
+scaled by each leg's own decimals — `null` when the token publishes none, `0`
+for an empty leg. Its total shares come from `pool_instance_state` (the pool
+contract's own storage) scaled by the share token's decimals; a stored 0 is
+reported as `0` only for a pair-factory pool or a pool holding nothing, and as
+`null` where the contract does not record it (concentrated, config-factory,
+older routers). TVL sums every leg's reserve × price and is `null` unless every
+leg has both. A classic pool's reserves / total shares come from its latest
+snapshot row; clients that care about freshness read `latest_snapshot_at` in
+the response. A Soroban pool's `volume` / `fee_revenue` are `null`: nothing
+records its volume. `participant_count` is independent of
 snapshot freshness — populated even on stale pools. The money fields
 (`tvl`, `volume`, `fee_revenue`) do NOT come from the snapshot row: they are
 computed at read from the in-cluster `prices.*` views (task 0199,

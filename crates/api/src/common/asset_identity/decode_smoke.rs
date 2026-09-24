@@ -46,6 +46,7 @@ fn identity(
         contract_strkey: None,
         symbol: None,
         decimals: 7,
+        decimals_known: true,
     }
 }
 

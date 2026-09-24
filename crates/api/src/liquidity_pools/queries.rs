@@ -27,6 +27,8 @@ use std::collections::HashMap;
 
 use crate::common::asset_identity::ResolvedAsset;
 
+use leg_reserves::Reserves;
+
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
 // maps these into the public response DTOs).
@@ -44,8 +46,8 @@ pub struct PoolRow {
     pub fee_bps: i32,
     pub fee_percent: String,
     pub created_at_ledger: i64,
-    /// Ledger value the list keyset orders + paginates on. CH keys on the
-    /// native `last_updated_ledger` ("most recently active"), carried here.
+    /// Ledger value the list keyset orders + paginates on: the pool's last
+    /// activity (`list_pools::ACTIVITY_LEDGER`), carried here.
     /// The wire `PoolListCursor.created_at_ledger` slot stays opaque (ADR
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
@@ -76,7 +78,7 @@ pub struct PoolLegRow {
     /// that has no classic code.
     pub symbol: Option<String>,
     pub icon_url: Option<String>,
-    /// What the pool holds of this leg, raw units — see `PoolAssetLeg::reserve`.
+    /// What the pool holds of this leg, in units — see `PoolAssetLeg::reserve`.
     pub reserve: Option<String>,
 }
 
@@ -90,13 +92,18 @@ fn leg_rows(
     leg_ids: &[i64],
     identities: &HashMap<i64, ResolvedAsset>,
     icons: &HashMap<i64, String>,
-    reserves: &[Option<String>],
+    reserves: Reserves<'_>,
 ) -> Vec<PoolLegRow> {
     leg_ids
         .iter()
         .enumerate()
         .map(|(i, id)| {
-            let reserve = reserves.get(i).cloned().flatten();
+            // A raw soroban reserve scales only by decimals that are a fact.
+            let scale = identities
+                .get(id)
+                .filter(|r| r.decimals_known)
+                .map(|r| r.decimals);
+            let reserve = reserves.at(i, scale);
             match identities.get(id) {
                 Some(r) if r.known => PoolLegRow {
                     family: r.asset_type,
@@ -131,9 +138,11 @@ fn leg_rows(
 
 mod get_pool;
 mod get_pool_chart;
+mod leg_reserves;
 mod list_participants;
 mod list_pool_activity;
 mod list_pools;
+mod total_shares;
 mod usd_analytics;
 
 pub use get_pool::fetch_pool_by_id;

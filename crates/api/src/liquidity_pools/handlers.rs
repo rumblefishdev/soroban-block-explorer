@@ -363,8 +363,14 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     {
         Ok(analytics) => {
             row.tvl = analytics.tvl;
-            row.volume = analytics.volume;
-            row.fee_revenue = analytics.fee_revenue;
+            // Volume is read off the classic snapshot. Nothing records a
+            // soroban pool's (its state changes carry reserves only), and an
+            // empty window reads as a zero-volume day — "$0.00 traded" would
+            // be an invented measurement, so the fields stay unknown.
+            if row.pool_kind == domain::PoolKind::Classic {
+                row.volume = analytics.volume;
+                row.fee_revenue = analytics.fee_revenue;
+            }
         }
         Err(e) => {
             tracing::error!("DB error in fetch_pool_usd_analytics({pool_id}): {e}");

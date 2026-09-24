@@ -4341,15 +4341,16 @@
                   "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
                 },
                 "total_shares": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Pool shares outstanding, in units, as a decimal string. A classic pool's\ncome from its latest snapshot; a soroban pool's from the pool contract's\nown storage, scaled by the share token's decimals. `0` only when it is a\nmeasurement — a pair-factory pool, or a pool holding nothing; `null` when\nthe contract does not record it (concentrated and config-factory pools,\nolder router versions) or no snapshot is fresh."
                 },
                 "tvl": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless both legs price (never a one-leg partial) —\nuntracked assets and stale pools read `null`."
+                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless every leg has both a reserve and a price (never a\npartial sum) — untracked assets and stale pools read `null`."
                 },
                 "volume": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable,\nand on a soroban pool, whose volume nothing records."
                 }
               }
             }
@@ -4553,7 +4554,7 @@
           },
           "reserve": {
             "type": ["string", "null"],
-            "description": "What the pool holds of this leg: raw units as a decimal string (a JSON\nnumber is a browser double and a big reserve would lose digits). On the\nleg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to\nfour legs. `null` when no source knows it — never `0`. Read from the\nlatest classic snapshot; a soroban pool has none, so its legs are\n`null` until its own state is read."
+            "description": "What the pool holds of this leg, in units, as a decimal string (a JSON\nnumber is a browser double and a big reserve would lose digits). On the\nleg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to\nfour legs. A classic pool's comes from its latest snapshot; a soroban\npool's from its latest state change on the plane the pool itself\ndeclares, scaled by the leg's own decimals. `null` when no source knows\nit — including a soroban token that publishes no decimals, where a\nguessed 7 would be off by up to 10^11. An empty leg is `0`."
           },
           "symbol": {
             "type": ["string", "null"],
@@ -4624,15 +4625,16 @@
             "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
           },
           "total_shares": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Pool shares outstanding, in units, as a decimal string. A classic pool's\ncome from its latest snapshot; a soroban pool's from the pool contract's\nown storage, scaled by the share token's decimals. `0` only when it is a\nmeasurement — a pair-factory pool, or a pool holding nothing; `null` when\nthe contract does not record it (concentrated and config-factory pools,\nolder router versions) or no snapshot is fresh."
           },
           "tvl": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless both legs price (never a one-leg partial) —\nuntracked assets and stale pools read `null`."
+            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless every leg has both a reserve and a price (never a\npartial sum) — untracked assets and stale pools read `null`."
           },
           "volume": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable,\nand on a soroban pool, whose volume nothing records."
           }
         }
       },
