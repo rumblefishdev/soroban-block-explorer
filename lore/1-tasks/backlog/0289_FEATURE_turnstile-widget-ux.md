@@ -47,3 +47,9 @@ told the page is broken, when the cause is a verification that did not pass.
 - [ ] A 401 after a failed or timed-out solve renders "could not verify your
       browser — try again" (with a retry that re-solves), not the section's
       render-error boundary.
+
+Seen again 2026-09-24 on `/search?q=<hash>` in the in-app browser: the same
+"Something went wrong" section, with `Uncaught TurnstileError: [Cloudflare
+Turnstile] Nothing to reset found for provided container` in the console —
+a `reset()` called on a widget that was never rendered (or already removed),
+so the failure path itself throws. Guard the reset on a live widget id.

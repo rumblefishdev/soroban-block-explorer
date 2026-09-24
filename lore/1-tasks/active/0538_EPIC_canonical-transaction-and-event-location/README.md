@@ -120,8 +120,11 @@ hash keep using `transaction_hash_index`.
    `transaction_participants` (81.46), `operations_appearances` (33.00),
    `soroban_invocations_appearances` (8.30), `operation_pools` (4.76),
    `lp_operation_amounts` (4.43). Each: new table, fill from the old one +
-   `transactions` (no S3), coverage gate, `EXCHANGE TABLES` with the indexer
-   stopped (`docs/backfills.md`), readers switched in the same window.
+   `transactions` (no S3), coverage gate. Since task 0580 (2026-09-24,
+   decision karolkow) as a **parallel change** — new table under a new name,
+   dual write, fill, readers, stop the old write, drop — four ordinary
+   deploys and no window (`docs/deployment.md`); 0575's `EXCHANGE TABLES`
+   window stopped ingest for 51 minutes.
 6. **Readers**: every list pages on the canonical position — execution order
    inside a ledger, cursor `(ledger_sequence, application_order[, op, event])`.
 7. **`transactions.id`** dropped once nothing joins on it. The indexer joins
@@ -351,7 +354,9 @@ caller only), `caller_contract_id` 0.62 and `amount` 0.58 **read by nothing**
 Options when this step comes: rekey to the position and drop the two dead
 columns (~9.6 GiB, _estimate_), or fold an `invoked` flag and `caller_id` into
 `contract_transactions` and drop the table (~10 GiB, but the table stops being
-pure presence and the SAC Invocations tab reads ~4× the rows). Task 0575
+pure presence and the SAC Invocations tab reads ~4× the rows). **Decided
+2026-09-23 (karolkow): fold** — one table instead of two; the SAC
+Invocations tab's extra rows are the accepted cost. Task 0575
 already stopped reading it for the asset list.
 
 ## Step 5a done — task 0575 (2026-09-23)
@@ -380,18 +385,18 @@ the transaction location (the same tables and the same windows). Survey:
 [notes/R-whole-database-survey-2026-09-23.md](notes/R-whole-database-survey-2026-09-23.md).
 Estimates until a trial measures them.
 
-| candidate                                                                                        | saving               | window                                      | where                                       |
-| ------------------------------------------------------------------------------------------------ | -------------------- | ------------------------------------------- | ------------------------------------------- |
-| `transaction_hash_index` keyed by an 8-byte hash prefix; the full hash checked in `transactions` | **done: −124.8 GiB** | no (parallel change)                        | task 0580, 0396                             |
-| `operations_appearances` by position, `pool_ids` dropped, codecs                                 | ~40–50 GiB           | yes                                         | step 5; task 0372                           |
-| `transactions.id` dropped                                                                        | 31.57 GiB            | yes                                         | step 7                                      |
-| `soroban_invocations_appearances` folded into `contract_transactions` (below)                    | ~8–9 GiB             | yes                                         | step 5                                      |
-| `operation_pools`, `lp_operation_amounts` by position                                            | ~9 GiB               | yes                                         | step 5                                      |
-| codecs on integer columns without one (`soroban_events`, `contract_transactions`)                | ~15–25 GiB           | no (`MODIFY CODEC`, parts rewrite on merge) | —                                           |
-| `transactions.idx_tx_hash_bloom` dropped                                                         | 4.93 GiB             | no (`DROP INDEX`)                           | —                                           |
-| `soroban_events` payload as raw XDR instead of JSON text                                         | unknown              | yes                                         | tasks 0572, 0416; prices-api reads the JSON |
-| account hash surrogates → dense ids (~99 GiB of columns)                                         | unknown              | everywhere                                  | research only                               |
-| prices-api backup tables (`rollout_0286_bak_*`, `price_ohlcv_*_bak`)                             | 48.53 GiB            | —                                           | theirs to drop                              |
+| candidate                                                                                        | saving               | window                                      | where                                                          |
+| ------------------------------------------------------------------------------------------------ | -------------------- | ------------------------------------------- | -------------------------------------------------------------- |
+| `transaction_hash_index` keyed by an 8-byte hash prefix; the full hash checked in `transactions` | **done: −124.8 GiB** | no (parallel change)                        | task 0580, 0396                                                |
+| `operations_appearances` by position, `pool_ids` dropped, codecs                                 | ~40–50 GiB           | yes                                         | step 5; task 0372                                              |
+| `transactions.id` dropped                                                                        | 31.57 GiB            | yes                                         | step 7                                                         |
+| `soroban_invocations_appearances` folded into `contract_transactions` (below)                    | ~8–9 GiB             | yes                                         | step 5                                                         |
+| `operation_pools`, `lp_operation_amounts` by position                                            | ~9 GiB               | yes                                         | step 5                                                         |
+| codecs on integer columns without one (`soroban_events`, `contract_transactions`)                | ~15–25 GiB           | no (`MODIFY CODEC`, parts rewrite on merge) | —                                                              |
+| `transactions.idx_tx_hash_bloom` dropped                                                         | 4.93 GiB             | no (`DROP INDEX`)                           | —                                                              |
+| `soroban_events` payload as raw XDR instead of JSON text                                         | unknown              | yes                                         | tasks 0572, 0416; prices-api reads the JSON                    |
+| account hash surrogates → dense ids (~99 GiB of columns)                                         | unknown              | everywhere                                  | research only                                                  |
+| prices-api backup tables (`rollout_0286_bak_*`, `price_ohlcv_*_bak`)                             | 48.53 GiB            | —                                           | out of scope: theirs, not ours to raise (karolkow, 2026-09-24) |
 
 **`soroban_invocations_appearances` is a subset of `contract_transactions`.**
 Same grain — one row per (contract, transaction); the invocation tree is
