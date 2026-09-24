@@ -303,14 +303,6 @@ fn column_order_transactions() {
 }
 
 #[test]
-fn column_order_transaction_hash_index() {
-    assert_columns::<TransactionHashIndexRow>(
-        "transaction_hash_index",
-        &["hash", "ledger_sequence"],
-    );
-}
-
-#[test]
 fn column_order_transaction_hash_prefix_index() {
     assert_columns::<TransactionHashPrefixRow>(
         "transaction_hash_prefix_index",
@@ -572,7 +564,7 @@ fn prepare_surrogate_id_fk_consistency() {
 
     assert_eq!(staged.account_rows.len(), 1);
     assert_eq!(staged.transaction_rows.len(), 1);
-    assert_eq!(staged.hash_index_rows.len(), 1);
+    assert_eq!(staged.hash_prefix_rows.len(), 1);
     assert_eq!(staged.participant_rows.len(), 1);
 
     let tx_row = &staged.transaction_rows[0];
@@ -597,8 +589,10 @@ fn prepare_surrogate_id_fk_consistency() {
 fn prepare_fee_bump_indexes_inner_hash() {
     let ledger = synthetic_ledger();
     let mut tx = synthetic_tx(0x10);
+    // The inner hash differs from the outer one in its first 8 bytes, so the
+    // two index rows are told apart by their prefix.
     let mut inner = vec![0u8; 32];
-    inner[31] = 0x20;
+    inner[0] = 0x20;
     tx.inner_tx_hash = Some(hex::encode(&inner));
 
     let staged = stage::prepare(
@@ -620,23 +614,16 @@ fn prepare_fee_bump_indexes_inner_hash() {
     .expect("prepare");
 
     // Two index rows: outer + inner, both → the tx's ledger.
-    assert_eq!(staged.hash_index_rows.len(), 2);
     let seq = staged.transaction_rows[0].ledger_sequence;
-    let mut outer = [0u8; 32];
-    outer[31] = 0x10;
-    assert!(
-        staged
-            .hash_index_rows
-            .iter()
-            .any(|r| r.hash == outer && r.ledger_sequence == seq)
-    );
+    let outer = staged.transaction_rows[0].hash;
     let mut inner_bytes = [0u8; 32];
-    inner_bytes[31] = 0x20;
-    assert!(
-        staged
-            .hash_index_rows
-            .iter()
-            .any(|r| r.hash == inner_bytes && r.ledger_sequence == seq)
+    inner_bytes[0] = 0x20;
+    assert_eq!(
+        staged.hash_prefix_rows,
+        vec![
+            TransactionHashPrefixRow::new(&outer, seq),
+            TransactionHashPrefixRow::new(&inner_bytes, seq),
+        ]
     );
 }
 

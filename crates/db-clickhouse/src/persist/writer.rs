@@ -90,8 +90,6 @@ struct TableInserts {
     metadata: Option<Insert<SorobanContractMetadataRow>>,
     executable_refs: Option<Insert<ContractExecutableRefRow>>,
     transactions: Option<Insert<TransactionRow>>,
-    hash_index: Option<Insert<TransactionHashIndexRow>>,
-    /// Task 0580 — written beside `hash_index` until the readers move to it.
     hash_prefix: Option<Insert<TransactionHashPrefixRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
@@ -269,7 +267,7 @@ impl PartitionWriter {
             metadata_rows,
             executable_ref_rows,
             transaction_rows,
-            hash_index_rows,
+            hash_prefix_rows,
             participant_rows,
             pool_rows,
             pool_instance_state_rows,
@@ -344,15 +342,6 @@ impl PartitionWriter {
             &transaction_rows,
         )
         .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.hash_index,
-            "transaction_hash_index",
-            &hash_index_rows,
-        )
-        .await?;
-        let hash_prefix_rows: Vec<TransactionHashPrefixRow> =
-            hash_index_rows.iter().map(Into::into).collect();
         write_rows(
             &self.client,
             &mut self.inserts.hash_prefix,
@@ -558,7 +547,6 @@ impl PartitionWriter {
             metadata,
             executable_refs,
             transactions,
-            hash_index,
             hash_prefix,
             participants,
             op_assets,
@@ -591,7 +579,6 @@ impl PartitionWriter {
         end(metadata).await?;
         end(executable_refs).await?;
         end(transactions).await?;
-        end(hash_index).await?;
         end(hash_prefix).await?;
         end(participants).await?;
         end(op_assets).await?;

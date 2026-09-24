@@ -182,24 +182,6 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- transaction_hash_index (append-only fact, source for Dictionary) -----
-    client
-        .query(
-            "INSERT INTO transaction_hash_index (hash, ledger_sequence) \
-             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000aa'), ?)",
-        )
-        .bind(SMOKE_LEDGER)
-        .execute()
-        .await
-        .expect("insert transaction_hash_index");
-    assert_count(
-        &client,
-        "transaction_hash_index",
-        &format!("ledger_sequence = {SMOKE_LEDGER}"),
-        1,
-    )
-    .await;
-
     // ----- transaction_hash_prefix_index (task 0580) -----
     // Two hashes sharing the 8-byte prefix in different ledgers must both
     // survive a merge — the ledger is part of the sort key.
@@ -580,7 +562,6 @@ async fn cleanup(client: &clickhouse::Client) {
         format!("ALTER TABLE soroban_contracts DELETE WHERE id = {l}"),
         "ALTER TABLE wasm_interface_metadata DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {l}"),
-        format!("ALTER TABLE transaction_hash_index DELETE WHERE ledger_sequence = {l}"),
         format!(
             "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence IN ({l}, {l} - 1)"
         ),

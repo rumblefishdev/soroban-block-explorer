@@ -230,7 +230,7 @@ pub struct StagedLedger {
     /// here, never a rewrite of the members that follow it.
     pub executable_ref_rows: Vec<ContractExecutableRefRow>,
     pub transaction_rows: Vec<TransactionRow>,
-    pub hash_index_rows: Vec<TransactionHashIndexRow>,
+    pub hash_prefix_rows: Vec<TransactionHashPrefixRow>,
     pub participant_rows: Vec<TransactionParticipantRow>,
     pub pool_rows: Vec<LiquidityPoolRow>,
     pub pool_instance_state_rows: Vec<PoolInstanceStateRow>,
@@ -1032,7 +1032,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // in the asset-emission pass. A real deploy still writes its contract row
     // from `contract_deployments` (site above).
 
-    // ---- transactions + transaction_hash_index ----
+    // ---- transactions + transaction_hash_prefix_index ----
     // `(surrogate id, application_order)` per hash: the surrogate keys joins,
     // the application order is the ledger's own temporal position — the ONLY
     // valid intra-ledger ordering (a hash surrogate sorts randomly; the task
@@ -1068,20 +1068,16 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             parse_error: tx.parse_error,
         });
 
-        out.hash_index_rows.push(TransactionHashIndexRow {
-            hash,
-            ledger_sequence: ledger_sequence_i64,
-        });
+        out.hash_prefix_rows
+            .push(TransactionHashPrefixRow::new(&hash, ledger_sequence_i64));
 
         // Fee-bump: also index the inner-tx hash so a lookup by the inner
         // hash resolves to the wrapping fee-bump (Horizon `inner_transaction`
         // semantics). `inner_tx_hash → ledger_sequence` is immutable, same as
         // the outer key (task 0375).
         if let Some(inner) = inner_tx_hash {
-            out.hash_index_rows.push(TransactionHashIndexRow {
-                hash: inner,
-                ledger_sequence: ledger_sequence_i64,
-            });
+            out.hash_prefix_rows
+                .push(TransactionHashPrefixRow::new(&inner, ledger_sequence_i64));
         }
     }
 

@@ -652,7 +652,7 @@ Galexie + S3 propagation + Lambda processing).
 The gap check above only proves `ledgers` is gapless. It does **not** prove
 the production `persist_ledger_clickhouse` fills the _other_ 16 tables — the
 `persist_e2e` fixture only populated `ledgers` + the transaction-derived
-tables (`transactions`, `transaction_hash_index`, `transaction_participants`,
+tables (`transactions`, `transaction_hash_prefix_index`, `transaction_participants`,
 `accounts`), leaving every other slice empty. The only place the full
 multi-table write is exercised with real data is live traffic, so confirm it
 here. (Invocation matches B-0 / D-7: container `app-clickhouse-1` +
@@ -669,7 +669,7 @@ ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
   --config-file=/etc/clickhouse-backup/client.xml --param_cut=$CUTOVER -q \"
 SELECT 'ledgers'                            AS tbl, count() AS rows_post_cutover FROM ledgers                          WHERE sequence        > {cut:Int64}
 UNION ALL SELECT 'transactions',                    count() FROM transactions                    WHERE ledger_sequence > {cut:Int64}
-UNION ALL SELECT 'transaction_hash_index',          count() FROM transaction_hash_index          WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'transaction_hash_prefix_index',   count() FROM transaction_hash_prefix_index   WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'transaction_participants',        count() FROM transaction_participants        WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'operations_appearances',          count() FROM operations_appearances          WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'soroban_events',                  count() FROM soroban_events                  WHERE ledger_sequence > {cut:Int64}
@@ -707,7 +707,7 @@ FORMAT PrettyCompact
 
 **Interpretation:**
 
-- `ledgers`, `transactions`, `transaction_hash_index`,
+- `ledgers`, `transactions`, `transaction_hash_prefix_index`,
   `transaction_participants`, `operations_appearances` — **must** be `> 0`
   and climb every poll (pubnet ledgers always carry txs, each tx ≥ 1 op).
   Zero here = persist not running or a broken core write → page.
