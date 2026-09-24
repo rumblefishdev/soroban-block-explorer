@@ -2,7 +2,7 @@
 id: '0574'
 title: 'FEATURE: link to the Prices API from the navbar and the footer'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0519', '0407', '0494']
 tags: [frontend, nav, footer, priority-medium, effort-small]
@@ -28,6 +28,14 @@ history:
       footer, one shared constant, nav collapse breakpoint md → lg (the
       inline nav now needs ~1115px). 2 tests (1 new file). Open until
       deployed after 0519's basic-auth flip.
+  - date: '2026-09-24'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      PR #481 merged 2026-09-23 (e0479d29). The SPA carrying the links went
+      out at 08:06 UTC, 25 min after the basic-auth flip finished
+      (ApiSpaRoutingFunction UPDATE_COMPLETE 07:40:45 UTC). Still live after
+      the 12:13 UTC SPA deploy for 0577. Archived.
 ---
 
 # FEATURE: link to the Prices API from the navbar and the footer
@@ -37,11 +45,12 @@ history:
 The explorer does not link to the Prices API anywhere. Add one link in the
 top navigation and one in the footer, so users can find it from any page.
 
-## Status: Active
+## Status: Completed
 
-**Current state:** implemented, PR open. Deploy only after 0519's
-`enableApiSpaBasicAuth: false` is live (`/api/` answered `401` on
-2026-09-23).
+**Current state:** live on production since 2026-09-23 08:06 UTC.
+
+> ⚠️ Shipped from `develop`. Until `develop` reaches `master`, a
+> `production-*` tag cut from `master` rebuilds the SPA without these links.
 
 ## Context
 
@@ -88,8 +97,9 @@ CLAUDE.md test-placement rule) with one assertion for the new link.
 - [x] Footer shows a `Prices API` link under Resources
 - [x] Both links point at the same URL, defined once (`layout/links.ts`)
 - [x] The link does a full page load (`<a href>`), not client-side routing
-- [ ] Not shipped while the target is still behind basic auth: deploy after
-      0519's `enableApiSpaBasicAuth: false` is live in production
+- [x] Not shipped while the target is still behind basic auth: deploy after
+      0519's `enableApiSpaBasicAuth: false` is live in production — flip
+      done 07:40:45 UTC, SPA with the links 08:06 UTC (2026-09-23)
 - [x] **Docs updated** — `docs/architecture/frontend/frontend-overview.md`
       §5: `/api` is not an explorer route; linked with a plain anchor.
 - [x] **API types regenerated** — N/A — no `crates/api/**`, `Cargo.*` or
@@ -106,6 +116,12 @@ CLAUDE.md test-placement rule) with one assertion for the new link.
 - Tests: `Footer.test.tsx` moved to `__tests__/` (CLAUDE.md rule) and gained
   one case; new `__tests__/SecondaryNav.test.tsx`. ui 88/88, web 376/376.
 - Browser check: inline links clear at 1200px, drawer at 1024px, footer.
+- Deploy: `Explorer-production-Delivery` shows the basic-auth removal
+  (`ApiSpaRoutingFunction`) finishing at 07:40:45 UTC. The SPA's
+  `index.html` was written at 08:06:13 UTC, 4 min after the #481 merge. That
+  is the bucket's last write that morning: it keeps no object versions. The
+  live bundle `index-CG4OxREA.js` (2026-09-24) still carries
+  `PRICES_API_URL = "/api/"`, and `/api/` answers 200 without credentials.
 
 ## Design Decisions
 
