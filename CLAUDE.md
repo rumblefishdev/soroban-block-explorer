@@ -11,6 +11,12 @@
 
 - Production module ≤ ~800 lines. Split BY TOPIC (one concern per file),
   never by layer ("all queries of the module" is how god files grow).
+- Name each split-out file after what it serves, so a search for the
+  handler lands on its file: an endpoint's query file carries the
+  handler's name (`queries/list_pools.rs` backs `handlers::list_pools`), a
+  shared helper the concept it computes (`usd_analytics.rs`). Never a
+  generic noun (`utils`, `helpers`) or one that names less than
+  the file holds (`pricing.rs` for TVL, volume and fee revenue).
 - Tests always live in their own file, never inline, and never in the same
   directory as the code:
   - Rust: `foo.rs` declares `#[cfg(test)] mod tests;`, which resolves natively
