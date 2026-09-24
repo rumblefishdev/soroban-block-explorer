@@ -28,8 +28,9 @@
 //! # CH-vs-PG / CH-vs-canonical-SQL divergences (all verified against
 //! `crates/db-clickhouse/schema/init.sql` and the live CH read modules)
 //!
-//! - **Transaction lookup** reads `transaction_hash_index` (ORDER BY `hash`,
-//!   PK point-seek), mirroring [`crate::transactions::queries`].
+//! - **Transaction lookup** takes the candidate ledgers off
+//!   `transaction_hash_prefix_index` (8-byte hash prefix, PK point-seek)
+//!   through the transaction page's own `lookup_hash_ledgers`.
 //!   `successful` + `last_activity_at` are
 //!   resolved (PG parity) via a partition-pruned `transactions` seek + a
 //!   `ledgers` PK join — both single-row, so the cost is two point-seeks.

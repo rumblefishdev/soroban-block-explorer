@@ -3,10 +3,11 @@
 use clickhouse::Row;
 use serde::Deserialize;
 
-use super::super::classifier::Classified;
-use super::super::dto::{EntityType, SearchHit};
 use super::IncludeFlags;
 use crate::common::ch::millis_to_utc;
+use crate::search::classifier::Classified;
+use crate::search::dto::{EntityType, SearchHit};
+use crate::transactions::lookup_hash_ledgers;
 
 /// Mainnet ledger-partition width (`PARTITION BY intDiv(ledger_sequence,
 /// 500000)` on `transactions`). Used to prune the `transactions` seek to the
@@ -18,11 +19,6 @@ const LEDGER_PARTITION_SIZE: i64 = 500_000;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
-struct LedgerSeqRow {
-    ledger_sequence: i64,
-}
-
-#[derive(Debug, Row, Deserialize)]
 struct TxMetaRow {
     successful: bool,
     /// `ledgers.closed_at` (`DateTime64(3)`) decoded as raw i64 millis.
@@ -30,9 +26,9 @@ struct TxMetaRow {
 }
 
 /// Fires only for a hash-shaped query. Step 1 takes the candidate ledgers off
-/// `transaction_hash_prefix_index` (the hash's first 8 bytes; immutable
-/// mapping, no FINAL — more than one only when two hashes share the prefix,
-/// task 0580). The index maps a fee-bump's inner hash too (task 0375), so
+/// `transaction_hash_prefix_index` through the transaction page's own
+/// [`lookup_hash_ledgers`] (the hash's first 8 bytes — more than one only when
+/// two hashes share the prefix, task 0580). The index maps a fee-bump's inner hash too (task 0375), so
 /// step 2, per candidate until one matches, checks the hash as the
 /// transaction's own or as its inner hash, as the transaction page does: it
 /// reads `successful` + the ledger `closed_at` via a single-partition,
@@ -52,19 +48,7 @@ pub(super) async fn search_transactions(
     };
     let hash_hex = hex::encode(bytes);
 
-    let ledgers = client
-        .query(
-            "SELECT DISTINCT ledger_sequence FROM transaction_hash_prefix_index \
-             WHERE hash_prefix = reinterpretAsUInt64(substring(unhex(?), 1, 8)) \
-             ORDER BY ledger_sequence DESC",
-        )
-        .bind(&hash_hex)
-        .fetch_all::<LedgerSeqRow>()
-        .await?;
-    for LedgerSeqRow {
-        ledger_sequence: ledger,
-    } in ledgers
-    {
+    for ledger in lookup_hash_ledgers(client, &hash_hex).await? {
         if let Some(meta) = fetch_tx_meta(client, ledger, &hash_hex).await? {
             return Ok(vec![(
                 "transaction".to_string(),
