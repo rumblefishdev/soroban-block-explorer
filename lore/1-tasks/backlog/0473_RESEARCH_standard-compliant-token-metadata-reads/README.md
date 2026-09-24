@@ -118,3 +118,23 @@ plus the already-missed 527 — is what the drain design covers.
 - [ ] Non-token-rows question dispatched (scoped here or spawned)
 - [ ] Docs: database-schema-overview (`soroban_contract_metadata` readers /
       writers) + backfills doc if a new subcommand lands
+
+## 2026-09-24 — measured from the pool read (0374 PR 4c)
+
+605 of the 4,466 Soroban assets (14%) have no `soroban_contract_metadata`
+row, so their decimals are unknown to us — yet the three that are live pool
+legs all answer the SEP-41 interface on chain (RPC simulation):
+
+| contract    | on chain                 | pools                          |
+| ----------- | ------------------------ | ------------------------------ |
+| `CBAPZAZN…` | `HITZ` "Gravity HITZ", 7 | 2 constant, swapping this hour |
+| `CB7OOP3V…` | `XRP` "XRP", 6           | 1 concentrated                 |
+| `CBZ4DCE7…` | `USST` "STBL_USST", 18   | 1 stable, reserve 1.28e24 raw  |
+
+- The pool read (4c) refuses to scale a raw amount without a known scale,
+  so these legs show "—" rather than a wrong number.
+- **Other reads still guess.** `accounts/queries.rs` projects
+  `coalesce(m.decimals, 7)` with no flag, so a USST balance renders 10^11
+  too large. The pool path's `decimals_known` (asset resolver) is the
+  pattern the other reads need; the root fix is reading metadata by the
+  interface (`decimals()`), which is this task's question.

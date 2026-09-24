@@ -2275,3 +2275,20 @@ against production, all 770 Soroban pools:
   of 2.66M). Detail 0.6M rows / ~130 ms.
 - **Tests:** the CH-gated list test now also pins the reserve plane filter
   (red without it: the foreign row's `99999` / `0.0000001`).
+
+### The 7-day "freshness window" is a leftover — removed from 4c, one left for PR 5 (2026-09-24)
+
+The PG design treated a pool with no snapshot in 7 days as stale and blanked
+its dynamic fields. The ClickHouse port (0243) dropped that for list and
+detail but kept it in the participants endpoint and in the frontend's
+`isPoolStale` caption. It no longer describes anything: a classic pool
+writes a snapshot on every change of its ledger entry (52,284 of 52,284
+pools have their latest snapshot at their last change), so an old snapshot
+is a quiet pool's CURRENT state. On 2026-09-24 the caption "no recent
+snapshot" sat under correct values on 29,284 of 53,554 classic pools (55%).
+
+- **Removed in 4c (decision 99 A):** `isPoolStale` and its caption; the DTO,
+  handler, table and module comments that still described the window.
+- **For PR 5:** `list_participants.rs` still reads `total_shares` only from a
+  snapshot inside `FRESHNESS_WINDOW_LEDGERS`, so a quiet pool's participants
+  lose their share percentage. Drop the window there too.
