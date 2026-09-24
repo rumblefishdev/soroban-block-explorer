@@ -357,6 +357,28 @@ Frontend **content** is separate: `deploy-production-web`
 
   Remove this item once that tag exists.
 
+- **Change a table's shape as a parallel change, not a swap window**
+  (decided in task 0580). The clickhouse-rs 0.15 client checks every insert
+  against `DESCRIBE`, so a writer and the table it names must change together;
+  swapping a table under the same name forces an indexer pause and a gap in
+  which readers fail (task 0575: ingest stood 51 minutes). Instead: create the
+  new table under a **new name**, deploy a writer that writes both, fill the
+  history in ClickHouse, switch the readers in a later deploy, then stop
+  writing the old table and drop it. Every step is an ordinary deploy, and
+  until the drop the rollback is the previous deploy.
+
+- **Hash prefix index (task 0580), step 1 of that pattern.** The indexer
+  writes `transaction_hash_prefix_index` beside `transaction_hash_index`.
+  Create the table on production **before** the Compute deploy that carries
+  the writer — without it the client refuses the insert on every ledger:
+
+  ```bash
+  awk "/CREATE TABLE IF NOT EXISTS transaction_hash_prefix_index \\(/,/^ORDER BY/" crates/db-clickhouse/schema/init.sql
+  ```
+
+  Then deploy Compute, then fill the history ([backfills.md](./backfills.md),
+  "Hash prefix index"). No pause; the readers still use the old index.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and

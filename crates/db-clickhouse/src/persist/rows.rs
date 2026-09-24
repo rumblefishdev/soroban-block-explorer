@@ -426,6 +426,33 @@ pub struct TransactionHashIndexRow {
     pub ledger_sequence: i64,
 }
 
+/// `transaction_hash_prefix_index` — the same mapping keyed by an 8-byte prefix
+/// of the hash (task 0580); the reader checks the full hash in `transactions`.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct TransactionHashPrefixRow {
+    pub hash_prefix: u64,
+    pub ledger_sequence: i64,
+}
+
+impl TransactionHashPrefixRow {
+    /// `hash_prefix` is the little-endian `u64` of the hash's first 8 bytes —
+    /// what ClickHouse computes as `reinterpretAsUInt64(substring(hash, 1, 8))`.
+    pub fn new(hash: &[u8; 32], ledger_sequence: i64) -> Self {
+        let mut prefix = [0u8; 8];
+        prefix.copy_from_slice(&hash[..8]);
+        Self {
+            hash_prefix: u64::from_le_bytes(prefix),
+            ledger_sequence,
+        }
+    }
+}
+
+impl From<&TransactionHashIndexRow> for TransactionHashPrefixRow {
+    fn from(row: &TransactionHashIndexRow) -> Self {
+        Self::new(&row.hash, row.ledger_sequence)
+    }
+}
+
 /// `operations_appearances` — fact, no surrogate id. ORDER BY
 /// (ledger_sequence, transaction_id, application_order).
 #[derive(Debug, Clone, Row, Serialize)]

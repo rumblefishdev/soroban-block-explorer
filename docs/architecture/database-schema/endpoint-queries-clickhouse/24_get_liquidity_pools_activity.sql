@@ -64,7 +64,7 @@
 --     op moved nothing, and this narrows a known CH-vs-Horizon breadth
 --     difference rather than widening it.
 --
--- Shipped module: `crates/api/src/liquidity_pools/queries.rs::fetch_pool_activity`
+-- Shipped module: `crates/api/src/liquidity_pools/queries/list_pool_activity.rs::fetch_pool_activity`
 -- ============================================================================
 
 -- STEP 1 — the page window, read in sort-key order. One row per LEG; the two
