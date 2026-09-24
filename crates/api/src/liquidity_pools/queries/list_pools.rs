@@ -11,7 +11,7 @@ use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
 use super::leg_reserves::{Reserves, state_reserves_sql};
-use super::total_shares::{instance_shares_sql, total_shares_of, zero_shares_is_measured};
+use super::total_shares::{instance_shares_sql, pool_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
@@ -67,7 +67,7 @@ struct PoolListChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
-    /// Verbatim family marker; read only by [`zero_shares_is_measured`].
+    /// Verbatim family marker; read only by `pool_total_shares`.
     pool_type_raw: String,
     /// A soroban pool's latest reserves, raw and in leg order; empty for a
     /// classic pool, which has none there.
@@ -255,7 +255,8 @@ pub async fn fetch_pool_list(
                     lp.legs AS legs, lp.fee_bps AS fee_bps, \
                     lp.pool_type_raw AS pool_type_raw, \
                     lp.last_updated_ledger AS last_updated_ledger, \
-                    {act} AS activity_ledger \
+                    {act} AS activity_ledger, \
+                    pa.last_activity_ledger AS state_ledger \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN pool_activity pa ON pa.pool_id = lp.pool_id \
              WHERE 1 = 1{filters} {keyset} \
@@ -334,7 +335,7 @@ pub async fn fetch_pool_list(
         // Bounded to the page, like every other side read here.
         reserves = state_reserves_sql(
             "SELECT pool_id FROM page",
-            "(SELECT min(activity_ledger) FROM page)",
+            "(SELECT minIf(state_ledger, pool_kind = 1) FROM page)",
         ),
         shares = instance_shares_sql("SELECT pool_id FROM page"),
         filters = filters,
@@ -392,20 +393,21 @@ pub async fn fetch_pool_list(
         .map(|(r, price_legs)| {
             // A soroban pool's reserves come from its state changes; a classic
             // pool's legs are its two snapshot columns, in order.
-            let reserves = if r.state_reserves.is_empty() {
-                Reserves::Pair(r.reserve_a.as_deref(), r.reserve_b.as_deref())
-            } else {
-                Reserves::Raw(&r.state_reserves)
-            };
+            let reserves = Reserves::from_sources(
+                &r.state_reserves,
+                r.reserve_a.as_deref(),
+                r.reserve_b.as_deref(),
+            );
             let legs = leg_rows(&r.legs, &identities, &icons, reserves);
             let reserve_strs: Vec<Option<&str>> =
                 legs.iter().map(|l| l.reserve.as_deref()).collect();
             let tvl = tvl_usd(&reserve_strs, &price_legs, &closes).map(usd_str);
-            let total_shares = total_shares_of(
+            let total_shares = pool_total_shares(
                 r.total_shares,
                 r.instance_shares.as_deref(),
                 r.instance_shares_decimals,
-                zero_shares_is_measured(&r.pool_type_raw, &r.state_reserves),
+                &r.pool_type_raw,
+                &r.state_reserves,
             );
             PoolRow {
                 pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),

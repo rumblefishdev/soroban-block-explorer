@@ -1,9 +1,6 @@
 //! What a pool holds of each leg, from whichever source records it.
 
-/// The largest scale treated as a fact. A `u128` has 39 digits, so no real
-/// token needs more; a larger value is broken or hostile metadata (two live
-/// contracts declare 43,224) and would otherwise size the padding below.
-const MAX_SCALE: u32 = 38;
+use super::scale_decimal_str;
 
 /// Where a pool's per-leg reserves come from, in the source's own units.
 pub(super) enum Reserves<'a> {
@@ -16,7 +13,21 @@ pub(super) enum Reserves<'a> {
     Raw(&'a [String]),
 }
 
-impl Reserves<'_> {
+impl<'a> Reserves<'a> {
+    /// A soroban pool's state-change reserves when it has any, else the
+    /// classic snapshot pair.
+    pub(super) fn from_sources(
+        state: &'a [String],
+        snapshot_a: Option<&'a str>,
+        snapshot_b: Option<&'a str>,
+    ) -> Self {
+        if state.is_empty() {
+            Self::Pair(snapshot_a, snapshot_b)
+        } else {
+            Self::Raw(state)
+        }
+    }
+
     /// The reserve for leg `i` in units, or `None` when it is not knowable.
     ///
     /// `scale` is `None` when nothing established the leg's decimals. A raw
@@ -40,39 +51,17 @@ impl Reserves<'_> {
     }
 }
 
-/// A raw integer amount as a decimal string, scaled by `decimals`.
-///
-/// STRING SURGERY, not arithmetic: the value is a `u128` out of contract
-/// storage, an `f64` drops digits above 2^53, and a `Decimal128` division would
-/// have to pick its scale up front. Inserting the point is exact at every
-/// magnitude.
-pub(super) fn scale_decimal_str(raw: &str, decimals: u32) -> Option<String> {
-    let digits = raw.strip_prefix('+').unwrap_or(raw);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) || decimals > MAX_SCALE {
-        return None;
-    }
-    let d = decimals as usize;
-    if d == 0 {
-        return Some(digits.to_string());
-    }
-    // Left-pad so there is always at least one integer digit.
-    let padded = format!("{digits:0>width$}", width = d + 1);
-    let split = padded.len() - d;
-    let frac = padded[split..].trim_end_matches('0');
-    Some(if frac.is_empty() {
-        padded[..split].to_string()
-    } else {
-        format!("{}.{}", &padded[..split], frac)
-    })
-}
-
 /// Each soroban pool's latest reserves, raw and in leg order, for the pools in
 /// `pool_ids` (the body of an `IN (…)`: `unhex(?)` or a subquery — bounded,
 /// never the whole table). It appears twice, so a bound value binds twice.
-/// `from_ledger` is a lower bound on the rows read (an SQL expression): the
-/// list passes its page's oldest activity, which no page pool's latest row can
-/// precede — 0.25M rows read instead of 2.66M for a page of the busiest pools
-/// (measured 2026-09-24) — and the single-pool detail passes `0`.
+/// `from_ledger` is a lower bound on the rows read (an SQL expression). The
+/// list passes the oldest `pool_activity` ledger among its page's SOROBAN pools:
+/// that table is the max of these same rows, so no pool's latest row can precede
+/// its own entry, and a soroban pool the MV has not reached yet joins as 0,
+/// which lifts the bound entirely. Classic pools have no rows here and are left
+/// out of the minimum, or their 0 would lift it on every mixed page.
+/// 0.25M rows read instead of 2.66M for a page of the busiest pools (measured
+/// 2026-09-24). The single-pool detail passes `0`.
 ///
 /// **The plane filter is required, not an optimisation.** A plane entry names
 /// its pool in a key payload the writing contract chooses freely, so any

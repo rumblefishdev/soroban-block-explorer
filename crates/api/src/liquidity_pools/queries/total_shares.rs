@@ -1,6 +1,6 @@
 //! A pool's total shares, from whichever source records them.
 
-use super::leg_reserves::scale_decimal_str;
+use super::scale_decimal_str;
 
 /// The pool's total shares as a decimal string, or `None` when unknown.
 ///
@@ -10,18 +10,20 @@ use super::leg_reserves::scale_decimal_str;
 /// indexer reads off the pool contract's own storage: a RAW integer, scaled by
 /// the share token's decimals (`None` when its metadata does not say).
 ///
-/// A soroban 0 is only sometimes a measurement — see [`zero_shares_is_measured`].
-pub(super) fn total_shares_of(
+/// A soroban 0 is only sometimes a measurement — see [`zero_shares_is_measured`];
+/// `pool_type_raw` and the pool's raw `state_reserves` decide it.
+pub(super) fn pool_total_shares(
     snapshot: Option<String>,
     instance_raw: Option<&str>,
     share_decimals: Option<u32>,
-    zero_is_measured: bool,
+    pool_type_raw: &str,
+    state_reserves: &[String],
 ) -> Option<String> {
     if snapshot.is_some() {
         return snapshot;
     }
     match instance_raw? {
-        "0" => zero_is_measured.then(|| "0".to_string()),
+        "0" => zero_shares_is_measured(pool_type_raw, state_reserves).then(|| "0".to_string()),
         raw => scale_decimal_str(raw, share_decimals?),
     }
 }
@@ -43,12 +45,14 @@ pub(super) fn total_shares_of(
 /// nothing, and two sampled on chain answer `get_total_shares() = 0`; the one
 /// constant-product pool that holds reserves is a contract without that
 /// function. Everything else with a 0 reads as unknown, not as "no shares".
-pub(super) fn zero_shares_is_measured(pool_type_raw: &str, raw_reserves: &[String]) -> bool {
+fn zero_shares_is_measured(pool_type_raw: &str, raw_reserves: &[String]) -> bool {
     pool_type_raw.is_empty() || (!raw_reserves.is_empty() && raw_reserves.iter().all(|r| r == "0"))
 }
 
 /// Each soroban pool's instance-state shares and its share token's decimals,
-/// for the pools in `pool_ids` (the body of an `IN (…)` — bounded, never whole).
+/// for the pools in `pool_ids` (the body of an `IN (…)`). The instance read is
+/// bounded to those pools; the two dimension hops read `soroban_contracts` and
+/// `soroban_contract_metadata` whole, which measured 0.25M rows for a page.
 ///
 /// `toNullable` on the projected columns: with `join_use_nulls = 0` an
 /// unmatched LEFT JOIN yields the column DEFAULT, so a plain `String` would

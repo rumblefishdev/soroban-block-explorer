@@ -9,7 +9,7 @@ use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
 use super::leg_reserves::{Reserves, state_reserves_sql};
-use super::total_shares::{instance_shares_sql, total_shares_of, zero_shares_is_measured};
+use super::total_shares::{instance_shares_sql, pool_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -26,7 +26,7 @@ struct PoolDetailChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
-    /// Verbatim family marker; read only by [`zero_shares_is_measured`].
+    /// Verbatim family marker; read only by `pool_total_shares`.
     pool_type_raw: String,
     /// A soroban pool's latest reserves, raw and in leg order; empty for a
     /// classic pool, which has none there.
@@ -46,9 +46,10 @@ pub async fn fetch_pool_by_id(
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
     // `unhex(?)` appears 8×: the created_at-ledger and participant-count
     // subqueries, the latest-snapshot and ledger seeks, the soroban reserves
-    // (twice) and shares joins, and the outer WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
-    // detail is single-pool and CH dislikes correlated subqueries. Each `?`
-    // consumes one positional bind; all are the same value, so order is moot.
+    // (twice) and shares joins, and the outer WHERE. All scoped to the literal
+    // pool id (NOT correlated to `lp`) since detail is single-pool and CH
+    // dislikes correlated subqueries. Each `?` consumes one positional bind;
+    // all are the same value, so order is moot.
     //
     // **Leg identity is resolved in Rust, not joined here.** This used to carry
     // three pair-keyed CTEs — `legs` (the pool's four pair columns), `iss` (a
@@ -144,11 +145,11 @@ pub async fn fetch_pool_by_id(
             &r.legs,
             &identities,
             &icons,
-            if r.state_reserves.is_empty() {
-                Reserves::Pair(r.reserve_a.as_deref(), r.reserve_b.as_deref())
-            } else {
-                Reserves::Raw(&r.state_reserves)
-            },
+            Reserves::from_sources(
+                &r.state_reserves,
+                r.reserve_a.as_deref(),
+                r.reserve_b.as_deref(),
+            ),
         ),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
@@ -157,11 +158,12 @@ pub async fn fetch_pool_by_id(
         cursor_ledger: r.created_at_ledger,
         participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
-        total_shares: total_shares_of(
+        total_shares: pool_total_shares(
             r.total_shares,
             r.instance_shares.as_deref(),
             r.instance_shares_decimals,
-            zero_shares_is_measured(&r.pool_type_raw, &r.state_reserves),
+            &r.pool_type_raw,
+            &r.state_reserves,
         ),
         // Filled by the handler from `fetch_pool_usd_analytics` (0199
         // compute-at-read); the snapshot columns are not read.

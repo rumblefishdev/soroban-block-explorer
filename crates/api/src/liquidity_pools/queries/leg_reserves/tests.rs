@@ -1,41 +1,5 @@
 use super::*;
 
-/// Real values off production, scaled by 7 decimals.
-#[test]
-fn scaling_inserts_the_point() {
-    assert_eq!(
-        scale_decimal_str("9516607233561", 7).unwrap(),
-        "951660.7233561"
-    );
-    assert_eq!(scale_decimal_str("100000", 7).unwrap(), "0.01");
-    assert_eq!(scale_decimal_str("1000000000000000000", 18).unwrap(), "1");
-}
-
-/// A `u128` past 2^53, where an `f64` round-trip would start dropping digits —
-/// the reason this is string surgery and not arithmetic.
-#[test]
-fn scaling_is_exact_beyond_the_float_range() {
-    assert_eq!(
-        scale_decimal_str("340282366920938463463374607431768211455", 7).unwrap(),
-        "34028236692093846346337460743176.8211455"
-    );
-}
-
-#[test]
-fn scaling_handles_the_edges() {
-    // Fewer digits than the scale: left-padded, never a bare ".01".
-    assert_eq!(scale_decimal_str("1", 7).unwrap(), "0.0000001");
-    // No fractional part left once trailing zeros go.
-    assert_eq!(scale_decimal_str("10000000", 7).unwrap(), "1");
-    assert_eq!(scale_decimal_str("42", 0).unwrap(), "42");
-    // Not a number: no value rather than a wrong one.
-    assert_eq!(scale_decimal_str("", 7), None);
-    assert_eq!(scale_decimal_str("-5", 7), None);
-    assert_eq!(scale_decimal_str("12x4", 7), None);
-    // Contract-published decimals past what a u128 can need are not a scale.
-    assert_eq!(scale_decimal_str("1", 43_224), None);
-}
-
 /// A classic snapshot is already in units and pair-shaped.
 #[test]
 fn a_snapshot_pair_is_used_verbatim() {

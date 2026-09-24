@@ -154,6 +154,36 @@ pub use usd_analytics::{
     PoolPriceContext, fetch_pool_price_context, fetch_pool_usd_analytics, price_leg,
 };
 
+/// The largest scale treated as a fact. A `u128` has 39 digits, so no real
+/// token needs more; a larger value is broken or hostile metadata (two live
+/// contracts declare 43,224) and would otherwise size the padding below.
+const MAX_SCALE: u32 = 38;
+
+/// A raw integer amount as a decimal string, scaled by `decimals`.
+///
+/// STRING SURGERY, not arithmetic: the value is a `u128` out of contract
+/// storage, an `f64` drops digits above 2^53, and a `Decimal128` division would
+/// have to pick its scale up front. Inserting the point is exact at every
+/// magnitude.
+fn scale_decimal_str(raw: &str, decimals: u32) -> Option<String> {
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) || decimals > MAX_SCALE {
+        return None;
+    }
+    let d = decimals as usize;
+    if d == 0 {
+        return Some(raw.to_string());
+    }
+    // Left-pad so there is always at least one integer digit.
+    let padded = format!("{raw:0>width$}", width = d + 1);
+    let split = padded.len() - d;
+    let frac = padded[split..].trim_end_matches('0');
+    Some(if frac.is_empty() {
+        padded[..split].to_string()
+    } else {
+        format!("{}.{}", &padded[..split], frac)
+    })
+}
+
 /// `fee_bps / 100` as a decimal string (e.g. 30 → "0.3", 25 → "0.25",
 /// 100 → "1"). Computed in Rust to avoid CH integer-division / decimal-scale
 /// quirks; trailing zeros are trimmed.
