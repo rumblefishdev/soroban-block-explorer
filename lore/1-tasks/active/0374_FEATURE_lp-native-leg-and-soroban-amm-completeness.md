@@ -2271,10 +2271,21 @@ against production, all 770 Soroban pools:
 - **Volume** on a Soroban detail is `null` instead of `$0.00` — nothing
   records it, and an empty window used to read as a zero-volume day.
 - **Cost:** a 20-row Soroban list page reads 8.1M rows (4b shape 7.5M); the
-  reserve read is bounded by the page's oldest activity (0.25M rows instead
-  of 2.66M). Detail 0.6M rows / ~130 ms.
+  reserve read is bounded by the oldest `pool_activity` ledger among the
+  page's Soroban pools (0.25M rows instead of 2.66M). Detail 0.6M rows /
+  ~130 ms.
 - **Tests:** the CH-gated list test now also pins the reserve plane filter
-  (red without it: the foreign row's `99999` / `0.0000001`).
+  (red without it: the foreign row's `99999` / `0.0000001`) and the reserve
+  bound: a pool registered after its last change, and one the refresh has
+  not reached (red under the old activity-key bound, and under a bound that
+  skips a missing `pool_activity` entry).
+- **Known gap, accepted (review of the 4c follow-ups):** when a pool
+  declares a NEW plane, `pool_activity` still holds the old plane's maximum
+  until the next refresh. If the new plane's latest row sits below that
+  value, the pool's reserves read `null` for up to 2 minutes. Reasoned, not
+  reproduced: 0 of 813 pools in `pool_instance_state` have ever declared a
+  second plane (production, 2026-09-24). Empty, never wrong, so no code
+  change.
 
 ### The 7-day "freshness window" is a leftover — removed from 4c, one left for PR 5 (2026-09-24)
 
