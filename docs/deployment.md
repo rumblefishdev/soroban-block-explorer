@@ -365,16 +365,11 @@ Frontend **content** is separate: `deploy-production-web`
   new table under a **new name**, deploy a writer that writes both, fill the
   history in ClickHouse, switch the readers in a later deploy, then stop
   writing the old table and drop it. Every step is an ordinary deploy, and
-  until the drop the rollback is the previous deploy.
-
-- **Hash prefix index (task 0580), last step: the old index goes.** The
-  indexer stops writing `transaction_hash_index`. Deploy Compute **first**;
-  only then drop the table — the previous writer still inserts into it, and
-  a drop before the deploy stops ingest on the next ledger:
-
-  ```sql
-  DROP TABLE transaction_hash_index
-  ```
+  until the drop the rollback is the previous deploy. Drop the old table
+  only after the deploy that stops writing it — the earlier writer still
+  inserts, and a drop before that deploy stops ingest on the next ledger.
+  The server refuses to drop a table over 50 GB unless told:
+  `DROP TABLE <old> SETTINGS max_table_size_to_drop = 0`.
 
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
