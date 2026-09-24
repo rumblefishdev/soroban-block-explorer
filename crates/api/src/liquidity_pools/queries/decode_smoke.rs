@@ -164,6 +164,58 @@ async fn lp_ch_rows_decode() {
         .expect("chart rows decode");
 }
 
+/// Paging must not repeat a row, which it does the moment the outer
+/// `ORDER BY` and the paging CTE's disagree: the page then holds the right
+/// rows in the wrong order and the cursor is cut from the wrong last row.
+/// One page alone looks correct; it takes two real pages to see it.
+#[tokio::test]
+async fn a_second_page_repeats_nothing_from_the_first() {
+    let Some(ch) = client() else {
+        eprintln!("CH_URL unset — skipping LP paging smoke");
+        return;
+    };
+    let params = |cursor| ResolvedPoolListParams {
+        limit: 10,
+        cursor,
+        pool_kind: None,
+        pool_id_hex: None,
+        asset_codes: vec![],
+    };
+
+    let first = fetch_pool_list(&ch, &params(None), Direction::Next)
+        .await
+        .expect("first page decodes");
+    let Some(last) = first.last().filter(|_| first.len() == 10) else {
+        eprintln!("fewer than two pages of pools here — skipping");
+        return;
+    };
+    let cursor = crate::liquidity_pools::dto::PoolListCursor {
+        created_at_ledger: last.cursor_ledger,
+        pool_id_hex: last.pool_id_hex.clone(),
+    };
+    let second = fetch_pool_list(&ch, &params(Some(cursor)), Direction::Next)
+        .await
+        .expect("second page decodes");
+
+    let seen: std::collections::HashSet<&str> =
+        first.iter().map(|p| p.pool_id_hex.as_str()).collect();
+    let repeated: Vec<&str> = second
+        .iter()
+        .map(|p| p.pool_id_hex.as_str())
+        .filter(|h| seen.contains(h))
+        .collect();
+    assert!(
+        repeated.is_empty(),
+        "page 2 repeats rows from page 1 — the paging key and the outer \
+         ORDER BY have diverged: {repeated:?}"
+    );
+    // And the pages descend: the ordering value never rises across the cut.
+    assert!(
+        second.first().map(|p| p.cursor_ledger) <= Some(last.cursor_ledger),
+        "page 2 starts above where page 1 ended"
+    );
+}
+
 /// `filter[asset_code]` is a substring of either leg, not an exact code
 /// (0440 / issue #366). The regression this guards is the original
 /// behaviour: `USD` returning nothing while the list is full of `USDC`
