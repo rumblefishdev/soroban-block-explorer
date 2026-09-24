@@ -1,4 +1,5 @@
 use super::ResolvedPoolListParams;
+use super::get_pool_chart::ChartChRow;
 use super::*;
 
 /// Every leg's DISPLAYED code, upper-cased. Native renders as `XLM`, which
