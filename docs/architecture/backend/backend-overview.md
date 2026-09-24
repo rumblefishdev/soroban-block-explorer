@@ -561,10 +561,10 @@ reported as `0` only for a pair-factory pool or a pool holding nothing, and as
 `null` where the contract does not record it (concentrated, config-factory,
 older routers). TVL sums every leg's reserve × price and is `null` unless every
 leg has both. A classic pool's reserves / total shares come from its latest
-snapshot row; clients that care about freshness read `latest_snapshot_at` in
-the response. A Soroban pool's `volume` / `fee_revenue` are `null`: nothing
-records its volume. `participant_count` is independent of
-snapshot freshness — populated even on stale pools. The money fields
+snapshot row — whatever its age: a snapshot is written on every change of the
+pool entry, so an old one is a quiet pool's current state (`latest_snapshot_at`
+says when it last changed). A Soroban pool's `volume` / `fee_revenue` are
+`null`: nothing records its volume. The money fields
 (`tvl`, `volume`, `fee_revenue`) do NOT come from the snapshot row: they are
 computed at read from the in-cluster `prices.*` views (task 0199,
 [ADR 0053](../../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md))

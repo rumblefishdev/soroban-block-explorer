@@ -1,8 +1,8 @@
 import type { PoolAssetLeg } from '@rumblefish/api-types';
 import { formatCompactAmount } from '@rumblefish/soroban-block-explorer-ui';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { assetLegLabel, isPoolStale, legHref, poolLabel } from '../helpers.js';
+import { assetLegLabel, legHref, poolLabel } from '../helpers.js';
 import { UNREGISTERED_TOKEN_LABEL } from '../../assets/assetType.js';
 
 function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
@@ -161,38 +161,6 @@ describe('poolLabel', () => {
         makeLeg({ asset_code: 'EURC' }),
       ])
     ).toBe('XLM / USDC / EURC');
-  });
-});
-
-describe('isPoolStale', () => {
-  beforeEach(() => {
-    // Pin "now" so the freshness math is deterministic.
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-29T12:00:00Z'));
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('returns true when no snapshot timestamp is provided', () => {
-    expect(isPoolStale(null)).toBe(true);
-    expect(isPoolStale(undefined)).toBe(true);
-    expect(isPoolStale('')).toBe(true);
-  });
-
-  it('returns false within the 7-day freshness window', () => {
-    expect(isPoolStale('2026-05-29T11:00:00Z')).toBe(false); // 1h ago
-    expect(isPoolStale('2026-05-23T13:00:00Z')).toBe(false); // ~6 days ago
-  });
-
-  it('returns true once the snapshot is older than 7 days', () => {
-    expect(isPoolStale('2026-05-22T11:59:00Z')).toBe(true);
-    expect(isPoolStale('2026-05-01T00:00:00Z')).toBe(true);
-  });
-
-  it('returns true on unparseable timestamps', () => {
-    expect(isPoolStale('not a date')).toBe(true);
   });
 });
 

@@ -11,12 +11,10 @@ import { KpiCell } from '../detail/KpiCell.js';
 
 import {
   assetLegLabel,
-  isPoolStale,
   legHref,
   reserveDotColor,
 } from '../pool-shared/helpers.js';
 
-const STALE_SUBTITLE = 'no recent snapshot';
 const UNKNOWN_SUBTITLE = 'not indexed';
 
 interface PoolKpiStripProps {
@@ -29,12 +27,11 @@ interface PoolKpiStripProps {
  * notation (`1.2M`, `480K`); the subtitle carries the asset code so the value
  * reads cleanly without units stacked on top.
  *
- * A missing value renders "—", and its caption says which absence it is:
- * "no recent snapshot" for a classic pool whose snapshot went stale, "not
- * indexed" otherwise. A value that IS present is never stale-captioned — a
- * Soroban pool has no snapshots at all, and keying the caption off snapshot
- * freshness told every one of them "no recent snapshot" beside a current
- * reserve. `participant_count` stays accurate regardless (per task 0246).
+ * A missing value renders "—" captioned "not indexed". There is no staleness
+ * caption: the API returns a pool's latest state whatever its age, and a
+ * classic pool writes a snapshot on every change, so an old snapshot is a
+ * quiet pool's CURRENT state, not an outdated one. (A 7-day "no recent
+ * snapshot" caption here outlived the rule it described — see task 0374.)
  */
 function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);
@@ -51,12 +48,6 @@ function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
 }
 
 export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
-  // "No recent snapshot" is only true of a pool that HAS snapshots; a Soroban
-  // pool never does (the table is classic-only).
-  const stale =
-    pool.latest_snapshot_ledger != null && isPoolStale(pool.latest_snapshot_at);
-  const absent = stale ? STALE_SUBTITLE : UNKNOWN_SUBTITLE;
-
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
@@ -71,7 +62,9 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       <KpiCell
         label="Total shares"
         value={formatCompactAmount(pool.total_shares)}
-        caption={pool.total_shares != null ? 'shares outstanding' : absent}
+        caption={
+          pool.total_shares != null ? 'shares outstanding' : UNKNOWN_SUBTITLE
+        }
       />
       {pool.legs.map((leg, i) => {
         const code = assetLegLabel(leg);
@@ -80,7 +73,9 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
             key={i}
             label={`${code} reserve`}
             value={formatCompactAmount(leg.reserve)}
-            caption={leg.reserve != null ? assetSubtitle(leg, code) : absent}
+            caption={
+              leg.reserve != null ? assetSubtitle(leg, code) : UNKNOWN_SUBTITLE
+            }
             valueColor={reserveDotColor(leg)}
           />
         );

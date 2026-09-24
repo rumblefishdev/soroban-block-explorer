@@ -17,10 +17,12 @@
 //! - **snapshot `created_at`** does NOT exist on CH `liquidity_pool_snapshots`
 //!   (only `ledger_sequence`) — the latest-snapshot timestamp is derived from
 //!   the joined `ledgers.closed_at`.
-//! - The freshness window (PG: `snapshots.created_at >= NOW() - 7d`) is NOT
-//!   applied on the detail/list latest-snapshot pick yet — detail takes the
-//!   single latest snapshot regardless of age (matches the "latest known
-//!   state" intent); a staleness cutoff is a follow-up if parity needs it.
+//! - No freshness window on the detail/list latest-snapshot pick (the PG
+//!   design had `snapshots.created_at >= NOW() - 7d`). A classic pool writes
+//!   a snapshot on every change of its ledger entry, so the latest one IS its
+//!   current state whatever its age — an old snapshot means a quiet pool, not
+//!   an outdated reading. The participants endpoint still carries the window
+//!   (0374 PR 5 removes it).
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;

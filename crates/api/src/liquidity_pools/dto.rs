@@ -37,9 +37,8 @@ pub struct ParticipantItem {
     pub shares: String,
     /// Share of the pool, expressed as a decimal-string percentage
     /// (`100 * shares / total_pool_shares`). `None` when the pool has no
-    /// snapshot in the freshness window (stale pool); the frontend renders
-    /// it as "—" in that case (matches the list-endpoint stale-pool
-    /// convention from `18_get_liquidity_pools_list.sql`).
+    /// snapshot in the last 7 days — a window this endpoint still carries from
+    /// the PG design (0374 PR 5 removes it); the frontend renders "—".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
     /// Ledger of the first deposit by this account into this pool.
@@ -183,11 +182,11 @@ pub struct PoolAssetLeg {
     pub reserve: Option<String>,
 }
 
-/// One pool row returned by the list endpoint. Shape pinned to canonical
-/// SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
-/// in the freshness window come back with `null` for every dynamic field
-/// (each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,
-/// `latest_snapshot_*`); frontend renders these as "stale".
+/// One pool row returned by the list and detail endpoints. Shape pinned to
+/// canonical SQL `18_get_liquidity_pools_list.sql`. Dynamic fields carry the
+/// pool's latest known state whatever its age — a classic pool writes a
+/// snapshot on every change, so an old one is a quiet pool's current state;
+/// `null` means no source knows the value, never "too old".
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PoolItem {
     /// A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
@@ -210,10 +209,8 @@ pub struct PoolItem {
     /// the frontend can render directly (frontend §6.13/§6.14).
     pub fee_percent: String,
     pub created_at_ledger: i64,
-    /// Count of active liquidity providers (`lp_positions WHERE shares > 0`).
-    /// Computed from the live table — not dependent on the snapshot
-    /// freshness window, so it is populated even on stale pools (where
-    /// `tvl`/`volume`/`fee_revenue` are NULL).
+    /// Count of active liquidity providers (`lp_positions WHERE shares > 0`),
+    /// computed from the live table.
     pub participant_count: i64,
     pub latest_snapshot_ledger: Option<i64>,
     /// Pool shares outstanding, in units, as a decimal string. A classic pool's
@@ -221,14 +218,14 @@ pub struct PoolItem {
     /// own storage, scaled by the share token's decimals. `0` only when it is a
     /// measurement — a pair-factory pool, or a pool holding nothing; `null` when
     /// the contract does not record it (concentrated and config-factory pools,
-    /// older router versions) or no snapshot is fresh.
+    /// older router versions).
     pub total_shares: Option<String>,
     /// USD, decimal string rounded to cents (task 0199 compute-at-read).
     /// Populated on **both** the list (Phase A2, one batched price lookup
     /// per page) and the detail endpoint. `tvl` = latest reserves × each
     /// leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
     /// stale); `null` unless every leg has both a reserve and a price (never a
-    /// partial sum) — untracked assets and stale pools read `null`.
+    /// partial sum) — a pool with an untracked asset reads `null`.
     pub tvl: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced

@@ -30,16 +30,13 @@ function pool(overrides: Partial<PoolItem>): PoolItem {
 }
 
 describe('PoolKpiStrip captions', () => {
-  // A Soroban pool has no snapshots at all. Keying the caption off snapshot
-  // freshness told every one of them "no recent snapshot" beside a current
-  // value — the caption follows the value instead.
-  it('never stale-captions a value that is present', () => {
+  it('captions a present value by what it is', () => {
     renderWithProviders(<PoolKpiStrip pool={pool({})} />);
     expect(screen.queryByText('no recent snapshot')).toBeNull();
     expect(screen.getByText('shares outstanding')).toBeInTheDocument();
   });
 
-  it('says "not indexed" for a missing value on a pool with no snapshots', () => {
+  it('says "not indexed" for a missing value', () => {
     renderWithProviders(
       <PoolKpiStrip
         pool={pool({
@@ -52,17 +49,18 @@ describe('PoolKpiStrip captions', () => {
     expect(screen.queryByText('no recent snapshot')).toBeNull();
   });
 
-  it('says "no recent snapshot" for a missing value on a stale classic pool', () => {
+  // A classic pool writes a snapshot on every change, so an old snapshot is
+  // a quiet pool's current state — its values are shown plainly.
+  it('shows an old classic snapshot without a staleness caption', () => {
     renderWithProviders(
       <PoolKpiStrip
         pool={pool({
-          total_shares: null,
           latest_snapshot_ledger: 50_000_000,
           latest_snapshot_at: '2024-01-01T00:00:00Z',
         })}
       />
     );
-    expect(screen.getByText('no recent snapshot')).toBeInTheDocument();
-    expect(screen.queryByText('not indexed')).toBeNull();
+    expect(screen.queryByText('no recent snapshot')).toBeNull();
+    expect(screen.getByText('shares outstanding')).toBeInTheDocument();
   });
 });

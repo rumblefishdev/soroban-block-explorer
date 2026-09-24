@@ -4191,7 +4191,7 @@
                 },
                 "share_percentage": {
                   "type": ["string", "null"],
-                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the last 7 days — a window this endpoint still carries from\nthe PG design (0374 PR 5 removes it); the frontend renders \"—\"."
                 },
                 "shares": {
                   "type": "string",
@@ -4285,7 +4285,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
+              "description": "One pool row returned by the list and detail endpoints. Shape pinned to\ncanonical SQL `18_get_liquidity_pools_list.sql`. Dynamic fields carry the\npool's latest known state whatever its age — a classic pool writes a\nsnapshot on every change, so an old one is a quiet pool's current state;\n`null` means no source knows the value, never \"too old\".",
               "required": [
                 "pool_id",
                 "pool_kind",
@@ -4330,7 +4330,7 @@
                 "participant_count": {
                   "type": "integer",
                   "format": "int64",
-                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table."
                 },
                 "pool_id": {
                   "type": "string",
@@ -4342,11 +4342,11 @@
                 },
                 "total_shares": {
                   "type": ["string", "null"],
-                  "description": "Pool shares outstanding, in units, as a decimal string. A classic pool's\ncome from its latest snapshot; a soroban pool's from the pool contract's\nown storage, scaled by the share token's decimals. `0` only when it is a\nmeasurement — a pair-factory pool, or a pool holding nothing; `null` when\nthe contract does not record it (concentrated and config-factory pools,\nolder router versions) or no snapshot is fresh."
+                  "description": "Pool shares outstanding, in units, as a decimal string. A classic pool's\ncome from its latest snapshot; a soroban pool's from the pool contract's\nown storage, scaled by the share token's decimals. `0` only when it is a\nmeasurement — a pair-factory pool, or a pool holding nothing; `null` when\nthe contract does not record it (concentrated and config-factory pools,\nolder router versions)."
                 },
                 "tvl": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless every leg has both a reserve and a price (never a\npartial sum) — untracked assets and stale pools read `null`."
+                  "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless every leg has both a reserve and a price (never a\npartial sum) — a pool with an untracked asset reads `null`."
                 },
                 "volume": {
                   "type": ["string", "null"],
@@ -4464,7 +4464,7 @@
           },
           "share_percentage": {
             "type": ["string", "null"],
-            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the last 7 days — a window this endpoint still carries from\nthe PG design (0374 PR 5 removes it); the frontend renders \"—\"."
           },
           "shares": {
             "type": "string",
@@ -4569,7 +4569,7 @@
       },
       "PoolItem": {
         "type": "object",
-        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
+        "description": "One pool row returned by the list and detail endpoints. Shape pinned to\ncanonical SQL `18_get_liquidity_pools_list.sql`. Dynamic fields carry the\npool's latest known state whatever its age — a classic pool writes a\nsnapshot on every change, so an old one is a quiet pool's current state;\n`null` means no source knows the value, never \"too old\".",
         "required": [
           "pool_id",
           "pool_kind",
@@ -4614,7 +4614,7 @@
           "participant_count": {
             "type": "integer",
             "format": "int64",
-            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table."
           },
           "pool_id": {
             "type": "string",
@@ -4626,11 +4626,11 @@
           },
           "total_shares": {
             "type": ["string", "null"],
-            "description": "Pool shares outstanding, in units, as a decimal string. A classic pool's\ncome from its latest snapshot; a soroban pool's from the pool contract's\nown storage, scaled by the share token's decimals. `0` only when it is a\nmeasurement — a pair-factory pool, or a pool holding nothing; `null` when\nthe contract does not record it (concentrated and config-factory pools,\nolder router versions) or no snapshot is fresh."
+            "description": "Pool shares outstanding, in units, as a decimal string. A classic pool's\ncome from its latest snapshot; a soroban pool's from the pool contract's\nown storage, scaled by the share token's decimals. `0` only when it is a\nmeasurement — a pair-factory pool, or a pool holding nothing; `null` when\nthe contract does not record it (concentrated and config-factory pools,\nolder router versions)."
           },
           "tvl": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless every leg has both a reserve and a price (never a\npartial sum) — untracked assets and stale pools read `null`."
+            "description": "USD, decimal string rounded to cents (task 0199 compute-at-read).\nPopulated on **both** the list (Phase A2, one batched price lookup\nper page) and the detail endpoint. `tvl` = latest reserves × each\nleg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h\nstale); `null` unless every leg has both a reserve and a price (never a\npartial sum) — a pool with an untracked asset reads `null`."
           },
           "volume": {
             "type": ["string", "null"],

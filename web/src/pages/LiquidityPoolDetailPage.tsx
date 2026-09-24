@@ -22,7 +22,7 @@ import { PoolActivity } from './pool-detail/PoolActivity.js';
  * Liquidity-pool detail page (`/liquidity-pools/:id`). Composes the
  * Figma-defined sections from top to bottom:
  *
- *   1. Header (breadcrumb, pair name, Active/Stale badge, truncated id)
+ *   1. Header (breadcrumb, pair name, kind badge, truncated id)
  *   2. KPI strip (Total shares, A-leg reserve, B-leg reserve, participants)
  *   3. Summary (key-value rows for Pool ID, Fee, Total shares, reserves)
  *   4. Activity chart (TVL/Volume/Fees tabs, 1D/7D/30D/1Y range)

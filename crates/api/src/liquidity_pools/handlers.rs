@@ -339,8 +339,8 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     // USD analytics (0199 compute-at-read): spot TVL + 24h volume/fee from
     // the in-cluster `prices.*` views. Deliberately DEGRADES to NULL fields
     // on error instead of failing the whole detail — the pool's on-chain
-    // data is still valid without prices, and the FE already renders the
-    // NULL ("stale") state. The error log is the operator signal (a missing
+    // data is still valid without prices, and the FE already renders a NULL
+    // money field as "—". The error log is the operator signal (a missing
     // `prices.*` SELECT grant lands here, not in a 500).
     let ctx = queries::PoolPriceContext {
         legs: row
