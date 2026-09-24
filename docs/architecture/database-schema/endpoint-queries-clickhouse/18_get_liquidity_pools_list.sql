@@ -61,7 +61,7 @@
 --     the API says so explicitly rather than answering "no pools".
 --   • Cursor ordering is `activity_ledger DESC` — "most recently active
 --     first", for BOTH kinds — where `activity_ledger` is
---     `greatest(last_updated_ledger, max(pool_state_changes.ledger_sequence))`.
+--     `greatest(last_updated_ledger, pool_activity.last_activity_ledger)`.
 --     `last_updated_ledger` alone does not mean that: it is the RMT version,
 --     bumped on every change to a CLASSIC pool's entry but written once at
 --     registration for a soroban pool, whose activity lives in
@@ -69,14 +69,13 @@
 --     the real activity is newer than the column, by 250 days on average, and
 --     no soroban pool reached the first 5,000 rows of the list (127 do now).
 --     `greatest` needs no `pool_kind` branch: a classic pool has no
---     state-change rows, so the column wins.
---   • **The API runs this as two queries.** The first picks the page (the
---     WHERE / ORDER BY / LIMIT below, plus the state-change aggregate); the
---     second reads the snapshot, position and ledger columns for exactly
---     those pool ids. ClickHouse re-evaluates a `WITH` subquery at every
---     reference, so as one query the aggregate ran once per reference:
---     37-45M rows per page, against 5.1M for the page query alone plus
---     8-13M for the enrichment (measured 2026-09-24).
+--     `pool_activity` row, so the column wins.
+--   • `pool_activity` is a refreshable MV (every 2 min) over
+--     `pool_state_changes`, keeping only the plane each pool declares. Taking
+--     the max per request instead re-scanned that table on every page: the
+--     API references its page CTE six times and ClickHouse re-evaluates a
+--     `WITH` subquery at each reference, so it cost 37-45M rows per page
+--     against 8-10M without the key (measured 2026-09-24).
 --   • argMax over GROUP BY rather than correlated scalar — CH 26.x
 --     rejects correlated subqueries with ORDER BY/LIMIT in JOIN.
 --   • **Pair filtering is a distinctness condition, not two column tests.**
@@ -111,7 +110,7 @@ SELECT
     lp.fee_bps,
     toDecimal64(lp.fee_bps, 2) / 100                                                AS fee_percent,
     lp.last_updated_ledger                                                          AS last_updated_ledger,
-    greatest(lp.last_updated_ledger, ifNull(sc.led, 0))                             AS activity_ledger,
+    greatest(lp.last_updated_ledger, pa.last_activity_ledger)                       AS activity_ledger,
     s.latest_ledger_sequence                                                        AS latest_snapshot_ledger,
     s.reserve_a,                -- → legs[0].reserve (a classic pool's two legs, in order)
     s.reserve_b,                -- → legs[1].reserve
@@ -122,11 +121,7 @@ SELECT
     -- `fee_revenue` stay null on the list — detail-only.
     l_snap.closed_at                                                                AS latest_snapshot_at
 FROM liquidity_pools lp FINAL
-LEFT JOIN (
-    SELECT pool_id, max(ledger_sequence) AS led
-    FROM pool_state_changes
-    GROUP BY pool_id
-) sc ON sc.pool_id = lp.pool_id
+LEFT JOIN pool_activity pa ON pa.pool_id = lp.pool_id
 LEFT JOIN (
     SELECT
         pool_id,

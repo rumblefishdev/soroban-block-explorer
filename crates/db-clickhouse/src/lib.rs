@@ -191,10 +191,12 @@ mod tests {
         // task 0541: added `contract_transactions` — the per-(contract, tx)
         // presence index the contract-filtered transaction list seeks. 39 → 40.
         // task 0396: dropped `transaction_hash_dict` — never called. 40 → 39.
+        // task 0374: added `pool_activity` + its refreshable MV — the soroban
+        // pool's last reserve change, the pool list's order key. 39 → 41.
         assert_eq!(
             stmts.len(),
-            39,
-            "expected 37 tables + 2 materialized views, got {}",
+            41,
+            "expected 38 tables + 3 materialized views, got {}",
             stmts.len()
         );
     }

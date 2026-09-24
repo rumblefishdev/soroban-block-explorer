@@ -840,6 +840,41 @@ CREATE TABLE IF NOT EXISTS pool_instance_state (
 ENGINE = ReplacingMergeTree(derived_at_ledger)
 ORDER BY (pool_id);
 
+-- pool_activity (task 0374): the ledger of each soroban pool's last reserve
+-- change — the key the pool list orders on. A soroban pool's
+-- `liquidity_pools` row is written once, at registration; its activity lives
+-- in `pool_state_changes`. Deriving it per list request re-scanned that whole
+-- table on every page (5M rows and growing), so a refreshable MV keeps the
+-- per-pool max here: full recompute + atomic EXCHANGE, the
+-- `accounts_recent_mv` pattern — no backfill, and a rebuild of the source by
+-- EXCHANGE cannot leave it stale past the next refresh.
+-- Only rows of the plane the pool itself declares count: a plane entry names
+-- its pool in an attacker-writable key (see `pool_instance_state`), and a
+-- foreign plane must not move a pool up the list (0 such rows today).
+-- A classic pool is absent on purpose: its `last_updated_ledger` already IS
+-- its last activity, and read live it never lags the refresh.
+CREATE TABLE IF NOT EXISTS pool_activity (
+    pool_id              FixedString(32),
+    last_activity_ledger Int64
+)
+ENGINE = MergeTree
+ORDER BY pool_id;
+
+-- Sources (`pool_state_changes`, `pool_instance_state`) are defined above and
+-- MUST exist before this CREATE. A ≤2-minute-stale order is fine for a
+-- "most recently active" list.
+CREATE MATERIALIZED VIEW IF NOT EXISTS pool_activity_mv
+REFRESH EVERY 2 MINUTE
+TO pool_activity AS
+SELECT s.pool_id AS pool_id, max(s.ledger_sequence) AS last_activity_ledger
+FROM pool_state_changes AS s
+INNER JOIN (
+    SELECT pool_id, argMax(plane_id, derived_at_ledger) AS plane_id
+    FROM pool_instance_state
+    GROUP BY pool_id
+) AS d ON d.pool_id = s.pool_id AND d.plane_id = s.plane_id
+GROUP BY s.pool_id;
+
 -- `closed_at_ledger`: same lifecycle semantics as `balances` (ADR 0055) — a
 -- withdrawn position was written as `shares = 0`, indistinguishable from a
 -- position that still exists at zero.

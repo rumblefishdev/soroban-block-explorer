@@ -2,7 +2,7 @@
 
 use clickhouse::Row;
 use serde::Deserialize;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
@@ -46,14 +46,6 @@ fn is_hex_pool_id(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// One pool of the page, in paging order (SELECT order = field order).
-#[derive(Debug, Row, Deserialize)]
-struct PageChRow {
-    pool_id_hex: String,
-    /// [`ACTIVITY_LEDGER`] — the list sort/cursor key.
-    activity_ledger: i64,
-}
-
 /// SELECT column order MUST match this struct (clickhouse positional decode).
 #[derive(Debug, Row, Deserialize)]
 struct PoolListChRow {
@@ -65,6 +57,8 @@ struct PoolListChRow {
     legs: Vec<i64>,
     fee_bps: i32,
     created_at_ledger: i64,
+    /// [`ACTIVITY_LEDGER`] — the list sort/cursor key.
+    cursor_ledger: i64,
     participant_count: i64,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
@@ -78,16 +72,19 @@ struct PoolListChRow {
 /// `last_updated_ledger` is the RMT version, and it means two different things.
 /// A classic pool's row is rewritten on every deposit, withdrawal and trade, so
 /// there it IS the last activity. A soroban pool's row is written once, at
-/// registration, and never again — its activity lives in `pool_state_changes`.
+/// registration, and never again — its activity lives in `pool_state_changes`,
+/// kept per pool in `pool_activity` by a refreshable MV (schema `init.sql`).
 /// Measured on production 2026-09-24: for 699 of 770 soroban pools the real
-/// activity is NEWER than this column, by 250 days on average and 801 at worst,
-/// so ordering on the column alone opened the list on just-registered pools.
+/// activity is NEWER than the column, by 250 days on average and 801 at worst,
+/// and no soroban pool reached the first 5,000 rows of the list.
 ///
-/// `greatest` rather than a per-kind branch: a classic pool has no state-change
-/// rows, so the join misses and the column wins; a soroban pool's column is its
-/// registration, which its activity is never earlier than. One expression, one
-/// meaning, no `pool_kind` test.
-const ACTIVITY_LEDGER: &str = "greatest(lp.last_updated_ledger, ifNull(sc.led, 0))";
+/// `greatest` rather than a per-kind branch: a classic pool has no
+/// `pool_activity` row, so the join misses and the column wins — read live, it
+/// never lags the MV's refresh; a soroban pool's column is its registration,
+/// which its activity is never earlier than. A join miss yields `0`, not NULL
+/// (`join_use_nulls` is refused for the read-only user), which `greatest`
+/// ignores.
+const ACTIVITY_LEDGER: &str = "greatest(lp.last_updated_ledger, pa.last_activity_ledger)";
 
 /// `GET /v1/liquidity-pools` — paginated pool list. Mirrors the PG
 /// `fetch_pool_list` projection, with two CH-specific structural choices
@@ -107,8 +104,6 @@ const ACTIVITY_LEDGER: &str = "greatest(lp.last_updated_ledger, ifNull(sc.led, 0
 ///   The wire `created_at_ledger` field still reports the min-snapshot proxy
 ///   (parity with detail); only the *ordering* differs, and the FE does not
 ///   consume the list yet, so there is no live ordering regression.
-///   The page is picked by its own query, then enriched by pool id: see the
-///   comment on `page_sql` for why this is two round trips and not one.
 /// - **No `min_tvl` pre-filter.** It used to exist as a `tvl_pools` CTE doing
 ///   a full-scan `argMax(tvl)` over the snapshot column — a column task 0199
 ///   established is never written, so it matched nothing. The parameter is
@@ -150,7 +145,7 @@ pub async fn fetch_pool_list(
 
     // Asset filters are bound (untrusted free-text codes / handler-validated
     // issuer StrKeys — clickhouse-rs escapes them). Each `?` appears in the
-    // page query's WHERE in this exact push order. Issuer StrKey → surrogate id
+    // `page` CTE WHERE in this exact push order. Issuer StrKey → surrogate id
     // resolves via an `accounts` PK seek (`ORDER BY (account_id)`), cheap.
     // NO relevance ranking anywhere on the pools path, by decision (task
     // 0485). Measured on production, the first page of
@@ -211,40 +206,8 @@ pub async fn fetch_pool_list(
         binds.extend(clause_binds);
     }
 
-    // Step 1 picks the page, step 2 enriches exactly those pools. One query
-    // would read shorter, but ClickHouse re-evaluates a `WITH` subquery at
-    // every reference and the enrichment references the page six times, so the
-    // state-change aggregate behind the activity key ran six times: 37-45M
-    // read_rows and ~350 ms per page, against 8-10M / ~180 ms before the key
-    // existed (measured 2026-09-24). Picked on its own the page costs 5.1M
-    // rows / 65 ms, and the enrichment then seeks by the page's pool ids.
-    let page_sql = format!(
-        "SELECT lower(hex(lp.pool_id)) AS pool_id_hex, {act} AS activity_ledger \
-         FROM liquidity_pools lp FINAL \
-         LEFT JOIN (SELECT pool_id, max(ledger_sequence) AS led \
-                    FROM pool_state_changes GROUP BY pool_id) sc \
-             ON sc.pool_id = lp.pool_id \
-         WHERE 1 = 1{filters} {keyset} \
-         ORDER BY activity_ledger {order}, lp.pool_id {order} \
-         LIMIT {limit}",
-        act = ACTIVITY_LEDGER,
-        filters = filters,
-        keyset = keyset,
-        order = order,
-        limit = params.limit,
-    );
-    let mut query = client.query(&page_sql);
-    for b in &binds {
-        query = query.bind(b.as_str());
-    }
-    let page = query.fetch_all::<PageChRow>().await?;
-    let activity = page.iter().map(|p| p.activity_ledger);
-    let (Some(lo), Some(hi)) = (activity.clone().min(), activity.max()) else {
-        return Ok(Vec::new());
-    };
-
     // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
-    // `ledger_sequence` band around the page's activity range (`lo`..`hi`,
+    // `ledger_sequence` band around the page's activity range (the `band` CTE,
     // ±10k). Page pools are the most-recently-active, so their latest snapshot
     // sits in that band — a bounded seek (~0.5M rows / ~50ms)
     // instead of a full per-pool history scan (30M rows, which OOMed the 4 GB
@@ -280,9 +243,17 @@ pub async fn fetch_pool_list(
          page AS ( \
              SELECT lp.pool_id AS pool_id, lp.pool_kind AS pool_kind, \
                     lp.legs AS legs, lp.fee_bps AS fee_bps, \
-                    lp.last_updated_ledger AS last_updated_ledger \
+                    lp.last_updated_ledger AS last_updated_ledger, \
+                    {act} AS activity_ledger \
              FROM liquidity_pools lp FINAL \
-             WHERE lp.pool_id IN ({ids}) \
+             LEFT JOIN pool_activity pa ON pa.pool_id = lp.pool_id \
+             WHERE 1 = 1{filters} {keyset} \
+             ORDER BY activity_ledger {order}, pool_id {order} \
+             LIMIT {limit} \
+         ), \
+         band AS ( \
+             SELECT min(activity_ledger) - 10000 AS lo, \
+                    max(activity_ledger) + 10000 AS hi FROM page \
          ) \
          SELECT \
              lower(hex(lp.pool_id))                          AS pool_id_hex, \
@@ -290,6 +261,7 @@ pub async fn fetch_pool_list(
              lp.legs                                         AS legs, \
              lp.fee_bps                                      AS fee_bps, \
              ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
+             lp.activity_ledger                              AS cursor_ledger, \
              toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
              toString(s.reserve_a)                           AS reserve_a, \
@@ -305,7 +277,7 @@ pub async fn fetch_pool_list(
                 argMax(toNullable(total_shares), ledger_sequence) AS total_shares \
              FROM liquidity_pool_snapshots \
              WHERE pool_id IN (SELECT pool_id FROM page) \
-               AND ledger_sequence BETWEEN {lo} AND {hi} \
+               AND ledger_sequence BETWEEN (SELECT lo FROM band) AND (SELECT hi FROM band) \
              GROUP BY pool_id \
          ) s ON s.pool_id = lp.pool_id \
          LEFT JOIN ( \
@@ -336,27 +308,23 @@ pub async fn fetch_pool_list(
              SELECT sequence, any(closed_at) AS closed_at FROM ledgers \
              WHERE sequence IN (SELECT last_updated_ledger FROM page) \
              GROUP BY sequence \
-         ) l_snap ON l_snap.sequence = s.latest_ledger_sequence",
-        ids = vec!["unhex(?)"; page.len()].join(", "),
-        lo = lo - 10_000,
-        hi = hi + 10_000,
+         ) l_snap ON l_snap.sequence = s.latest_ledger_sequence \
+         /* The outer ORDER BY must repeat the CTE's, or the page holds the \
+            right rows in the wrong order and `finalize_page` cuts the cursor \
+            from the wrong last row — pages then overlap. */ \
+         ORDER BY lp.activity_ledger {order}, lp.pool_id {order}",
+        act = ACTIVITY_LEDGER,
+        filters = filters,
+        keyset = keyset,
+        order = order,
+        limit = params.limit,
     );
 
     let mut query = client.query(&sql);
-    for p in &page {
-        query = query.bind(p.pool_id_hex.as_str());
+    for b in &binds {
+        query = query.bind(b.as_str());
     }
-    let mut rows = query.fetch_all::<PoolListChRow>().await?;
-
-    // The enrichment answers in no particular order. The page query's order IS
-    // the paging order, so the rows go back into it, each with the activity
-    // ledger its cursor is cut from. Every row is a page pool by the `IN`.
-    let paged: HashMap<&str, (usize, i64)> = page
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (p.pool_id_hex.as_str(), (i, p.activity_ledger)))
-        .collect();
-    rows.sort_by_key(|r| paged[r.pool_id_hex.as_str()].0);
+    let rows = query.fetch_all::<PoolListChRow>().await?;
 
     // One batched identity resolution for every leg on the page, with the
     // icons read alongside it. Both key on `assets.id`, which is exactly what
@@ -409,12 +377,12 @@ pub async fn fetch_pool_list(
             let tvl = tvl_usd(&reserve_strs, &legs, &closes).map(usd_str);
             PoolRow {
                 pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
-                cursor_ledger: paged[r.pool_id_hex.as_str()].1,
                 pool_id_hex: r.pool_id_hex,
                 legs: leg_rows(&r.legs, &identities, &icons, &reserves),
                 fee_bps: r.fee_bps,
                 fee_percent: fee_percent_str(r.fee_bps),
                 created_at_ledger: r.created_at_ledger,
+                cursor_ledger: r.cursor_ledger,
                 participant_count: r.participant_count,
                 latest_snapshot_ledger: r.latest_snapshot_ledger,
                 total_shares: r.total_shares,
