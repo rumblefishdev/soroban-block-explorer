@@ -418,16 +418,10 @@ pub struct TransactionRow {
     pub parse_error: bool,
 }
 
-/// `transaction_hash_index` — fact: transaction hash (outer or fee-bump inner)
-/// → ledger, read by search and the transaction page.
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct TransactionHashIndexRow {
-    pub hash: [u8; 32],
-    pub ledger_sequence: i64,
-}
-
-/// `transaction_hash_prefix_index` — the same mapping keyed by an 8-byte prefix
-/// of the hash (task 0580); the reader checks the full hash in `transactions`.
+/// `transaction_hash_prefix_index` — fact: transaction hash (outer or fee-bump
+/// inner) → ledger, keyed by an 8-byte prefix of the hash (task 0580), read by
+/// search and the transaction page; the reader checks the full hash in
+/// `transactions`.
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
 pub struct TransactionHashPrefixRow {
     pub hash_prefix: u64,
@@ -444,12 +438,6 @@ impl TransactionHashPrefixRow {
             hash_prefix: u64::from_le_bytes(prefix),
             ledger_sequence,
         }
-    }
-}
-
-impl From<&TransactionHashIndexRow> for TransactionHashPrefixRow {
-    fn from(row: &TransactionHashIndexRow) -> Self {
-        Self::new(&row.hash, row.ledger_sequence)
     }
 }
 

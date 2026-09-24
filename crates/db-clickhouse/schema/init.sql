@@ -18,7 +18,7 @@
 -- a hash never compresses (ratio 1.0, 8.03 B/row, ~220 GiB across the
 -- tables that still carry it, 2026-09-23), while the position costs
 -- 0.07–1.3 B/row and sorts in execution order. Lookups by hash go through
--- `transaction_hash_index`. `tests/schema_conventions.rs` fails on a new
+-- `transaction_hash_prefix_index`. `tests/schema_conventions.rs` fails on a new
 -- `transaction_id` column.
 --
 -- Accounts and contracts are the **central FK hubs** — referenced by 6–8
@@ -34,7 +34,7 @@
 -- `liquidity_pool_snapshots`, `operations_appearances`,
 -- `transaction_participants`, `nft_ownership`, `lp_positions`,
 -- `account_balances_current`, `wasm_interface_metadata`,
--- `ledgers`, `transaction_hash_index`) keep their natural / composite
+-- `ledgers`, `transaction_hash_prefix_index`) keep their natural / composite
 -- primary keys — no surrogate `id`. Composite (StrKey-or-hash, …)
 -- ORDER BYs work cheaply for these without a hash layer.
 --
@@ -913,7 +913,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     has_soroban       Bool,
     parse_error       Bool
     -- No hash bloom: every read by hash pins `ledger_sequence` first (the
-    -- ledger comes from `transaction_hash_index`), and one ledger fits one
+    -- ledger comes from `transaction_hash_prefix_index`), and one ledger fits one
     -- granule. `idx_tx_hash_bloom` kept 1 of 1 granules and cost 4.93 GiB;
     -- dropped 2026-09-23 (task 0579).
 )
@@ -921,19 +921,11 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, application_order);
 
-CREATE TABLE IF NOT EXISTS transaction_hash_index (
-    hash            FixedString(32),
-    ledger_sequence Int64
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (hash);
-
--- transaction_hash_prefix_index: `transaction_hash_index` keyed by the first 8
--- bytes of the hash instead of all 32 (task 0580). A hash is random, so the
--- full key compresses at ratio 1.0 — 154 GiB of the old index's 175
--- (2026-09-23); this shape measured 10.22 B/row against 36.24. Written beside
--- the old index until the readers move here, then the old one is dropped.
+-- transaction_hash_prefix_index: transaction hash (outer or fee-bump inner) →
+-- ledger, keyed by the first 8 bytes of the hash instead of all 32 (task
+-- 0580). A hash is random, so the full key compressed at ratio 1.0 — 154 GiB
+-- of the former `transaction_hash_index`'s 175 (2026-09-23); this shape
+-- measured 10.22 B/row against 36.24, and replaced it.
 --
 -- A prefix can name more than one ledger (~0.7 shared prefixes expected over
 -- 5 bn hashes), so a reader takes EVERY ledger with the prefix and

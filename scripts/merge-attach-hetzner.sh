@@ -167,7 +167,7 @@ fi
 PARTITIONED_TABLES=(
   ledgers
   transactions
-  transaction_hash_index
+  transaction_hash_prefix_index
   transaction_participants
   operations_appearances
   soroban_events
