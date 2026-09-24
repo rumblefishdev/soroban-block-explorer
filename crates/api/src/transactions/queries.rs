@@ -1097,7 +1097,7 @@ async fn resolve_contract_surrogate(
 }
 
 mod hash_lookup;
-pub use hash_lookup::lookup_hash_ledger;
+pub use hash_lookup::lookup_hash_ledgers;
 
 #[cfg(test)]
 mod tests;

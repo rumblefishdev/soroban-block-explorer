@@ -19,8 +19,9 @@
 --                           the full-content table (§5.1, §5.5 win).
 -- Inputs:
 --   $1  :hash     FixedString(32)  raw 32-byte transaction hash
--- Indexes:      transaction_hash_index (ORDER BY hash → ledger_sequence),
---                 the PG transaction_hash_index PK seek, 1:1.
+-- Indexes:      transaction_hash_prefix_index (ORDER BY (hash_prefix,
+--                 ledger_sequence) — the hash's first 8 bytes → candidate
+--                 ledgers, task 0580).
 --               transactions ORDER BY (ledger_sequence, application_order, id)
 --                 + PARTITION BY intDiv. Once we have ledger_sequence from
 --                 the index, the planner uses one partition + sparse-PK granule.
@@ -41,7 +42,9 @@
 --   • Six statements. The API runs them sequentially, threading
 --     `(transaction_id, ledger_sequence)` from statement B into C-F.
 --   • Statement A is the partition-pruning shortcut: hash → ledger_sequence
---     via a `transaction_hash_index` PK seek. (A `transaction_hash_dict`
+--     via a `transaction_hash_prefix_index` seek on the hash's first 8 bytes —
+--     every candidate ledger; `transactions` decides by the full hash (more
+--     than one candidate only when two hashes share a prefix). (A `transaction_hash_dict`
 --     Dictionary over it was never called by the API and was removed in
 --     task 0396.)
 --   • Statement E (events) is the major §5.1 divergence: returns FULL
@@ -56,16 +59,18 @@
 --   • `closed_at` for the header comes via JOIN to `ledgers` (§5.2).
 
 -- ============================================================================
--- A. Resolve hash → ledger_sequence (transaction_hash_index PK seek).
+-- A. Candidate ledgers of the hash (transaction_hash_prefix_index seek).
 -- ============================================================================
-SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1;
+SELECT DISTINCT ledger_sequence FROM transaction_hash_prefix_index
+WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8))
+ORDER BY ledger_sequence DESC;
 
 -- @@ split @@
 
 -- ============================================================================
 -- B. Transaction header.
 --    Inputs: $1 = hash (FixedString(32)).
---    Resolves the row using the Dict's ledger_sequence for partition prune,
+--    Resolves the row using the candidate ledgers for partition prune,
 --    then sparse-PK seek on (ledger_sequence, application_order, id).
 -- ============================================================================
 SELECT
@@ -89,7 +94,8 @@ JOIN accounts src FINAL ON src.id = t.source_id
 JOIN ledgers   l        ON l.sequence = t.ledger_sequence
 WHERE t.hash = $1
   AND intDiv(t.ledger_sequence, 500000)
-      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000);
+      IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)));
 
 -- @@ split @@
 
@@ -123,10 +129,12 @@ JOIN      ledgers           l         ON l.sequence = oa.ledger_sequence
 WHERE oa.transaction_id = (
     SELECT id FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
-          = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
+          IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
     LIMIT 1)
   AND intDiv(oa.ledger_sequence, 500000)
-      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
+      IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
 -- ORDER BY natural shape: application_order is unique within (transaction_id, ledger_sequence)
 -- per PR #175 schema, so this single column gives stable ordering — no oa.id tiebreaker needed.
 ORDER BY oa.application_order ASC NULLS LAST;
@@ -145,10 +153,12 @@ WHERE (tp.ledger_sequence, tp.application_order) = (
     -- the transaction's position (task 0575)
     SELECT ledger_sequence, application_order FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
-          = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
+          IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
     LIMIT 1)
   AND intDiv(tp.ledger_sequence, 500000)
-      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
+      IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
 ORDER BY a.account_id;
 
 -- @@ split @@
@@ -177,10 +187,12 @@ JOIN ledgers l ON l.sequence = se.ledger_sequence
 WHERE (se.ledger_sequence, se.application_order) = (
     SELECT ledger_sequence, application_order FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
-          = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
+          IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
     LIMIT 1)
   AND intDiv(se.ledger_sequence, 500000)
-      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
+      IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
 ORDER BY se.ledger_sequence, sc.contract_id, se.transaction_index, se.operation_index, se.event_index;
 
 -- The filter is the transaction's POSITION (ADR 0059): a fee refund's rpc id
@@ -211,8 +223,10 @@ JOIN      ledgers           l                     ON l.sequence = sia.ledger_seq
 WHERE sia.transaction_id = (
     SELECT id FROM transactions FINAL WHERE hash = $1
       AND intDiv(ledger_sequence, 500000)
-          = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
+          IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
     LIMIT 1)
   AND intDiv(sia.ledger_sequence, 500000)
-      = intDiv((SELECT ledger_sequence FROM transaction_hash_index WHERE hash = $1 LIMIT 1), 500000)
+      IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
+          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
 ORDER BY sia.ledger_sequence, sc.contract_id;

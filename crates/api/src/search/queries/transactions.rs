@@ -10,11 +10,11 @@ use crate::common::ch::millis_to_utc;
 
 /// Mainnet ledger-partition width (`PARTITION BY intDiv(ledger_sequence,
 /// 500000)` on `transactions`). Used to prune the `transactions` seek to the
-/// single partition the `transaction_hash_index` lookup resolved.
+/// single partition each hash-index candidate names.
 const LEDGER_PARTITION_SIZE: i64 = 500_000;
 
 // ---------------------------------------------------------------------------
-// Transactions — exact hash → transaction_hash_index PK seek
+// Transactions — exact hash → transaction_hash_prefix_index seek
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
@@ -29,14 +29,16 @@ struct TxMetaRow {
     created_at_ms: i64,
 }
 
-/// Fires only for a hash-shaped query. Step 1 resolves `hash → ledger_sequence`
-/// off `transaction_hash_index` (ORDER BY `hash`; immutable mapping, no FINAL).
-/// The index maps a fee-bump's inner hash too (task 0375), so step 2 matches
-/// the hash as the transaction's own or as its inner hash, as the transaction
-/// page does. Step 2 reads `successful` + the ledger `closed_at` via a
-/// single-partition, single-row seek on `transactions` (`ledger_sequence` leading PK — one
-/// ledger is one granule) joined to `ledgers` — the PG `tx_hits`
-/// enrichment, at the cost of two point-seeks.
+/// Fires only for a hash-shaped query. Step 1 takes the candidate ledgers off
+/// `transaction_hash_prefix_index` (the hash's first 8 bytes; immutable
+/// mapping, no FINAL — more than one only when two hashes share the prefix,
+/// task 0580). The index maps a fee-bump's inner hash too (task 0375), so
+/// step 2, per candidate until one matches, checks the hash as the
+/// transaction's own or as its inner hash, as the transaction page does: it
+/// reads `successful` + the ledger `closed_at` via a single-partition,
+/// single-row seek on `transactions` (`ledger_sequence` leading PK — one
+/// ledger is one granule) joined to `ledgers` — the PG `tx_hits` enrichment,
+/// at the cost of two point-seeks.
 pub(super) async fn search_transactions(
     client: &clickhouse::Client,
     classified: &Classified,
@@ -50,19 +52,47 @@ pub(super) async fn search_transactions(
     };
     let hash_hex = hex::encode(bytes);
 
-    let ledger = client
+    let ledgers = client
         .query(
-            "SELECT ledger_sequence FROM transaction_hash_index \
-             WHERE hash = unhex(?) LIMIT 1",
+            "SELECT DISTINCT ledger_sequence FROM transaction_hash_prefix_index \
+             WHERE hash_prefix = reinterpretAsUInt64(substring(unhex(?), 1, 8)) \
+             ORDER BY ledger_sequence DESC",
         )
         .bind(&hash_hex)
-        .fetch_optional::<LedgerSeqRow>()
-        .await?
-        .map(|r| r.ledger_sequence);
-    let Some(ledger) = ledger else {
-        return Ok(Vec::new());
-    };
+        .fetch_all::<LedgerSeqRow>()
+        .await?;
+    for LedgerSeqRow {
+        ledger_sequence: ledger,
+    } in ledgers
+    {
+        if let Some(meta) = fetch_tx_meta(client, ledger, &hash_hex).await? {
+            return Ok(vec![(
+                "transaction".to_string(),
+                SearchHit {
+                    entity_type: EntityType::Transaction,
+                    identifier: hash_hex,
+                    label: String::new(),
+                    route_token: None,
+                    successful: Some(meta.successful),
+                    last_activity_at: Some(millis_to_utc(meta.created_at_ms)),
+                    contract_id: None,
+                    token_id: None,
+                },
+            )]);
+        }
+    }
+    // No candidate, or an index row whose transaction row is missing — no hit
+    // rather than a half-populated redirect target.
+    Ok(Vec::new())
+}
 
+/// `successful` + the ledger's `closed_at` of the transaction in `ledger` whose
+/// own or fee-bump inner hash is `hash_hex`, if there is one.
+async fn fetch_tx_meta(
+    client: &clickhouse::Client,
+    ledger: i64,
+    hash_hex: &str,
+) -> Result<Option<TxMetaRow>, clickhouse::error::Error> {
     // `ledger` is from our own index seek (i64), inlined for partition pruning —
     // no injection surface. `hash` is bound. `successful` is immutable across
     // re-ingest, so `LIMIT 1` (no FINAL) is correct. `closed_at` is resolved via
@@ -86,29 +116,10 @@ pub(super) async fn search_transactions(
          ORDER BY t.application_order \
          LIMIT 1"
     );
-    let Some(meta) = client
+    client
         .query(&sql)
-        .bind(&hash_hex)
-        .bind(&hash_hex)
+        .bind(hash_hex)
+        .bind(hash_hex)
         .fetch_optional::<TxMetaRow>()
-        .await?
-    else {
-        // Index row present but the transaction row is missing — treat as no
-        // hit rather than emit a half-populated redirect target.
-        return Ok(Vec::new());
-    };
-
-    Ok(vec![(
-        "transaction".to_string(),
-        SearchHit {
-            entity_type: EntityType::Transaction,
-            identifier: hash_hex,
-            label: String::new(),
-            route_token: None,
-            successful: Some(meta.successful),
-            last_activity_at: Some(millis_to_utc(meta.created_at_ms)),
-            contract_id: None,
-            token_id: None,
-        },
-    )])
+        .await
 }

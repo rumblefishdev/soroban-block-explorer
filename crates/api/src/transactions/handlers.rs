@@ -463,16 +463,20 @@ async fn fetch_list_for_source(
 }
 
 /// Resolve a tx hash to its DB header. CH keys the detail read by
-/// `(ledger_sequence, hash)` resolved via `transaction_hash_index`. A miss at
-/// either step is `Ok(None)` → 404.
+/// `(ledger_sequence, hash)`; the candidate ledgers come from
+/// `transaction_hash_prefix_index` (a hash prefix, so more than one only when
+/// two hashes share it), and the first whose `transactions` row carries the
+/// full hash wins. No candidate, or none that matches, is `Ok(None)` → 404.
 async fn lookup_detail_for_source(
     state: &AppState,
     hash_hex: &str,
 ) -> Result<Option<TxDetailRow>, clickhouse::error::Error> {
-    let Some(ledger_sequence) = queries::lookup_hash_ledger(&state.ch(), hash_hex).await? else {
-        return Ok(None);
-    };
-    queries::fetch_detail(&state.ch(), hash_hex, ledger_sequence).await
+    for ledger_sequence in queries::lookup_hash_ledgers(&state.ch(), hash_hex).await? {
+        if let Some(row) = queries::fetch_detail(&state.ch(), hash_hex, ledger_sequence).await? {
+            return Ok(Some(row));
+        }
+    }
+    Ok(None)
 }
 
 async fn fetch_operations_for_source(
