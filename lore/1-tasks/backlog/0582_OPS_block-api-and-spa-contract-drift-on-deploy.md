@@ -71,3 +71,15 @@ Compute and SPA together; the gap is a single-half deploy.
 - [ ] `deploy-production-web` exits before any sync when the bucket or
       distribution lookup comes back empty
 - [ ] `docs/deployment.md` describes the check and what to do on failure
+
+## 2026-09-24 — refreshable MVs fail silently too (0374 PR 4b review, decision 94 A)
+
+Same class — a production half goes stale and nothing says so. Three
+refreshable MVs feed read paths (`accounts_recent_mv`, `balance_aggregates_mv`,
+and `pool_activity_mv`, which orders the pool list since 0374 PR 4b). A
+failed refresh leaves the target serving its last result: data still right,
+order or totals frozen. Nothing in `infra` / `infra-hetzner` reads
+`system.view_refreshes` today (only the prices service is granted it).
+
+- [ ] Alarm when any `default.*` refreshable MV has a non-empty `exception`
+      or a `last_success_time` older than 5× its interval.

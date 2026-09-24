@@ -98,7 +98,9 @@ pools keep `tvl = null` and sort after the valued ones.
    classic coverage ≈ 85% (26,421 + 19,208 — estimate from the table).
 2. **Store it.** A per-pool TVL table refreshed on a schedule (house precedent:
    refreshable MVs `accounts_recent_mv`, `balance_aggregates_mv`), keyed by
-   pool, with the price bucket it used.
+   pool, with the price bucket it used. Fold `pool_activity` (0374 PR 4b, the
+   activity tie-break) into the same ranking source — one MV with both
+   columns — and drop `pool_activity_mv` rather than run two side by side.
 3. **Order the list** by stored TVL (NULLs last), then activity ledger, then
    pool id; the keyset carries all three.
 4. **`filter[min_tvl]`** becomes answerable from the same table (today 400).
