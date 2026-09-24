@@ -64,7 +64,7 @@ INNER JOIN (SELECT sequence, closed_at FROM ledgers WHERE sequence = :ledger) l
         ON l.sequence = t.ledger_sequence
 WHERE t.ledger_sequence = :ledger
   AND intDiv(t.ledger_sequence, 500000) = :partition
-  AND t.hash = unhex(:q_hex)
+  AND (t.hash = unhex(:q_hex) OR t.inner_tx_hash = unhex(:q_hex))  -- a fee-bump by its inner hash too
 ORDER BY t.application_order LIMIT 1;
 -- → identifier = q_hex, label = '' (PG parity), successful/last_activity_at set.
 
