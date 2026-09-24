@@ -65,7 +65,9 @@ async fn search_ch_rows_decode() {
         eprintln!("transactions empty — text-mode decode ok, skipping hash mode");
         return;
     };
-    fetch_search(
+    // The hash comes from `transactions`, so finding it proves the prefix
+    // index reaches it — not only that the rows decode.
+    let hits = fetch_search(
         &ch,
         &boot.hash_hex,
         &classifier::classify(&boot.hash_hex),
@@ -74,6 +76,10 @@ async fn search_ch_rows_decode() {
     )
     .await
     .expect("transaction/pool bucket rows must decode");
+    assert!(
+        hits.iter().any(|(bucket, _)| bucket == "transaction"),
+        "a transaction's own hash must find it through the prefix index"
+    );
 
     // A fee-bump's inner hash finds its transaction too, as the transaction
     // page already did.
