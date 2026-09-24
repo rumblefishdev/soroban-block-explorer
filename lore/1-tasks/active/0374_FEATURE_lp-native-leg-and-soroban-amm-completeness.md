@@ -2191,3 +2191,57 @@ for PR 4 and PR 5 (decision 2026-09-23).** Follow-ups recorded elsewhere: one
 display name from API to frontend (0546), rank pool results so `XLM` lists
 native pools first (0485), filter pools by asset identity (0470 stage 3,
 undecided), round-trip activity rows (this task, for PR 7).
+
+### PR 4 split into 4a–4d; 4a and 4b (2026-09-24)
+
+PR 4 lands as four PRs: 4a split the pool queries by topic, 4b order the list
+by activity, 4c Soroban reserves / shares / TVL, 4d Soroban chart.
+
+- **4a, #494 (`refactor/0374-split-pool-queries`):** `queries.rs` (1,928
+  lines) into one file per handler (`list_pools`, `get_pool`,
+  `get_pool_chart`, `list_participants`, `list_pool_activity`) plus the shared
+  `usd_analytics`. Pure move, SQL byte-identical. The naming rule it
+  prompted is now in `CLAUDE.md` (`6226e9a7`).
+- **4b (`fix/0374-pool-list-activity-order`, stacked on 4a):** the list orders
+  by `greatest(last_updated_ledger, max(pool_state_changes.ledger_sequence))`.
+  Measured on production: 699 of 770 Soroban pools are active later than
+  their row says (250 days on average, 801 at worst), and no Soroban pool
+  reached the first 5,000 rows of the full list; with the key 49 are in the
+  first 1,000 and 127 in the first 5,000. 310 were active in the last 7 days.
+- **Found while measuring 4b:** as one query the key cost 37–45M read_rows
+  and ~350 ms per page against 8–10M / ~180 ms before. ClickHouse
+  re-evaluates a `WITH` subquery at every reference and the list references
+  its page CTE six times, so the 5.1M-row aggregate ran six times; the #455
+  branch's "+3.5M" had measured one run. Decision (2026-09-24): two queries —
+  pick the page (5.1M rows / 30–60 ms), then enrich those pool ids (8–14M /
+  ~180 ms). Paging forward and back, the filters and the id lookup verified
+  on the local API against production.
+
+### 4b reworked: the activity key is stored, not derived per request (2026-09-24)
+
+Decision 90 A replaced the two-query list: `pool_activity` (table) and
+`pool_activity_mv` (refreshable MV, every 2 minutes, the `accounts_recent_mv`
+pattern) keep each Soroban pool's last reserve change; the list is one query
+again with `LEFT JOIN pool_activity`, ordered by
+`greatest(last_updated_ledger, last_activity_ledger)`.
+
+- **Plane filter added.** The MV keeps only `pool_state_changes` rows of the
+  plane the pool declares in `pool_instance_state`, as the schema requires:
+  a plane entry names its pool in an attacker-writable key. The first cut of
+  4b took the max over every row. No foreign row exists today (0 of 5.02M;
+  the order differed for 0 of 774 pools).
+- **DDL run on production by the operator, 2026-09-24 ~11:01 UTC**; first
+  refresh 11:02 UTC, 774 rows, latest activity 14 ledgers behind the tip, no
+  exception in `system.view_refreshes`. The MV's SELECT reads 5.0M rows in
+  ~0.1 s per refresh.
+- **Cost per list page** (local API against production, `query_log`):
+  7–15M rows, 170–490 ms — against 37–45M for the single query that derived
+  the key inline and 5.1M + 8–14M for the two-query version.
+- **Deploy order:** the API reads `pool_activity`, so the table must exist
+  before the API deploy — done.
+- **PR 3 is live after all.** The hold (decision 2026-09-23) was overtaken:
+  the production API Lambda was updated from `develop` 2026-09-24 09:33:49
+  UTC and the SPA redeployed at 11:01:57 UTC (its bundle carries
+  `pool_kind`). Between the two the pool list crashed on the old SPA — task 0582. Until 4b–4d and PR 5 ship, a Soroban pool on production shows `—` for
+  reserves, TVL and shares, zeros for participants and activity, and sits
+  deep in the default order (reachable through the kind filter).

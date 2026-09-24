@@ -636,6 +636,7 @@ other 12 tables.
 | `liquidity_pools`                 | `pool_id` (FixedString(32) hash)                                                  | no              |
 | `lp_positions`                    | `(pool_id, account_id)`                                                           | no              |
 | `transaction_hash_index`          | `hash` (FixedString(32))                                                          | no              |
+| `transaction_hash_prefix_index`   | `(hash_prefix, ledger_sequence)` (8-byte hash prefix, task 0580)                  | no              |
 | `operations_appearances`          | `(ledger_sequence, transaction_id, application_order)`                            | no              |
 | `transaction_participants`        | `(account_id, ledger_sequence, application_order)`                                | no              |
 | `soroban_events`                  | `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)` | no              |
