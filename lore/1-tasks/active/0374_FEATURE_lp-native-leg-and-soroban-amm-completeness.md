@@ -2191,3 +2191,28 @@ for PR 4 and PR 5 (decision 2026-09-23).** Follow-ups recorded elsewhere: one
 display name from API to frontend (0546), rank pool results so `XLM` lists
 native pools first (0485), filter pools by asset identity (0470 stage 3,
 undecided), round-trip activity rows (this task, for PR 7).
+
+### PR 4 split into 4a–4d; 4a and 4b (2026-09-24)
+
+PR 4 lands as four PRs: 4a split the pool queries by topic, 4b order the list
+by activity, 4c Soroban reserves / shares / TVL, 4d Soroban chart.
+
+- **4a, #494 (`refactor/0374-split-pool-queries`):** `queries.rs` (1,928
+  lines) into one file per handler (`list_pools`, `get_pool`,
+  `get_pool_chart`, `list_participants`, `list_pool_activity`) plus the shared
+  `usd_analytics`. Pure move, SQL byte-identical. The naming rule it
+  prompted is now in `CLAUDE.md` (`6226e9a7`).
+- **4b (`fix/0374-pool-list-activity-order`, stacked on 4a):** the list orders
+  by `greatest(last_updated_ledger, max(pool_state_changes.ledger_sequence))`.
+  Measured on production: 699 of 770 Soroban pools are active later than
+  their row says (250 days on average, 801 at worst), and no Soroban pool
+  reached the first 5,000 rows of the full list; with the key 49 are in the
+  first 1,000 and 127 in the first 5,000. 310 were active in the last 7 days.
+- **Found while measuring 4b:** as one query the key cost 37–45M read_rows
+  and ~350 ms per page against 8–10M / ~180 ms before. ClickHouse
+  re-evaluates a `WITH` subquery at every reference and the list references
+  its page CTE six times, so the 5.1M-row aggregate ran six times; the #455
+  branch's "+3.5M" had measured one run. Decision (2026-09-24): two queries —
+  pick the page (5.1M rows / 30–60 ms), then enrich those pool ids (8–14M /
+  ~180 ms). Paging forward and back, the filters and the id lookup verified
+  on the local API against production.
