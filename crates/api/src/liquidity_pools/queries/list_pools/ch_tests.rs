@@ -18,20 +18,27 @@ use super::*;
 
 const DB: &str = "api_test_0374_pool_activity";
 
-// Pool ids as 32-byte hex: `c1` classic, `51` / `52` soroban.
+// Pool ids as 32-byte hex: `c1` classic, `51` to `54` soroban.
 const CLASSIC: &str = "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1";
 const SOROBAN_SPOOFED: &str = "5151515151515151515151515151515151515151515151515151515151515151";
 const SOROBAN_ACTIVE: &str = "5252525252525252525252525252525252525252525252525252525252525252";
+const SOROBAN_LATE: &str = "5353535353535353535353535353535353535353535353535353535353535353";
+const SOROBAN_UNREFRESHED: &str =
+    "5454545454545454545454545454545454545454545454545454545454545454";
 
 async fn seed(ch: &clickhouse::Client) {
     for sql in [
         // A classic pool's own row moves with every trade: last activity 200.
-        // Both soroban rows sit at their registration ledgers (100, 110).
+        // The soroban rows sit at their registration ledgers. LATE and
+        // UNREFRESHED register (500, 400) AFTER their last change (120, 50),
+        // so the page's activity key is no lower bound on their reserve rows.
         format!(
             "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs, pool_type_raw) VALUES \
              (unhex('{CLASSIC}'), 30, 200, 0, [], ''), \
              (unhex('{SOROBAN_SPOOFED}'), 30, 100, 1, [1001, 1002], 'constant'), \
-             (unhex('{SOROBAN_ACTIVE}'), 30, 110, 1, [], '')"
+             (unhex('{SOROBAN_ACTIVE}'), 30, 110, 1, [], ''), \
+             (unhex('{SOROBAN_LATE}'), 30, 500, 1, [1001, 1002], ''), \
+             (unhex('{SOROBAN_UNREFRESHED}'), 30, 400, 1, [1001, 1002], '')"
         ),
         // Two classic legs, so both scale by the protocol's 7 decimals.
         "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, id) VALUES \
@@ -43,7 +50,9 @@ async fn seed(ch: &clickhouse::Client) {
         format!(
             "INSERT INTO pool_instance_state (pool_id, plane_id, share_token_id, total_shares, derived_at_ledger) VALUES \
              (unhex('{SOROBAN_SPOOFED}'), 7, 501, 252647541418, 100), \
-             (unhex('{SOROBAN_ACTIVE}'), 8, 0, 0, 110)"
+             (unhex('{SOROBAN_ACTIVE}'), 8, 0, 0, 110), \
+             (unhex('{SOROBAN_LATE}'), 9, 0, 0, 500), \
+             (unhex('{SOROBAN_UNREFRESHED}'), 10, 0, 0, 400)"
         ),
         "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES (501, 'CSHARETOKEN', false)"
             .to_string(),
@@ -55,7 +64,8 @@ async fn seed(ch: &clickhouse::Client) {
             "INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id) VALUES \
              (unhex('{SOROBAN_SPOOFED}'), 150, [10000000, 20000000], 7), \
              (unhex('{SOROBAN_SPOOFED}'), 900, [999990000000, 1], 666), \
-             (unhex('{SOROBAN_ACTIVE}'), 300, [1, 2], 8)"
+             (unhex('{SOROBAN_ACTIVE}'), 300, [1, 2], 8), \
+             (unhex('{SOROBAN_LATE}'), 120, [30000000, 40000000], 9)"
         ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
@@ -92,6 +102,15 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
             .await
             .expect("refresh pool_activity_mv");
     }
+    // A change the refresh has not reached yet: UNREFRESHED has no
+    // `pool_activity` row, so its reserves must still read.
+    ch.query(&format!(
+        "INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id) VALUES \
+         (unhex('{SOROBAN_UNREFRESHED}'), 50, [50000000, 60000000], 10)"
+    ))
+    .execute()
+    .await
+    .expect("seed unrefreshed change");
 
     let params = ResolvedPoolListParams {
         limit: 10,
@@ -113,6 +132,8 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
     assert_eq!(
         order,
         vec![
+            (SOROBAN_LATE, 500),
+            (SOROBAN_UNREFRESHED, 400),
             (SOROBAN_ACTIVE, 300),
             (CLASSIC, 200),
             (SOROBAN_SPOOFED, 150)
@@ -135,6 +156,21 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
         .find(|r| r.pool_id_hex == SOROBAN_ACTIVE)
         .expect("active pool listed");
     assert_eq!(active.total_shares.as_deref(), Some("0"));
+
+    // The reserve read's lower bound. LATE's latest row (120) is older than
+    // every activity key on the page (lowest 150), so a bound on that key hides
+    // it; UNREFRESHED has no `pool_activity` entry, which must lift the bound.
+    for (pool, want) in [
+        (SOROBAN_LATE, [Some("3"), Some("4")]),
+        (SOROBAN_UNREFRESHED, [Some("5"), Some("6")]),
+    ] {
+        let row = rows
+            .iter()
+            .find(|r| r.pool_id_hex == pool)
+            .expect("pool listed");
+        let reserves: Vec<Option<&str>> = row.legs.iter().map(|l| l.reserve.as_deref()).collect();
+        assert_eq!(reserves, want, "reserves of {pool}");
+    }
 
     // The detail reads the same values through its own statement (8 binds).
     let detail = crate::liquidity_pools::queries::fetch_pool_by_id(&ch, SOROBAN_SPOOFED)

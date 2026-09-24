@@ -109,8 +109,11 @@
 --                  declares (argMax(plane_id, derived_at_ledger) FROM
 --                  pool_instance_state) — a plane names its pool in a key any
 --                  contract can write, so the filter is required, and
---                  ledger_sequence >= the page's oldest activity (no page
---                  pool's latest row can precede it);
+--                  ledger_sequence >= the oldest pool_activity ledger among
+--                  the page's Soroban pools (that table is the max of these
+--                  same rows, so no pool's latest row precedes its own entry;
+--                  a pool the refresh has not reached joins as 0 and lifts
+--                  the bound);
 --       shares   = argMax(total_shares, derived_at_ledger) FROM
 --                  pool_instance_state, with the share token's decimals from
 --                  soroban_contract_metadata (NULL when it publishes none).

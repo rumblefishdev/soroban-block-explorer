@@ -91,7 +91,9 @@ struct PoolListChRow {
 /// `greatest` rather than a per-kind branch: a classic pool has no
 /// `pool_activity` row, so the join misses and the column wins — read live, it
 /// never lags the MV's refresh; a soroban pool's column is its registration,
-/// which its activity is never earlier than. A join miss yields `0`, not NULL
+/// which its last change normally follows (every pool on production,
+/// 2026-09-24). Nothing relies on that: the reserve read is bounded by
+/// `pool_activity` alone, not by this key. A join miss yields `0`, not NULL
 /// (`join_use_nulls` is refused for the read-only user), which `greatest`
 /// ignores.
 const ACTIVITY_LEDGER: &str = "greatest(lp.last_updated_ledger, pa.last_activity_ledger)";

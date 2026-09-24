@@ -36,7 +36,7 @@ fn a_soroban_pool_reads_its_instance_state() {
     assert_eq!(pool_total_shares(None, None, Some(7), "", &holding), None);
 }
 
-/// A stored 0 is a number only when it is a measurement (decision 96 A).
+/// A stored 0 is a number only when it is a measurement (task 0374, decision 96 A: the zero-shares rule).
 #[test]
 fn a_zero_is_shown_only_when_measured() {
     let empty = raw(&EMPTY);
