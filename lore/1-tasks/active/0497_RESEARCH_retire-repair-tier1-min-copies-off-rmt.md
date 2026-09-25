@@ -295,3 +295,10 @@ old image fails with `SchemaMismatch` (roll back = re-add the column with
 `MODIFY COLUMN … DEFAULT NULL` before it runs the new writer. Left as found:
 the unused `domain::Nft` type still lists the field; the Hot/Pending merge in
 `stage/nfts.rs` is duplicated (pre-existing).
+
+**Merged 2026-09-25.** Split after review (owner: a move never shares a PR
+with logic): #503 carried the three pure moves (merged 13:19 UTC), #501 the
+logic only — 0 moved lines in its final diff (merged 13:42 UTC, `d91a2890`).
+Rollout step 2 (indexer deploy) ships with the next release; step 3 (DROP on
+both tables) follows once every old indexer container is gone. Until step 3
+the table keeps the column with `DEFAULT NULL`, a state safe for both writers.
