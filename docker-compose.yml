@@ -78,6 +78,9 @@ services:
         condition: service_healthy
     volumes:
       - ./crates/db-clickhouse/schema/init.sql:/init.sql:ro
+      # Tables still written while a parallel change replaces them
+      # (`transitional.sql` header). Applied after `init.sql`.
+      - ./crates/db-clickhouse/schema/transitional.sql:/transitional.sql:ro
     entrypoint:
       - clickhouse-client
       - --host=clickhouse
@@ -85,7 +88,9 @@ services:
       - --user=default
       - --password=clickhouse
       - --multiquery
-      - --queries-file=/init.sql
+      - --queries-file
+      - /init.sql
+      - /transitional.sql
     restart: 'no'
 
 volumes:

@@ -17,6 +17,11 @@ pub mod mtls;
 /// integration tests).
 pub const INIT_SQL: &str = include_str!("../schema/init.sql");
 
+/// Tables being replaced by a parallel change: still on production and still
+/// written, so a fresh database needs them too, but not part of the end state
+/// `INIT_SQL` describes. Applied after it by [`apply_init_sql`].
+pub const TRANSITIONAL_SQL: &str = include_str!("../schema/transitional.sql");
+
 /// Default ClickHouse HTTP endpoint when `CLICKHOUSE_URL` is not set.
 pub const DEFAULT_URL: &str = "http://localhost:8123";
 
@@ -86,7 +91,10 @@ pub enum SchemaError {
 /// embedded semicolons (no string literals, no functions), so naive
 /// splitting is safe — keep the schema in that style.
 pub async fn apply_init_sql(client: &Client) -> Result<(), SchemaError> {
-    for stmt in split_statements(INIT_SQL) {
+    for stmt in split_statements(INIT_SQL)
+        .into_iter()
+        .chain(split_statements(TRANSITIONAL_SQL))
+    {
         client.query(&stmt).execute().await?;
     }
     Ok(())
@@ -200,12 +208,23 @@ mod tests {
         // task 0372: added `transaction_operations` and
         // `pool_operation_amounts` (the operation tables located by the
         // transaction position), dropped `operation_pools` (no reader since
-        // task 0491). 41 → 42.
+        // task 0491). 41 → 42. The two tables they replace moved to
+        // `transitional.sql`. 42 → 40.
         assert_eq!(
             stmts.len(),
-            42,
-            "expected 39 tables + 3 materialized views, got {}",
+            40,
+            "expected 37 tables + 3 materialized views, got {}",
             stmts.len()
         );
+    }
+
+    #[test]
+    fn transitional_sql_holds_only_idempotent_tables() {
+        for stmt in split_statements(TRANSITIONAL_SQL) {
+            assert!(
+                stmt.starts_with("CREATE TABLE IF NOT EXISTS "),
+                "transitional.sql must stay re-runnable: {stmt}"
+            );
+        }
     }
 }

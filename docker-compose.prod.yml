@@ -249,7 +249,9 @@ services:
       - --host=clickhouse
       - --port=9000
       - --multiquery
-      - --queries-file=/init.sql
+      - --queries-file
+      - /init.sql
+      - /transitional.sql
     volumes:
       - /etc/soroban-backup/clickhouse-client.xml:/etc/clickhouse-backup/client.xml:ro
     # `restart: 'no'` is inherited from the base. Re-runs on every
