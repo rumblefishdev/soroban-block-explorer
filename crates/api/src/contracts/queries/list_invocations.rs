@@ -75,18 +75,26 @@ pub async fn fetch_invocation_appearances(
     // Step 1: contract-scoped driver seek. `contract_id` is the leading PK of
     // `contract_activity`, so the query reads only this contract's rows;
     // `invocation_count > 0` keeps the invoked ones (a touched-only row counts
-    // 0). No FINAL — with it CH merges the contract's rows across every part
-    // (~38× read amplification, measured on the invocations table); `LIMIT 1
-    // BY` collapses a rare re-ingest duplicate instead.
+    // 0). The page LIMIT sits INSIDE the subquery so the read stops at it in
+    // key order; `LIMIT 1 BY` on the same level as the LIMIT disables that
+    // (measured on a SAC with 10 M weekly invocations: 22.3 M rows read flat,
+    // 4.4 M nested). No FINAL — with it CH merges the contract's rows across
+    // every part (~38× read amplification, measured on the invocations table);
+    // the outer `LIMIT 1 BY` collapses a rare re-ingest duplicate instead.
     let driver_sql = format!(
-        "SELECT ledger_sequence, application_order, caller_id \
-         FROM contract_activity \
-         WHERE contract_id = ? \
-           AND invocation_count > 0 \
-           AND ledger_sequence <= (SELECT max(sequence) FROM ledgers){keyset} \
-         ORDER BY ledger_sequence {order}, application_order {order} \
-         LIMIT 1 BY ledger_sequence, application_order \
-         LIMIT ?"
+        "SELECT m.ledger_sequence AS ledger_sequence, \
+                m.application_order AS application_order, \
+                m.caller_id AS caller_id \
+         FROM ( \
+            SELECT ledger_sequence, application_order, caller_id \
+            FROM contract_activity \
+            WHERE contract_id = ? \
+              AND invocation_count > 0 \
+              AND ledger_sequence <= (SELECT max(sequence) FROM ledgers){keyset} \
+            ORDER BY ledger_sequence {order}, application_order {order} \
+            LIMIT ? \
+         ) m \
+         LIMIT 1 BY m.ledger_sequence, m.application_order"
     );
     let key_rows = client
         .query(&driver_sql)
