@@ -4340,7 +4340,8 @@
                   "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
                 },
                 "total_shares": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Pool shares outstanding, as a decimal string. Classic: the latest\nsnapshot. Soroban: the pool's own instance storage, scaled by its share\ntoken's published decimals; `null` when the pool keeps no total there\n(concentrated and config-factory pools) or the scale is unknown — a\n`0` is served only for a pool whose every reserve is `0`."
                 },
                 "tvl": {
                   "type": ["string", "null"],
@@ -4622,7 +4623,8 @@
             "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
           },
           "total_shares": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Pool shares outstanding, as a decimal string. Classic: the latest\nsnapshot. Soroban: the pool's own instance storage, scaled by its share\ntoken's published decimals; `null` when the pool keeps no total there\n(concentrated and config-factory pools) or the scale is unknown — a\n`0` is served only for a pool whose every reserve is `0`."
           },
           "tvl": {
             "type": ["string", "null"],

@@ -91,19 +91,25 @@ pub(super) fn leg_reserves(
         .collect()
 }
 
-/// A raw integer amount in stroops as a decimal string, trailing zeros
-/// trimmed — the shape ClickHouse gives a classic reserve (`Decimal128(7)`),
-/// so both kinds of pool read the same on the wire.
+/// A raw integer amount in stroops as a decimal string — see [`scale_raw`].
 fn scale_by_7(raw: &str) -> Option<String> {
+    scale_raw(raw, 7)
+}
+
+/// A raw integer amount scaled by `decimals`, as a decimal string with
+/// trailing zeros trimmed — the shape ClickHouse gives a classic reserve
+/// (`Decimal128(7)`), so both kinds of pool read the same on the wire.
+pub(super) fn scale_raw(raw: &str, decimals: u32) -> Option<String> {
     let v: i128 = raw.trim().parse().ok()?;
     let sign = if v < 0 { "-" } else { "" };
     let abs = v.unsigned_abs();
-    let whole = abs / 10_000_000;
-    let frac = abs % 10_000_000;
+    let unit = 10u128.checked_pow(decimals)?;
+    let whole = abs / unit;
+    let frac = abs % unit;
     if frac == 0 {
         return Some(format!("{sign}{whole}"));
     }
-    let frac = format!("{frac:07}");
+    let frac = format!("{frac:0width$}", width = decimals as usize);
     Some(format!("{sign}{whole}.{}", frac.trim_end_matches('0')))
 }
 

@@ -135,6 +135,7 @@ mod list_participants;
 mod list_pool_activity;
 mod list_pools;
 mod soroban_reserves;
+mod soroban_total_shares;
 mod usd_analytics;
 
 pub use get_pool::fetch_pool_by_id;
