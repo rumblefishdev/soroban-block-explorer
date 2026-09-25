@@ -28,11 +28,11 @@
 --     frontend uses synthetic cityHash64 surrogate from E15 as routing
 --     key and the API decomposes.
 --   • Burned NFT: `current_owner_id IS NULL` → LEFT JOIN yields NULL. Note
---     the burn ALSO erases `nfts.minted_at_ledger` — see the next bullet.
---   • **`minted_at_ledger` is DERIVED from `nft_ownership`, not read from the
---     `nfts` column (task 0528).** `nfts` is Replacing(current_owner_ledger)
---     with one row per token, so the burn above — or any later transfer —
---     replaces the WHOLE row with one carrying no mint ledger. Detail scopes
+--     the mint ledger comes from `nft_ownership` — see the next bullet.
+--   • **`minted_at_ledger` is DERIVED from `nft_ownership` (task 0528); `nfts`
+--     stores no mint ledger (task 0497).** `nfts` is
+--     Replacing(current_owner_ledger) with one row per token, so any stored
+--     copy was replaced by the next transfer or burn. Detail scopes
 --     the derivation to the resolved contract:
 --         LEFT JOIN (SELECT contract_id, token_id,
 --                           min(ledger_sequence) AS minted_at_ledger
@@ -41,8 +41,7 @@
 --                       AND event_type = 0
 --                     GROUP BY contract_id, token_id) mi
 --     `event_type = 0` and the `nullIf(_, 0)` wrapper are both load-bearing —
---     see `15_get_nfts_list.sql` for the full reasoning. `nfts.minted_at_ledger`
---     stays written and unread until task 0529 drops it.
+--     see `15_get_nfts_list.sql` for the full reasoning.
 --
 -- ---------------------------------------------------------------------------
 -- DRIFT NOTICE — as with E15, the statement below is an intent sketch, not the

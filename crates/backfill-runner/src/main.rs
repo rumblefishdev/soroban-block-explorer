@@ -178,15 +178,11 @@ enum Command {
     },
 
     /// Tier-1 post-merge column rebuild for the Hetzner CH
-    /// (task 0228 Phase 5). Reconstructs 6 of the 12 Tier-1 columns
-    /// across 5 state tables (`accounts.first_seen_ledger`,
+    /// (task 0228 Phase 5). Reconstructs 4 MIN-semantics columns
+    /// across 3 state tables (`accounts.first_seen_ledger`,
     /// `lp_positions.first_deposit_ledger`,
-    /// `nfts.minted_at_ledger`, `nfts_pending.minted_at_ledger`,
     /// `soroban_contracts.deployer_id` + `deployed_at_ledger`).
-    /// These silently corrupt under cross-machine
-    /// `ReplacingMergeTree` collapse. The remaining 6 columns
-    /// (NFT metadata: `collection_name`, `name`, `media_url` × 2
-    /// tables) are filled by Stage 2 enrichment (task 0231).
+    /// These silently corrupt under `ReplacingMergeTree` collapse.
     /// Per-table staging + EXCHANGE TABLES atomic swap.
     RepairTier1 {
         /// Build staging tables and log their row counts, then drop
@@ -340,12 +336,10 @@ async fn main() {
                 .await
                 .expect("repair_tier1 failed");
             println!(
-                "repair_tier1 completed (dry_run={}): accounts={} lp_positions={} nfts={} nfts_pending={} soroban_contracts={}",
+                "repair_tier1 completed (dry_run={}): accounts={} lp_positions={} soroban_contracts={}",
                 stats.dry_run,
                 stats.accounts_rows,
                 stats.lp_positions_rows,
-                stats.nfts_rows,
-                stats.nfts_pending_rows,
                 stats.soroban_contracts_rows,
             );
         }

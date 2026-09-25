@@ -207,3 +207,91 @@ with the measured reason), implementation subtasks filed for the routes that
 win, and an explicit statement of what remains in `repair-tier1` and until
 when. The end state — the subcommand deleted, `docs/backfills.md` losing the
 mandatory step — is the success criterion even if it lands incrementally.
+
+## Progress 2026-09-25 — NFT entries retired (branch `refactor/0497-retire-nft-repair-entries`)
+
+- **Retired:** `nfts.minted_at_ledger`, `nfts_pending.minted_at_ledger`.
+  Checked before deleting: every NFT query in `crates/api` derives the value
+  from `nft_ownership` (including the per-contract list); `system.query_log`
+  over 14 days shows the stored column only written by the indexer and read
+  by no service user.
+- **Kept, and why:** `accounts.first_seen_ledger` and
+  `soroban_contracts.{deployer_id, deployed_at_ledger}` — read by the API and
+  corrected by nothing else. `lp_positions.first_deposit_ledger` — broken
+  (0468: zeroes 95% of positions), yet the only thing correcting the live
+  drift (7 of 8 sampled live rows later than the true first deposit); it
+  retires with 0468's storage fix, not before.
+- **Found:** the two CH-gated `accounts` tests race on the shared
+  `accounts_staging_repair_tier1` table when run in parallel (one fails with
+  the default thread count, all pass with `--test-threads=1`). Pre-existing.
+- The `nfts.minted_at_ledger` column itself stays (dropping it is a
+  production `ALTER`, formerly 0529).
+
+### Stored NFT mint ledgers measured (2026-09-25) — the copy must go, not just its repair
+
+Owner's rule (karolkow, 2026-09-25): an unread column is no licence to keep a
+false value in the database. Production, against `min(ledger_sequence)` of
+Mint rows in the matching ownership table:
+
+| Table          | Tokens | Wrong value | NULL though the mint is known | Value with no Mint row |
+| -------------- | ------ | ----------- | ----------------------------- | ---------------------- |
+| `nfts`         | 14,045 | 0           | 706                           | 1                      |
+| `nfts_pending` | 277    | 0           | 1                             | 63                     |
+
+The drift now surfaces as NULL, not as a wrong number: a later batch carries
+no mint (`stage.rs` merges `(None, b) => b` within a batch only) and the RMT
+replace keeps that row. Retiring the repair entry without dropping the column
+lets the NULLs grow. Route: drop `minted_at_ledger` from both tables (former 0529) — the fact lives in `nft_ownership*`, the copy can only drift.
+
+### NFT mint ledger no longer stored (2026-09-25, decision karolkow 37 A)
+
+Branch `refactor/0497-retire-nft-repair-entries`, commit `0c217dda` (after two
+pure moves: NFT staging → `persist/stage/nfts.rs`, NFT query tests →
+`nfts/queries/{tests,decode_smoke}.rs`). `minted_at_ledger` leaves `NftRow`,
+`NftPendingRow`, the staging merge and `init.sql`; the parser keeps its
+in-batch mint ledger (it selects the enrichment candidates). Considered and
+rejected (37 C): a min-carrying `nft_mints` table — a second copy of what
+`nft_ownership` already holds and reads cheaply (23k rows).
+
+**Rollout — verified on a local CH 26.3 with the new writer (g9 e2e):**
+
+| Table state                                 | New writer                               |
+| ------------------------------------------- | ---------------------------------------- |
+| column present, no DEFAULT (production now) | **fails** — `SchemaMismatch` on `NftRow` |
+| column present, `DEFAULT NULL`              | passes                                   |
+| column dropped                              | passes                                   |
+
+1. Operator, before the indexer deploy (metadata-only, old writer unaffected):
+   `ALTER TABLE nfts MODIFY COLUMN minted_at_ledger Nullable(Int64) DEFAULT NULL`
+   and the same on `nfts_pending`.
+2. Deploy the indexer.
+3. After every old container is recycled: `DROP COLUMN minted_at_ledger` on
+   BOTH tables in one sitting — `nft-reclassify` promotes with
+   `INSERT INTO nfts SELECT * FROM nfts_pending`, which needs equal shapes.
+
+`api-types` regenerated: no diff (the wire field is the derived value).
+
+**Nothing true is lost with the column (checked 2026-09-25).** The 64 stored
+values with no Mint row behind them (1 in `nfts`, 63 in `nfts_pending`) are
+all `0` — not a ledger. Their tokens carry transfer rows only; `0` is the
+`repair-tier1` LEFT JOIN miss writing the type default, the same trap as
+0468's LP zeros. Every other stored value equals the `nft_ownership` mint.
+
+**Rollout step 1 done (2026-09-25 ~12:43 UTC, operator).** Both
+`MODIFY COLUMN minted_at_ledger Nullable(Int64) DEFAULT NULL` applied:
+`system.columns` shows `DEFAULT` / `NULL` on `nfts` and `nfts_pending`.
+Ingest unaffected — latest ledger 64,610,895 closed 3 s before the check
+(12:44:17 UTC). Steps 2 (indexer deploy) and 3 (DROP on both tables) wait for
+the merge.
+
+**Review (2026-09-25, `/code-review`, both axes) — fixed in `08df49dc`, `031ac423`:**
+the 0528 test now picks a token moved after its mint (verified against a
+seeded local CH: mint at 150, transfer at 300, passes without skipping);
+comments and guides the drop made false corrected; the live-tail cutover
+runbook filtered on the dropped column and now uses `current_owner_ledger`.
+Rollout caveats the review added: after step 3 an indexer rollback to the
+old image fails with `SchemaMismatch` (roll back = re-add the column with
+`DEFAULT NULL` first); a local CH built from the old `init.sql` needs the same
+`MODIFY COLUMN … DEFAULT NULL` before it runs the new writer. Left as found:
+the unused `domain::Nft` type still lists the field; the Hot/Pending merge in
+`stage/nfts.rs` is duplicated (pre-existing).

@@ -663,7 +663,6 @@ CREATE TABLE IF NOT EXISTS nfts (
     collection_name       Nullable(String),
     name                  Nullable(String),
     media_url             Nullable(String),
-    minted_at_ledger      Nullable(Int64),
     current_owner_id      Nullable(Int64),
     current_owner_ledger  Int64 DEFAULT 0
 )
@@ -689,7 +688,6 @@ CREATE TABLE IF NOT EXISTS nfts_pending (
     collection_name       Nullable(String),
     name                  Nullable(String),
     media_url             Nullable(String),
-    minted_at_ledger      Nullable(Int64),
     current_owner_id      Nullable(Int64),
     current_owner_ledger  Int64 DEFAULT 0
 )

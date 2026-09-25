@@ -243,7 +243,9 @@ pub struct BalanceRow {
 }
 
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
-/// = (contract_id, token_id). No surrogate id.
+/// = (contract_id, token_id). No surrogate id. No mint ledger: the mint is
+/// the `nft_ownership` row with `event_type = 0`, and a copy here was
+/// replaced by every later transfer (task 0497).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct NftRow {
     pub contract_id: i64,
@@ -251,7 +253,6 @@ pub struct NftRow {
     pub collection_name: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
-    pub minted_at_ledger: Option<i64>,
     pub current_owner_id: Option<i64>,
     pub current_owner_ledger: i64,
 }
@@ -271,7 +272,6 @@ pub struct NftPendingRow {
     pub collection_name: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
-    pub minted_at_ledger: Option<i64>,
     pub current_owner_id: Option<i64>,
     pub current_owner_ledger: i64,
 }

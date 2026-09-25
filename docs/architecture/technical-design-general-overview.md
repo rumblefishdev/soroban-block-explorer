@@ -1237,7 +1237,6 @@ CREATE TABLE nfts (
     name                 VARCHAR(256),
     media_url            TEXT,
     metadata             JSONB,
-    minted_at_ledger     BIGINT,
     current_owner_id     BIGINT       REFERENCES accounts(id),                     -- ADR 0026
     current_owner_ledger BIGINT,
     UNIQUE (contract_id, token_id)

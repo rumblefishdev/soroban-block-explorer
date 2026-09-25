@@ -20,37 +20,27 @@
 //! `nfts.minted_at_ledger` was losing ~30 tokens/day, and 3.5% of a
 //! 400-row `accounts` sample carried a `first_seen_ledger` later than the
 //! true first appearance. So a clean run of this pass is point-in-time
-//! cleanup, never a guarantee. Task 0497 retires the compromise itself;
-//! task 0528 already moved `nfts.minted_at_ledger` off this pass by
-//! deriving it at read time.
+//! cleanup, never a guarantee. Task 0497 retires the compromise itself,
+//! one entry at a time as each column stops being read from its RMT copy.
 //!
-//! Twelve Tier-1 columns silently corrupt this way; this pass repairs
-//! the **6** that derive from on-chain facts (across **5** tables). The
-//! remaining 6 (NFT metadata: `collection_name`, `name`, `media_url` ×
-//! `nfts` + `nfts_pending`) require external HTTP/IPFS fetches and are
-//! delivered by task 0231 (Stage 2 SEP-1 + NFT `token_uri` enrichment).
-//!
-//! ### Stage 1 scope (this module) — 6 columns × 5 tables
+//! ### Scope — 4 columns × 3 tables
 //!
 //! | Table | Column | Correct rebuild |
 //! |-------|--------|-----------------|
 //! | `accounts` | `first_seen_ledger` | `MIN(ledger_sequence) FROM transaction_participants` |
 //! | `lp_positions` | `first_deposit_ledger` | `MIN(ledger_sequence) FROM transaction_operations WHERE type = 22 (LiquidityPoolDeposit)` |
-//! | `nfts` | `minted_at_ledger` | `MIN(ledger_sequence) FROM nft_ownership WHERE event_type = 0 (Mint)` |
-//! | `nfts_pending` | `minted_at_ledger` | `MIN(ledger_sequence) FROM nft_ownership_pending WHERE event_type = 0` |
 //! | `soroban_contracts` | `deployer_id` + `deployed_at_ledger` | `argMin(deployer_id, wasm_uploaded_at_ledger)` + `MIN(wasm_uploaded_at_ledger)` over rows where `deployer_id IS NOT NULL` |
 //!
-//! ### Stage 2 scope (task 0231, deferred) — 6 columns × 2 tables
-//!
-//! `nfts.{collection_name, name, media_url}` and
-//! `nfts_pending.{collection_name, name, media_url}` — populated by
-//! per-row SEP-1 / NFT `token_uri` enrichment loop. Not repaired here.
+//! **Retired entries.** `nfts.minted_at_ledger` and
+//! `nfts_pending.minted_at_ledger`: both columns are dropped (task 0497) —
+//! the mint is the `nft_ownership` row with `event_type = 0`, which every NFT
+//! read derives it from.
 //!
 //! **Source selection rule**: state-shaped tables under
 //! `ReplacingMergeTree` collapse history on `OPTIMIZE FINAL`, so the
 //! historic MIN must come from append-only fact tables
-//! (`transaction_participants`, `transaction_operations`,
-//! `nft_ownership`). The one exception is `soroban_contracts`: deployer
+//! (`transaction_participants`, `transaction_operations`). The one
+//! exception is `soroban_contracts`: deployer
 //! info is only stored on `soroban_contracts` itself (no dedicated fact
 //! table exists for deployments), so the rebuild reads the raw
 //! pre-FINAL table and filters non-NULL rows — fragile if a full
@@ -59,12 +49,6 @@
 //! `OPTIMIZE FINAL` on `soroban_contracts` (the Phase 5 plan
 //! Step 2 lists only `wasm_interface_metadata` + `ledgers` for the
 //! pre-repair OPTIMIZE, so this is fine in the documented sequence).
-//!
-//! The remaining `nfts.{collection_name, name, media_url}` (and
-//! `nfts_pending.{collection_name, name, media_url}`) columns are filled
-//! by Stage 2 of the CH-enrichment plan (SEP-1 + NFT `token_uri` port,
-//! tracked separately). They remain NULL after Tier-1 — that is
-//! correct.
 //!
 //! ## Pattern
 //!
@@ -99,8 +83,6 @@ use crate::sink::Sink;
 pub struct RepairTier1Stats {
     pub accounts_rows: u64,
     pub lp_positions_rows: u64,
-    pub nfts_rows: u64,
-    pub nfts_pending_rows: u64,
     pub soroban_contracts_rows: u64,
     pub dry_run: bool,
 }
@@ -121,16 +103,11 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<RepairTier1Stats, Bac
 
     stats.accounts_rows = rebuild_accounts(client, dry_run).await?;
     stats.lp_positions_rows = rebuild_lp_positions(client, dry_run).await?;
-    stats.nfts_rows = rebuild_nfts(client, "nfts", "nft_ownership", dry_run).await?;
-    stats.nfts_pending_rows =
-        rebuild_nfts(client, "nfts_pending", "nft_ownership_pending", dry_run).await?;
     stats.soroban_contracts_rows = rebuild_soroban_contracts(client, dry_run).await?;
 
     info!(
         accounts = stats.accounts_rows,
         lp_positions = stats.lp_positions_rows,
-        nfts = stats.nfts_rows,
-        nfts_pending = stats.nfts_pending_rows,
         soroban_contracts = stats.soroban_contracts_rows,
         dry_run,
         "repair_tier1: completed"
@@ -237,62 +214,6 @@ async fn rebuild_lp_positions(
     info!(staging, rows, "repair_tier1: lp_positions staging built");
 
     finalize(client, "lp_positions", staging, dry_run).await?;
-    Ok(rows)
-}
-
-/// `nfts.minted_at_ledger` (and `nfts_pending.minted_at_ledger`) ←
-/// `MIN(ledger_sequence)` over rows in the matching `nft_ownership*`
-/// fact table filtered to `event_type = 0 (Mint)`. The plain "earliest
-/// ownership ledger" would be wrong: a Transfer/Burn at an earlier
-/// ledger (rare but legal under XDR replay races) would set
-/// `minted_at_ledger` to a non-mint ledger.
-///
-/// `event_type = 0` matches `domain::enums::NftEventType::Mint`.
-///
-/// `collection_name`, `name`, `media_url` stay at their existing values
-/// — populating those is Stage 2 work (SEP-1 + NFT `token_uri` port).
-async fn rebuild_nfts(
-    client: &ClickhouseClient,
-    nfts_table: &str,
-    ownership_table: &str,
-    dry_run: bool,
-) -> Result<u64, BackfillError> {
-    let staging = format!("{nfts_table}_staging_repair_tier1");
-    drop_if_exists(client, &staging).await?;
-    create_staging_like(client, nfts_table, &staging).await?;
-
-    let insert_sql = format!(
-        "INSERT INTO {staging} (contract_id, token_id, collection_name, name, media_url, minted_at_ledger, current_owner_id, current_owner_ledger)
-         SELECT
-             n.contract_id,
-             n.token_id,
-             n.collection_name,
-             n.name,
-             n.media_url,
-             ifNull(m.min_ledger, n.minted_at_ledger) AS minted_at_ledger,
-             n.current_owner_id,
-             n.current_owner_ledger
-           FROM {nfts_table} AS n FINAL
-           LEFT JOIN (
-             SELECT contract_id, token_id, min(ledger_sequence) AS min_ledger
-               FROM {ownership_table}
-              WHERE event_type = 0
-              GROUP BY contract_id, token_id
-           ) AS m ON m.contract_id = n.contract_id AND m.token_id = n.token_id"
-    );
-    client
-        .query(&insert_sql)
-        .execute()
-        .await
-        .map_err(BackfillError::Ch)?;
-
-    let rows = staging_row_count(client, &staging).await?;
-    info!(
-        staging = staging.as_str(),
-        rows, "repair_tier1: nfts staging built"
-    );
-
-    finalize(client, nfts_table, &staging, dry_run).await?;
     Ok(rows)
 }
 

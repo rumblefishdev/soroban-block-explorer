@@ -69,16 +69,16 @@ async fn nft_ch_rows_decode() {
         .expect("NftTransferChRow must decode");
 }
 
-/// Task 0528 regression — a token whose stored `nfts.minted_at_ledger` was
-/// clobbered to NULL by a later transfer / burn must still SERVE its mint
-/// ledger, derived from the append-only `nft_ownership`.
+/// Task 0528 regression — a token with a transfer or burn AFTER its mint must
+/// still SERVE its mint ledger, derived from the append-only `nft_ownership`.
 ///
-/// Fails on the pre-0528 code, which read the stored column and served
-/// `None` for every such token (621 / 13 915 on prod when this was filed).
+/// That later event is what used to clobber the stored copy: it replaced the
+/// whole `nfts` row with one carrying no mint ledger (621 / 13 915 tokens read
+/// `None` on prod when 0528 was filed). `nfts` stores no mint ledger since
+/// task 0497, so the subject is picked from `nft_ownership` alone.
 ///
-/// Picks its own subject: any token that is clobbered AND has a Mint row.
-/// Skips cleanly when the CH under test has none — a freshly seeded CH
-/// where no burn has landed yet is a legitimate empty case, not a failure.
+/// Skips cleanly when the CH under test has no such token — a freshly seeded
+/// CH where nothing has moved since its mint is a legitimate empty case.
 #[tokio::test]
 async fn clobbered_mint_ledger_is_served_from_ownership() {
     let Some(ch) = client() else {
@@ -86,21 +86,22 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
         return;
     };
 
-    // One clobbered token + the mint ledger the journal still holds for it.
+    // One token in `nfts` whose journal holds its mint AND a later non-mint
+    // event — the condition that clobbered the stored copy.
     let subject = ch
         .query(
             "SELECT sc.contract_id, n.token_id, m.minted_at_ledger \
              FROM ( \
-                 SELECT contract_id, token_id \
+                 SELECT DISTINCT contract_id, token_id \
                  FROM nfts \
-                 GROUP BY contract_id, token_id \
-                 HAVING argMax(minted_at_ledger, current_owner_ledger) IS NULL \
              ) n \
              INNER JOIN ( \
-                 SELECT contract_id, token_id, min(ledger_sequence) AS minted_at_ledger \
+                 SELECT contract_id, token_id, \
+                        minIf(ledger_sequence, event_type = 0) AS minted_at_ledger \
                  FROM nft_ownership \
-                 WHERE event_type = 0 \
                  GROUP BY contract_id, token_id \
+                 HAVING countIf(event_type = 0) > 0 \
+                    AND maxIf(ledger_sequence, event_type != 0) > minted_at_ledger \
              ) m ON m.contract_id = n.contract_id AND m.token_id = n.token_id \
              INNER JOIN soroban_contracts sc ON sc.id = n.contract_id \
              LIMIT 1",
@@ -110,7 +111,7 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
         .expect("subject probe must run");
 
     let Some((contract_id, token_id, expected)) = subject else {
-        eprintln!("no clobbered NFT on this CH — skipping 0528 regression");
+        eprintln!("no NFT moved after its mint on this CH — skipping 0528 regression");
         return;
     };
 
@@ -132,10 +133,10 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
 ///
 /// The risk this covers: the ORDER BY, the keyset predicate and the cursor
 /// payload each reference the mint ledger separately. If any one of them
-/// still read `nfts.minted_at_ledger` while the others read the derived
+/// read a stored mint ledger while the others read the derived
 /// value, pages would order by one key and seek by another — silently
 /// skipping or repeating rows, which no single-page test would notice.
-/// Clobbered and healthy tokens interleave by mint ledger, so a mismatch
+/// Tokens minted at many different ledgers interleave, so a mismatch
 /// cannot cancel out.
 ///
 /// Walks the whole list in 2-row pages and asserts every token is seen
