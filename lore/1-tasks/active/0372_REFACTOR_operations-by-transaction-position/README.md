@@ -122,14 +122,39 @@ PR 3 is written while the fill runs.
 
 ## Progress
 
-- **PR 1 (moves)** — branch `refactor/0372-move-operations-code`, commit
-  `40f281fa`, local. `transactions/queries.rs` 1,103 → 482 lines (list →
+- **PR 1 (moves)** — [#498](https://github.com/rumblefishdev/soroban-block-explorer/pull/498), merged. `transactions/queries.rs` 1,103 → 482 lines (list →
   `queries/list_transactions.rs`, 635); `stage.rs` 3,355 → 3,210 (operation
   staging → `stage/operations.rs`, 180). Only glue is new: imports, module
   lines, the wrapping signature. Checks: fmt, workspace clippy
   `-D warnings`, `api` + `db-clickhouse` 824 tests, CH-gated
   `db-clickhouse` 174 on a fresh ClickHouse 26.3; `api` decode smoke 21/25 —
   the 4 pool tests need pool rows an empty database lacks, as on `develop`.
+
+- **PR 2 (write both)** — branch `feat/0372-transaction-operations-dual-write`,
+  commits `56dfb092` (code), `714a9483` (docs). New tables:
+
+  - `transaction_operations` (codecs Delta / T64);
+  - `pool_operation_amounts`;
+  - both skip indexes of the old table left behind: no reader filters by pool
+    or contract since 0491 / 0541.
+
+  `operation_pools` is no longer written. Checks:
+
+  - `persist_e2e` drives a pool deposit through the real writer and reads
+    both twins back; verified red with the operation index left 1-based;
+  - workspace clippy clean; 952 unit and 175 CH-gated tests pass.
+
+- **Fill runbook** — [`fill_operations.zsh`](notes/fill_operations.zsh) with
+  [`fill_transaction_operations.sql`](notes/fill_transaction_operations.sql),
+  [`fill_pool_operation_amounts.sql`](notes/fill_pool_operation_amounts.sql),
+  [`gate_operations.sql`](notes/gate_operations.sql). Loop dry-run with stubbed
+  `chw`/`chq`: 6 fills and 48 gate queries for 3 slices. Read-only on
+  production, 64,000,000–64,050,000:
+  - the operations join reads 42.9 M rows in 1.2 s (2.2 GB);
+  - quarter gate 6,214,520 = 6,214,520 keys;
+  - amounts 7,911,730 = 7,911,730 keys.
+- **prices-api:** no `prices_*` user read `operations_appearances`,
+  `operation_pools` or `lp_operation_amounts` in 14 days (checked 2026-09-25).
 
 ## Acceptance Criteria
 
