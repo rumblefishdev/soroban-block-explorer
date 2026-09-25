@@ -10,7 +10,22 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
-interface DataListCardProps<T> {
+/**
+ * The unfiltered empty state — exactly one of: the standard `TableEmptyState`
+ * preset (`emptyKind`, the list pages) or a caller-rendered one
+ * (`renderEmpty`, detail sections with their own copy, icon or padding).
+ */
+type EmptyStateProps =
+  | { emptyKind: TableEmptyKind; renderEmpty?: undefined }
+  | { emptyKind?: undefined; renderEmpty: () => ReactNode };
+
+type DataListCardProps<T> = EmptyStateProps & {
+  /**
+   * Wraps the content (filters + body + pagination). Defaults to a plain
+   * `<Card>`; detail sections pass their own shell — a titled `SectionCard`,
+   * a `Card` with a `TableSectionHeader`, or a bare `Box` inside a tab.
+   */
+  renderContainer?: (content: ReactNode) => ReactNode;
   filters?: ReactNode;
   columnCount: number;
   isLoading: boolean;
@@ -24,6 +39,8 @@ interface DataListCardProps<T> {
   isError: boolean;
   error?: unknown;
   onRetry?: () => void;
+  /** Vertical padding of the error state. */
+  errorPy?: number;
   rows: readonly T[];
 
   renderTable: (rows: readonly T[]) => ReactNode;
@@ -38,7 +55,6 @@ interface DataListCardProps<T> {
   renderSkeleton?: () => ReactNode;
 
   hasActiveFilters?: boolean;
-  emptyKind: TableEmptyKind;
   emptyNoun: string;
   onClearFilters?: () => void;
   paginationCaption?: string;
@@ -47,9 +63,12 @@ interface DataListCardProps<T> {
   onPrev: () => void;
   onNext: () => void;
   skeletonRows?: number;
-}
+};
+
+const cardContainer = (content: ReactNode) => <Card>{content}</Card>;
 
 export function DataListCard<T>({
+  renderContainer = cardContainer,
   filters,
   columnCount,
   isLoading,
@@ -57,11 +76,13 @@ export function DataListCard<T>({
   isError,
   error,
   onRetry,
+  errorPy = 8,
   rows,
   renderTable,
   renderSkeleton,
   hasActiveFilters = false,
   emptyKind,
+  renderEmpty,
   emptyNoun,
   onClearFilters,
   paginationCaption = 'Latest results',
@@ -90,31 +111,35 @@ export function DataListCard<T>({
       <TableSkeleton rows={skeletonRows} columns={columnCount} />
     );
   } else if (isError) {
-    body = <QueryErrorState error={error} onRetry={onRetry} py={8} />;
+    body = <QueryErrorState error={error} onRetry={onRetry} py={errorPy} />;
   } else if (rows.length === 0) {
-    body = hasActiveFilters ? (
-      <EmptyState
-        icon={<SearchIcon />}
-        title={`No ${emptyNoun} match your filters`}
-        description="Try adjusting or clearing the active filters"
-        action={
-          onClearFilters ? (
-            <Button variant="contained" onClick={onClearFilters}>
-              Clear filters
-            </Button>
-          ) : undefined
-        }
-        py={8}
-      />
-    ) : (
-      <TableEmptyState kind={emptyKind} />
-    );
+    if (hasActiveFilters) {
+      body = (
+        <EmptyState
+          icon={<SearchIcon />}
+          title={`No ${emptyNoun} match your filters`}
+          description="Try adjusting or clearing the active filters"
+          action={
+            onClearFilters ? (
+              <Button variant="contained" onClick={onClearFilters}>
+                Clear filters
+              </Button>
+            ) : undefined
+          }
+          py={8}
+        />
+      );
+    } else if (renderEmpty) {
+      body = renderEmpty();
+    } else {
+      body = <TableEmptyState kind={emptyKind} />;
+    }
   } else {
     body = renderTable(rows);
   }
 
-  return (
-    <Card>
+  return renderContainer(
+    <>
       {filters}
       <Box>{body}</Box>
       <PaginationControls
@@ -124,6 +149,6 @@ export function DataListCard<T>({
         onPrev={onPrev}
         onNext={onNext}
       />
-    </Card>
+    </>
   );
 }
