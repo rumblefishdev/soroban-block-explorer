@@ -1283,14 +1283,18 @@ ORDER BY (contract_id, ledger_sequence, application_order);
 -- exactly one of the two on an invoked row (0 rows without a caller in the
 -- invocations table, 2026-09-25), neither on a row touched only by an
 -- operation event or an operation naming the contract. The caller is the
--- first invocation's; the invocations table's fold count is not carried —
--- nothing read it. No surrogate: the transaction is its position (ADR 0059).
+-- first invocation's. `invocation_count` is how many times the transaction
+-- called the contract (the invocations table's fold count: `fn_call`s of the
+-- execution trace merged with the auth tree), 0 on a touched-only row — no
+-- other table holds it, diagnostic events are not stored. No surrogate: the
+-- transaction is its position (ADR 0059).
 CREATE TABLE IF NOT EXISTS contract_activity (
     contract_id        Int64,
     ledger_sequence    Int64,
     application_order  Int16,
     caller_id          Nullable(Int64),
-    caller_contract_id Nullable(Int64)
+    caller_contract_id Nullable(Int64),
+    invocation_count   Int32
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)

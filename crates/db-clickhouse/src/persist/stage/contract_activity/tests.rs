@@ -18,14 +18,16 @@ fn column_order_contract_activity() {
             "ledger_sequence",
             "application_order",
             "caller_id",
-            "caller_contract_id"
+            "caller_contract_id",
+            "invocation_count"
         ]
     );
 }
 
 /// Every way a transaction touches a contract lands in `contract_activity`,
 /// keyed by the transaction's position, and only an invoked contract carries
-/// its caller — an account in `caller_id`, a contract in `caller_contract_id`.
+/// its caller — an account in `caller_id`, a contract in `caller_contract_id`
+/// — and a non-zero `invocation_count`.
 #[test]
 fn contract_activity_is_the_presence_plus_the_invocation_caller() {
     let hash = "ab".repeat(32);
@@ -96,12 +98,15 @@ fn contract_activity_is_the_presence_plus_the_invocation_caller() {
 
     rows(&mut out, &invocations, &tx_id_by_hash, from_events, 10).expect("stage");
 
-    let row = |contract_id, application_order, caller_id, caller_contract_id| ContractActivityRow {
-        contract_id,
-        ledger_sequence: 10,
-        application_order,
-        caller_id,
-        caller_contract_id,
+    let row = |contract_id, application_order, caller_id, caller_contract_id, invocation_count| {
+        ContractActivityRow {
+            contract_id,
+            ledger_sequence: 10,
+            application_order,
+            caller_id,
+            caller_contract_id,
+            invocation_count,
+        }
     };
     let mut expected = vec![
         row(
@@ -109,15 +114,17 @@ fn contract_activity_is_the_presence_plus_the_invocation_caller() {
             2,
             Some(ids::account_id(&account)),
             None,
+            2, // invoked twice: the first caller stays, both calls count
         ),
         row(
             ids::contract_id(&by_contract),
             2,
             None,
             Some(ids::contract_id(&caller_contract)),
+            1,
         ),
-        row(named_by_op, 2, None, None),
-        row(by_event, 1, None, None),
+        row(named_by_op, 2, None, None, 0),
+        row(by_event, 1, None, None, 0),
     ];
     expected.sort();
     assert_eq!(out.contract_activity_rows, expected);

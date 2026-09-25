@@ -105,15 +105,26 @@ pub(super) fn rows(
             .copied()
             .ok_or_else(|| staging_err(&format!("transaction id {tx_id} is not in this ledger")))
     };
-    // The caller of each invoked (contract, position), for `contract_activity`.
-    let mut caller_of: HashMap<(i64, i16), (Option<i64>, Option<i64>)> =
+    // The caller and the call count of each invoked (contract, position), for
+    // `contract_activity`. A pair missing here was touched, not invoked.
+    #[derive(Clone, Copy, Default)]
+    struct Invoked {
+        caller_id: Option<i64>,
+        caller_contract_id: Option<i64>,
+        count: i32,
+    }
+    let mut invoked: HashMap<(i64, i16), Invoked> =
         HashMap::with_capacity(out.invocation_rows.len());
     for inv in &out.invocation_rows {
         let position = position_of(inv.transaction_id)?;
         contract_txs.insert((inv.contract_id, position));
-        caller_of.insert(
+        invoked.insert(
             (inv.contract_id, position),
-            (inv.caller_id, inv.caller_contract_id),
+            Invoked {
+                caller_id: inv.caller_id,
+                caller_contract_id: inv.caller_contract_id,
+                count: inv.amount,
+            },
         );
     }
     for op in &out.tx_operation_rows {
@@ -124,7 +135,7 @@ pub(super) fn rows(
     out.contract_activity_rows = contract_txs
         .iter()
         .map(|&(contract_id, application_order)| {
-            let (caller_id, caller_contract_id) = caller_of
+            let inv = invoked
                 .get(&(contract_id, application_order))
                 .copied()
                 .unwrap_or_default();
@@ -132,8 +143,9 @@ pub(super) fn rows(
                 contract_id,
                 ledger_sequence: ledger_sequence_i64,
                 application_order,
-                caller_id,
-                caller_contract_id,
+                caller_id: inv.caller_id,
+                caller_contract_id: inv.caller_contract_id,
+                invocation_count: inv.count,
             }
         })
         .collect();

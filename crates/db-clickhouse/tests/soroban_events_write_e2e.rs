@@ -101,6 +101,7 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
                 application_order: 1,
                 caller_id: Some(42),
                 caller_contract_id: None,
+                invocation_count: 3,
             },
             ContractActivityRow {
                 contract_id: CONTRACT,
@@ -108,6 +109,7 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
                 application_order: 2,
                 caller_id: None,
                 caller_contract_id: Some(7),
+                invocation_count: 1,
             },
             ContractActivityRow {
                 contract_id: CONTRACT,
@@ -115,6 +117,7 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
                 application_order: 3,
                 caller_id: None,
                 caller_contract_id: None,
+                invocation_count: 0,
             },
         ],
         ..Default::default()
@@ -151,9 +154,11 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
         .expect("read back the presence row");
     assert_eq!(presence, vec![(CONTRACT, 1)]);
 
-    let activity: Vec<(i64, i16, Option<i64>, Option<i64>)> = ch
+    // (contract, position, caller account, caller contract, calls)
+    type Activity = (i64, i16, Option<i64>, Option<i64>, i32);
+    let activity: Vec<Activity> = ch
         .query(
-            "SELECT contract_id, application_order, caller_id, caller_contract_id \
+            "SELECT contract_id, application_order, caller_id, caller_contract_id, invocation_count \
              FROM contract_activity WHERE ledger_sequence = ? ORDER BY application_order",
         )
         .bind(TEST_LEDGER)
@@ -163,9 +168,9 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
     assert_eq!(
         activity,
         vec![
-            (CONTRACT, 1, Some(42), None),
-            (CONTRACT, 2, None, Some(7)),
-            (CONTRACT, 3, None, None)
+            (CONTRACT, 1, Some(42), None, 3),
+            (CONTRACT, 2, None, Some(7), 1),
+            (CONTRACT, 3, None, None, 0)
         ]
     );
 }

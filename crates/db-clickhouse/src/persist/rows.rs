@@ -503,10 +503,11 @@ pub struct ContractTransactionRow {
 
 /// `contract_activity` — fact, one row per (contract, transaction) the
 /// transaction touched, located by its position (task 0586, ADR 0059): the
-/// `contract_transactions` presence plus the caller of the invocation, if the
-/// contract was invoked. Exactly one of the two callers is set on an invoked
-/// row and neither on a touched-only one (an operation event or an operation
-/// naming the contract). Column order matches `init.sql`.
+/// `contract_transactions` presence plus, if the contract was invoked, the
+/// caller of its first invocation and how many times the transaction called
+/// it. Exactly one of the two callers is set on an invoked row and neither on
+/// a touched-only one (an operation event or an operation naming the
+/// contract), whose `invocation_count` is 0. Column order matches `init.sql`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
 pub struct ContractActivityRow {
     pub contract_id: i64,
@@ -514,6 +515,11 @@ pub struct ContractActivityRow {
     pub application_order: i16,
     pub caller_id: Option<i64>,
     pub caller_contract_id: Option<i64>,
+    /// Calls of the contract in the transaction — the execution trace's
+    /// `fn_call`s merged with the auth tree (the invocations table's fold
+    /// count); 0 = touched, not invoked. Not recoverable from other tables:
+    /// diagnostic events are not stored.
+    pub invocation_count: i32,
 }
 
 /// `pool_operation_amounts` — fact, what one operation moved through one pool

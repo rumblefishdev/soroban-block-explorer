@@ -123,7 +123,8 @@ Backbone timeline:
   would be every transaction on the network ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md)).
   Being replaced by `contract_activity`, with the invocations table (task 0586)
 - `contract_activity` — the same pairs plus the invocation's caller
-  (`caller_id` / `caller_contract_id`, set only on an invoked row); replaces
+  (`caller_id` / `caller_contract_id`, set only on an invoked row) and call
+  count (`invocation_count`, 0 when not invoked); replaces
   `contract_transactions` and `soroban_invocations_appearances` (task 0586)
 - `pool_operation_amounts` — per-(operation, pool, asset) amounts, the driver of
   pool activity (task 0279 / issue #371, 0491), keyed pool-first and by the
@@ -821,7 +822,8 @@ CREATE TABLE contract_activity (
     ledger_sequence    Int64,
     application_order  Int16,             -- the transaction's position
     caller_id          Nullable(Int64),   -- invoked by an account
-    caller_contract_id Nullable(Int64)    -- invoked by a contract
+    caller_contract_id Nullable(Int64),   -- invoked by a contract
+    invocation_count   Int32              -- calls in the transaction; 0 = touched only
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
@@ -832,8 +834,13 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   two callers (the first invocation's); a row touched only by an operation
   event or an operation naming the contract carries neither. No invocation
   in the old table lacks a caller (0 of 1.13 bn, 2026-09-25).
+- **`invocation_count`** is the invocations table's fold count under a clear
+  name: how many times the transaction called the contract (the execution
+  trace's `fn_call`s merged with the auth tree), 0 on a touched-only row.
+  Nothing reads it yet, but no other table holds it — diagnostic events are
+  not stored — so it is kept rather than lost with the old table.
 - **Not carried:** the invocations table's `transaction_id` surrogate
-  (8.45 GiB at ratio 1.0) and its fold count, which nothing read.
+  (8.45 GiB at ratio 1.0).
 - **No codecs** (decided in task 0586): the key columns would shrink by ~4 GiB
   (_estimate_), not worth it here.
 - Written beside both old tables until the readers move, then both are
