@@ -345,10 +345,9 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- nfts (state) — composite PK, no surrogate `id` -----
     client
         .query(
-            "INSERT INTO nfts (contract_id, token_id, collection_name, name, media_url, minted_at_ledger, current_owner_id, current_owner_ledger) \
-             VALUES (?, 'tok-1', NULL, NULL, NULL, ?, ?, ?)",
+            "INSERT INTO nfts (contract_id, token_id, collection_name, name, media_url, current_owner_id, current_owner_ledger) \
+             VALUES (?, 'tok-1', NULL, NULL, NULL, ?, ?)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)

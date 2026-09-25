@@ -50,8 +50,8 @@
 --     non-Nullable Int64 and, without `join_use_nulls = 1` (unavailable —
 --     `api_reader` is readonly), a JOIN miss fills DEFAULT 0 rather than NULL.
 --     The cursor, the keyset predicate and the ORDER BY all key on the DERIVED
---     value, so the three agree. `nfts.minted_at_ledger` stays written and
---     unread until task 0529 drops it.
+--     value, so the three agree. `nfts` no longer stores a mint ledger at all
+--     (task 0497): the copy could only drift from the fact table.
 --
 -- ---------------------------------------------------------------------------
 -- DRIFT NOTICE — the statement below predates several shipped changes and is

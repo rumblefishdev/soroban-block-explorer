@@ -1378,7 +1378,8 @@ CREATE TABLE nfts (
     media_url            TEXT,                                                    -- task 0195 §2d (Lambda 2)
     -- (`metadata JSONB` dropped per ADR 0043 / task 0195 §2d — detail-only,
     --  served at request time via `runtime_enrichment::nft_token_uri`)
-    minted_at_ledger     BIGINT,
+    -- (`minted_at_ledger` dropped per task 0497 — the mint is the
+    --  `nft_ownership` row with event_type = 0; a copy here drifted)
     current_owner_id     BIGINT       REFERENCES accounts(id),                    -- ADR 0026
     current_owner_ledger BIGINT,
     UNIQUE (contract_id, token_id)
@@ -1447,7 +1448,6 @@ CREATE TABLE nfts_pending (
     collection_name       VARCHAR(256),
     name                  VARCHAR(256),
     media_url             TEXT,
-    minted_at_ledger      BIGINT,
     current_owner_id      BIGINT,                  -- no FK to accounts
     current_owner_ledger  BIGINT,
     PRIMARY KEY (contract_id, token_id)

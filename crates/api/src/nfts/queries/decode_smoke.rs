@@ -86,15 +86,15 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
         return;
     };
 
-    // One clobbered token + the mint ledger the journal still holds for it.
+    // One token + the mint ledger the journal holds for it. `nfts` stores no
+    // mint ledger (task 0497), so every token is a subject; the tokens whose
+    // stored copy was clobbered were the reason this test exists (0528).
     let subject = ch
         .query(
             "SELECT sc.contract_id, n.token_id, m.minted_at_ledger \
              FROM ( \
-                 SELECT contract_id, token_id \
+                 SELECT DISTINCT contract_id, token_id \
                  FROM nfts \
-                 GROUP BY contract_id, token_id \
-                 HAVING argMax(minted_at_ledger, current_owner_ledger) IS NULL \
              ) n \
              INNER JOIN ( \
                  SELECT contract_id, token_id, min(ledger_sequence) AS minted_at_ledger \
@@ -110,7 +110,7 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
         .expect("subject probe must run");
 
     let Some((contract_id, token_id, expected)) = subject else {
-        eprintln!("no clobbered NFT on this CH — skipping 0528 regression");
+        eprintln!("no minted NFT on this CH — skipping 0528 regression");
         return;
     };
 
@@ -132,7 +132,7 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
 ///
 /// The risk this covers: the ORDER BY, the keyset predicate and the cursor
 /// payload each reference the mint ledger separately. If any one of them
-/// still read `nfts.minted_at_ledger` while the others read the derived
+/// read a stored mint ledger while the others read the derived
 /// value, pages would order by one key and seek by another — silently
 /// skipping or repeating rows, which no single-page test would notice.
 /// Clobbered and healthy tokens interleave by mint ledger, so a mismatch

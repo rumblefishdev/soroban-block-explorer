@@ -88,7 +88,6 @@ pub(super) fn nft_rows(
         let watermark = i64::from(nft.last_seen_ledger);
         let key = (contract_id_int, nft.token_id.clone());
         let owner_id = nft.owner_account.as_deref().map(ids::account_id);
-        let minted = nft.minted_at_ledger.map(i64::from);
 
         match route {
             NftRoute::Hot => match nft_hot_indices.get(&key).copied() {
@@ -98,11 +97,6 @@ pub(super) fn nft_rows(
                         existing.current_owner_id = owner_id;
                         existing.current_owner_ledger = watermark;
                     }
-                    existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (Some(a), None) => Some(a),
-                        (None, b) => b,
-                    };
                     existing.collection_name = existing
                         .collection_name
                         .clone()
@@ -119,7 +113,6 @@ pub(super) fn nft_rows(
                         collection_name: nft.collection_name.clone(),
                         name: nft.name.clone(),
                         media_url: nft.media_url.clone(),
-                        minted_at_ledger: minted,
                         current_owner_id: owner_id,
                         current_owner_ledger: watermark,
                     });
@@ -132,11 +125,6 @@ pub(super) fn nft_rows(
                         existing.current_owner_id = owner_id;
                         existing.current_owner_ledger = watermark;
                     }
-                    existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (Some(a), None) => Some(a),
-                        (None, b) => b,
-                    };
                     existing.collection_name = existing
                         .collection_name
                         .clone()
@@ -153,7 +141,6 @@ pub(super) fn nft_rows(
                         collection_name: nft.collection_name.clone(),
                         name: nft.name.clone(),
                         media_url: nft.media_url.clone(),
-                        minted_at_ledger: minted,
                         current_owner_id: owner_id,
                         current_owner_ledger: watermark,
                     });
