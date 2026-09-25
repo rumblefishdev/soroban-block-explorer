@@ -234,6 +234,13 @@ Authoring rule: changes to API DTOs, request params, or routes must be made in t
 Rust crate; the frontend regenerates and consumes the result. Hand-edited types in
 `libs/api-types/src/generated/` will be overwritten on the next regeneration.
 
+The session exchange `POST /auth/session` is in the spec too (task 0510), so the
+frontend takes its `SessionResponse` type from the package. `web/src/api/session.ts`
+calls it with plain `fetch`, not the generated SDK: the SDK client's request
+interceptor waits for the session, so routing the session call through that client
+would wait on itself. Session state lives in the object `createSession` returns;
+`web/src/api/client.ts` holds the one the app uses.
+
 ### 4.6 State Strategy
 
 The frontend should keep local state intentionally small:
