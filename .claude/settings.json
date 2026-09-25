@@ -114,6 +114,7 @@
       "Bash(npm:*)",
       "Bash(npx:*)",
       "Bash(npx tsc:*)",
+      "Bash(pnpm dlx:*)",
       "Bash(npx tsx:*)",
       "Write(.claude/settings.json)",
       "Write(.claude/settings.local.json)",
