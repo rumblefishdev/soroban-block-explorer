@@ -237,16 +237,21 @@ pub struct StagedLedger {
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
     pub op_rows: Vec<OperationAppearanceRow>,
+    /// The same fold located by the transaction position (task 0372) →
+    /// `transaction_operations`; written beside `op_rows` until the readers
+    /// move.
+    pub tx_operation_rows: Vec<TransactionOperationRow>,
     /// Per-(asset, tx) presence rows (task 0359) → `operation_asset_appearances`,
     /// the asset-dimension twin of `participant_rows`.
     pub op_asset_rows: Vec<OperationAssetAppearanceRow>,
-    /// Per-(pool, tx) presence rows (task 0365) → `operation_pools`, the
-    /// pool-dimension twin of `participant_rows` / `op_asset_rows`.
-    pub op_pool_rows: Vec<OperationPoolRow>,
-    /// Per-(op, pool, asset) amounts (task 0279) → `lp_operation_amounts`, the
-    /// value twin of `op_pool_rows`. Trades from `claimedAtoms`, deposits and
-    /// withdrawals from the op's own reserve delta (`poolDelta`).
+    /// Per-(op, pool, asset) amounts (task 0279) → `lp_operation_amounts`.
+    /// Trades from `claimedAtoms`, deposits and withdrawals from the op's own
+    /// reserve delta (`poolDelta`).
     pub lp_amount_rows: Vec<LpOperationAmountRow>,
+    /// The same amounts located by the transaction position (task 0372) →
+    /// `pool_operation_amounts`; written beside `lp_amount_rows` until pool
+    /// activity moves.
+    pub pool_amount_rows: Vec<PoolOperationAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
     /// Per-(contract, tx) presence rows (task 0541) → `contract_transactions`,

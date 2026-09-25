@@ -1,7 +1,10 @@
-//! Operation-derived rows staged per ledger: `operations_appearances` (the
-//! identity fold), the op-derived half of `operation_asset_appearances`,
-//! `operation_pools` and `lp_operation_amounts` — every table filled by the
-//! one walk over each transaction's operations.
+//! Operation-derived rows staged per ledger: `operations_appearances` and
+//! `transaction_operations` (the identity fold), the op-derived half of
+//! `operation_asset_appearances`, and `lp_operation_amounts` /
+//! `pool_operation_amounts` — every table filled by the one walk over each
+//! transaction's operations. The `*_operations` / `pool_*` twins locate the
+//! transaction by its position (task 0372) and are written beside the
+//! surrogate-keyed tables until the readers move.
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
@@ -14,7 +17,8 @@ use super::{OpTyped, StagedLedger, decode_hash, pool_fill_amounts, staging_err};
 use crate::SchemaError;
 use crate::persist::ids;
 use crate::persist::rows::{
-    LpOperationAmountRow, OperationAppearanceRow, OperationAssetAppearanceRow, OperationPoolRow,
+    LpOperationAmountRow, OperationAppearanceRow, OperationAssetAppearanceRow,
+    PoolOperationAmountRow, TransactionOperationRow,
 };
 
 pub(super) fn operation_rows(
@@ -52,9 +56,6 @@ pub(super) fn operation_rows(
         // RMT sort key collapses them eventually, but deduping at write cuts the
         // backfilled volume up front. Scoped per tx — one entry per tx_hash here.
         let mut seen_tx_asset_ids: HashSet<i64> = HashSet::new();
-        // Same per-tx dedup for the pool fan-out (task 0365): N ops crossing the
-        // same pool in one tx → one (pool, tx) row.
-        let mut seen_tx_pool_ids: HashSet<[u8; 32]> = HashSet::new();
         for op in ops {
             // ---- operation_asset_appearances (task 0359, pure presence) ----
             // Asset-dimension twin of transaction_participants: one row per
@@ -86,26 +87,6 @@ pub(super) fn operation_rows(
             pool_ids.sort_unstable();
             pool_ids.dedup();
 
-            // ---- operation_pools (task 0365, pure presence) ----
-            // Pool-dimension twin of the asset fan-out above: one row per (pool
-            // the op crossed, tx). `pool_ids` is already the sorted+deduped
-            // crossing list; dedup per-tx so N ops crossing the same pool in one
-            // tx write one (pool, tx) row (the RMT collapses any residual). Sourced
-            // from `oa.pool_ids` — no XDR-only data, so a plain CH re-key can
-            // backfill it (task 0365 Path B).
-            if !pool_ids.is_empty() {
-                let tx_id = tx_id_by_hash[tx_hash];
-                for pool_id in &pool_ids {
-                    if seen_tx_pool_ids.insert(*pool_id) {
-                        out.op_pool_rows.push(OperationPoolRow {
-                            pool_id: *pool_id,
-                            ledger_sequence: ledger_sequence_i64,
-                            transaction_id: tx_id,
-                        });
-                    }
-                }
-            }
-
             // ---- lp_operation_amounts (task 0279) ----
             // The value twin of the block above: `gross_volume_a_by_pool` walks
             // the same trade atoms and sums them into one number per pool; here
@@ -114,6 +95,7 @@ pub(super) fn operation_rows(
             // from the op's own reserve delta.
             {
                 let tx_id = tx_id_by_hash[tx_hash];
+                let application_order = app_order_by_hash[tx_hash];
                 // Fail the ledger rather than clamp, matching the
                 // `transactions.application_order` conversion above: this
                 // column is part of the ORDER BY, so two operations squeezed
@@ -128,6 +110,16 @@ pub(super) fn operation_rows(
                         ledger_sequence: ledger_sequence_i64,
                         transaction_id: tx_id,
                         application_order: order,
+                        asset_id,
+                        amount,
+                    });
+                    // The operation index is 1-based in the parser, 0-based
+                    // in the position-keyed tables (ADR 0059).
+                    out.pool_amount_rows.push(PoolOperationAmountRow {
+                        pool_id,
+                        ledger_sequence: ledger_sequence_i64,
+                        application_order,
+                        operation_index: order - 1,
                         asset_id,
                         amount,
                     });
@@ -162,6 +154,18 @@ pub(super) fn operation_rows(
         };
         let app_order = i16::try_from(agg.min_apply_order)
             .map_err(|_| staging_err("operation_index >i16 — protocol violation"))?;
+        out.tx_operation_rows.push(TransactionOperationRow {
+            ledger_sequence: ledger_sequence_i64,
+            application_order: app_order_by_hash[&k.tx_hash_hex],
+            operation_index: app_order - 1,
+            op_type: k.op_type,
+            source_id: k.source_account.as_deref().map(ids::account_id),
+            destination_id: k.destination_account.as_deref().map(ids::account_id),
+            contract_id: k.contract_strkey.as_deref().map(ids::contract_id),
+            asset_code: k.asset_code.clone(),
+            asset_issuer_id: k.asset_issuer_account.as_deref().map(ids::account_id),
+            pool_ids: k.pool_ids.clone(),
+        });
         out.op_rows.push(OperationAppearanceRow {
             transaction_id: tx_id,
             application_order: app_order,

@@ -359,10 +359,36 @@ fn column_order_operation_asset_appearances() {
 }
 
 #[test]
-fn column_order_operation_pools() {
-    assert_columns::<OperationPoolRow>(
-        "operation_pools",
-        &["pool_id", "ledger_sequence", "transaction_id"],
+fn column_order_transaction_operations() {
+    assert_columns::<TransactionOperationRow>(
+        "transaction_operations",
+        &[
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "type",
+            "source_id",
+            "destination_id",
+            "contract_id",
+            "asset_code",
+            "asset_issuer_id",
+            "pool_ids",
+        ],
+    );
+}
+
+#[test]
+fn column_order_pool_operation_amounts() {
+    assert_columns::<PoolOperationAmountRow>(
+        "pool_operation_amounts",
+        &[
+            "pool_id",
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "asset_id",
+            "amount",
+        ],
     );
 }
 
@@ -1458,7 +1484,16 @@ fn prepare_lp_deposit_single_element_pool_ids() {
         counterparties: vec![],
         source_muxed_id: None,
         destination_muxed_id: None,
-        details: serde_json::json!({ "liquidityPoolId": pool }),
+        details: serde_json::json!({
+            "liquidityPoolId": pool,
+            "poolDelta": {
+                "poolId": pool,
+                "assetA": "native",
+                "amountA": 1_000,
+                "assetB": "native",
+                "amountB": 2_000,
+            },
+        }),
     };
     let ops = vec![(tx.hash.clone(), vec![op])];
 
@@ -1482,13 +1517,27 @@ fn prepare_lp_deposit_single_element_pool_ids() {
 
     assert_eq!(staged.op_rows.len(), 1);
     assert_eq!(staged.op_rows[0].pool_ids, vec![[0xABu8; 32]]);
-    // task 0365: the same crossing fans out into operation_pools (pool, tx).
-    assert_eq!(staged.op_pool_rows.len(), 1);
-    assert_eq!(staged.op_pool_rows[0].pool_id, [0xABu8; 32]);
-    assert_eq!(
-        staged.op_pool_rows[0].transaction_id,
-        staged.op_rows[0].transaction_id
-    );
+
+    // Task 0372: the twins carry the same rows, located by the transaction
+    // position (1-based) and the 0-based operation index.
+    let tx_row = &staged.transaction_rows[0];
+    let twin = &staged.tx_operation_rows;
+    assert_eq!(twin.len(), 1);
+    assert_eq!(twin[0].ledger_sequence, tx_row.ledger_sequence);
+    assert_eq!(twin[0].application_order, tx_row.application_order);
+    assert_eq!(twin[0].operation_index, 0);
+    assert_eq!(twin[0].pool_ids, staged.op_rows[0].pool_ids);
+
+    assert!(!staged.lp_amount_rows.is_empty());
+    assert_eq!(staged.pool_amount_rows.len(), staged.lp_amount_rows.len());
+    for (old, new) in staged.lp_amount_rows.iter().zip(&staged.pool_amount_rows) {
+        assert_eq!(
+            (new.pool_id, new.ledger_sequence, new.asset_id, new.amount),
+            (old.pool_id, old.ledger_sequence, old.asset_id, old.amount)
+        );
+        assert_eq!(new.application_order, tx_row.application_order);
+        assert_eq!(new.operation_index, old.application_order - 1);
+    }
 }
 
 #[test]
@@ -1538,10 +1587,10 @@ fn prepare_offer_op_pool_ids_from_details() {
 }
 
 #[test]
-fn op_pool_rows_dedup_same_pool_across_ops_in_one_tx() {
-    // Two ops in one tx crossing the SAME pool → one (pool, tx) row (the per-tx
-    // dedup, task 0365). The RMT would collapse residuals anyway; deduping at write
-    // cuts the backfilled volume up front — the pool twin of the asset fan-out.
+fn transaction_operations_fold_like_operations_appearances() {
+    // Two identical ops in one tx fold into one row in both tables, and the
+    // position-keyed twin (task 0372) keeps the group's smallest operation
+    // index, 0-based: operations 2 and 3 (1-based) → 1.
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x34);
     let pool = "ef".repeat(32);
@@ -1556,7 +1605,7 @@ fn op_pool_rows_dedup_same_pool_across_ops_in_one_tx() {
         destination_muxed_id: None,
         details: serde_json::json!({ "liquidityPoolId": pool }),
     };
-    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
+    let ops = vec![(tx.hash.clone(), vec![mk(2), mk(3)])];
 
     let staged = stage::prepare(
         &ledger,
@@ -1576,11 +1625,14 @@ fn op_pool_rows_dedup_same_pool_across_ops_in_one_tx() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_pool_rows.len(), 1);
-    assert_eq!(staged.op_pool_rows[0].pool_id, [0xEFu8; 32]);
+    assert_eq!(staged.op_rows.len(), 1);
+    assert_eq!(staged.op_rows[0].application_order, 2);
+    assert_eq!(staged.op_rows[0].amount, 2);
+    assert_eq!(staged.tx_operation_rows.len(), 1);
+    assert_eq!(staged.tx_operation_rows[0].operation_index, 1);
     assert_eq!(
-        staged.op_pool_rows[0].transaction_id,
-        staged.op_rows[0].transaction_id
+        staged.tx_operation_rows[0].application_order,
+        staged.transaction_rows[0].application_order
     );
 }
 

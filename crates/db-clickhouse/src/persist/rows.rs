@@ -464,6 +464,26 @@ pub struct OperationAppearanceRow {
     pub ledger_sequence: i64,
 }
 
+/// `transaction_operations` — the [`OperationAppearanceRow`] fold located by
+/// the transaction position (task 0372, ADR 0059). `application_order` is the
+/// transaction's 1-based position in its ledger, `operation_index` the
+/// operation's 0-based position in its transaction (the group's smallest).
+/// Column order matches `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct TransactionOperationRow {
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub operation_index: i16,
+    #[serde(rename = "type")]
+    pub op_type: i16,
+    pub source_id: Option<i64>,
+    pub destination_id: Option<i64>,
+    pub contract_id: Option<i64>,
+    pub asset_code: String,
+    pub asset_issuer_id: Option<i64>,
+    pub pool_ids: Vec<[u8; 32]>,
+}
+
 /// `transaction_participants` — fact. The transaction is located by its
 /// position in the ledger (ADR 0059, task 0575), not the hash surrogate.
 #[derive(Debug, Clone, Row, Serialize)]
@@ -487,19 +507,6 @@ pub struct OperationAssetAppearanceRow {
     pub application_order: i16,
 }
 
-/// `operation_pools` — fact, the per-(pool, transaction) presence index
-/// (task 0365). The EXACT `transaction_participants` shape with `pool_id` in
-/// place of `account_id` → a per-pool tx-list is a PK-prefix seek. `pool_id` is
-/// the raw 32-byte pool hash (already how `operations_appearances.pool_ids`
-/// stores each crossing — no surrogate). Pure presence: which pools a
-/// transaction crossed; duplicate (pool, tx) rows collapse in the RMT.
-#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
-pub struct OperationPoolRow {
-    pub pool_id: [u8; 32],
-    pub ledger_sequence: i64,
-    pub transaction_id: i64,
-}
-
 /// `contract_transactions` — fact, the per-(contract, transaction) presence
 /// index (task 0541): the contract-dimension twin of `transaction_participants`,
 /// so a per-contract transaction list is a key seek instead of a merge over
@@ -515,8 +522,8 @@ pub struct ContractTransactionRow {
 }
 
 /// `lp_operation_amounts` — fact, what one operation moved through one pool
-/// (task 0279). The value twin of [`OperationPoolRow`]: same pool-leading key,
-/// plus `application_order` / `asset_id` / `amount`.
+/// (task 0279): a pool-leading key plus the operation's 1-based index in
+/// `application_order`, `asset_id` and `amount`.
 ///
 /// One row per (operation, pool, asset) — the op's claim atoms are SUMMED into
 /// it, never written per atom: an op can take the same pool several times
@@ -532,6 +539,20 @@ pub struct LpOperationAmountRow {
     pub ledger_sequence: i64,
     pub transaction_id: i64,
     pub application_order: i16,
+    pub asset_id: i64,
+    pub amount: i64,
+}
+
+/// `pool_operation_amounts` — [`LpOperationAmountRow`] located by the
+/// transaction position (task 0372, ADR 0059): `application_order` is the
+/// transaction's 1-based position, `operation_index` the operation's 0-based
+/// one. Same grain and sign. Column order matches `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct PoolOperationAmountRow {
+    pub pool_id: [u8; 32],
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub operation_index: i16,
     pub asset_id: i64,
     pub amount: i64,
 }

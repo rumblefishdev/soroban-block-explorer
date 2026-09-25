@@ -93,14 +93,17 @@ struct TableInserts {
     hash_prefix: Option<Insert<TransactionHashPrefixRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
-    op_pools: Option<Insert<OperationPoolRow>>,
     lp_amounts: Option<Insert<LpOperationAmountRow>>,
+    /// Task 0372 — written beside `lp_amounts` until pool activity reads it.
+    pool_amounts: Option<Insert<PoolOperationAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
     pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
     pool_state_changes: Option<Insert<PoolStateChangeRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
     operations: Option<Insert<OperationAppearanceRow>>,
+    /// Task 0372 — written beside `operations` until the readers move.
+    tx_operations: Option<Insert<TransactionOperationRow>>,
     events: Option<Insert<SorobanEventRow>>,
     invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
     contract_txs: Option<Insert<ContractTransactionRow>>,
@@ -193,6 +196,15 @@ impl PartitionWriter {
                     )
                     .await?
                 }
+                "pool_operation_amounts" => {
+                    write_rows(
+                        &self.client,
+                        &mut self.inserts.pool_amounts,
+                        "pool_operation_amounts",
+                        &staged.pool_amount_rows,
+                    )
+                    .await?
+                }
                 "asset_transfers" => {
                     write_rows(
                         &self.client,
@@ -275,9 +287,10 @@ impl PartitionWriter {
             snapshot_rows,
             lp_position_rows,
             op_rows,
+            tx_operation_rows,
             op_asset_rows,
-            op_pool_rows,
             lp_amount_rows,
+            pool_amount_rows,
             event_rows,
             invocation_rows,
             contract_tx_rows,
@@ -365,16 +378,16 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.op_pools,
-            "operation_pools",
-            &op_pool_rows,
+            &mut self.inserts.lp_amounts,
+            "lp_operation_amounts",
+            &lp_amount_rows,
         )
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.lp_amounts,
-            "lp_operation_amounts",
-            &lp_amount_rows,
+            &mut self.inserts.pool_amounts,
+            "pool_operation_amounts",
+            &pool_amount_rows,
         )
         .await?;
         write_rows(
@@ -417,6 +430,13 @@ impl PartitionWriter {
             &mut self.inserts.operations,
             "operations_appearances",
             &op_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.tx_operations,
+            "transaction_operations",
+            &tx_operation_rows,
         )
         .await?;
         write_rows(
@@ -550,14 +570,15 @@ impl PartitionWriter {
             hash_prefix,
             participants,
             op_assets,
-            op_pools,
             lp_amounts,
+            pool_amounts,
             pools,
             pool_instance_state,
             pool_state_changes,
             snapshots,
             lp_positions,
             operations,
+            tx_operations,
             events,
             invocations,
             contract_txs,
@@ -582,14 +603,15 @@ impl PartitionWriter {
         end(hash_prefix).await?;
         end(participants).await?;
         end(op_assets).await?;
-        end(op_pools).await?;
         end(lp_amounts).await?;
+        end(pool_amounts).await?;
         end(pools).await?;
         end(pool_instance_state).await?;
         end(pool_state_changes).await?;
         end(snapshots).await?;
         end(lp_positions).await?;
         end(operations).await?;
+        end(tx_operations).await?;
         end(events).await?;
         end(invocations).await?;
         end(contract_txs).await?;
