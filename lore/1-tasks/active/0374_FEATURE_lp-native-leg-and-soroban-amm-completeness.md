@@ -2348,3 +2348,50 @@ snapshot" sat under correct values on 29,284 of 53,554 classic pools (55%).
 - **For PR 5:** `list_participants.rs` still reads `total_shares` only from a
   snapshot inside `FRESHNESS_WINDOW_LEDGERS`, so a quiet pool's participants
   lose their share percentage. Drop the window there too.
+
+### Soroban pools are half-indexed — the band-aid map and the new split (2026-09-25)
+
+A sweep of the pool read path and the rest of the API (two review agents,
+every finding read in code) traced most pool band-aids to one root: the
+indexer stores a Soroban pool's STATE but not its operations or holders,
+while the read path presents both kinds alike. Fundamentally the indexer
+should write the same four facts for every pool, classic or Soroban:
+
+| Fact                                     | Classic                            | Soroban today                                         | Band-aid it causes                                                           |
+| ---------------------------------------- | ---------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Registry (family, fee, legs)             | yes                                | family inferred from `pool_type_raw = ''`; fee frozen | family guessing in the zero-shares rule                                      |
+| State per ledger (reserves, shares)      | yes                                | reserves yes; shares `0` stored for "key absent"      | `Reserves` Pair/Raw; `zero_shares_is_measured`; concentrated shares read "—" |
+| Operations (swap/deposit/withdraw, amts) | `lp_operation_amounts`, volume col | none                                                  | volume guard in `handlers.rs`; activity and chart said "none"                |
+| Holders                                  | `lp_positions`                     | none (they are the share token's holders)             | participants said 0                                                          |
+
+**Volume was planned and lost in the split (decision 122 B).** Step C above
+(`soroban_pool_trades`, ~4.16M-row backfill, Δreserve check) and a
+read-time version (`0ff56188`, 2026-09-01, from `soroban_events`) existed;
+the PR 1–7 split of #455 carried neither. It returns as W1 below.
+
+**Interim honesty, in #496 (decision 123 A):** `participant_count` is
+`null` for a Soroban pool, and its chart, participants and activity
+sections say "Not indexed yet" instead of their empty states.
+
+**Remaining split (decision 126, supersedes the list under "PR 4 split"):**
+
+| PR  | Scope                                                                                              | Write/read |
+| --- | -------------------------------------------------------------------------------------------------- | ---------- |
+| 5   | Soroban participants = share-token holders from `balances`; drop the 7-day window                  | read       |
+| W1  | Stage Soroban pool operations (swap, deposit, withdraw) with amounts + backfill; per-ledger volume | write      |
+| W2  | `total_shares` nullable, concentrated pools' shares key, stored `pool_family`, instance backfill   | write      |
+| 4d  | Soroban chart: reserves + W1 volume; volume rule moves into `PoolPriceContext` (109 A)             | read       |
+| 7   | Soroban activity from W1                                                                           | read       |
+| 6   | Drop the pair columns (deployment window)                                                          | write      |
+
+W2 removes the zero-shares inference (110) and the family guess; W1 removes
+the volume guard (109). Classic/Soroban storage unification (ADR 0058) and
+the activity column (0581) stay where they are.
+
+**Outside the pools** (same sweep): guessed 7 decimals in account balances,
+balance changes and asset supply show wrong numbers today (USST 10^11 too
+large); task 0473 covers only the parser, not the rendering — decision 119
+pending. Merged accounts shown open: 0321. `resolves_on_asset_page`: 0542.
+Smaller defaults that render a plausible wrong value: task 0584 (127 A).
+The read-only user's refused `join_use_nulls`, behind most `nullIf` /
+`toNullable` tricks, is an infra setting left to the operator.
