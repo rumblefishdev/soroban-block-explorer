@@ -43,6 +43,9 @@ jobs:
               # must re-run it.
               - 'docker-compose.yml'
               - '.github/workflows/ci.yml'
+              # The Tier-1 endpoint-query gate (task 0478) runs in the rust
+              # job, on the same ClickHouse.
+              - 'docs/architecture/database-schema/endpoint-queries-clickhouse/**'
             typescript:
               - 'apps/**'
               - 'libs/**'
@@ -100,7 +103,11 @@ jobs:
           base=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$BASE" \
             --jq 'if (.files | length) >= 300 then "too-many" else .files[].filename end')
           printf '%s\n%s\n' "$pushed" "$base"
-          if ! printf '%s\n%s\n' "$pushed" "$base" | grep -qvE '^$|^(lore|docs)/|\.md$'; then
+          # The endpoint-query SQL and its runner live under docs/ but are
+          # gated code (task 0478), so they never count as documentation.
+          gated='^docs/architecture/database-schema/endpoint-queries-clickhouse/.*\.(sql|sh)$'
+          if ! printf '%s\n%s\n' "$pushed" "$base" | grep -qvE '^$|^(lore|docs)/|\.md$' \
+             && ! printf '%s\n%s\n' "$pushed" "$base" | grep -qE "$gated"; then
             echo "only=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -253,6 +260,7 @@ jobs:
       # schema path as local dev: the compose sidecar applies
       # `crates/db-clickhouse/schema/init.sql` before the run.
       - name: Start ClickHouse
+        id: clickhouse
         run: |
           docker compose up -d clickhouse
           docker compose run --rm db-clickhouse-init
@@ -296,6 +304,15 @@ jobs:
             echo "::error::ClickHouse e2e failed (env-gated leg: $gated_status, #[ignore] leg: $ignored_status)"
             exit 1
           fi
+
+      # Tier-1 gate for the documented endpoint queries (task 0478): every
+      # statement of every NN_*.sql must plan against the canonical schema.
+      # Read-only (`--format=Null` on the empty tables) and seconds long. Runs
+      # whenever ClickHouse came up, even if the e2e step above failed, so one
+      # red run reports both.
+      - name: Endpoint queries parse (Tier 1)
+        if: ${{ !cancelled() && steps.clickhouse.outcome == 'success' }}
+        run: ./docs/architecture/database-schema/endpoint-queries-clickhouse/run_endpoint_ch.sh all --syntax-only
 
   # The release Lambda build shares no compilation with the debug clippy/test
   # steps (different profile), so it runs as its own job in parallel with `rust`

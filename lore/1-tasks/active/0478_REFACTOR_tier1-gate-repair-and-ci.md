@@ -107,11 +107,113 @@ this set rots again after CI is in place, that is the next step — not before.
 
 ## Acceptance criteria
 
-- [ ] `./run_endpoint_ch.sh all --syntax-only` exits 0 with 38 of 38 parsing
-- [ ] CI runs that command and fails the build when it does not
-- [ ] `08` / `09` reference only tables that exist in `init.sql`, and their
+- [x] `./run_endpoint_ch.sh all --syntax-only` exits 0 with every check
+      passing — **67 of 67** (not "38 of 38": that count predates the runner
+      checking every statement; see Implementation Notes)
+- [x] CI runs that command and fails the build when it does not
+      (`.github/workflows/ci.yml`, rust job, step "Endpoint queries parse
+      (Tier 1)")
+- [x] `08` / `09` reference only tables that exist in `init.sql`, and their
       shape matches the two-phase read in `assets::queries`
-- [ ] No named placeholders remain, or the runner handles them
-- [ ] README states the measured result, and the failures section is gone
-- [ ] **Docs updated** — the endpoint-queries README per ADR 0032; no other
-      architecture doc describes this tooling
+- [x] No named placeholders remain, or the runner handles them — 22 is
+      positional; the only `{name}` left are 21's real `format!` fragments,
+      substituted by the runner per interval
+- [x] README states the measured result, and the failures section is gone
+      (the section had already been reverted on develop; the Tier-1 row now
+      carries the measurement and a new §Tier 1 gate describes the checks)
+- [x] **Docs updated** — `docs/architecture/database-schema/endpoint-queries-clickhouse/README.md`
+      updated (banner, FINAL table `balance_aggregates` row, Tier-1 row,
+      §Tier 1 gate); no other architecture doc describes this tooling (N/A)
+
+## Implementation Notes
+
+Branch `refactor/0478_tier1-gate-ci` off develop 786e1943. Five commits:
+
+1. **01** — `{head}` → `$1` (re-applied from the closed PR 404 branch, runner
+   arm included), and the body synced with `network/queries.rs`
+   (`accounts_recent` / `soroban_contracts FINAL` counts instead of
+   `system.tables.total_rows`, `LIMIT 1 BY sequence`).
+2. **08 / 09** — re-derived statement by statement from
+   `assets/queries.rs`. 08: A seek (holder-ranked, cursor
+   `(holder_rank, id)`, filters `$2`/`$3`/`$6`), B `hydrate_sql`, C
+   `resolve_soroban_contracts`, D `resolve_page_issuers`. 09: A issuer seek by
+   StrKey, B key seek, C SAC-wrapper seek, D hydrate, E contract context,
+   F issuer by id. Both read `balance_aggregates` by `asset_id`.
+3. **21 / 22 / 24** — 22: `:named` → `$1..$8`, twelve split sections, and
+   synced with `search/queries.rs` (pool-by-code bucket added, deduped
+   `soroban_contracts` join in the asset arms, `scm` label in the NFT bucket,
+   duplicated CODE:ISSUER arm removed). 21: leg identities bound as
+   `$4..$9`, `$1` now the hex string (`unhex($1)`, as the Rust binds it);
+   `{bucket_fn}` / `{price_bucket_fn}` / `{series_view}` / `{carry}` stay,
+   documented as a per-interval table. 24: two missing split markers.
+4. **Runner** — rewritten dispatch and accounting: walks every `NN_*.sql`
+   present; every split section must be checked; `;` count must equal the
+   section count; leftover `$N` / `:name` / `{name}` fail by name; counters
+   and exit 1 on any failure. 21 is checked for 1h / 1d / 1w, with the
+   `prices.*` view replaced by an empty inline stand-in.
+5. **CI** — one step after the ClickHouse e2e step, `if: !cancelled() &&
+steps.clickhouse.outcome == 'success'`.
+
+Counts, measured 2026-09-25 against local docker ClickHouse 26.3.21.7 with
+`init.sql` applied: baseline on develop — 01, 08, 09, 10, 14, 21, 22 failed and
+the runner exited 0 (and 20 "failed" for a missing file); after — 64
+statements in 23 files, 67 checks (08 statement A twice, 21 three times), all
+pass, exit 0. Negative checks: `asset_aggregates` put back into 08 → `65 of 67`,
+`FAILED: 08`, exit 1; on a scratch copy an unsupplied `$5`, a `:slack`, a
+missing split marker, a file without an arm and an arm skipping a statement
+each FAIL with their own message, exit 1.
+
+## Issues Encountered
+
+- **More failures than filed.** 10 (the arm still fed the retired
+  two-variant `asset_code`/`issuer_id` inputs) and 14 (arm supplied five of
+  six params) also failed; 02, 06, 07, 10, 11 had statements the old arms
+  never ran, and 24 had three statements in one section. Hence the coverage
+  and `;`-count checks.
+- **The `prices` database is not in this repo's schema.** 21 cannot plan
+  against it locally or in CI (same reason `decode_smoke` skips). Stubbed —
+  see Design Decisions.
+- **Local compose network clash.** Another worktree's compose network holds
+  the pinned 172.30.0.0/16, so `docker compose up` failed; ran with a
+  scratchpad override file moving the subnet. CI is unaffected (fresh runner).
+
+## Design Decisions
+
+### From Plan
+
+1. **Convert 22 to positional, not teach the runner `:name`.** One
+   convention; the runner's guard now rejects `:name` outright.
+2. **08 / 09 mirror the two-phase read, split with `-- @@ split @@`.**
+   Page keys that Rust inlines appear as example literals (the 02
+   convention), not placeholders.
+3. **Gate in the existing rust job**, on the ClickHouse started for 0406.
+
+### Emerged
+
+4. **21's `format!` fragments stay `{name}` and the runner substitutes
+   them** from a table duplicated in the 21 header, the runner arm and
+   `get_pool_chart.rs`. Positionalising them would misdescribe the Rust (they
+   are not bound). Drift is visible, not detected.
+5. **`prices.price_usd_series*` replaced by an empty inline subquery** in the
+   runner rather than creating a stub `prices` database: the gate stays
+   read-only. It cannot check the view names or column types.
+6. **Guards beyond the brief**: statement coverage, `;`-vs-split count,
+   placeholder check, file list derived from the directory. Each closes a way
+   the old runner passed silently.
+7. **CI filter and docs-only shortcut touched**, not just one step: the rust
+   job did not trigger on this directory, and the documentation-only
+   shortcut (`^(lore|docs)/`) would have skipped a SQL-only push after a
+   green run. Both now treat `endpoint-queries-clickhouse/*.{sql,sh}` as code.
+8. **Content synced where the file was rewritten anyway**: 01 body, 22
+   buckets. Not audited elsewhere.
+9. **08 statement A checked twice** (unfiltered first page; every filter +
+   cursor), so both sides of each `$N IS NULL OR …` gate are type-checked.
+
+## Future Work
+
+- `06_get_accounts_by_id` still documents the pre-0331 balances read
+  (`account_balances_current`); it parses, so the gate cannot see it. README
+  banner says so. Not filed — needs a decision on whether to refresh by hand
+  or wait for generated docs.
+- Generating these files from the Rust queries remains out of scope (see
+  above).

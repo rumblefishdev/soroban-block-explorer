@@ -7,38 +7,43 @@
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.2 + §7
 -- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037
 -- Data sources: DB-only.
--- Inputs:       {head} — the chain head (max ledger sequence) the API
---               version-keys its cache on (crate::common::head), inlined as a
---               trusted i64. The latest row is PINNED to it (WHERE sequence =
---               {head}) and the TPS window prunes on sequence > {head} - 200,
---               so latest_ledger_sequence always equals the cache key and the
---               previous inner (SELECT max(sequence) ...) subquery is dropped.
---               {head} = 0 (empty cluster) matches no row -> zero response.
--- Indexes:      ledgers PK on (sequence); system.tables.total_rows for the
---               accounts / soroban_contracts estimates.
--- CH Engine:    ledgers — MergeTree (no FINAL needed).
---               accounts / soroban_contracts — totals come from
---               system.tables.total_rows so engine FINAL semantics are
---               irrelevant here (we want the planner estimate).
--- CH Pattern:   scalar subselects; no FINAL (ledgers immutable lookup);
---               toStartOfSecond-free time math via dateDiff('second', ...).
--- ADR 0044 §:   §4.1 (ledgers plain MergeTree).
+-- Inputs:
+--   $1  :head  Int64  the chain head (max ledger sequence) the API
+--               version-keys its cache on (crate::common::head). The Rust
+--               query inlines it as a trusted i64 via `format!`; documented
+--               here as a positional parameter so this file is standalone
+--               SQL the Tier-1 gate can parse. The latest row is PINNED to it
+--               (WHERE sequence = $1) and the TPS window prunes on
+--               sequence > $1 - 200, so latest_ledger_sequence always equals
+--               the cache key and the previous inner
+--               (SELECT max(sequence) ...) subquery is dropped.
+--               $1 = 0 (empty cluster) matches no row -> zero response.
+-- Indexes:      ledgers PK on (sequence); accounts_recent (plain MergeTree,
+--               count() is a metadata read); soroban_contracts FINAL.
+-- CH Engine:    ledgers — ReplacingMergeTree; deduped by `LIMIT 1` / `LIMIT 1
+--                 BY sequence` rather than FINAL (lore-0420/0422).
+--               accounts_recent — refreshable-MV copy of `accounts`, already one
+--                 row per account.
+--               soroban_contracts — ReplacingMergeTree, FINAL (≈146k rows).
+-- CH Pattern:   scalar subselects; no FINAL on ledgers; time math via
+--               dateDiff('second', ...).
+-- ADR 0044 §:   §4.1 (ledgers), §4.5 (Replacing state).
 -- Notes:
 --   • `latest_ledger_closed_at` powers the §7 "polling indicator — when
 --     data was last refreshed" UI element. Same semantics as PG.
---   • `total_accounts` and `total_contracts` use `system.tables.total_rows`
---     — ClickHouse's O(1) row-count estimate maintained by the storage
---     layer. Mirrors the PG pattern of `pg_class.reltuples` (planner
---     estimate, not exact). On an explorer-scale DB an exact `count()`
---     touches every part of every partition (still seconds even in CH)
---     and would dominate this hot dashboard query. If exact ever needed,
---     spawn a counter table — do NOT add count() here.
+--   • `total_accounts` / `total_contracts` do NOT read
+--     `system.tables.total_rows` (lore-0420): that is the PHYSICAL part-row
+--     count, so on a ReplacingMergeTree it counts unmerged duplicates and
+--     reads too high (measured +4.3% accounts / +11.6% contracts, drifting
+--     upward). accounts → `count()` over `accounts_recent` (exact to ±1 vs
+--     `accounts FINAL`, modulo the 2-minute MV refresh); soroban_contracts →
+--     `count()` over FINAL, affordable at its size.
 --   • TPS is `sum(transaction_count) / window_seconds` over the closed
 --     ledgers in the trailing 60s, computed from the actual span between
 --     min/max closed_at in the window. `nullIf(.., 0)` guards a 0 window
 --     (single-ledger or empty range). Same numerical semantics as PG E01.
 --   • `generated_at` is `now()` at SELECT time. The API caches the
---     assembled response in-process, version-keyed on {head} (one compute per
+--     assembled response in-process, version-keyed on the head `$1` (one compute per
 --     chain head; a 60 s backstop TTL bounds memory / a stalled head); cache
 --     hits return the original `generated_at` so the frontend can split
 --     indexer-health lag from data staleness.
@@ -47,22 +52,23 @@ SELECT
     latest.sequence                                                              AS latest_ledger_sequence,
     latest.closed_at                                                             AS latest_ledger_closed_at,
     now64()                                                                      AS generated_at,
-    (
-        SELECT toFloat64(
-            ifNull(
-                sum(transaction_count)
-                    / nullIf(dateDiff('second', min(closed_at), max(closed_at)), 0),
-                0
-            )
-        )
-        FROM ledgers
-        WHERE sequence > {head} - 200                  -- prune to recent ~200 ledgers
-          AND closed_at >= now64() - INTERVAL 60 SECOND
-    )                                                                            AS tps_60s,
-    (SELECT total_rows FROM system.tables WHERE database = currentDatabase() AND name = 'accounts')          AS total_accounts,
-    (SELECT total_rows FROM system.tables WHERE database = currentDatabase() AND name = 'soroban_contracts') AS total_contracts
+    toFloat64(ifNull(
+        (SELECT sum(transaction_count)
+                / nullIf(dateDiff('second', min(closed_at), max(closed_at)), 0)
+         FROM (
+             SELECT sequence, transaction_count, closed_at
+             FROM ledgers
+             WHERE sequence > $1 - 200                  -- prune to recent ~200 ledgers
+               AND closed_at >= now64() - INTERVAL 60 SECOND
+             LIMIT 1 BY sequence                        -- dedup unmerged RMT rows
+         )),
+        0
+    ))                                                                           AS tps_60s,
+    ifNull((SELECT count() FROM accounts_recent), 0)                             AS total_accounts,
+    ifNull((SELECT count() FROM soroban_contracts FINAL), 0)                     AS total_contracts
 FROM (
     SELECT sequence, closed_at
     FROM ledgers
-    WHERE sequence = {head}   -- pinned to the cache-key head (PK point read)
+    WHERE sequence = $1   -- pinned to the cache-key head (PK point read)
+    LIMIT 1               -- a duplicated head row would return two rows
 ) AS latest;

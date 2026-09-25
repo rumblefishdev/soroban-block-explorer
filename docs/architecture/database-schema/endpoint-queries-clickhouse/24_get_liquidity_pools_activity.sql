@@ -112,6 +112,7 @@ WHERE pool_id = toFixedString(unhex($1), 32)
 ORDER BY ls DESC, ao DESC, oi DESC
 LIMIT 44;                          -- 2 × (page 20 + 1) + 2
 
+-- @@ split @@
 -- STEP 2 — transaction-level enrichment for the page's DISTINCT tx keys.
 -- Smaller than the page: several operations of one transaction share it.
 -- Keyed by the transaction's position (task 0372), inlined (integers) with
@@ -129,6 +130,7 @@ WHERE (t.ledger_sequence, t.application_order) IN ((58123456, 14), (58123455, 3)
   AND intDiv(t.ledger_sequence, 500000) IN (116)
 LIMIT 1 BY t.ledger_sequence, t.application_order;
 
+-- @@ split @@
 -- STEP 3 — the OPERATION's own source account.
 --
 -- ⚠️  NOT the transaction's. A Stellar operation may declare its own source,

@@ -1,12 +1,11 @@
 # ClickHouse endpoint SQL query reference set
 
-> ⚠️ **Task 0331 (unified balances) supersedes the supply/holders/account-balance
-> queries here.** `06_get_accounts_by_id`, `08_get_assets_list`, `09_get_assets_by_id`
-> now read from the unified `balances` table + `balance_aggregates` MV (keyed by the
-> re-added `assets.id` surrogate); `asset_aggregates`, `account_balances_current`, and
-> `soroban_token_*` are retired/renamed. The authoritative queries live in
-> `crates/api/src/{assets,accounts}/queries_ch.rs`. The banners in those three files
-> point to them; the SQL bodies here are pre-0331 and pending a full refresh.
+> ⚠️ **`06_get_accounts_by_id` still carries pre-0331 SQL.** Task 0331 (unified
+> balances) moved the account portfolio onto the `balances` table; the 06 body
+> still reads `account_balances_current` (it parses — the table exists — but is
+> not what the API runs). Authoritative query:
+> `crates/api/src/accounts/queries.rs::fetch_balances`. `08` / `09` were
+> re-derived from `crates/api/src/assets/queries.rs` by task 0478.
 
 Hand-tuned read queries — **one script per public REST endpoint** defined in
 [`backend-overview.md §6.2`](../../backend/backend-overview.md#62-endpoint-inventory).
@@ -64,7 +63,7 @@ Every file must:
 | `wasm_interface_metadata`         | `ReplacingMergeTree` (no version)              | no — immutable per `wasm_hash`; dedup-on-merge (lore-0293, was `MergeTree`)                                                                                                                                                                           |
 | `accounts`                        | `ReplacingMergeTree(last_seen_ledger)`         | **yes**                                                                                                                                                                                                                                               |
 | `assets`                          | `ReplacingMergeTree` (no version)              | **yes** — identity only since lore-0310; supply/holders come from `balance_aggregates`, name/icon from `asset_enrichment`                                                                                                                             |
-| `asset_aggregates`                | `MergeTree` (refreshable MV from balances)     | no — pre-computed per-asset `total_supply`/`holder_count`, read via a 1:1 LEFT JOIN; `Nullable` cols (NULL on miss). Refreshed on a cadence (eventually consistent) (lore-0293)                                                                       |
+| `balance_aggregates`              | `MergeTree` (refreshable MV from balances)     | no — pre-computed per-asset `total_supply`/`holder_count` keyed by `asset_id` (the `assets.id` surrogate, task 0331; replaces the retired `asset_aggregates`); `Nullable` cols (NULL on miss). Refreshed on a cadence (eventually consistent)         |
 | `account_balances_current`        | `ReplacingMergeTree(last_updated_ledger)`      | **yes**                                                                                                                                                                                                                                               |
 | `soroban_contracts`               | `ReplacingMergeTree(wasm_uploaded_at_ledger)`  | **yes**                                                                                                                                                                                                                                               |
 | `nfts`                            | `ReplacingMergeTree(current_owner_ledger)`     | **yes**                                                                                                                                                                                                                                               |
@@ -158,7 +157,7 @@ docker compose exec clickhouse clickhouse-client \
 ./run_endpoint_ch.sh 04                 # E04 ledgers list
 ./run_endpoint_ch.sh 03 --explain       # with EXPLAIN PLAN actions=1
 
-# Tier 1 parse-check every endpoint (CI gate):
+# Tier 1 parse-check every endpoint (CI gate — exits 1 on any failure):
 ./run_endpoint_ch.sh all --syntax-only
 
 # Smoke-run every endpoint:
@@ -167,16 +166,42 @@ docker compose exec clickhouse clickhouse-client \
 
 ## Validation tiers
 
-| Tier | What                                                                                                                                 | Status as of task 0207                                                                                                                                                                                                                                                                                          |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | Schema parse — `clickhouse-client --format=Null` returns exit 0 against canonical schema                                             | **Partial.** 28 of 38 statements (23 files) parse (measured 2026-08-12; the earlier "all 34 pass" was stale on both the count and the claim). Several endpoints fail, for unrelated reasons, and the gate runs in no CI workflow — both are being taken up as their own piece of work rather than patched here. |
-| 2    | Row-count equivalence — same params against PG (audit DB) and CH (mirror of same ledger range) → row counts match within tolerance   | **Deferred.** Gated on the CH writer becoming non-stub (`db_clickhouse::persist::persist_ledger_clickhouse` is a no-op per task 0205). Smoke-tested end-to-end on E01/E04/E08 with hand-inserted rows.                                                                                                          |
-| 3    | Sample-row diff — 10 random keys from result set, column-by-column PG vs CH compare. Expected diffs per §5 documented in each header | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                             |
-| 4    | Aggregate equivalence — aggregating queries (E01 stats, E22 search) compare totals PG vs CH; tolerance per §5                        | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                             |
+| Tier | What                                                                                                                                    | Status                                                                                                                                                                                                                                                                                                                                |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | Schema parse — every statement of every file planned with `clickhouse-client --format=Null` against the canonical schema (empty tables) | **Green, gated in CI.** 67 of 67 checks pass across 23 files (64 statements; 08 statement A is checked unfiltered and filtered, 21 once per interval), measured 2026-09-25 on ClickHouse 26.3 (task 0478). Runs in the `rust` job of `.github/workflows/ci.yml`; the runner exits 1 on any failure. See [§Tier 1 gate](#tier-1-gate). |
+| 2    | Row-count equivalence — same params against PG (audit DB) and CH (mirror of same ledger range) → row counts match within tolerance      | **Deferred.** Gated on the CH writer becoming non-stub (`db_clickhouse::persist::persist_ledger_clickhouse` is a no-op per task 0205). Smoke-tested end-to-end on E01/E04/E08 with hand-inserted rows.                                                                                                                                |
+| 3    | Sample-row diff — 10 random keys from result set, column-by-column PG vs CH compare. Expected diffs per §5 documented in each header    | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                                                   |
+| 4    | Aggregate equivalence — aggregating queries (E01 stats, E22 search) compare totals PG vs CH; tolerance per §5                           | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                                                   |
 
 The scaffold helper `compare_pg_ch.sh` is in place so the Tier 2-4 work
 is a small follow-up once the CH writer lands — it does not require
 re-deriving the per-endpoint binding logic.
+
+## Tier 1 gate
+
+`./run_endpoint_ch.sh all --syntax-only` is the CI gate (task 0478). Beyond
+"does CH accept it", it fails when:
+
+- a `NN_*.sql` file has no runner arm, or an arm skips one of the file's
+  `-- @@ split @@` sections;
+- a file holds more `;`-terminated statements than split sections (two
+  statements in one section would reach CH as one multi-query);
+- a placeholder is left unsubstituted — `$N`, `:name` or `{name}` — reported
+  by name before CH is asked.
+
+Inputs are positional `$N`, numbered file-wide. Values the Rust code inlines
+as literal lists (page keys, `IN (…)`) appear as example literals, as in 02.
+The only `{name}` placeholders left are `21`'s runtime `format!` fragments:
+its header and its runner arm carry the same per-interval table as
+`get_pool_chart.rs`, and the arm checks all three intervals. `21` also reads
+the prices tenant's `prices.price_usd_series*` views, which this repo's
+schema does not create; the gate substitutes an empty inline stand-in with the
+same columns, so the view names and column types are the one part of `21` it
+cannot check.
+
+The gate checks that the SQL plans, not that it matches the Rust query it
+documents — the two are still hand-copied. Generating these files from the
+Rust queries is the step after this one, if the set drifts again.
 
 ## Reviewer guide
 
