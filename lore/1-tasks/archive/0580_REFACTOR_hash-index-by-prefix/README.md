@@ -2,7 +2,7 @@
 id: '0580'
 title: 'REFACTOR: key transaction_hash_index by an 8-byte hash prefix — the full hash is checked in transactions'
 type: REFACTOR
-status: done
+status: completed
 related_adr: ['0059']
 related_tasks: ['0538', '0396', '0579']
 tags: ['clickhouse', 'storage', 'effort-medium', 'priority-high']
@@ -17,7 +17,7 @@ history:
       day of work (~120 GiB, estimate). Two PRs: the unused
       transaction_hash_dict removed first (task 0396), then the index itself.
   - date: 2026-09-24
-    status: done
+    status: completed
     who: karolkow
     note: >
       Shipped as a parallel change in four deploys, no swap window: #491
