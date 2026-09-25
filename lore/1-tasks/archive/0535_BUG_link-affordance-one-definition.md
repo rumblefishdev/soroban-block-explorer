@@ -2,7 +2,7 @@
 id: '0535'
 title: 'BUG: a link in content is indistinguishable from plain text, and the app carries two definitions of one'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0062', '0467', '0472']
 tags:
@@ -25,6 +25,17 @@ history:
       Promoted to active. No research phase needed — the defect and the two
       competing link definitions are both located in the code, and the open
       question is the rule, which is settled in the body.
+  - date: '2026-09-25'
+    status: completed
+    who: karolkow
+    note: >
+      Shipped in production-2026.09.07-1 (PR #450). The real-app pass the
+      implementation notes asked for is done: `/transactions` against the
+      production API through the dev proxy (frontend files identical to
+      production-2026.09.21-1), 60 linked cells, every one computed
+      `underline` at 0.35 alpha (`rgba(245,245,245,.35)` dark,
+      `rgba(26,26,26,.35)` light), unlinked cells `none`; the table still
+      reads as a table in both modes. Archived.
 ---
 
 # BUG: a link in content is indistinguishable from plain text
@@ -171,6 +182,9 @@ values (mono font, real light/dark `text.primary`/`background` from
 `theme/colors.ts`, the 0.35 alpha, the 3px offset) — screenshotted and sent to
 the user, not just described. A real-app pass with a working proxy would still
 be worth doing before calling this fully closed on a device.
+Done 2026-09-25 through the dev proxy (the key was available this time): on
+`/transactions`, all 60 linked cells compute `underline` at 0.35 alpha in both
+modes, unlinked text computes `none`, and the list still reads as a table.
 
 ## Not in scope
 

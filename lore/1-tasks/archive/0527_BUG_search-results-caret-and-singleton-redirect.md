@@ -2,7 +2,7 @@
 id: '0527'
 title: 'BUG: search results page — caret jumps to end while typing, and a single hit redirects on its own'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0271', '0443']
 tags: [frontend, search, ux, priority-medium, effort-small]
@@ -23,6 +23,16 @@ history:
       withdrawing the singleton effect also stops tx hash / StrKey
       auto-landing. Accepted as a deliberate regression (one extra click);
       docs and comments updated to say so.
+  - date: '2026-09-25'
+    status: completed
+    who: karolkow
+    note: >
+      Shipped in production-2026.09.07-1 (f950c99cb). Re-verified 2026-09-25
+      against the production API through the dev proxy (frontend files
+      identical to production-2026.09.21-1): `q=Kale Inferno` stays on
+      `/search` and renders its one contract row; typing `Xy` at caret 2
+      leaves the caret at 4, not at the end, and the URL becomes
+      `?q=KaXyle+Inferno`. Archived.
 ---
 
 # BUG: two defects on the search results view

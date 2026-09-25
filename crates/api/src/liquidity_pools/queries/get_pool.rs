@@ -57,7 +57,9 @@ pub async fn fetch_pool_by_id(
     // whole-table merge. It stays a whole-row `LIMIT 1` (not per-column
     // `argMax`), so `reserve_a`/`reserve_b` can never tear across a stale
     // before/after pair in the pre-cleanup window. `created_at_ledger` already
-    // reads without `FINAL` (`min(ledger_sequence)` is dup-invariant).
+    // reads without `FINAL` (the minimum is dup-invariant). It is `minOrNull`:
+    // plain `min` over zero rows is `0`, not NULL, so a pool with no snapshot —
+    // every soroban pool — read ledger 0 instead of falling back to its own.
     //
     // **`ledgers` is SEEKED, never joined whole.** `LEFT JOIN ledgers l ON
     // l.sequence = s.ledger_sequence` hash-built the entire 26M-row table to
@@ -77,7 +79,7 @@ pub async fn fetch_pool_by_id(
                 lp.legs                              AS legs, \
                 lp.fee_bps                           AS fee_bps, \
                 ifNull( \
-                    (SELECT min(ledger_sequence) FROM liquidity_pool_snapshots \
+                    (SELECT minOrNull(ledger_sequence) FROM liquidity_pool_snapshots \
                       WHERE pool_id = unhex(?)), \
                     lp.last_updated_ledger)          AS created_at_ledger, \
                 toInt64(ifNull( \
@@ -147,3 +149,6 @@ pub async fn fetch_pool_by_id(
         latest_snapshot_at: r.latest_snapshot_at_ms.map(millis_to_utc),
     }))
 }
+
+#[cfg(test)]
+mod ch_tests;

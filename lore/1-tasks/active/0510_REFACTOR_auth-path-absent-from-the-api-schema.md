@@ -2,7 +2,7 @@
 id: '0510'
 title: 'REFACTOR: the auth path is absent from the API schema, so the frontend hand-mirrors its type'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0455']
 tags: ['api', 'frontend', 'openapi', 'effort-small', 'priority-medium']
@@ -16,6 +16,16 @@ history:
       are one cause and two symptoms: the hand-written type exists precisely
       because the endpoint is missing from the schema, and the module-level
       mutable state is the same missing contract on the client side.
+  - date: '2026-09-25'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Re-verified on develop c0e85893 before starting: the path is
+      still absent from openapi.json, the handler and the hand-written type are
+      unchanged since filing. Two corrections to the plan: the frontend imports
+      the generated TYPE only (calling the generated SDK from session.ts would
+      deadlock on its own interceptor), and the handler is mounted only when
+      the JWT secret is set, so the spec registration must not mount it.
 ---
 
 # REFACTOR: the auth path is absent from the API schema
