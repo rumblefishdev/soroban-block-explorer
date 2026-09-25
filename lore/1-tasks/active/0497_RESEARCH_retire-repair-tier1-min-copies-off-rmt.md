@@ -193,3 +193,22 @@ with the measured reason), implementation subtasks filed for the routes that
 win, and an explicit statement of what remains in `repair-tier1` and until
 when. The end state — the subcommand deleted, `docs/backfills.md` losing the
 mandatory step — is the success criterion even if it lands incrementally.
+
+## Progress 2026-09-25 — NFT entries retired (branch `refactor/0497-retire-nft-repair-entries`)
+
+- **Retired:** `nfts.minted_at_ledger`, `nfts_pending.minted_at_ledger`.
+  Checked before deleting: every NFT query in `crates/api` derives the value
+  from `nft_ownership` (including the per-contract list); `system.query_log`
+  over 14 days shows the stored column only written by the indexer and read
+  by no service user.
+- **Kept, and why:** `accounts.first_seen_ledger` and
+  `soroban_contracts.{deployer_id, deployed_at_ledger}` — read by the API and
+  corrected by nothing else. `lp_positions.first_deposit_ledger` — broken
+  (0468: zeroes 95% of positions), yet the only thing correcting the live
+  drift (7 of 8 sampled live rows later than the true first deposit); it
+  retires with 0468's storage fix, not before.
+- **Found:** the two CH-gated `accounts` tests race on the shared
+  `accounts_staging_repair_tier1` table when run in parallel (one fails with
+  the default thread count, all pass with `--test-threads=1`). Pre-existing.
+- The `nfts.minted_at_ledger` column itself stays (dropping it is a
+  production `ALTER`, formerly 0529).
