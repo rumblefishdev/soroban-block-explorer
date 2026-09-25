@@ -97,8 +97,12 @@ Current file names (2026-09-25; `PoolTransactions` was renamed
       out as low value. See Design Decisions → Emerged.
 - [x] Each detail page renders identically for loading / empty / error /
       populated / paginating states — proven by a before/after HTML harness
-      (40/40 cases), **not** verified live: the dev server's API proxy needs
-      a `DEV_API_KEY` this worktree does not have. A live look remains open.
+      (40/40 cases). Live look done 2026-09-25 against the production API
+      through the dev proxy: account transactions, asset (native) latest
+      transactions and NFT transfer history each render 10 rows in their own
+      card; a contract with one invocation renders it in the bare tab box
+      with the pager, and its Events tab renders the custom empty state
+      ("This contract has not emitted any events yet.").
 - [x] `web` typecheck + lint + test green
 - [x] **Docs updated** — N/A (no system-shape change; pure FE component reuse)
 - [x] **API types regenerated** — N/A (FE-only)
