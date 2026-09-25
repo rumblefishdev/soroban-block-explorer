@@ -25,13 +25,13 @@
 //! the belt-and-braces. The cursor keys on `application_order` for this path
 //! (also the correct in-ledger order — the old `id`-hash tie-break did not
 //! preserve it). Statement B (contract filter) keys on the same position, by a
-//! seek on the `contract_transactions` presence index (task 0541).
-//! Statement C still keys on the `transactions.id` surrogate (it drives off
-//! `operations_appearances`).
+//! seek on the `contract_transactions` presence index (task 0541), and
+//! statement C (operation type) by a scan of `transaction_operations`, keyed
+//! by the position too (task 0372).
 //!
 //! `operation_types` comes from the shared [`ch::fetch_tx_list_aggregates`]
-//! keyed on the ≤ `limit + 1` page rows (sourced from `operations_appearances`
-//! by primary-key seek). The per-row `contract_ids` array it once also returned
+//! keyed on the ≤ `limit + 1` page positions (sourced from
+//! `transaction_operations` by primary-key seek). The per-row `contract_ids` array it once also returned
 //! was removed (task 0386) — dead field, whole-table `soroban_contracts FINAL`.
 
 use clickhouse::Row;
@@ -48,8 +48,8 @@ use super::{ResolvedListParams, SurrogateIdRow, TxListRow};
 // ---------------------------------------------------------------------------
 
 /// One page row — slim base columns only. `operation_types` is fetched
-/// separately via [`ch::fetch_tx_list_aggregates`] and merged by `id` (CH 26.3
-/// cannot compute it inline with a correlated subquery).
+/// separately via [`ch::fetch_tx_list_aggregates`] and merged by position
+/// (CH 26.3 cannot compute it inline with a correlated subquery).
 #[derive(Debug, Row, Deserialize)]
 struct TxPageChRow {
     hash: String,
@@ -61,7 +61,6 @@ struct TxPageChRow {
     successful: bool,
     operation_count: i16,
     has_soroban: bool,
-    id: i64,
     created_at: i64,
 }
 
@@ -71,7 +70,6 @@ impl TxPageChRow {
     /// contracts) gets empty vecs via `unwrap_or_default`.
     fn into_list_row(self, agg: ch::TxListAggregates) -> TxListRow {
         TxListRow {
-            id: self.id,
             hash: self.hash,
             ledger_sequence: self.ledger_sequence,
             application_order: self.application_order,
@@ -105,7 +103,6 @@ struct TxPageRawRow {
     successful: bool,
     operation_count: i16,
     has_soroban: bool,
-    id: i64,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -182,46 +179,11 @@ async fn resolve_source_and_closed_at(
                 successful: r.successful,
                 operation_count: r.operation_count,
                 has_soroban: r.has_soroban,
-                id: r.id,
                 created_at,
             })
         })
         .collect())
 }
-
-// ---------------------------------------------------------------------------
-// Shared projection fragments
-// ---------------------------------------------------------------------------
-
-/// Slim per-row projection shared by every list statement: the base list
-/// columns plus `t.id` (cursor tie-break / aggregate join key) and
-/// `l.closed_at` (derived `created_at`). References only `t.*` / `l.*` — no
-/// binds, no correlated subqueries. `operation_types` is fetched in a second,
-/// non-correlated pass (`ch::fetch_tx_list_aggregates`) and merged by `id` —
-/// CH 26.3 rejects correlated subqueries in SELECT.
-///
-/// Column order MUST match `TxPageChRow` field order (positional decode).
-///
-/// EVERY column carries an explicit `AS` alias on purpose. The clickhouse
-/// crate validates the result column *names* against the `Row` struct fields.
-/// Statements B/C join this projection's `t` to a driver subquery `m` that
-/// also has a `ledger_sequence` column, so a bare `t.ledger_sequence` comes
-/// back named `t.ledger_sequence` (CH keeps the qualifier to disambiguate) and
-/// fails struct decode with "column t.ledger_sequence not found in the struct".
-/// Statement A has no such join so the bare form happened to work — aliasing
-/// all columns makes the projection robust regardless of the surrounding joins.
-const SLIM_PROJECTION: &str = "\
-    lower(hex(t.hash)) AS hash, \
-    t.ledger_sequence AS ledger_sequence, \
-    t.application_order AS application_order, \
-    nullIf(src.account_id, '') AS source_account, \
-    t.fee_charged AS fee_charged, \
-    lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
-    t.successful AS successful, \
-    t.operation_count AS operation_count, \
-    t.has_soroban AS has_soroban, \
-    t.id AS id, \
-    l.closed_at AS created_at";
 
 // ---------------------------------------------------------------------------
 // List
@@ -272,23 +234,19 @@ pub async fn fetch_list(
     };
 
     let (op, order) = keyset_sql_desc(direction);
-    // Cursor keyset is `(ledger_sequence, <within-ledger key>)` (canonical SQL
-    // 02): the position for statements A and B, the id surrogate for C.
-    // `list_transactions` has already rejected a cursor of the other keyset, so
-    // each statement reads the key its variant carries. Both parts are present
-    // together or absent together, so the keyset tuple never binds a NULL.
-    let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match params.cursor.as_ref()
-    {
+    // Cursor keyset is the position `(ledger_sequence, application_order)`
+    // (canonical SQL 02) for every statement; `list_transactions` has already
+    // rejected a surrogate-keyed one. Both parts are present together or absent
+    // together, so the keyset tuple never binds a NULL.
+    let cursor: Option<(i64, i16)> = match params.cursor.as_ref() {
         Some(TxListCursor::ChPosition {
             ledger_sequence,
             application_order,
-        }) => (Some(*ledger_sequence), Some(i64::from(*application_order))),
-        Some(TxListCursor::ChSurrogate {
-            ledger_sequence,
-            transaction_id,
-        }) => (Some(*ledger_sequence), Some(*transaction_id)),
-        None => (None, None),
+        }) => Some((*ledger_sequence, *application_order)),
+        _ => None,
     };
+    let cursor_ledger = cursor.map(|(l, _)| l);
+    let cursor_tiebreak = cursor.map(|(_, a)| i64::from(a));
 
     // Inline the integer params directly into the filtered-statement SQL rather
     // than `.bind()`-ing them. The clickhouse 0.15 bound-parameter path
@@ -330,13 +288,6 @@ pub async fn fetch_list(
             // — the shape `transaction_participants` gives the account list
             // (task 0541). Not bounded to a partition: the index is keyed by
             // contract, so the seek crosses them cheaply (task 0381).
-            let cursor = match params.cursor.as_ref() {
-                Some(TxListCursor::ChPosition {
-                    ledger_sequence,
-                    application_order,
-                }) => Some((*ledger_sequence, *application_order)),
-                _ => None,
-            };
             let positions: Vec<(i64, i16)> = client
                 .query(&contract_positions_sql(
                     cid, &head_max, cursor, direction, lim_over,
@@ -352,7 +303,7 @@ pub async fn fetch_list(
                 // Step 2: seek `transactions` on its own key. Source + closed_at
                 // resolve by key-seek in `resolve_source_and_closed_at`.
                 let ot = op_type_opt.map_or_else(|| "NULL".to_string(), |v| v.to_string());
-                let sql = contract_page_sql(&positions, &src, &ot, order, lim_peek);
+                let sql = page_at_positions_sql(&positions, &src, &ot, order, lim_peek);
                 let raw = client.query(&sql).fetch_all::<TxPageRawRow>().await?;
                 resolve_source_and_closed_at(client, raw).await?
             }
@@ -360,61 +311,34 @@ pub async fn fetch_list(
 
         // --- Statement C: op_type filter only ------------------------------
         (None, Some(op_type)) => {
-            // Restructured so NEITHER side of the join is a full-table read:
-            //
-            //  - `transactions t` is pruned to a single partition and is the
-            //    STREAMED (left) side; the ≤ `limit*4`-row driver `m` is the
-            //    hash side. The previous `... INNER JOIN transactions t FINAL`
-            //    had no prune on `t`, so FINAL merged the entire 3.6B-row
-            //    table per request — a single op_type page read billions of
-            //    rows and exhausted the `read_rows` quota (CH Code: 201). FINAL
-            //    is dropped (append-only, immutable columns, Rust-side dedup).
-            //  - `m` (driver) scans the pruned partition by `type`, which is
-            //    NOT an `operations_appearances` primary-key prefix (~8e7 rows;
-            //    bounded, and op_type filtering is user-initiated, not polled).
-            //    Making this a seek needs a skip-index on `type` — deferred
-            //    follow-up.
-            //
-            // `LIMIT 1 BY t.id` before the page `LIMIT`: the `accounts` join has
-            // no FINAL (a 16M-row FINAL would be ruinous), so un-merged
-            // ReplacingMergeTree versions of the source account fan a single
-            // transaction into N identical-`id` rows. Here the page `LIMIT` is
-            // applied AFTER the join, so without the dedup it fills with copies
-            // of the top tx and the page collapses to 1 row (measured rows=4 /
-            // distinct_ids=1). `LIMIT 1 BY t.id` collapses the fan-out in SQL
-            // before the page cut, so the limit counts distinct transactions and
-            // next-page detection stays correct. (Statement A applies its LIMIT
-            // inside the pre-join subquery, so it is unaffected.)
-            let sql = format!(
-                "SELECT {SLIM_PROJECTION} \
-                 FROM ( \
-                    SELECT * FROM transactions \
-                    WHERE intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
-                 ) t \
-                 INNER JOIN ( \
-                    SELECT DISTINCT ledger_sequence, transaction_id \
-                    FROM operations_appearances \
-                    WHERE type = {op_type} \
-                      AND intDiv(ledger_sequence, 500000) \
-                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
-                      AND ledger_sequence <= {head_max} \
-                      AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
-                    ORDER BY ledger_sequence {order}, transaction_id {order} \
-                    LIMIT {lim_over} \
-                 ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
-                 LEFT JOIN accounts src ON src.id = t.source_id \
-                 INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-                 WHERE ({src} IS NULL OR t.source_id = {src}) \
-                 ORDER BY t.ledger_sequence {order}, t.id {order} \
-                 LIMIT 1 BY t.id \
-                 LIMIT {lim_peek}",
-            );
-            // No outer keyset re-check: the driver subquery already filtered
-            // `(ledger_sequence, transaction_id) {op} (cursor)`, and the JOIN
-            // binds `t.id = m.transaction_id` / `t.ledger_sequence =
-            // m.ledger_sequence`, so every joined row already satisfies it.
-            client.query(&sql).fetch_all::<TxPageChRow>().await?
+            // Step 1: up to `lim_over` positions of transactions carrying the
+            // operation type, from `transaction_operations` pinned to one
+            // partition (canonical SQL 02). `type` is not a key prefix, so this
+            // scans the partition in key order until the limit (~8e7 rows at
+            // worst, for a rare type; user-initiated, not polled).
+            let positions: Vec<(i64, i16)> = client
+                .query(&op_type_positions_sql(
+                    op_type,
+                    &head_partition,
+                    &head_max,
+                    cursor,
+                    direction,
+                    lim_over,
+                ))
+                .fetch_all::<PositionRow>()
+                .await?
+                .into_iter()
+                .map(|r| (r.ledger_sequence, r.application_order))
+                .collect();
+            if positions.is_empty() {
+                Vec::new()
+            } else {
+                // Step 2: the same page seek as statement B; the positions
+                // already match the type, so it filters by source only.
+                let sql = page_at_positions_sql(&positions, &src, "NULL", order, lim_peek);
+                let raw = client.query(&sql).fetch_all::<TxPageRawRow>().await?;
+                resolve_source_and_closed_at(client, raw).await?
+            }
         }
 
         // --- Statement A: no contract / op_type filter (default path) ------
@@ -469,8 +393,7 @@ pub async fn fetch_list(
                     lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
                     t.successful AS successful, \
                     t.operation_count AS operation_count, \
-                    t.has_soroban AS has_soroban, \
-                    t.id AS id \
+                    t.has_soroban AS has_soroban \
                  FROM ( \
                     SELECT * FROM transactions \
                     WHERE intDiv(ledger_sequence, 500000) \
@@ -489,24 +412,29 @@ pub async fn fetch_list(
     };
 
     // Statement A drops FINAL for the read-in-order fast path (see above), so
-    // a re-ingested transaction could in principle surface as two rows with
-    // the same `id`. Drop any such duplicate, keeping the first (the rows are
-    // already in the requested order). A no-op on the FINAL'd B/C paths and on
-    // the live partition (validated zero net dedup), but cheap insurance on
-    // ≤ `limit + 1` rows.
+    // a re-ingested transaction could in principle surface as two rows at the
+    // same position. Drop any such duplicate, keeping the first (the rows are
+    // already in the requested order). A no-op on the `LIMIT 1 BY` B/C paths
+    // and on the live partition (validated zero net dedup), but cheap
+    // insurance on ≤ `limit + 1` rows.
     let mut rows = rows;
     let mut seen = std::collections::HashSet::with_capacity(rows.len());
-    rows.retain(|r| seen.insert(r.id));
+    rows.retain(|r| seen.insert((r.ledger_sequence, r.application_order)));
 
-    // Second pass: fetch operation_types for the page's keys (non-correlated
-    // derived-table aggregation; CH 26.3 rejects correlated subqueries in
-    // SELECT), then merge onto the page rows by tx id.
-    let keys: Vec<(i64, i64)> = rows.iter().map(|r| (r.ledger_sequence, r.id)).collect();
+    // Second pass: fetch operation_types for the page's positions
+    // (non-correlated derived-table aggregation; CH 26.3 rejects correlated
+    // subqueries in SELECT), then merge onto the page rows by position.
+    let keys: Vec<(i64, i16)> = rows
+        .iter()
+        .map(|r| (r.ledger_sequence, r.application_order))
+        .collect();
     let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
     Ok(rows
         .into_iter()
         .map(|r| {
-            let agg = aggregates.remove(&r.id).unwrap_or_default();
+            let agg = aggregates
+                .remove(&(r.ledger_sequence, r.application_order))
+                .unwrap_or_default();
             r.into_list_row(agg)
         })
         .collect())
@@ -550,9 +478,42 @@ fn contract_positions_sql(
     )
 }
 
-/// Statement B's page: the transactions at `positions`, filtered by source and
-/// operation type, in position order. Every value is an integer literal.
-fn contract_page_sql(
+/// Statement C's driver: the positions of the transactions carrying an
+/// operation of `op_type`, past the cursor, in page order, inside one partition
+/// (canonical SQL 02). `LIMIT 1 BY` folds a transaction's several operations
+/// of the type — and rows the RMT has not merged yet — into one position.
+/// Every value is an integer literal (see `fetch_list`).
+fn op_type_positions_sql(
+    op_type: i16,
+    head_partition: &str,
+    head_max: &str,
+    cursor: Option<(i64, i16)>,
+    direction: Direction,
+    lim_over: i64,
+) -> String {
+    let (op, order) = keyset_sql_desc(direction);
+    let (partition, cursor) = match cursor {
+        Some((l, a)) => (
+            format!("intDiv({l}, 500000)"),
+            format!(" AND (ledger_sequence, application_order) {op} ({l}, {a})"),
+        ),
+        None => (head_partition.to_string(), String::new()),
+    };
+    format!(
+        "SELECT ledger_sequence, application_order FROM transaction_operations \
+         WHERE type = {op_type} \
+           AND intDiv(ledger_sequence, 500000) = {partition} \
+           AND ledger_sequence <= {head_max}{cursor} \
+         ORDER BY ledger_sequence {order}, application_order {order} \
+         LIMIT 1 BY ledger_sequence, application_order \
+         LIMIT {lim_over}"
+    )
+}
+
+/// The page of statements B and C: the transactions at `positions`, filtered
+/// by source and operation type, in position order. Every value is an integer
+/// literal.
+fn page_at_positions_sql(
     positions: &[(i64, i16)],
     src: &str,
     ot: &str,
@@ -582,19 +543,16 @@ fn contract_page_sql(
             lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
             t.successful AS successful, \
             t.operation_count AS operation_count, \
-            t.has_soroban AS has_soroban, \
-            t.id AS id \
+            t.has_soroban AS has_soroban \
          FROM transactions t \
          WHERE (t.ledger_sequence, t.application_order) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
            AND ({src} IS NULL OR t.source_id = {src}) \
-           AND ({ot} IS NULL OR ( \
-                SELECT count() FROM operations_appearances oa2 \
-                WHERE oa2.transaction_id = t.id \
-                  AND oa2.ledger_sequence = t.ledger_sequence \
-                  AND oa2.type = {ot} \
-                  AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
-           ) > 0) \
+           AND ({ot} IS NULL OR (t.ledger_sequence, t.application_order) IN ( \
+                SELECT ledger_sequence, application_order FROM transaction_operations \
+                WHERE (ledger_sequence, application_order) IN ({in_tuples}) \
+                  AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+                  AND type = {ot})) \
          ORDER BY t.ledger_sequence {order}, t.application_order {order} \
          LIMIT 1 BY t.ledger_sequence, t.application_order \
          LIMIT {lim_peek}",

@@ -16,10 +16,11 @@ use crate::liquidity_pools::dto::{PoolActivityCursor, PoolEvent};
 pub struct PoolActivityRow {
     pub transaction_hash: String,
     pub ledger_sequence: i64,
-    /// Surrogate `transactions.id`. Not on the wire — it is the cursor's
-    /// middle component, the same tie-break the sort key uses.
-    pub transaction_id: i64,
+    /// The transaction's 1-based position in its ledger. Not on the wire — it
+    /// is the cursor's middle component, the same tie-break the sort key uses.
     pub application_order: i16,
+    /// The operation's 0-based position in its transaction (ADR 0059).
+    pub operation_index: i16,
     pub event: Option<PoolEvent>,
     /// One per leg, in `legs` order — see `PoolActivityItem::amounts`.
     pub amounts: Vec<Option<String>>,
@@ -36,7 +37,7 @@ struct PoolLegsChRow {
     legs: Vec<i64>,
 }
 
-/// The pool's leg surrogates — the key `lp_operation_amounts.asset_id` is
+/// The pool's leg surrogates — the key `pool_operation_amounts.asset_id` is
 /// written with (task 0279), so an amount row maps onto the legs the page
 /// renders. `None` when the pool does not exist, which is also this seek's
 /// existence check (it replaces a separate `pool_exists` round-trip).
@@ -63,14 +64,14 @@ pub async fn fetch_pool_asset_ids(
     Ok(rows.into_iter().next().map(|r| r.legs))
 }
 
-/// One raw leg from `lp_operation_amounts` — the table's own grain, read in
+/// One raw leg from `pool_operation_amounts` — the table's own grain, read in
 /// sort-key order and paired in Rust. No `GROUP BY`: see
 /// [`fetch_pool_activity`] for the measurement that removed it.
 #[derive(Debug, Row, Deserialize)]
 struct PoolLegChRow {
     ls: i64,
-    tid: i64,
     ao: i16,
+    oi: i16,
     asset_id: i64,
     amount: i64,
 }
@@ -78,7 +79,8 @@ struct PoolLegChRow {
 /// Transaction-level enrichment for the activity page's DISTINCT tx keys.
 #[derive(Debug, Row, Deserialize)]
 struct ActivityTxRow {
-    id: i64,
+    ls: i64,
+    ao: i16,
     hash: String,
     source_id: i64,
     created_at_ms: i64,
@@ -89,8 +91,8 @@ struct ActivityTxRow {
 #[derive(Debug, Row, Deserialize)]
 struct OpSourceChRow {
     ls: i64,
-    tid: i64,
     ao: i16,
+    oi: i16,
     source_id: Option<i64>,
     /// `length(pool_ids)` — how many pools the whole operation crossed.
     pools_crossed: u64,
@@ -100,8 +102,8 @@ struct OpSourceChRow {
 /// `amounts[i]` belongs to the pool's `legs[i]`.
 struct PairedOp {
     ls: i64,
-    tid: i64,
     ao: i16,
+    oi: i16,
     amounts: Vec<Option<i64>>,
 }
 
@@ -119,7 +121,7 @@ impl PairedOp {
 ///
 /// The legs of one operation are ADJACENT by construction: `asset_id` is
 /// the last component of the sort key, so rows sharing
-/// `(ledger_sequence, transaction_id, application_order)` are neighbours. That
+/// `(ledger_sequence, application_order, operation_index)` are neighbours. That
 /// is the whole reason this can be a fold instead of an aggregation.
 ///
 /// `truncated` means the read hit its row cap, so the final group may be
@@ -130,12 +132,12 @@ fn pair_legs(rows: Vec<PoolLegChRow>, legs: &[i64], truncated: bool) -> Vec<Pair
     for r in rows {
         let same_op = out
             .last()
-            .is_some_and(|last| (last.ls, last.tid, last.ao) == (r.ls, r.tid, r.ao));
+            .is_some_and(|last| (last.ls, last.ao, last.oi) == (r.ls, r.ao, r.oi));
         if !same_op {
             out.push(PairedOp {
                 ls: r.ls,
-                tid: r.tid,
                 ao: r.ao,
+                oi: r.oi,
                 amounts: vec![None; legs.len()],
             });
         }
@@ -155,9 +157,9 @@ fn pair_legs(rows: Vec<PoolLegChRow>, legs: &[i64], truncated: bool) -> Vec<Pair
 ///
 /// **The driver table is the design.** `operation_pools` (dropped in task
 /// 0372) was keyed `(pool_id, ledger_sequence, transaction_id)` with no
-/// `application_order`, so it could not page per operation. `lp_operation_amounts` is keyed
-/// `(pool_id, ledger_sequence, transaction_id, application_order, asset_id)`
-/// — the page's exact grain, reached by one PK-prefix seek.
+/// operation, so it could not page per operation. `pool_operation_amounts` is
+/// keyed `(pool_id, ledger_sequence, application_order, operation_index,
+/// asset_id)` — the page's exact grain, reached by one PK-prefix seek.
 ///
 /// **No `GROUP BY`, and that is measured, not stylistic.** The first cut of
 /// this function pivoted the legs with `countIf`/`anyIf` and grouped by the
@@ -182,7 +184,7 @@ fn pair_legs(rows: Vec<PoolLegChRow>, legs: &[i64], truncated: bool) -> Vec<Pair
 ///
 /// **Known consequence: an operation with no amount rows is not listed.** An
 /// op *declares* a pool whether or not the transaction succeeded (its
-/// `pool_ids` in `operations_appearances`); amounts are written only for value
+/// `pool_ids` in `transaction_operations`); amounts are written only for value
 /// that actually moved. A failed explicit LP op therefore had a row under
 /// `/transactions` and has none here — the page answers "what moved through
 /// this pool", and a failed op moved nothing.
@@ -200,8 +202,8 @@ pub async fn fetch_pool_activity(
     // Where the next window resumes. `<` on the whole triple skips the last
     // kept operation outright — both its legs share that triple, so there is
     // no half-operation to step over.
-    let mut after: Option<(i64, i64, i16)> =
-        cursor.map(|c| (c.ledger_sequence, c.transaction_id, c.application_order));
+    let mut after: Option<(i64, i16, i16)> =
+        cursor.map(|c| (c.ledger_sequence, c.application_order, c.operation_index));
 
     // One row per leg per operation, plus slack so the cap rarely lands mid-op.
     let legs_per_op = legs.len() as i64;
@@ -216,22 +218,22 @@ pub async fn fetch_pool_activity(
     // the slow version of the same idea.
     loop {
         let keyset = match after {
-            Some((ls, tid, ao)) => format!(
-                " AND (ledger_sequence, transaction_id, application_order) {op} ({ls}, {tid}, {ao})"
+            Some((ls, ao, oi)) => format!(
+                " AND (ledger_sequence, application_order, operation_index) {op} ({ls}, {ao}, {oi})"
             ),
             None => String::new(),
         };
         let sql = format!(
             "SELECT \
                 ledger_sequence   AS ls, \
-                transaction_id    AS tid, \
                 application_order AS ao, \
+                operation_index   AS oi, \
                 asset_id          AS asset_id, \
                 amount            AS amount \
-             FROM lp_operation_amounts \
+             FROM pool_operation_amounts \
              WHERE pool_id = toFixedString(unhex(?), 32) \
                AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) {keyset} \
-             ORDER BY ls {order}, tid {order}, ao {order} \
+             ORDER BY ls {order}, ao {order}, oi {order} \
              LIMIT {window}"
         );
         let rows = client
@@ -243,7 +245,7 @@ pub async fn fetch_pool_activity(
         let exhausted = (rows.len() as i64) < window;
         let batch = pair_legs(rows, legs, !exhausted);
         if let Some(last) = batch.last() {
-            after = Some((last.ls, last.tid, last.ao));
+            after = Some((last.ls, last.ao, last.oi));
         }
 
         match event {
@@ -263,14 +265,14 @@ pub async fn fetch_pool_activity(
 
     // Enrich the page's DISTINCT transactions — several operations of one
     // transaction share a row here, so this set is smaller than the page.
-    // Keys inlined (i64) with the partition prune that turns the
-    // `(ledger_sequence, id) IN (…)` filter into a tight PK seek, same shape
-    // as `common::ch::fetch_tx_list_aggregates`.
-    let tx_keys: std::collections::BTreeSet<(i64, i64)> =
-        ops.iter().map(|o| (o.ls, o.tid)).collect();
+    // Keys inlined (integers) with the partition prune that turns the
+    // position filter into a tight PK seek, same shape as
+    // `common::ch::fetch_tx_list_aggregates`.
+    let tx_keys: std::collections::BTreeSet<(i64, i16)> =
+        ops.iter().map(|o| (o.ls, o.ao)).collect();
     let in_tuples = tx_keys
         .iter()
-        .map(|(ls, tid)| format!("({ls},{tid})"))
+        .map(|(ls, ao)| format!("({ls},{ao})"))
         .collect::<Vec<_>>()
         .join(",");
     let partitions = tx_keys
@@ -283,61 +285,66 @@ pub async fn fetch_pool_activity(
         .join(",");
     let detail_sql = format!(
         "SELECT \
-            t.id                                 AS id, \
+            t.ledger_sequence                    AS ls, \
+            t.application_order                  AS ao, \
             lower(hex(t.hash))                   AS hash, \
             t.source_id                          AS source_id, \
             toUnixTimestamp64Milli(l.closed_at)  AS created_at_ms \
          FROM transactions t \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-         WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
+         WHERE (t.ledger_sequence, t.application_order) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
-         LIMIT 1 BY t.id"
+         LIMIT 1 BY t.ledger_sequence, t.application_order"
     );
     let txs = client
         .query(&detail_sql)
         .fetch_all::<ActivityTxRow>()
         .await?;
-    let by_tx: HashMap<i64, &ActivityTxRow> = txs.iter().map(|t| (t.id, t)).collect();
+    let by_tx: HashMap<(i64, i16), &ActivityTxRow> =
+        txs.iter().map(|t| ((t.ls, t.ao), t)).collect();
 
     // The OPERATION's own source account. A Stellar operation may declare one,
     // and then it — not the transaction's source — is who performed this
-    // operation; `operations_appearances.source_id` is NULL when it does not,
+    // operation; `transaction_operations.source_id` is NULL when it does not,
     // which per the XDR means "same as the transaction's". Showing the
     // transaction's source on a per-operation row names the wrong account
     // whenever they differ (measured on prod: 41% of ops in a recent ledger
     // window declare their own, and stellar.expert shows that one).
     //
-    // `(ledger_sequence, transaction_id, application_order)` IS this table's
+    // `(ledger_sequence, application_order, operation_index)` IS this table's
     // sort key, so the page's bounded IN-list is a PK seek with the same
-    // partition prune. `max()` rather than `LIMIT 1 BY`: the table holds one
-    // row per APPEARANCE, so an operation has several, and aggregation skips
-    // the NULLs instead of picking one arbitrarily.
+    // partition prune. `max()` rather than `LIMIT 1 BY`: aggregation folds
+    // rows the RMT has not merged yet and skips the NULLs instead of picking a
+    // row arbitrarily. The table holds one row per folded identity group, at
+    // the group's smallest `operation_index` (`stage/operations.rs`), so an
+    // operation folded into an earlier identical one has no row of its own:
+    // its page row falls back to the transaction's source and carries no
+    // `pools_crossed`.
     //
     // `pools_crossed` rides the same seek for free: `pool_ids` is the op's
-    // sorted+deduped crossing list, written identically on every appearance
-    // row (stage.rs fans the one list out), so `max(length(...))` is just
-    // "the length". It is what lets a row say "this trade was one hop of an
+    // sorted+deduped crossing list, part of the fold identity, so
+    // `max(length(...))` is just "the length". It is what lets a row say "this trade was one hop of an
     // N-pool route" without carrying the route itself — the route lives on
     // the op's detail page, which the row already links to.
     let op_sources_sql = format!(
         "SELECT \
             ledger_sequence   AS ls, \
-            transaction_id    AS tid, \
             application_order AS ao, \
+            operation_index   AS oi, \
             max(source_id)    AS source_id, \
             max(length(pool_ids)) AS pools_crossed \
-         FROM operations_appearances \
-         WHERE (ledger_sequence, transaction_id) IN ({in_tuples}) \
+         FROM transaction_operations \
+         WHERE (ledger_sequence, application_order) IN ({in_tuples}) \
            AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
-         GROUP BY ls, tid, ao"
+         GROUP BY ls, ao, oi"
     );
     let op_sources = client
         .query(&op_sources_sql)
         .fetch_all::<OpSourceChRow>()
         .await?;
-    let by_op: HashMap<(i64, i64, i16), (Option<i64>, u64)> = op_sources
+    let by_op: HashMap<(i64, i16, i16), (Option<i64>, u64)> = op_sources
         .iter()
-        .map(|r| ((r.ls, r.tid, r.ao), (r.source_id, r.pools_crossed)))
+        .map(|r| ((r.ls, r.ao, r.oi), (r.source_id, r.pools_crossed)))
         .collect();
 
     // Source StrKeys by surrogate id (bloom seek) rather than a whole-
@@ -357,11 +364,11 @@ pub async fn fetch_pool_activity(
     Ok(ops
         .into_iter()
         .filter_map(|o| {
-            let tx = by_tx.get(&o.tid)?;
+            let tx = by_tx.get(&(o.ls, o.ao))?;
             // The operation's own source, falling back to the transaction's —
             // which is what the XDR's absent `sourceAccount` means.
             let (op_source, pools_crossed) = by_op
-                .get(&(o.ls, o.tid, o.ao))
+                .get(&(o.ls, o.ao, o.oi))
                 .copied()
                 .map_or((None, None), |(src, n)| (src, Some(n as i64)));
             let source_id = op_source.unwrap_or(tx.source_id);
@@ -370,8 +377,8 @@ pub async fn fetch_pool_activity(
             Some(PoolActivityRow {
                 transaction_hash: tx.hash.clone(),
                 ledger_sequence: o.ls,
-                transaction_id: o.tid,
                 application_order: o.ao,
+                operation_index: o.oi,
                 event,
                 amounts: o
                     .amounts

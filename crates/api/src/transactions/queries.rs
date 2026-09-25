@@ -13,9 +13,9 @@
 //!   keyset `(ledger_sequence, id)` (canonical SQL 02), but it is NOT
 //!   apply-order within a ledger — callers that need on-chain order use
 //!   `application_order`.
-//! - **`operations_appearances` has no `id` surrogate** (PR #175). The
-//!   per-op `appearance_id` is the natural-key `application_order`
-//!   (canonical SQL 03 statement C).
+//! - **`transaction_operations` has no `id` surrogate** (PR #175). The
+//!   per-op `appearance_id` is the operation's 1-based position,
+//!   `operation_index + 1` (canonical SQL 03 statement C).
 //! - **`soroban_events` is the full-payload table** (one row per event). The
 //!   archive-unavailable fallback groups per (contract, ledger) to emit one
 //!   appearance row per contract — the same wire shape as the PG appearance
@@ -37,7 +37,6 @@ use super::dto::TxListCursor;
 
 #[derive(Debug)]
 pub struct TxListRow {
-    pub id: i64,
     pub hash: String,
     pub ledger_sequence: i64,
     pub application_order: i16,
@@ -152,7 +151,7 @@ struct OpRawRow {
     asset_issuer_id: Option<i64>,
     asset_code: Option<String>,
     pool_ids: Vec<String>,
-    application_order: i16,
+    operation_index: i16,
     ledger_sequence: i64,
     created_at: i64,
 }
@@ -256,10 +255,11 @@ async fn fetch_source_account(
         .await
 }
 
+/// The transaction's operations, located by its position (task 0372).
 pub async fn fetch_operations(
     client: &clickhouse::Client,
-    transaction_id: i64,
     ledger_sequence: i64,
+    application_order: i16,
 ) -> Result<Vec<OpRow>, clickhouse::error::Error> {
     let raw = client
         .query(
@@ -271,23 +271,23 @@ pub async fn fetch_operations(
                 oa.asset_issuer_id, \
                 nullIf(oa.asset_code, '') AS asset_code, \
                 arrayMap(x -> lower(hex(x)), oa.pool_ids) AS pool_ids, \
-                oa.application_order, \
+                oa.operation_index, \
                 oa.ledger_sequence, \
                 l.closed_at AS created_at \
-             FROM operations_appearances oa FINAL \
+             FROM transaction_operations oa FINAL \
              /* ledgers l FINAL: ledgers is a ReplacingMergeTree with unmerged \
                 duplicate rows. This was correct only because `oa FINAL` \
                 propagates FINAL into the join — an implicit CH behavior. Made \
                 explicit so dropping `oa FINAL` can't silently double every op. \
                 Cheap: the join pins a single sequence. lore-0420 */ \
              INNER JOIN ledgers l FINAL ON l.sequence = oa.ledger_sequence \
-             WHERE oa.transaction_id = ? \
-               AND oa.ledger_sequence = ? \
+             WHERE oa.ledger_sequence = ? \
+               AND oa.application_order = ? \
                AND intDiv(oa.ledger_sequence, 500000) = intDiv(?, 500000) \
-             ORDER BY oa.application_order",
+             ORDER BY oa.operation_index",
         )
-        .bind(transaction_id)
         .bind(ledger_sequence)
+        .bind(application_order)
         .bind(ledger_sequence)
         .fetch_all::<OpRawRow>()
         .await?;
@@ -308,33 +308,37 @@ pub async fn fetch_operations(
 
     Ok(raw
         .into_iter()
-        .map(|r| OpRow {
-            // CH `operations_appearances` dropped the BIGSERIAL surrogate
-            // (PR #175); `application_order` is the natural per-op key.
-            appearance_id: i64::from(r.application_order),
-            type_name: operation_type_label(r.op_type),
-            op_type: r.op_type,
-            source_account: r
-                .source_id
-                .and_then(|id| accounts.get(&id).cloned())
-                .filter(|s| !s.is_empty()),
-            destination_account: r
-                .destination_id
-                .and_then(|id| accounts.get(&id).cloned())
-                .filter(|s| !s.is_empty()),
-            contract_id: r
-                .contract_id
-                .and_then(|id| contracts.get(&id).cloned())
-                .filter(|s| !s.is_empty()),
-            asset_code: r.asset_code.filter(|s| !s.is_empty()),
-            asset_issuer: r
-                .asset_issuer_id
-                .and_then(|id| accounts.get(&id).cloned())
-                .filter(|s| !s.is_empty()),
-            pool_ids: r.pool_ids,
-            application_order: Some(r.application_order),
-            ledger_sequence: r.ledger_sequence,
-            created_at: millis_to_utc(r.created_at),
+        .map(|r| {
+            // The wire keeps the operation's 1-based position (Horizon's
+            // `application_order`, the `#op-N` anchor); the table stores the
+            // 0-based `operation_index` (ADR 0059).
+            let position = r.operation_index + 1;
+            OpRow {
+                appearance_id: i64::from(position),
+                type_name: operation_type_label(r.op_type),
+                op_type: r.op_type,
+                source_account: r
+                    .source_id
+                    .and_then(|id| accounts.get(&id).cloned())
+                    .filter(|s| !s.is_empty()),
+                destination_account: r
+                    .destination_id
+                    .and_then(|id| accounts.get(&id).cloned())
+                    .filter(|s| !s.is_empty()),
+                contract_id: r
+                    .contract_id
+                    .and_then(|id| contracts.get(&id).cloned())
+                    .filter(|s| !s.is_empty()),
+                asset_code: r.asset_code.filter(|s| !s.is_empty()),
+                asset_issuer: r
+                    .asset_issuer_id
+                    .and_then(|id| accounts.get(&id).cloned())
+                    .filter(|s| !s.is_empty()),
+                pool_ids: r.pool_ids,
+                application_order: Some(position),
+                ledger_sequence: r.ledger_sequence,
+                created_at: millis_to_utc(r.created_at),
+            }
         })
         .collect())
 }

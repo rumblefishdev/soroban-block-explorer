@@ -39,7 +39,7 @@ fn position_cursor_round_trips() {
 }
 
 #[test]
-fn each_statement_takes_only_its_own_keyset() {
+fn transaction_list_takes_only_the_position() {
     let position = TxListCursor::ChPosition {
         ledger_sequence: 64_000_000,
         application_order: 7,
@@ -48,24 +48,9 @@ fn each_statement_takes_only_its_own_keyset() {
         ledger_sequence: 64_000_000,
         transaction_id: -123,
     };
-    // (contract filter, operation-type filter) → the statement's keyset.
-    for (contract, op_type, keyed_by_position) in [
-        (false, false, true), // A: no filter
-        (true, false, true),  // B: contract
-        (true, true, true),   // B: contract + operation type
-        (false, true, false), // C: operation type only
-    ] {
-        assert_eq!(
-            position.fits_transaction_list(contract, op_type),
-            keyed_by_position,
-            "position cursor, contract {contract}, op_type {op_type}"
-        );
-        assert_eq!(
-            surrogate.fits_transaction_list(contract, op_type),
-            !keyed_by_position,
-            "surrogate cursor, contract {contract}, op_type {op_type}"
-        );
-    }
+    assert!(position.fits_transaction_list());
+    // Minted by the operation-type filter before task 0372.
+    assert!(!surrogate.fits_transaction_list());
 }
 
 #[test]

@@ -16,29 +16,27 @@
 //! CH 26.3:
 //!
 //! 1. The caller fetches the page of transactions (≤ `limit + 1` rows),
-//!    yielding a bounded set of `(ledger_sequence, transaction_id)` keys.
+//!    yielding a bounded set of `(ledger_sequence, application_order)`
+//!    positions.
 //! 2. [`fetch_tx_list_aggregates`] aggregates `operation_types` for exactly
-//!    that key set — a derived table keyed by `(ledger_sequence,
-//!    transaction_id) IN (…)`, grouped by `transaction_id`, no reference to
-//!    any outer row.
-//! 3. The caller merges the aggregates back onto its page rows by
-//!    `transaction_id`.
+//!    that position set — a derived table keyed by `(ledger_sequence,
+//!    application_order) IN (…)`, grouped by position, no reference to any
+//!    outer row.
+//! 3. The caller merges the aggregates back onto its page rows by position.
 //!
-//! Keys are `i64`, so they are inlined into the `IN (…)` list directly — no
+//! Keys are integers, so they are inlined into the `IN (…)` list directly — no
 //! injection surface, and it sidesteps binding a tuple array. The key set is
 //! the page (≤ 101 rows) and a partition prune on
 //! `intDiv(ledger_sequence, 500000)` confines the scan to the touched
 //! partition(s).
 //!
-//! ## `operation_types` sources `operations_appearances` by primary-key seek
+//! ## `operation_types` sources `transaction_operations` by primary-key seek
 //!
-//! `operations_appearances` leads its `ORDER BY` with `(ledger_sequence,
-//! transaction_id)`, so the key filter is a **primary-key seek** — it reads
-//! only the page transactions' op rows. `FINAL` is kept: seek-bounded here (the
-//! merge is over the matched rows only — measured identical read_rows vs
-//! no-FINAL), so it keeps the ReplacingMergeTree collapse explicit at zero read
-//! cost, rather than leaning on `groupUniqArray` set-dedup + `type`
-//! immutability.
+//! `transaction_operations` leads its `ORDER BY` with `(ledger_sequence,
+//! application_order)` (task 0372), so the key filter is a **primary-key
+//! seek** — it reads only the page transactions' op rows. No `FINAL`:
+//! `groupUniqArray` collapses an unmerged duplicate on its own, and `type` is
+//! the same on every version of a row.
 //!
 //! ## Removed: the per-row `contract_ids` array (task 0386)
 //!
@@ -66,32 +64,31 @@ pub struct TxListAggregates {
 
 #[derive(Debug, Row, Deserialize)]
 struct OpTypeCodesRow {
-    transaction_id: i64,
+    ledger_sequence: i64,
+    application_order: i16,
     codes: Vec<i16>,
 }
 
-/// Aggregate `operation_types` for a bounded page of
-/// `(ledger_sequence, transaction_id)` keys.
+/// Aggregate `operation_types` for a bounded page of transaction positions
+/// `(ledger_sequence, application_order)`.
 ///
-/// Returns a map keyed by `transaction_id`. A transaction with no operations
-/// is simply absent (the caller treats a missing entry as the empty vec).
-/// Empty `keys` short-circuits to an empty map with no query.
+/// Returns a map keyed by position. A transaction with no operations is simply
+/// absent (the caller treats a missing entry as the empty vec). Empty `keys`
+/// short-circuits to an empty map with no query.
 ///
 /// Non-correlated by construction (see module docs) — CH-26-safe.
 pub async fn fetch_tx_list_aggregates(
     client: &clickhouse::Client,
-    keys: &[(i64, i64)],
-) -> Result<HashMap<i64, TxListAggregates>, clickhouse::error::Error> {
+    keys: &[(i64, i16)],
+) -> Result<HashMap<(i64, i16), TxListAggregates>, clickhouse::error::Error> {
     if keys.is_empty() {
         return Ok(HashMap::new());
     }
 
-    // `(ledger_sequence, transaction_id)` tuple-list + the distinct touched
-    // partitions. Both are `i64`, inlined directly — integers carry no
-    // injection risk.
+    // Integers, inlined directly — no injection risk.
     let in_tuples = keys
         .iter()
-        .map(|(ledger, tx)| format!("({ledger},{tx})"))
+        .map(|(ledger, order)| format!("({ledger},{order})"))
         .collect::<Vec<_>>()
         .join(",");
     let partitions = keys
@@ -103,33 +100,27 @@ pub async fn fetch_tx_list_aggregates(
         .collect::<Vec<_>>()
         .join(",");
 
-    // Page-key filter + partition prune — the load-bearing read guard.
-    // `operations_appearances` is ORDER BY `(ledger_sequence, transaction_id,
-    // application_order)`, so this filter is a primary-key seek — it reads only
-    // the page transactions' op rows. `FINAL` is seek-bounded here (the merge is
-    // over the matched rows only, measured identical read_rows vs no-FINAL), so
-    // it is kept: the RMT collapse stays explicit at zero read cost.
-    let key_filter = format!(
-        "(oa.ledger_sequence, oa.transaction_id) IN ({in_tuples}) \
-         AND intDiv(oa.ledger_sequence, 500000) IN ({partitions})"
-    );
-
+    // Page-key filter + partition prune — the load-bearing read guard: a
+    // primary-key seek that reads only the page transactions' op rows.
     let op_sql = format!(
-        "SELECT oa.transaction_id AS transaction_id, \
-                groupUniqArray(oa.type) AS codes \
-         FROM operations_appearances oa FINAL \
-         WHERE {key_filter} \
-         GROUP BY oa.transaction_id"
+        "SELECT ledger_sequence, application_order, groupUniqArray(type) AS codes \
+         FROM transaction_operations \
+         WHERE (ledger_sequence, application_order) IN ({in_tuples}) \
+           AND intDiv(ledger_sequence, 500000) IN ({partitions}) \
+         GROUP BY ledger_sequence, application_order"
     );
 
     let op_rows = client.query(&op_sql).fetch_all::<OpTypeCodesRow>().await?;
 
-    let mut map: HashMap<i64, TxListAggregates> = HashMap::with_capacity(keys.len());
-    for row in op_rows {
-        map.entry(row.transaction_id).or_default().operation_types =
-            sorted_unique_labels(row.codes);
-    }
-    Ok(map)
+    Ok(op_rows
+        .into_iter()
+        .map(|row| {
+            let agg = TxListAggregates {
+                operation_types: sorted_unique_labels(row.codes),
+            };
+            ((row.ledger_sequence, row.application_order), agg)
+        })
+        .collect())
 }
 
 /// Decode a `DateTime64(3, 'UTC')` millisecond value into a `DateTime<Utc>`.
@@ -146,7 +137,7 @@ pub fn millis_to_utc(ms: i64) -> DateTime<Utc> {
         .expect("ClickHouse DateTime64(3, 'UTC') must decode to a valid UTC timestamp")
 }
 
-/// Map a raw `operations_appearances.type` code to its canonical
+/// Map a raw `transaction_operations.type` code to its canonical
 /// SCREAMING_SNAKE label, degrading to `UNKNOWN_<code>` for a code from a
 /// newer protocol rather than panicking.
 pub fn operation_type_label(code: i16) -> String {
