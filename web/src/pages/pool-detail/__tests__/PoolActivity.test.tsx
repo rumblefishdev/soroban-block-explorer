@@ -22,8 +22,8 @@ vi.mock('../../../api/index.js', async (importOriginal) => ({
 /** An XLM / USDC pool, in registration order. */
 const pool = {
   legs: [
-    { asset_type_name: 'native', asset_code: null },
-    { asset_type_name: 'classic_credit', asset_code: 'USDC' },
+    { asset_type_name: 'native', asset_code: null, decimals: 7 },
+    { asset_type_name: 'classic_credit', asset_code: 'USDC', decimals: 7 },
   ],
 } as Parameters<typeof formatPoolAmount>[1];
 
@@ -70,6 +70,25 @@ describe('tradeRate', () => {
     expect(tradeRate(parts)).toBe('0.0003245 XLM/USDC');
   });
 
+  // Legs of different decimals: each amount scales by its own leg, so the
+  // rate is in units — a raw ratio would be 10^11 off.
+  it('rates legs of different scales in units', () => {
+    const mixed = {
+      legs: [
+        { asset_type_name: 'native', asset_code: null, decimals: 7 },
+        { asset_type_name: 'soroban', asset_code: 'USST', decimals: 18 },
+      ],
+    } as Parameters<typeof formatPoolAmount>[1];
+    const parts = poolAmountLegs(
+      { amounts: ['10000000', '-2000000000000000000'] },
+      mixed
+    );
+    expect(
+      formatPoolAmount({ amounts: ['10000000', '-2000000000000000000'] }, mixed)
+    ).toBe('1 XLM → 2 USST');
+    expect(tradeRate(parts)).toBe('2 USST/XLM');
+  });
+
   it('has no rate for a deposit and no rate against a zero leg', () => {
     expect(
       tradeRate(poolAmountLegs({ amounts: ['1200000000', '5000000'] }, pool))
@@ -99,8 +118,8 @@ describe('PoolActivity table', () => {
   // vacuously against nothing.
   const poolItem = {
     legs: [
-      { asset_type_name: 'native', asset_code: null },
-      { asset_type_name: 'classic_credit', asset_code: 'USDC' },
+      { asset_type_name: 'native', asset_code: null, decimals: 7 },
+      { asset_type_name: 'classic_credit', asset_code: 'USDC', decimals: 7 },
     ],
   } as PoolItem;
 

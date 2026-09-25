@@ -84,8 +84,8 @@ fn tvl_needs_every_leg_priced_and_reserved() {
     let closes: HashMap<PriceLeg, f64> = [(xlm.clone(), 0.5), (usdc.clone(), 1.0)].into();
     let legs = [xlm, usdc];
 
-    assert_eq!(tvl_usd(&[Some("10"), Some("3")], &legs, &closes), Some(8.0));
-    assert_eq!(tvl_usd(&[Some("10"), None], &legs, &closes), None);
+    assert_eq!(tvl_usd(&[Some(10.0), Some(3.0)], &legs, &closes), Some(8.0));
+    assert_eq!(tvl_usd(&[Some(10.0), None], &legs, &closes), None);
     // A third leg with no price makes the whole pool unpriced.
     let dai = price_leg(
         1,
@@ -94,7 +94,16 @@ fn tvl_needs_every_leg_priced_and_reserved() {
     );
     let three = [legs[0].clone(), legs[1].clone(), dai];
     assert_eq!(
-        tvl_usd(&[Some("10"), Some("3"), Some("1")], &three, &closes),
+        tvl_usd(&[Some(10.0), Some(3.0), Some(1.0)], &three, &closes),
         None
     );
+}
+
+/// A raw amount in units by its own scale, and nothing without one.
+#[test]
+fn leg_units_scales_by_the_legs_own_decimals() {
+    assert_eq!(leg_units(Some("7506999160"), Some(7)), Some(750.699916));
+    assert_eq!(leg_units(Some("1000000000000000000"), Some(18)), Some(1.0));
+    assert_eq!(leg_units(Some("1000000000000000000"), None), None);
+    assert_eq!(leg_units(None, Some(7)), None);
 }

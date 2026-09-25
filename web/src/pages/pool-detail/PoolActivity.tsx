@@ -16,7 +16,8 @@ import {
   EmptyState,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
-  formatTokenAmount,
+  formatAmount,
+  scaleByDecimals,
   IdentifierWithCopy,
   PaginationControls,
   QueryErrorState,
@@ -83,7 +84,8 @@ function isPoolEvent(value: string | null): value is PoolEvent {
  *  belongs to, and its direction from the pool's side. */
 export interface AmountLegPart {
   amount: string;
-  raw: string;
+  /** The leg amount in units, `null` when its scale is unknown. */
+  units: string | null;
   leg: PoolAssetLeg;
   incoming: boolean;
 }
@@ -99,12 +101,10 @@ export interface AmountLegPart {
  * same way are a deposit or a withdrawal, joined with `+` and already named
  * by the Event chip.
  *
- * Amounts stay STRINGS end to end — `formatTokenAmount` consumes them exactly,
- * while a leg above 2^53 stroops would lose digits as a number. The unit is
- * split back off its output (the format is always `number unit` and an asset
- * code cannot contain a space) rather than reformatting the number here, so
- * the digits shown next to a linked code are byte-identical to the plain-text
- * form in `formatPoolAmount`.
+ * Amounts stay STRINGS end to end — each raw leg amount is scaled exactly by
+ * that leg's own `decimals` (`scaleByDecimals`), while a leg above 2^53 would
+ * lose digits as a number. A leg with no known scale shows "—" rather than a
+ * guessed-7 figure.
  *
  * A leg that is `null` did not move in this operation — never rendered as `0`.
  */
@@ -118,13 +118,11 @@ export function poolAmountLegs(
     if (amount == null || amount === '') return [];
     const raw = amount.replace(/^-/, '');
     // The sign is carried by the ordering and the separator, not the digits.
-    const text = formatTokenAmount(raw, assetLegLabel(leg));
-    if (text == null) return [];
-    const cut = text.lastIndexOf(' ');
+    const units = scaleByDecimals(raw, leg.decimals);
     return [
       {
-        amount: text.slice(0, cut),
-        raw,
+        amount: formatAmount(units),
+        units,
         leg,
         incoming: !amount.startsWith('-'),
       },
@@ -162,19 +160,22 @@ export function formatPoolAmount(
  *
  * Rounded to 4 significant figures. Doubles are fine HERE and only here: the
  * displayed amounts stay exact strings, and a relative error of 1e-16 cannot
- * move a 4-figure rate, even for legs beyond 2^53 stroops.
+ * move a 4-figure rate, even for legs beyond 2^53 raw units.
  */
 export function tradeRate(
   parts: { legs: AmountLegPart[]; swap: boolean } | null
 ): string | null {
   if (parts == null || !parts.swap) return null;
   const [inLeg, outLeg] = parts.legs;
-  const inRaw = Number(inLeg.raw);
-  const outRaw = Number(outLeg.raw);
-  if (!Number.isFinite(inRaw) || !Number.isFinite(outRaw) || inRaw <= 0) {
+  // In units, not raw: two legs of different decimals make a raw ratio wrong
+  // by their scale difference. An unknown scale has no rate.
+  if (inLeg.units == null || outLeg.units == null) return null;
+  const inUnits = Number(inLeg.units);
+  const outUnits = Number(outLeg.units);
+  if (!Number.isFinite(inUnits) || !Number.isFinite(outUnits) || inUnits <= 0) {
     return null;
   }
-  const rate = Number((outRaw / inRaw).toPrecision(4));
+  const rate = Number((outUnits / inUnits).toPrecision(4));
   const text = rate.toLocaleString('en-US', { maximumFractionDigits: 7 });
   return `${text} ${assetLegLabel(outLeg.leg)}/${assetLegLabel(inLeg.leg)}`;
 }

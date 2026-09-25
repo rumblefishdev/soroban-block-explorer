@@ -269,7 +269,7 @@ pub async fn fetch_pool_usd_analytics(
     client: &clickhouse::Client,
     pool_id_hex: &str,
     ctx: &PoolPriceContext,
-    reserves: &[Option<&str>],
+    units: &[Option<f64>],
 ) -> Result<PoolUsdAnalytics, clickhouse::error::Error> {
     let legs = priceable_legs(ctx);
     let (closes, vol24_raw) = tokio::join!(
@@ -287,7 +287,7 @@ pub async fn fetch_pool_usd_analytics(
         Some(raw) => parse_f64(raw),
     };
 
-    let tvl = tvl_usd(reserves, &ctx.legs, &closes);
+    let tvl = tvl_usd(units, &ctx.legs, &closes);
     let volume = match (spot_a, vol24_units) {
         (Some(pa), Some(units)) => Some(units * pa),
         _ => None,
@@ -404,20 +404,27 @@ fn priceable_legs(ctx: &PoolPriceContext) -> Vec<&PriceLeg> {
     ctx.legs.iter().filter(|l| !l.kind.is_empty()).collect()
 }
 
-/// A pool's TVL: every leg's reserve times its price, summed. `None` unless
-/// EVERY leg has both — a partial sum understates the pool while looking like
-/// a real number. `reserves[i]` and `legs[i]` describe the same leg: both
-/// callers build the two from one leg list.
+/// A pool's TVL: every leg's reserve (in units, see [`leg_units`]) times its
+/// price, summed. `None` unless EVERY leg has both — a partial sum understates
+/// the pool while looking like a real number. `units[i]` and `legs[i]`
+/// describe the same leg: both callers build the two from one leg list.
 pub(super) fn tvl_usd(
-    reserves: &[Option<&str>],
+    units: &[Option<f64>],
     legs: &[PriceLeg],
     closes: &HashMap<PriceLeg, f64>,
 ) -> Option<f64> {
-    reserves
+    units
         .iter()
         .zip(legs)
-        .map(|(r, leg)| Some(r.and_then(parse_f64)? * closes.get(leg).copied()?))
+        .map(|(u, leg)| Some((*u)? * closes.get(leg).copied()?))
         .sum()
+}
+
+/// A raw leg amount in units, for USD arithmetic only: an `f64` is exact
+/// enough for a dollar figure, while the displayed amount stays a raw integer
+/// string the client scales exactly. `None` without a known scale.
+pub fn leg_units(raw: Option<&str>, decimals: Option<u32>) -> Option<f64> {
+    Some(parse_f64(raw?)? / 10f64.powi(i32::try_from(decimals?).ok()?))
 }
 
 /// Strict decimal-string → f64 (the wire strings come from CH `toString`

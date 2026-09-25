@@ -1,53 +1,22 @@
 //! What a pool holds of each leg, from whichever source records it.
 
-use super::scale_decimal_str;
-
-/// Where a pool's per-leg reserves come from, in the source's own units.
-pub(super) enum Reserves<'a> {
-    /// A classic pool's snapshot: exactly two, already scaled by the column's
-    /// `Decimal128(7)`.
-    Pair(Option<&'a str>, Option<&'a str>),
-    /// A soroban pool's latest state change: one raw integer per leg, in leg
-    /// order (the pool's `get_tokens()` order, which `legs` keeps), to be
-    /// scaled by each leg's own decimals.
-    Raw(&'a [String]),
-}
-
-impl<'a> Reserves<'a> {
-    /// A soroban pool's state-change reserves when it has any, else the
-    /// classic snapshot pair.
-    pub(super) fn from_sources(
-        state: &'a [String],
-        snapshot_a: Option<&'a str>,
-        snapshot_b: Option<&'a str>,
-    ) -> Self {
-        if state.is_empty() {
-            Self::Pair(snapshot_a, snapshot_b)
-        } else {
-            Self::Raw(state)
-        }
-    }
-
-    /// The reserve for leg `i` in units, or `None` when it is not knowable.
-    ///
-    /// `scale` is `None` when nothing established the leg's decimals. A raw
-    /// amount then has NO renderable value: a guessed 7 is wrong by up to
-    /// 10^11 for an 18-decimal token and still reads as a number.
-    pub(super) fn at(&self, i: usize, scale: Option<u32>) -> Option<String> {
-        match self {
-            Self::Pair(a, b) => match i {
-                0 => a.map(str::to_string),
-                1 => b.map(str::to_string),
-                // The snapshot is pair-shaped; a third leg has no slot in it.
-                _ => None,
-            },
-            Self::Raw(v) => match v.get(i)?.as_str() {
-                // Zero is zero at every scale, so an empty leg is knowable even
-                // when its decimals are not.
-                "0" => Some("0".to_string()),
-                raw => scale_decimal_str(raw, scale?),
-            },
-        }
+/// A pool's reserves, one RAW integer per leg, in leg order: a soroban pool's
+/// latest state change when it has one (the pool's `get_tokens()` order, which
+/// `legs` keeps), else the classic snapshot's two columns (read raw: the SQL
+/// takes their `Decimal128(7)` × 10^7). Scaling is the client's, by each leg's
+/// `decimals`, the same contract as every other amount the API serves.
+pub(super) fn leg_reserves(
+    state: &[String],
+    snapshot_a: Option<&str>,
+    snapshot_b: Option<&str>,
+) -> Vec<Option<String>> {
+    if state.is_empty() {
+        vec![
+            snapshot_a.map(str::to_string),
+            snapshot_b.map(str::to_string),
+        ]
+    } else {
+        state.iter().cloned().map(Some).collect()
     }
 }
 

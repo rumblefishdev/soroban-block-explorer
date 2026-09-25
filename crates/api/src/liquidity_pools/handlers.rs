@@ -156,6 +156,7 @@ fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
         symbol: leg.symbol,
         icon_url: leg.icon_url,
         reserve: leg.reserve,
+        decimals: leg.decimals,
     }
 }
 
@@ -177,6 +178,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
             .then_some(row.participant_count),
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         total_shares: row.total_shares,
+        total_shares_decimals: row.total_shares_decimals,
         tvl: row.tvl,
         volume: row.volume,
         fee_revenue: row.fee_revenue,
@@ -360,7 +362,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         &ctx,
         &row.legs
             .iter()
-            .map(|l| l.reserve.as_deref())
+            .map(|l| queries::leg_units(l.reserve.as_deref(), l.decimals))
             .collect::<Vec<_>>(),
     )
     .await

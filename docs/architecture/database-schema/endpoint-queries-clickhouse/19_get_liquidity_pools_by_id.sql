@@ -50,10 +50,12 @@
 --                  pool_instance_state, with the share token's decimals from
 --                  the shared asset identity resolution (NULL when it
 --                  publishes none).
---     Raw integers are scaled in Rust by each leg's decimals, and only when
---     they are a fact (protocol 7 for classic/native, published metadata for
---     a Soroban token). A stored 0 in shares reads 0 only for a pair-factory
---     pool (empty pool_type_raw) or a pool whose every reserve is 0.
+--     Every amount is served RAW (classic snapshot columns × 10^7) with its
+--     scale: `legs[i].decimals` and `total_shares_decimals` — 7 for
+--     classic/native, published metadata for a Soroban token, NULL when none.
+--     The client scales, as for account balances and asset supply. A stored
+--     0 in shares reads 0 only for a pair-factory pool (empty pool_type_raw)
+--     or a pool whose every reserve is 0.
 --   • **task 0199:** `tvl` / `volume` / `fee_revenue` are NO LONGER read
 --     from the snapshot columns (never populated — pre-0199 design). The
 --     handler runs a second, small query and computes USD in Rust:

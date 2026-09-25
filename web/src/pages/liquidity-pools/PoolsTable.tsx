@@ -22,6 +22,8 @@ import {
   legHref,
   poolLabel,
   reserveDotColor,
+  legReserve,
+  poolShares,
 } from '../pool-shared/helpers.js';
 
 import { PoolLegIcons } from '../pool-shared/PoolLegIcons.js';
@@ -117,14 +119,16 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
       // A pool whose reserves no source knows comes back with null on every
       // leg — render an em-dash rather than "0"; there is nothing honest to
       // label them with.
-      if (row.legs.every((leg) => leg.reserve == null)) return <Dash />;
+      if (row.legs.every((leg) => legReserve(leg) == null)) return <Dash />;
       return (
         <Stack spacing={0.5}>
           {row.legs.map((leg, i) => (
             <Stack key={i} direction="row" spacing={1} alignItems="center">
               <AssetDot color={reserveDotColor(leg)} />
               <Typography variant="bodyXsMedium" component="span">
-                {leg.reserve != null ? formatCompactAmount(leg.reserve) : '—'}{' '}
+                {legReserve(leg) != null
+                  ? formatCompactAmount(legReserve(leg))
+                  : '—'}{' '}
                 {assetCodeNode(leg)}
               </Typography>
             </Stack>
@@ -163,14 +167,15 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     align: 'right',
     width: 150,
     cell: (row) => {
-      if (row.total_shares == null) return <Dash />;
+      const shares = poolShares(row);
+      if (shares == null) return <Dash />;
       return (
         <Stack spacing={0.25} alignItems="flex-end">
           <Typography
             variant="bodySmMedium"
             sx={(theme) => ({ color: theme.palette.text.primary })}
           >
-            {formatCompactAmount(row.total_shares)}
+            {formatCompactAmount(shares)}
           </Typography>
           <Typography
             variant="bodyXsRegular"

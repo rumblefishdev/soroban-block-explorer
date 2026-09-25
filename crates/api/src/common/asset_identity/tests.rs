@@ -102,3 +102,24 @@ fn a_native_key_carries_the_empty_stored_code() {
     }];
     assert_eq!(icon_key(&rows[0]), Some((0i16, String::new(), 0, 0)));
 }
+
+/// Metadata past what a u128 can need is not a scale: no value, not a
+/// 43,224-digit fraction on the client.
+#[test]
+fn an_absurd_published_scale_is_not_a_fact() {
+    let row = |decimals| AssetIdentityChRow {
+        id: 9,
+        known: true,
+        asset_type: 3,
+        asset_code: None,
+        issuer_id: 0,
+        contract_id: 9,
+        contract_strkey: None,
+        symbol: None,
+        decimals,
+    };
+    let resolved = assemble(vec![row(Some(43_224))], &HashMap::new());
+    assert_eq!(resolved[&9].decimals, None);
+    let resolved = assemble(vec![row(Some(18))], &HashMap::new());
+    assert_eq!(resolved[&9].decimals, Some(18));
+}

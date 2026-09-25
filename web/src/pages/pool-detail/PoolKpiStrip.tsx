@@ -13,6 +13,8 @@ import {
   assetLegLabel,
   legHref,
   reserveDotColor,
+  legReserve,
+  poolShares,
 } from '../pool-shared/helpers.js';
 
 const UNKNOWN_SUBTITLE = 'not indexed';
@@ -60,9 +62,9 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
     >
       <KpiCell
         label="Total shares"
-        value={formatCompactAmount(pool.total_shares)}
+        value={formatCompactAmount(poolShares(pool))}
         caption={
-          pool.total_shares != null ? 'shares outstanding' : UNKNOWN_SUBTITLE
+          poolShares(pool) != null ? 'shares outstanding' : UNKNOWN_SUBTITLE
         }
       />
       {pool.legs.map((leg, i) => {
@@ -71,9 +73,11 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
           <KpiCell
             key={i}
             label={`${code} reserve`}
-            value={formatCompactAmount(leg.reserve)}
+            value={formatCompactAmount(legReserve(leg))}
             caption={
-              leg.reserve != null ? assetSubtitle(leg, code) : UNKNOWN_SUBTITLE
+              legReserve(leg) != null
+                ? assetSubtitle(leg, code)
+                : UNKNOWN_SUBTITLE
             }
             valueColor={reserveDotColor(leg)}
           />

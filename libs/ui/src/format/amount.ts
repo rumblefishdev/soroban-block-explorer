@@ -37,13 +37,21 @@ export function formatAmount(
  */
 export function scaleByDecimals(
   value: string | number | null | undefined,
-  decimals: number
+  decimals: number | null | undefined
 ): string | null {
   if (value == null) return null;
+  // Zero is zero at every scale, so an empty balance or reserve reads "0" even
+  // when the asset's decimals are unknown.
+  if (typeof value === 'number' ? value === 0 : /^0+$/.test(value.trim())) {
+    return '0';
+  }
   // Reject invalid decimals up front: null / undefined / NaN / fractional would
   // throw in `BigInt(decimals)`, and `null <= 0` is `true` (would silently return
   // the raw integer unscaled).
-  if (!Number.isInteger(decimals) || decimals < 0) return null;
+  // `decimals == null` changes nothing at runtime (`Number.isInteger(null)` is
+  // false); it narrows the type for the BigInt below.
+  if (decimals == null || !Number.isInteger(decimals) || decimals < 0)
+    return null;
   let safe: bigint;
   if (typeof value === 'number') {
     // Reject non-integer (and non-finite) numbers rather than truncating — matches

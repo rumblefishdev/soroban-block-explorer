@@ -10,9 +10,11 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
-use super::leg_reserves::{Reserves, state_reserves_sql};
+use super::leg_reserves::{leg_reserves, state_reserves_sql};
 use super::total_shares::{instance_shares_sql, pool_total_shares};
-use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
+use super::usd_analytics::{
+    PriceLeg, fetch_last_closes, leg_units, price_leg_of, tvl_usd, usd_str,
+};
 use super::{PoolLegRow, PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
 
@@ -276,9 +278,11 @@ pub async fn fetch_pool_list(
              lp.activity_ledger                              AS cursor_ledger, \
              toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
-             toString(s.reserve_a)                           AS reserve_a, \
-             toString(s.reserve_b)                           AS reserve_b, \
-             toString(s.total_shares)                        AS total_shares, \
+             /* RAW integers: the snapshot's Decimal128(7) × 10^7, the same \
+                contract as every amount the API serves (scaled by the client). */ \
+             toString(toInt128(s.reserve_a * 10000000)) AS reserve_a, \
+             toString(toInt128(s.reserve_b * 10000000)) AS reserve_b, \
+             toString(toInt128(s.total_shares * 10000000)) AS total_shares, \
              nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms, \
              lp.pool_type_raw                                AS pool_type_raw, \
              sr.reserves                                     AS state_reserves, \
@@ -396,14 +400,14 @@ pub async fn fetch_pool_list(
         .map(|(r, price_legs)| {
             // A soroban pool's reserves come from its state changes; a classic
             // pool's legs are its two snapshot columns, in order.
-            let reserves = Reserves::from_sources(
+            let reserves = leg_reserves(
                 &r.state_reserves,
                 r.reserve_a.as_deref(),
                 r.reserve_b.as_deref(),
             );
-            let legs = leg_rows(&r.legs, &identities, &icons, reserves);
+            let legs = leg_rows(&r.legs, &identities, &icons, &reserves);
             let tvl = legs_tvl(&legs, &price_legs, &closes);
-            let total_shares = pool_total_shares(
+            let shares = pool_total_shares(
                 r.total_shares,
                 r.instance_shares.as_deref(),
                 identities.get(&r.share_token_id).and_then(|t| t.decimals),
@@ -420,7 +424,8 @@ pub async fn fetch_pool_list(
                 cursor_ledger: r.cursor_ledger,
                 participant_count: r.participant_count,
                 latest_snapshot_ledger: r.latest_snapshot_ledger,
-                total_shares,
+                total_shares: shares.as_ref().map(|(raw, _)| raw.clone()),
+                total_shares_decimals: shares.and_then(|(_, d)| d),
                 tvl,
                 volume: None,
                 fee_revenue: None,
@@ -430,17 +435,20 @@ pub async fn fetch_pool_list(
         .collect())
 }
 
-/// A pool's USD value from its legs as the page shows them. Takes the built
-/// legs, never raw reserves: a soroban reserve is only in units once
-/// `leg_rows` has scaled it, and a raw one would price the pool 10^7× or
-/// more too high while still reading as a number.
+/// A pool's USD value from its built legs: each raw reserve is brought into
+/// units by that leg's own `decimals` ([`leg_units`]) before it is priced — a
+/// raw integer priced as-is would value the pool 10^7× or more too high while
+/// still reading as a number, and a leg with no known scale prices nothing.
 fn legs_tvl(
     legs: &[PoolLegRow],
     price_legs: &[PriceLeg],
     closes: &HashMap<PriceLeg, f64>,
 ) -> Option<String> {
-    let reserves: Vec<Option<&str>> = legs.iter().map(|l| l.reserve.as_deref()).collect();
-    tvl_usd(&reserves, price_legs, closes).map(usd_str)
+    let units: Vec<Option<f64>> = legs
+        .iter()
+        .map(|l| leg_units(l.reserve.as_deref(), l.decimals))
+        .collect();
+    tvl_usd(&units, price_legs, closes).map(usd_str)
 }
 
 #[cfg(test)]
