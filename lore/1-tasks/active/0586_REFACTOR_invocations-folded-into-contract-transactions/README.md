@@ -120,6 +120,15 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   writes: `scripts/merge-*.sh` list neither contract table — add
   `contract_activity` there, as 0372 did.
 
+- **PRs opened** (2026-09-25): the move alone in
+  [#506](https://github.com/rumblefishdev/soroban-block-explorer/pull/506)
+  (`refactor/0586-move-contract-staging`, 95 lines moved, 34 of glue), the
+  table and dual write in
+  [#507](https://github.com/rumblefishdev/soroban-block-explorer/pull/507),
+  stacked on it (draft; retargets to `develop` after #506 merges). Split
+  because a PR that moves code and changes logic reads all green in GitHub's
+  diff (global rule, `move-split-guard`).
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared
