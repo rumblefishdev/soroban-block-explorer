@@ -501,6 +501,21 @@ pub struct ContractTransactionRow {
     pub application_order: i16,
 }
 
+/// `contract_activity` — fact, one row per (contract, transaction) the
+/// transaction touched, located by its position (task 0586, ADR 0059): the
+/// `contract_transactions` presence plus the caller of the invocation, if the
+/// contract was invoked. Exactly one of the two callers is set on an invoked
+/// row and neither on a touched-only one (an operation event or an operation
+/// naming the contract). Column order matches `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
+pub struct ContractActivityRow {
+    pub contract_id: i64,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub caller_id: Option<i64>,
+    pub caller_contract_id: Option<i64>,
+}
+
 /// `pool_operation_amounts` — fact, what one operation moved through one pool
 /// (task 0279), located by the transaction position (task 0372, ADR 0059):
 /// `application_order` is the transaction's 1-based position,

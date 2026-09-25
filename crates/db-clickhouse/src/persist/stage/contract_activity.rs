@@ -1,6 +1,8 @@
 //! Contract-derived rows staged per ledger: `soroban_invocations_appearances`
-//! (the invocation fold) and `contract_transactions` (which contracts each
-//! transaction touched).
+//! (the invocation fold), `contract_transactions` (which contracts each
+//! transaction touched) and `contract_activity` (the two in one, located by
+//! the transaction position — task 0586; written beside them until the
+//! readers move).
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
@@ -11,7 +13,9 @@ use xdr_parser::types::ExtractedInvocation;
 use super::{StagedLedger, is_strkey_account, staging_err};
 use crate::SchemaError;
 use crate::persist::ids;
-use crate::persist::rows::{ContractTransactionRow, SorobanInvocationAppearanceRow};
+use crate::persist::rows::{
+    ContractActivityRow, ContractTransactionRow, SorobanInvocationAppearanceRow,
+};
 
 /// `contract_txs` arrives holding the (contract, position) of every operation
 /// event; invocations and operations naming a contract are added here.
@@ -101,14 +105,38 @@ pub(super) fn contract_rows(
             .copied()
             .ok_or_else(|| staging_err(&format!("transaction id {tx_id} is not in this ledger")))
     };
+    // The caller of each invoked (contract, position), for `contract_activity`.
+    let mut caller_of: HashMap<(i64, i16), (Option<i64>, Option<i64>)> =
+        HashMap::with_capacity(out.invocation_rows.len());
     for inv in &out.invocation_rows {
-        contract_txs.insert((inv.contract_id, position_of(inv.transaction_id)?));
+        let position = position_of(inv.transaction_id)?;
+        contract_txs.insert((inv.contract_id, position));
+        caller_of.insert(
+            (inv.contract_id, position),
+            (inv.caller_id, inv.caller_contract_id),
+        );
     }
     for op in &out.tx_operation_rows {
         if let Some(contract_id) = op.contract_id {
             contract_txs.insert((contract_id, op.application_order));
         }
     }
+    out.contract_activity_rows = contract_txs
+        .iter()
+        .map(|&(contract_id, application_order)| {
+            let (caller_id, caller_contract_id) = caller_of
+                .get(&(contract_id, application_order))
+                .copied()
+                .unwrap_or_default();
+            ContractActivityRow {
+                contract_id,
+                ledger_sequence: ledger_sequence_i64,
+                application_order,
+                caller_id,
+                caller_contract_id,
+            }
+        })
+        .collect();
     out.contract_tx_rows = contract_txs
         .into_iter()
         .map(|(contract_id, application_order)| ContractTransactionRow {
@@ -119,3 +147,6 @@ pub(super) fn contract_rows(
         .collect();
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

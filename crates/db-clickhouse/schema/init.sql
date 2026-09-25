@@ -1274,6 +1274,28 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, application_order);
 
+-- contract_activity: replaces `contract_transactions` and
+-- `soroban_invocations_appearances` (task 0586), which are dropped once the
+-- readers move here (a parallel change, `docs/deployment.md`). One row per
+-- (contract, transaction) the transaction touched — the same sources and
+-- position as `contract_transactions` — plus the caller when the contract was
+-- invoked: `caller_id` for an account, `caller_contract_id` for a contract,
+-- exactly one of the two on an invoked row (0 rows without a caller in the
+-- invocations table, 2026-09-25), neither on a row touched only by an
+-- operation event or an operation naming the contract. The caller is the
+-- first invocation's; the invocations table's fold count is not carried —
+-- nothing read it. No surrogate: the transaction is its position (ADR 0059).
+CREATE TABLE IF NOT EXISTS contract_activity (
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    application_order  Int16,
+    caller_id          Nullable(Int64),
+    caller_contract_id Nullable(Int64)
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, application_order);
+
 CREATE TABLE IF NOT EXISTS nft_ownership (
     contract_id      Int64,
     token_id         String,
