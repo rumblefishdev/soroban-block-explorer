@@ -5,15 +5,27 @@
 -- Schema:       ADR 0044 (CH pilot); prices views contract pinned in the
 --               prices repo `views.sql` header (2026-06-16).
 -- Data sources: DB + in-cluster `prices.*` views (same CH cluster, read-only).
--- Inputs:
---   $1  :pool_id      FixedString(32)  raw 32-byte pool id
---   $2  :from_ms      Int64            inclusive lower bound (epoch millis)
---   $3  :to_ms        Int64            exclusive upper bound (epoch millis)
---   $4  :interval     '1h' | '1d' | '1w' (allowlist; picks bucket fn + grain)
+-- Impl:         crates/api/src/liquidity_pools/queries/get_pool_chart.rs
+--               (`fetch_pool_chart`).
+-- Inputs (bound — `?` in Rust, in bind order; `$2` / `$3` are bound more
+--         than once there):
+--   $1  :pool_id       String  64-char hex pool id (Rust: `unhex(?)`)
+--   $2  :from_ms       Int64   inclusive lower bound (epoch millis)
+--   $3  :to_ms         Int64   exclusive upper bound (epoch millis)
+--   $4  :leg_a_kind    String  prices interop kind: 'native' | 'credit' | ''
+--   $5  :leg_a_code    String  'XLM' for native, else the asset code
+--   $6  :leg_a_issuer  String  '' for native, else the issuer G-StrKey
+--   $7..$9             same three for leg B
 --   Leg identities + fee_bps come from a per-request pre-query on
---   `liquidity_pools` (also the 404 gate): (asset_kind, asset_code,
---   issuer_address) per leg in the prices interop forms —
---   native = ('native','XLM',''), classic = ('credit', code, issuer).
+--   `liquidity_pools` (also the 404 gate; `price_leg`). An unpriceable pair
+--   binds the kind '' on both legs, which matches no price row.
+-- Format fragments (Rust `format!`, NOT bound — the interval allowlist picks
+--   them; run_endpoint_ch.sh substitutes the same table per interval):
+--   interval  {bucket_fn}      {price_bucket_fn}  {series_view}
+--   '1h'      toStartOfHour    toStartOfHour      prices.price_usd_series_1h
+--   '1d'      toStartOfDay     toStartOfDay       prices.price_usd_series
+--   '1w'      toMonday         toStartOfDay       prices.price_usd_series
+--   {carry} = MAX_PRICE_CARRY_SECONDS = 172800 (48 h), all intervals.
 -- Indexes:      liquidity_pool_snapshots ORDER BY (pool_id, ledger_sequence)
 --                 — leading-PK seek bounds the scan to this pool.
 --               ledgers minmax(closed_at) — window bounds resolve to a
@@ -91,7 +103,6 @@
 --               users.d/services.xml, so its read_only profile already
 --               reads `prices.*` (verified on the box 2026-08-04).
 
--- {carry} = 48 h in seconds (MAX_PRICE_CARRY_SECONDS in the API).
 SELECT
     bucket_ms,
     argMaxIf(tvl_row, ledger_sequence, isNotNull(tvl_row)) AS tvl,
@@ -112,7 +123,7 @@ FROM (
     FROM (
         SELECT ledger_sequence, reserve_a, reserve_b, gross_volume_a
         FROM liquidity_pool_snapshots
-        WHERE pool_id = $1
+        WHERE pool_id = unhex($1)
           AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli($2))
           AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli($2) AND closed_at < fromUnixTimestamp64Milli($3))
         ORDER BY ledger_sequence DESC
@@ -127,14 +138,14 @@ FROM (
     ) l ON l.sequence = lps.ledger_sequence
     ASOF LEFT JOIN (
         SELECT 1 AS k, bucket, close_usd FROM {series_view}
-        WHERE asset_kind = {leg_a_kind} AND asset_code = {leg_a_code} AND issuer_address = {leg_a_issuer}
+        WHERE asset_kind = $4 AND asset_code = $5 AND issuer_address = $6
           AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli($2)) - INTERVAL {carry} SECOND
           AND bucket <  least(fromUnixTimestamp64Milli($3), {price_bucket_fn}(now()))
           AND close_usd > 0
     ) pa ON pa.k = l.k AND pa.bucket <= l.price_bucket
     ASOF LEFT JOIN (
         SELECT 1 AS k, bucket, close_usd FROM {series_view}
-        WHERE asset_kind = {leg_b_kind} AND asset_code = {leg_b_code} AND issuer_address = {leg_b_issuer}
+        WHERE asset_kind = $7 AND asset_code = $8 AND issuer_address = $9
           AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli($2)) - INTERVAL {carry} SECOND
           AND bucket <  least(fromUnixTimestamp64Milli($3), {price_bucket_fn}(now()))
           AND close_usd > 0
