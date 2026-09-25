@@ -2302,6 +2302,36 @@ against production, all 770 Soroban pools:
   rule covers every measured case; pools that keep their supply on the
   share token would read 0 even then.
 
+### The plane filter guarded nothing since C′ — dropped from the API reads (2026-09-25)
+
+Decision 113 E. The review asked why the Soroban reads were so involved;
+the main cause was the declared-plane filter (95 C), and it is obsolete:
+
+- Before C′ reserve rows came from a plane's `[PoolData, pool]` entry, a key
+  any contract could publish under another pool's id. Since C′ (deployed
+  2026-09-16) every row is decoded from the pool's own instance, keyed on the
+  entry's owner (`pool_state.rs`, `stage.rs`), so a contract writes only under
+  its own id.
+- Production, 2026-09-25: 0 of 5,040,494 `pool_state_changes` rows come from
+  a plane the pool does not declare; 0 rows without a declaration; 0 of 775
+  pools with more than one plane.
+- The filter also hid a re-pointed pool's reserves until its next move (gap
+  104). The CH-gated test now pins that case (red with the filter restored:
+  `[None, None]`), replacing the foreign-row scenario C′ made impossible.
+- The `minIf` ledger bound went with it: the pool endpoints see 36 production
+  requests a day (`query_log`, 24 h), and the unbounded read costs 2.4M rows /
+  57 ms for a page of the busiest pools. A plain view (113 D) was measured and
+  dropped: its reason was to keep the filter in one place.
+- `pool_activity_mv` still filters in `init.sql` (DDL to change); task 0581
+  rebuilds that view and drops it there.
+
+**Other per-request rebuilds (114 A, sweep of `crates/api`):** the NFT list
+derives its sort key (mint ledger) from all of `nft_ownership` per page
+(23k rows today, cheap); contract list/detail count 7-day invocations per
+request (99.5M rows for the hottest contract). Neither is worth a task at
+current traffic. The one large background cost found on the way,
+`balance_aggregates_mv` at 45% of database CPU, is task 0583.
+
 ### The 7-day "freshness window" is a leftover — removed from 4c, one left for PR 5 (2026-09-24)
 
 The PG design treated a pool with no snapshot in 7 days as stale and blanked
