@@ -4341,13 +4341,7 @@
                 },
                 "total_shares": {
                   "type": ["string", "null"],
-                  "description": "Pool shares outstanding, as a RAW integer string — scale by\n`total_shares_decimals`. A classic pool's come from its latest snapshot;\na soroban pool's from the pool contract's own storage. `0` only when it\nis a measurement — a pair-factory pool, or a pool holding nothing;\n`null` when the contract does not record it (concentrated and\nconfig-factory pools, older router versions)."
-                },
-                "total_shares_decimals": {
-                  "type": ["integer", "null"],
-                  "format": "int32",
-                  "description": "The scale of `total_shares`: 7 for a classic pool, the share token's\ndecimals for a soroban one; `null` when the share token publishes none.",
-                  "minimum": 0
+                  "description": "Pool shares outstanding, in units, as a decimal string. A classic pool's\ncome from its latest snapshot; a soroban pool's from the pool contract's\nown storage, scaled by the share token's decimals. `0` only when it is a\nmeasurement — a pair-factory pool, or a pool holding nothing; `null` when\nthe contract does not record it (concentrated and config-factory pools,\nolder router versions)."
                 },
                 "tvl": {
                   "type": ["string", "null"],
@@ -4550,12 +4544,6 @@
             "type": ["string", "null"],
             "description": "The token's own contract, set ONLY for a `soroban` leg. `None` for\nnative and classic credit."
           },
-          "decimals": {
-            "type": ["integer", "null"],
-            "format": "int32",
-            "description": "The scale of `reserve`: 7 for native and classic (fixed by the\nprotocol), a Soroban token's on-chain metadata. `null` when the token\npublishes none we could read — the reserve then has no known scale and\nrenders as \"—\", never scaled by a guessed 7 (10^11 off for an\n18-decimal token).",
-            "minimum": 0
-          },
           "icon_url": {
             "type": ["string", "null"],
             "description": "Asset icon URL from `asset_enrichment` (ADR 0050), so pool avatars match\nthe assets list. NOT from `assets`, whose `icon_url` column was dropped\nin task 0310 after measuring 0 of 411,654 rows populated. `None` for an\nasset with no enriched icon — the frontend falls back to the initial."
@@ -4565,7 +4553,7 @@
           },
           "reserve": {
             "type": ["string", "null"],
-            "description": "What the pool holds of this leg, as a RAW integer string (`Int128`) —\nscale by `decimals`, the same contract as account balances and asset\nsupply (a JSON number is a browser double and a big reserve would lose\ndigits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a\npool has two to four legs. A classic pool's comes from its latest\nsnapshot; a soroban pool's from its latest state change. `null` when no\nsource knows it. An empty leg is `0`."
+            "description": "What the pool holds of this leg, in units, as a decimal string (a JSON\nnumber is a browser double and a big reserve would lose digits). On the\nleg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to\nfour legs. A classic pool's comes from its latest snapshot; a soroban\npool's from its latest state change, scaled by the leg's own decimals. `null` when no source knows\nit — including a soroban token that publishes no decimals, where a\nguessed 7 would be off by up to 10^11. An empty leg is `0`."
           },
           "symbol": {
             "type": ["string", "null"],
@@ -4636,13 +4624,7 @@
           },
           "total_shares": {
             "type": ["string", "null"],
-            "description": "Pool shares outstanding, as a RAW integer string — scale by\n`total_shares_decimals`. A classic pool's come from its latest snapshot;\na soroban pool's from the pool contract's own storage. `0` only when it\nis a measurement — a pair-factory pool, or a pool holding nothing;\n`null` when the contract does not record it (concentrated and\nconfig-factory pools, older router versions)."
-          },
-          "total_shares_decimals": {
-            "type": ["integer", "null"],
-            "format": "int32",
-            "description": "The scale of `total_shares`: 7 for a classic pool, the share token's\ndecimals for a soroban one; `null` when the share token publishes none.",
-            "minimum": 0
+            "description": "Pool shares outstanding, in units, as a decimal string. A classic pool's\ncome from its latest snapshot; a soroban pool's from the pool contract's\nown storage, scaled by the share token's decimals. `0` only when it is a\nmeasurement — a pair-factory pool, or a pool holding nothing; `null` when\nthe contract does not record it (concentrated and config-factory pools,\nolder router versions)."
           },
           "tvl": {
             "type": ["string", "null"],

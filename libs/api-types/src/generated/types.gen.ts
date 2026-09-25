@@ -1890,19 +1890,14 @@ export type PaginatedPoolItem = {
      */
     pool_kind: PoolKind;
     /**
-     * Pool shares outstanding, as a RAW integer string — scale by
-     * `total_shares_decimals`. A classic pool's come from its latest snapshot;
-     * a soroban pool's from the pool contract's own storage. `0` only when it
-     * is a measurement — a pair-factory pool, or a pool holding nothing;
-     * `null` when the contract does not record it (concentrated and
-     * config-factory pools, older router versions).
+     * Pool shares outstanding, in units, as a decimal string. A classic pool's
+     * come from its latest snapshot; a soroban pool's from the pool contract's
+     * own storage, scaled by the share token's decimals. `0` only when it is a
+     * measurement — a pair-factory pool, or a pool holding nothing; `null` when
+     * the contract does not record it (concentrated and config-factory pools,
+     * older router versions).
      */
     total_shares?: string | null;
-    /**
-     * The scale of `total_shares`: 7 for a classic pool, the share token's
-     * decimals for a soroban one; `null` when the share token publishes none.
-     */
-    total_shares_decimals?: number | null;
     /**
      * USD, decimal string rounded to cents (task 0199 compute-at-read).
      * Populated on **both** the list (Phase A2, one batched price lookup
@@ -2129,14 +2124,6 @@ export type PoolAssetLeg = {
    */
   contract_id?: string | null;
   /**
-   * The scale of `reserve`: 7 for native and classic (fixed by the
-   * protocol), a Soroban token's on-chain metadata. `null` when the token
-   * publishes none we could read — the reserve then has no known scale and
-   * renders as "—", never scaled by a guessed 7 (10^11 off for an
-   * 18-decimal token).
-   */
-  decimals?: number | null;
-  /**
    * Asset icon URL from `asset_enrichment` (ADR 0050), so pool avatars match
    * the assets list. NOT from `assets`, whose `icon_url` column was dropped
    * in task 0310 after measuring 0 of 411,654 rows populated. `None` for an
@@ -2145,13 +2132,13 @@ export type PoolAssetLeg = {
   icon_url?: string | null;
   issuer?: string | null;
   /**
-   * What the pool holds of this leg, as a RAW integer string (`Int128`) —
-   * scale by `decimals`, the same contract as account balances and asset
-   * supply (a JSON number is a browser double and a big reserve would lose
-   * digits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a
-   * pool has two to four legs. A classic pool's comes from its latest
-   * snapshot; a soroban pool's from its latest state change. `null` when no
-   * source knows it. An empty leg is `0`.
+   * What the pool holds of this leg, in units, as a decimal string (a JSON
+   * number is a browser double and a big reserve would lose digits). On the
+   * leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
+   * four legs. A classic pool's comes from its latest snapshot; a soroban
+   * pool's from its latest state change, scaled by the leg's own decimals. `null` when no source knows
+   * it — including a soroban token that publishes no decimals, where a
+   * guessed 7 would be off by up to 10^11. An empty leg is `0`.
    */
   reserve?: string | null;
   /**
@@ -2225,19 +2212,14 @@ export type PoolItem = {
    */
   pool_kind: PoolKind;
   /**
-   * Pool shares outstanding, as a RAW integer string — scale by
-   * `total_shares_decimals`. A classic pool's come from its latest snapshot;
-   * a soroban pool's from the pool contract's own storage. `0` only when it
-   * is a measurement — a pair-factory pool, or a pool holding nothing;
-   * `null` when the contract does not record it (concentrated and
-   * config-factory pools, older router versions).
+   * Pool shares outstanding, in units, as a decimal string. A classic pool's
+   * come from its latest snapshot; a soroban pool's from the pool contract's
+   * own storage, scaled by the share token's decimals. `0` only when it is a
+   * measurement — a pair-factory pool, or a pool holding nothing; `null` when
+   * the contract does not record it (concentrated and config-factory pools,
+   * older router versions).
    */
   total_shares?: string | null;
-  /**
-   * The scale of `total_shares`: 7 for a classic pool, the share token's
-   * decimals for a soroban one; `null` when the share token publishes none.
-   */
-  total_shares_decimals?: number | null;
   /**
    * USD, decimal string rounded to cents (task 0199 compute-at-read).
    * Populated on **both** the list (Phase A2, one batched price lookup

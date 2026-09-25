@@ -10,7 +10,6 @@ fn native_leg() -> PoolLegRow {
         symbol: None,
         icon_url: None,
         reserve: None,
-        decimals: None,
     }
 }
 
@@ -23,7 +22,6 @@ fn usdc_leg() -> PoolLegRow {
         symbol: None,
         icon_url: None,
         reserve: None,
-        decimals: None,
     }
 }
 
@@ -39,7 +37,6 @@ fn base_row() -> PoolRow {
         participant_count: 0,
         latest_snapshot_ledger: None,
         total_shares: None,
-        total_shares_decimals: None,
         tvl: None,
         volume: None,
         fee_revenue: None,
@@ -74,7 +71,6 @@ fn a_soroban_leg_carries_its_symbol() {
         symbol: Some("USDx".into()),
         icon_url: None,
         reserve: None,
-        decimals: None,
     };
     let item = map_pool_item(row);
     assert_eq!(item.legs[1].symbol.as_deref(), Some("USDx"));
@@ -107,7 +103,6 @@ fn a_three_leg_pool_renders_all_three() {
         symbol: None,
         icon_url: None,
         reserve: None,
-        decimals: None,
     });
     let item = map_pool_item(row);
     assert_eq!(item.legs.len(), 3);

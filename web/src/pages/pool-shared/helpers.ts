@@ -1,5 +1,4 @@
-import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
-import { scaleByDecimals } from '@rumblefish/soroban-block-explorer-ui';
+import type { PoolAssetLeg } from '@rumblefish/api-types';
 
 import { assetColor } from '../assets/assetColor.js';
 import {
@@ -70,23 +69,4 @@ export function poolLabel(legs: readonly PoolAssetLeg[]): string {
  */
 export function reserveDotColor(leg: PoolAssetLeg): string {
   return assetColor(assetLegLabel(leg)).dot;
-}
-
-/**
- * A leg's reserve in units, or `null` when unknown. The API serves pool
- * amounts RAW with each leg's `decimals`, like every other amount; a leg with
- * no known scale has no number to show (a guessed 7 is 10^11 off for an
- * 18-decimal token).
- */
-export function legReserve(
-  leg: Pick<PoolAssetLeg, 'reserve' | 'decimals'>
-): string | null {
-  return scaleByDecimals(leg.reserve, leg.decimals);
-}
-
-/** The pool's shares outstanding in units, or `null` when unknown. */
-export function poolShares(
-  pool: Pick<PoolItem, 'total_shares' | 'total_shares_decimals'>
-): string | null {
-  return scaleByDecimals(pool.total_shares, pool.total_shares_decimals);
 }

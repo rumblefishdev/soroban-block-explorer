@@ -11,7 +11,7 @@ fn hex_pool_id_validation() {
     assert!(!is_hex_pool_id(&"'; DROP--".repeat(8)));
 }
 
-/// A pool's TVL prices each raw reserve in UNITS: raw 10000000 and 30000000
+/// A soroban pool's TVL prices the SCALED reserves: raw 10000000 and 30000000
 /// at 7 decimals are 1 and 3 units, so 1 × 0.5 + 3 × 1.0 = 3.5 — not the
 /// 35,000,000 the raw integers would give.
 #[test]
@@ -33,8 +33,13 @@ fn soroban_tvl_prices_scaled_reserves() {
         (1001, asset(0, None, None)),
         (1002, asset(1, Some("USDC"), Some(ISSUER))),
     ]);
-    let raw = [Some("10000000".to_string()), Some("30000000".to_string())];
-    let legs = leg_rows(&[1001, 1002], &identities, &HashMap::new(), &raw);
+    let raw = ["10000000".to_string(), "30000000".to_string()];
+    let legs = leg_rows(
+        &[1001, 1002],
+        &identities,
+        &HashMap::new(),
+        Reserves::Raw(&raw),
+    );
 
     let xlm = price_leg(0, None, None);
     let usdc = price_leg(1, Some("USDC"), Some(ISSUER));

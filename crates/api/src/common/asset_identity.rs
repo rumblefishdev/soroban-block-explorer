@@ -77,10 +77,6 @@ pub(crate) struct ResolvedAsset {
     pub(crate) decimals: Option<u32>,
 }
 
-/// The largest scale treated as a fact: a `u128` has 39 digits, so no real
-/// token needs more.
-const MAX_DECIMALS: u32 = 38;
-
 /// Resolve a bounded set of `asset_transfers.asset_id` surrogates to a link
 /// identity + display code + decimals.
 ///
@@ -175,9 +171,7 @@ fn assemble(
                     issuer,
                     contract_strkey: r.contract_strkey,
                     symbol: r.symbol,
-                    // Past what a u128 can need is broken or hostile metadata,
-                    // not a scale (two live contracts declare 43,224).
-                    decimals: r.decimals.filter(|&d| d <= MAX_DECIMALS),
+                    decimals: r.decimals,
                 },
             )
         })

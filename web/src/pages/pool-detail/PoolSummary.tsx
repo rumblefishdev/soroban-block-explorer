@@ -13,8 +13,6 @@ import {
   assetLegLabel,
   legHref,
   reserveDotColor,
-  legReserve,
-  poolShares,
 } from '../pool-shared/helpers.js';
 
 interface AssetReserveCellProps {
@@ -58,8 +56,11 @@ function AssetReserveCell({
         }}
       />
       <Typography component="span" variant="bodyXsMedium">
-        {/* `amount` is already in units: the caller scaled the raw reserve by
-            the leg's own decimals (`legReserve`). */}
+        {/* LP amounts (reserves, shares) arrive in units: a classic pool's
+            from its Decimal128(7) snapshot, a Soroban pool's scaled by the API
+            with each leg's own decimals. Do NOT wrap in scaleByDecimals —
+            unlike account balances / asset supply (raw Int128 + `decimals`,
+            scaled on the FE). */}
         {amount != null ? formatAmount(amount) : '—'}
       </Typography>
       {amount != null ? codeNode : null}
@@ -109,7 +110,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
           { label: 'Fee', value: `${formatAmount(pool.fee_percent, 2)}%` },
           {
             label: 'Total shares',
-            value: formatAmount(poolShares(pool)),
+            value: formatAmount(pool.total_shares),
           },
         ]}
       />
@@ -125,7 +126,7 @@ export function PoolSummary({ pool }: PoolSummaryProps) {
               label: `${code} reserve`,
               value: (
                 <AssetReserveCell
-                  amount={legReserve(leg)}
+                  amount={leg.reserve ?? null}
                   code={code}
                   dotColor={reserveDotColor(leg)}
                   href={legHref(leg)}

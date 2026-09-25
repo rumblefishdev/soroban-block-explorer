@@ -1,34 +1,30 @@
 //! A pool's total shares, from whichever source records them.
 
-/// A classic pool's shares are protocol-scaled: `Decimal128(7)` in the
-/// snapshot, read raw.
-const CLASSIC_SHARE_DECIMALS: u32 = 7;
+use super::scale_decimal_str;
 
-/// The pool's total shares as a RAW integer and its scale, or `None` when
-/// unknown. The client scales, as for every other amount the API serves.
+/// The pool's total shares as a decimal string, or `None` when unknown.
 ///
-/// A CLASSIC pool's shares come from its snapshot (7 decimals, fixed by the
-/// protocol). A SOROBAN pool has no snapshot — the table is classic-only — so
-/// its shares come from `pool_instance_state`, which the indexer reads off the
-/// pool contract's own storage, scaled by the share token's decimals (`None`
-/// when its metadata does not say; the client then shows no number).
+/// A CLASSIC pool's shares come from its snapshot, already scaled by the
+/// column's `Decimal128(7)`. A SOROBAN pool has no snapshot — the table is
+/// classic-only — so its shares come from `pool_instance_state`, which the
+/// indexer reads off the pool contract's own storage: a RAW integer, scaled by
+/// the share token's decimals (`None` when its metadata does not say).
 ///
 /// A soroban 0 is only sometimes a measurement — see [`zero_shares_is_measured`];
 /// `pool_type_raw` and the pool's raw `state_reserves` decide it.
 pub(super) fn pool_total_shares(
-    snapshot_raw: Option<String>,
+    snapshot: Option<String>,
     instance_raw: Option<&str>,
     share_decimals: Option<u32>,
     pool_type_raw: &str,
     state_reserves: &[String],
-) -> Option<(String, Option<u32>)> {
-    if let Some(raw) = snapshot_raw {
-        return Some((raw, Some(CLASSIC_SHARE_DECIMALS)));
+) -> Option<String> {
+    if snapshot.is_some() {
+        return snapshot;
     }
     match instance_raw? {
-        "0" => zero_shares_is_measured(pool_type_raw, state_reserves)
-            .then(|| ("0".to_string(), share_decimals)),
-        raw => Some((raw.to_string(), share_decimals)),
+        "0" => zero_shares_is_measured(pool_type_raw, state_reserves).then(|| "0".to_string()),
+        raw => scale_decimal_str(raw, share_decimals?),
     }
 }
 

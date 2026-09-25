@@ -8,7 +8,7 @@ use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
-use super::leg_reserves::{leg_reserves, state_reserves_sql};
+use super::leg_reserves::{Reserves, state_reserves_sql};
 use super::total_shares::{instance_shares_sql, pool_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
@@ -89,11 +89,9 @@ pub async fn fetch_pool_by_id(
                     (SELECT count() FROM lp_positions FINAL \
                       WHERE pool_id = unhex(?) AND shares > 0), 0)) AS participant_count, \
                 s.ledger_sequence                    AS latest_snapshot_ledger, \
-                /* RAW integers: the snapshot's Decimal128(7) × 10^7, the same \
-                   contract as every amount the API serves (scaled by the client). */ \
-                toString(toInt128(s.reserve_a * 10000000)) AS reserve_a, \
-                toString(toInt128(s.reserve_b * 10000000)) AS reserve_b, \
-                toString(toInt128(s.total_shares * 10000000)) AS total_shares, \
+                toString(s.reserve_a)                AS reserve_a, \
+                toString(s.reserve_b)                AS reserve_b, \
+                toString(s.total_shares)             AS total_shares, \
                 nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms, \
                 lp.pool_type_raw                     AS pool_type_raw, \
                 sr.reserves                          AS state_reserves, \
@@ -140,13 +138,6 @@ pub async fn fetch_pool_by_id(
         .collect();
     let (identities, icons) = resolve_identities_and_icons(client, &asset_ids).await?;
 
-    let shares = pool_total_shares(
-        r.total_shares.clone(),
-        r.instance_shares.as_deref(),
-        identities.get(&r.share_token_id).and_then(|t| t.decimals),
-        &r.pool_type_raw,
-        &r.state_reserves,
-    );
     Ok(Some(PoolRow {
         pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
         pool_id_hex: r.pool_id_hex,
@@ -156,7 +147,7 @@ pub async fn fetch_pool_by_id(
             &r.legs,
             &identities,
             &icons,
-            &leg_reserves(
+            Reserves::from_sources(
                 &r.state_reserves,
                 r.reserve_a.as_deref(),
                 r.reserve_b.as_deref(),
@@ -169,8 +160,13 @@ pub async fn fetch_pool_by_id(
         cursor_ledger: r.created_at_ledger,
         participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
-        total_shares: shares.as_ref().map(|(raw, _)| raw.clone()),
-        total_shares_decimals: shares.and_then(|(_, d)| d),
+        total_shares: pool_total_shares(
+            r.total_shares,
+            r.instance_shares.as_deref(),
+            identities.get(&r.share_token_id).and_then(|t| t.decimals),
+            &r.pool_type_raw,
+            &r.state_reserves,
+        ),
         // Filled by the handler from `fetch_pool_usd_analytics` (0199
         // compute-at-read); the snapshot columns are not read.
         tvl: None,

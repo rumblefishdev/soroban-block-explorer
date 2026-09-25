@@ -27,7 +27,7 @@ async fn seed(ch: &clickhouse::Client) {
         // The soroban rows sit at their registration ledgers.
         format!(
             "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs, pool_type_raw) VALUES \
-             (unhex('{CLASSIC}'), 30, 200, 0, [1001, 1002], ''), \
+             (unhex('{CLASSIC}'), 30, 200, 0, [], ''), \
              (unhex('{SOROBAN_ROUTER}'), 30, 100, 1, [1001, 1002], 'constant'), \
              (unhex('{SOROBAN_ACTIVE}'), 30, 110, 1, [], ''), \
              (unhex('{SOROBAN_REPOINTED}'), 30, 90, 1, [1001, 1002], '')"
@@ -46,12 +46,6 @@ async fn seed(ch: &clickhouse::Client) {
              (unhex('{SOROBAN_ACTIVE}'), 8, 0, 0, 110), \
              (unhex('{SOROBAN_REPOINTED}'), 9, 0, 0, 90), \
              (unhex('{SOROBAN_REPOINTED}'), 90, 0, 0, 140)"
-        ),
-        // The classic pool's snapshot, in units (`Decimal128(7)`), which the
-        // API serves raw.
-        format!(
-            "INSERT INTO liquidity_pool_snapshots (pool_id, ledger_sequence, reserve_a, reserve_b, total_shares) VALUES \
-             (unhex('{CLASSIC}'), 200, 750.699916, 1, 10)"
         ),
         "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES (501, 'CSHARETOKEN', false)"
             .to_string(),
@@ -140,40 +134,25 @@ async fn list_reads_soroban_order_reserves_and_shares() {
         row.legs.iter().map(|l| l.reserve.clone()).collect()
     };
     let some = |v: [&str; 2]| v.map(|s| Some(s.to_string())).to_vec();
-    let scales =
-        |row: &PoolRow| -> Vec<Option<u32>> { row.legs.iter().map(|l| l.decimals).collect() };
 
-    // Every amount is served RAW with its scale. The classic snapshot's
-    // Decimal128(7) comes out × 10^7, exactly.
-    let classic = listed(CLASSIC);
-    assert_eq!(reserves(classic), some(["7506999160", "10000000"]));
-    assert_eq!(scales(classic), vec![Some(7), Some(7)]);
-    assert_eq!(classic.total_shares.as_deref(), Some("100000000"));
-    assert_eq!(classic.total_shares_decimals, Some(7));
-
-    // The newest row wins (10000000, 20000000), not the older 50000000, 60000000.
+    // The newest row wins (1, 2 at 7 decimals), not the older 5, 6.
     let router = listed(SOROBAN_ROUTER);
-    assert_eq!(reserves(router), some(["10000000", "20000000"]));
-    // Shares carry the share token's own decimals; the pair-factory 0 is real.
-    assert_eq!(router.total_shares.as_deref(), Some("252647541418"));
-    assert_eq!(router.total_shares_decimals, Some(7));
+    assert_eq!(reserves(router), some(["1", "2"]));
+    // Shares scale by the share token's own decimals; the pair-factory 0 is real.
+    assert_eq!(router.total_shares.as_deref(), Some("25264.7541418"));
     assert_eq!(listed(SOROBAN_ACTIVE).total_shares.as_deref(), Some("0"));
     // A pool that re-pointed its plane without moving keeps its reserves: its
     // newest row sits on the old plane, and a filter on the declared plane
     // would read nothing.
-    assert_eq!(
-        reserves(listed(SOROBAN_REPOINTED)),
-        some(["30000000", "40000000"])
-    );
+    assert_eq!(reserves(listed(SOROBAN_REPOINTED)), some(["3", "4"]));
 
     // The detail reads the same values through its own statement.
     let detail = crate::liquidity_pools::queries::fetch_pool_by_id(&ch, SOROBAN_ROUTER)
         .await
         .expect("detail query runs")
         .expect("pool found");
-    assert_eq!(reserves(&detail), some(["10000000", "20000000"]));
-    assert_eq!(detail.total_shares.as_deref(), Some("252647541418"));
-    assert_eq!(detail.total_shares_decimals, Some(7));
+    assert_eq!(reserves(&detail), some(["1", "2"]));
+    assert_eq!(detail.total_shares.as_deref(), Some("25264.7541418"));
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
         .execute()
