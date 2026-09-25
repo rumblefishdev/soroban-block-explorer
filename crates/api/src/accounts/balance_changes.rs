@@ -75,9 +75,9 @@ pub struct BalanceChange {
     /// Display code — `asset_code` for classic, the on-chain `symbol` for a
     /// bespoke token, `None` for native (render as XLM) or when neither exists.
     pub asset_code: Option<String>,
-    /// Display decimals — 7 for classic/native/SAC, on-chain `METADATA` for a
-    /// bespoke token.
-    pub decimals: u32,
+    /// Display decimals — 7 for classic/native/SAC, on-chain metadata for a
+    /// bespoke token; `None` when none could be read.
+    pub decimals: Option<u32>,
     /// SIGNED raw amount for the account in context (`+` in, `−` out), as an
     /// `Int128` string. `None` = non-fungible movement, no amount exists —
     /// see `nft_delta`, and never render it as zero.
@@ -181,10 +181,10 @@ pub async fn fetch_balance_changes(
     for row in delta_rows {
         let identity = identities.get(&row.asset_id);
         let (asset, asset_code, decimals) = identity.map_or_else(
-            // Unresolvable asset: no link, no code, classic decimals. It
-            // cannot happen through the query above (every id yields a row),
-            // and is here so a future caller cannot silently get a wrong scale.
-            || (String::new(), None, 7),
+            // Unresolvable asset: no link, no code, no scale. It cannot happen
+            // through the query above (every id yields a row), and is here so
+            // a future caller cannot silently get a wrong scale.
+            || (String::new(), None, None),
             |i| {
                 // A NON-FUNGIBLE entry keeps its contract StrKey whatever
                 // `assets` knows: the cell sends it to the NFT pages, which are
@@ -268,7 +268,7 @@ pub async fn fetch_balance_changes(
 struct AssetIdentity {
     asset: String,
     asset_code: Option<String>,
-    decimals: u32,
+    decimals: Option<u32>,
     /// Whether `/assets/{asset}` can actually answer for this identity.
     ///
     /// **This flag is a WORKAROUND and is meant to be deleted** (task 0542).

@@ -32,9 +32,12 @@ export type AccountBalance = {
    */
   contract_id?: string | null;
   /**
-   * Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.
+   * Display decimals — 7 for native and classic, on-chain metadata for a
+   * Soroban token. `null` when the token publishes none we could read: the
+   * balance then has no known scale, and a guessed 7 would be off by up to
+   * 10^11.
    */
-  decimals: number;
+  decimals?: number | null;
   last_updated_ledger: number;
   /**
    * Asset display `name`, from two disjoint sources by asset type: classic /
@@ -108,10 +111,10 @@ export type AccountBalanceChange = {
    */
   asset_code?: string | null;
   /**
-   * Display decimals — 7 for native/classic/SAC, on-chain `METADATA` for a
-   * bespoke Soroban token.
+   * Display decimals — 7 for native/classic/SAC, on-chain metadata for a
+   * bespoke Soroban token; `null` when none could be read (never a guessed 7).
    */
-  decimals: number;
+  decimals?: number | null;
   /**
    * Signed count of non-fungible pieces moved (`+1` received, `−1` sent);
    * `0` for an ordinary fungible asset. Non-zero exactly when `amount` is
@@ -293,10 +296,12 @@ export type AssetDetailResponse = {
    */
   contract_id?: string | null;
   /**
-   * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
-   * (Stellar classic precision). Load-bearing for amount rendering.
+   * Display decimals — 7 for native and classic (Stellar precision), a
+   * Soroban token's on-chain metadata. Load-bearing for amount rendering.
+   * `null` when the token publishes none we could read: its amounts then
+   * have no known scale, and a guessed 7 would be off by up to 10^11.
    */
-  decimals: number;
+  decimals?: number | null;
   /**
    * Active-holder count (`amount > 0`) from `balance_aggregates` (all asset
    * types — accounts, contracts and liquidity pools; a claimable balance is not
@@ -388,10 +393,12 @@ export type AssetItem = {
    */
   contract_id?: string | null;
   /**
-   * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
-   * (Stellar classic precision). Load-bearing for amount rendering.
+   * Display decimals — 7 for native and classic (Stellar precision), a
+   * Soroban token's on-chain metadata. Load-bearing for amount rendering.
+   * `null` when the token publishes none we could read: its amounts then
+   * have no known scale, and a guessed 7 would be off by up to 10^11.
    */
-  decimals: number;
+  decimals?: number | null;
   /**
    * Active-holder count (`amount > 0`) from `balance_aggregates` (all asset
    * types — accounts, contracts and liquidity pools; a claimable balance is not
@@ -1451,10 +1458,12 @@ export type PaginatedAssetItem = {
      */
     contract_id?: string | null;
     /**
-     * Display decimals — on-chain `METADATA` for Soroban tokens, else 7
-     * (Stellar classic precision). Load-bearing for amount rendering.
+     * Display decimals — 7 for native and classic (Stellar precision), a
+     * Soroban token's on-chain metadata. Load-bearing for amount rendering.
+     * `null` when the token publishes none we could read: its amounts then
+     * have no known scale, and a guessed 7 would be off by up to 10^11.
      */
-    decimals: number;
+    decimals?: number | null;
     /**
      * Active-holder count (`amount > 0`) from `balance_aggregates` (all asset
      * types — accounts, contracts and liquidity pools; a claimable balance is not

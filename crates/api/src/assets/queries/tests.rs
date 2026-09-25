@@ -182,3 +182,38 @@ fn list_sql_has_no_search_predicate_without_a_term() {
     // No cursor and no needle → nothing to bind (the LIMIT is inlined).
     assert_eq!(sql.matches('?').count(), 0);
 }
+
+/// 7 is a fact only for native and classic. A Soroban token's scale is what
+/// its metadata publishes, and `None` without it — a guessed 7 renders an
+/// 18-decimal supply 10^11 too large.
+#[test]
+fn decimals_are_a_fact_or_none() {
+    let header = |asset_type: i16, contract_id_key: i64| AssetHydrateRow {
+        asset_type,
+        asset_code: None,
+        name_enrichment: None,
+        total_supply: None,
+        holder_count: None,
+        icon_url: None,
+        issuer_id_key: 0,
+        contract_id_key,
+        sac_contract_surrogate: 0,
+        sac_deployed: false,
+        id: 1,
+    };
+    let ctx_row = |id: i64, decimals: Option<u32>| SorobanCtxRow {
+        id,
+        contract_id: "CTOKEN".to_string(),
+        deployed_at_ledger: None,
+        name: None,
+        symbol: None,
+        decimals,
+    };
+    let ctx = HashMap::from([(10, ctx_row(10, Some(18))), (11, ctx_row(11, None))]);
+
+    assert_eq!(assemble_asset_row(header(1, 0), &ctx).decimals, Some(7));
+    assert_eq!(assemble_asset_row(header(0, 0), &ctx).decimals, Some(7));
+    assert_eq!(assemble_asset_row(header(3, 10), &ctx).decimals, Some(18));
+    assert_eq!(assemble_asset_row(header(3, 11), &ctx).decimals, None);
+    assert_eq!(assemble_asset_row(header(3, 12), &ctx).decimals, None);
+}

@@ -451,8 +451,11 @@ The displayed `name`, `symbol`, and `decimals` are **read-composed from side
 tables**, not from the `assets` row — `assets.name` has had no writer since task 0297. On the ClickHouse read path `name` resolves `asset_enrichment.name`
 (classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (on-chain
 SEP-41 `METADATA`, task 0297) → `'Stellar Lumens'` for native; `symbol` /
-`decimals` come from `soroban_contract_metadata` (decimals defaults to 7 for
-classic/SAC). See `crates/api/src/assets/queries.rs`.
+`decimals` come from `soroban_contract_metadata`. `decimals` is 7 for native
+and classic/SAC (fixed by the protocol) and `null` for a Soroban token that
+publishes none we could read — its raw amounts then render as "—", never
+scaled by a guessed 7 (the same rule on account balances and balance
+changes). See `crates/api/src/assets/queries.rs`.
 
 **`GET /assets/:id/transactions`** - Paginated transactions involving this asset
 (addressed by the same `:id` token forms).

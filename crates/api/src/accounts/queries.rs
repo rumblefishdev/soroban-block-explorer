@@ -78,7 +78,7 @@ pub struct AccountBalanceRow {
     pub name: Option<String>,
     pub symbol: Option<String>,
     pub balance: String,
-    pub decimals: u32,
+    pub decimals: Option<u32>,
     pub last_updated_ledger: i64,
     pub sac_deployed: bool,
 }
@@ -393,7 +393,7 @@ struct AccountBalanceChRow {
     name: Option<String>,
     symbol: Option<String>,
     balance: String,
-    decimals: u32,
+    decimals: Option<u32>,
     last_updated_ledger: i64,
     sac_deployed: bool,
 }
@@ -485,7 +485,10 @@ const BALANCES_SQL: &str = "SELECT \
                 coalesce(nullIf(ae.name, ''), nullIf(m.name, '')) AS name, \
                 nullIf(m.symbol, '')          AS symbol, \
                 toString(b.amount)            AS balance, \
-                coalesce(m.decimals, 7)       AS decimals, \
+                /* 7 is a fact only for native and classic; a Soroban token's \
+                   scale is what its metadata publishes, NULL when none. */ \
+                if(a.asset_type IN (0, 1), toNullable(toUInt32(7)), \
+                   CAST(m.decimals AS Nullable(UInt32))) AS decimals, \
                 b.last_updated_ledger         AS last_updated_ledger, \
                 sac.deployed                  AS sac_deployed \
              FROM balances b FINAL \

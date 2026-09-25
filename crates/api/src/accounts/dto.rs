@@ -78,8 +78,11 @@ pub struct AccountBalance {
     /// Option C: one convention for all asset types; classic `decimals` = 7). The
     /// account portfolio now includes Soroban (type-3) token balances too.
     pub balance: String,
-    /// Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.
-    pub decimals: u32,
+    /// Display decimals — 7 for native and classic, on-chain metadata for a
+    /// Soroban token. `null` when the token publishes none we could read: the
+    /// balance then has no known scale, and a guessed 7 would be off by up to
+    /// 10^11.
+    pub decimals: Option<u32>,
     pub last_updated_ledger: i64,
     /// Whether this asset has a Stellar Asset Contract DEPLOYED on-chain
     /// (ADR 0051). A SAC is a PROPERTY of a classic/native asset, orthogonal to
@@ -177,9 +180,9 @@ pub struct AccountBalanceChange {
     /// Display code (`"USDC"`, or a bespoke token's on-chain symbol).
     /// `null` for native — render as XLM — and for a token with no symbol.
     pub asset_code: Option<String>,
-    /// Display decimals — 7 for native/classic/SAC, on-chain `METADATA` for a
-    /// bespoke Soroban token.
-    pub decimals: u32,
+    /// Display decimals — 7 for native/classic/SAC, on-chain metadata for a
+    /// bespoke Soroban token; `null` when none could be read (never a guessed 7).
+    pub decimals: Option<u32>,
     /// SIGNED raw amount as an `Int128` string: positive received, negative
     /// spent. Scale by `decimals`.
     ///

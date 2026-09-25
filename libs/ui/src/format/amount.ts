@@ -32,18 +32,20 @@ export function formatAmount(
  * supplies / balances exact (raw amounts exceed `Number` precision). The API
  * returns raw integers for all asset types (task 0331 Option C); callers pipe
  * the result through `formatAmount` for display. `decimals <= 0` returns the
- * integer unchanged. Returns `null` for null / negative / non-integer input so
+ * integer unchanged. Returns `null` for null / negative / non-integer input —
+ * and for `null` decimals, an asset whose scale is unknown — so
  * `formatAmount(null)` renders an em-dash.
  */
 export function scaleByDecimals(
   value: string | number | null | undefined,
-  decimals: number
+  decimals: number | null | undefined
 ): string | null {
   if (value == null) return null;
   // Reject invalid decimals up front: null / undefined / NaN / fractional would
   // throw in `BigInt(decimals)`, and `null <= 0` is `true` (would silently return
   // the raw integer unscaled).
-  if (!Number.isInteger(decimals) || decimals < 0) return null;
+  if (decimals == null || !Number.isInteger(decimals) || decimals < 0)
+    return null;
   let safe: bigint;
   if (typeof value === 'number') {
     // Reject non-integer (and non-finite) numbers rather than truncating — matches

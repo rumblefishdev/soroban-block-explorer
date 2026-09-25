@@ -79,9 +79,10 @@ pub struct AssetRow {
     /// On-chain SEP-41 token symbol from `soroban_contract_metadata` (task 0297);
     /// `None` for classic/native.
     pub symbol: Option<String>,
-    /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
-    /// (Stellar classic precision).
-    pub decimals: u32,
+    /// Display decimals — 7 for native and classic (Stellar precision), a
+    /// Soroban token's on-chain metadata; `None` when it publishes none we
+    /// could read.
+    pub decimals: Option<u32>,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,
     pub icon_url: Option<String>,
@@ -224,7 +225,7 @@ struct AssetListChRow {
     contract_id: Option<String>,
     name: Option<String>,
     symbol: Option<String>,
-    decimals: u32,
+    decimals: Option<u32>,
     total_supply: Option<String>,
     holder_count: Option<i32>,
     deployed_at_ledger: Option<i64>,
@@ -555,7 +556,8 @@ async fn hydrate_assets(
 /// Assemble one [`AssetListChRow`] from its `assets`-side header and the
 /// `soroban_contracts` context map (task 0364 2c). Replicates the pre-2c SQL
 /// projection exactly: `name = coalesce(ae.name, metadata.name, native-default)`,
-/// `decimals = coalesce(metadata.decimals, 7)`, `deployed_at_ledger` prefers the
+/// `decimals` = 7 for native/classic, else the metadata's (`None` when absent —
+/// never a guessed 7), `deployed_at_ledger` prefers the
 /// own contract then the SAC-wrapper (both `nullIf 0`), StrKey / symbol are
 /// non-empty-or-`None`.
 fn assemble_asset_row(h: AssetHydrateRow, ctx: &HashMap<i64, SorobanCtxRow>) -> AssetListChRow {
@@ -579,7 +581,13 @@ fn assemble_asset_row(h: AssetHydrateRow, ctx: &HashMap<i64, SorobanCtxRow>) -> 
             .or_else(|| nonempty(own.and_then(|c| c.name.clone())))
             .or_else(|| (h.asset_type == 0).then(|| "Stellar Lumens".to_string())),
         symbol: nonempty(own.and_then(|c| c.symbol.clone())),
-        decimals: own.and_then(|c| c.decimals).unwrap_or(7),
+        // 7 is a fact only for native and classic; a Soroban token's scale is
+        // what its metadata publishes, if anything.
+        decimals: if matches!(h.asset_type, 0 | 1) {
+            Some(7)
+        } else {
+            own.and_then(|c| c.decimals)
+        },
         total_supply: h.total_supply,
         holder_count: h.holder_count,
         // Own contract's deploy ledger, else the SAC-wrapper's (ADR 0051).

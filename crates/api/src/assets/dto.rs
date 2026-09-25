@@ -75,9 +75,11 @@ pub struct AssetItem {
     /// On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
     /// (use `asset_code`) and native.
     pub symbol: Option<String>,
-    /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
-    /// (Stellar classic precision). Load-bearing for amount rendering.
-    pub decimals: u32,
+    /// Display decimals — 7 for native and classic (Stellar precision), a
+    /// Soroban token's on-chain metadata. Load-bearing for amount rendering.
+    /// `null` when the token publishes none we could read: its amounts then
+    /// have no known scale, and a guessed 7 would be off by up to 10^11.
+    pub decimals: Option<u32>,
     /// Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
     /// display (task 0331 Option C: one convention for ALL asset types; classic
     /// `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
