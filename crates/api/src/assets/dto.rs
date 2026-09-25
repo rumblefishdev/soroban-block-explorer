@@ -78,7 +78,8 @@ pub struct AssetItem {
     /// Display decimals — 7 for native and classic (Stellar precision), a
     /// Soroban token's on-chain metadata. Load-bearing for amount rendering.
     /// `null` when the token publishes none we could read: its amounts then
-    /// have no known scale, and a guessed 7 would be off by up to 10^11.
+    /// have no known scale, and a guessed 7 would be off by 10^11 for an
+    /// 18-decimal token.
     pub decimals: Option<u32>,
     /// Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
     /// display (task 0331 Option C: one convention for ALL asset types; classic

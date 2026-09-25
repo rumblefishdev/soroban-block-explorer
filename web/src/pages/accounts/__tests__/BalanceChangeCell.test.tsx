@@ -39,6 +39,19 @@ describe('BalanceChangeCell', () => {
     expect(screen.getByRole('link', { name: 'USDC' })).toBeInTheDocument();
   });
 
+  it('states an unknown-scale amount as a plain dash, unsigned', () => {
+    // A token that publishes no decimals: a sign or colour would read as a
+    // movement of some size, and a guessed 7 could be 10^11 off.
+    renderWithProviders(
+      <BalanceChangeCell
+        changes={[change({ decimals: null, amount: '-1000000000000000000' })]}
+      />
+    );
+
+    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.queryByText(/[−+]/)).toBeNull();
+  });
+
   it('marks money out with a minus, not a bare number', () => {
     renderWithProviders(
       <BalanceChangeCell changes={[change({ amount: '-13499' })]} />

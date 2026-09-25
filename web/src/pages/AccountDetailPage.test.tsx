@@ -170,6 +170,35 @@ describe('AccountDetailPage', () => {
     expect(screen.getAllByText('USDC').length).toBeGreaterThan(0);
   });
 
+  it('shows a Soroban balance with no known scale as a dash, not a number', () => {
+    // `decimals: null` — the token publishes none we could read. A guessed 7
+    // would render an 18-decimal balance 10^11 too large.
+    mockDetail({
+      data: {
+        ...SAMPLE,
+        balances: [
+          {
+            ...SOROBAN_BALANCE,
+            balance: '1000000000000000000',
+            decimals: null,
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.queryByText('100,000,000,000.00')).toBeNull();
+  });
+
   it('counts the assets and, separately, how many carry value', () => {
     // A card titled "Balances" listing thousands of zeros argues with its own
     // contents — the zeros are real holdings (issue #377), so the card is

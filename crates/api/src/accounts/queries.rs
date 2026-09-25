@@ -28,6 +28,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use super::balance_changes::{BalanceChange, TxKey, fetch_balance_changes};
+use crate::common::asset_identity::known_decimals;
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql};
 use crate::transactions::dto::TxListCursor;
@@ -393,7 +394,7 @@ struct AccountBalanceChRow {
     name: Option<String>,
     symbol: Option<String>,
     balance: String,
-    decimals: Option<u32>,
+    published_decimals: Option<u32>,
     last_updated_ledger: i64,
     sac_deployed: bool,
 }
@@ -485,10 +486,7 @@ const BALANCES_SQL: &str = "SELECT \
                 coalesce(nullIf(ae.name, ''), nullIf(m.name, '')) AS name, \
                 nullIf(m.symbol, '')          AS symbol, \
                 toString(b.amount)            AS balance, \
-                /* 7 is a fact only for native and classic; a Soroban token's \
-                   scale is what its metadata publishes, NULL when none. */ \
-                if(a.asset_type IN (0, 1), toNullable(toUInt32(7)), \
-                   CAST(m.decimals AS Nullable(UInt32))) AS decimals, \
+                CAST(m.decimals AS Nullable(UInt32)) AS published_decimals, \
                 b.last_updated_ledger         AS last_updated_ledger, \
                 sac.deployed                  AS sac_deployed \
              FROM balances b FINAL \
@@ -549,8 +547,9 @@ const BALANCES_SQL: &str = "SELECT \
 /// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
 /// seek (`balances` ORDER BY `(holder_id, asset_id)`). Resolves each asset via the
 /// `assets.id` surrogate; classic + Soroban (type-3) holdings both appear.
-/// `balance` is RAW (`Int128`) — clients scale by `decimals` (classic = 7,
-/// Soroban from on-chain `METADATA`).
+/// `balance` is RAW (`Int128`) — clients scale by `decimals`
+/// ([`known_decimals`]: 7 for native/classic, a Soroban token's published
+/// metadata, `None` when there is none).
 pub async fn fetch_balances(
     client: &clickhouse::Client,
     account_id: i64,
@@ -582,7 +581,7 @@ pub async fn fetch_balances(
             name: r.name,
             symbol: r.symbol,
             balance: r.balance,
-            decimals: r.decimals,
+            decimals: known_decimals(Some(r.asset_type), r.published_decimals),
             last_updated_ledger: r.last_updated_ledger,
             sac_deployed: r.sac_deployed,
         })

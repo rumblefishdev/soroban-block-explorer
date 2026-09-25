@@ -34,8 +34,8 @@ export type AccountBalance = {
   /**
    * Display decimals — 7 for native and classic, on-chain metadata for a
    * Soroban token. `null` when the token publishes none we could read: the
-   * balance then has no known scale, and a guessed 7 would be off by up to
-   * 10^11.
+   * balance then has no known scale, and a guessed 7 would be off by 10^11
+   * for an 18-decimal token.
    */
   decimals?: number | null;
   last_updated_ledger: number;
@@ -299,7 +299,8 @@ export type AssetDetailResponse = {
    * Display decimals — 7 for native and classic (Stellar precision), a
    * Soroban token's on-chain metadata. Load-bearing for amount rendering.
    * `null` when the token publishes none we could read: its amounts then
-   * have no known scale, and a guessed 7 would be off by up to 10^11.
+   * have no known scale, and a guessed 7 would be off by 10^11 for an
+   * 18-decimal token.
    */
   decimals?: number | null;
   /**
@@ -396,7 +397,8 @@ export type AssetItem = {
    * Display decimals — 7 for native and classic (Stellar precision), a
    * Soroban token's on-chain metadata. Load-bearing for amount rendering.
    * `null` when the token publishes none we could read: its amounts then
-   * have no known scale, and a guessed 7 would be off by up to 10^11.
+   * have no known scale, and a guessed 7 would be off by 10^11 for an
+   * 18-decimal token.
    */
   decimals?: number | null;
   /**
@@ -1461,7 +1463,8 @@ export type PaginatedAssetItem = {
      * Display decimals — 7 for native and classic (Stellar precision), a
      * Soroban token's on-chain metadata. Load-bearing for amount rendering.
      * `null` when the token publishes none we could read: its amounts then
-     * have no known scale, and a guessed 7 would be off by up to 10^11.
+     * have no known scale, and a guessed 7 would be off by 10^11 for an
+     * 18-decimal token.
      */
     decimals?: number | null;
     /**

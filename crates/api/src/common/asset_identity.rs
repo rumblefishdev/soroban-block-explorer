@@ -31,6 +31,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use clickhouse::Row;
+use domain::AssetFamily;
 use serde::Deserialize;
 
 #[derive(Debug, Row, Deserialize)]
@@ -48,7 +49,9 @@ pub(crate) struct AssetIdentityChRow {
     pub(crate) contract_id: i64,
     pub(crate) contract_strkey: Option<String>,
     pub(crate) symbol: Option<String>,
-    pub(crate) decimals: u32,
+    /// The decimals the token's on-chain metadata publishes, if any — not yet
+    /// the display scale; see [`known_decimals`].
+    pub(crate) published_decimals: Option<u32>,
 }
 
 /// One asset's identity as the dimension knows it, with the issuer StrKey
@@ -69,7 +72,21 @@ pub(crate) struct ResolvedAsset {
     pub(crate) issuer: Option<String>,
     pub(crate) contract_strkey: Option<String>,
     pub(crate) symbol: Option<String>,
-    pub(crate) decimals: u32,
+    pub(crate) decimals: Option<u32>,
+}
+
+/// An asset's display scale when it is a FACT: 7 for native and classic
+/// credit (fixed by the protocol; a SAC shares its classic asset's row), the
+/// decimals a Soroban token's metadata publishes otherwise, `None` when it
+/// publishes none — a guessed 7 renders an 18-decimal amount 10^11 too large
+/// while still reading as a number. `family` is `None` when no `assets` row
+/// resolved: an unmatched join's default 0 would otherwise claim native.
+/// The one place this rule lives; every reader of `decimals` goes through it.
+pub(crate) fn known_decimals(family: Option<i16>, published: Option<u32>) -> Option<u32> {
+    match family.map(AssetFamily::try_from) {
+        Some(Ok(AssetFamily::Native | AssetFamily::ClassicCredit)) => Some(7),
+        _ => published,
+    }
 }
 
 /// Resolve a bounded set of `asset_transfers.asset_id` surrogates to a link
@@ -166,7 +183,7 @@ fn assemble(
                     issuer,
                     contract_strkey: r.contract_strkey,
                     symbol: r.symbol,
-                    decimals: r.decimals,
+                    decimals: known_decimals(r.known.then_some(r.asset_type), r.published_decimals),
                 },
             )
         })
@@ -187,7 +204,7 @@ async fn fetch_identity_rows(
                 a.contract_id                 AS contract_id, \
                 nullIf(sc.contract_id, '')    AS contract_strkey, \
                 nullIf(m.symbol, '')          AS symbol, \
-                coalesce(m.decimals, 7)       AS decimals \
+                CAST(m.decimals AS Nullable(UInt32)) AS published_decimals \
          FROM (SELECT arrayJoin(CAST([{in_list}] AS Array(Int64))) AS id) ids \
          LEFT JOIN (SELECT id, asset_type, asset_code, issuer_id, contract_id \
                     FROM assets \

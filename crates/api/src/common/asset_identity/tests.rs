@@ -66,7 +66,7 @@ fn unknown_identities_get_no_icon_key() {
             contract_id: 0,
             contract_strkey: None,
             symbol: None,
-            decimals: 7,
+            published_decimals: Some(7),
         },
         AssetIdentityChRow {
             id: 7,
@@ -77,7 +77,7 @@ fn unknown_identities_get_no_icon_key() {
             contract_id: 7,
             contract_strkey: None,
             symbol: None,
-            decimals: 7,
+            published_decimals: Some(7),
         },
     ];
     let keys: Vec<_> = rows.iter().map(icon_key).collect();
@@ -98,7 +98,20 @@ fn a_native_key_carries_the_empty_stored_code() {
         contract_id: 0,
         contract_strkey: None,
         symbol: None,
-        decimals: 7,
+        published_decimals: Some(7),
     }];
     assert_eq!(icon_key(&rows[0]), Some((0i16, String::new(), 0, 0)));
+}
+
+/// The one decimals rule: 7 where the protocol fixes it, the published value
+/// otherwise, and no guess for an asset no `assets` row resolved (its default
+/// `asset_type` 0 would otherwise claim native).
+#[test]
+fn known_decimals_is_a_fact_or_none() {
+    assert_eq!(known_decimals(Some(0), None), Some(7));
+    assert_eq!(known_decimals(Some(1), Some(18)), Some(7));
+    assert_eq!(known_decimals(Some(3), Some(18)), Some(18));
+    assert_eq!(known_decimals(Some(3), None), None);
+    assert_eq!(known_decimals(None, None), None);
+    assert_eq!(known_decimals(None, Some(6)), Some(6));
 }

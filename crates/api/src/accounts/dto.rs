@@ -80,8 +80,8 @@ pub struct AccountBalance {
     pub balance: String,
     /// Display decimals — 7 for native and classic, on-chain metadata for a
     /// Soroban token. `null` when the token publishes none we could read: the
-    /// balance then has no known scale, and a guessed 7 would be off by up to
-    /// 10^11.
+    /// balance then has no known scale, and a guessed 7 would be off by 10^11
+    /// for an 18-decimal token.
     pub decimals: Option<u32>,
     pub last_updated_ledger: i64,
     /// Whether this asset has a Stellar Asset Contract DEPLOYED on-chain

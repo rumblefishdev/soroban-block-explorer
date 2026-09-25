@@ -8,7 +8,7 @@ fn asset(asset_type: i16, known: bool) -> ResolvedAsset {
         issuer: None,
         contract_strkey: None,
         symbol: None,
-        decimals: 7,
+        decimals: Some(7),
     }
 }
 

@@ -51,6 +51,7 @@ use serde::Deserialize;
 
 use chrono::{DateTime, Utc};
 
+use crate::common::asset_identity::known_decimals;
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, SortOrder, keyset_sql, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
@@ -581,13 +582,7 @@ fn assemble_asset_row(h: AssetHydrateRow, ctx: &HashMap<i64, SorobanCtxRow>) -> 
             .or_else(|| nonempty(own.and_then(|c| c.name.clone())))
             .or_else(|| (h.asset_type == 0).then(|| "Stellar Lumens".to_string())),
         symbol: nonempty(own.and_then(|c| c.symbol.clone())),
-        // 7 is a fact only for native and classic; a Soroban token's scale is
-        // what its metadata publishes, if anything.
-        decimals: if matches!(h.asset_type, 0 | 1) {
-            Some(7)
-        } else {
-            own.and_then(|c| c.decimals)
-        },
+        decimals: known_decimals(Some(h.asset_type), own.and_then(|c| c.decimals)),
         total_supply: h.total_supply,
         holder_count: h.holder_count,
         // Own contract's deploy ledger, else the SAC-wrapper's (ADR 0051).

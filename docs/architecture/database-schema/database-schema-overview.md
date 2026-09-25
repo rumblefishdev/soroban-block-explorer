@@ -911,7 +911,8 @@ CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern
 > table `soroban_contract_metadata(contract_id, name, symbol, decimals, version)`
 > — `ReplacingMergeTree(version)`, key `contract_id` — written by the indexer
 > (`created` + `updated`, SACs skipped) and composed at read (`LEFT JOIN`;
-> `decimals` defaults to 7 for classic/SAC). It is a separate table, not columns
+> `decimals` is 7 for native and classic/SAC, `null` for a Soroban token that
+> publishes none — never a guessed 7). It is a separate table, not columns
 > on `soroban_contracts`: RMT whole-row replace + that table's multiple writers
 > would clobber in-row metadata, and identity vs metadata update on different
 > clocks. The API exposes `name`/`symbol`/`decimals` on the contract-detail and

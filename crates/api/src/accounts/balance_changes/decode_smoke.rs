@@ -209,7 +209,7 @@ async fn asset_identity_row_decodes_bool_and_lowcardinality_nullables() {
                     toInt64(0)  AS contract_id, \
                     nullIf('', '') AS contract_strkey, \
                     nullIf('', '') AS symbol, \
-                    coalesce(CAST(NULL AS Nullable(UInt32)), 7) AS decimals",
+                    CAST(7 AS Nullable(UInt32)) AS published_decimals",
         )
         .fetch_all::<AssetIdentityChRow>()
         .await
@@ -219,5 +219,6 @@ async fn asset_identity_row_decodes_bool_and_lowcardinality_nullables() {
     assert!(rows[0].known);
     assert_eq!(rows[0].asset_code.as_deref(), Some("USDC"));
     assert_eq!(rows[0].contract_strkey, None);
-    assert_eq!(rows[0].decimals, 7);
+    // The published decimals ride the row; `known_decimals` decides the scale.
+    assert_eq!(rows[0].published_decimals, Some(7));
 }

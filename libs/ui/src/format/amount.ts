@@ -44,6 +44,8 @@ export function scaleByDecimals(
   // Reject invalid decimals up front: null / undefined / NaN / fractional would
   // throw in `BigInt(decimals)`, and `null <= 0` is `true` (would silently return
   // the raw integer unscaled).
+  // `decimals == null` changes nothing at runtime (`Number.isInteger(null)` is
+  // false); it narrows the type for the BigInt below.
   if (decimals == null || !Number.isInteger(decimals) || decimals < 0)
     return null;
   let safe: bigint;
