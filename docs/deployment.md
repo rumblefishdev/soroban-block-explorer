@@ -427,6 +427,15 @@ Frontend **content** is separate: `deploy-production-web`
   Then deploy Compute; then fill the history ([backfills.md](./backfills.md),
   "Contract activity"). No pause; the readers still use the old tables.
 
+- **Contract activity (task 0586), step 2: the readers.** The API reads
+  `contract_activity` only: the contract invocation stats, the Invocations
+  tab, the transaction page's invocations and the `/transactions` contract
+  filter. Deploy Compute **after the history fill has passed its gates in
+  every partition**, head included: a range the fill has not reached would
+  show no invocations and drop out of the contract filter. No operator step.
+  The Invocations tab now pages on the transaction's position, so a cursor
+  minted before the deploy answers 400 `invalid_cursor` once.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and

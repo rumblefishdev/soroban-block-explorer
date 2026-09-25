@@ -18,12 +18,12 @@
 //! storage detail and is not surfaced on the wire.
 //!
 //! Read-cost notes (lessons from the global tx-list firefight):
-//! - `soroban_contracts` is ORDER BY `(contract_id)`; `soroban_invocations_appearances`
-//!   is ORDER BY `(contract_id, ledger_sequence, transaction_id)`. So every
+//! - `soroban_contracts` is ORDER BY `(contract_id)`; `contract_activity`
+//!   is ORDER BY `(contract_id, ledger_sequence, application_order)`. So every
 //!   filter by `contract_id` is a LEADING-primary-key seek, never a scan.
 //! - A contract's invocations span MANY ledger partitions, so (like account
 //!   transactions) the page is driven off the seek, then the ≤limit transaction
-//!   rows are fetched by `(ledger_sequence, id) IN (keys)` and merged in Rust —
+//!   rows are fetched by `(ledger_sequence, application_order) IN (keys)` and merged in Rust —
 //!   never an unpruned `transactions FINAL` join (the read_rows-quota trap).
 
 use std::collections::{BTreeSet, HashMap};
@@ -341,8 +341,10 @@ pub async fn fetch_contract_list(
     //     duplicates, so the dedup problem does not arise rather than being
     //     worked around.
     // `closed_at` carries a minmax index, so resolving the bound is cheap; the
-    // LP chart resolves its window the same way. `FINAL` on the appearances
-    // matches the detail stat so re-ingest duplicates collapse identically.
+    // LP chart resolves its window the same way. `FINAL` on the rows matches
+    // the detail stat so re-ingest duplicates collapse identically;
+    // `invocation_count > 0` keeps the pairs where the contract was invoked
+    // (task 0586 — `contract_activity` also holds touched-only pairs).
     let ids = list_rows
         .iter()
         .map(|r| r.id.to_string())
@@ -353,15 +355,16 @@ pub async fn fetch_contract_list(
     let days = STATS_WINDOW_DAYS;
     let count_sql = format!(
         "SELECT \
-            sia.contract_id                  AS contract_id, \
+            ca.contract_id                   AS contract_id, \
             toUInt64(count())                AS recent_invocations \
-         FROM soroban_invocations_appearances sia FINAL \
-         WHERE sia.contract_id IN ({ids}) \
-           AND sia.ledger_sequence >= ( \
+         FROM contract_activity ca FINAL \
+         WHERE ca.contract_id IN ({ids}) \
+           AND ca.invocation_count > 0 \
+           AND ca.ledger_sequence >= ( \
                SELECT min(sequence) FROM ledgers \
                WHERE closed_at >= now64() - INTERVAL {days} DAY \
            ) \
-         GROUP BY sia.contract_id"
+         GROUP BY ca.contract_id"
     );
     // Resolve the page's deployer surrogates → StrKeys by a bloom-pruned
     // key-seek (`accounts.idx_acc_id`), replacing the full-table `accounts`
@@ -577,7 +580,7 @@ struct StatsChRow {
 }
 
 /// `window` is the echoed label (e.g. `"7 days"`); its leading integer is the
-/// day count. CH `soroban_invocations_appearances` has no `created_at`, so the
+/// day count. CH `contract_activity` has no `created_at`, so the
 /// window is applied via a JOIN to `ledgers.closed_at`, bounded first by a
 /// `ledger_sequence` floor so the seek stays on the primary-key prefix.
 ///
@@ -651,7 +654,7 @@ fn contract_stats_sql(days: i64) -> String {
     format!(
         "SELECT \
             toUInt64(count())                       AS recent_invocations, \
-            toUInt64(uniqExact(sia.caller_id))      AS recent_unique_callers, \
+            toUInt64(uniqExact(ca.caller_id))       AS recent_unique_callers, \
             ifNull(( \
                 SELECT toUInt64(count()) \
                 FROM soroban_events se \
@@ -661,9 +664,10 @@ fn contract_stats_sql(days: i64) -> String {
                       WHERE closed_at >= now64() - INTERVAL {days} DAY \
                   ) \
             ), 0)                                   AS recent_events \
-         FROM soroban_invocations_appearances sia FINAL \
-         WHERE sia.contract_id = ? \
-           AND sia.ledger_sequence >= ( \
+         FROM contract_activity ca FINAL \
+         WHERE ca.contract_id = ? \
+           AND ca.invocation_count > 0 \
+           AND ca.ledger_sequence >= ( \
                SELECT min(sequence) FROM ledgers \
                WHERE closed_at >= now64() - INTERVAL {days} DAY \
            )"
