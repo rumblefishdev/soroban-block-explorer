@@ -2,9 +2,21 @@
 id: '0372'
 title: 'REFACTOR: operations and LP amounts located by transaction position — drop transaction_id, the dead operation_pools, and the unread fold count'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0538', '0575', '0580', '0365', '0491', '0268', '0261', '0281']
+related_tasks:
+  [
+    '0538',
+    '0575',
+    '0580',
+    '0365',
+    '0491',
+    '0268',
+    '0261',
+    '0281',
+    '0468',
+    '0585',
+  ]
 tags: [clickhouse, storage, effort-large, priority-high]
 links:
   - crates/db-clickhouse/schema/init.sql
@@ -46,6 +58,18 @@ history:
       activity reads pools_crossed — pool_ids stays. operation_pools lost its
       last reader in task 0491 and is dropped instead. Shipped as a parallel
       change, no window.
+  - date: '2026-09-25'
+    status: completed
+    who: karolkow
+    note: >
+      Four PRs (#498 moves, #499 dual write, #500 readers, #502 stop old
+      writes), three Compute deploys, no window. History copied in ClickHouse
+      per 50k-ledger slice, gated in every partition; before the drop the old
+      and new tables matched row for row (7,043,648,565 operation rows,
+      982,202,932 amount keys, 0 whole-row differences on 184.8 M sampled
+      rows). operations_appearances, lp_operation_amounts and operation_pools
+      dropped: 122.04 GiB → 65.19 GiB, 56.85 GiB net against the ~46 GiB
+      estimate. The parser's 0-based operation index moves to task 0585.
 ---
 
 # Operations and LP amounts located by transaction position
@@ -258,6 +282,78 @@ PR 3 is written while the fill runs.
       cutover and the derived-table re-parse runbook moved to the new names
       (Karol, 2026-09-25). `ch-mirror-setup.sh` keeps the old name: it copies
       Postgres tables of that name.
+
+## Design Decisions
+
+### From Plan
+
+1. **Parallel change, not a swap window** (decided in task 0580): new tables
+   under new names, dual write, in-DB fill, readers switch, stop the old
+   write, drop. Every step an ordinary deploy; until each drop the rollback
+   was the previous deploy.
+2. **`pool_ids` stays** (see Context); the unread fold count `amount` and the
+   `transaction_id` surrogate go.
+3. **`operation_index` 0-based in the tables** (ADR 0059); the API wire keeps
+   the operation's 1-based position (`operation_index + 1`, the `#op-N`
+   anchor), so no frontend change and no web deploy.
+
+### Emerged
+
+4. **Old and new `CREATE` side by side in `init.sql`** during the dual write
+   (karolkow); a `schema/transitional.sql` variant was built and reverted.
+5. **A 0 operation position fails the ledger** (`checked_sub`), because the
+   parser is 1-based and a clamp would silently merge two operations on one key.
+6. **Neither skip index of `operations_appearances` carried**: no reader
+   filtered by pool or contract since 0491 / 0541. Codecs Delta / T64 on the
+   position columns.
+7. **Statement C of `/transactions` rebuilt on statement B's page seek**
+   instead of a minimal column swap: removes a whole-`accounts` hash join and
+   a correlated subquery. Larger diff than the switch needed (karolkow noted
+   it; kept as is).
+8. **No `FINAL` on the `operation_types` aggregate**: `groupUniqArray`
+   collapses unmerged duplicates on its own.
+9. **Old cursors answer 400 once** on the operation-type filter and pool
+   activity (position keyset; ADR 0008 clean break).
+10. **Whole-row checks, not only key counts**: once on the first
+    dual-written slice before the fill, and on a slice of every partition
+    plus the dual-written tail before the drop. The key gate alone would pass
+    a uniform shift.
+11. **Parser 0-based index deferred to after PR 4** (karolkow), as task 0585.
+12. **Dead `domain::operation::OperationAppearance`** (Postgres era) removed
+    with its table.
+13. **Runbooks moved to the new names** (karolkow); `ch-mirror-setup.sh` keeps
+    the old one because it copies Postgres tables of that name.
+
+## Issues Encountered
+
+- **Read-only `chq` queries blocked by the write guard** when their text
+  contains `Insert` / `Drop` (a `LIKE` filter, `query_kind`,
+  `system.dropped_tables`). Worked around by leaving the word out; the exact
+  moment the dropped files were removed was not read.
+- **Freshly filled tables read 1.3–2.6× more rows** than the merged old ones
+  (10 unmerged parts per partition after the fill) — measured on partition
+  115; same order of magnitude, all under the reader caps.
+- **`pool_reserves_reconciliation` (task 0374) fails** on one Soroban pool
+  (`CAZ6W4…`); unrelated to this task.
+- **Pre-existing, carried over unchanged:** an operation folded into an
+  earlier identical one has no row of its own, so its pool-activity row
+  falls back to the transaction's source and has no `pools_crossed`; the
+  `repair-tier1` `lp_positions` rebuild zeroes positions whose deposit has no
+  own source (flagged above; retires with task 0468).
+- **A WIP commit was made with `--no-verify`** during the variant-B work and
+  undone at once (`git reset --soft HEAD~1`); nothing was pushed.
+
+**Modified tests:** `tests_cross.rs` staging tests assert the position-keyed
+rows (`operation_index` 0-based) instead of `op_rows` / `lp_amount_rows`;
+`persist_e2e`, `smoke`, `g9` cleanup lists drop the old tables;
+`lp_amounts_targeted_write_e2e.rs` became `pool_amounts_targeted_write_e2e.rs`;
+the `/transactions` cursor test now accepts only the position; the
+`init.sql` statement count went 41 → 42 → 40. All intentional.
+
+## Future Work
+
+- Parser emits a 0-based operation index — task 0585.
+- `repair-tier1` op-source defect — task 0468.
 
 ## Superseded scope (2026-07, kept for the record)
 

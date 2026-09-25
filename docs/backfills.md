@@ -1156,11 +1156,11 @@ ledger slice — no S3. The indexer keeps running; ledgers it already wrote to
 both collapse in the ReplacingMergeTrees.
 
 - **Statements and gate:**
-  [`fill_transaction_operations.sql`](../lore/1-tasks/active/0372_REFACTOR_operations-by-transaction-position/notes/fill_transaction_operations.sql),
-  [`fill_pool_operation_amounts.sql`](../lore/1-tasks/active/0372_REFACTOR_operations-by-transaction-position/notes/fill_pool_operation_amounts.sql),
-  [`gate_operations.sql`](../lore/1-tasks/active/0372_REFACTOR_operations-by-transaction-position/notes/gate_operations.sql);
+  [`fill_transaction_operations.sql`](../lore/1-tasks/archive/0372_REFACTOR_operations-by-transaction-position/notes/fill_transaction_operations.sql),
+  [`fill_pool_operation_amounts.sql`](../lore/1-tasks/archive/0372_REFACTOR_operations-by-transaction-position/notes/fill_pool_operation_amounts.sql),
+  [`gate_operations.sql`](../lore/1-tasks/archive/0372_REFACTOR_operations-by-transaction-position/notes/gate_operations.sql);
   the loop that runs them per slice and stops at the first mismatch:
-  [`fill_operations.zsh`](../lore/1-tasks/active/0372_REFACTOR_operations-by-transaction-position/notes/fill_operations.zsh).
+  [`fill_operations.zsh`](../lore/1-tasks/archive/0372_REFACTOR_operations-by-transaction-position/notes/fill_operations.zsh).
 - **Gate per slice:** distinct keys of each old table against its new twin,
   per quarter slice. A position is unique in its ledger, as the surrogate is,
   so the keys map one to one.
