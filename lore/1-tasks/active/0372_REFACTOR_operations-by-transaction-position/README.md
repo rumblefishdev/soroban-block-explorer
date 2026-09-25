@@ -120,6 +120,17 @@ contract bloom stays only if a reader still filters by contract).
 
 PR 3 is written while the fill runs.
 
+## Progress
+
+- **PR 1 (moves)** — branch `refactor/0372-move-operations-code`, commit
+  `40f281fa`, local. `transactions/queries.rs` 1,103 → 482 lines (list →
+  `queries/list_transactions.rs`, 635); `stage.rs` 3,355 → 3,210 (operation
+  staging → `stage/operations.rs`, 180). Only glue is new: imports, module
+  lines, the wrapping signature. Checks: fmt, workspace clippy
+  `-D warnings`, `api` + `db-clickhouse` 824 tests, CH-gated
+  `db-clickhouse` 174 on a fresh ClickHouse 26.3; `api` decode smoke 21/25 —
+  the 4 pool tests need pool rows an empty database lacks, as on `develop`.
+
 ## Acceptance Criteria
 
 - [ ] New tables filled and gated in every partition
