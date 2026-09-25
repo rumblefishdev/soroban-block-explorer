@@ -7,8 +7,6 @@ import {
 } from '../assets/assetType.js';
 import { routes } from '../../router/routes.js';
 
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-
 /**
  * Resolve the cross-entity link target for a pool asset leg (task 0263).
  * Always routes to the asset detail page — backend `parse_asset_id`
@@ -71,18 +69,4 @@ export function poolLabel(legs: readonly PoolAssetLeg[]): string {
  */
 export function reserveDotColor(leg: PoolAssetLeg): string {
   return assetColor(assetLegLabel(leg)).dot;
-}
-/**
- * A pool is "stale" when its newest snapshot is older than 7 days (matches
- * the freshness window enforced by `18_get_liquidity_pools_list.sql` and
- * the participants endpoint). Stale pools come back with `null` reserves,
- * TVL, volume, and fee revenue. `participant_count` stays accurate
- * regardless of freshness (per 0246); it is `null` for a soroban pool.
- */
-export function isPoolStale(
-  latestSnapshotAt: string | null | undefined
-): boolean {
-  if (!latestSnapshotAt) return true;
-  const ageMs = Date.now() - new Date(latestSnapshotAt).getTime();
-  return Number.isNaN(ageMs) || ageMs > SEVEN_DAYS_MS;
 }
