@@ -65,10 +65,17 @@ Decided (karolkow, 2026-09-25):
   `DROP`.
 - **Task 0487 rides a separate PR** right after the readers (thread 249 A),
   so the reader PR stays behaviour-preserving and comparable to the old API.
-- **No invoked flag, no fold count:** every invocation row names exactly one
-  caller (0 rows without one in the whole table, 0 with both on
-  64,000,000–64,050,000), so "invoked" = a caller is present; nothing reads
-  the fold count (`amount`) — the stats count rows.
+- **No invoked flag:** every invocation row names exactly one caller (0 rows
+  without one in the whole table, 0 with both on 64,000,000–64,050,000), so
+  "invoked" = a caller is present.
+- **The fold count stays, as `invocation_count`** (thread 255, karolkow):
+  how many times the transaction called the contract — the execution trace's
+  `fn_call`s merged with the auth tree, not the operation count; 0 on a
+  touched-only row. Nothing reads it yet, but no other table holds it
+  (diagnostic events are not stored), and after the drop it would come back
+  only from an S3 re-parse. 64,000,000–64,010,000: 294,841 of 1,978,709
+  invoked pairs were called more than once; the fill's counts sum to
+  3,835,802 = `sum(amount)` of the invocations table.
 
 Target shape:
 
@@ -78,7 +85,8 @@ CREATE TABLE contract_activity (
     ledger_sequence    Int64,
     application_order  Int16,             -- transaction position
     caller_id          Nullable(Int64),   -- invoked by an account
-    caller_contract_id Nullable(Int64)    -- invoked by a contract
+    caller_contract_id Nullable(Int64),   -- invoked by a contract
+    invocation_count   Int32              -- calls in the transaction; 0 = touched only
 ) ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, application_order);

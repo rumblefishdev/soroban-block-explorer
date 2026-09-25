@@ -7,13 +7,13 @@
 -- before the drop. Pass: 0 and 0.
 SELECT
   (SELECT count() FROM (
-      SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller.1, inv.caller.2
+      SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller.1, inv.caller.2, inv.caller.3
       FROM (SELECT contract_id, ledger_sequence, application_order FROM contract_transactions
             WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS ct
       LEFT JOIN
       (
           SELECT s.contract_id AS contract_id, s.ledger_sequence AS ledger_sequence, t.application_order AS application_order,
-                 any((s.caller_id, s.caller_contract_id)) AS caller
+                 any((s.caller_id, s.caller_contract_id, s.amount)) AS caller
           FROM soroban_invocations_appearances AS s
           INNER JOIN (SELECT id, ledger_sequence, application_order FROM transactions
                       WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS t
@@ -22,20 +22,20 @@ SELECT
           GROUP BY contract_id, ledger_sequence, application_order
       ) AS inv USING (contract_id, ledger_sequence, application_order)
       EXCEPT DISTINCT
-      SELECT contract_id, ledger_sequence, application_order, caller_id, caller_contract_id
+      SELECT contract_id, ledger_sequence, application_order, caller_id, caller_contract_id, invocation_count
       FROM contract_activity WHERE ledger_sequence >= {A} AND ledger_sequence < {B}
   )) AS rows_only_in_old,
   (SELECT count() FROM (
-      SELECT contract_id, ledger_sequence, application_order, caller_id, caller_contract_id
+      SELECT contract_id, ledger_sequence, application_order, caller_id, caller_contract_id, invocation_count
       FROM contract_activity WHERE ledger_sequence >= {A} AND ledger_sequence < {B}
       EXCEPT DISTINCT
-      SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller.1, inv.caller.2
+      SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller.1, inv.caller.2, inv.caller.3
       FROM (SELECT contract_id, ledger_sequence, application_order FROM contract_transactions
             WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS ct
       LEFT JOIN
       (
           SELECT s.contract_id AS contract_id, s.ledger_sequence AS ledger_sequence, t.application_order AS application_order,
-                 any((s.caller_id, s.caller_contract_id)) AS caller
+                 any((s.caller_id, s.caller_contract_id, s.amount)) AS caller
           FROM soroban_invocations_appearances AS s
           INNER JOIN (SELECT id, ledger_sequence, application_order FROM transactions
                       WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS t

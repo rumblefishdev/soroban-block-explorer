@@ -55,12 +55,12 @@
       # stdout only: a shell warning on stderr must not read as a count.
       g=$(chq "$(sed -e "s/{LO}/$a/g" -e "s/{HI}/$b/g" "$N/gate_contract_activity.sql")" 2>/dev/null)
       n=(${=g})
-      if (( ${#n} != 5 )) || [[ ${n[1]} != <-> ]]; then
+      if (( ${#n} != 6 )) || [[ ${n[1]} != <-> ]]; then
         print -r -- "FAILED gate [$a, $b): '$g'"
         return 1
       fi
-      if (( n[1] != n[2] || n[3] != n[4] || n[5] != 0 )); then
-        print -r -- "FAILED gate [$a, $b): presence ${n[1]} activity ${n[2]} invoked ${n[3]} callers ${n[4]} both ${n[5]}"
+      if (( n[1] != n[2] || n[3] != n[4] || n[5] != 0 || n[6] != 0 )); then
+        print -r -- "FAILED gate [$a, $b): presence ${n[1]} activity ${n[2]} invoked ${n[3]} callers ${n[4]} both ${n[5]} count ${n[6]}"
         return 1
       fi
     done
