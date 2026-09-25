@@ -146,6 +146,24 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   shipped task 0497's writer (the `minted_at_ledger` defaults were already
   on production).
 
+- **Fill complete** (2026-09-25, 16:10–16:50 UTC): every slice gated;
+  coverage over all 30 partitions — 2,997,455,423 pairs = the
+  `contract_transactions` keys, 1,109,006,747 invoked = the invocation keys.
+
+- **PR 2 (readers) opened** (2026-09-25): the move alone in
+  [#512](https://github.com/rumblefishdev/soroban-block-explorer/pull/512)
+  (`fetch_invocation_appearances` into `contracts/queries/list_invocations.rs`,
+  `contracts/queries.rs` 1165 → 995 lines, 172 moved), the readers in
+  [#513](https://github.com/rumblefishdev/soroban-block-explorer/pull/513),
+  stacked (draft). Local API on production ClickHouse against the deployed
+  API: detail stats same for 6 contracts, list counts 50/50, Invocations tab
+  same rows for 4 contracts over whole ledgers, old cursor 400, transaction
+  page 18/18, `/transactions` contract filter same for 6. The tab's first
+  driver put `LIMIT 1 BY` beside `LIMIT`, which disables the read-in-order
+  early stop (21.7 M rows vs 0.59 M); `LIMIT` moved into a subquery →
+  4.37 M rows / 78 ms vs 0.54 M / 32 ms, the rest from 199 unmerged parts
+  after the fill (6.6 per partition vs 1.9), left to background merges.
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared
