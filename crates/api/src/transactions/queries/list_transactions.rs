@@ -1,0 +1,635 @@
+//! `GET /v1/transactions` — the list: statements A (no filter), B (contract)
+//! and C (operation type), the slim page projection, and the StrKey →
+//! surrogate resolution they use.
+//!
+//! ### List pagination + the partition-prune / read-in-order guard
+//!
+//! Canonical SQL 02 (PR #175 amendment) bounds every page to a single
+//! `intDiv(ledger_sequence, 500000)` partition. Statements A and C reproduce
+//! that — first page prunes to the latest partition (`intDiv(max(sequence),
+//! 500000)`), subsequent pages prune to the cursor's partition. The known cost
+//! is that pagination across a 500k-ledger partition boundary stops early —
+//! and for a rare `op_type` the first page is already short or empty (task
+//! 0381). Statement B seeks an index keyed by contract and is not bounded.
+//!
+//! The partition prune alone is NOT enough. A partition is ~1e8 transactions
+//! on mainnet, and `transactions FINAL ... ORDER BY ... LIMIT` reads the
+//! **whole partition** (FINAL must merge it before the limit applies) —
+//! ~118M rows per page, which under frontend polling exhausted the
+//! `api_reader` `read_rows` hourly quota (CH `Code: 201`). The no-filter
+//! **Statement A** therefore drops FINAL and orders by the table's physical
+//! sort key `(ledger_sequence, application_order)`, so CH reads in primary-key
+//! order and stops at the limit (~2e5 rows/page; validated). This is safe
+//! because `transactions` is append-only and effectively unique on that key,
+//! with all projected columns immutable across versions; a Rust-side dedup is
+//! the belt-and-braces. The cursor keys on `application_order` for this path
+//! (also the correct in-ledger order — the old `id`-hash tie-break did not
+//! preserve it). Statement B (contract filter) keys on the same position, by a
+//! seek on the `contract_transactions` presence index (task 0541).
+//! Statement C still keys on the `transactions.id` surrogate (it drives off
+//! `operations_appearances`).
+//!
+//! `operation_types` comes from the shared [`ch::fetch_tx_list_aggregates`]
+//! keyed on the ≤ `limit + 1` page rows (sourced from `operations_appearances`
+//! by primary-key seek). The per-row `contract_ids` array it once also returned
+//! was removed (task 0386) — dead field, whole-table `soroban_contracts FINAL`.
+
+use clickhouse::Row;
+use serde::Deserialize;
+
+use crate::common::ch::{self, millis_to_utc, resolve_accounts};
+use crate::common::cursor::{Direction, keyset_sql_desc};
+
+use super::super::dto::TxListCursor;
+use super::{ResolvedListParams, SurrogateIdRow, TxListRow};
+
+// ---------------------------------------------------------------------------
+// Row structs (positional decode — SELECT column order MUST match field order)
+// ---------------------------------------------------------------------------
+
+/// One page row — slim base columns only. `operation_types` is fetched
+/// separately via [`ch::fetch_tx_list_aggregates`] and merged by `id` (CH 26.3
+/// cannot compute it inline with a correlated subquery).
+#[derive(Debug, Row, Deserialize)]
+struct TxPageChRow {
+    hash: String,
+    ledger_sequence: i64,
+    application_order: i16,
+    source_account: Option<String>,
+    fee_charged: i64,
+    inner_tx_hash: Option<String>,
+    successful: bool,
+    operation_count: i16,
+    has_soroban: bool,
+    id: i64,
+    created_at: i64,
+}
+
+impl TxPageChRow {
+    /// Merge this page row with its pre-fetched aggregates into the
+    /// public `TxListRow`. A tx absent from the aggregate map (no ops /
+    /// contracts) gets empty vecs via `unwrap_or_default`.
+    fn into_list_row(self, agg: ch::TxListAggregates) -> TxListRow {
+        TxListRow {
+            id: self.id,
+            hash: self.hash,
+            ledger_sequence: self.ledger_sequence,
+            application_order: self.application_order,
+            source_account: self.source_account.filter(|s| !s.is_empty()),
+            fee_charged: self.fee_charged,
+            inner_tx_hash: self.inner_tx_hash.filter(|s| !s.is_empty()),
+            successful: self.successful,
+            operation_count: self.operation_count,
+            has_soroban: self.has_soroban,
+            operation_types: agg.operation_types,
+            created_at: millis_to_utc(self.created_at),
+        }
+    }
+}
+
+/// Raw page row for Statement A's two-step path: base columns plus the
+/// `source_id` surrogate and `ledger_sequence`, with NO join to `accounts` /
+/// `ledgers`. `source_account` + `created_at` are resolved by key-seek in
+/// [`resolve_source_and_closed_at`]. The old `LEFT JOIN accounts` + `INNER
+/// JOIN ledgers` hash-joins built over the FULL tables (~23M + ~13M) and were
+/// the real cost behind the polled list's 35M-rows/page (task 0290) — NOT the
+/// partition scan, which reads ~2e5 in primary-key order (`InReverseOrder`).
+#[derive(Debug, Row, Deserialize)]
+struct TxPageRawRow {
+    hash: String,
+    ledger_sequence: i64,
+    application_order: i16,
+    source_id: i64,
+    fee_charged: i64,
+    inner_tx_hash: Option<String>,
+    successful: bool,
+    operation_count: i16,
+    has_soroban: bool,
+    id: i64,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct LedgerClosedAtRow {
+    sequence: i64,
+    closed_at: i64,
+}
+
+/// Resolve `source_account` + `created_at` for a page of raw rows via key
+/// seeks instead of full-table hash joins (task 0290). `accounts WHERE id IN
+/// (...)` rides the `idx_acc_id` bloom skip-index (accounts is ORDER BY
+/// account_id, so the surrogate `id` is not the sort key — a plain join
+/// full-scans ~23M); `ledgers WHERE sequence IN (...)` is a primary-key seek.
+/// Both inline `i64` literals (no injection surface — same as
+/// `ch::fetch_tx_list_aggregates`). Preserves input order.
+async fn resolve_source_and_closed_at(
+    client: &clickhouse::Client,
+    raw: Vec<TxPageRawRow>,
+) -> Result<Vec<TxPageChRow>, clickhouse::error::Error> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let in_list = |vals: &[i64]| {
+        vals.iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let dedup_keys = |f: fn(&TxPageRawRow) -> i64| -> Vec<i64> {
+        let mut v: Vec<i64> = raw.iter().map(f).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let ledger_seqs = dedup_keys(|r| r.ledger_sequence);
+    // ledgers: sequence -> closed_at (plain MergeTree, PK seek, no FINAL).
+    let ledgers_sql = format!(
+        "SELECT sequence, closed_at FROM ledgers WHERE sequence IN ({})",
+        in_list(&ledger_seqs),
+    );
+
+    // Both seeks key off `raw` alone, so they go out together (task 0446).
+    // Source StrKeys go through the shared resolver, which sorts, dedups and
+    // short-circuits on an empty set itself.
+    let (accounts, ledger_rows) = tokio::join!(
+        resolve_accounts(client, raw.iter().map(|r| r.source_id).collect()),
+        client.query(&ledgers_sql).fetch_all::<LedgerClosedAtRow>(),
+    );
+
+    let accounts = accounts?;
+
+    let closed_ats: std::collections::HashMap<i64, i64> = ledger_rows?
+        .into_iter()
+        .map(|r| (r.sequence, r.closed_at))
+        .collect();
+
+    // Build page rows in input order. The old `INNER JOIN ledgers` dropped
+    // rows whose ledger row was not present yet; the `ledger_sequence <=
+    // max(sequence)` cap in the candidate scan already prevents that, but the
+    // `?` here preserves the inner semantics defensively (skip a row missing
+    // its ledger).
+    Ok(raw
+        .into_iter()
+        .filter_map(|r| {
+            let created_at = *closed_ats.get(&r.ledger_sequence)?;
+            Some(TxPageChRow {
+                hash: r.hash,
+                ledger_sequence: r.ledger_sequence,
+                application_order: r.application_order,
+                source_account: accounts.get(&r.source_id).cloned(),
+                fee_charged: r.fee_charged,
+                inner_tx_hash: r.inner_tx_hash,
+                successful: r.successful,
+                operation_count: r.operation_count,
+                has_soroban: r.has_soroban,
+                id: r.id,
+                created_at,
+            })
+        })
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
+// Shared projection fragments
+// ---------------------------------------------------------------------------
+
+/// Slim per-row projection shared by every list statement: the base list
+/// columns plus `t.id` (cursor tie-break / aggregate join key) and
+/// `l.closed_at` (derived `created_at`). References only `t.*` / `l.*` — no
+/// binds, no correlated subqueries. `operation_types` is fetched in a second,
+/// non-correlated pass (`ch::fetch_tx_list_aggregates`) and merged by `id` —
+/// CH 26.3 rejects correlated subqueries in SELECT.
+///
+/// Column order MUST match `TxPageChRow` field order (positional decode).
+///
+/// EVERY column carries an explicit `AS` alias on purpose. The clickhouse
+/// crate validates the result column *names* against the `Row` struct fields.
+/// Statements B/C join this projection's `t` to a driver subquery `m` that
+/// also has a `ledger_sequence` column, so a bare `t.ledger_sequence` comes
+/// back named `t.ledger_sequence` (CH keeps the qualifier to disambiguate) and
+/// fails struct decode with "column t.ledger_sequence not found in the struct".
+/// Statement A has no such join so the bare form happened to work — aliasing
+/// all columns makes the projection robust regardless of the surrounding joins.
+const SLIM_PROJECTION: &str = "\
+    lower(hex(t.hash)) AS hash, \
+    t.ledger_sequence AS ledger_sequence, \
+    t.application_order AS application_order, \
+    nullIf(src.account_id, '') AS source_account, \
+    t.fee_charged AS fee_charged, \
+    lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
+    t.successful AS successful, \
+    t.operation_count AS operation_count, \
+    t.has_soroban AS has_soroban, \
+    t.id AS id, \
+    l.closed_at AS created_at";
+
+// ---------------------------------------------------------------------------
+// List
+// ---------------------------------------------------------------------------
+
+pub async fn fetch_list(
+    client: &clickhouse::Client,
+    params: &ResolvedListParams,
+    direction: Direction,
+    head: Option<i64>,
+) -> Result<Vec<TxListRow>, clickhouse::error::Error> {
+    // Resolve StrKey filters to the CH surrogate ids up front. The writer's
+    // `cityhash_102_128` surrogate is NOT bit-equivalent to CH's builtin
+    // `cityHash64()` (schema header), so the id cannot be computed in SQL —
+    // it is looked up against the `accounts` / `soroban_contracts` natural
+    // keys. A filter that names a non-existent account/contract matches no
+    // rows, so we short-circuit to an empty page.
+    // The two filters are validated independently in the handler and neither
+    // lookup consumes the other's result, so with BOTH set they go out
+    // together (task 0446). The empty-page short-circuit moves after the join:
+    // a miss on either filter still yields the same empty page, at the cost of
+    // one wasted bounded seek when exactly one of the two names nothing.
+    let (source_res, contract_res) = tokio::join!(
+        async {
+            match params.source_account.as_deref() {
+                Some(acct) => resolve_account_surrogate(client, acct).await.map(Some),
+                None => Ok(None),
+            }
+        },
+        async {
+            match params.contract_id.as_deref() {
+                Some(cid) => resolve_contract_surrogate(client, cid).await.map(Some),
+                None => Ok(None),
+            }
+        },
+    );
+    // Outer Option = "was the filter set", inner = "did it resolve". A set
+    // filter that resolves to nothing matches no rows — empty page.
+    let source_id: Option<i64> = match source_res? {
+        Some(None) => return Ok(Vec::new()),
+        Some(Some(id)) => Some(id),
+        None => None,
+    };
+    let contract_surrogate: Option<i64> = match contract_res? {
+        Some(None) => return Ok(Vec::new()),
+        Some(Some(id)) => Some(id),
+        None => None,
+    };
+
+    let (op, order) = keyset_sql_desc(direction);
+    // Cursor keyset is `(ledger_sequence, <within-ledger key>)` (canonical SQL
+    // 02): the position for statements A and B, the id surrogate for C.
+    // `list_transactions` has already rejected a cursor of the other keyset, so
+    // each statement reads the key its variant carries. Both parts are present
+    // together or absent together, so the keyset tuple never binds a NULL.
+    let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match params.cursor.as_ref()
+    {
+        Some(TxListCursor::ChPosition {
+            ledger_sequence,
+            application_order,
+        }) => (Some(*ledger_sequence), Some(i64::from(*application_order))),
+        Some(TxListCursor::ChSurrogate {
+            ledger_sequence,
+            transaction_id,
+        }) => (Some(*ledger_sequence), Some(*transaction_id)),
+        None => (None, None),
+    };
+
+    // Inline the integer params directly into the filtered-statement SQL rather
+    // than `.bind()`-ing them. The clickhouse 0.15 bound-parameter path
+    // produced empty results for Statements B/C in production — the
+    // literal-equivalent query (validated on prod CH) returns the correct page,
+    // the bound form returned none. All values are `i64` / `i16` / `None`→`NULL`,
+    // so inlining carries no injection surface (same approach as
+    // `common::ch::fetch_tx_list_aggregates`, which already inlines its keys).
+    let cl = cursor_ledger.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let src = source_id.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    let lim_over = params.limit * 4;
+    let lim_peek = params.limit + 1;
+
+    // Head substitution (task 0292 §5/6). On the live first page (`cl` IS NULL)
+    // the partition prune and the `<= head` cap below otherwise each re-derive
+    // the head with a `(SELECT max(sequence) FROM ledgers)` subquery — work the
+    // caller has *already* done via `common::head` (the value compared for the
+    // 304 short-circuit). When that head is known we inline it as a literal:
+    // fewer subqueries in the heavy statement, and the candidate scan is capped
+    // at exactly the head the response is ETag'd with (so body == validator,
+    // closing the probe-vs-query race on this path). When `head` is `None`
+    // (cursored page — the head is irrelevant to the partition) we keep the
+    // subquery form. `head` is an `i64`, no injection surface.
+    let head_partition = head.map_or_else(
+        || "(SELECT intDiv(max(sequence), 500000) FROM ledgers)".to_string(),
+        |h| format!("intDiv({h}, 500000)"),
+    );
+    let head_max = head.map_or_else(
+        || "(SELECT max(sequence) FROM ledgers)".to_string(),
+        |h| h.to_string(),
+    );
+
+    let rows = match (contract_surrogate, params.op_type) {
+        // --- Statement B: contract filter (optionally + op_type) -----------
+        (Some(cid), op_type_opt) => {
+            // Step 1: up to `lim_over` positions of transactions touching the
+            // contract, by a seek on the `contract_transactions` presence index
+            // — the shape `transaction_participants` gives the account list
+            // (task 0541). Not bounded to a partition: the index is keyed by
+            // contract, so the seek crosses them cheaply (task 0381).
+            let cursor = match params.cursor.as_ref() {
+                Some(TxListCursor::ChPosition {
+                    ledger_sequence,
+                    application_order,
+                }) => Some((*ledger_sequence, *application_order)),
+                _ => None,
+            };
+            let positions: Vec<(i64, i16)> = client
+                .query(&contract_positions_sql(
+                    cid, &head_max, cursor, direction, lim_over,
+                ))
+                .fetch_all::<PositionRow>()
+                .await?
+                .into_iter()
+                .map(|r| (r.ledger_sequence, r.application_order))
+                .collect();
+            if positions.is_empty() {
+                Vec::new()
+            } else {
+                // Step 2: seek `transactions` on its own key. Source + closed_at
+                // resolve by key-seek in `resolve_source_and_closed_at`.
+                let ot = op_type_opt.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+                let sql = contract_page_sql(&positions, &src, &ot, order, lim_peek);
+                let raw = client.query(&sql).fetch_all::<TxPageRawRow>().await?;
+                resolve_source_and_closed_at(client, raw).await?
+            }
+        }
+
+        // --- Statement C: op_type filter only ------------------------------
+        (None, Some(op_type)) => {
+            // Restructured so NEITHER side of the join is a full-table read:
+            //
+            //  - `transactions t` is pruned to a single partition and is the
+            //    STREAMED (left) side; the ≤ `limit*4`-row driver `m` is the
+            //    hash side. The previous `... INNER JOIN transactions t FINAL`
+            //    had no prune on `t`, so FINAL merged the entire 3.6B-row
+            //    table per request — a single op_type page read billions of
+            //    rows and exhausted the `read_rows` quota (CH Code: 201). FINAL
+            //    is dropped (append-only, immutable columns, Rust-side dedup).
+            //  - `m` (driver) scans the pruned partition by `type`, which is
+            //    NOT an `operations_appearances` primary-key prefix (~8e7 rows;
+            //    bounded, and op_type filtering is user-initiated, not polled).
+            //    Making this a seek needs a skip-index on `type` — deferred
+            //    follow-up.
+            //
+            // `LIMIT 1 BY t.id` before the page `LIMIT`: the `accounts` join has
+            // no FINAL (a 16M-row FINAL would be ruinous), so un-merged
+            // ReplacingMergeTree versions of the source account fan a single
+            // transaction into N identical-`id` rows. Here the page `LIMIT` is
+            // applied AFTER the join, so without the dedup it fills with copies
+            // of the top tx and the page collapses to 1 row (measured rows=4 /
+            // distinct_ids=1). `LIMIT 1 BY t.id` collapses the fan-out in SQL
+            // before the page cut, so the limit counts distinct transactions and
+            // next-page detection stays correct. (Statement A applies its LIMIT
+            // inside the pre-join subquery, so it is unaffected.)
+            let sql = format!(
+                "SELECT {SLIM_PROJECTION} \
+                 FROM ( \
+                    SELECT * FROM transactions \
+                    WHERE intDiv(ledger_sequence, 500000) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
+                 ) t \
+                 INNER JOIN ( \
+                    SELECT DISTINCT ledger_sequence, transaction_id \
+                    FROM operations_appearances \
+                    WHERE type = {op_type} \
+                      AND intDiv(ledger_sequence, 500000) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
+                      AND ledger_sequence <= {head_max} \
+                      AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
+                    ORDER BY ledger_sequence {order}, transaction_id {order} \
+                    LIMIT {lim_over} \
+                 ) m ON t.id = m.transaction_id AND t.ledger_sequence = m.ledger_sequence \
+                 LEFT JOIN accounts src ON src.id = t.source_id \
+                 INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+                 WHERE ({src} IS NULL OR t.source_id = {src}) \
+                 ORDER BY t.ledger_sequence {order}, t.id {order} \
+                 LIMIT 1 BY t.id \
+                 LIMIT {lim_peek}",
+            );
+            // No outer keyset re-check: the driver subquery already filtered
+            // `(ledger_sequence, transaction_id) {op} (cursor)`, and the JOIN
+            // binds `t.id = m.transaction_id` / `t.ledger_sequence =
+            // m.ledger_sequence`, so every joined row already satisfies it.
+            client.query(&sql).fetch_all::<TxPageChRow>().await?
+        }
+
+        // --- Statement A: no contract / op_type filter (default path) ------
+        (None, None) => {
+            // Read-in-order fast path. `transactions` is ORDER BY
+            // `(ledger_sequence, application_order)`, so ordering + keying the
+            // page on that tuple lets CH read in primary-key order and stop at
+            // LIMIT instead of scanning + sorting the whole partition.
+            //
+            // FINAL is dropped here ON PURPOSE. With FINAL, CH must merge the
+            // entire partition before it can apply the limit — measured ~118M
+            // rows read per page on the mainnet head partition; without FINAL
+            // the same page reads ~2e5. This is the load-bearing fix for the
+            // `read_rows` quota blow-up (CH Code: 201) the polled list path
+            // caused. It is safe because `transactions` is append-only and
+            // effectively unique on `(ledger_sequence, application_order)`
+            // (validated: zero net dedup on the live partition), and every
+            // projected column is immutable across ReplacingMergeTree versions,
+            // so a non-FINAL read returns identical values. Any rare duplicate
+            // row is dropped by the `dedup_by_id` pass below.
+            //
+            // The cursor therefore keys on `application_order` (the physical
+            // sort key — also the correct in-ledger apply order, which the old
+            // `id`-hash tie-break did NOT preserve), not the `id` surrogate.
+            // See `handlers::list_cursor_for`.
+            // Cap the candidate scan at the newest ledger actually present in
+            // `ledgers`. The indexer can make a transaction visible slightly
+            // ahead of its ledger row; without this bound the inner LIMIT picks
+            // those head transactions, and the `INNER JOIN ledgers` below then
+            // drops the entire page (their `l` row does not exist yet) — the
+            // poll returns an empty list even though the feed is healthy. The
+            // join is load-bearing (`created_at = l.closed_at`), so the fix is
+            // to never page past the ledgers we have rather than to LEFT JOIN.
+            // The bound is the PK prefix, so it prunes via the index and is a
+            // no-op except at the live head.
+            // The `accounts` / `ledgers` projections are NOT joined here. A
+            // hash-join over those tables builds the hash side from the WHOLE
+            // table (~23M accounts + ~13M ledgers) regardless of the 11-row
+            // page — that, not the partition scan, was the 35M rows/page the
+            // polled list read (task 0290). Instead project the raw
+            // `source_id` + `ledger_sequence` and resolve `source_account` /
+            // `created_at` by key-seek in `resolve_source_and_closed_at`
+            // (`accounts.id` rides the idx_acc_id bloom; `ledgers.sequence` is
+            // a PK seek).
+            let sql = format!(
+                "SELECT \
+                    lower(hex(t.hash)) AS hash, \
+                    t.ledger_sequence AS ledger_sequence, \
+                    t.application_order AS application_order, \
+                    t.source_id AS source_id, \
+                    t.fee_charged AS fee_charged, \
+                    lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
+                    t.successful AS successful, \
+                    t.operation_count AS operation_count, \
+                    t.has_soroban AS has_soroban, \
+                    t.id AS id \
+                 FROM ( \
+                    SELECT * FROM transactions \
+                    WHERE intDiv(ledger_sequence, 500000) \
+                          = ifNull(intDiv({cl}, 500000), {head_partition}) \
+                      AND ledger_sequence <= {head_max} \
+                      AND ({cl} IS NULL OR (ledger_sequence, toInt64(application_order)) {op} ({cl}, {ct})) \
+                      AND ({src} IS NULL OR source_id = {src}) \
+                    ORDER BY ledger_sequence {order}, application_order {order} \
+                    LIMIT {lim_peek} \
+                 ) t \
+                 ORDER BY t.ledger_sequence {order}, t.application_order {order}",
+            );
+            let raw = client.query(&sql).fetch_all::<TxPageRawRow>().await?;
+            resolve_source_and_closed_at(client, raw).await?
+        }
+    };
+
+    // Statement A drops FINAL for the read-in-order fast path (see above), so
+    // a re-ingested transaction could in principle surface as two rows with
+    // the same `id`. Drop any such duplicate, keeping the first (the rows are
+    // already in the requested order). A no-op on the FINAL'd B/C paths and on
+    // the live partition (validated zero net dedup), but cheap insurance on
+    // ≤ `limit + 1` rows.
+    let mut rows = rows;
+    let mut seen = std::collections::HashSet::with_capacity(rows.len());
+    rows.retain(|r| seen.insert(r.id));
+
+    // Second pass: fetch operation_types for the page's keys (non-correlated
+    // derived-table aggregation; CH 26.3 rejects correlated subqueries in
+    // SELECT), then merge onto the page rows by tx id.
+    let keys: Vec<(i64, i64)> = rows.iter().map(|r| (r.ledger_sequence, r.id)).collect();
+    let mut aggregates = ch::fetch_tx_list_aggregates(client, &keys).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let agg = aggregates.remove(&r.id).unwrap_or_default();
+            r.into_list_row(agg)
+        })
+        .collect())
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct PositionRow {
+    ledger_sequence: i64,
+    application_order: i16,
+}
+
+/// Statement B's driver: the positions of the transactions touching the
+/// contract, past the cursor, in page order — one seek on the
+/// `contract_transactions` key, the way the account list seeks
+/// `transaction_participants`. No partition bound: pinned to the head's
+/// partition, a contract without transactions there listed as empty (93.3% of
+/// the contracts in `soroban_contracts`, 2026-09-22). Across every partition
+/// the native SAC's first page reads 28–31M rows in 117–137 ms, a contract
+/// quiet since the previous partition 1.8M in 36–57 ms. `LIMIT 1 BY` collapses
+/// rows the RMT has not merged yet — exactly, so the page never comes back
+/// short. Every value is an integer literal (the bound-parameter path returned
+/// empty pages, see `fetch_list`).
+fn contract_positions_sql(
+    contract_id: i64,
+    head_max: &str,
+    cursor: Option<(i64, i16)>,
+    direction: Direction,
+    lim_over: i64,
+) -> String {
+    let (op, order) = keyset_sql_desc(direction);
+    let cursor = cursor.map_or_else(String::new, |(l, a)| {
+        format!(" AND (ledger_sequence, application_order) {op} ({l}, {a})")
+    });
+    format!(
+        "SELECT ledger_sequence, application_order FROM contract_transactions \
+         WHERE contract_id = {contract_id} \
+           AND ledger_sequence <= {head_max}{cursor} \
+         ORDER BY ledger_sequence {order}, application_order {order} \
+         LIMIT 1 BY ledger_sequence, application_order \
+         LIMIT {lim_over}"
+    )
+}
+
+/// Statement B's page: the transactions at `positions`, filtered by source and
+/// operation type, in position order. Every value is an integer literal.
+fn contract_page_sql(
+    positions: &[(i64, i16)],
+    src: &str,
+    ot: &str,
+    order: &str,
+    lim_peek: i64,
+) -> String {
+    let in_tuples = positions
+        .iter()
+        .map(|(ledger, order)| format!("({ledger},{order})"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let partitions = positions
+        .iter()
+        .map(|(ledger, _)| ledger / 500_000)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "SELECT \
+            lower(hex(t.hash)) AS hash, \
+            t.ledger_sequence AS ledger_sequence, \
+            t.application_order AS application_order, \
+            t.source_id AS source_id, \
+            t.fee_charged AS fee_charged, \
+            lower(hex(t.inner_tx_hash)) AS inner_tx_hash, \
+            t.successful AS successful, \
+            t.operation_count AS operation_count, \
+            t.has_soroban AS has_soroban, \
+            t.id AS id \
+         FROM transactions t \
+         WHERE (t.ledger_sequence, t.application_order) IN ({in_tuples}) \
+           AND intDiv(t.ledger_sequence, 500000) IN ({partitions}) \
+           AND ({src} IS NULL OR t.source_id = {src}) \
+           AND ({ot} IS NULL OR ( \
+                SELECT count() FROM operations_appearances oa2 \
+                WHERE oa2.transaction_id = t.id \
+                  AND oa2.ledger_sequence = t.ledger_sequence \
+                  AND oa2.type = {ot} \
+                  AND intDiv(oa2.ledger_sequence, 500000) = intDiv(t.ledger_sequence, 500000) \
+           ) > 0) \
+         ORDER BY t.ledger_sequence {order}, t.application_order {order} \
+         LIMIT 1 BY t.ledger_sequence, t.application_order \
+         LIMIT {lim_peek}",
+    )
+}
+
+// ---------------------------------------------------------------------------
+// StrKey → surrogate-id resolution
+// ---------------------------------------------------------------------------
+
+async fn resolve_account_surrogate(
+    client: &clickhouse::Client,
+    account_strkey: &str,
+) -> Result<Option<i64>, clickhouse::error::Error> {
+    // `accounts.id` is deterministic across versions (cityhash of the
+    // StrKey), so no FINAL is needed for the id lookup.
+    let row = client
+        .query("SELECT id FROM accounts WHERE account_id = ? LIMIT 1")
+        .bind(account_strkey)
+        .fetch_optional::<SurrogateIdRow>()
+        .await?;
+    Ok(row.map(|r| r.id))
+}
+
+async fn resolve_contract_surrogate(
+    client: &clickhouse::Client,
+    contract_strkey: &str,
+) -> Result<Option<i64>, clickhouse::error::Error> {
+    let row = client
+        .query("SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1")
+        .bind(contract_strkey)
+        .fetch_optional::<SurrogateIdRow>()
+        .await?;
+    Ok(row.map(|r| r.id))
+}
+
+#[cfg(test)]
+mod tests;
