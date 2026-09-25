@@ -232,6 +232,56 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
+    // ----- transaction_operations / pool_operation_amounts (task 0372) -----
+    // The position-keyed twins: two operations of one transaction are two
+    // rows, and the same operation re-inserted collapses on merge.
+    client
+        .query(
+            "INSERT INTO transaction_operations (ledger_sequence, application_order, operation_index, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_ids) \
+             VALUES (?, 1, 0, 1, ?, NULL, NULL, '', NULL, []), (?, 1, 1, 1, ?, NULL, NULL, '', NULL, []), (?, 1, 1, 1, ?, NULL, NULL, '', NULL, [])",
+        )
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .execute()
+        .await
+        .expect("insert transaction_operations");
+    client
+        .query(&format!(
+            "OPTIMIZE TABLE transaction_operations PARTITION ID '{}' FINAL",
+            SMOKE_LEDGER / 500_000
+        ))
+        .execute()
+        .await
+        .expect("optimize transaction_operations");
+    assert_count(
+        &client,
+        "transaction_operations",
+        &format!("ledger_sequence = {SMOKE_LEDGER}"),
+        2,
+    )
+    .await;
+    client
+        .query(
+            "INSERT INTO pool_operation_amounts (pool_id, ledger_sequence, application_order, operation_index, asset_id, amount) \
+             VALUES (unhex(repeat('ab', 32)), ?, 1, 0, 0, 1000), (unhex(repeat('ab', 32)), ?, 1, 0, 1, -2000)",
+        )
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .execute()
+        .await
+        .expect("insert pool_operation_amounts");
+    assert_count(
+        &client,
+        "pool_operation_amounts",
+        &format!("ledger_sequence = {SMOKE_LEDGER}"),
+        2,
+    )
+    .await;
+
     // ----- transaction_participants (append-only fact) -----
     client
         .query(
@@ -566,6 +616,8 @@ async fn cleanup(client: &clickhouse::Client) {
             "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence IN ({l}, {l} - 1)"
         ),
         format!("ALTER TABLE operations_appearances DELETE WHERE ledger_sequence = {l}"),
+        format!("ALTER TABLE transaction_operations DELETE WHERE ledger_sequence = {l}"),
+        format!("ALTER TABLE pool_operation_amounts DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_invocations_appearances DELETE WHERE ledger_sequence = {l}"),

@@ -197,10 +197,14 @@ mod tests {
         // pool's last reserve change, the pool list's order key. 40 → 42.
         // task 0580: dropped `transaction_hash_index` — the readers moved to
         // `transaction_hash_prefix_index`. 42 → 41.
+        // task 0372: added `transaction_operations` and
+        // `pool_operation_amounts` (the operation tables located by the
+        // transaction position), dropped `operation_pools` (no reader since
+        // task 0491). 41 → 42.
         assert_eq!(
             stmts.len(),
-            41,
-            "expected 38 tables + 3 materialized views, got {}",
+            42,
+            "expected 39 tables + 3 materialized views, got {}",
             stmts.len()
         );
     }

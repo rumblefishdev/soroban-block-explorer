@@ -894,7 +894,7 @@ ORDER BY (pool_id, account_id);
 ----------------------------------------------------------------------
 
 -- transactions: surrogate `id Int64` for cheap FK joins from
--- operations_appearances, operation_pools, lp_operation_amounts,
+-- operations_appearances, lp_operation_amounts,
 -- soroban_invocations_appearances, nft_ownership (`soroban_events`,
 -- `transaction_participants`, `operation_asset_appearances` join by
 -- `(ledger_sequence, application_order)`). Legacy: new tables join on the
@@ -1007,6 +1007,40 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, transaction_id, application_order);
 
+-- transaction_operations: `operations_appearances` located by the transaction
+-- POSITION (task 0372, ADR 0059) — the same identity-folded rows, keyed
+-- `(ledger_sequence, application_order, operation_index)` instead of the
+-- `transaction_id` hash surrogate (33.3 GiB, ratio 1.57 on prod, 2026-09-24).
+-- Written beside the old table until the readers move here, then the old one
+-- is dropped (a parallel change, `docs/deployment.md`).
+--
+-- `application_order` is the TRANSACTION's 1-based position in its ledger —
+-- never an operation's (in `operations_appearances` the same name held the
+-- operation position). `operation_index` is the operation's 0-based position
+-- in its transaction; for a folded row, the smallest of its group. The fold
+-- itself is unchanged (`stage/operations.rs`, `pool_ids` in the identity), so
+-- new rows match the history copied from the old table. The fold count
+-- `amount` is not carried: nothing reads it.
+--
+-- No skip index: the two blooms of the old table (`pool_ids`, `contract_id`)
+-- have no reader left — pool activity drives from `pool_operation_amounts`,
+-- the contract list from `contract_transactions`.
+CREATE TABLE IF NOT EXISTS transaction_operations (
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1)),
+    operation_index   Int16 CODEC(T64, ZSTD(1)),
+    type              Int16 CODEC(T64, ZSTD(1)),
+    source_id         Nullable(Int64),
+    destination_id    Nullable(Int64),
+    contract_id       Nullable(Int64),
+    asset_code        LowCardinality(String),
+    asset_issuer_id   Nullable(Int64),
+    pool_ids          Array(FixedString(32))
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (ledger_sequence, application_order, operation_index);
+
 -- transaction_participants: per-(account, transaction) presence index. The
 -- transaction is located by its position `(ledger_sequence,
 -- application_order)` (ADR 0059, task 0575), so an account's list comes out in
@@ -1057,28 +1091,10 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (asset_id, ledger_sequence, application_order);
 
--- operation_pools: per-(pool, transaction) presence index (task 0365). The
--- pool-dimension twin of operation_asset_appearances / transaction_participants,
--- keyed pool-first so GET /liquidity-pools/:id/transactions is a PK-prefix seek
--- instead of the density-dependent has(pool_ids, X) scan over
--- operations_appearances (0281-C read-in-order driver, superseded). pool_id = the
--- raw 32-byte pool hash (already how operations_appearances.pool_ids stores each
--- crossing -- no surrogate). Populated by arrayJoin(pool_ids) in staging; pure
--- presence, so duplicate (pool, tx) rows within a tx collapse in the RMT.
--- Plain Int64 columns, matching transaction_participants / operation_asset_appearances.
-CREATE TABLE IF NOT EXISTS operation_pools (
-    pool_id         FixedString(32),
-    ledger_sequence Int64,
-    transaction_id  Int64
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (pool_id, ledger_sequence, transaction_id);
-
 -- lp_operation_amounts: what each operation actually moved through a pool
--- (task 0279, issue #371) — the value twin of `operation_pools`, same
--- pool-leading key prefix. `operation_pools` stays the paging driver; this is
--- the value lookup for the page's (ledger, tx) set.
+-- (task 0279, issue #371) — the driver of pool activity (task 0491). Being
+-- replaced by `pool_operation_amounts`, the same rows located by the
+-- transaction position (task 0372).
 --
 -- ROW GRAIN = (operation, pool, asset), with the op's claim atoms PRE-SUMMED
 -- in Rust before the insert. NOT one row per atom: a single op can take the
@@ -1139,6 +1155,26 @@ CREATE TABLE IF NOT EXISTS lp_operation_amounts (
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (pool_id, ledger_sequence, transaction_id, application_order, asset_id);
+
+-- pool_operation_amounts: `lp_operation_amounts` located by the transaction
+-- POSITION (task 0372, ADR 0059) — same grain, sign and producers as the
+-- comment above describes, keyed `(pool_id, ledger_sequence,
+-- application_order, operation_index, asset_id)` instead of the
+-- `transaction_id` surrogate. `application_order` is the transaction's 1-based
+-- position; `operation_index` the operation's 0-based one (the old table's
+-- `application_order` held the 1-based operation index). Written beside the
+-- old table until pool activity reads it, then the old one is dropped.
+CREATE TABLE IF NOT EXISTS pool_operation_amounts (
+    pool_id           FixedString(32),
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1)),
+    operation_index   Int16 CODEC(T64, ZSTD(1)),
+    asset_id          Int64,
+    amount            Int64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id);
 
 -- soroban_events: full-content per-event row (ADR 0044 §4a unfold).
 -- ZSTD codecs on the ScVal-decoded JSON columns. `signature` is the
