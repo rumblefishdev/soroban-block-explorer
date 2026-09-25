@@ -83,6 +83,15 @@ unread fold count `amount` on the operations table. Drop `operation_pools`
 - **`operation_pools`:** no API reader since 0491 (pool activity drives from
   `lp_operation_amounts`); `query_log` 14 days: backups, ad-hoc research and
   the writer only.
+- **Review of PR 2** (standards + spec): no struct/DDL mismatch; live
+  writer and fill produce the same rows. Fixed: a 0 operation position now
+  fails the ledger (`checked_sub`), false comments about `operation_pools`,
+  `stage.rs` growth, the pipeline and `--only` docs. The spec review noted the
+  gate counts keys only, so a uniform shift would pass:
+  [`check_fill_matches_live.sql`](notes/check_fill_matches_live.sql) compares
+  whole rows of the fill against the live-written ones on the first
+  dual-written slice, before the fill. Deferred: moving the 4,891-line
+  sibling `tests_cross.rs` (task 0525).
 - **prices-api:** no `prices_*` user read any of the three tables in 14 days.
 
 ## Target shape
