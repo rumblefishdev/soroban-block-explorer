@@ -12,7 +12,8 @@ use crate::transactions::dto::TxListCursor;
 
 #[derive(Debug)]
 pub struct InvocationAppearanceRow {
-    pub transaction_id: i64,
+    /// The transaction's position in its ledger — the cursor's tie-break.
+    pub application_order: i16,
     pub transaction_hash: String,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
@@ -27,24 +28,26 @@ pub struct InvocationAppearanceRow {
 #[derive(Debug, Row, Deserialize)]
 struct InvocationKeyRow {
     ledger_sequence: i64,
-    transaction_id: i64,
+    application_order: i16,
     caller_id: Option<i64>,
 }
 
 #[derive(Debug, Row, Deserialize)]
 struct TxMetaChRow {
-    transaction_id: i64,
+    ledger_sequence: i64,
+    application_order: i16,
     hash: String,
     successful: bool,
     created_at: i64,
 }
 
 /// `contract_surrogate_id` is from [`fetch_contract`]; caller passes
-/// `limit + 1`. Driven off `soroban_invocations_appearances` (leading-PK seek
-/// on `contract_id`), then the page's transaction header columns
-/// (`hash` / `successful` / `closed_at`) are fetched by
-/// `(ledger_sequence, id) IN (keys)` and merged. The CH cursor keys on
-/// `(ledger_sequence, transaction_id)`.
+/// `limit + 1`. Driven off `contract_activity` (leading-PK seek on
+/// `contract_id`), keeping only the rows where the contract was invoked, then
+/// the page's transaction header columns (`hash` / `successful` / `closed_at`)
+/// are fetched by `(ledger_sequence, application_order) IN (keys)` and merged.
+/// The cursor is the transaction's position (task 0586), so a page lists the
+/// contract's invocations in execution order.
 pub async fn fetch_invocation_appearances(
     client: &clickhouse::Client,
     contract_surrogate_id: i64,
@@ -52,51 +55,38 @@ pub async fn fetch_invocation_appearances(
     cursor: Option<&TxListCursor>,
     direction: Direction,
 ) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match cursor {
-        Some(TxListCursor::ChSurrogate {
-            ledger_sequence,
-            transaction_id,
-        }) => (Some(*ledger_sequence), Some(*transaction_id)),
-        _ => (None, None),
-    };
     let (op, order) = keyset_sql_desc(direction);
 
-    // Inline the cursor bounds rather than `.bind()`-ing them: the clickhouse
+    // Inline the cursor bound rather than `.bind()`-ing it: the clickhouse
     // 0.15 bound-parameter path returns an empty result when `None` is bound
     // into a tuple keyset comparison (the same defect that forced transactions
-    // B/C to inline). Values are i64 / None→NULL, no injection surface.
-    let cl = cursor_ledger.map_or_else(|| "NULL".to_string(), |v| v.to_string());
-    let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
+    // B/C to inline). Integers only, no injection surface.
+    // The handler has already refused a cursor of another keyset.
+    let keyset = match cursor {
+        Some(TxListCursor::ChPosition {
+            ledger_sequence,
+            application_order,
+        }) => format!(
+            " AND (ledger_sequence, application_order) {op} ({ledger_sequence}, {application_order})"
+        ),
+        _ => String::new(),
+    };
 
     // Step 1: contract-scoped driver seek. `contract_id` is the leading PK of
-    // `soroban_invocations_appearances`, so the inner subquery reads only this
-    // contract's rows.
-    //
-    // The page LIMIT is applied INSIDE the subquery, BEFORE the `accounts caller`
-    // join. That join has no FINAL (a 16M-row accounts FINAL would be ruinous),
-    // and a hot contract has millions of invocations; joining accounts to ALL of
-    // them before the limit OOMs the JoiningTransform (measured: 14.9M
-    // invocations → 300M join rows → 5.6 GiB limit hit). With the limit inside,
-    // the join sees only ≤limit rows. FINAL is dropped on the seek too — with it
-    // CH merges the contract's rows across every part (~38× read amplification,
-    // measured 574M vs 18.6M rows); the outer `LIMIT 1 BY (ledger_sequence,
-    // transaction_id)` collapses both the caller-account fan-out and any rare
-    // re-ingest duplicate, so FINAL is not needed for correctness here.
+    // `contract_activity`, so the query reads only this contract's rows;
+    // `invocation_count > 0` keeps the invoked ones (a touched-only row counts
+    // 0). No FINAL — with it CH merges the contract's rows across every part
+    // (~38× read amplification, measured on the invocations table); `LIMIT 1
+    // BY` collapses a rare re-ingest duplicate instead.
     let driver_sql = format!(
-        "SELECT \
-            m.ledger_sequence AS ledger_sequence, \
-            m.transaction_id AS transaction_id, \
-            m.caller_id AS caller_id \
-         FROM ( \
-            SELECT ledger_sequence, transaction_id, caller_id \
-            FROM soroban_invocations_appearances \
-            WHERE contract_id = ? \
-              AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
-              AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
-            ORDER BY ledger_sequence {order}, transaction_id {order} \
-            LIMIT ? \
-         ) m \
-         LIMIT 1 BY m.ledger_sequence, m.transaction_id"
+        "SELECT ledger_sequence, application_order, caller_id \
+         FROM contract_activity \
+         WHERE contract_id = ? \
+           AND invocation_count > 0 \
+           AND ledger_sequence <= (SELECT max(sequence) FROM ledgers){keyset} \
+         ORDER BY ledger_sequence {order}, application_order {order} \
+         LIMIT 1 BY ledger_sequence, application_order \
+         LIMIT ?"
     );
     let key_rows = client
         .query(&driver_sql)
@@ -109,20 +99,15 @@ pub async fn fetch_invocation_appearances(
         return Ok(Vec::new());
     }
 
-    let keys: Vec<(i64, i64)> = key_rows
+    // Step 2: fetch the transaction header columns for the page's positions.
+    let in_tuples = key_rows
         .iter()
-        .map(|r| (r.ledger_sequence, r.transaction_id))
-        .collect();
-
-    // Step 2: fetch the transaction header columns for the page's keys.
-    let in_tuples = keys
-        .iter()
-        .map(|(ledger, tx)| format!("({ledger},{tx})"))
+        .map(|r| format!("({},{})", r.ledger_sequence, r.application_order))
         .collect::<Vec<_>>()
         .join(",");
-    let partitions = keys
+    let partitions = key_rows
         .iter()
-        .map(|(ledger, _)| ledger / 500_000)
+        .map(|r| r.ledger_sequence / 500_000)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(|p| p.to_string())
@@ -130,13 +115,14 @@ pub async fn fetch_invocation_appearances(
         .join(",");
     let page_sql = format!(
         "SELECT \
-            t.id AS transaction_id, \
+            t.ledger_sequence AS ledger_sequence, \
+            t.application_order AS application_order, \
             lower(hex(t.hash)) AS hash, \
             t.successful, \
             l.closed_at AS created_at \
          FROM transactions t \
          INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-         WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
+         WHERE (t.ledger_sequence, t.application_order) IN ({in_tuples}) \
            AND intDiv(t.ledger_sequence, 500000) IN ({partitions})"
     );
     // Caller StrKeys resolve by surrogate id (bloom seek) instead of a
@@ -152,21 +138,22 @@ pub async fn fetch_invocation_appearances(
     let tx_rows = tx_rows?;
     let accounts = accounts?;
 
-    let mut tx_by_id: HashMap<i64, TxMetaChRow> = HashMap::with_capacity(tx_rows.len());
+    let mut tx_by_position: HashMap<(i64, i16), TxMetaChRow> =
+        HashMap::with_capacity(tx_rows.len());
     for row in tx_rows {
-        tx_by_id.insert(row.transaction_id, row);
+        tx_by_position.insert((row.ledger_sequence, row.application_order), row);
     }
 
     // Emit in driver keyset order, merging the transaction header columns. A
     // key whose transaction row is somehow absent is skipped (should not occur
-    // — an invocation appearance always has its parent transaction).
+    // — an invocation always has its parent transaction).
     let mut out = Vec::with_capacity(key_rows.len());
     for key in &key_rows {
-        let Some(tx) = tx_by_id.get(&key.transaction_id) else {
+        let Some(tx) = tx_by_position.get(&(key.ledger_sequence, key.application_order)) else {
             continue;
         };
         out.push(InvocationAppearanceRow {
-            transaction_id: key.transaction_id,
+            application_order: key.application_order,
             transaction_hash: tx.hash.clone(),
             ledger_sequence: key.ledger_sequence,
             created_at: millis_to_utc(tx.created_at),

@@ -32,8 +32,9 @@ pub struct ListParams {
 /// - `ChPosition` — the transaction's `application_order`, which is also its
 ///   execution order. `/transactions` under every filter (tasks 0541, 0372);
 ///   the account and asset lists (task 0575).
-/// - `ChSurrogate` — the `transactions.id` hash surrogate. The
-///   contract-invocation list, until task 0538 moves it to the position.
+/// - `ChSurrogate` — the `transactions.id` hash surrogate. No list mints it
+///   since task 0586 (the contract-invocation list moved to the position); it
+///   still decodes so every list can refuse it with `invalid_cursor`.
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
 /// format is opaque to clients, so the backend may change the encoding

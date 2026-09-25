@@ -197,7 +197,7 @@ pub async fn list_transactions(
 /// Build the opaque list cursor for a boundary row: the transaction position
 /// `(ledger_sequence, application_order)`, the keyset of every statement —
 /// A reads `transactions` in primary-key order, B seeks the
-/// `contract_transactions` index (task 0541), C scans
+/// `contract_activity` index (tasks 0541, 0586), C scans
 /// `transaction_operations` (task 0372).
 fn list_cursor_for(r: &TxListRow) -> TxListCursor {
     TxListCursor::ChPosition {
@@ -490,7 +490,8 @@ async fn fetch_invocations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_invocation_appearances(&state.ch(), tx.ledger_sequence, tx.application_order)
+        .await
 }
 
 #[cfg(test)]

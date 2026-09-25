@@ -285,8 +285,8 @@ pub async fn list_invocations(
         return resp;
     }
 
-    // Reject a stale cursor minted under the retired PG backend (ADR 0008
-    // fail-clean).
+    // Reject a cursor of another keyset — one minted before task 0586 keyed
+    // this list on the transaction surrogate (ADR 0008 fail-clean).
     if let Some(cursor) = &pagination.cursor
         && !cursor_matches_source(cursor)
     {
@@ -472,19 +472,19 @@ async fn fetch_invocations_for_source(
     .await
 }
 
-/// Build the opaque invocations cursor for a boundary row. CH keys on
-/// `(ledger_sequence, id)` (the `soroban_invocations_appearances` keyset).
+/// Build the opaque invocations cursor for a boundary row: the transaction's
+/// position, the `contract_activity` keyset (task 0586).
 fn invocation_cursor_for(r: &InvocationAppearanceRow) -> TxListCursor {
-    TxListCursor::ChSurrogate {
+    TxListCursor::ChPosition {
         ledger_sequence: r.ledger_sequence,
-        transaction_id: r.transaction_id,
+        application_order: r.application_order,
     }
 }
 
-/// True when the cursor anchors this list's keyset, the id surrogate. A
-/// position cursor from `/transactions` is refused (ADR 0008 fail-clean).
+/// True when the cursor anchors this list's keyset, the position. A surrogate
+/// cursor minted before task 0586 is refused (ADR 0008 fail-clean).
 fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::ChSurrogate { .. })
+    matches!(cursor, TxListCursor::ChPosition { .. })
 }
 
 // ---------------------------------------------------------------------------
