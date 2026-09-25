@@ -110,6 +110,16 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   0 with both callers; 17.4 M rows read, 0.74 s, 1.1 GiB. Loop dry-run with
   stubbed `chw` / `chq`: pass, gate mismatch, bad resume point, low disk.
 
+- **Review of PR 1** (standards + spec, 2026-09-25): no struct / DDL
+  mismatch, the move is pure, fill = live writer for the same ledgers.
+  Fixed: the fill takes the caller pair with one `any()` (two unmerged copies
+  with different callers could otherwise combine into a row with both set),
+  the gate checks that no row has both callers, the e2e now writes a
+  contract caller too, a test pins that a second invocation's caller does not
+  replace the first, `contract_rows` → `rows`. For the PR that stops the old
+  writes: `scripts/merge-*.sh` list neither contract table — add
+  `contract_activity` there, as 0372 did.
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared
