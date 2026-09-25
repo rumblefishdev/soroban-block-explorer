@@ -2454,3 +2454,19 @@ dimension does not know into "native". The same default-on-miss trap as the
 The KPI strip's "no recent snapshot" caption is gone with `isPoolStale`: an
 old classic snapshot is a quiet pool's current state (item 30) and a soroban
 pool has none, so every newly served soroban reserve would have carried it.
+
+### 26c — soroban total shares served (2026-09-25)
+
+Branch `feat/0374-soroban-total-shares`, stacked on 26a. List and detail read
+`pool_instance_state.total_shares`, scaled by the share token's published
+decimals. Measured first on production, per family: constant 296 positive /
+86 empty 0 / 1 holding 0 (old code, no key); pair 232 / 3 / 0; stable 46 / 39
+/ 0; elastic 1 / 2 / 0; concentrated 0 / 0 / 48 (no share token); config
+0 / 3 / 17 (supply on the share token). Share-token decimals: 726/726
+published, all 7. Chain: 15/15 sampled values (positive and zero, four
+families) equal `get_total_shares` / `total_supply`. Rule: a positive total is
+scaled; `0` only for a pool whose every reserve is `0`; otherwise `null`.
+Local API against production: 575 positive, 133 `0`, 66 `null` — the
+measured split exactly; classic unchanged. CH-gated test
+`soroban_total_shares_follow_the_measured_rule`: green, red with the value
+taken from the snapshot as before.
