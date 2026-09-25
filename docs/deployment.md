@@ -371,6 +371,22 @@ Frontend **content** is separate: `deploy-production-web`
   The server refuses to drop a table over 50 GB unless told:
   `DROP TABLE <old> SETTINGS max_table_size_to_drop = 0`.
 
+- **Operations by transaction position (task 0372), step 1 of that pattern.**
+  The indexer writes `transaction_operations` and `pool_operation_amounts`
+  beside `operations_appearances` and `lp_operation_amounts`, and stops
+  writing `operation_pools`. Create both tables on production **before** the
+  Compute deploy — without them the client refuses the insert on every
+  ledger:
+
+  ```bash
+  for t in transaction_operations pool_operation_amounts; do awk "/CREATE TABLE IF NOT EXISTS $t \\(/,/^ORDER BY/" crates/db-clickhouse/schema/init.sql; done
+  ```
+
+  Then deploy Compute; then `DROP TABLE operation_pools` (no reader since task
+  0491, no writer after this deploy); then fill the history
+  ([backfills.md](./backfills.md), "Operations by transaction position"). No
+  pause; the readers still use the old tables.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and

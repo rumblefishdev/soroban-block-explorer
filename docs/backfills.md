@@ -1137,6 +1137,32 @@ row's surrogate is joined to `transactions` for the position.
   indexer is paused, inside the window ([deployment.md](./deployment.md),
   "Presence tables by position").
 
+## Operations by transaction position (task 0372) — in-DB, per 50k-ledger slice
+
+`transaction_operations` and `pool_operation_amounts` hold what
+`operations_appearances` and `lp_operation_amounts` hold, located by the
+transaction position instead of `transaction_id`. Once the indexer writes both
+(the step in [deployment.md](./deployment.md)), the history is copied from the
+old tables joined to `transactions` on `(ledger_sequence, id)` inside each
+ledger slice — no S3. The indexer keeps running; ledgers it already wrote to
+both collapse in the ReplacingMergeTrees.
+
+- **Statements and gate:**
+  [`fill_transaction_operations.sql`](../lore/1-tasks/active/0372_REFACTOR_operations-by-transaction-position/notes/fill_transaction_operations.sql),
+  [`fill_pool_operation_amounts.sql`](../lore/1-tasks/active/0372_REFACTOR_operations-by-transaction-position/notes/fill_pool_operation_amounts.sql),
+  [`gate_operations.sql`](../lore/1-tasks/active/0372_REFACTOR_operations-by-transaction-position/notes/gate_operations.sql);
+  the loop that runs them per slice and stops at the first mismatch:
+  [`fill_operations.zsh`](../lore/1-tasks/active/0372_REFACTOR_operations-by-transaction-position/notes/fill_operations.zsh).
+- **Gate per slice:** distinct keys of each old table against its new twin,
+  per quarter slice. A position is unique in its ledger, as the surrogate is,
+  so the keys map one to one.
+- **Cost** (read-only dry run, 64,000,000–64,050,000): the operations join reads
+  42.9 M rows in 1.2 s; the amounts join 32.2 M in 0.8 s. Both old tables lead
+  with the ledger or are partitioned by it, so a ledger slice stays cheap —
+  unlike the hash-sorted source of task 0580.
+- **Order:** whole partitions from the floor up, then the head's partition as
+  an `A-B` range up to the first dual-written ledger.
+
 ## Hash prefix index (task 0580) — rebuilt from `transactions`
 
 `transaction_hash_prefix_index` is derived from `transactions` alone: one row

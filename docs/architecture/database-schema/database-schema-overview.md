@@ -108,16 +108,13 @@ Backbone timeline:
   and search (replaces `transaction_hash_index`, task 0580)
 - `operations_appearances` — transaction-scoped appearance index for classic and
   mixed transaction inspection (partitioned; per-op detail recovered from XDR on
-  demand per task 0163)
+  demand per task 0163). Being replaced by `transaction_operations`, the same
+  rows located by the transaction position (task 0372)
 - `transaction_participants` — derived participant links for account-history reads (partitioned)
 - `operation_asset_appearances` — per-(asset, transaction) presence index powering
   `/assets/:id/transactions` (task 0359; the asset-dimension twin of
   `transaction_participants`, keyed asset-first; native XLM is a first-class
   surrogate, not absence)
-- `operation_pools` — per-(pool, transaction) presence index powering
-  `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
-  `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
-  hash — the same value `operations_appearances.pool_ids` stores per crossing)
 - `contract_transactions` — per-(contract, transaction) presence index powering
   `/transactions?filter[contract_id]=` (task 0541; the contract-dimension twin of
   `transaction_participants`, keyed contract-first and by the transaction's
@@ -125,9 +122,9 @@ Backbone timeline:
   A transaction touches a contract through an operation event, an invocation or
   an operation naming it; fee events do not count, or the native SAC's list
   would be every transaction on the network ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md))
-- `lp_operation_amounts` — per-(operation, pool, asset) amounts behind that
-  endpoint's "Amount" column (task 0279 / issue #371; the value twin of
-  `operation_pools`, same pool-leading prefix). `amount` is raw stroops in a
+- `lp_operation_amounts` — per-(operation, pool, asset) amounts, the driver of
+  pool activity (task 0279 / issue #371, 0491), keyed pool-first. Being replaced
+  by `pool_operation_amounts`, located by the transaction position (task 0372). `amount` is raw stroops in a
   signed `Int64`, positive when the asset entered the pool — so the sign pattern
   names the event (trade `+/-`, deposit `+/+`, withdrawal `-/-`) without a type
   column. Rows are per-op sums of the op's claim atoms, never per atom
@@ -266,12 +263,11 @@ High-level relationship sketch:
 ```text
 ledgers
   └─ transactions (partitioned)
-       ├─ operations_appearances (partitioned)
+       ├─ operations_appearances (partitioned)   # → transaction_operations (0372)
        ├─ transaction_participants (partitioned)
        ├─ operation_asset_appearances (partitioned)
-       ├─ operation_pools (partitioned)
        ├─ contract_transactions (partitioned)     # (contract, tx position) presence (0541)
-       ├─ lp_operation_amounts (partitioned)
+       ├─ lp_operation_amounts (partitioned)     # → pool_operation_amounts (0372)
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
        ├─ soroban_events_appearances (partitioned)
@@ -555,6 +551,16 @@ Design notes:
   Write layer uses `ON CONFLICT ON CONSTRAINT uq_ops_app_identity DO NOTHING`
   for replay idempotency
 
+**ClickHouse, task 0372:** being replaced by `transaction_operations` — the same
+identity-folded rows keyed `(ledger_sequence, application_order,
+operation_index)`: the transaction's position instead of the `transaction_id`
+surrogate (33.3 GiB at ratio 1.57, 2026-09-24), and the operation's 0-based
+`operation_index` instead of its 1-based position in `application_order`
+(ADR 0059). The fold count `amount` and both skip indexes (`pool_ids`,
+`contract_id`) are not carried — nothing reads them. Written beside
+`operations_appearances` as a parallel change (`docs/deployment.md`); history
+copied in ClickHouse (`docs/backfills.md`).
+
 ### 4.5 Transaction Participants
 
 ```sql
@@ -645,46 +651,22 @@ Purpose / design notes:
   run it in the SAME rollout as the read swap or the endpoint shows only
   post-deploy classic activity.
 
-### 4.5.2 Operation Pools (task 0365)
+### 4.5.2 Operation Pools (task 0365) — dropped (task 0372)
 
-ClickHouse-only. The **pool-dimension twin of `transaction_participants`** — a
-per-(pool, transaction) presence index so `/liquidity-pools/:id/transactions` is a
-PK-prefix seek instead of the density-dependent `has(pool_ids, X)` scan over
-`operations_appearances` (the 0281-C read-in-order driver, superseded).
-
-```sql
-CREATE TABLE operation_pools (
-    pool_id         FixedString(32),  -- raw 32-byte pool hash (no surrogate)
-    ledger_sequence Int64,
-    transaction_id  Int64
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (pool_id, ledger_sequence, transaction_id);
-```
-
-Purpose / design notes:
-
-- `pool_id` is the raw 32-byte hash — the exact value `operations_appearances.pool_ids`
-  stores per crossing — so no surrogate resolution is needed (unlike the asset twin).
-- **Pure presence** — no `role` / `application_order` / `amount`. Duplicate (pool, tx)
-  rows within a tx are deduped at write (per-tx set) and collapse in the RMT; the read
-  also applies `LIMIT 1 BY (ledger, tx)`.
-- Populated by the indexer as a per-op Rust fan-out over each op's `pool_ids`,
-  written beside `transaction_participants` / `operation_asset_appearances`. (The
-  Path B backfill below re-keys history via `arrayJoin(pool_ids)`.)
-- **Backfill (task 0365 Path B)**: unlike the asset twin, the source `pool_ids` is
-  already in ClickHouse, so history is backfilled by a plain CH re-key
-  (`INSERT … SELECT arrayJoin(pool_ids), ledger_sequence, transaction_id
-FROM operations_appearances`) — no XDR re-parse.
+`operation_pools`, the per-(pool, transaction) presence index, lost its only
+reader when pool activity moved to `lp_operation_amounts` (task 0491). The
+indexer stops writing it in task 0372; the table is dropped after that deploy.
 
 ### 4.5.3 LP Operation Amounts (task 0279)
 
-ClickHouse-only. The **value twin of `operation_pools`** — what each operation
-actually moved through a pool, so `/liquidity-pools/:id/transactions` can render
-an "Amount" column (`12,059.29 XLM → 38.5M KALE`) instead of a bare event chip
-(issue #371). `operation_pools` remains the paging driver; this table is the
-value lookup for the page's `(ledger, tx)` set.
+ClickHouse-only. What each operation actually moved through a pool (issue #371);
+since task 0491 the paging driver of pool activity. **Task 0372** replaces it with
+`pool_operation_amounts` — the same rows keyed `(pool_id, ledger_sequence,
+application_order, operation_index, asset_id)`: the transaction position instead
+of `transaction_id`, and the operation's 0-based `operation_index` instead of
+its 1-based position in `application_order` (ADR 0059). Written beside this
+table until pool activity reads it; history copied in ClickHouse
+(`docs/backfills.md`).
 
 ```sql
 CREATE TABLE lp_operation_amounts (
