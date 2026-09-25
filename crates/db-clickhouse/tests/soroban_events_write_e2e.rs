@@ -17,7 +17,9 @@
 //! ```
 
 use db_clickhouse::persist::PartitionWriter;
-use db_clickhouse::persist::rows::{ContractTransactionRow, LedgerRow, SorobanEventRow};
+use db_clickhouse::persist::rows::{
+    ContractActivityRow, ContractTransactionRow, LedgerRow, SorobanEventRow,
+};
 use db_clickhouse::persist::stage::StagedLedger;
 use db_clickhouse::{Config, apply_init_sql, client};
 
@@ -38,7 +40,12 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
     let ch = client(&cfg);
     apply_init_sql(&ch).await.expect("apply init.sql");
 
-    for table in ["soroban_events", "contract_transactions", "ledgers"] {
+    for table in [
+        "soroban_events",
+        "contract_transactions",
+        "contract_activity",
+        "ledgers",
+    ] {
         let column = if table == "ledgers" {
             "sequence"
         } else {
@@ -84,6 +91,35 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
             ledger_sequence: TEST_LEDGER,
             application_order: 1,
         }],
+        // Its successor with the caller (task 0586): a row invoked by an
+        // account, one by a contract and a touched-only one, so both Nullable
+        // columns cross the wire set and unset.
+        contract_activity_rows: vec![
+            ContractActivityRow {
+                contract_id: CONTRACT,
+                ledger_sequence: TEST_LEDGER,
+                application_order: 1,
+                caller_id: Some(42),
+                caller_contract_id: None,
+                invocation_count: 3,
+            },
+            ContractActivityRow {
+                contract_id: CONTRACT,
+                ledger_sequence: TEST_LEDGER,
+                application_order: 2,
+                caller_id: None,
+                caller_contract_id: Some(7),
+                invocation_count: 1,
+            },
+            ContractActivityRow {
+                contract_id: CONTRACT,
+                ledger_sequence: TEST_LEDGER,
+                application_order: 3,
+                caller_id: None,
+                caller_contract_id: None,
+                invocation_count: 0,
+            },
+        ],
         ..Default::default()
     };
 
@@ -117,4 +153,24 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
         .await
         .expect("read back the presence row");
     assert_eq!(presence, vec![(CONTRACT, 1)]);
+
+    // (contract, position, caller account, caller contract, calls)
+    type Activity = (i64, i16, Option<i64>, Option<i64>, i32);
+    let activity: Vec<Activity> = ch
+        .query(
+            "SELECT contract_id, application_order, caller_id, caller_contract_id, invocation_count \
+             FROM contract_activity WHERE ledger_sequence = ? ORDER BY application_order",
+        )
+        .bind(TEST_LEDGER)
+        .fetch_all()
+        .await
+        .expect("read back contract_activity");
+    assert_eq!(
+        activity,
+        vec![
+            (CONTRACT, 1, Some(42), None, 3),
+            (CONTRACT, 2, None, Some(7), 1),
+            (CONTRACT, 3, None, None, 0)
+        ]
+    );
 }

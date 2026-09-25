@@ -103,6 +103,8 @@ struct TableInserts {
     events: Option<Insert<SorobanEventRow>>,
     invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
     contract_txs: Option<Insert<ContractTransactionRow>>,
+    /// Task 0586 — written beside `contract_txs` and `invocations` until the readers move.
+    contract_activity: Option<Insert<ContractActivityRow>>,
     assets: Option<Insert<AssetRow>>,
     asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
@@ -279,6 +281,7 @@ impl PartitionWriter {
             event_rows,
             invocation_rows,
             contract_tx_rows,
+            contract_activity_rows,
             asset_rows,
             asset_sac_rows,
             nft_rows,
@@ -431,6 +434,13 @@ impl PartitionWriter {
             &contract_tx_rows,
         )
         .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.contract_activity,
+            "contract_activity",
+            &contract_activity_rows,
+        )
+        .await?;
 
         write_rows(
             &self.client,
@@ -551,6 +561,7 @@ impl PartitionWriter {
             events,
             invocations,
             contract_txs,
+            contract_activity,
             assets,
             asset_sac,
             nfts,
@@ -582,6 +593,7 @@ impl PartitionWriter {
         end(events).await?;
         end(invocations).await?;
         end(contract_txs).await?;
+        end(contract_activity).await?;
         end(assets).await?;
         end(asset_sac).await?;
         end(nfts).await?;

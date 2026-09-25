@@ -251,6 +251,8 @@ pub struct StagedLedger {
     /// Per-(contract, tx) presence rows (task 0541) → `contract_transactions`,
     /// the contract-dimension twin of `participant_rows`.
     pub contract_tx_rows: Vec<ContractTransactionRow>,
+    /// `contract_tx_rows` plus the invocation's caller (task 0586) → `contract_activity`.
+    pub contract_activity_rows: Vec<ContractActivityRow>,
     pub asset_rows: Vec<AssetRow>,
     /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
     pub asset_sac_rows: Vec<AssetSacRow>,
@@ -1760,7 +1762,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         );
     }
 
-    contract_activity::contract_rows(
+    contract_activity::rows(
         &mut out,
         invocations,
         &tx_id_by_hash,
