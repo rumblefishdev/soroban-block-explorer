@@ -2,7 +2,7 @@
 id: '0528'
 title: 'nfts.minted_at_ledger clobbered by any post-mint event — serve it from nft_ownership'
 type: BUG
-status: active
+status: completed
 related_adr: ['0043', '0044']
 related_tasks: ['0051', '0217', '0529']
 tags: ['nft', 'clickhouse', 'api', 'data-integrity', 'effort-small']
@@ -35,6 +35,17 @@ history:
       End-to-end run against prod CH consciously NOT done (see the AC): the
       certs are agent-blocked and the two halves are separately proved. Awaiting
       merge and deploy; not archived.
+  - date: '2026-09-25'
+    status: completed
+    who: karolkow
+    note: >
+      Shipped in production-2026.09.07-1 (8089d2b2, PR #442). The residual
+      end-to-end gap is closed on the deployed API through the dev proxy:
+      `GET /v1/nfts/CBHUX3RS…A6GR/83305` answers `minted_at_ledger: 58946561`
+      while that token's `nfts` row still holds NULL (`chq`), and it equals
+      the min ledger of its `nft_ownership` rows. First list page
+      (`/v1/nfts?limit=100`): 0 of 100 rows NULL. Archived; the vestigial
+      column drop stays with 0529.
 ---
 
 # nfts.minted_at_ledger clobbered by any post-mint event
@@ -173,6 +184,9 @@ must still serve the mint ledger.
       requires the mTLS bundle and `~/.certs` is blocked to the agent by an
       active permission rule, so closing this properly is an operator step:
       stage the certs, run the binary, and curl a clobbered token.
+      **Closed 2026-09-25** on the deployed API instead (dev proxy, no certs
+      needed): token 83305 serves `minted_at_ledger: 58946561` while its
+      `nfts` row is NULL — database → handler → JSON in one pass.
 
 ## Implementation Notes
 
@@ -211,6 +225,9 @@ clobbered, mint ledgers interleaved so an ordering mismatch cannot cancel out):
 
 Not covered: an end-to-end run of `api --bin local` against prod CH. That needs
 the mTLS certs staged, which is an operator step.
+Closed after deploy (2026-09-25): the deployed API, reached through the Vite
+dev proxy, serves the derived value for the spot-check token above, and the
+first 100-row list page carries no NULL mint ledger.
 
 ## Issues Encountered
 
