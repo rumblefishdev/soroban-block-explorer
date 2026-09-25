@@ -256,3 +256,9 @@ rejected (37 C): a min-carrying `nft_mints` table — a second copy of what
    `INSERT INTO nfts SELECT * FROM nfts_pending`, which needs equal shapes.
 
 `api-types` regenerated: no diff (the wire field is the derived value).
+
+**Nothing true is lost with the column (checked 2026-09-25).** The 64 stored
+values with no Mint row behind them (1 in `nfts`, 63 in `nfts_pending`) are
+all `0` — not a ledger. Their tokens carry transfer rows only; `0` is the
+`repair-tier1` LEFT JOIN miss writing the type default, the same trap as
+0468's LP zeros. Every other stored value equals the `nft_ownership` mint.
