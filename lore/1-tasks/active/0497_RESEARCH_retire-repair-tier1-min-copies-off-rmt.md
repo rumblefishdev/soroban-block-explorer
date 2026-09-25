@@ -262,3 +262,10 @@ values with no Mint row behind them (1 in `nfts`, 63 in `nfts_pending`) are
 all `0` — not a ledger. Their tokens carry transfer rows only; `0` is the
 `repair-tier1` LEFT JOIN miss writing the type default, the same trap as
 0468's LP zeros. Every other stored value equals the `nft_ownership` mint.
+
+**Rollout step 1 done (2026-09-25 ~12:43 UTC, operator).** Both
+`MODIFY COLUMN minted_at_ledger Nullable(Int64) DEFAULT NULL` applied:
+`system.columns` shows `DEFAULT` / `NULL` on `nfts` and `nfts_pending`.
+Ingest unaffected — latest ledger 64,610,895 closed 3 s before the check
+(12:44:17 UTC). Steps 2 (indexer deploy) and 3 (DROP on both tables) wait for
+the merge.
