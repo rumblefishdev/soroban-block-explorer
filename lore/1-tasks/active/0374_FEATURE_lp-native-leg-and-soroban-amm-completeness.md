@@ -2395,3 +2395,16 @@ pending. Merged accounts shown open: 0321. `resolves_on_asset_page`: 0542.
 Smaller defaults that render a plausible wrong value: task 0584 (127 A).
 The read-only user's refused `join_use_nulls`, behind most `nullIf` /
 `toNullable` tricks, is an infra setting left to the operator.
+
+### Raw pool amounts pulled out of #496 into their own PR (2026-09-25)
+
+Decision 135 A. #496 had grown to five topics; the last one, pool amounts
+served RAW with their `decimals` (the house contract of account balances
+and asset supply, client-side scaling, activity scaled per leg instead of a
+hard-coded 7), was added after review and changes the API contract. It is
+reverted on #496 (`7ab811a0` reverts `9e7be181`) and lands as its own PR
+after #496 merges: a branch from develop that reverts `7ab811a0`. Measured
+on the reverted commit: production code +206 / −186 — not shorter, but one
+amount convention and one scaler; and it fixes a latent bug for PR 7 (a
+trade rate between a 7- and an 18-decimal leg read 10^11 off). It must deploy
+API and SPA together.
