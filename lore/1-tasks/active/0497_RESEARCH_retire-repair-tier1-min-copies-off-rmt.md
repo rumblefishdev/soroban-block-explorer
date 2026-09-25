@@ -283,3 +283,15 @@ all `0` — not a ledger. Their tokens carry transfer rows only; `0` is the
 Ingest unaffected — latest ledger 64,610,895 closed 3 s before the check
 (12:44:17 UTC). Steps 2 (indexer deploy) and 3 (DROP on both tables) wait for
 the merge.
+
+**Review (2026-09-25, `/code-review`, both axes) — fixed in `08df49dc`, `031ac423`:**
+the 0528 test now picks a token moved after its mint (verified against a
+seeded local CH: mint at 150, transfer at 300, passes without skipping);
+comments and guides the drop made false corrected; the live-tail cutover
+runbook filtered on the dropped column and now uses `current_owner_ledger`.
+Rollout caveats the review added: after step 3 an indexer rollback to the
+old image fails with `SchemaMismatch` (roll back = re-add the column with
+`DEFAULT NULL` first); a local CH built from the old `init.sql` needs the same
+`MODIFY COLUMN … DEFAULT NULL` before it runs the new writer. Left as found:
+the unused `domain::Nft` type still lists the field; the Hot/Pending merge in
+`stage/nfts.rs` is duplicated (pre-existing).
