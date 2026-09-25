@@ -228,3 +228,31 @@ The drift now surfaces as NULL, not as a wrong number: a later batch carries
 no mint (`stage.rs` merges `(None, b) => b` within a batch only) and the RMT
 replace keeps that row. Retiring the repair entry without dropping the column
 lets the NULLs grow. Route: drop `minted_at_ledger` from both tables (former 0529) — the fact lives in `nft_ownership*`, the copy can only drift.
+
+### NFT mint ledger no longer stored (2026-09-25, decision karolkow 37 A)
+
+Branch `refactor/0497-retire-nft-repair-entries`, commit `0c217dda` (after two
+pure moves: NFT staging → `persist/stage/nfts.rs`, NFT query tests →
+`nfts/queries/{tests,decode_smoke}.rs`). `minted_at_ledger` leaves `NftRow`,
+`NftPendingRow`, the staging merge and `init.sql`; the parser keeps its
+in-batch mint ledger (it selects the enrichment candidates). Considered and
+rejected (37 C): a min-carrying `nft_mints` table — a second copy of what
+`nft_ownership` already holds and reads cheaply (23k rows).
+
+**Rollout — verified on a local CH 26.3 with the new writer (g9 e2e):**
+
+| Table state                                 | New writer                               |
+| ------------------------------------------- | ---------------------------------------- |
+| column present, no DEFAULT (production now) | **fails** — `SchemaMismatch` on `NftRow` |
+| column present, `DEFAULT NULL`              | passes                                   |
+| column dropped                              | passes                                   |
+
+1. Operator, before the indexer deploy (metadata-only, old writer unaffected):
+   `ALTER TABLE nfts MODIFY COLUMN minted_at_ledger Nullable(Int64) DEFAULT NULL`
+   and the same on `nfts_pending`.
+2. Deploy the indexer.
+3. After every old container is recycled: `DROP COLUMN minted_at_ledger` on
+   BOTH tables in one sitting — `nft-reclassify` promotes with
+   `INSERT INTO nfts SELECT * FROM nfts_pending`, which needs equal shapes.
+
+`api-types` regenerated: no diff (the wire field is the derived value).
