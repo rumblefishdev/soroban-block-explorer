@@ -1871,7 +1871,8 @@ export type PaginatedPoolItem = {
     legs: Array<PoolAssetLeg>;
     /**
      * Count of active liquidity providers (`lp_positions WHERE shares > 0`),
-     * computed from the live table.
+     * computed from the live table. `lp_positions` holds classic pool shares
+     * only, so a Soroban pool reads 0 here without that being a measurement.
      */
     participant_count: number;
     /**
@@ -2192,7 +2193,8 @@ export type PoolItem = {
   legs: Array<PoolAssetLeg>;
   /**
    * Count of active liquidity providers (`lp_positions WHERE shares > 0`),
-   * computed from the live table.
+   * computed from the live table. `lp_positions` holds classic pool shares
+   * only, so a Soroban pool reads 0 here without that being a measurement.
    */
   participant_count: number;
   /**

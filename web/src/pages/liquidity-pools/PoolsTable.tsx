@@ -211,8 +211,8 @@ interface PoolsTableProps {
  * issue #367's ask; em-dash when a leg is unpriceable) / Total shares
  * (right-aligned, unit label) / Participants. Fee column dropped (task
  * 0348 F9): every classic pool is protocol-fixed at 0.30%
- * (`LIQUIDITY_POOL_FEE_V18`), so a per-row Fee column carried no
- * comparative signal.
+ * (`LIQUIDITY_POOL_FEE_V18`). Soroban pools set their own fee; it shows on
+ * the detail page, not as a list column.
  */
 export function PoolsTable({ rows, loading, skeletonRows }: PoolsTableProps) {
   return (

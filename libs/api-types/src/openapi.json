@@ -4330,7 +4330,7 @@
                 "participant_count": {
                   "type": "integer",
                   "format": "int64",
-                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table."
+                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table. `lp_positions` holds classic pool shares\nonly, so a Soroban pool reads 0 here without that being a measurement."
                 },
                 "pool_id": {
                   "type": "string",
@@ -4614,7 +4614,7 @@
           "participant_count": {
             "type": "integer",
             "format": "int64",
-            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table."
+            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table. `lp_positions` holds classic pool shares\nonly, so a Soroban pool reads 0 here without that being a measurement."
           },
           "pool_id": {
             "type": "string",
