@@ -45,7 +45,7 @@ fn identity(
         contract_id,
         contract_strkey: None,
         symbol: None,
-        decimals: 7,
+        decimals: Some(7),
     }
 }
 

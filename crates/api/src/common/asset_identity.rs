@@ -48,7 +48,7 @@ pub(crate) struct AssetIdentityChRow {
     pub(crate) contract_id: i64,
     pub(crate) contract_strkey: Option<String>,
     pub(crate) symbol: Option<String>,
-    pub(crate) decimals: u32,
+    pub(crate) decimals: Option<u32>,
 }
 
 /// One asset's identity as the dimension knows it, with the issuer StrKey
@@ -69,7 +69,12 @@ pub(crate) struct ResolvedAsset {
     pub(crate) issuer: Option<String>,
     pub(crate) contract_strkey: Option<String>,
     pub(crate) symbol: Option<String>,
-    pub(crate) decimals: u32,
+    /// The scale to read a raw amount of this asset at, when it is a FACT:
+    /// 7 for a native or classic asset (fixed by the protocol), the published
+    /// decimals for a Soroban token. `None` for a Soroban token no metadata
+    /// was found for — its real scale can be 18, and a raw amount scaled by a
+    /// guessed 7 is then wrong by 10^11 while still reading as a number.
+    pub(crate) decimals: Option<u32>,
 }
 
 /// Resolve a bounded set of `asset_transfers.asset_id` surrogates to a link
@@ -187,7 +192,12 @@ async fn fetch_identity_rows(
                 a.contract_id                 AS contract_id, \
                 nullIf(sc.contract_id, '')    AS contract_strkey, \
                 nullIf(m.symbol, '')          AS symbol, \
-                coalesce(m.decimals, 7)       AS decimals \
+                /* `a.id != 0` FIRST: an unmatched LEFT JOIN yields the column \
+                   default, and `asset_type` 0 is `native` — without the guard \
+                   every unknown asset would claim the protocol's 7. */ \
+                if(a.id != 0 AND a.asset_type IN (0, 1), \
+                   toNullable(toUInt32(7)), \
+                   CAST(m.decimals AS Nullable(UInt32))) AS decimals \
          FROM (SELECT arrayJoin(CAST([{in_list}] AS Array(Int64))) AS id) ids \
          LEFT JOIN (SELECT id, asset_type, asset_code, issuer_id, contract_id \
                     FROM assets \

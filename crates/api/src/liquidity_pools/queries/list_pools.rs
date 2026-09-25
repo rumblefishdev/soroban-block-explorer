@@ -2,7 +2,7 @@
 
 use clickhouse::Row;
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
@@ -10,8 +10,10 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
+use super::leg_reserves::state_reserves_sql;
+use super::total_shares::{instance_shares_sql, pool_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
-use super::{PoolRow, fee_percent_str, leg_rows};
+use super::{PoolLegRow, PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
 
 /// Resolved, validated `GET /v1/liquidity-pools` list params.
@@ -65,6 +67,15 @@ struct PoolListChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
+    /// Verbatim family marker; read only by `pool_total_shares`.
+    pool_type_raw: String,
+    /// A soroban pool's latest reserves, raw and in leg order; empty for a
+    /// classic pool, which has none there.
+    state_reserves: Vec<String>,
+    /// A soroban pool's raw instance-state shares, scaled in Rust (a `u128`)
+    /// by its share token's decimals.
+    instance_shares: Option<String>,
+    share_token_id: i64,
 }
 
 /// The ordering value the list pages on: the pool's LAST ACTIVITY.
@@ -81,7 +92,7 @@ struct PoolListChRow {
 /// `greatest` rather than a per-kind branch: a classic pool has no
 /// `pool_activity` row, so the join misses and the column wins — read live, it
 /// never lags the MV's refresh; a soroban pool's column is its registration,
-/// which its activity is never earlier than. A join miss yields `0`, not NULL
+/// which its last change normally follows. A join miss yields `0`, not NULL
 /// (`join_use_nulls` is refused for the read-only user), which `greatest`
 /// ignores.
 const ACTIVITY_LEDGER: &str = "greatest(lp.last_updated_ledger, pa.last_activity_ledger)";
@@ -243,6 +254,7 @@ pub async fn fetch_pool_list(
          page AS ( \
              SELECT lp.pool_id AS pool_id, lp.pool_kind AS pool_kind, \
                     lp.legs AS legs, lp.fee_bps AS fee_bps, \
+                    lp.pool_type_raw AS pool_type_raw, \
                     lp.last_updated_ledger AS last_updated_ledger, \
                     {act} AS activity_ledger \
              FROM liquidity_pools lp FINAL \
@@ -267,7 +279,11 @@ pub async fn fetch_pool_list(
              toString(s.reserve_a)                           AS reserve_a, \
              toString(s.reserve_b)                           AS reserve_b, \
              toString(s.total_shares)                        AS total_shares, \
-             nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms \
+             nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms, \
+             lp.pool_type_raw                                AS pool_type_raw, \
+             sr.reserves                                     AS state_reserves, \
+             inst.shares_raw                                 AS instance_shares, \
+             inst.share_token_id                             AS share_token_id \
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
@@ -291,6 +307,8 @@ pub async fn fetch_pool_list(
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
              GROUP BY pool_id \
          ) pc ON pc.pool_id = lp.pool_id \
+         LEFT JOIN ({reserves}) sr ON sr.pool_id = lp.pool_id \
+         LEFT JOIN ({shares}) inst ON inst.pool_id = lp.pool_id \
          /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
             duplicate rows): without it this LEFT JOIN doubled every page row \
             whose latest snapshot ledger falls in the duplicated range, doubling \
@@ -314,6 +332,9 @@ pub async fn fetch_pool_list(
             from the wrong last row — pages then overlap. */ \
          ORDER BY lp.activity_ledger {order}, lp.pool_id {order}",
         act = ACTIVITY_LEDGER,
+        // Bounded to the page, like every other side read here.
+        reserves = state_reserves_sql("SELECT pool_id FROM page"),
+        shares = instance_shares_sql("SELECT pool_id FROM page"),
         filters = filters,
         keyset = keyset,
         order = order,
@@ -328,9 +349,15 @@ pub async fn fetch_pool_list(
 
     // One batched identity resolution for every leg on the page, with the
     // icons read alongside it. Both key on `assets.id`, which is exactly what
-    // `legs` stores.
-    let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
-    let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
+    // `legs` stores; a soroban share token is a contract surrogate, the same
+    // id space.
+    // The soroban share tokens ride along: their decimals scale the shares.
+    let asset_ids: BTreeSet<i64> = rows
+        .iter()
+        .flat_map(|r| r.legs.iter().copied().chain(Some(r.share_token_id)))
+        .filter(|id| *id != 0)
+        .collect();
+    let (identities, icons) = resolve_identities_and_icons(client, &asset_ids).await?;
 
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
     // endpoint (latest reserves × last 1h close per leg; both legs required)
@@ -366,26 +393,35 @@ pub async fn fetch_pool_list(
     Ok(rows
         .into_iter()
         .zip(page_legs)
-        .map(|(r, legs)| {
-            // The snapshot is classic: its two columns are a classic pool's
-            // two legs, in order. A soroban pool has no snapshot row, so its
-            // legs carry no reserve and its TVL stays unknown.
-            let reserves = [r.reserve_a.clone(), r.reserve_b.clone()];
-            let reserve_strs: Vec<Option<&str>> = (0..legs.len())
-                .map(|i| reserves.get(i).and_then(|r| r.as_deref()))
-                .collect();
-            let tvl = tvl_usd(&reserve_strs, &legs, &closes).map(usd_str);
+        .map(|(r, price_legs)| {
+            // A soroban pool's reserves come from its state changes; a classic
+            // pool's legs are its two snapshot columns, in order.
+            let legs = leg_rows(
+                &r.legs,
+                &identities,
+                &icons,
+                &r.state_reserves,
+                [r.reserve_a.as_deref(), r.reserve_b.as_deref()],
+            );
+            let tvl = legs_tvl(&legs, &price_legs, &closes);
+            let total_shares = pool_total_shares(
+                r.total_shares,
+                r.instance_shares.as_deref(),
+                identities.get(&r.share_token_id).and_then(|t| t.decimals),
+                &r.pool_type_raw,
+                &r.state_reserves,
+            );
             PoolRow {
                 pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
                 pool_id_hex: r.pool_id_hex,
-                legs: leg_rows(&r.legs, &identities, &icons, &reserves),
+                legs,
                 fee_bps: r.fee_bps,
                 fee_percent: fee_percent_str(r.fee_bps),
                 created_at_ledger: r.created_at_ledger,
                 cursor_ledger: r.cursor_ledger,
                 participant_count: r.participant_count,
                 latest_snapshot_ledger: r.latest_snapshot_ledger,
-                total_shares: r.total_shares,
+                total_shares,
                 tvl,
                 volume: None,
                 fee_revenue: None,
@@ -393,6 +429,19 @@ pub async fn fetch_pool_list(
             }
         })
         .collect())
+}
+
+/// A pool's USD value from its legs as the page shows them. Takes the built
+/// legs, never raw reserves: a soroban reserve is only in units once
+/// `leg_rows` has scaled it, and a raw one would price the pool 10^7× or
+/// more too high while still reading as a number.
+fn legs_tvl(
+    legs: &[PoolLegRow],
+    price_legs: &[PriceLeg],
+    closes: &HashMap<PriceLeg, f64>,
+) -> Option<String> {
+    let reserves: Vec<Option<&str>> = legs.iter().map(|l| l.reserve.as_deref()).collect();
+    tvl_usd(&reserves, price_legs, closes).map(usd_str)
 }
 
 #[cfg(test)]

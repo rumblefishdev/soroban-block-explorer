@@ -56,11 +56,11 @@ function AssetReserveCell({
         }}
       />
       <Typography component="span" variant="bodyXsMedium">
-        {/* LP amounts (reserves, shares) arrive pre-scaled: CH stores them as
-            Decimal128(7) so `toString` already renders "750.699916", not a raw
-            integer. Do NOT wrap in scaleByDecimals — unlike account balances /
-            asset supply (raw Int128 + `decimals`, scaled on the FE), LP assets
-            are always classic 7dp and scaled DB-side. */}
+        {/* LP amounts (reserves, shares) arrive in units: a classic pool's
+            from its Decimal128(7) snapshot, a Soroban pool's scaled by the API
+            with each leg's own decimals. Do NOT wrap in scaleByDecimals —
+            unlike account balances / asset supply (raw Int128 + `decimals`,
+            scaled on the FE). */}
         {amount != null ? formatAmount(amount) : '—'}
       </Typography>
       {amount != null ? codeNode : null}

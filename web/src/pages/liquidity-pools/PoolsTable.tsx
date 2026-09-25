@@ -114,10 +114,9 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     header: 'Reserves',
     width: 150,
     cell: (row) => {
-      // Stale pools (no fresh snapshot) come back with null reserves —
-      // render an em-dash rather than "0". A pool whose legs are not indexed
-      // yet gets the same treatment: the amounts cannot be attributed to
-      // anything, so there is nothing honest to label them with.
+      // A pool whose reserves no source knows comes back with null on every
+      // leg — render an em-dash rather than "0"; there is nothing honest to
+      // label them with.
       if (row.legs.every((leg) => leg.reserve == null)) return <Dash />;
       return (
         <Stack spacing={0.5}>
@@ -140,7 +139,7 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     align: 'right',
     width: 120,
     cell: (row) => {
-      // Unpriceable pools (an untracked leg, or no fresh snapshot) come
+      // Unpriceable pools (an untracked leg, or a leg with no reserve) come
       // back with null TVL — em-dash, consistent with the reserves column.
       if (row.tvl == null) return <Dash />;
       return (
@@ -212,8 +211,8 @@ interface PoolsTableProps {
  * issue #367's ask; em-dash when a leg is unpriceable) / Total shares
  * (right-aligned, unit label) / Participants. Fee column dropped (task
  * 0348 F9): every classic pool is protocol-fixed at 0.30%
- * (`LIQUIDITY_POOL_FEE_V18`), so a per-row Fee column carried no
- * comparative signal.
+ * (`LIQUIDITY_POOL_FEE_V18`). Soroban pools set their own fee; it shows on
+ * the detail page, not as a list column.
  */
 export function PoolsTable({ rows, loading, skeletonRows }: PoolsTableProps) {
   return (

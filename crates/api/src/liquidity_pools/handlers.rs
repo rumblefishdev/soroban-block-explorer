@@ -170,7 +170,11 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
-        participant_count: row.participant_count,
+        // `lp_positions` holds classic pool shares only, so a soroban pool's
+        // count is unknown, not 0 — until 0374 PR 5 counts its share token's
+        // holders.
+        participant_count: (row.pool_kind == domain::PoolKind::Classic)
+            .then_some(row.participant_count),
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         total_shares: row.total_shares,
         tvl: row.tvl,
@@ -339,8 +343,8 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     // USD analytics (0199 compute-at-read): spot TVL + 24h volume/fee from
     // the in-cluster `prices.*` views. Deliberately DEGRADES to NULL fields
     // on error instead of failing the whole detail — the pool's on-chain
-    // data is still valid without prices, and the FE already renders the
-    // NULL ("stale") state. The error log is the operator signal (a missing
+    // data is still valid without prices, and the FE already renders a NULL
+    // money field as "—". The error log is the operator signal (a missing
     // `prices.*` SELECT grant lands here, not in a 500).
     let ctx = queries::PoolPriceContext {
         legs: row
@@ -363,8 +367,14 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     {
         Ok(analytics) => {
             row.tvl = analytics.tvl;
-            row.volume = analytics.volume;
-            row.fee_revenue = analytics.fee_revenue;
+            // Volume is read off the classic snapshot. Nothing records a
+            // soroban pool's (its state changes carry reserves only), and an
+            // empty window reads as a zero-volume day — "$0.00 traded" would
+            // be an invented measurement, so the fields stay unknown.
+            if row.pool_kind == domain::PoolKind::Classic {
+                row.volume = analytics.volume;
+                row.fee_revenue = analytics.fee_revenue;
+            }
         }
         Err(e) => {
             tracing::error!("DB error in fetch_pool_usd_analytics({pool_id}): {e}");

@@ -532,7 +532,8 @@ no client held a key to use them.
 Each `PoolItem` carries `legs` — the pool's assets in registration order, two
 for a classic pool and two to four for a Soroban one, replacing the
 `asset_a` / `asset_b` pair — plus `pool_kind`, `participant_count` (count of
-active LP positions; task 0246), the snapshot fields, and a compute-at-read
+active LP positions; task 0246; `null` on a Soroban pool, whose share-token
+holders are not counted yet), the snapshot fields, and a compute-at-read
 USD `tvl` (task 0199 Phase A2 — one batched price lookup per page; `volume`
 and `fee_revenue` stay `null` on the list, they are detail-only).
 
@@ -550,12 +551,19 @@ semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 **`GET /liquidity-pools/:id`** - Pool detail: legs, kind, fee, reserves, total
 shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
 leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
-read the snapshot's two reserve columns in order, and a Soroban pool's legs
-carry `null` until its own state is read. TVL sums every leg's reserve × price
-and is `null` unless every leg has both. Reserves / total shares come from
-the latest snapshot row; clients that care about freshness read
-`latest_snapshot_at` in the response. `participant_count` is independent of
-snapshot freshness — populated even on stale pools. The money fields
+read the snapshot's two reserve columns in order. A Soroban pool has no
+snapshot: its legs read the latest `pool_state_changes` row (decoded from the
+pool's own instance storage, so no provenance filter is needed), scaled by each leg's own decimals — `null` when the token publishes none, `0`
+for an empty leg. Its total shares come from `pool_instance_state` (the pool
+contract's own storage) scaled by the share token's decimals; a stored 0 is
+reported as `0` only for a pair-factory pool or a pool holding nothing, and as
+`null` where the contract does not record it (concentrated, config-factory,
+older routers). TVL sums every leg's reserve × price and is `null` unless every
+leg has both. A classic pool's reserves / total shares come from its latest
+snapshot row — whatever its age: a snapshot is written on every change of the
+pool entry, so an old one is a quiet pool's current state (`latest_snapshot_at`
+says when it last changed). A Soroban pool's `volume` / `fee_revenue` are
+`null`: nothing records its volume. The money fields
 (`tvl`, `volume`, `fee_revenue`) do NOT come from the snapshot row: they are
 computed at read from the in-cluster `prices.*` views (task 0199,
 [ADR 0053](../../../lore/2-adrs/0053_fast-change-offchain-compute-at-read.md))

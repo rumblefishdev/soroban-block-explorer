@@ -91,10 +91,11 @@ pub struct PriceLeg {
     pub issuer: String,
 }
 
-/// Map an LP leg (XDR `AssetType` + code + issuer G-strkey) to its prices
-/// identity. LP legs are classic-only (`LiquidityPoolEntry`), so only
-/// native (0) and credit_alphanum4/12 (1|2) occur; anything else — or a
-/// credit leg missing its code/issuer — is unpriceable by construction.
+/// Map an LP leg (asset family + code + issuer G-strkey) to its prices
+/// identity. Only native (0) and credit_alphanum4/12 (1|2) price: a classic
+/// pool's legs are always those, and a Soroban pool's SAC leg is keyed on its
+/// classic asset. A Soroban token (3) — or a credit leg missing its
+/// code/issuer — is unpriceable by construction.
 pub fn price_leg(asset_type: i16, code: Option<&str>, issuer: Option<&str>) -> PriceLeg {
     match asset_type {
         0 => PriceLeg {

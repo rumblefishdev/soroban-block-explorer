@@ -11,12 +11,11 @@ import { KpiCell } from '../detail/KpiCell.js';
 
 import {
   assetLegLabel,
-  isPoolStale,
   legHref,
   reserveDotColor,
 } from '../pool-shared/helpers.js';
 
-const STALE_SUBTITLE = 'no recent snapshot';
+const UNKNOWN_SUBTITLE = 'not indexed';
 
 interface PoolKpiStripProps {
   pool: PoolItem;
@@ -28,9 +27,10 @@ interface PoolKpiStripProps {
  * notation (`1.2M`, `480K`); the subtitle carries the asset code so the value
  * reads cleanly without units stacked on top.
  *
- * Stale pools (no fresh snapshot in 7 days) come back with null reserves
- * and shares — those cells render as "—". `participant_count` stays
- * accurate regardless of freshness (per task 0246).
+ * A missing value renders "—" captioned "not indexed". There is no staleness
+ * caption: the API returns a pool's latest state whatever its age, and a
+ * classic pool writes a snapshot on every change, so an old snapshot is a
+ * quiet pool's CURRENT state, not an outdated one.
  */
 function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);
@@ -47,8 +47,6 @@ function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
 }
 
 export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
-  const stale = isPoolStale(pool.latest_snapshot_at);
-
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
@@ -63,7 +61,9 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       <KpiCell
         label="Total shares"
         value={formatCompactAmount(pool.total_shares)}
-        caption={stale ? STALE_SUBTITLE : 'shares outstanding'}
+        caption={
+          pool.total_shares != null ? 'shares outstanding' : UNKNOWN_SUBTITLE
+        }
       />
       {pool.legs.map((leg, i) => {
         const code = assetLegLabel(leg);
@@ -72,15 +72,25 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
             key={i}
             label={`${code} reserve`}
             value={formatCompactAmount(leg.reserve)}
-            caption={stale ? STALE_SUBTITLE : assetSubtitle(leg, code)}
+            caption={
+              leg.reserve != null ? assetSubtitle(leg, code) : UNKNOWN_SUBTITLE
+            }
             valueColor={reserveDotColor(leg)}
           />
         );
       })}
       <KpiCell
         label="Participants"
-        value={formatInteger(pool.participant_count)}
-        caption="liquidity providers"
+        value={
+          pool.participant_count != null
+            ? formatInteger(pool.participant_count)
+            : '—'
+        }
+        caption={
+          pool.participant_count != null
+            ? 'liquidity providers'
+            : UNKNOWN_SUBTITLE
+        }
       />
     </Stack>
   );

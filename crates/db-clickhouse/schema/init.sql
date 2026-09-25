@@ -818,12 +818,13 @@ ORDER BY (pool_id, plane_id, ledger_sequence);
 -- sighting ledger so a migration (13 pools re-pointed their share token;
 -- measured) converges on the newest — matching share_id() on chain.
 --
--- `plane_id` is the AUTHORITY for reserve provenance (review #438). Reserve
--- rows in `pool_state_changes` carry the plane that wrote them, but a plane
--- entry names its pool in an attacker-writable KEY payload — any contract
--- can publish `[PoolData, Address(victim)]` under its own id. Reads must
--- therefore keep only reserve rows whose `plane_id` matches the plane the
--- POOL ITSELF declares here. `plane_id` is always populated — `Plane` is
+-- `plane_id` was the AUTHORITY for reserve provenance (review #438) while
+-- reserve rows came from a plane's `[PoolData, Address(pool)]` entry, a key
+-- any contract could publish under another pool's id. Since decision C′
+-- every reserve row is decoded from the pool's OWN instance, keyed on the
+-- entry's owner, so the API reads no longer filter on it (0 of 5,040,494
+-- rows from an undeclared plane, 2026-09-25); `pool_activity_mv` still does
+-- until task 0581 rebuilds it. `plane_id` is always populated — `Plane` is
 -- the shape key that recognises an instance as a pool at all. `Router` is
 -- OPTIONAL: five older deployments write none (23 pools), and their
 -- registrations are accepted UNVERIFIED with a warn, and only when the

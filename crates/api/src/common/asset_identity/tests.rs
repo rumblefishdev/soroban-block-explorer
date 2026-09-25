@@ -66,7 +66,7 @@ fn unknown_identities_get_no_icon_key() {
             contract_id: 0,
             contract_strkey: None,
             symbol: None,
-            decimals: 7,
+            decimals: Some(7),
         },
         AssetIdentityChRow {
             id: 7,
@@ -77,7 +77,7 @@ fn unknown_identities_get_no_icon_key() {
             contract_id: 7,
             contract_strkey: None,
             symbol: None,
-            decimals: 7,
+            decimals: Some(7),
         },
     ];
     let keys: Vec<_> = rows.iter().map(icon_key).collect();
@@ -98,7 +98,7 @@ fn a_native_key_carries_the_empty_stored_code() {
         contract_id: 0,
         contract_strkey: None,
         symbol: None,
-        decimals: 7,
+        decimals: Some(7),
     }];
     assert_eq!(icon_key(&rows[0]), Some((0i16, String::new(), 0, 0)));
 }

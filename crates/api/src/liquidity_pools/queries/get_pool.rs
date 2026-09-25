@@ -8,6 +8,8 @@ use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
+use super::leg_reserves::state_reserves_sql;
+use super::total_shares::{instance_shares_sql, pool_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -24,6 +26,11 @@ struct PoolDetailChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
+    // The four soroban columns: see `list_pools::PoolListChRow`.
+    pool_type_raw: String,
+    state_reserves: Vec<String>,
+    instance_shares: Option<String>,
+    share_token_id: i64,
 }
 
 /// `GET /v1/liquidity-pools/:id` — single-pool detail. Mirrors the PG
@@ -34,11 +41,10 @@ pub async fn fetch_pool_by_id(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
-    // `unhex(?)` appears 5×: the `legs` CTE, the created_at-ledger subquery, the
-    // participant-count subquery, the latest-snapshot subquery, and the outer
-    // WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
-    // detail is single-pool and CH dislikes correlated subqueries. Each `?`
-    // consumes one positional bind; all are the same value, so order is moot.
+    // Every `unhex(?)` is scoped to the literal pool id (NOT correlated to
+    // `lp`) since detail is single-pool and CH dislikes correlated subqueries.
+    // Each `?` consumes one positional bind; all are the same value, so order
+    // is moot and the count is read off the statement.
     //
     // **Leg identity is resolved in Rust, not joined here.** This used to carry
     // three pair-keyed CTEs — `legs` (the pool's four pair columns), `iss` (a
@@ -69,9 +75,8 @@ pub async fn fetch_pool_by_id(
     // The `s` join is an EQUI-join on `pool_id` (not `ON 1 = 1`): a constant ON
     // condition is only supported by `join_algorithm = 'hash'`, so the old form
     // 500'd (Code 48) the moment the server profile carried anything else.
-    let row = client
-        .query(
-            "SELECT \
+    let sql = format!(
+        "SELECT \
                 lower(hex(lp.pool_id))               AS pool_id_hex, \
                 toInt16(lp.pool_kind)                AS pool_kind, \
                 lp.legs                              AS legs, \
@@ -87,7 +92,11 @@ pub async fn fetch_pool_by_id(
                 toString(s.reserve_a)                AS reserve_a, \
                 toString(s.reserve_b)                AS reserve_b, \
                 toString(s.total_shares)             AS total_shares, \
-                nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms \
+                nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms, \
+                lp.pool_type_raw                     AS pool_type_raw, \
+                sr.reserves                          AS state_reserves, \
+                inst.shares_raw                      AS instance_shares, \
+                inst.share_token_id                  AS share_token_id \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN ( \
                  SELECT pool_id, \
@@ -105,31 +114,41 @@ pub async fn fetch_pool_by_id(
                  WHERE sequence = (SELECT max(ledger_sequence) FROM liquidity_pool_snapshots \
                                     WHERE pool_id = unhex(?)) \
              ) l ON l.sequence = s.ledger_sequence \
+             LEFT JOIN ({reserves}) sr ON sr.pool_id = lp.pool_id \
+             LEFT JOIN ({shares}) inst ON inst.pool_id = lp.pool_id \
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
-        )
-        .bind(pool_id_hex)
-        .bind(pool_id_hex)
-        .bind(pool_id_hex)
-        .bind(pool_id_hex)
-        .bind(pool_id_hex)
-        .fetch_optional::<PoolDetailChRow>()
-        .await?;
+        reserves = state_reserves_sql("unhex(?)"),
+        shares = instance_shares_sql("unhex(?)"),
+    );
+    let mut query = client.query(&sql);
+    for _ in 0..sql.matches('?').count() {
+        query = query.bind(pool_id_hex);
+    }
+    let row = query.fetch_optional::<PoolDetailChRow>().await?;
 
     let Some(r) = row else { return Ok(None) };
-    let leg_ids: BTreeSet<i64> = r.legs.iter().copied().collect();
-    let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
+    // The soroban share token rides along: its decimals scale the shares.
+    let asset_ids: BTreeSet<i64> = r
+        .legs
+        .iter()
+        .copied()
+        .chain(Some(r.share_token_id))
+        .filter(|id| *id != 0)
+        .collect();
+    let (identities, icons) = resolve_identities_and_icons(client, &asset_ids).await?;
 
     Ok(Some(PoolRow {
         pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
         pool_id_hex: r.pool_id_hex,
-        // The snapshot is classic, and a classic pool's legs are its two
-        // snapshot columns in order; a soroban pool has no snapshot row.
+        // A soroban pool's reserves come from its state changes; a classic
+        // pool's legs are its two snapshot columns, in order.
         legs: leg_rows(
             &r.legs,
             &identities,
             &icons,
-            &[r.reserve_a.clone(), r.reserve_b.clone()],
+            &r.state_reserves,
+            [r.reserve_a.as_deref(), r.reserve_b.as_deref()],
         ),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
@@ -138,7 +157,13 @@ pub async fn fetch_pool_by_id(
         cursor_ledger: r.created_at_ledger,
         participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
-        total_shares: r.total_shares,
+        total_shares: pool_total_shares(
+            r.total_shares,
+            r.instance_shares.as_deref(),
+            identities.get(&r.share_token_id).and_then(|t| t.decimals),
+            &r.pool_type_raw,
+            &r.state_reserves,
+        ),
         // Filled by the handler from `fetch_pool_usd_analytics` (0199
         // compute-at-read); the snapshot columns are not read.
         tvl: None,

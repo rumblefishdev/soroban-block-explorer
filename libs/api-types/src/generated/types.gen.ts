@@ -1760,9 +1760,8 @@ export type PaginatedParticipantItem = {
     /**
      * Share of the pool, expressed as a decimal-string percentage
      * (`100 * shares / total_pool_shares`). `None` when the pool has no
-     * snapshot in the freshness window (stale pool); the frontend renders
-     * it as "—" in that case (matches the list-endpoint stale-pool
-     * convention from `18_get_liquidity_pools_list.sql`).
+     * snapshot in the last 7 days — a window this endpoint still carries from
+     * the PG design (0374 PR 5 removes it); the frontend renders "—".
      */
     share_percentage?: string | null;
     /**
@@ -1871,12 +1870,11 @@ export type PaginatedPoolItem = {
      */
     legs: Array<PoolAssetLeg>;
     /**
-     * Count of active liquidity providers (`lp_positions WHERE shares > 0`).
-     * Computed from the live table — not dependent on the snapshot
-     * freshness window, so it is populated even on stale pools (where
-     * `tvl`/`volume`/`fee_revenue` are NULL).
+     * Count of active liquidity providers (`lp_positions WHERE shares > 0`),
+     * computed from the live table. `null` on a Soroban pool: `lp_positions`
+     * holds classic pool shares only, and its holders are not counted yet.
      */
-    participant_count: number;
+    participant_count?: number | null;
     /**
      * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
      * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
@@ -1891,20 +1889,29 @@ export type PaginatedPoolItem = {
      * an error.
      */
     pool_kind: PoolKind;
+    /**
+     * Pool shares outstanding, in units, as a decimal string. A classic pool's
+     * come from its latest snapshot; a soroban pool's from the pool contract's
+     * own storage, scaled by the share token's decimals. `0` only when it is a
+     * measurement — a pair-factory pool, or a pool holding nothing; `null` when
+     * the contract does not record it (concentrated and config-factory pools,
+     * older router versions).
+     */
     total_shares?: string | null;
     /**
      * USD, decimal string rounded to cents (task 0199 compute-at-read).
      * Populated on **both** the list (Phase A2, one batched price lookup
      * per page) and the detail endpoint. `tvl` = latest reserves × each
      * leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
-     * stale); `null` unless both legs price (never a one-leg partial) —
-     * untracked assets and stale pools read `null`.
+     * stale); `null` unless every leg has both a reserve and a price (never a
+     * partial sum) — a pool with an untracked asset reads `null`.
      */
     tvl?: string | null;
     /**
      * USD, decimal string rounded to cents. **Detail endpoint only.**
      * Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-     * at the leg-A last hourly close; `null` when the pool is unpriceable.
+     * at the leg-A last hourly close; `null` when the pool is unpriceable,
+     * and on a soroban pool, whose volume nothing records.
      */
     volume?: string | null;
   }>;
@@ -1983,9 +1990,8 @@ export type ParticipantItem = {
   /**
    * Share of the pool, expressed as a decimal-string percentage
    * (`100 * shares / total_pool_shares`). `None` when the pool has no
-   * snapshot in the freshness window (stale pool); the frontend renders
-   * it as "—" in that case (matches the list-endpoint stale-pool
-   * convention from `18_get_liquidity_pools_list.sql`).
+   * snapshot in the last 7 days — a window this endpoint still carries from
+   * the PG design (0374 PR 5 removes it); the frontend renders "—".
    */
   share_percentage?: string | null;
   /**
@@ -2126,12 +2132,13 @@ export type PoolAssetLeg = {
   icon_url?: string | null;
   issuer?: string | null;
   /**
-   * What the pool holds of this leg: raw units as a decimal string (a JSON
+   * What the pool holds of this leg, in units, as a decimal string (a JSON
    * number is a browser double and a big reserve would lose digits). On the
    * leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
-   * four legs. `null` when no source knows it — never `0`. Read from the
-   * latest classic snapshot; a soroban pool has none, so its legs are
-   * `null` until its own state is read.
+   * four legs. A classic pool's comes from its latest snapshot; a soroban
+   * pool's from its latest state change, scaled by the leg's own decimals. `null` when no source knows
+   * it — including a soroban token that publishes no decimals, where a
+   * guessed 7 would be off by up to 10^11. An empty leg is `0`.
    */
   reserve?: string | null;
   /**
@@ -2156,11 +2163,11 @@ export type PoolAssetLeg = {
 export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 
 /**
- * One pool row returned by the list endpoint. Shape pinned to canonical
- * SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
- * in the freshness window come back with `null` for every dynamic field
- * (each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,
- * `latest_snapshot_*`); frontend renders these as "stale".
+ * One pool row returned by the list and detail endpoints. Shape pinned to
+ * canonical SQL `18_get_liquidity_pools_list.sql`. Dynamic fields carry the
+ * pool's latest known state whatever its age — a classic pool writes a
+ * snapshot on every change, so an old one is a quiet pool's current state;
+ * `null` means no source knows the value, never "too old".
  */
 export type PoolItem = {
   created_at_ledger: number;
@@ -2185,12 +2192,11 @@ export type PoolItem = {
    */
   legs: Array<PoolAssetLeg>;
   /**
-   * Count of active liquidity providers (`lp_positions WHERE shares > 0`).
-   * Computed from the live table — not dependent on the snapshot
-   * freshness window, so it is populated even on stale pools (where
-   * `tvl`/`volume`/`fee_revenue` are NULL).
+   * Count of active liquidity providers (`lp_positions WHERE shares > 0`),
+   * computed from the live table. `null` on a Soroban pool: `lp_positions`
+   * holds classic pool shares only, and its holders are not counted yet.
    */
-  participant_count: number;
+  participant_count?: number | null;
   /**
    * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
    * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
@@ -2205,20 +2211,29 @@ export type PoolItem = {
    * an error.
    */
   pool_kind: PoolKind;
+  /**
+   * Pool shares outstanding, in units, as a decimal string. A classic pool's
+   * come from its latest snapshot; a soroban pool's from the pool contract's
+   * own storage, scaled by the share token's decimals. `0` only when it is a
+   * measurement — a pair-factory pool, or a pool holding nothing; `null` when
+   * the contract does not record it (concentrated and config-factory pools,
+   * older router versions).
+   */
   total_shares?: string | null;
   /**
    * USD, decimal string rounded to cents (task 0199 compute-at-read).
    * Populated on **both** the list (Phase A2, one batched price lookup
    * per page) and the detail endpoint. `tvl` = latest reserves × each
    * leg's last hourly USD close (`prices.price_usd_series_1h`, ≤ ~2h
-   * stale); `null` unless both legs price (never a one-leg partial) —
-   * untracked assets and stale pools read `null`.
+   * stale); `null` unless every leg has both a reserve and a price (never a
+   * partial sum) — a pool with an untracked asset reads `null`.
    */
   tvl?: string | null;
   /**
    * USD, decimal string rounded to cents. **Detail endpoint only.**
    * Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-   * at the leg-A last hourly close; `null` when the pool is unpriceable.
+   * at the leg-A last hourly close; `null` when the pool is unpriceable,
+   * and on a soroban pool, whose volume nothing records.
    */
   volume?: string | null;
 };

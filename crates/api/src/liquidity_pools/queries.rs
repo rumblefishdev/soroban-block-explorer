@@ -17,15 +17,19 @@
 //! - **snapshot `created_at`** does NOT exist on CH `liquidity_pool_snapshots`
 //!   (only `ledger_sequence`) — the latest-snapshot timestamp is derived from
 //!   the joined `ledgers.closed_at`.
-//! - The freshness window (PG: `snapshots.created_at >= NOW() - 7d`) is NOT
-//!   applied on the detail/list latest-snapshot pick yet — detail takes the
-//!   single latest snapshot regardless of age (matches the "latest known
-//!   state" intent); a staleness cutoff is a follow-up if parity needs it.
+//! - No freshness window on the detail/list latest-snapshot pick (the PG
+//!   design had `snapshots.created_at >= NOW() - 7d`). A classic pool writes
+//!   a snapshot on every change of its ledger entry, so the latest one IS its
+//!   current state whatever its age — an old snapshot means a quiet pool, not
+//!   an outdated reading. The participants endpoint still carries the window
+//!   (0374 PR 5 removes it).
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 use crate::common::asset_identity::ResolvedAsset;
+
+use leg_reserves::leg_reserve;
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -44,8 +48,8 @@ pub struct PoolRow {
     pub fee_bps: i32,
     pub fee_percent: String,
     pub created_at_ledger: i64,
-    /// Ledger value the list keyset orders + paginates on. CH keys on the
-    /// native `last_updated_ledger` ("most recently active"), carried here.
+    /// Ledger value the list keyset orders + paginates on: the pool's last
+    /// activity (`list_pools::ACTIVITY_LEDGER`), carried here.
     /// The wire `PoolListCursor.created_at_ledger` slot stays opaque (ADR
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
@@ -76,7 +80,7 @@ pub struct PoolLegRow {
     /// that has no classic code.
     pub symbol: Option<String>,
     pub icon_url: Option<String>,
-    /// What the pool holds of this leg, raw units — see `PoolAssetLeg::reserve`.
+    /// What the pool holds of this leg, in units — see `PoolAssetLeg::reserve`.
     pub reserve: Option<String>,
 }
 
@@ -90,13 +94,16 @@ fn leg_rows(
     leg_ids: &[i64],
     identities: &HashMap<i64, ResolvedAsset>,
     icons: &HashMap<i64, String>,
-    reserves: &[Option<String>],
+    state_reserves: &[String],
+    snapshot_reserves: [Option<&str>; 2],
 ) -> Vec<PoolLegRow> {
     leg_ids
         .iter()
         .enumerate()
         .map(|(i, id)| {
-            let reserve = reserves.get(i).cloned().flatten();
+            // A raw soroban reserve scales only by decimals that are a fact.
+            let scale = identities.get(id).and_then(|r| r.decimals);
+            let reserve = leg_reserve(i, state_reserves, snapshot_reserves, scale);
             match identities.get(id) {
                 Some(r) if r.known => PoolLegRow {
                     family: r.asset_type,
@@ -131,9 +138,11 @@ fn leg_rows(
 
 mod get_pool;
 mod get_pool_chart;
+mod leg_reserves;
 mod list_participants;
 mod list_pool_activity;
 mod list_pools;
+mod total_shares;
 mod usd_analytics;
 
 pub use get_pool::fetch_pool_by_id;
@@ -144,6 +153,36 @@ pub use list_pools::{ResolvedPoolListParams, fetch_pool_list};
 pub use usd_analytics::{
     PoolPriceContext, fetch_pool_price_context, fetch_pool_usd_analytics, price_leg,
 };
+
+/// The largest scale treated as a fact. A `u128` has 39 digits, so no real
+/// token needs more; a larger value is broken or hostile metadata (two live
+/// contracts declare 43,224) and would otherwise size the padding below.
+const MAX_SCALE: u32 = 38;
+
+/// A raw integer amount as a decimal string, scaled by `decimals`.
+///
+/// STRING SURGERY, not arithmetic: the value is a `u128` out of contract
+/// storage, an `f64` drops digits above 2^53, and a `Decimal128` division would
+/// have to pick its scale up front. Inserting the point is exact at every
+/// magnitude.
+fn scale_decimal_str(raw: &str, decimals: u32) -> Option<String> {
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) || decimals > MAX_SCALE {
+        return None;
+    }
+    let d = decimals as usize;
+    if d == 0 {
+        return Some(raw.to_string());
+    }
+    // Left-pad so there is always at least one integer digit.
+    let padded = format!("{raw:0>width$}", width = d + 1);
+    let split = padded.len() - d;
+    let frac = padded[split..].trim_end_matches('0');
+    Some(if frac.is_empty() {
+        padded[..split].to_string()
+    } else {
+        format!("{}.{}", &padded[..split], frac)
+    })
+}
 
 /// `fee_bps / 100` as a decimal string (e.g. 30 → "0.3", 25 → "0.25",
 /// 100 → "1"). Computed in Rust to avoid CH integer-division / decimal-scale
