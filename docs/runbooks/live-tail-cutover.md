@@ -687,7 +687,7 @@ ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
 SELECT 'accounts'                  AS tbl, count() AS rows_touched FROM accounts                  WHERE last_seen_ledger        > {cut:Int64}
 UNION ALL SELECT 'account_balances_current', count() FROM account_balances_current WHERE last_updated_ledger     > {cut:Int64}
 UNION ALL SELECT 'soroban_contracts',        count() FROM soroban_contracts        WHERE wasm_uploaded_at_ledger > {cut:Int64}
-UNION ALL SELECT 'nfts',                      count() FROM nfts                      WHERE minted_at_ledger        > {cut:Int64}
+UNION ALL SELECT 'nfts',                      count() FROM nfts                      WHERE current_owner_ledger    > {cut:Int64}
 UNION ALL SELECT 'liquidity_pools',           count() FROM liquidity_pools           WHERE last_updated_ledger     > {cut:Int64}
 UNION ALL SELECT 'lp_positions',              count() FROM lp_positions              WHERE last_updated_ledger     > {cut:Int64}
 ORDER BY tbl FORMAT PrettyCompact

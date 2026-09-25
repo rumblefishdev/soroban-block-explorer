@@ -15,8 +15,8 @@
 //!   — NOT a `FINAL` join — so an un-merged RMT duplicate can never multiply
 //!   the base rows (same idiom as `asset_enrichment`). **Without this join CH
 //!   NFTs read NULL names despite the enrichment table being populated.**
-//! - **`minted_at_ledger` is DERIVED from `nft_ownership`**, never read from
-//!   the `nfts` column of the same name (task 0528). `nfts` is
+//! - **`minted_at_ledger` is DERIVED from `nft_ownership`** (task 0528);
+//!   `nfts` stores no mint ledger at all since task 0497. `nfts` is
 //!   `Replacing(current_owner_ledger)` with one row per token, so a transfer or
 //!   burn arriving in a later ingest batch — carrying no mint ledger, because
 //!   the indexer only sees its own batch — replaces the WHOLE row and erases
@@ -71,8 +71,8 @@
 //! ~23.1k ownership rows, of which exactly one Mint row per token). If the NFT
 //! count grows ~100x, page-scope both collapses (or add a denormalized
 //! enriched-nfts projection carrying the derived mint ledger) — not before
-//! (YAGNI). A skip index on `nfts.minted_at_ledger` is NOT the answer any more:
-//! nothing sorts on that column now, and 0529 removes it.
+//! (YAGNI). A skip index on a stored mint ledger is not an option: `nfts` no
+//! longer has one (task 0497).
 
 use clickhouse::Row;
 use serde::Deserialize;

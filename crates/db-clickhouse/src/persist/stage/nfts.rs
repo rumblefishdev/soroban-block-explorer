@@ -28,7 +28,8 @@ pub(super) fn nft_rows(
     //   1. Same-ledger `contract_rows` carrying a definitive
     //      `contract_type` (Token / Nft / Fungible). Either:
     //        - SAC deploy (`is_sac=true` → Token).
-    //        - WASM-classified deploy (the override applied above).
+    //        - WASM-classified deploy (the override `prepare_with_sac_overrides`
+    //          applies before calling this function).
     //   2. SAC overrides (also Token) — these were skipped from Pass-2
     //      stubs, so they're in `out.contract_rows` already.
     // Contracts with NO entry in EITHER source → treat as `Other`/uncached →

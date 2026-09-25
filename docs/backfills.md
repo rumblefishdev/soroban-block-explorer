@@ -121,12 +121,12 @@ Two related wins, both bigger than the split itself:
   end usable days early; the worker whose range it duplicates re-does the slice
   later at no cost beyond time.
 
-### 3. The MIN-semantics trap — 12 Tier-1 columns corrupt silently
+### 3. The MIN-semantics trap — 10 Tier-1 columns corrupt silently
 
 RMT keeps the **highest-version whole row**, so it **cannot express MIN
 semantics**. Worker N stamps `first_seen_ledger` with the first ledger of _its_
 range, with no visibility into earlier workers' ranges — so the surviving value
-reflects the latest-touching worker, not the true minimum. **Twelve Tier-1
+reflects the latest-touching worker, not the true minimum. **Ten Tier-1
 columns corrupt this way, silently.**
 
 Scale, measured: the 0228 repair moved `first_seen_ledger` for **10.13M
@@ -142,9 +142,9 @@ accounts**.
 >
 > - `nfts.minted_at_ledger` — 643 of 13 932 tokens were wrong, growing **~30 per
 >   day**. Served correctly since task 0528, which reads the value from the
->   append-only `nft_ownership` instead of the stored column. No reader uses
->   the stored `nfts` / `nfts_pending` value any more, so `repair-tier1` no
->   longer rebuilds either (task 0497).
+>   append-only `nft_ownership` instead of the stored column, and the column
+>   itself is gone from `nfts` and `nfts_pending`, so `repair-tier1` no longer
+>   rebuilds it.
 > - `accounts.first_seen_ledger` — **14 of 400 sampled rows diverge (3.5%)**, all
 >   of them later than the true first appearance. Still wrong today, and it is
 >   rendered on the account page and the account list.
@@ -152,12 +152,13 @@ accounts**.
 > - `lp_positions.first_deposit_ledger` — **the repair itself is broken for this
 >   column** (task 0468). It matches deposits on the operation's source, which is
 >   NULL for 42% of deposits, and a miss writes `0`: its 2026-07-16 run zeroed
->   102 693 positions. Until 0468 lands, a `repair-tier1` run re-zeroes them.
+>   102 693 positions, and every run zeroes them again while the rebuild keeps
+>   that join.
 >
 > So a clean `repair-tier1` after a backfill does **not** mean the Tier-1 columns
 > stay correct: they start drifting again immediately. Treat the pass as
-> point-in-time cleanup, not as a guarantee. Task 0497 replaces it with storage
-> that carries MIN semantics natively, and retires this rule.
+> point-in-time cleanup, not as a guarantee. Storage that carries MIN semantics
+> natively replaces it, and retires this rule.
 
 **Unless the run writes one table that has no such column.** A re-parse whose
 only purpose is to populate a NEW derived table does not need to re-emit the
@@ -452,7 +453,7 @@ rows); `BACKFILL_TEMP_DIR` (default `.temp/backfill-runner`).
 3. **Only then** drop the pre-op snapshot ([`docs/backups.md`](backups.md)).
 
 > Steps 1–2 are not bookkeeping. A re-parse that skips `repair-tier1` leaves the
-> 12 Tier-1 columns wrong (rule 3), and the damage is invisible until someone
+> 10 Tier-1 columns wrong (rule 3), and the damage is invisible until someone
 > reads `first_seen_ledger` — which is why "the write finished" is not the same
 > as "the backfill is done".
 

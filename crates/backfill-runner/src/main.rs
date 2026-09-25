@@ -183,7 +183,6 @@ enum Command {
     /// `lp_positions.first_deposit_ledger`,
     /// `soroban_contracts.deployer_id` + `deployed_at_ledger`).
     /// These silently corrupt under `ReplacingMergeTree` collapse.
-    /// Task 0497 retires the pass one entry at a time.
     /// Per-table staging + EXCHANGE TABLES atomic swap.
     RepairTier1 {
         /// Build staging tables and log their row counts, then drop

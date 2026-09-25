@@ -32,8 +32,9 @@
 //! | `soroban_contracts` | `deployer_id` + `deployed_at_ledger` | `argMin(deployer_id, wasm_uploaded_at_ledger)` + `MIN(wasm_uploaded_at_ledger)` over rows where `deployer_id IS NOT NULL` |
 //!
 //! **Retired entries.** `nfts.minted_at_ledger` and
-//! `nfts_pending.minted_at_ledger` (task 0497): no reader uses the stored
-//! value since task 0528 derives it from `nft_ownership` at read time.
+//! `nfts_pending.minted_at_ledger`: both columns are dropped (task 0497) —
+//! the mint is the `nft_ownership` row with `event_type = 0`, which every NFT
+//! read derives it from.
 //!
 //! **Source selection rule**: state-shaped tables under
 //! `ReplacingMergeTree` collapse history on `OPTIMIZE FINAL`, so the
