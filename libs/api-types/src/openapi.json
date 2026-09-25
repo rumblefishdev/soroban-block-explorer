@@ -3466,7 +3466,7 @@
           "appearance_id": {
             "type": "integer",
             "format": "int64",
-            "description": "Global BIGSERIAL `operations_appearances.id`. Internal ordering\nartefact only; not a within-tx index. Use `application_order`\nfor apply-order display and to join against\n`XdrOperationDto.application_order` from the heavy overlay."
+            "description": "Equal to `application_order` (the table has no surrogate id since\nPR #175). Use `application_order` for apply-order display and to join\nagainst `XdrOperationDto.application_order` from the heavy overlay."
           },
           "application_order": {
             "type": ["integer", "null"],
@@ -4247,7 +4247,7 @@
                     },
                     {
                       "$ref": "#/components/schemas/PoolEvent",
-                      "description": "`null` when not every leg of the pool landed in `lp_operation_amounts`\nfor this operation. Rare but real: 350 of 6.09M operations in the\n100k ledgers to 64,576,995 carry one leg only. The read stays total\nrather than classifying a half-row."
+                      "description": "`null` when not every leg of the pool landed in `pool_operation_amounts`\nfor this operation. Rare but real: 350 of 6.09M operations in the\n100k ledgers to 64,576,995 carry one leg only. The read stays total\nrather than classifying a half-row."
                     }
                   ]
                 },
@@ -4505,7 +4505,7 @@
               },
               {
                 "$ref": "#/components/schemas/PoolEvent",
-                "description": "`null` when not every leg of the pool landed in `lp_operation_amounts`\nfor this operation. Rare but real: 350 of 6.09M operations in the\n100k ledgers to 64,576,995 carry one leg only. The read stays total\nrather than classifying a half-row."
+                "description": "`null` when not every leg of the pool landed in `pool_operation_amounts`\nfor this operation. Rare but real: 350 of 6.09M operations in the\n100k ledgers to 64,576,995 carry one leg only. The read stays total\nrather than classifying a half-row."
               }
             ]
           },
@@ -4562,7 +4562,7 @@
       },
       "PoolEvent": {
         "type": "string",
-        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `lp_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
+        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `pool_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
         "enum": ["trade", "deposit", "withdrawal"]
       },
       "PoolItem": {

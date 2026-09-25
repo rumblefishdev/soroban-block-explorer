@@ -27,7 +27,11 @@
 --                 the multi-op-per-tx fan-out to one row per tx.
 --               transactions ORDER BY (ledger_sequence, application_order)
 --                 + PARTITION BY intDiv — headers fetched by their full key.
---               accounts ORDER BY (account_id) — source join via id.
+--               accounts `idx_acc_id` bloom — source StrKey by id seek.
+--               transaction_operations ORDER BY (ledger_sequence,
+--                 application_order, operation_index) — the operation_types
+--                 aggregate is a primary-key seek on the page positions
+--                 (task 0372).
 -- CH Engine:    All ReplacingMergeTree. The driver dedups via `LIMIT 1 BY` (no
 --                 FINAL on the seek); the header/aggregate step is the shared
 --                 non-correlated two-step (crates/api/src/common/ch.rs).
@@ -35,10 +39,13 @@
 --   • Native (asset_type=0) is FIRST-CLASS: asset_id = ids::asset_id(0,'',0,0),
 --     a stable non-zero surrogate, so /assets/native/transactions returns real
 --     native activity — no longer "out of scope" as on the old path.
---   • `operation_types` is the per-tx aggregate over `operations_appearances`,
---     fetched NON-correlated (page keys → GROUP BY transaction_id) via
---     `fetch_tx_list_aggregates` — CH 26.3+ rejects the correlated scalar
---     subquery (`… WHERE oa.transaction_id = t.id`) with Code 48 NOT_IMPLEMENTED.
+--   • `operation_types` is the per-tx aggregate over `transaction_operations`,
+--     fetched NON-correlated (page positions → GROUP BY ledger_sequence,
+--     application_order; task 0372) via `fetch_tx_list_aggregates` — CH 26.3+
+--     rejects the correlated scalar subquery (`… WHERE oa.transaction_id =
+--     t.id`) with Code 48 NOT_IMPLEMENTED.
+--   • The page keys are integers, inlined as literal `IN (…)` lists with the
+--     touched partitions — the literals in steps 2 and 3 are examples.
 --   • Cursor tuple (ledger_sequence, application_order) — the transaction's
 --     position (task 0575) — matches the seek's key order, so a page is in
 --     execution order inside a ledger. A surrogate cursor minted before 0575
@@ -67,22 +74,33 @@ LIMIT $2;
 
 -- @@ split @@
 
--- Step 2 — transaction headers + `operation_types` aggregate for the page keys
---          from Step 1 (non-correlated two-step; `keys` = the (ledger,
+-- Step 2 — transaction headers for the page keys from Step 1 (the (ledger,
 --          application_order) tuples the seek returned, inlined as an
---          IN-tuple list). `operation_types` is keyed by `t.id` until task
---          0538 moves `operations_appearances` to the position.
+--          IN-tuple list with the touched partitions). The source StrKey
+--          resolves by surrogate-id key seek (`resolve_accounts`, task 0354),
+--          not a JOIN to accounts.
 SELECT
-    lower(hex(t.hash))  AS hash_hex,
-    t.ledger_sequence,
-    src.account_id      AS source_account,
-    t.fee_charged,
-    t.successful,
-    t.operation_count,
-    t.has_soroban,
-    t.application_order AS cursor_app_order
-FROM transactions t FINAL
-JOIN accounts src FINAL ON src.id = t.source_id
-WHERE (t.ledger_sequence, t.application_order) IN ( /* page keys from Step 1 */ )
-ORDER BY t.ledger_sequence DESC, t.application_order DESC
-LIMIT $2;
+    lower(hex(t.hash))  AS hash,
+    t.ledger_sequence   AS ledger_sequence,
+    t.application_order AS application_order,
+    t.source_id         AS source_id,
+    t.fee_charged       AS fee_charged,
+    t.successful        AS successful,
+    t.operation_count   AS operation_count,
+    t.has_soroban       AS has_soroban,
+    l.closed_at         AS created_at
+FROM transactions t
+INNER JOIN ledgers l ON l.sequence = t.ledger_sequence
+WHERE (t.ledger_sequence, t.application_order) IN ((64000123, 12), (63990001, 3))
+  AND intDiv(t.ledger_sequence, 500000) IN (127, 128);
+
+-- @@ split @@
+
+-- Step 3 — `operation_types` for the same page positions (shared helper, see
+--          02 statement D), keyed by position since task 0372. Rows are
+--          emitted in the Step 1 keyset order, merged by position in Rust.
+SELECT ledger_sequence, application_order, groupUniqArray(type) AS codes
+FROM transaction_operations
+WHERE (ledger_sequence, application_order) IN ((64000123, 12), (63990001, 3))
+  AND intDiv(ledger_sequence, 500000) IN (127, 128)
+GROUP BY ledger_sequence, application_order;

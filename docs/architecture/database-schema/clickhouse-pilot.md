@@ -781,8 +781,10 @@ task 0244). Each query targets the ADR 0044 schema (`init.sql`), uses
 > the SELECT projection (`… WHERE oa.transaction_id = t.id`). ClickHouse
 > 26.3.10.60 rejects that at runtime — `Code: 48 NOT_IMPLEMENTED: can't find
 correlated column …`. The live read path instead fetches the page of tx
-> keys, then aggregates per `(ledger_sequence, transaction_id) IN (…)` with
-> `GROUP BY transaction_id` (non-correlated), merged in Rust. The shared
+> keys, then aggregates `transaction_operations` per
+> `(ledger_sequence, application_order) IN (…)`, grouped by that position
+> (non-correlated; keyed by `transaction_id` until task 0372), merged in Rust.
+> The shared
 > implementation is
 > [`crates/api/src/common/ch.rs::fetch_tx_list_aggregates`](../../../crates/api/src/common/ch.rs);
 > reuse it for any new transaction-list module rather than the inline
@@ -823,23 +825,27 @@ correlated column …`. The live read path instead fetches the page of tx
 >   `(ledger_sequence, application_order)` — the table's physical sort key — so
 >   CH stops at the limit (~2e5 rows/page, validated). The cursor tie-break is
 >   `application_order` (also the correct in-ledger order; the `id` hash
->   surrogate did not preserve it). The filtered statements still key on `id`.
+>   surrogate did not preserve it). The filtered statements key on the same
+>   position since tasks 0541 (contract) and 0372 (operation type).
 > - **filtered transactions list** (contract / op_type) must not join the
 >   driver to an unpruned `transactions FINAL` — that merges the whole 3.6B-row
 >   table per request (measured ~1e9+ rows; blew the quota). `transactions` is
 >   pruned to the driver's partition and streamed, the driver is the hash side
->   (~2e8 rows/page, validated). Making the driver itself a seek (it scans the
->   partition by `type` / `contract_id`, neither a PK prefix) needs a
->   skip-index — deferred follow-up.
+>   (~2e8 rows/page, validated). Since tasks 0541 and 0372 neither filtered
+>   statement joins: its driver returns the page's positions — a seek on
+>   `contract_transactions`, or a scan of one `transaction_operations`
+>   partition by `type` (not a key prefix) — and `transactions` is sought by
+>   `(ledger_sequence, application_order) IN (…)`.
 > - **ledgers list** + **network stats** are ORDER BY `sequence`, not
 >   `closed_at`; both now drive off `sequence` (monotonic with `closed_at`) to
 >   stay on the primary key instead of scanning the ~12M-row table per request.
 >
 > FINAL is retained only for single-key / per-page key-seek reads (transaction
-> detail, embedded ledger transactions, the aggregate helper), where it is
-> cheap. This is the general rule for any new CH read path: a polled or
-> list-shaped query must read in primary-key order; reserve FINAL for reads
-> already bounded to a key seek.
+> detail, embedded ledger transactions), where it is cheap; the
+> `operation_types` aggregate helper dropped it in task 0372 (`groupUniqArray`
+> collapses an unmerged duplicate). This is the general rule for any new CH
+> read path: a polled or list-shaped query must read in primary-key order;
+> reserve FINAL for reads already bounded to a key seek.
 
 ---
 

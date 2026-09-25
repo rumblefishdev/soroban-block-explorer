@@ -146,13 +146,10 @@ impl From<LedgerDetailChRow> for LedgerDetailRow {
 
 /// One embedded-transaction page row — slim base columns only.
 /// `operation_types` is fetched separately via
-/// [`ch::fetch_tx_list_aggregates`] and merged by the surrogate tx id
-/// (CH 26.3 cannot compute it inline with a correlated subquery).
+/// [`ch::fetch_tx_list_aggregates`] and merged by position (CH 26.3 cannot
+/// compute it inline with a correlated subquery).
 #[derive(Debug, Row, Deserialize)]
 struct LedgerTxPageChRow {
-    /// `transactions.id` hash surrogate — the aggregate join key. NOT the
-    /// API cursor id (CH `id` is not apply-order; see `into_ledger_tx_row`).
-    tx_surrogate: i64,
     hash: String,
     ledger_sequence: i64,
     application_order: i16,
@@ -498,11 +495,9 @@ pub async fn fetch_transactions(
     let (op, order) = keyset_sql_desc(direction);
 
     // Slim page query — base columns only, no correlated subqueries (CH 26.3
-    // rejects those). `t.id` (hash surrogate) is selected as the aggregate
-    // join key; the API cursor still keys on `application_order`.
+    // rejects those).
     let sql = format!(
         "SELECT \
-            t.id AS tx_surrogate, \
             lower(hex(t.hash)) AS hash, \
             t.ledger_sequence, \
             t.application_order, \
@@ -533,12 +528,11 @@ pub async fn fetch_transactions(
         .fetch_all::<LedgerTxPageChRow>()
         .await?;
 
-    // Second pass: aggregate operation_types for the page's (ledger_sequence,
-    // transaction_id) keys (non-correlated; CH-26-safe), then merge by the
-    // surrogate tx id.
-    let keys: Vec<(i64, i64)> = page
+    // Second pass: aggregate operation_types for the page's positions
+    // (non-correlated; CH-26-safe), then merge by position.
+    let keys: Vec<(i64, i16)> = page
         .iter()
-        .map(|r| (r.ledger_sequence, r.tx_surrogate))
+        .map(|r| (r.ledger_sequence, r.application_order))
         .collect();
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … FINAL ON src.id = t.source_id` (task 0354).
@@ -552,7 +546,9 @@ pub async fn fetch_transactions(
     Ok(page
         .into_iter()
         .map(|r| {
-            let agg = aggregates.remove(&r.tx_surrogate).unwrap_or_default();
+            let agg = aggregates
+                .remove(&(r.ledger_sequence, r.application_order))
+                .unwrap_or_default();
             let source_account = accounts
                 .get(&r.source_id)
                 .cloned()

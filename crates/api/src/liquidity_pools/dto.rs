@@ -241,7 +241,7 @@ pub struct PoolItem {
 // ---------------------------------------------------------------------------
 
 /// What an operation did to the pool, named by the SIGN PAIR of its two legs
-/// and nothing else — `lp_operation_amounts.amount` is signed from the pool's
+/// and nothing else — `pool_operation_amounts.amount` is signed from the pool's
 /// perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
 /// There is no operation-type column to read and no join to `operations`.
 ///
@@ -324,20 +324,19 @@ pub struct PoolActivityParams {
 }
 
 /// Cursor payload for `GET /v1/liquidity-pools/{id}/activity`, keyed on
-/// `(ledger_sequence, transaction_id, application_order)` — the sort-key
-/// prefix of `lp_operation_amounts` minus its `asset_id` tail.
+/// `(ledger_sequence, application_order, operation_index)` — the sort-key
+/// prefix of `pool_operation_amounts` minus its `asset_id` tail: the
+/// transaction's position and the operation's 0-based index (ADR 0059).
 ///
-/// A plain struct, not an enum tagged by datasource. The retired
-/// `/transactions` cursor carried `tiebreak`, which is absent here, so a
-/// stale one fails to deserialize and the extractor answers `invalid_cursor`
-/// on its own — no explicit source guard needed (the retired endpoint needed
-/// `pool_tx_cursor_matches_source` only because both of its variants
-/// deserialized cleanly).
+/// A plain struct, not an enum tagged by datasource. A stale cursor fails to
+/// deserialize and the extractor answers `invalid_cursor` on its own: the
+/// retired `/transactions` one carried `tiebreak`, and the one keyed on
+/// `transaction_id` before task 0372 lacks `operation_index`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolActivityCursor {
     pub ledger_sequence: i64,
-    pub transaction_id: i64,
     pub application_order: i16,
+    pub operation_index: i16,
 }
 
 /// One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
@@ -360,7 +359,7 @@ pub struct PoolActivityItem {
     /// `application_order`), and the `#op-N` anchor on the transaction detail
     /// page this row links to (task 0482).
     pub application_order: i16,
-    /// `null` when not every leg of the pool landed in `lp_operation_amounts`
+    /// `null` when not every leg of the pool landed in `pool_operation_amounts`
     /// for this operation. Rare but real: 350 of 6.09M operations in the
     /// 100k ledgers to 64,576,995 carry one leg only. The read stays total
     /// rather than classifying a half-row.

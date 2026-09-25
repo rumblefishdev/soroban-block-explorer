@@ -27,22 +27,27 @@
 --               transactions ORDER BY (ledger_sequence, application_order, id)
 --                 + PARTITION BY intDiv. Once we have ledger_sequence from
 --                 the index, the planner uses one partition + sparse-PK granule.
---               operations_appearances, transaction_participants, soroban_events,
---                 soroban_invocations_appearances — all PARTITION BY intDiv
---                 + ORDER BY with transaction_id in the prefix.
+--               transaction_operations ORDER BY (ledger_sequence,
+--                 application_order, operation_index) — statement C is a
+--                 primary-key seek on the transaction's position (task 0372).
+--               transaction_participants, soroban_events — filtered by the
+--                 position too; soroban_invocations_appearances — by
+--                 transaction_id. All PARTITION BY intDiv(ledger_sequence, 500000).
 --               accounts, soroban_contracts — Replacing state, FINAL.
 -- CH Engine:    All Replacing — FINAL on every read. ledgers MergeTree only.
 -- CH Pattern:   6 statements like PG. A seeks the hash index; subsequent
---                 statements use the resolved `(ledger_sequence, transaction_id)`
---                 for partition prune + sparse-PK granule seek.
+--                 statements use the resolved position `(ledger_sequence,
+--                 application_order)` (C–E) or `(ledger_sequence,
+--                 transaction_id)` (F) for partition prune + sparse-PK seek.
 -- ADR 0044 §:   §4.9, §4.2/§4.3 (Replacing
 --                 partitioned), §4.4 (soroban_events full payload — §5.1
 --                 divergence: E reads full payload not just appearance index),
 --                 §4.5 (state Replacing), §5.2 (closed_at via JOIN ledgers
 --                 if needed; the header carries it via JOIN to ledgers).
 -- Notes:
---   • Six statements. The API runs them sequentially, threading
---     `(transaction_id, ledger_sequence)` from statement B into C-F.
+--   • Six statements. The API runs them sequentially, threading the
+--     position `(ledger_sequence, application_order)` from statement B into
+--     C–E and `(transaction_id, ledger_sequence)` into F.
 --   • Statement A is the partition-pruning shortcut: hash → ledger_sequence
 --     via a `transaction_hash_prefix_index` seek on the hash's first 8 bytes —
 --     every candidate ledger; `transactions` decides by the full hash (more
@@ -104,32 +109,37 @@ WHERE (t.hash = $1 OR t.inner_tx_hash = $1)
 -- ============================================================================
 -- C. Operations (appearance rows for this tx).
 --    Inputs: $1 = hash (used for partition pruning via the index lookup).
---    PR #175 dropped `operations_appearances.id` surrogate; rows are
---    identified by (transaction_id, application_order). Frontend gets
---    a stable per-op id by combining the natural key.
+--    Located by the transaction's POSITION (task 0372): the API binds
+--    `(ledger_sequence, application_order)` from statement B; here the same
+--    subquery as D and E derives it from the hash. `transaction_operations`
+--    has no surrogate `id` (PR #175) and stores the operation's 0-based
+--    `operation_index` (ADR 0059); the API sends `operation_index + 1` as both
+--    `appearance_id` and `application_order`, the 1-based position the wire
+--    has always carried (the `#op-N` anchor).
+--    Surrogate ids (`source_id`, `destination_id`, `contract_id`,
+--    `asset_issuer_id`) resolve to StrKeys by key seeks in the API
+--    (`resolve_accounts` / `resolve_contracts`), not by joins.
 -- ============================================================================
 SELECT
-    oa.application_order                    AS appearance_id, -- natural-key replacement for dropped surrogate
-    oa.type                                 AS type,
-    src.account_id                          AS source_account,
-    dst.account_id                          AS destination_account,
-    sc.contract_id                          AS contract_id,
-    oa.asset_code,
-    iss.account_id                          AS asset_issuer,
-    arrayMap(x -> lower(hex(x)), oa.pool_ids) AS pool_ids_hex,
-    oa.application_order,
+    oa.type                                 AS op_type,
+    oa.source_id,
+    oa.destination_id,
+    oa.contract_id,
+    oa.asset_issuer_id,
+    nullIf(oa.asset_code, '')               AS asset_code,
+    arrayMap(x -> lower(hex(x)), oa.pool_ids) AS pool_ids,
+    oa.operation_index,
     oa.ledger_sequence,
     l.closed_at                             AS created_at
     -- not in DB: per-op stroop amount, raw operation parameters, return values
     --           — Archive XDR overlay. ADR 0029.
-FROM operations_appearances oa FINAL
-LEFT JOIN accounts          src FINAL ON src.id = oa.source_id          AND oa.source_id         IS NOT NULL
-LEFT JOIN accounts          dst FINAL ON dst.id = oa.destination_id     AND oa.destination_id    IS NOT NULL
-LEFT JOIN soroban_contracts sc  FINAL ON sc.id  = oa.contract_id        AND oa.contract_id       IS NOT NULL
-LEFT JOIN accounts          iss FINAL ON iss.id = oa.asset_issuer_id    AND oa.asset_issuer_id   IS NOT NULL
-JOIN      ledgers           l         ON l.sequence = oa.ledger_sequence
-WHERE oa.transaction_id = (
-    SELECT id FROM transactions FINAL WHERE (hash = $1 OR inner_tx_hash = $1)
+FROM transaction_operations oa FINAL
+-- ledgers FINAL explicit: ledgers is a ReplacingMergeTree with unmerged
+-- duplicates; the join pins one sequence, so it is cheap (task 0420).
+INNER JOIN ledgers l FINAL ON l.sequence = oa.ledger_sequence
+WHERE (oa.ledger_sequence, oa.application_order) = (
+    -- the transaction's position (task 0372)
+    SELECT ledger_sequence, application_order FROM transactions FINAL WHERE (hash = $1 OR inner_tx_hash = $1)
       AND intDiv(ledger_sequence, 500000)
           IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
           WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
@@ -137,9 +147,10 @@ WHERE oa.transaction_id = (
   AND intDiv(oa.ledger_sequence, 500000)
       IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
           WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
--- ORDER BY natural shape: application_order is unique within (transaction_id, ledger_sequence)
--- per PR #175 schema, so this single column gives stable ordering — no oa.id tiebreaker needed.
-ORDER BY oa.application_order ASC NULLS LAST;
+-- `operation_index` is unique within the transaction: every operation belongs
+-- to one folded identity group, and the group's row carries its smallest
+-- index — so no tiebreaker is needed.
+ORDER BY oa.operation_index;
 
 -- @@ split @@
 

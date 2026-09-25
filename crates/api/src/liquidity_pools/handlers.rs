@@ -431,7 +431,7 @@ pub async fn list_pool_activity(
     };
 
     // The pool's leg surrogates, which double as this path's existence
-    // check: the driver pivots `lp_operation_amounts.asset_id` onto them, so
+    // check: the driver pivots `pool_operation_amounts.asset_id` onto them, so
     // the read cannot run without them and a missing pool is one seek away
     // (task 0279's pairing, kept).
     let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
@@ -495,8 +495,8 @@ pub async fn list_pool_activity(
             cursor::encode(
                 &PoolActivityCursor {
                     ledger_sequence: r.ledger_sequence,
-                    transaction_id: r.transaction_id,
                     application_order: r.application_order,
+                    operation_index: r.operation_index,
                 },
                 dir,
             )
@@ -507,7 +507,9 @@ pub async fn list_pool_activity(
         .map(|r| PoolActivityItem {
             transaction_hash: r.transaction_hash,
             ledger_sequence: r.ledger_sequence,
-            application_order: r.application_order,
+            // The operation's 1-based position (the `#op-N` anchor); the
+            // tables store the 0-based index (ADR 0059).
+            application_order: r.operation_index + 1,
             event: r.event,
             amounts: r.amounts,
             source_account: r.source_account,
