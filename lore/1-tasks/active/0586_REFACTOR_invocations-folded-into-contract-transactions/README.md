@@ -137,6 +137,15 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   because a PR that moves code and changes logic reads all green in GitHub's
   diff (global rule, `move-split-guard`).
 
+- **PR 1 deployed** (2026-09-25): `contract_activity` created by hand, then
+  Compute (indexer and API Lambdas 16:06:03 UTC). The indexer writes it from
+  ledger **64,613,318**; 0 writer or API errors. Whole-row check of the fill
+  SELECT against the live rows on 64,613,318–64,613,348 (`check_fill_matches_live.sql`):
+  0 / 0; gate: 4,943 = 4,943 pairs, 2,607 = 2,607 invoked, 0 both, 0 count
+  mismatches (768 pairs called more than once, 7,788 calls). The same deploy
+  shipped task 0497's writer (the `minted_at_ledger` defaults were already
+  on production).
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared
