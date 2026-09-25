@@ -7,13 +7,13 @@
 -- before the drop. Pass: 0 and 0.
 SELECT
   (SELECT count() FROM (
-      SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller_id, inv.caller_contract_id
+      SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller.1, inv.caller.2
       FROM (SELECT contract_id, ledger_sequence, application_order FROM contract_transactions
             WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS ct
       LEFT JOIN
       (
           SELECT s.contract_id AS contract_id, s.ledger_sequence AS ledger_sequence, t.application_order AS application_order,
-                 any(s.caller_id) AS caller_id, any(s.caller_contract_id) AS caller_contract_id
+                 any((s.caller_id, s.caller_contract_id)) AS caller
           FROM soroban_invocations_appearances AS s
           INNER JOIN (SELECT id, ledger_sequence, application_order FROM transactions
                       WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS t
@@ -29,13 +29,13 @@ SELECT
       SELECT contract_id, ledger_sequence, application_order, caller_id, caller_contract_id
       FROM contract_activity WHERE ledger_sequence >= {A} AND ledger_sequence < {B}
       EXCEPT DISTINCT
-      SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller_id, inv.caller_contract_id
+      SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller.1, inv.caller.2
       FROM (SELECT contract_id, ledger_sequence, application_order FROM contract_transactions
             WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS ct
       LEFT JOIN
       (
           SELECT s.contract_id AS contract_id, s.ledger_sequence AS ledger_sequence, t.application_order AS application_order,
-                 any(s.caller_id) AS caller_id, any(s.caller_contract_id) AS caller_contract_id
+                 any((s.caller_id, s.caller_contract_id)) AS caller
           FROM soroban_invocations_appearances AS s
           INNER JOIN (SELECT id, ledger_sequence, application_order FROM transactions
                       WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS t

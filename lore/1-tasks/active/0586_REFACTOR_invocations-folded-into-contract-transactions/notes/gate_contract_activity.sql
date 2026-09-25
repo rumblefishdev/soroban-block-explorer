@@ -1,9 +1,11 @@
--- The gate of one slice [{LO}, {HI}) — read-only (chq). Four numbers, two
--- pairs that must be equal:
+-- The gate of one slice [{LO}, {HI}) — read-only (chq). Five numbers: two
+-- pairs that must be equal, and one that must be 0:
 --   presence  distinct (contract, position) of contract_transactions
 --   activity  distinct (contract, position) of contract_activity
 --   invoked   distinct (contract, transaction) of soroban_invocations_appearances
 --   callers   distinct (contract, position) of contract_activity with a caller
+--   both      rows of contract_activity with both callers set (must be 0: an
+--             invocation names exactly one caller)
 -- presence = activity: every pair copied. invoked = callers: every invocation
 -- found its pair and its caller (an invocation missing from
 -- contract_transactions would show as callers < invoked). A transaction's
@@ -19,5 +21,8 @@ SELECT
    WHERE ledger_sequence >= {LO} AND ledger_sequence < {HI}),
   (SELECT uniqExact(contract_id, ledger_sequence, application_order) FROM contract_activity
    WHERE ledger_sequence >= {LO} AND ledger_sequence < {HI}
-     AND (isNotNull(caller_id) OR isNotNull(caller_contract_id)))
+     AND (isNotNull(caller_id) OR isNotNull(caller_contract_id))),
+  (SELECT count() FROM contract_activity
+   WHERE ledger_sequence >= {LO} AND ledger_sequence < {HI}
+     AND isNotNull(caller_id) AND isNotNull(caller_contract_id))
 FORMAT TSV

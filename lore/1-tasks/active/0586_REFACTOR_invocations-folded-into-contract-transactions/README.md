@@ -84,11 +84,11 @@ PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, application_order);
 ```
 
-| PR                                                                                                                  | Attention  | Deploy | Operator                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
-| 1. New table (position key, codecs, caller columns, fold count); the indexer writes it beside both old ones         | write path | yes    | before: `CREATE`; after: fill per 50k-ledger slice from `contract_transactions` ⟕ invocations ⋈ `transactions`, gated |
-| 2. Readers on the new table; Invocations tab cursor on the position (old cursors 400; `ChSurrogate` leaves the API) | read path  | yes    | —                                                                                                                     |
-| 3. Old tables no longer written                                                                                     | small      | yes    | after: `DROP` ×2                                                                                                      |
+| PR                                                                                                                    | Attention  | Deploy | Operator                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
+| 1. New table (position key, two caller columns; no codecs, no fold count); the indexer writes it beside both old ones | write path | yes    | before: `CREATE`; after: fill per 10k-ledger slice from `contract_transactions` ⟕ invocations ⋈ `transactions`, gated |
+| 2. Readers on the new table; Invocations tab cursor on the position (old cursors 400; `ChSurrogate` leaves the API)   | read path  | yes    | —                                                                                                                     |
+| 3. Old tables no longer written                                                                                       | small      | yes    | after: `DROP` ×2                                                                                                      |
 
 ## Progress
 

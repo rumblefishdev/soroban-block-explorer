@@ -7,18 +7,19 @@
 -- same on every run.
 --
 -- LEFT JOIN: a pair without an invocation keeps NULL callers (touched by an
--- operation event or an operation naming the contract only). any(): an
--- unmerged duplicate of an invocation row carries the same caller.
+-- operation event or an operation naming the contract only). any() over the
+-- caller PAIR, not per column: two unmerged copies of one invocation with
+-- different callers must not combine into a row with both set.
 -- Measured read-only 2026-09-25 on 64,000,000–64,010,000: 17.4 M rows read,
 -- 0.74 s, 1.1 GiB of memory; a 50,000-ledger slice exceeded the 3.73 GiB cap.
 INSERT INTO contract_activity (contract_id, ledger_sequence, application_order, caller_id, caller_contract_id)
-SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller_id, inv.caller_contract_id
+SELECT ct.contract_id, ct.ledger_sequence, ct.application_order, inv.caller.1, inv.caller.2
 FROM (SELECT contract_id, ledger_sequence, application_order FROM contract_transactions
       WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS ct
 LEFT JOIN
 (
     SELECT s.contract_id AS contract_id, s.ledger_sequence AS ledger_sequence, t.application_order AS application_order,
-           any(s.caller_id) AS caller_id, any(s.caller_contract_id) AS caller_contract_id
+           any((s.caller_id, s.caller_contract_id)) AS caller
     FROM soroban_invocations_appearances AS s
     INNER JOIN
     (
