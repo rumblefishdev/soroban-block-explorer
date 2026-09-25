@@ -212,3 +212,19 @@ mandatory step — is the success criterion even if it lands incrementally.
   the default thread count, all pass with `--test-threads=1`). Pre-existing.
 - The `nfts.minted_at_ledger` column itself stays (dropping it is a
   production `ALTER`, formerly 0529).
+
+### Stored NFT mint ledgers measured (2026-09-25) — the copy must go, not just its repair
+
+Owner's rule (karolkow, 2026-09-25): an unread column is no licence to keep a
+false value in the database. Production, against `min(ledger_sequence)` of
+Mint rows in the matching ownership table:
+
+| Table          | Tokens | Wrong value | NULL though the mint is known | Value with no Mint row |
+| -------------- | ------ | ----------- | ----------------------------- | ---------------------- |
+| `nfts`         | 14,045 | 0           | 706                           | 1                      |
+| `nfts_pending` | 277    | 0           | 1                             | 63                     |
+
+The drift now surfaces as NULL, not as a wrong number: a later batch carries
+no mint (`stage.rs` merges `(None, b) => b` within a batch only) and the RMT
+replace keeps that row. Retiring the repair entry without dropping the column
+lets the NULLs grow. Route: drop `minted_at_ledger` from both tables (former 0529) — the fact lives in `nft_ownership*`, the copy can only drift.
