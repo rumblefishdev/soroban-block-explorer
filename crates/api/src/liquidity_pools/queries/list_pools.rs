@@ -2,7 +2,7 @@
 
 use clickhouse::Row;
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
@@ -13,7 +13,7 @@ use crate::common::strkey::decode_pool_kind;
 use super::leg_reserves::{Reserves, state_reserves_sql};
 use super::total_shares::{instance_shares_sql, pool_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
-use super::{PoolRow, fee_percent_str, leg_rows};
+use super::{PoolLegRow, PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
 
 /// Resolved, validated `GET /v1/liquidity-pools` list params.
@@ -402,9 +402,7 @@ pub async fn fetch_pool_list(
                 r.reserve_b.as_deref(),
             );
             let legs = leg_rows(&r.legs, &identities, &icons, reserves);
-            let reserve_strs: Vec<Option<&str>> =
-                legs.iter().map(|l| l.reserve.as_deref()).collect();
-            let tvl = tvl_usd(&reserve_strs, &price_legs, &closes).map(usd_str);
+            let tvl = legs_tvl(&legs, &price_legs, &closes);
             let total_shares = pool_total_shares(
                 r.total_shares,
                 r.instance_shares.as_deref(),
@@ -430,6 +428,19 @@ pub async fn fetch_pool_list(
             }
         })
         .collect())
+}
+
+/// A pool's USD value from its legs as the page shows them. Takes the built
+/// legs, never raw reserves: a soroban reserve is only in units once
+/// `leg_rows` has scaled it, and a raw one would price the pool 10^7× or
+/// more too high while still reading as a number.
+fn legs_tvl(
+    legs: &[PoolLegRow],
+    price_legs: &[PriceLeg],
+    closes: &HashMap<PriceLeg, f64>,
+) -> Option<String> {
+    let reserves: Vec<Option<&str>> = legs.iter().map(|l| l.reserve.as_deref()).collect();
+    tvl_usd(&reserves, price_legs, closes).map(usd_str)
 }
 
 #[cfg(test)]
