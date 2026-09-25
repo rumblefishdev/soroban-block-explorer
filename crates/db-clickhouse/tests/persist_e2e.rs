@@ -82,10 +82,6 @@ fn fixture_tx() -> ExtractedTransaction {
     }
 }
 
-/// Drive the production per-ledger persist wrapper once. Empty slices
-/// for everything except the ledger + one transaction keeps the
-/// fixture minimal while still exercising the multi-table write
-/// (ledgers + transactions + the surrogate-id `accounts` hub).
 /// One liquidity-pool deposit — enough to exercise both operation tables and
 /// both amount tables through the real writer (task 0372).
 fn fixture_ops(tx_hash: &str) -> Vec<(String, Vec<ExtractedOperation>)> {
@@ -113,6 +109,10 @@ fn fixture_ops(tx_hash: &str) -> Vec<(String, Vec<ExtractedOperation>)> {
     vec![(tx_hash.to_string(), vec![op])]
 }
 
+/// Drive the production per-ledger persist wrapper once. Empty slices for
+/// everything except the ledger, one transaction and its one operation keep
+/// the fixture minimal while still exercising the multi-table write
+/// (ledgers + transactions + operations + the surrogate-id `accounts` hub).
 async fn persist_once(cl: &clickhouse::Client) {
     let ledger = fixture_ledger();
     let txs = vec![fixture_tx()];

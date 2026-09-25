@@ -376,14 +376,15 @@ Frontend **content** is separate: `deploy-production-web`
   beside `operations_appearances` and `lp_operation_amounts`, and stops
   writing `operation_pools`. Create both tables on production **before** the
   Compute deploy — without them the client refuses the insert on every
-  ledger:
+  ledger. The command prints the two statements; run each through `chw`:
 
   ```bash
   for t in transaction_operations pool_operation_amounts; do awk "/CREATE TABLE IF NOT EXISTS $t \\(/,/^ORDER BY/" crates/db-clickhouse/schema/init.sql; done
   ```
 
   Then deploy Compute; then `DROP TABLE operation_pools` (no reader since task
-  0491, no writer after this deploy); then fill the history
+  0491, no writer after this deploy; prices-api check recorded in task 0372);
+  then fill the history
   ([backfills.md](./backfills.md), "Operations by transaction position"). No
   pause; the readers still use the old tables.
 

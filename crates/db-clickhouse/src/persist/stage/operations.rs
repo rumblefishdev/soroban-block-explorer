@@ -87,9 +87,8 @@ pub(super) fn operation_rows(
             pool_ids.sort_unstable();
             pool_ids.dedup();
 
-            // ---- lp_operation_amounts (task 0279) ----
-            // The value twin of the block above: `gross_volume_a_by_pool` walks
-            // the same trade atoms and sums them into one number per pool; here
+            // ---- lp_operation_amounts + pool_operation_amounts (tasks 0279, 0372) ----
+            // `gross_volume_a_by_pool` walks the same trade atoms and sums them into one number per pool; here
             // the per-(op, pool, asset) attribution is KEPT instead of
             // discarded, and deposits/withdrawals — which have no atoms — come
             // from the op's own reserve delta.
@@ -102,24 +101,28 @@ pub(super) fn operation_rows(
                 // onto one saturated value would share a key and the RMT would
                 // drop a fill silently — the loss the per-op summing exists to
                 // prevent. Unreachable while Stellar caps ops per tx at 100.
-                let order = i16::try_from(op.operation_index)
-                    .map_err(|_| staging_err("lp_operation_amounts application_order (>i16)"))?;
+                let op_order = i16::try_from(op.operation_index)
+                    .map_err(|_| staging_err("operation position (>i16)"))?;
+                // 1-based in the parser, 0-based in the position-keyed table
+                // (ADR 0059); a 0 here is a parser bug, not a first operation.
+                let operation_index = op_order
+                    .checked_sub(1)
+                    .filter(|i| *i >= 0)
+                    .ok_or_else(|| staging_err("operation position 0 — expected 1-based"))?;
                 for (pool_id, asset_id, amount) in pool_fill_amounts(&op.details) {
                     out.lp_amount_rows.push(LpOperationAmountRow {
                         pool_id,
                         ledger_sequence: ledger_sequence_i64,
                         transaction_id: tx_id,
-                        application_order: order,
+                        application_order: op_order,
                         asset_id,
                         amount,
                     });
-                    // The operation index is 1-based in the parser, 0-based
-                    // in the position-keyed tables (ADR 0059).
                     out.pool_amount_rows.push(PoolOperationAmountRow {
                         pool_id,
                         ledger_sequence: ledger_sequence_i64,
                         application_order,
-                        operation_index: order - 1,
+                        operation_index,
                         asset_id,
                         amount,
                     });
@@ -149,26 +152,24 @@ pub(super) fn operation_rows(
         }
     }
     for (k, agg) in op_agg {
-        let Some(&tx_id) = tx_id_by_hash.get(&k.tx_hash_hex) else {
+        let (Some(&tx_id), Some(&application_order)) = (
+            tx_id_by_hash.get(&k.tx_hash_hex),
+            app_order_by_hash.get(&k.tx_hash_hex),
+        ) else {
             continue;
         };
-        let app_order = i16::try_from(agg.min_apply_order)
+        // The group's smallest operation position: 1-based from the parser,
+        // 0-based in `transaction_operations` (ADR 0059).
+        let op_order = i16::try_from(agg.min_apply_order)
             .map_err(|_| staging_err("operation_index >i16 — protocol violation"))?;
-        out.tx_operation_rows.push(TransactionOperationRow {
+        let operation_index = op_order
+            .checked_sub(1)
+            .filter(|i| *i >= 0)
+            .ok_or_else(|| staging_err("operation position 0 — expected 1-based"))?;
+        let row = TransactionOperationRow {
             ledger_sequence: ledger_sequence_i64,
-            application_order: app_order_by_hash[&k.tx_hash_hex],
-            operation_index: app_order - 1,
-            op_type: k.op_type,
-            source_id: k.source_account.as_deref().map(ids::account_id),
-            destination_id: k.destination_account.as_deref().map(ids::account_id),
-            contract_id: k.contract_strkey.as_deref().map(ids::contract_id),
-            asset_code: k.asset_code.clone(),
-            asset_issuer_id: k.asset_issuer_account.as_deref().map(ids::account_id),
-            pool_ids: k.pool_ids.clone(),
-        });
-        out.op_rows.push(OperationAppearanceRow {
-            transaction_id: tx_id,
-            application_order: app_order,
+            application_order,
+            operation_index,
             op_type: k.op_type,
             source_id: k.source_account.as_deref().map(ids::account_id),
             destination_id: k.destination_account.as_deref().map(ids::account_id),
@@ -176,9 +177,21 @@ pub(super) fn operation_rows(
             asset_code: k.asset_code,
             asset_issuer_id: k.asset_issuer_account.as_deref().map(ids::account_id),
             pool_ids: k.pool_ids,
+        };
+        out.op_rows.push(OperationAppearanceRow {
+            transaction_id: tx_id,
+            application_order: op_order,
+            op_type: row.op_type,
+            source_id: row.source_id,
+            destination_id: row.destination_id,
+            contract_id: row.contract_id,
+            asset_code: row.asset_code.clone(),
+            asset_issuer_id: row.asset_issuer_id,
+            pool_ids: row.pool_ids.clone(),
             amount: agg.count,
             ledger_sequence: ledger_sequence_i64,
         });
+        out.tx_operation_rows.push(row);
     }
     Ok(())
 }

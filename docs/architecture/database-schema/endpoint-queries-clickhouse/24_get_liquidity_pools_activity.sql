@@ -26,8 +26,9 @@
 -- ============================================================================
 --
 -- ⚠️  THE DRIVER TABLE IS THE WHOLE DESIGN.
---     `operation_pools` is keyed (pool_id, ledger_sequence, transaction_id)
---     with NO application_order, so it cannot page per operation.
+--     `operation_pools` (dropped in task 0372) was keyed (pool_id,
+--     ledger_sequence, transaction_id) with NO application_order, so it could
+--     not page per operation.
 --     `lp_operation_amounts` is keyed
 --     (pool_id, ledger_sequence, transaction_id, application_order, asset_id)
 --     — exactly this page's grain, reached by one PK-prefix seek.
@@ -55,8 +56,8 @@
 --     picking either leg row gives the same answer.
 --
 -- ⚠️  KNOWN CONSEQUENCE: an operation with NO amount rows is not listed.
---     The indexer writes `operation_pools` for an op that DECLARES a pool
---     whether or not the transaction succeeded, but writes amounts only for
+--     An op DECLARES a pool (its `pool_ids`) whether or not the transaction
+--     succeeded, but the indexer writes amounts only for
 --     value that actually moved (claim atoms for trades, the op's own
 --     LedgerEntryChanges for deposits/withdrawals). A FAILED explicit LP op
 --     therefore appeared under `/transactions` and does not appear here.

@@ -153,9 +153,9 @@ fn pair_legs(rows: Vec<PoolLegChRow>, legs: &[i64], truncated: bool) -> Vec<Pair
 /// `GET /v1/liquidity-pools/:id/activity` — one row per (operation, pool),
 /// task 0491.
 ///
-/// **The driver table is the design.** `operation_pools` is keyed
-/// `(pool_id, ledger_sequence, transaction_id)` with no `application_order`,
-/// so it cannot page per operation. `lp_operation_amounts` is keyed
+/// **The driver table is the design.** `operation_pools` (dropped in task
+/// 0372) was keyed `(pool_id, ledger_sequence, transaction_id)` with no
+/// `application_order`, so it could not page per operation. `lp_operation_amounts` is keyed
 /// `(pool_id, ledger_sequence, transaction_id, application_order, asset_id)`
 /// — the page's exact grain, reached by one PK-prefix seek.
 ///
@@ -180,10 +180,10 @@ fn pair_legs(rows: Vec<PoolLegChRow>, legs: &[i64], truncated: bool) -> Vec<Pair
 /// deterministic (schema header's single-writer argument), so an unmerged
 /// duplicate is byte-identical to its twin.
 ///
-/// **Known consequence: an operation with no amount rows is not listed.** The
-/// indexer writes `operation_pools` for an op that *declares* a pool whether
-/// or not the transaction succeeded; amounts are written only for value that
-/// actually moved. A failed explicit LP op therefore had a row under
+/// **Known consequence: an operation with no amount rows is not listed.** An
+/// op *declares* a pool whether or not the transaction succeeded (its
+/// `pool_ids` in `operations_appearances`); amounts are written only for value
+/// that actually moved. A failed explicit LP op therefore had a row under
 /// `/transactions` and has none here — the page answers "what moved through
 /// this pool", and a failed op moved nothing.
 pub async fn fetch_pool_activity(

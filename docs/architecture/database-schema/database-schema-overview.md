@@ -705,8 +705,8 @@ Purpose / design notes:
   max/min bounds, not what actually moved).
 - **Backfill**: a targeted XDR re-parse — the per-pool amounts were never
   persisted, so unlike `operation_pools` there is no CH-side re-key. Scope is the
-  ~13.15M ledgers with pool activity (`SELECT DISTINCT ledger_sequence FROM
-operation_pools`), ~20.6% of history. Additive: no existing table is touched, the
+  ~13.15M ledgers with pool activity (then counted from `operation_pools`,
+  since dropped), ~20.6% of history. Additive: no existing table is touched, the
   indexer keeps running, rollback is `DROP TABLE`. Validation gate:
   `sum(abs(amount))` over the asset-A legs per (pool, ledger) must equal
   `liquidity_pool_snapshots.gross_volume_a` — both derive from the same atoms.
