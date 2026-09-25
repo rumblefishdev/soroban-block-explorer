@@ -193,6 +193,16 @@ PR 3 is written while the fill runs.
   either was 12:59:02 UTC, the PR 3 deploy; the rest are `ingestion_writer`,
   the fill and gates (`dev_read`, `dev_shared`) and the 09-21 backup
   (`default`).
+- **Pre-drop comparison** (2026-09-25 13:30–13:37 UTC, read-only), after the
+  PR 4 deploy (indexer 13:25:34; old tables stop at ledger 64,611,391):
+  - range: both pairs 50,457,424–64,611,391, 30 partitions each;
+  - operations: rows per partition equal in all 30 — 7,043,648,565 each (the
+    fill copied rows 1:1, duplicates included);
+  - amounts: distinct keys per partition equal in all 30 — 982,202,932 each;
+  - whole rows, both directions (`EXCEPT DISTINCT`, old mapped to position
+    through `transactions`): 0 differences on a 12,500-ledger slice of every
+    partition 100–129 and on the whole dual-written tail 64,609,690–64,611,391
+    — 184.8 M operation rows compared.
 - **PR 3 (readers)** — branch `feat/0372-readers-by-position`, commits
   `0df844ad` (code), `bc9dc95c` (docs); [#500](https://github.com/rumblefishdev/soroban-block-explorer/pull/500), merged. Every API reader and
   `repair-tier1` read the new tables; `/transactions` pages on the position
