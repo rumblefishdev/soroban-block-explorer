@@ -559,7 +559,11 @@ surrogate (33.3 GiB at ratio 1.57, 2026-09-24), and the operation's 0-based
 (ADR 0059). The fold count `amount` and both skip indexes (`pool_ids`,
 `contract_id`) are not carried — nothing reads them. Written beside
 `operations_appearances` as a parallel change (`docs/deployment.md`); history
-copied in ClickHouse (`docs/backfills.md`).
+copied in ClickHouse (`docs/backfills.md`). Every API read of operations —
+the list `operation_types`, the `/transactions` operation-type filter, the
+transaction page, pool activity — and `repair-tier1` read
+`transaction_operations`; `operations_appearances` is still written, and read
+only by the history fill, until it is dropped.
 
 ### 4.5 Transaction Participants
 
@@ -664,9 +668,10 @@ since task 0491 the paging driver of pool activity. **Task 0372** replaces it wi
 `pool_operation_amounts` — the same rows keyed `(pool_id, ledger_sequence,
 application_order, operation_index, asset_id)`: the transaction position instead
 of `transaction_id`, and the operation's 0-based `operation_index` instead of
-its 1-based position in `application_order` (ADR 0059). Written beside this
-table until pool activity reads it; history copied in ClickHouse
-(`docs/backfills.md`).
+its 1-based position in `application_order` (ADR 0059). History copied in
+ClickHouse (`docs/backfills.md`). Pool activity reads `pool_operation_amounts`;
+this table is still written, and read only by the history fill, until it is
+dropped.
 
 ```sql
 CREATE TABLE lp_operation_amounts (
