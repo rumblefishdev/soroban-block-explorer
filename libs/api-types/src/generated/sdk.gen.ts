@@ -87,6 +87,9 @@ import type {
   ListTransactionsData,
   ListTransactionsErrors,
   ListTransactionsResponses,
+  SessionData,
+  SessionErrors,
+  SessionResponses,
 } from './types.gen.js';
 
 export type Options<
@@ -106,6 +109,25 @@ export type Options<
    */
   meta?: Record<string, unknown>;
 };
+
+/**
+ * Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.
+ */
+export const session = <ThrowOnError extends boolean = false>(
+  options: Options<SessionData, ThrowOnError>
+) =>
+  (options.client ?? client).post<
+    SessionResponses,
+    SessionErrors,
+    ThrowOnError
+  >({
+    url: '/auth/session',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
 
 /**
  * Liveness probe consumed by AWS Lambda health checks and smoke tests.
