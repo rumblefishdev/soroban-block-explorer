@@ -203,6 +203,17 @@ PR 3 is written while the fill runs.
     through `transactions`): 0 differences on a 12,500-ledger slice of every
     partition 100–129 and on the whole dual-written tail 64,609,690–64,611,391
     — 184.8 M operation rows compared.
+- **Old tables dropped** (Karol, 2026-09-25 ~13:38 UTC):
+  `operations_appearances` (`max_table_size_to_drop = 0`) and
+  `lp_operation_amounts`. Ingest unaffected (head and `transaction_operations`
+  both at 64,611,649 at 13:47, 0 writer or API errors since 13:37). ClickHouse
+  free space 726.72 → 841.65 GiB after the 8-minute delay (+114.9 GiB against
+  103.42 + 11.65 GiB of tables).
+- **Saving, measured 2026-09-25 13:47 UTC:** old 122.04 GiB
+  (`operations_appearances` 103.42, `lp_operation_amounts` 11.65,
+  `operation_pools` 6.97) → new 65.19 GiB (`transaction_operations` 59.10,
+  `pool_operation_amounts` 6.09; 230 and 162 parts, not fully merged yet):
+  **56.85 GiB** net, against the ~46 GiB estimate.
 - **PR 3 (readers)** — branch `feat/0372-readers-by-position`, commits
   `0df844ad` (code), `bc9dc95c` (docs); [#500](https://github.com/rumblefishdev/soroban-block-explorer/pull/500), merged. Every API reader and
   `repair-tier1` read the new tables; `/transactions` pages on the position
@@ -237,12 +248,15 @@ PR 3 is written while the fill runs.
 
 - [x] New tables filled and gated in every partition
 - [x] API reads only the new tables (`query_log`: 0 reads of the old ones)
-- [ ] `operations_appearances`, `lp_operation_amounts` (old), `operation_pools`
+- [x] `operations_appearances`, `lp_operation_amounts` (old), `operation_pools`
       dropped; saving measured
-- [ ] `schema_conventions` allowlist shorter by three tables
-- [ ] prices-api check recorded before each drop
+- [x] `schema_conventions` allowlist shorter by three tables
+- [x] prices-api check recorded before each drop
 - [ ] **Docs updated** — schema overview, pilot, canonical SQL 02/03/07/10/18/24,
-      runbooks and merge scripts that name the tables
+      runbooks and merge scripts that name the tables — all done in PRs 3–4
+      (SQL 18 never named them) except the one-off historical runbooks
+      (PG→CH cutover, 0225, 0228, the 0365 re-parse example) and the PG mirror
+      script, left with the old names on purpose; open until Karol decides
 
 ## Superseded scope (2026-07, kept for the record)
 
