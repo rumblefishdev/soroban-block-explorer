@@ -13,9 +13,6 @@ pub struct TargetedTables(Vec<&'static str>);
 impl TargetedTables {
     pub const TARGETABLE: &'static [&'static str] = &[
         "lp_operation_amounts",
-        // Task 0372 — the position-keyed twin, so a targeted re-parse
-        // refills both while the two are written side by side.
-        "pool_operation_amounts",
         "asset_transfers",
         "transaction_memos",
         // Task 0518 — the three pool tables, so a full-range targeted

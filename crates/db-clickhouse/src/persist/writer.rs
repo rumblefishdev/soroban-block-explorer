@@ -196,15 +196,6 @@ impl PartitionWriter {
                     )
                     .await?
                 }
-                "pool_operation_amounts" => {
-                    write_rows(
-                        &self.client,
-                        &mut self.inserts.pool_amounts,
-                        "pool_operation_amounts",
-                        &staged.pool_amount_rows,
-                    )
-                    .await?
-                }
                 "asset_transfers" => {
                     write_rows(
                         &self.client,
