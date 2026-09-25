@@ -44,8 +44,7 @@ docker compose logs db-clickhouse-init    # expect: "exited with code 0"
 Two containers come up:
 - `sorban-block-explorer-clickhouse-1` — the long-running ClickHouse server
 - `sorban-block-explorer-db-clickhouse-init-1` — sidecar that applies
-  `schema/init.sql` (then `schema/transitional.sql`, the tables a parallel
-  change is still replacing) once and exits 0. Idempotent: re-running compose
+  `schema/init.sql` once and exits 0. Idempotent: re-running compose
   re-applies the file as a no-op.
 
 ### 3. Verify

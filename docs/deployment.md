@@ -370,11 +370,6 @@ Frontend **content** is separate: `deploy-production-web`
   inserts, and a drop before that deploy stops ingest on the next ledger.
   The server refuses to drop a table over 50 GB unless told:
   `DROP TABLE <old> SETTINGS max_table_size_to_drop = 0`.
-  In the repository, `init.sql` states the END shape: the new table's
-  definition takes the old one's place, so the diff reads as one table
-  changing. The old definition moves to `schema/transitional.sql`, which
-  fresh databases apply after `init.sql` while the old table is still
-  written, and leaves it with the PR that stops the write.
 
 - **Operations by transaction position (task 0372), step 1 of that pattern.**
   The indexer writes `transaction_operations` and `pool_operation_amounts`
