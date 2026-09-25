@@ -171,6 +171,35 @@ PR 3 is written while the fill runs.
   only adds tables.
 - **prices-api:** no `prices_*` user read `operations_appearances`,
   `operation_pools` or `lp_operation_amounts` in 14 days (checked 2026-09-25).
+- **PR 3 (readers)** — branch `feat/0372-readers-by-position`, commits
+  `0df844ad` (code), `bc9dc95c` (docs), local. Every API reader and
+  `repair-tier1` read the new tables; `/transactions` pages on the position
+  under every filter (statement C: positions from `transaction_operations`,
+  then statement B's page seek); pool activity's cursor is
+  `(ledger_sequence, application_order, operation_index)`; the wire keeps the
+  operation's 1-based position. Old cursors of both answer 400 once.
+  Deploy only after the fill is gated in every partition, head included.
+  Checks, 2026-09-25, local API on the branch against production vs the
+  deployed API:
+  - 14 of 14 transaction pages: identical operations, folded ones included;
+  - lists (`/transactions` unfiltered, 6 op types, contract + op type,
+    4 accounts, 6 assets, 2 ledgers): 0 differences outside ranges the fill
+    had not reached (there: empty `operation_types`, as expected); within the
+    oldest ledger of a full op-type page the cut differs, because the old
+    statement C ordered a ledger's transactions by hash;
+  - pool activity, 6 pools × {all, trade}: identical on the range both tables
+    cover;
+  - read cost on partition 115 (filled in both): statement C driver 63–147 M
+    rows vs 24–147 M old, pool driver 0.57–0.71 M vs 0.25–0.29 M — the new
+    tables still held the fill's 10 unmerged parts per partition (old: 1).
+  - clippy `-D warnings`, fmt, `api` + `backfill-runner` tests pass except
+    the 4 pool/search decode smokes that need pool rows (empty ClickHouse,
+    as on `develop`) and `pool_reserves_reconciliation` (task 0374: one
+    Soroban pool `CAZ6W4…` holds `[263512715771, 131948815702]`, chain
+    `[0, 131948815702]`; untouched by this PR).
+  - Known, unchanged: an operation folded into an earlier identical one has
+    no `transaction_operations` row of its own, so its pool-activity row
+    falls back to the transaction's source and has no `pools_crossed`.
 
 ## Acceptance Criteria
 
