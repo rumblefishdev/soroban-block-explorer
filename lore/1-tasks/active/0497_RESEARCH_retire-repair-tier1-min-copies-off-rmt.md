@@ -302,3 +302,10 @@ logic only — 0 moved lines in its final diff (merged 13:42 UTC, `d91a2890`).
 Rollout step 2 (indexer deploy) ships with the next release; step 3 (DROP on
 both tables) follows once every old indexer container is gone. Until step 3
 the table keeps the column with `DEFAULT NULL`, a state safe for both writers.
+
+**Correction (2026-09-25):** the "two CH-gated `accounts` tests race" finding
+above is not a defect. The CI job runs every ClickHouse-gated suite with
+`--test-threads=1` on purpose (`.github/workflows/ci.yml`: the suites seed
+shared tables with sentinel rows and clean up with `ALTER DELETE`, so parallel
+runs against one server race). The failure only appears when the suite is run
+locally without that flag.

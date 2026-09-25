@@ -84,11 +84,41 @@ PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, application_order);
 ```
 
-| PR                                                                                                                  | Attention  | Deploy | Operator                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
-| 1. New table (position key, codecs, caller columns, fold count); the indexer writes it beside both old ones         | write path | yes    | before: `CREATE`; after: fill per 50k-ledger slice from `contract_transactions` ⟕ invocations ⋈ `transactions`, gated |
-| 2. Readers on the new table; Invocations tab cursor on the position (old cursors 400; `ChSurrogate` leaves the API) | read path  | yes    | —                                                                                                                     |
-| 3. Old tables no longer written                                                                                     | small      | yes    | after: `DROP` ×2                                                                                                      |
+| PR                                                                                                                    | Attention  | Deploy | Operator                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
+| 1. New table (position key, two caller columns; no codecs, no fold count); the indexer writes it beside both old ones | write path | yes    | before: `CREATE`; after: fill per 10k-ledger slice from `contract_transactions` ⟕ invocations ⋈ `transactions`, gated |
+| 2. Readers on the new table; Invocations tab cursor on the position (old cursors 400; `ChSurrogate` leaves the API)   | read path  | yes    | —                                                                                                                     |
+| 3. Old tables no longer written                                                                                       | small      | yes    | after: `DROP` ×2                                                                                                      |
+
+## Progress
+
+- **PR 1 (write both)** — branch `feat/0586-contract-activity-dual-write`,
+  local: `0b743946` moves the invocation fold and the `contract_transactions`
+  derivation out of `stage.rs` (3,036 → 2,949 lines) into
+  `stage/contract_activity.rs`; the next commit adds `contract_activity` (row,
+  staging, writer, `init.sql` under `contract_transactions`). Checks: unit
+  test of the staging (red with the two callers swapped), column order, the
+  events e2e writes and reads both callers set and unset on a fresh
+  ClickHouse 26.3; `db-clickhouse` 176 tests pass; clippy clean.
+- **Fill runbook** — [`fill_contract_activity.zsh`](notes/fill_contract_activity.zsh)
+  with [`fill_contract_activity.sql`](notes/fill_contract_activity.sql),
+  [`gate_contract_activity.sql`](notes/gate_contract_activity.sql),
+  [`check_fill_matches_live.sql`](notes/check_fill_matches_live.sql). Slices
+  of **10,000** ledgers: the fill SELECT over 50,000 exceeded the 3.73 GiB
+  memory cap. Read-only on production, 64,000,000–64,010,000: 2,915,824 rows
+  = `contract_transactions` keys; 1,978,709 with a caller = invocation keys;
+  0 with both callers; 17.4 M rows read, 0.74 s, 1.1 GiB. Loop dry-run with
+  stubbed `chw` / `chq`: pass, gate mismatch, bad resume point, low disk.
+
+- **Review of PR 1** (standards + spec, 2026-09-25): no struct / DDL
+  mismatch, the move is pure, fill = live writer for the same ledgers.
+  Fixed: the fill takes the caller pair with one `any()` (two unmerged copies
+  with different callers could otherwise combine into a row with both set),
+  the gate checks that no row has both callers, the e2e now writes a
+  contract caller too, a test pins that a second invocation's caller does not
+  replace the first, `contract_rows` → `rows`. For the PR that stops the old
+  writes: `scripts/merge-*.sh` list neither contract table — add
+  `contract_activity` there, as 0372 did.
 
 ## Acceptance Criteria
 

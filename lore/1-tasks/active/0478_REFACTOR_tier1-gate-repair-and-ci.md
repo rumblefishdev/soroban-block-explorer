@@ -2,7 +2,7 @@
 id: '0478'
 title: 'REFACTOR: repair the four failing Tier-1 query docs and make the gate run in CI'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0032', '0044']
 related_tasks: ['0331', '0445']
 tags: [docs, clickhouse, ci, tooling, priority-medium, effort-medium]
@@ -33,6 +33,19 @@ history:
       The README line this task rewrote was reverted on develop as part of the
       deferral, so the directory now states the situation in one sentence
       instead of carrying a defect list nobody had signed up to fix.
+  - date: '2026-09-25'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Re-verified on develop c0e85893: 01 (`{head}` brace), 08 and
+      09 (join the retired `asset_aggregates`) still fail as filed; two more
+      fail since — 21 (runtime `format!` fragments, 0199) and 22 (named
+      placeholders added by 0374/0580). The runner cannot gate yet: `all`
+      always exits 0 (`|| echo`, nine `|| true`), its list names a missing 20
+      and skips 24. The partial branch conflicts with 0374 in
+      liquidity_pools/queries.rs; only its 01 + runner parts are reusable, and
+      its ci.yml / ch.rs changes belong to 0480. CI already starts ClickHouse
+      (ci.yml, task 0406), so the gate is one extra step.
 ---
 
 # REFACTOR: repair the Tier-1 query docs and gate them in CI
