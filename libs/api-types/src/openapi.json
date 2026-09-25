@@ -4292,8 +4292,7 @@
                 "legs",
                 "fee_bps",
                 "fee_percent",
-                "created_at_ledger",
-                "participant_count"
+                "created_at_ledger"
               ],
               "properties": {
                 "created_at_ledger": {
@@ -4328,9 +4327,9 @@
                   "description": "The pool's legs in registration order — two for a classic pool, two to\nfour for a soroban one. Replaces the `asset_a` / `asset_b` pair, which\ncould not express a three-leg pool and forced a soroban row to write\nplaceholder values that read as native XLM downstream."
                 },
                 "participant_count": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL).\n\n`null` for a soroban pool: its providers are the holders of its share\ntoken, which `lp_positions` does not index, so a `0` there would claim\nan empty pool rather than an unread one."
                 },
                 "pool_id": {
                   "type": "string",
@@ -4575,8 +4574,7 @@
           "legs",
           "fee_bps",
           "fee_percent",
-          "created_at_ledger",
-          "participant_count"
+          "created_at_ledger"
         ],
         "properties": {
           "created_at_ledger": {
@@ -4611,9 +4609,9 @@
             "description": "The pool's legs in registration order — two for a classic pool, two to\nfour for a soroban one. Replaces the `asset_a` / `asset_b` pair, which\ncould not express a three-leg pool and forced a soroban row to write\nplaceholder values that read as native XLM downstream."
           },
           "participant_count": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int64",
-            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL).\n\n`null` for a soroban pool: its providers are the holders of its share\ntoken, which `lp_positions` does not index, so a `0` there would claim\nan empty pool rather than an unread one."
           },
           "pool_id": {
             "type": "string",

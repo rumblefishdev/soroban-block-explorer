@@ -212,7 +212,11 @@ pub struct PoolItem {
     /// Computed from the live table — not dependent on the snapshot
     /// freshness window, so it is populated even on stale pools (where
     /// `tvl`/`volume`/`fee_revenue` are NULL).
-    pub participant_count: i64,
+    ///
+    /// `null` for a soroban pool: its providers are the holders of its share
+    /// token, which `lp_positions` does not index, so a `0` there would claim
+    /// an empty pool rather than an unread one.
+    pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
     pub total_shares: Option<String>,
     /// USD, decimal string rounded to cents (task 0199 compute-at-read).

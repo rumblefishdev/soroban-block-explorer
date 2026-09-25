@@ -143,6 +143,25 @@ describe('LiquidityPoolsListPage', () => {
     expect(screen.getAllByText('Classic').length).toBeGreaterThan(1);
   });
 
+  it('shows an unindexed participant count as a dash, never as 0', () => {
+    mockOk([
+      makePool({
+        pool_kind: 'soroban',
+        pool_id: 'C'.padEnd(56, 'A'),
+        participant_count: null,
+        tvl: '99.00',
+      }),
+    ]);
+
+    renderWithProviders(<LiquidityPoolsListPage />, {
+      initialEntries: ['/liquidity-pools'],
+    });
+
+    const row = screen.getAllByRole('row')[1];
+    const cells = row.querySelectorAll('td');
+    expect(cells[cells.length - 1]).toHaveTextContent('—');
+  });
+
   it('carries the kind chip through to filter[pool_kind]', async () => {
     mockOk([]);
     const user = userEvent.setup();

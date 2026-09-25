@@ -1875,8 +1875,12 @@ export type PaginatedPoolItem = {
      * Computed from the live table — not dependent on the snapshot
      * freshness window, so it is populated even on stale pools (where
      * `tvl`/`volume`/`fee_revenue` are NULL).
+     *
+     * `null` for a soroban pool: its providers are the holders of its share
+     * token, which `lp_positions` does not index, so a `0` there would claim
+     * an empty pool rather than an unread one.
      */
-    participant_count: number;
+    participant_count?: number | null;
     /**
      * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
      * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
@@ -2189,8 +2193,12 @@ export type PoolItem = {
    * Computed from the live table — not dependent on the snapshot
    * freshness window, so it is populated even on stale pools (where
    * `tvl`/`volume`/`fee_revenue` are NULL).
+   *
+   * `null` for a soroban pool: its providers are the holders of its share
+   * token, which `lp_positions` does not index, so a `0` there would claim
+   * an empty pool rather than an unread one.
    */
-  participant_count: number;
+  participant_count?: number | null;
   /**
    * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
    * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR

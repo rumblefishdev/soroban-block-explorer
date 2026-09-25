@@ -128,3 +128,14 @@ fn the_pool_id_renders_by_kind() {
     assert!(soroban.pool_id.starts_with('C'), "{}", soroban.pool_id);
     assert_eq!(soroban.pool_kind, domain::PoolKind::Soroban);
 }
+
+/// `lp_positions` holds classic providers only, so its count for a soroban
+/// pool is always 0 — the wire must say "not read", not "no providers".
+#[test]
+fn participant_count_is_null_for_a_soroban_pool() {
+    let mut row = base_row();
+    row.participant_count = 7;
+    assert_eq!(map_pool_item(row.clone()).participant_count, Some(7));
+    row.pool_kind = domain::PoolKind::Soroban;
+    assert_eq!(map_pool_item(row).participant_count, None);
+}

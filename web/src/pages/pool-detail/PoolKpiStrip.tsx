@@ -30,7 +30,8 @@ interface PoolKpiStripProps {
  *
  * Stale pools (no fresh snapshot in 7 days) come back with null reserves
  * and shares — those cells render as "—". `participant_count` stays
- * accurate regardless of freshness (per task 0246).
+ * accurate regardless of freshness (per task 0246); it is `null` for a
+ * soroban pool, whose providers are not indexed yet.
  */
 function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);
@@ -79,8 +80,16 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       })}
       <KpiCell
         label="Participants"
-        value={formatInteger(pool.participant_count)}
-        caption="liquidity providers"
+        value={
+          pool.participant_count == null
+            ? '—'
+            : formatInteger(pool.participant_count)
+        }
+        caption={
+          pool.participant_count == null
+            ? 'not indexed yet'
+            : 'liquidity providers'
+        }
       />
     </Stack>
   );

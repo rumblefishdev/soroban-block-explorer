@@ -77,7 +77,7 @@ export function reserveDotColor(leg: PoolAssetLeg): string {
  * the freshness window enforced by `18_get_liquidity_pools_list.sql` and
  * the participants endpoint). Stale pools come back with `null` reserves,
  * TVL, volume, and fee revenue. `participant_count` stays accurate
- * regardless of freshness (per 0246).
+ * regardless of freshness (per 0246); it is `null` for a soroban pool.
  */
 export function isPoolStale(
   latestSnapshotAt: string | null | undefined
