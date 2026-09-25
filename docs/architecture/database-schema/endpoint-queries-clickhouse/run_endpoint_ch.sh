@@ -1,30 +1,41 @@
 #!/usr/bin/env bash
 #
-# run_endpoint_ch.sh — run any of the 23 CH endpoint-queries SQL files
-# against the local Docker ClickHouse (canonical ADR 0044 schema applied
-# by the `db-clickhouse-init` sidecar).
+# run_endpoint_ch.sh — run the CH endpoint-queries SQL files (one per public
+# REST endpoint, `NN_get_*.sql` in this directory) against the local Docker
+# ClickHouse (canonical ADR 0044 schema applied by the `db-clickhouse-init`
+# sidecar).
 #
 # Assumes:
 #   • the CH container is up (`docker compose up -d clickhouse db-clickhouse-init`)
 #   • the schema is applied (the sidecar exits 0 after the init.sql)
 #   • for execution mode: tables are populated (otherwise discovery
-#     returns empty and the endpoint is reported and skipped)
+#     returns empty and the endpoint is reported as SKIP)
 #
 # Two modes:
 #   • Default (execution): discover real input values from CH, thread
 #     them between multi-statement endpoints, execute, print results.
 #   • `--syntax-only`: substitute type-correct dummy literals, run each
-#     statement through `--format=Null` (planner-only). Does NOT touch
-#     live data — works against an empty `db-clickhouse-init`-applied
-#     schema. This is the Tier 1 CI gate.
+#     statement through `--format=Null`. Does NOT need live data — works
+#     against an empty `db-clickhouse-init`-applied schema, and writes
+#     nothing. This is the Tier 1 CI gate (.github/workflows/ci.yml).
+#
+# Tier 1 gate guarantees (syntax-only):
+#   • every statement of every file is checked — an arm that skips one, or a
+#     file whose `;`-terminated statements are not split with `-- @@ split @@`,
+#     FAILS;
+#   • an unsubstituted placeholder (`$N`, `:name`, `{name}`) FAILS with its
+#     name, before CH is asked;
+#   • `all` walks every `NN_*.sql` file present (a file without a runner arm
+#     FAILS), prints a summary and exits non-zero on any failure.
 #
 # Mirrors `endpoint-queries/run_endpoint.sh` (PG) in structure and CLI
 # so reviewers can `./run_endpoint.sh 03 | tee pg.out
 # && ./run_endpoint_ch.sh 03 | tee ch.out` and diff side-by-side.
 
 set -uo pipefail
-# `-e` is intentionally NOT set — `all` mode is allowed to soldier on past
-# individual endpoint failures so you see the full picture in one run.
+# `-e` is intentionally NOT set — the runner soldiers on past individual
+# statement failures so you see the full picture in one run; the exit code
+# is computed from the failure counter instead.
 
 # =============================================================================
 # Config (override via env)
@@ -42,6 +53,11 @@ COMPOSE_SERVICE="${SBE_CH_SERVICE:-clickhouse}"
 EXPLAIN_PREFIX=""
 SYNTAX_ONLY=0
 
+# Counters (all arms, all files).
+CHECKS=0          # statements sent (or refused by the placeholder guard)
+FAILS=0           # of which failed
+SEEN=" "          # statement indices exercised for the current file
+
 # =============================================================================
 # Help
 # =============================================================================
@@ -50,18 +66,19 @@ usage() {
     cat <<EOF
 Usage: $me <id> [--explain] [--syntax-only]
 
-Run one of the 23 CH endpoint-queries SQL files against the local Docker
-ClickHouse (canonical ADR 0044 schema).
+Run one of the CH endpoint-queries SQL files (NN_get_*.sql) against the local
+Docker ClickHouse (canonical ADR 0044 schema).
 
 IDs:
-  01..23     run a single endpoint
-  all        run every endpoint in sequence
+  01..24     run a single endpoint (20 was retired, superseded by 24)
+  all        run every NN_*.sql file present, in order
 
 Flags:
   --explain        wrap each statement in EXPLAIN PLAN actions=1
   --syntax-only    Tier 1 CI gate. Substitute type-correct dummy literals
                    per endpoint and route through \`--format=Null\`. No
                    discovery against live data; works on an empty schema.
+                   Exits non-zero if any statement fails.
   -h, --help
 
 Env:
@@ -107,12 +124,13 @@ ch_exec() {
     # In execution mode, stream results to caller's stdout.
     local sql="$1"
     if [[ "$SYNTAX_ONLY" == "1" ]]; then
-        if ch_parse_only "$sql" >/dev/null 2>&1; then
+        local out
+        if out=$(ch_parse_only "$sql" 2>&1 >/dev/null); then
             echo "  [OK]   parses"
             return 0
         else
             echo "  [FAIL] parse error:"
-            ch_parse_only "$sql" 2>&1 | head -5 | sed 's/^/         /'
+            printf '%s\n' "$out" | head -5 | sed 's/^/         /'
             return 1
         fi
     fi
@@ -132,8 +150,9 @@ ch_oneshot() {
 }
 
 ch_parse_only() {
-    # Tier 1 — parse the SQL against the live schema; format=Null discards
-    # results, only the planner runs. Exit 0 = parses.
+    # Tier 1 — run the SQL against the live schema; format=Null discards
+    # results. Against the empty schema this resolves every table, column,
+    # function and type without reading data. Exit 0 = parses.
     local sql="$1"
     docker compose -f "$COMPOSE_FILE" exec -T "$COMPOSE_SERVICE" \
         clickhouse-client \
@@ -156,6 +175,19 @@ get_statement() {
     ' "$file"
 }
 
+# statement_count <file> — number of `-- @@ split @@`-separated statements.
+statement_count() {
+    echo $(( $(grep -c '^-- @@ split @@' "$1") + 1 ))
+}
+
+# terminated_count <file> — number of `;` outside `--` comments. Each
+# statement ends in exactly one, so this must equal statement_count; a
+# mismatch means two statements share one split section (the runner would
+# send them to CH as one multi-query and only half-check them).
+terminated_count() {
+    sed 's/--.*$//' "$1" | tr -cd ';' | wc -c | tr -d ' '
+}
+
 # substitute_params <sql> <p1> <p2> ... — replace $1, $2, ... in the SQL
 # with the listed values. Iterates from highest index down so `$10` is
 # replaced before `$1` (avoids partial matches).
@@ -170,6 +202,26 @@ substitute_params() {
     printf '%s' "$sql"
 }
 
+# substitute_fragments <sql> <name>=<value> ... — replace `{name}` with the
+# value. For runtime `format!` fragments (21) that Rust interpolates rather
+# than binds.
+substitute_fragments() {
+    local sql="$1"; shift
+    local kv
+    for kv in "$@"; do
+        sql="${sql//\{${kv%%=*}\}/${kv#*=}}"
+    done
+    printf '%s' "$sql"
+}
+
+# leftover_placeholders <sql> — print any placeholder the arm failed to
+# substitute (`$N`, `$name`, `:name`, `{name}`), comments stripped.
+leftover_placeholders() {
+    printf '%s\n' "$1" | sed 's/--.*$//' \
+        | grep -oE '\$[A-Za-z0-9_]+|(^|[^:[:alnum:]_])\:[a-z_]+|\{[a-z_]+\}' \
+        | sed 's/^[^$:{]//' | sort -u | tr '\n' ' '
+}
+
 # explain_wrap <sql> — prepend `EXPLAIN PLAN actions=1` iff --explain set.
 explain_wrap() {
     local sql="$1"
@@ -178,6 +230,47 @@ explain_wrap() {
     else
         printf '%s' "$sql"
     fi
+}
+
+# check <n> <label> <sql> — run statement n (already substituted), count it,
+# record it as exercised. Returns the statement's status.
+check() {
+    local n="$1" label="$2" sql="$3"
+    SEEN="$SEEN$n "
+    CHECKS=$((CHECKS + 1))
+    if [[ -n "$label" ]]; then
+        echo "--- statement $n ($label) ---"
+    else
+        echo "--- statement $n ---"
+    fi
+    local left; left=$(leftover_placeholders "$sql")
+    if [[ -n "$left" ]]; then
+        echo "  [FAIL] unsubstituted placeholder(s): $left— the runner arm does not supply them"
+        FAILS=$((FAILS + 1))
+        return 1
+    fi
+    if ! ch_exec "$(explain_wrap "$sql")"; then
+        FAILS=$((FAILS + 1))
+        return 1
+    fi
+    return 0
+}
+
+# stmt <file> <n> [params...] — statement n of file with $1.. substituted.
+stmt() {
+    local file="$1" n="$2"; shift 2
+    substitute_params "$(get_statement "$file" "$n")" "$@"
+}
+
+# run_all_stmts <file> [params...] — check every statement of the file with
+# one shared positional parameter list (the files number their inputs
+# file-wide, so one list fits every statement).
+run_all_stmts() {
+    local file="$1"; shift
+    local n total; total=$(statement_count "$file")
+    for ((n=1; n<=total; n++)); do
+        check "$n" "" "$(stmt "$file" "$n" "$@")"
+    done
 }
 
 require_value() {
@@ -195,22 +288,26 @@ require_value() {
 # Hardcoded type-correct dummy values per discovery slot. These make
 # Tier 1 parse-check independent of CH being populated — the planner
 # only needs concrete types, not real rows.
-#
-# Dummy choices (all valid CH literals, none of which need to exist):
-#   hash_hex       — 32-byte hex string of zeros
-#   strkey         — 56-char G… literal (any valid string works)
-#   contract_strkey— 56-char C… literal
-#   surrogate_id_i32  — 0 (Int32)
-#   surrogate_id_i64  — 0 (Int64)
-#   ledger_seq     — 12345 (Int64)
-#   pool_hex       — same as hash_hex
 DUMMY_HASH_HEX="0000000000000000000000000000000000000000000000000000000000000000"
 DUMMY_POOL_HEX="$DUMMY_HASH_HEX"
 DUMMY_STRKEY_G="GAAA"
 DUMMY_STRKEY_C="CAAA"
-DUMMY_ID_I32="0"
-DUMMY_ID_I64="0"
+DUMMY_ID_I64="1234567890123"
 DUMMY_LEDGER_SEQ="12345"
+DUMMY_FROM_MS="1767225600000"   # 2026-01-01T00:00:00Z
+DUMMY_TO_MS="1767830400000"     # 2026-01-08T00:00:00Z
+
+# 21 reads the prices tenant's `prices.price_usd_series*` views, which live
+# in the same production cluster but are NOT part of this repo's schema
+# (crates/db-clickhouse/schema/init.sql) — a CH bootstrapped from here has
+# no `prices` database (the api decode_smoke test skips on the same probe).
+# The gate therefore substitutes `{series_view}` with an inline, empty,
+# read-only stand-in carrying the columns 21 reads, typed per the prices
+# interop contract (asset_kind/asset_code/issuer_address String, bucket a
+# grain-floored DateTime, close_usd Decimal). This checks everything in 21
+# except the view's name and column types, which the prices repo owns; the
+# real view name is printed next to each check so it stays visible.
+PRICES_SERIES_STUB="(SELECT '' AS asset_kind, '' AS asset_code, '' AS issuer_address, toDateTime(0, 'UTC') AS bucket, toDecimal128(0, 18) AS close_usd WHERE 0)"
 
 # =============================================================================
 # Per-endpoint runners
@@ -218,455 +315,365 @@ DUMMY_LEDGER_SEQ="12345"
 run_one() {
     local id="$1"
     local FILE
-    local nn; nn=$(printf '%02d' "$((10#$id))" 2>/dev/null || echo "$id")
-    FILE=$(ls "$QUERY_DIR"/${nn}_*.sql 2>/dev/null | head -1)
+    FILE=$(ls "$QUERY_DIR"/${id}_*.sql 2>/dev/null | head -1)
     if [[ -z "$FILE" ]]; then
-        echo "unknown id: $id (no ${nn}_*.sql in $QUERY_DIR)" >&2
+        echo "unknown id: $id (no ${id}_*.sql in $QUERY_DIR)" >&2
         return 1
     fi
-
-    if [[ "$SYNTAX_ONLY" == "1" ]]; then
-        echo "=== Tier 1 parse: $(basename "$FILE") ==="
-    fi
+    SEEN=" "
+    local fails_before=$FAILS
+    echo "=== $(basename "$FILE") ==="
 
     case "$id" in
-    01) # Params: $1=head (chain head; the Rust query inlines it via format!).
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E01: GET /network/stats ==="
+    01)
+        # Params: $1=head (chain head; the Rust query inlines it via format!).
         local head
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             head="$DUMMY_LEDGER_SEQ"
         else
             head=$(ch_oneshot "SELECT max(sequence) FROM ledgers")
-            require_value "$head" "ledgers" || return 1
+            require_value "$head" "ledgers" || return 2
         fi
-        ch_exec "$(explain_wrap "$(substitute_params "$(<"$FILE")" "$head")")" ;;
+        run_all_stmts "$FILE" "$head"
+        ;;
 
     02)
-        # Statement A — no filter. PR #175 amendment: $7 = latest_partition
-        # (intDiv(max_ledger, 500000)) bounds the scan to one partition
-        # to avoid full-table FINAL memory blowup.
-        # Params: $1=limit, $2=cursor_ledger, $3=cursor_tx_id, $4=source_id,
-        # $5=contract_id, $6=op_type, $7=latest_partition.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E02: GET /transactions (statement A) ==="
+        # 5 statements, file-wide params: $1=limit, $2=cursor_ledger,
+        # $3=cursor_app_order, $4=source_id, $5=contract_id, $6=op_type,
+        # $7=latest_partition (PR #175: intDiv(max_ledger, 500000) bounds the
+        # unfiltered scan to one partition). Filters get typed dummies so the
+        # filtered statements (B contract, C/D op-type) plan their real shape.
         local latest_part
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             latest_part="124"  # intDiv(62016000, 500000)
         else
-            latest_part=$(ch_oneshot "SELECT intDiv(max(ledger_sequence), 500000) FROM transactions FINAL")
-            require_value "$latest_part" "transactions" || return 1
+            latest_part=$(ch_oneshot "SELECT intDiv(max(ledger_sequence), 500000) FROM transactions")
+            require_value "$latest_part" "transactions" || return 2
             echo "  latest_partition = $latest_part"
         fi
-        local STMT; STMT=$(get_statement "$FILE" 1)
-        local SUB; SUB=$(substitute_params "$STMT" "50" "NULL" "NULL" "NULL" "NULL" "NULL" "$latest_part")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "50" "NULL" "NULL" "NULL" "$DUMMY_ID_I64" "1" "$latest_part"
         ;;
 
     03)
         # 6 statements; A=hash index seek (hash→ledger_sequence), B=header,
         # C=ops, D=participants, E=events (full payload §5.1), F=invocations.
         # All take $1=hash (FixedString(32) — pass as unhex(hex)).
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E03: GET /transactions/:hash ==="
         local hex
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             hex="$DUMMY_HASH_HEX"
         else
             hex=$(ch_oneshot "SELECT lower(hex(hash)) FROM transactions WHERE ledger_sequence = (SELECT max(ledger_sequence) FROM transactions) LIMIT 1")
-            require_value "$hex" "transactions" || return 1
+            require_value "$hex" "transactions" || return 2
             echo "  hash = $hex"
         fi
-        local stmt_idx
-        for stmt_idx in 1 2 3 4 5 6; do
-            local STMT SUB
-            STMT=$(get_statement "$FILE" "$stmt_idx")
-            SUB=$(substitute_params "$STMT" "unhex('$hex')")
-            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement $stmt_idx ---"
-            ch_exec "$(explain_wrap "$SUB")" || true
-        done
+        run_all_stmts "$FILE" "unhex('$hex')"
         ;;
 
     04)
         # Stmt A params: $1=limit, $2=cursor_closed_at, $3=cursor_sequence.
         # Stmt B params: $1=sequence list, $2=partition list (task 0445).
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E04: GET /ledgers ==="
-        local stmt_idx
-        for stmt_idx in 1 2; do
-            local STMT SUB
-            STMT=$(get_statement "$FILE" "$stmt_idx")
-            if [[ "$stmt_idx" == "1" ]]; then
-                SUB=$(substitute_params "$STMT" "50" "NULL" "NULL")
-            else
-                SUB=$(substitute_params "$STMT" "$DUMMY_LEDGER_SEQ" \
-                    "$((DUMMY_LEDGER_SEQ / 500000))")
-            fi
-            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement $stmt_idx ---"
-            ch_exec "$(explain_wrap "$SUB")" || true
-        done
+        check 1 "page" "$(stmt "$FILE" 1 "50" "NULL" "NULL")"
+        check 2 "aggregates" "$(stmt "$FILE" 2 "$DUMMY_LEDGER_SEQ" "$((DUMMY_LEDGER_SEQ / 500000))")"
         ;;
 
     05)
-        # Params: $1=sequence (used in both stmts), $2=cursor_lseq,
-        # $3=cursor_id, $4=limit.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E05: GET /ledgers/:sequence ==="
+        # Stmt A: $1=sequence. Stmt B: $1=sequence, $2=cursor_lseq,
+        # $3=cursor_id, $4=limit. Stmt C (task 0445): $1=sequence list,
+        # $2=partition list.
         local seq
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             seq="$DUMMY_LEDGER_SEQ"
         else
             seq=$(ch_oneshot "SELECT max(sequence) FROM ledgers")
-            require_value "$seq" "ledgers" || return 1
+            require_value "$seq" "ledgers" || return 2
             echo "  sequence = $seq"
         fi
-        local stmt_idx
-        for stmt_idx in 1 2 3; do
-            local STMT SUB
-            STMT=$(get_statement "$FILE" "$stmt_idx")
-            case "$stmt_idx" in
-                1) SUB=$(substitute_params "$STMT" "$seq") ;;
-                2) SUB=$(substitute_params "$STMT" "$seq" "NULL" "NULL" "50") ;;
-                # Stmt C (task 0445): $1=sequence list, $2=partition list.
-                3) SUB=$(substitute_params "$STMT" "$seq" "$((seq / 500000))") ;;
-            esac
-            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement $stmt_idx ---"
-            ch_exec "$(explain_wrap "$SUB")" || true
-        done
+        check 1 "header" "$(stmt "$FILE" 1 "$seq")"
+        check 2 "transactions" "$(stmt "$FILE" 2 "$seq" "NULL" "NULL" "50")"
+        check 3 "aggregates" "$(stmt "$FILE" 3 "$seq" "$((seq / 500000))")"
         ;;
 
     06)
-        # 2 statements. A: WHERE account_id = $1 (StrKey). B: WHERE
-        # abc.account_id = $1 (Int64 surrogate from A). Capture A's
-        # `id` projection and thread into B.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E06: GET /accounts/:account_id ==="
-        local strkey acc_id STMT_A STMT_B SUB_A SUB_B
+        # 3 statements. A: $1 = StrKey. B: $1 = Int64 account id from A.
+        # C: $1 = account id, $2 = native asset surrogate (bound from Rust).
+        local strkey acc_id native_id
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             strkey="$DUMMY_STRKEY_G"
             acc_id="$DUMMY_ID_I64"
+            native_id="$DUMMY_ID_I64"
         else
             strkey=$(ch_oneshot "SELECT account_id FROM accounts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$strkey" "accounts" || return 1
+            require_value "$strkey" "accounts" || return 2
             echo "  account = $strkey"
             acc_id=$(ch_oneshot "SELECT id FROM accounts FINAL WHERE account_id = '$strkey' LIMIT 1")
-            require_value "$acc_id" "accounts.id" || return 1
+            require_value "$acc_id" "accounts.id" || return 2
             echo "  id = $acc_id"
+            native_id=$(ch_oneshot "SELECT id FROM assets WHERE asset_type = 0 LIMIT 1")
+            require_value "$native_id" "assets (native row)" || return 2
         fi
-        STMT_A=$(get_statement "$FILE" 1)
-        STMT_B=$(get_statement "$FILE" 2)
-        SUB_A=$(substitute_params "$STMT_A" "'$strkey'")
-        SUB_B=$(substitute_params "$STMT_B" "$acc_id")
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement 1 (header) ---"
-        ch_exec "$(explain_wrap "$SUB_A")" || true
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement 2 (balances) ---"
-        ch_exec "$(explain_wrap "$SUB_B")" || true
+        check 1 "header" "$(stmt "$FILE" 1 "'$strkey'")"
+        check 2 "balances" "$(stmt "$FILE" 2 "$acc_id")"
+        check 3 "deleted flag" "$(stmt "$FILE" 3 "$acc_id" "$native_id")"
         ;;
 
     07)
-        # Params: $1=account_strkey, $2=limit, $3=cursor_ledger, $4=cursor_tx_id.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E07: GET /accounts/:account_id/transactions ==="
+        # Params: $1=account_strkey, $2=limit, $3=cursor_ledger,
+        # $4=cursor_app_order. B/C take example literal IN lists.
         local strkey
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             strkey="$DUMMY_STRKEY_G"
         else
             strkey=$(ch_oneshot "SELECT account_id FROM accounts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$strkey" "accounts" || return 1
+            require_value "$strkey" "accounts" || return 2
             echo "  account = $strkey"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$strkey'" "50" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "'$strkey'" "50" "NULL" "NULL"
         ;;
 
     08)
-        # PR #175: assets dropped surrogate id; cursor is 4-tuple natural key.
-        # Params: $1=limit, $2..$5=cursor 4-tuple, $6=asset_type_filter, $7=asset_code_filter.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E08: GET /assets ==="
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "50" "NULL" "NULL" "NULL" "NULL" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        # Two-phase list (task 0364). A: $1=limit, $2=asset_type_filter,
+        # $3=asset_code_filter, $4/$5=cursor (holder_rank, id), $6=sac_only.
+        # B–D take example literal IN lists. A is checked twice: first page
+        # unfiltered, then every filter + the cursor bound, so both branches
+        # of each `$N IS NULL OR …` gate are type-checked.
+        check 1 "seek, first page" "$(stmt "$FILE" 1 "50" "NULL" "NULL" "NULL" "NULL" "0")"
+        check 1 "seek, filtered + cursor" "$(stmt "$FILE" 1 "50" "1" "'usdc'" "100" "$DUMMY_ID_I64" "1")"
+        check 2 "hydrate" "$(stmt "$FILE" 2)"
+        check 3 "contract context" "$(stmt "$FILE" 3)"
+        check 4 "page issuers" "$(stmt "$FILE" 4)"
         ;;
 
     09)
-        # PR #175: takes natural 4-tuple instead of single surrogate id.
-        # Params: $1=asset_type, $2=asset_code, $3=issuer_id, $4=contract_id.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E09: GET /assets/:id ==="
-        local atype acode aiss actr
+        # File-wide params: $1=issuer StrKey, $2=asset_code, $3=issuer_id
+        # (from A), $4=issuer_id_key (from D). C–E take example literals.
+        local iss_strkey acode iss_id
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            atype="1"; acode="'USDC'"; aiss="0"; actr="0"
+            iss_strkey="$DUMMY_STRKEY_G"; acode="USDC"; iss_id="$DUMMY_ID_I64"
         else
-            # Discover any real asset's 4-tuple
             local row
-            row=$(ch_oneshot "SELECT toString(asset_type) || '|' || asset_code || '|' || toString(issuer_id) || '|' || toString(contract_id) FROM assets FINAL LIMIT 1")
-            require_value "$row" "assets" || return 1
-            atype="${row%%|*}"; row="${row#*|}"
-            acode="'${row%%|*}'"; row="${row#*|}"
-            aiss="${row%%|*}"; row="${row#*|}"
-            actr="$row"
-            echo "  asset (type, code, issuer_id, contract_id) = ($atype, $acode, $aiss, $actr)"
+            row=$(ch_oneshot "SELECT a.asset_code || '|' || toString(a.issuer_id) FROM assets a WHERE a.asset_type = 1 LIMIT 1")
+            require_value "$row" "assets (classic credit)" || return 2
+            acode="${row%%|*}"; iss_id="${row#*|}"
+            iss_strkey=$(ch_oneshot "SELECT account_id FROM accounts WHERE id = $iss_id LIMIT 1")
+            require_value "$iss_strkey" "accounts (issuer $iss_id)" || return 2
+            echo "  asset = $acode-$iss_strkey"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "$atype" "$acode" "$aiss" "$actr")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "'$iss_strkey'" "'$acode'" "$iss_id" "$iss_id"
         ;;
 
     10)
-        # 2 variants. PR #175 amendment:
-        #  Variant A (classic identity): $1=asset_code, $2=asset_issuer_id, $3=limit, $4=cursor_ledger, $5=cursor_tx_id.
-        #  Variant B (contract identity): $1=contract_id (Int64), $2=limit, $3=cursor_ledger, $4=cursor_tx_id.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E10: GET /assets/:id/transactions ==="
-        # Run variant A with first classic-identity asset (asset_code+issuer_id)
-        local STMT_A SUB_A acode aiss
+        # Params: $1=asset_id (ids::asset_id surrogate), $2=limit,
+        # $3=cursor_ledger, $4=cursor_app_order. B/C take example literals.
+        local aid
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            acode="'USDC'"; aiss="1234"
+            aid="$DUMMY_ID_I64"
         else
-            local row_a
-            row_a=$(ch_oneshot "SELECT asset_code || '|' || toString(issuer_id) FROM assets FINAL WHERE length(asset_code) > 0 AND issuer_id != 0 LIMIT 1")
-            if [[ -n "$row_a" ]]; then
-                acode="'${row_a%%|*}'"; aiss="${row_a#*|}"
-                echo "  variant A (asset_code, issuer_id) = ($acode, $aiss)"
-            else
-                echo "  variant A — no classic asset; skipping"
-                acode=""
-            fi
+            aid=$(ch_oneshot "SELECT id FROM assets WHERE id != 0 LIMIT 1")
+            require_value "$aid" "assets" || return 2
+            echo "  asset_id = $aid"
         fi
-        if [[ -n "$acode" ]]; then
-            STMT_A=$(get_statement "$FILE" 1)
-            SUB_A=$(substitute_params "$STMT_A" "$acode" "$aiss" "50" "NULL" "NULL")
-            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- variant A (classic identity) ---"
-            ch_exec "$(explain_wrap "$SUB_A")" || true
-        fi
-        # Variant B with first contract-identity asset
-        local STMT_B SUB_B actr_b
-        if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            actr_b="1234"
-        else
-            actr_b=$(ch_oneshot "SELECT toString(contract_id) FROM assets FINAL WHERE contract_id != 0 LIMIT 1")
-        fi
-        if [[ -n "$actr_b" ]]; then
-            echo "  variant B (contract_id) = $actr_b"
-            STMT_B=$(get_statement "$FILE" 2)
-            SUB_B=$(substitute_params "$STMT_B" "$actr_b" "50" "NULL" "NULL")
-            [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- variant B (contract identity) ---"
-            ch_exec "$(explain_wrap "$SUB_B")" || true
-        fi
+        run_all_stmts "$FILE" "$aid" "50" "NULL" "NULL"
         ;;
 
     11)
-        # 2 statements. A: WHERE contract_id = $1 (StrKey). B: WHERE
-        # sia.contract_id = $1 (Int64 surrogate from A) AND closed_at filter
-        # with $2 = window_days. Capture A's `id` projection and thread into B.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E11: GET /contracts/:contract_id ==="
-        local strkey ctr_id STMT_A STMT_B SUB_A SUB_B
+        # 3 statements. A: $1 = StrKey. B: $1 = Int64 contract id from A,
+        # $2 = window_days. C (task 0441): $3 = contract id list.
+        local strkey ctr_id
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             strkey="$DUMMY_STRKEY_C"
             ctr_id="$DUMMY_ID_I64"
         else
             strkey=$(ch_oneshot "SELECT contract_id FROM soroban_contracts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$strkey" "soroban_contracts" || return 1
+            require_value "$strkey" "soroban_contracts" || return 2
             echo "  contract = $strkey"
             ctr_id=$(ch_oneshot "SELECT id FROM soroban_contracts FINAL WHERE contract_id = '$strkey' LIMIT 1")
-            require_value "$ctr_id" "soroban_contracts.id" || return 1
+            require_value "$ctr_id" "soroban_contracts.id" || return 2
             echo "  id = $ctr_id"
         fi
-        STMT_A=$(get_statement "$FILE" 1)
-        STMT_B=$(get_statement "$FILE" 2)
-        SUB_A=$(substitute_params "$STMT_A" "'$strkey'")
-        SUB_B=$(substitute_params "$STMT_B" "$ctr_id" "7")
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement 1 (header) ---"
-        ch_exec "$(explain_wrap "$SUB_A")" || true
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "--- statement 2 (stats, window=7d) ---"
-        ch_exec "$(explain_wrap "$SUB_B")" || true
+        check 1 "header" "$(stmt "$FILE" 1 "'$strkey'")"
+        check 2 "stats, window=7d" "$(stmt "$FILE" 2 "$ctr_id" "7")"
+        check 3 "mirrored asset" "$(stmt "$FILE" 3 "" "" "$ctr_id")"
         ;;
 
-    12)
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E12: GET /contracts/:contract_id/interface ==="
+    12|13|14)
+        # 12: $1=contract_strkey.
+        # 13: $1=contract_strkey, $2=limit, $3=cursor_ledger, $4=cursor_tx_id.
+        # 14: $1=contract_strkey, $2=limit, $3..$6=cursor (ledger,
+        #     transaction_index, operation_index, event_index).
         local strkey
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             strkey="$DUMMY_STRKEY_C"
         else
             strkey=$(ch_oneshot "SELECT contract_id FROM soroban_contracts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$strkey" "soroban_contracts" || return 1
+            require_value "$strkey" "soroban_contracts" || return 2
             echo "  contract = $strkey"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$strkey'")
-        ch_exec "$(explain_wrap "$SUB")"
-        ;;
-
-    13)
-        # Params: $1=contract_strkey, $2=limit, $3=cursor_ledger, $4=cursor_tx_id.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E13: GET /contracts/:contract_id/invocations ==="
-        local strkey
-        if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            strkey="$DUMMY_STRKEY_C"
-        else
-            strkey=$(ch_oneshot "SELECT contract_id FROM soroban_contracts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$strkey" "soroban_contracts" || return 1
-            echo "  contract = $strkey"
-        fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$strkey'" "50" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
-        ;;
-
-    14)
-        # Params: $1=contract_strkey, $2=limit, $3=cursor_ledger,
-        # $4=cursor_tx_id, $5=cursor_event_index. Review #5 fix: cursor
-        # tuple now includes event_index as final tiebreaker.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E14: GET /contracts/:contract_id/events ==="
-        local strkey
-        if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            strkey="$DUMMY_STRKEY_C"
-        else
-            strkey=$(ch_oneshot "SELECT contract_id FROM soroban_contracts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$strkey" "soroban_contracts" || return 1
-            echo "  contract = $strkey"
-        fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$strkey'" "50" "NULL" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "'$strkey'" "50" "NULL" "NULL" "NULL" "NULL"
         ;;
 
     15)
         # PR #175: nfts dropped surrogate id; cursor is (contract_id, token_id) tuple.
         # Params: $1=limit, $2=cursor_contract_id, $3=cursor_token_id,
         #         $4=collection_name, $5=contract_strkey_filter, $6=name_filter.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E15: GET /nfts ==="
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "50" "NULL" "NULL" "NULL" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "50" "NULL" "NULL" "NULL" "NULL" "NULL"
         ;;
 
-    16)
-        # PR #175: takes (contract_strkey, token_id) tuple instead of surrogate id.
-        # Params: $1=contract_strkey, $2=token_id.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E16: GET /nfts/:id ==="
+    16|17)
+        # 16: $1=contract_strkey, $2=token_id.
+        # 17: + $3=limit, $4=cursor_ledger, $5=cursor_event_order.
         local strkey tokid
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             strkey="$DUMMY_STRKEY_C"; tokid="'1'"
         else
             local row
             row=$(ch_oneshot "SELECT sc.contract_id || '|' || n.token_id FROM nfts n FINAL JOIN soroban_contracts sc FINAL ON sc.id = n.contract_id LIMIT 1")
-            require_value "$row" "nfts" || return 1
+            require_value "$row" "nfts" || return 2
             strkey="${row%%|*}"
             tokid="'${row#*|}'"
             echo "  nft (contract_strkey, token_id) = ($strkey, $tokid)"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$strkey'" "$tokid")
-        ch_exec "$(explain_wrap "$SUB")"
-        ;;
-
-    17)
-        # PR #175: takes (contract_strkey, token_id) plus cursor.
-        # Params: $1=contract_strkey, $2=token_id, $3=limit, $4=cursor_ledger, $5=cursor_event_order.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E17: GET /nfts/:id/transfers ==="
-        local strkey17 tokid17
-        if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            strkey17="$DUMMY_STRKEY_C"; tokid17="'1'"
-        else
-            local row17
-            row17=$(ch_oneshot "SELECT sc.contract_id || '|' || n.token_id FROM nfts n FINAL JOIN soroban_contracts sc FINAL ON sc.id = n.contract_id LIMIT 1")
-            require_value "$row17" "nfts" || return 1
-            strkey17="${row17%%|*}"
-            tokid17="'${row17#*|}'"
-            echo "  nft (contract_strkey, token_id) = ($strkey17, $tokid17)"
-        fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$strkey17'" "$tokid17" "50" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "'$strkey'" "$tokid" "50" "NULL" "NULL"
         ;;
 
     18)
-        # Params: $1=limit, $2=cursor_created_at_ledger, $3=cursor_pool_id,
-        # $4..$7=asset pair filters, $8=min_tvl.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E18: GET /liquidity-pools ==="
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "50" "NULL" "NULL" "NULL" "NULL" "NULL" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        # Params: $1=limit, $2=cursor_activity_ledger, $3=cursor_pool_id,
+        # $4=asset_code filter, $5=pool_kind filter.
+        run_all_stmts "$FILE" "50" "NULL" "NULL" "NULL" "NULL"
         ;;
 
-    19)
-        # Params: $1=pool_id (FixedString(32) — pass as unhex(hex)).
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E19: GET /liquidity-pools/:id ==="
+    19|23)
+        # 19: $1=pool_id (FixedString(32) — pass as unhex(hex)).
+        # 23: + $2=limit, $3=cursor_shares, $4=cursor_account_id.
         local pool_hex
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             pool_hex="$DUMMY_POOL_HEX"
         else
             pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY last_updated_ledger DESC LIMIT 1")
-            require_value "$pool_hex" "liquidity_pools" || return 1
+            require_value "$pool_hex" "liquidity_pools" || return 2
             echo "  pool = $pool_hex"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "unhex('$pool_hex')")
-        ch_exec "$(explain_wrap "$SUB")"
-        ;;
-
-    20)
-        # Params: $1=pool_id, $2=limit, $3=cursor_ledger, $4=cursor_tx_id.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E20: GET /liquidity-pools/:id/transactions ==="
-        local pool_hex
-        if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            pool_hex="$DUMMY_POOL_HEX"
-        else
-            pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY last_updated_ledger DESC LIMIT 1")
-            require_value "$pool_hex" "liquidity_pools" || return 1
-            echo "  pool = $pool_hex"
-        fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "unhex('$pool_hex')" "50" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "unhex('$pool_hex')" "50" "NULL" "NULL"
         ;;
 
     21)
-        # Params: $1=pool_id, $2=from_ledger, $3=to_ledger, $4=interval_seconds.
-        # Review #6 fix: partition prune uses intDiv($3 - 1, 500000) for the
-        # half-open upper bound — applied in the SQL file.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E21: GET /liquidity-pools/:id/chart ==="
-        local pool_hex
+        # Bound: $1=pool_id hex, $2=from_ms, $3=to_ms, $4..$6 leg A
+        # (kind, code, issuer), $7..$9 leg B. Format fragments per interval —
+        # the SAME table as get_pool_chart.rs `fetch_pool_chart` (and the 21
+        # header); keep the three in step:
+        #   1h → bucket_fn=toStartOfHour price_bucket_fn=toStartOfHour series_view=prices.price_usd_series_1h
+        #   1d → bucket_fn=toStartOfDay  price_bucket_fn=toStartOfDay  series_view=prices.price_usd_series
+        #   1w → bucket_fn=toMonday      price_bucket_fn=toStartOfDay  series_view=prices.price_usd_series
+        #   carry = MAX_PRICE_CARRY_SECONDS = 172800
+        # `series_view` is replaced by PRICES_SERIES_STUB (see its comment).
+        local pool_hex from_ms to_ms
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
-            pool_hex="$DUMMY_POOL_HEX"
+            pool_hex="$DUMMY_POOL_HEX"; from_ms="$DUMMY_FROM_MS"; to_ms="$DUMMY_TO_MS"
         else
             pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY last_updated_ledger DESC LIMIT 1")
-            require_value "$pool_hex" "liquidity_pools" || return 1
-            echo "  pool = $pool_hex (range: 0..100000, bucket=1d)"
+            require_value "$pool_hex" "liquidity_pools" || return 2
+            to_ms=$(ch_oneshot "SELECT toUnixTimestamp64Milli(max(closed_at)) FROM ledgers")
+            from_ms=$((to_ms - 7 * 86400 * 1000))
+            echo "  pool = $pool_hex (last 7 days, prices stubbed)"
         fi
-        # Range 0..100000, interval 86400s (1 day) — works on empty CH for parse.
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "unhex('$pool_hex')" "0" "100000" "86400")
-        ch_exec "$(explain_wrap "$SUB")"
+        local base; base=$(stmt "$FILE" 1 "'$pool_hex'" "$from_ms" "$to_ms" \
+            "'native'" "'XLM'" "''" "'credit'" "'USDC'" "'$DUMMY_STRKEY_G'")
+        local spec interval bucket_fn price_bucket_fn series_view
+        for spec in "1h toStartOfHour toStartOfHour prices.price_usd_series_1h" \
+                    "1d toStartOfDay toStartOfDay prices.price_usd_series" \
+                    "1w toMonday toStartOfDay prices.price_usd_series"; do
+            read -r interval bucket_fn price_bucket_fn series_view <<<"$spec"
+            check 1 "interval=$interval, series_view=$series_view (stubbed)" \
+                "$(substitute_fragments "$base" \
+                    "bucket_fn=$bucket_fn" "price_bucket_fn=$price_bucket_fn" \
+                    "series_view=$PRICES_SERIES_STUB" "carry=172800")"
+        done
         ;;
 
     22)
-        # Params: $1=q (raw String), $2=hash_bytes (FixedString(32) or NULL),
-        # $3=strkey_prefix, $4=per_group_limit, $5..$10=include_* flags.
-        # Review #4 fix: tx bucket uses $2 hash_bytes (not unhex($1)) so it
-        # works for base64-shaped input — applied in the SQL file.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E22: GET /search ==="
+        # File-wide params: $1=q, $2=q_hex, $3=strkey_prefix,
+        # $4=per_group_limit, $5=code, $6=issuer, $7=ledger, $8=partition.
+        # The contract-name and issuer steps take example literal IN lists.
         local prefix
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             prefix="GAAA"
         else
             prefix=$(ch_oneshot "SELECT substring(account_id, 1, 4) FROM accounts FINAL ORDER BY id DESC LIMIT 1")
-            require_value "$prefix" "accounts" || return 1
+            require_value "$prefix" "accounts" || return 2
             echo "  query prefix = $prefix (StrKey path)"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "'$prefix'" "NULL" "'$prefix'" "10" "true" "true" "true" "true" "true" "true")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "'$prefix'" "'$DUMMY_HASH_HEX'" "'$prefix'" "10" \
+            "'USDC'" "'$DUMMY_STRKEY_G'" "$DUMMY_LEDGER_SEQ" "$((DUMMY_LEDGER_SEQ / 500000))"
         ;;
 
-    23)
-        # Params: $1=pool_id, $2=limit, $3=cursor_shares, $4=cursor_account_id.
-        [[ "$SYNTAX_ONLY" == "0" ]] && echo "=== E23: GET /liquidity-pools/:id/participants ==="
+    24)
+        # Step 1: $1=pool_id (64-char hex TEXT). Steps 2/3 take example
+        # literal IN lists.
         local pool_hex
         if [[ "$SYNTAX_ONLY" == "1" ]]; then
             pool_hex="$DUMMY_POOL_HEX"
         else
-            pool_hex=$(ch_oneshot "SELECT lower(hex(lp.pool_id)) FROM liquidity_pools lp JOIN lp_positions p FINAL ON p.pool_id = lp.pool_id WHERE p.shares > 0 ORDER BY lp.last_updated_ledger DESC LIMIT 1")
-            require_value "$pool_hex" "lp_positions (with shares > 0)" || return 1
+            pool_hex=$(ch_oneshot "SELECT lower(hex(pool_id)) FROM liquidity_pools ORDER BY last_updated_ledger DESC LIMIT 1")
+            require_value "$pool_hex" "liquidity_pools" || return 2
             echo "  pool = $pool_hex"
         fi
-        local SUB; SUB=$(substitute_params "$(<"$FILE")" "unhex('$pool_hex')" "50" "NULL" "NULL")
-        ch_exec "$(explain_wrap "$SUB")"
+        run_all_stmts "$FILE" "'$pool_hex'"
         ;;
 
     *)
-        echo "unknown id: $id" >&2
+        echo "  [FAIL] no runner arm for $(basename "$FILE") — add one to run_endpoint_ch.sh"
+        CHECKS=$((CHECKS + 1)); FAILS=$((FAILS + 1))
         return 1 ;;
     esac
+
+    # Coverage: every split section checked, and every `;` in its own section.
+    local total n; total=$(statement_count "$FILE")
+    for ((n=1; n<=total; n++)); do
+        if [[ "$SEEN" != *" $n "* ]]; then
+            echo "  [FAIL] statement $n of $total is not exercised by the runner arm"
+            CHECKS=$((CHECKS + 1)); FAILS=$((FAILS + 1))
+        fi
+    done
+    local terminated; terminated=$(terminated_count "$FILE")
+    if [[ "$terminated" != "$total" ]]; then
+        echo "  [FAIL] $terminated ';'-terminated statements but $total split sections — separate them with '-- @@ split @@'"
+        CHECKS=$((CHECKS + 1)); FAILS=$((FAILS + 1))
+    fi
+
+    [[ "$FAILS" -eq "$fails_before" ]]
 }
 
 # =============================================================================
 # Dispatch
 # =============================================================================
+ids=()
 if [[ "$ID" == "all" ]]; then
-    for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23; do
-        echo
-        run_one "$i" || echo "  -> failed (id=$i)"
+    for f in "$QUERY_DIR"/[0-9][0-9]_*.sql; do
+        b=$(basename "$f"); ids+=("${b%%_*}")
     done
 else
-    run_one "$ID"
+    ids=("$(printf '%02d' "$((10#$ID))" 2>/dev/null || echo "$ID")")
 fi
+
+failed=(); skipped=()
+for i in "${ids[@]}"; do
+    [[ "${#ids[@]}" -gt 1 ]] && echo
+    run_one "$i"
+    case $? in
+        0) ;;
+        2) skipped+=("$i") ;;
+        *) failed+=("$i") ;;
+    esac
+done
+
+echo
+if [[ "$SYNTAX_ONLY" == "1" ]]; then
+    echo "Tier 1: $((CHECKS - FAILS)) of $CHECKS checks pass across ${#ids[@]} file(s)."
+fi
+if [[ "${#skipped[@]}" -gt 0 ]]; then
+    echo "Skipped (no data): ${skipped[*]}"
+fi
+if [[ "${#failed[@]}" -gt 0 ]]; then
+    echo "FAILED: ${failed[*]}"
+    exit 1
+fi
+exit 0
