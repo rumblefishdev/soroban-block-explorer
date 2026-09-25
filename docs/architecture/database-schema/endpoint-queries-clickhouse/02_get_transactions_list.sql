@@ -62,7 +62,7 @@
 --       0372). The join they replaced, to an unpruned `transactions t FINAL`,
 --       merged the whole 3.6B-row table per request (measured; blew the
 --       read_rows quota, Code: 201). The contract driver is one seek on the
---       `contract_transactions` presence index (task 0541; before it the
+--       `contract_activity` presence index (tasks 0541, 0586; before it the
 --       `idx_oa_contract_id` bloom skip-index on `operations_appearances`,
 --       task 0333 — box-measured 13.18 M read_rows / 1609 granules → 245 K /
 --       32 granules). The `type` driver (Statement C) scans one partition of
@@ -98,8 +98,8 @@
 --                                     scan that previously blew CH memory limit.
 -- Indexes:      transactions ORDER BY (ledger_sequence, application_order)
 --                 + PARTITION BY intDiv(ledger_sequence, 500000).
---               contract_transactions ORDER BY (contract_id, ledger_sequence,
---                 application_order) — Statement B's driver (task 0541).
+--               contract_activity ORDER BY (contract_id, ledger_sequence,
+--                 application_order) — Statement B's driver (tasks 0541, 0586).
 --               transaction_operations ORDER BY (ledger_sequence,
 --                 application_order, operation_index) — Statement C's driver
 --                 (a partition scan by `type`), B's operation-type filter and
@@ -170,7 +170,7 @@ ORDER BY t.ledger_sequence DESC, t.application_order DESC;
 -- ============================================================================
 -- Statement B — contract filter set (with or without op_type)
 -- ============================================================================
--- Step 1: driven by one seek on the `contract_transactions` presence index
+-- Step 1: driven by one seek on the `contract_activity` presence index
 -- (task 0541) — the shape `transaction_participants` gives the account list. It
 -- replaced a UNION over `operations_appearances`,
 -- `soroban_invocations_appearances` and `soroban_events` that hashed the whole
@@ -182,7 +182,7 @@ ORDER BY t.ledger_sequence DESC, t.application_order DESC;
 -- not merged yet (no FINAL — it would merge the contract's rows across every
 -- part).
 SELECT ledger_sequence, application_order
-FROM contract_transactions
+FROM contract_activity
 WHERE contract_id = $5
   AND ledger_sequence <= (SELECT max(sequence) FROM ledgers)
   AND ($2 IS NULL OR (ledger_sequence, application_order) < ($2, $3))

@@ -31,14 +31,15 @@
 --                 application_order, operation_index) — statement C is a
 --                 primary-key seek on the transaction's position (task 0372).
 --               transaction_participants, soroban_events — filtered by the
---                 position too; soroban_invocations_appearances — by
---                 transaction_id. All PARTITION BY intDiv(ledger_sequence, 500000).
+--                 position too; contract_activity (F) — by the position,
+--                 behind a leading contract_id (task 0586). All PARTITION BY
+--                 intDiv(ledger_sequence, 500000).
 --               accounts, soroban_contracts — Replacing state, FINAL.
 -- CH Engine:    All Replacing — FINAL on every read. ledgers MergeTree only.
 -- CH Pattern:   6 statements like PG. A seeks the hash index; subsequent
 --                 statements use the resolved position `(ledger_sequence,
---                 application_order)` (C–E) or `(ledger_sequence,
---                 transaction_id)` (F) for partition prune + sparse-PK seek.
+--                 application_order)` (C–F) for partition prune + sparse-PK
+--                 seek.
 -- ADR 0044 §:   §4.9, §4.2/§4.3 (Replacing
 --                 partitioned), §4.4 (soroban_events full payload — §5.1
 --                 divergence: E reads full payload not just appearance index),
@@ -47,7 +48,7 @@
 -- Notes:
 --   • Six statements. The API runs them sequentially, threading the
 --     position `(ledger_sequence, application_order)` from statement B into
---     C–E and `(transaction_id, ledger_sequence)` into F.
+--     C–F.
 --   • Statement A is the partition-pruning shortcut: hash → ledger_sequence
 --     via a `transaction_hash_prefix_index` seek on the hash's first 8 bytes —
 --     every candidate ledger; `transactions` decides by the full hash (more
@@ -81,7 +82,6 @@ ORDER BY ledger_sequence DESC;
 --    then sparse-PK seek on (ledger_sequence, application_order, id).
 -- ============================================================================
 SELECT
-    t.id                                    AS transaction_id,
     lower(hex(t.hash))                      AS hash_hex,
     t.ledger_sequence,
     t.application_order,
@@ -220,26 +220,28 @@ ORDER BY se.ledger_sequence, sc.contract_id, se.transaction_index, se.operation_
 --    function_name/args/return_value still come from Archive XDR — those are
 --    not stored in CH either (ADR 0029 boundary applies to both stores).
 -- ============================================================================
+--    Located by the transaction's POSITION (task 0586): the API binds
+--    `(ledger_sequence, application_order)` from statement B; here the same
+--    subquery as D and E derives it from the hash. `contract_activity` leads
+--    with `contract_id`, so this reads the ledger's granules of the partition,
+--    as the old surrogate lookup did (2.1 M rows / 32 ms against 1.0 M /
+--    25 ms, measured on the same key shape). The API resolves the surrogates
+--    to StrKeys by key seeks, not joins, and reads `caller_id` only.
 SELECT
-    sc.contract_id,
-    caller.account_id                       AS caller_account,
-    caller_contract.contract_id             AS caller_contract,
-    sia.ledger_sequence,
-    sia.amount,
+    ca.contract_id                          AS contract_surrogate,
+    ca.caller_id,
+    ca.caller_contract_id,
+    ca.invocation_count,
+    ca.ledger_sequence,
     l.closed_at                             AS created_at
     -- not in DB: function_name, args, return_value — Archive XDR.
-FROM soroban_invocations_appearances sia FINAL
-JOIN soroban_contracts sc FINAL ON sc.id = sia.contract_id
-LEFT JOIN accounts          caller          FINAL ON caller.id          = sia.caller_id
-LEFT JOIN soroban_contracts caller_contract FINAL ON caller_contract.id = sia.caller_contract_id
-JOIN      ledgers           l                     ON l.sequence = sia.ledger_sequence
-WHERE sia.transaction_id = (
-    SELECT id FROM transactions FINAL WHERE (hash = $1 OR inner_tx_hash = $1)
+FROM contract_activity ca FINAL
+INNER JOIN ledgers l FINAL ON l.sequence = ca.ledger_sequence
+WHERE (ca.ledger_sequence, ca.application_order) = (
+    SELECT ledger_sequence, application_order FROM transactions FINAL
+    WHERE (hash = $1 OR inner_tx_hash = $1)
       AND intDiv(ledger_sequence, 500000)
           IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
           WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
     LIMIT 1)
-  AND intDiv(sia.ledger_sequence, 500000)
-      IN (SELECT intDiv(ledger_sequence, 500000) FROM transaction_hash_prefix_index
-          WHERE hash_prefix = reinterpretAsUInt64(substring($1, 1, 8)))
-ORDER BY sia.ledger_sequence, sc.contract_id;
+  AND ca.invocation_count > 0;

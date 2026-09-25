@@ -10,11 +10,11 @@
 --   $1  :contract_strkey  String   C-form contract ID
 --   $2  :stats_window_days Int     stats window in days (e.g. 7)
 -- Indexes:      soroban_contracts ORDER BY (id) — StrKey resolve walks FINAL.
---               soroban_invocations_appearances ORDER BY (contract_id,
---                 ledger_sequence, transaction_id) — contract-leading scan.
+--               contract_activity ORDER BY (contract_id, ledger_sequence,
+--                 application_order) — contract-leading seek (task 0586).
 --               ledgers ORDER BY (sequence) — JOIN for closed_at filter.
 -- CH Engine:    soroban_contracts — Replacing(wasm_uploaded_at_ledger) (FINAL).
---               soroban_invocations_appearances — Replacing partitioned (FINAL).
+--               contract_activity — Replacing partitioned (FINAL).
 --               accounts — Replacing (FINAL).
 --               ledgers — MergeTree (no FINAL).
 -- CH Pattern:   3 statements; B uses uniqExact for distinct-caller count;
@@ -32,7 +32,7 @@
 --     token metadata lives in the `soroban_contract_metadata` side table and is
 --     surfaced via /assets, not /contracts.
 --   • Statement B: PG uses `created_at >= NOW() - INTERVAL`. CH-side
---     `soroban_invocations_appearances` has no closed_at (§5.2). We JOIN
+--     `contract_activity` has no closed_at (§5.2). We JOIN
 --     `ledgers` on `ledger_sequence` and filter on `ledgers.closed_at`.
 --     The window param is a day count (`$2 = 7`) interpreted as
 --     `INTERVAL $2 DAY` to keep the CH grammar simple — PG uses an
@@ -84,14 +84,20 @@ LIMIT 1;
 --    Inputs: $1 = soroban_contracts.id (Int64, from A.contract_pk),
 --            $2 = window in days (Int).
 -- ============================================================================
+-- The invoked pairs only (`invocation_count > 0`): `contract_activity` also
+-- holds pairs a transaction merely touched (task 0586). The API resolves the
+-- window as one `ledger_sequence >= (first ledger in it)` bound instead of a
+-- join, so duplicate `ledgers` rows cannot fan the count out (lore-0420).
 SELECT
     count()                            AS recent_invocations,
-    uniqExact(sia.caller_id)           AS recent_unique_callers,
+    uniqExact(ca.caller_id)            AS recent_unique_callers,
     toInt32($2)                        AS stats_window_days
-FROM soroban_invocations_appearances sia FINAL
-JOIN ledgers l ON l.sequence = sia.ledger_sequence
-WHERE sia.contract_id = $1
-  AND l.closed_at >= now64() - INTERVAL $2 DAY;
+FROM contract_activity ca FINAL
+WHERE ca.contract_id = $1
+  AND ca.invocation_count > 0
+  AND ca.ledger_sequence >= (
+      SELECT min(sequence) FROM ledgers WHERE closed_at >= now64() - INTERVAL $2 DAY
+  );
 
 -- @@ split @@
 
