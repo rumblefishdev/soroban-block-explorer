@@ -109,7 +109,7 @@
       "Bash(docker system df *)",
       "mcp__plugin_lore-framework_lore-framework__lore-framework_validate"
     ],
-    "deny": [],
+    "deny": ["Bash(pnpm *deploy*)", "Bash(nx *deploy*)"],
     "ask": [
       "Bash(npm:*)",
       "Bash(npx:*)",
