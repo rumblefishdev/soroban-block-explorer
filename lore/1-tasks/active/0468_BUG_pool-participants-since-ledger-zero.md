@@ -117,3 +117,19 @@ transaction source, and a miss keeps the existing value; (2) a one-off data
 repair of the zeroed rows on production (operator); (3) the UI renders an
 unknown first deposit as an explicit absence, for whatever the repair cannot
 recover.
+
+### The live writer is wrong too — the column drifts on every update (2026-09-25)
+
+Sample of 8 positions written live after 2026-07-16 with
+`first_deposit_ledger = last_updated_ledger`: **7 of 8 have an earlier
+deposit** (matched on `coalesce(op source, tx source)`), up to 13.5 M ledgers
+earlier. Cause: an `updated` trustline change carries no first deposit, the
+writer falls back to the change's own ledger (`stage.rs:1656`), and the
+ReplacingMergeTree keeps that newest row. This is the class defect 0497
+describes ("not backfill-only"); `repair-tier1` is the only thing that ever
+corrected it, and its LP entry is broken as recorded above.
+
+So a fixed `repair-tier1` would be right only on the day it runs. The routes
+that survive 0497's measurements are a storage change (AggregatingMergeTree
+`min`, or a projection); read-time derivation costs 12.48 B rows for the
+busiest pool (see 0499).
