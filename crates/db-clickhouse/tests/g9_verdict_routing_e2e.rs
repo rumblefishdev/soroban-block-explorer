@@ -29,8 +29,7 @@ use db_clickhouse::persist::{ClassificationCache, ids, persist_ledger_clickhouse
 use db_clickhouse::{Config, apply_init_sql, client};
 use domain::{ContractEventType, NftEventType};
 use xdr_parser::types::{
-    EventSource, ExtractedEvent, ExtractedLedger, ExtractedNft, ExtractedNftEvent,
-    ExtractedTransaction,
+    ExtractedEvent, ExtractedLedger, ExtractedNft, ExtractedNftEvent, ExtractedTransaction,
 };
 
 /// Out-of-band sentinel — distinct from `smoke.rs` (99_999_001) and
@@ -109,8 +108,15 @@ const NEW_WASM_B64: &str = "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u4=";
 fn fixture_upgrade_event(contract_id: &str) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: tx_hash(),
+        // The ledger's first transaction; the first event of its operation 0.
+        event_id: xdr_parser::EventId {
+            ledger_sequence: E2E_LEDGER,
+            transaction_index: 1,
+            operation_index: 0,
+            event_index: 0,
+        },
+        origin: xdr_parser::EventOrigin::Operation(0),
         event_type: ContractEventType::System,
-        source: EventSource::TxLevel,
         contract_id: Some(contract_id.to_string()),
         topics: serde_json::json!([
             {"type": "symbol", "value": "executable_update"},
@@ -120,19 +126,6 @@ fn fixture_upgrade_event(contract_id: &str) -> ExtractedEvent {
                                       {"type": "bytes", "value": NEW_WASM_B64}]},
         ]),
         data: serde_json::Value::Null,
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        // Staging refuses a consensus event without one (ADR 0059); the
-        // transaction is the ledger's first, its event the first of operation 0.
-        event_id: Some(xdr_parser::EventId {
-            ledger_sequence: E2E_LEDGER,
-            transaction_index: 1,
-            operation_index: 0,
-            event_index: 0,
-        }),
-        ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
     }
 }

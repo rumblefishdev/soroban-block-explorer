@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use xdr_parser::{EventId, EventSource};
+use xdr_parser::EventId;
 
 #[test]
 fn every_consensus_event_of_a_real_ledger_has_a_unique_rpc_id() {
@@ -29,8 +29,7 @@ fn every_consensus_event_of_a_real_ledger_has_a_unique_rpc_id() {
         .events
         .iter()
         .flat_map(|(_, evs)| evs)
-        .filter(|e| e.source != EventSource::Diagnostic)
-        .map(|e| e.event_id.expect("consensus event without an rpc id"))
+        .map(|e| e.event_id)
         .collect();
     let unique: HashSet<_> = ids.iter().collect();
     assert_eq!(unique.len(), ids.len(), "two events share an rpc id");

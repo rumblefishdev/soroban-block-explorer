@@ -934,7 +934,7 @@ XDR parsing happens in two places, each with a different scope:
   `soroban_events_appearances` with an `amount` count of non-diagnostic events
   (ADR 0033). Full event detail (type, topics, data, per-event index) is not
   persisted; E14 re-expands it from the archive via
-  `xdr_parser::extract_events`
+  `xdr_parser::LedgerEvents`
 - Known SEP-41 / NFT transfer patterns also drive derived-state upserts on
   `assets`, `nfts`, and `nft_ownership`. Per-account Soroban token holdings
   are explicitly out of scope: `account_balances_current` (§4.17 of the
@@ -1182,7 +1182,7 @@ CREATE TABLE soroban_events_appearances (
 ```
 
 Parsed event type, topics, and data live at read time in the public archive and are
-re-expanded on demand via `xdr_parser::extract_events`.
+re-expanded on demand via `xdr_parser::LedgerEvents`.
 
 ### 6.7 Assets
 
@@ -1527,7 +1527,7 @@ CloudWatch dashboards and ingestion lag alarms.
    events in known Soroswap/Aquarius/Phoenix transactions (spot-checked by
    transaction hashes); decoded events are confirmed by fetching the
    corresponding `.xdr.zst` from the public archive and re-expanding via
-   `xdr_parser::extract_events`
+   `xdr_parser::LedgerEvents`
 4. `cdk deploy` (AWS side) + `ansible-playbook` (Hetzner side) from clean environments
    produces the full working stack with no manual steps
 5. CloudWatch dashboard accessible; Galexie lag alarm fires correctly in staging

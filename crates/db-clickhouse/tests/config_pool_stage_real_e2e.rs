@@ -56,8 +56,8 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
         let mut txs: Vec<ExtractedTransaction> = Vec::new();
         let mut seq_out = 0u32;
         for lcm in batch.ledger_close_metas.iter() {
-            // Staging refuses a consensus event without its rpc id, so the
-            // events come with ids, as the indexer's do (ADR 0059).
+            // Events come from the ledger, as the indexer's do: fee events
+            // are numbered over all of it (ADR 0059).
             let mut metas = Vec::new();
             let seq = xdr_parser::meta::for_each_tx_meta(lcm, |_, _, m| metas.push(m.clone()));
             let meta_refs: Vec<_> = metas.iter().collect();
@@ -67,7 +67,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
                 let changes = xdr_parser::extract_ledger_entry_changes(meta, &hash, seq, 0);
                 pools.extend(extract_config_pools(&changes));
                 lists.extend(extract_address_list_writes(&changes));
-                events.push((hash.clone(), ledger_events.extract(i, &hash)));
+                events.push((hash.clone(), ledger_events.extract(i, &hash).events));
                 txs.push(synthetic_tx(&hash, seq));
             });
         }

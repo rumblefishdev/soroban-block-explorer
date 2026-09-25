@@ -713,7 +713,7 @@ FORMAT PrettyCompact
   Zero here = persist not running or a broken core write → page.
 - `soroban_events`, `soroban_invocations_appearances` — `> 0` over any
   non-trivial pubnet window (Soroban traffic is continuous). The parser
-  extracts these (`extract_events` / `extract_invocations` in
+  extracts these (`LedgerEvents` / `extract_invocations` in
   `process.rs`) and persist writes them — they are **not** behind the
   enrichment stub. Sustained `0` across thousands of post-cutover ledgers
   points at a specific broken/unported persist branch, not a generic write

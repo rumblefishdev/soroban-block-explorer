@@ -52,7 +52,7 @@ use xdr_parser::claimable_balance::ExtractedClaimableBalance;
 use xdr_parser::executable_ref::ExtractedExecutableRefTarget;
 use xdr_parser::scval;
 use xdr_parser::types::{
-    EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
+    EventOrigin, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
     ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
     ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
     ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
@@ -60,7 +60,7 @@ use xdr_parser::types::{
 use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
 
-use xdr_parser::event::{ExecutableUpdate, extract_executable_update};
+use xdr_parser::executable_update::{ExecutableUpdate, extract_executable_update};
 use xdr_parser::pool_config_factory::PoolConfig;
 use xdr_parser::pool_family::PoolFamilyWrite;
 
@@ -430,14 +430,6 @@ pub fn build_wasm_upgrade_rows(
     let mut by_contract: HashMap<String, SorobanContractRow> = HashMap::new();
     for (_tx_hash, evs) in events {
         for ev in evs {
-            // Only consensus events drive state. The diagnostic container holds
-            // byte-identical copies of consensus events AND events from FAILED
-            // transactions (an upgrade that never applied) — acting on those would
-            // write a `wasm_hash` the chain never adopted. Mirror the `soroban_events`
-            // staging guard (this is the same population the backfill reads, post-drop).
-            if is_diagnostic(ev.source) {
-                continue;
-            }
             // Only the host emits `executable_update`, and always as a SYSTEM
             // event. A contract can emit a Contract-typed event with the same
             // topic shape; requiring System blocks that spoof of its own
@@ -791,14 +783,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let entry = participants_per_tx.entry(tx_hash.clone()).or_default();
         let asset_entry = event_assets_per_tx.entry(tx_hash.clone()).or_default();
         for ev in evs {
-            // Skip diagnostic-source events — they are host trace/simulation
-            // output, not a real state change, and are dropped from the
-            // persisted `soroban_events` (below). Filtering here keeps live
-            // ingest byte-identical to the backfill (which reads `soroban_events`)
-            // and never registers a participant/asset from a failed-call trace.
-            if is_diagnostic(ev.source) {
-                continue;
-            }
             let Some(derived) =
                 derive_token_event(&ev.topics, ev.contract_id.as_deref().map(ids::contract_id))
             else {
@@ -1848,40 +1832,28 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     ));
 
     // ---- soroban_events (UNFOLDED per ADR 0044 §4a, keyed by rpc id per ADR 0059) ----
-    let mut diagnostic_dropped: usize = 0;
     let mut contract_orphan_dropped: usize = 0;
     // (contract, transaction) of every operation event, for
     // `contract_transactions` below: the parser says where an event came from,
-    // so a fee event is left out by its source, not inferred from its id.
+    // so a fee event is left out by its origin, not inferred from its id.
     let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
     for (tx_hash, evs) in events {
         let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
             continue;
         };
         for ev in evs {
-            if is_diagnostic(ev.source) {
-                diagnostic_dropped += 1;
-                continue;
-            }
             let Some(contract_strkey) = &ev.contract_id else {
                 contract_orphan_dropped += 1;
                 continue;
             };
-            // Never guessed: an id is the parser's reading of the meta, and a
-            // wrong one would silently merge two events under the RMT key.
-            let Some(id) = ev.event_id else {
-                return Err(staging_err(&format!(
-                    "event without a stellar-rpc id (tx {tx_hash}, source {:?}) — ADR 0059",
-                    ev.source
-                )));
-            };
+            let id = ev.event_id;
             let topics_xdr = serde_json::to_string(&ev.topics)
                 .map_err(|e| staging_err(&format!("event topics serialize: {e}")))?;
             let data_xdr = serde_json::to_string(&ev.data)
                 .map_err(|e| staging_err(&format!("event data serialize: {e}")))?;
             let signature = extract_event_signature(&ev.topics);
             let contract_id = ids::contract_id(contract_strkey);
-            if ev.source == EventSource::PerOp {
+            if matches!(ev.origin, EventOrigin::Operation(_)) {
                 contract_txs.insert((contract_id, application_order));
             }
             out.event_rows.push(SorobanEventRow {
@@ -1898,10 +1870,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             });
         }
     }
-    if diagnostic_dropped > 0 || contract_orphan_dropped > 0 {
+    if contract_orphan_dropped > 0 {
         tracing::debug!(
             ledger_sequence = ledger.sequence,
-            diagnostic_dropped,
             contract_orphan_dropped,
             staged = out.event_rows.len(),
             "CH soroban_events filtered"
@@ -2663,10 +2634,6 @@ pub(crate) fn decimal7_string_to_i128(s: &str) -> Result<i128, SchemaError> {
 
 fn is_strkey_account(s: &str) -> bool {
     s.len() <= 56 && s.starts_with('G')
-}
-
-fn is_diagnostic(src: EventSource) -> bool {
-    matches!(src, EventSource::Diagnostic)
 }
 
 /// Collapse `pool_state_changes` to ONE row per (pool, plane, ledger) — the

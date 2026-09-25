@@ -42,8 +42,8 @@ use std::str::FromStr;
 
 use stellar_xdr::{LedgerCloseMeta, TransactionMeta};
 use xdr_parser::{
-    EventAsset, ExtractedAssetTransfer, LedgerAsset, MAINNET_PASSPHRASE, derive_sac_strkey,
-    extract_asset_transfers, extract_events, network_id, operation_balance_deltas,
+    EventAsset, ExtractedAssetTransfer, LedgerAsset, LedgerEvents, MAINNET_PASSPHRASE,
+    derive_sac_strkey, extract_asset_transfers, network_id, operation_balance_deltas,
 };
 
 /// The sample: thirty ledgers spread evenly over the ingested range
@@ -149,11 +149,14 @@ fn reconcile_tx(
     seq: u32,
     tx_index: usize,
     meta: &TransactionMeta,
+    ledger: &LedgerEvents,
     net: &[u8; 32],
     tally: &mut Tally,
 ) {
     tally.transactions += 1;
-    let events = extract_events(meta, &format!("{seq}:{tx_index}"), seq, 0);
+    let events = ledger
+        .extract(tx_index, &format!("{seq}:{tx_index}"))
+        .events;
     let decoded = extract_asset_transfers(&events, net);
     tally.rejects += decoded.rejects.len();
     tally.edges += decoded.transfers.len();
@@ -271,8 +274,10 @@ fn every_transfer_reconciles_against_the_ledger() {
         for lcm in batch.ledger_close_metas.iter() {
             let (got_seq, metas) = tx_metas(lcm);
             assert_eq!(got_seq, *seq, "cache file carries a different ledger");
+            let refs: Vec<&TransactionMeta> = metas.iter().collect();
+            let ledger = LedgerEvents::new(*seq, 0, &refs);
             for (i, meta) in metas.iter().enumerate() {
-                reconcile_tx(*seq, i, meta, &net, &mut tally);
+                reconcile_tx(*seq, i, meta, &ledger, &net, &mut tally);
             }
         }
     }

@@ -242,7 +242,7 @@ event patterns are still interpreted at ingest into derived state updates on
 `nfts` / `nft_ownership` / `assets` (classification happens by looking at the
 events without persisting them).
 
-At read time, `xdr_parser::extract_events` re-expands the decoded payload from
+At read time, `xdr_parser::LedgerEvents` re-expands the decoded payload from
 the archive for E14 `/contracts/:id/events`.
 
 ### 4.5 Soroban Invocations (Ingest: Appearance Index)
@@ -456,88 +456,64 @@ per [ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-de
 - at ingest, one row per `(contract, tx, ledger)` trio is written to
   `soroban_events_appearances` with a non-diagnostic-event count — no decoded
   event type, topics, or data are persisted
-- at read time, E14 re-parses the archive via `xdr_parser::extract_events` and
+- at read time, E14 re-parses the archive via `xdr_parser::LedgerEvents` and
   renders decoded `ScVal` topics / data per event
 - known NFT / SEP-41 patterns are still interpreted at ingest to drive
   `assets` / `nfts` / `nft_ownership` upserts, but the triggering events
   themselves are not retained as rows
 
-#### V3 vs V4 meta dispatch (Protocol 22 ↔ Protocol 23+)
+#### Containers and ids (stellar-go, stellar-rpc)
 
-`xdr_parser::extract_events` dispatches on the `TransactionMeta` variant
-because Protocol 23 (CAP-67) reorganised the on-chain event surface
-([ADR 0002](../../../lore/2-adrs/0002_rust-ledger-processor-lambda.md) §1):
+`xdr_parser::LedgerEvents` reads a ledger's events a transaction at a time,
+shaped like its two upstream sources (task 0573):
 
-- **V3** (`TransactionMetaV3`, Protocol ≤ 22): all Soroban contract events
-  are at `soroban_meta.events`; diagnostic events at
-  `soroban_meta.diagnostic_events`. The parser reads both.
-- **V4** (`TransactionMetaV4`, Protocol ≥ 23): events live in **three**
-  locations and the parser reads all three in this order:
+- **Containers — stellar-go `LedgerTransaction.GetTransactionEvents`.** Per
+  transaction: the transaction-level events (`TransactionMetaV4.events`, each
+  with a `stage`), each operation's events (`operations[i].events` — Soroban
+  contract events emitted during `InvokeHostFunction` **and** the SAC
+  `transfer` / `mint` / `burn` events of classic operations under Protocol 23
+  unification), and the diagnostic events. V3 (`TransactionMetaV3`, as
+  protocols ≤ 22 were first emitted) is a Soroban transaction's single
+  operation — `soroban_meta.events` is operation 0 — with no transaction-level
+  events. The public archive serves V4 for every protocol, 20 included.
+- **Ids — stellar-rpc `InsertEvents`** (ADR 0059). One pass, in that order.
+  A transaction-level event takes its stage's sentinel and counter:
+  `BeforeAllTxs` transaction 0 and `AfterAllTxs` transaction 1048575, both
+  counted over the whole ledger; `AfterTx` operation 4095 of its own
+  transaction, counted within it. An operation event takes (application
+  order, operation, position in the operation). The ledger-wide counters make
+  the ledger the unit: `LedgerEvents::new` counts stages only, and
+  `extract(i)` decodes the transaction asked for.
 
-  1. `tx_meta.events` (`VecM<TransactionEvent>`) — transaction-level
-     events: fee `BeforeAllTxs` charge, `AfterTx` refund, `AfterAllTxs`.
-  2. `tx_meta.operations[i].events` (`OperationMetaV2.events: VecM<ContractEvent>`) —
-     per-operation events: Soroban contract events emitted during
-     `InvokeHostFunction` execution **and** SAC `transfer` / `mint` / `burn`
-     events emitted by classic operations under Protocol 23 unification.
-  3. `tx_meta.diagnostic_events` (`VecM<DiagnosticEvent>`) — host-level
-     diagnostic / trace events.
+`extract` returns `TxEvents { events, diagnostic }`:
 
-  `SorobanTransactionMetaV2` (the V4 `soroban_meta`) no longer carries an
-  `events` field — that field was removed in CAP-67. `position_in_tx` is
-  numbered sequentially across all three sources within a single transaction
-  (in memory only). What identifies an event is `ExtractedEvent.event_id`, the
-  stellar-rpc id assigned per ledger through `xdr_parser::LedgerEvents`, the
-  only way to get it outside the parser (ADR 0059): for an operation event the
-  transaction's application order, the operation and the position inside it;
-  for a fee event the stage's sentinel (transaction 0 before all
-  transactions, operation 4095 after one transaction, transaction 1048575
-  after all of them) and that stage's counter. Diagnostic events have no id.
+| Container                                                      | Type              | Id                           | `origin`                          |
+| -------------------------------------------------------------- | ----------------- | ---------------------------- | --------------------------------- |
+| `v4.events`                                                    | `ExtractedEvent`  | stage sentinel + its counter | `EventOrigin::Transaction(stage)` |
+| `v4.operations[i].events`; `v3.soroban_meta.events` as `i = 0` | `ExtractedEvent`  | (tx, `i`, position)          | `EventOrigin::Operation(i)`       |
+| `v4.diagnostic_events`; `v3.soroban_meta.diagnostic_events`    | `DiagnosticEvent` | none                         | —                                 |
 
-The split matters because per-operation events carry the bulk of
-post-Protocol 23 Soroban traffic. Missing them produces a silently
-incomplete `soroban_events_appearances` index for every Protocol ≥ 23
-ledger — the canonical symptom is a Soroban tx with exactly two events,
-both XLM-SAC fee events at the tx-level location, while the contract's
-own `transfer` / `mint` / `burn` events (which lived under
-`operations[i].events`) are dropped.
+Which operation emitted an event is read from `origin`, never from the id: a
+fee event's id names operation 0 or 4095.
 
-##### Source-container tagging (task 0182)
+Per-operation events carry the bulk of post-Protocol 23 Soroban traffic.
+Missing them leaves every Protocol ≥ 23 ledger silently incomplete — the
+canonical symptom is a Soroban transaction with exactly two events, both
+XLM-SAC fee events, while the contract's own `transfer` / `mint` / `burn`
+events are gone.
 
-Every `ExtractedEvent` carries an `EventSource` discriminator —
-`TxLevel`, `PerOp`, or `Diagnostic` — populated by the parser at the
-extraction site. **The diagnostic_events container is dropped at staging
-regardless of inner type**: the staging filter
-(`crates/indexer/src/handler/persist/staging.rs`) routes on
-`source == EventSource::Diagnostic`, not on inner `event_type`.
+##### The diagnostic channel is a type of its own (tasks 0182, 0573)
 
-Why: when diagnostic mode is enabled (the default for archive-bound
-captive-core like Galexie), `v4.diagnostic_events` **holds
-byte-identical Contract-typed copies of every consensus per-op
-Contract event** — the copy carries the same inner `type_ = Contract`
-as the original. CAP-67 explicitly says diagnostic_events are
-auxiliary, "not hashed into the ledger, and therefore are not part of
-the protocol", so they must not contribute to the appearance index.
-A type-based filter (`event_type == Diagnostic`) cannot tell the
-original from the copy and silently double-counts. Container-based
-filtering is the only reliable signal.
-
-The same routing applies at read time: `split_events`
-(`crates/api/src/runtime_enrichment/stellar_archive/extractors.rs`) and the
-`/contracts/:id/events` handler (`crates/api/src/contracts/handlers.rs`)
-both filter on `EventSource::Diagnostic` to suppress the duplicates when
-rendering contract event lists. The host-VM Diagnostic-typed entries
-(`fn_call`, `fn_return`, `core_metrics`, errors) drop out the same way.
-
-Mapping per location (after task 0182):
-
-| Source location                         | `EventSource` | Counts in `amount` |
-| --------------------------------------- | ------------- | ------------------ |
-| `v3.soroban_meta.events`                | `TxLevel`     | yes                |
-| `v3.soroban_meta.diagnostic_events`     | `Diagnostic`  | no                 |
-| `v4.events`                             | `TxLevel`     | yes                |
-| `v4.operations[i].events`               | `PerOp`       | yes                |
-| `v4.diagnostic_events` (any inner type) | `Diagnostic`  | no                 |
+With diagnostic mode on (the default for archive-bound captive-core such as
+Galexie), `diagnostic_events` holds **byte-identical copies of the consensus
+events** — the same inner `type_ = Contract` — alongside the trace of calls
+that were rolled back. CAP-67 keeps it out of the ledger hash: it is "not part
+of the protocol". A filter on `event_type` cannot tell a copy from its
+original; the container can. So the parser returns the channel as a separate
+list of `DiagnosticEvent`s without ids. The indexer drops it where it reads
+it, and no consensus reader — staging, NFT, pool and transfer detection — can
+receive it. Only the transaction page shows it (the host-VM `fn_call`,
+`fn_return`, `core_metrics` and error entries).
 
 ### 5.2 Return Values
 
