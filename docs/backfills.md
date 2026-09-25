@@ -142,15 +142,21 @@ accounts**.
 >
 > - `nfts.minted_at_ledger` — 643 of 13 932 tokens were wrong, growing **~30 per
 >   day**. Served correctly since task 0528, which reads the value from the
->   append-only `nft_ownership` instead of the stored column.
+>   append-only `nft_ownership` instead of the stored column. No reader uses
+>   the stored `nfts` / `nfts_pending` value any more, so `repair-tier1` no
+>   longer rebuilds either (task 0497).
 > - `accounts.first_seen_ledger` — **14 of 400 sampled rows diverge (3.5%)**, all
 >   of them later than the true first appearance. Still wrong today, and it is
 >   rendered on the account page and the account list.
 > - `soroban_contracts.deployed_at_ledger` — **1 597 of 146 397 diverge (1.1%)**.
+> - `lp_positions.first_deposit_ledger` — **the repair itself is broken for this
+>   column** (task 0468). It matches deposits on the operation's source, which is
+>   NULL for 42% of deposits, and a miss writes `0`: its 2026-07-16 run zeroed
+>   102 693 positions. Until 0468 lands, a `repair-tier1` run re-zeroes them.
 >
 > So a clean `repair-tier1` after a backfill does **not** mean the Tier-1 columns
 > stay correct: they start drifting again immediately. Treat the pass as
-> point-in-time cleanup, not as a guarantee. Task 0531 replaces it with storage
+> point-in-time cleanup, not as a guarantee. Task 0497 replaces it with storage
 > that carries MIN semantics natively, and retires this rule.
 
 **Unless the run writes one table that has no such column.** A re-parse whose
