@@ -1197,10 +1197,9 @@ export type NftTransferItem = {
 
 export type OperationItem = {
   /**
-   * Global BIGSERIAL `operations_appearances.id`. Internal ordering
-   * artefact only; not a within-tx index. Use `application_order`
-   * for apply-order display and to join against
-   * `XdrOperationDto.application_order` from the heavy overlay.
+   * Equal to `application_order` (the table has no surrogate id since
+   * PR #175). Use `application_order` for apply-order display and to join
+   * against `XdrOperationDto.application_order` from the heavy overlay.
    */
   appearance_id: number;
   /**
@@ -2148,7 +2147,7 @@ export type PoolAssetLeg = {
 
 /**
  * What an operation did to the pool, named by the SIGN PAIR of its two legs
- * and nothing else — `lp_operation_amounts.amount` is signed from the pool's
+ * and nothing else — `pool_operation_amounts.amount` is signed from the pool's
  * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
  * There is no operation-type column to read and no join to `operations`.
  *

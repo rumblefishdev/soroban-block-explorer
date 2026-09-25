@@ -88,14 +88,15 @@ pub async fn list_transactions(
         return resp;
     }
 
-    // Reject a cursor whose keyset is not this list's: the statements page on
-    // the transaction position, except the operation-type filter alone, which
-    // pages on the id surrogate. Per ADR 0008 we fail with `invalid_cursor`
+    // Reject a cursor whose keyset is not this list's: every statement pages
+    // on the transaction position, so a surrogate-keyed cursor (the
+    // contract-invocation list's, or one minted by the operation-type filter
+    // before task 0372) is refused. Per ADR 0008 we fail with `invalid_cursor`
     // instead of silently mis-paginating. A legacy/untagged cursor already
     // fails to decode upstream in the extractor; this guards the
     // decodes-but-wrong-intent case.
     if let Some(cursor) = &pagination.cursor
-        && !cursor.fits_transaction_list(params.filter_contract_id.is_some(), op_type.is_some())
+        && !cursor.fits_transaction_list()
     {
         return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
@@ -147,7 +148,7 @@ pub async fn list_transactions(
         pagination.limit,
         direction,
         has_predecessor,
-        |dir, r| cursor::encode(&list_cursor_for(&resolved, r), dir),
+        |dir, r| cursor::encode(&list_cursor_for(r), dir),
     );
 
     // Pure DB-only mapping — no archive XDR fetch. Memo / heavy fields
@@ -193,30 +194,15 @@ pub async fn list_transactions(
     resp
 }
 
-/// Build the opaque list cursor for a boundary row. CH keys on
-/// `(ledger_sequence, <within-ledger key>)`, and the cursor must anchor the
-/// *same* keyset the next page's query will use:
-///
-/// - **Statement A** (no filter, the polled hot path) reads `transactions` in
-///   primary-key order `(ledger_sequence, application_order)` with FINAL
-///   dropped (the `read_rows` quota fix — see `queries::fetch_list`).
-/// - **Statement B** (contract filter) pages on the same position through the
-///   `contract_transactions` index (task 0541).
-/// - **Statement C** (op_type filter only) drives off `operations_appearances`
-///   and keys on the `transactions.id` surrogate.
-///
-/// A and B mint `ChPosition`, C mints `ChSurrogate`; `list_transactions`
-/// rejects a cursor carried to a statement with the other keyset.
-fn list_cursor_for(params: &ResolvedListParams, r: &TxListRow) -> TxListCursor {
-    if params.contract_id.is_some() || params.op_type.is_none() {
-        return TxListCursor::ChPosition {
-            ledger_sequence: r.ledger_sequence,
-            application_order: r.application_order,
-        };
-    }
-    TxListCursor::ChSurrogate {
+/// Build the opaque list cursor for a boundary row: the transaction position
+/// `(ledger_sequence, application_order)`, the keyset of every statement —
+/// A reads `transactions` in primary-key order, B seeks the
+/// `contract_transactions` index (task 0541), C scans
+/// `transaction_operations` (task 0372).
+fn list_cursor_for(r: &TxListRow) -> TxListCursor {
+    TxListCursor::ChPosition {
         ledger_sequence: r.ledger_sequence,
-        transaction_id: r.id,
+        application_order: r.application_order,
     }
 }
 
@@ -483,7 +469,7 @@ async fn fetch_operations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<OpRow>, clickhouse::error::Error> {
-    queries::fetch_operations(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_operations(&state.ch(), tx.ledger_sequence, tx.application_order).await
 }
 
 async fn fetch_participants_for_source(

@@ -1022,7 +1022,6 @@ struct AssetTxKeyChRow {
 
 #[derive(Debug, Row, Deserialize)]
 struct AssetTxPageChRow {
-    id: i64,
     hash: String,
     ledger_sequence: i64,
     application_order: i16,
@@ -1120,7 +1119,6 @@ pub async fn fetch_transactions(
         .join(",");
     let page_sql = format!(
         "SELECT \
-            t.id AS id, \
             lower(hex(t.hash)) AS hash, \
             t.ledger_sequence AS ledger_sequence, \
             t.application_order AS application_order, \
@@ -1139,18 +1137,14 @@ pub async fn fetch_transactions(
         .query(&page_sql)
         .fetch_all::<AssetTxPageChRow>()
         .await?;
-    // operation_types still come from `operations_appearances`, keyed by the
-    // surrogate until task 0538 reaches it — so they key off the page rows.
-    let agg_keys: Vec<(i64, i64)> = page_rows
-        .iter()
-        .map(|r| (r.ledger_sequence, r.id))
-        .collect();
+    // operation_types come from `transaction_operations`, keyed by the same
+    // positions as the driver (task 0372).
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN accounts src` (task 0354). Independent of the
     // aggregate — overlap the round-trips.
     let (accounts, aggregates) = tokio::try_join!(
         resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()),
-        ch::fetch_tx_list_aggregates(client, &agg_keys),
+        ch::fetch_tx_list_aggregates(client, &keys),
     )?;
 
     // Index by position, then emit in the driver's keyset order, merging
@@ -1165,7 +1159,7 @@ pub async fn fetch_transactions(
         let Some(row) = by_position.remove(key) else {
             continue;
         };
-        let agg = aggregates.get(&row.id);
+        let agg = aggregates.get(key);
         let operation_types = agg.map(|a| a.operation_types.clone()).unwrap_or_default();
         out.push(AssetTxRow {
             hash: row.hash,

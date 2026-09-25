@@ -2,7 +2,7 @@
 id: '0497'
 title: 'RESEARCH: retire repair-tier1 — move every MIN-semantics copy off RMT state tables'
 type: RESEARCH
-status: backlog
+status: active
 related_adr: ['0055']
 related_tasks: ['0464', '0463', '0420', '0492']
 tags:
@@ -11,7 +11,7 @@ tags:
     clickhouse,
     backfill-runner,
     data-integrity,
-    priority-low,
+    priority-high,
     effort-medium,
   ]
 links: []
@@ -26,6 +26,20 @@ history:
       class — one entry at a time, as each copy moves to a fact-derived or
       history-derived read. The LP entry already dies with that session's
       design. This task is the per-column investigation for the rest.
+  - date: '2026-09-25'
+    status: active
+    who: karolkow
+    note: >
+      Activated to retire the two NFT entries, whose columns no reader uses
+      since 0528. The LP entry stays until task 0468's storage fix; accounts
+      and soroban_contracts stay until their routes land.
+  - date: '2026-09-25'
+    status: active
+    who: karolkow
+    note: >
+      Priority raised low → high (decision 38 A): the MIN copies hold false
+      values in production today — ~570k account first-seen ledgers, ~1.6k
+      contract deploy ledgers, ~100k zeroed LP first deposits (0468).
 ---
 
 # RESEARCH: retire repair-tier1

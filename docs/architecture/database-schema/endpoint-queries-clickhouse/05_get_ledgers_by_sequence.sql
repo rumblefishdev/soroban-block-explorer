@@ -5,9 +5,11 @@
 --     `operation_types` projection must NOT use correlated
 --     scalar subqueries (`… WHERE oa.transaction_id = t.id`): ClickHouse 26.3
 --     rejects them with `Code: 48 NOT_IMPLEMENTED`. The live read path uses a
---     NON-correlated two-step — fetch the page of tx keys, then aggregate per
---     `(ledger_sequence, transaction_id) IN (…)` with `GROUP BY transaction_id`.
---     See `crates/api/src/common/ch.rs::fetch_tx_list_aggregates`.
+--     NON-correlated two-step — fetch the page, then aggregate
+--     `transaction_operations` per `(ledger_sequence, application_order) IN
+--     (…)` grouped by that position (task 0372; keyed by `transaction_id`
+--     before). See `crates/api/src/common/ch.rs::fetch_tx_list_aggregates`
+--     and 02 statement D.
 -- ============================================================================
 -- Endpoint:     GET /ledgers/:sequence
 -- Purpose:      Ledger detail — header row + prev/next navigation + embedded

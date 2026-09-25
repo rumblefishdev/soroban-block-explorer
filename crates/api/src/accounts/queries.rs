@@ -726,12 +726,8 @@ pub async fn fetch_transactions(
         })
         .collect();
 
-    // operation_types still come from `operations_appearances`, keyed by the
-    // surrogate until task 0538 reaches it — so they key off the page rows.
-    let agg_keys: Vec<(i64, i64)> = page_rows
-        .iter()
-        .map(|r| (r.ledger_sequence, r.id))
-        .collect();
+    // operation_types come from `transaction_operations`, keyed by the same
+    // positions as the driver (task 0372).
 
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … ON src.id = t.source_id` (task 0345).
@@ -739,7 +735,7 @@ pub async fn fetch_transactions(
     let (accounts, mut flows, aggregates) = tokio::try_join!(
         resolve_accounts(client, page_rows.iter().map(|r| r.source_id).collect()),
         fetch_balance_changes(client, account_id, &flow_keys),
-        ch::fetch_tx_list_aggregates(client, &agg_keys),
+        ch::fetch_tx_list_aggregates(client, &keys),
     )?;
 
     // Step 3: index page rows by position (a re-ingested tx collapses — values
@@ -756,7 +752,7 @@ pub async fn fetch_transactions(
         let Some(row) = by_position.remove(key) else {
             continue;
         };
-        let agg = aggregates.get(&row.id);
+        let agg = aggregates.get(key);
         let operation_types = agg.map(|a| a.operation_types.clone()).unwrap_or_default();
         out.push(AccountTxRow {
             hash: row.hash,

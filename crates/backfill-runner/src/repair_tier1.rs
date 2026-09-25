@@ -28,7 +28,7 @@
 //! | Table | Column | Correct rebuild |
 //! |-------|--------|-----------------|
 //! | `accounts` | `first_seen_ledger` | `MIN(ledger_sequence) FROM transaction_participants` |
-//! | `lp_positions` | `first_deposit_ledger` | `MIN(ledger_sequence) FROM operations_appearances WHERE type = 22 (LiquidityPoolDeposit)` |
+//! | `lp_positions` | `first_deposit_ledger` | `MIN(ledger_sequence) FROM transaction_operations WHERE type = 22 (LiquidityPoolDeposit)` |
 //! | `soroban_contracts` | `deployer_id` + `deployed_at_ledger` | `argMin(deployer_id, wasm_uploaded_at_ledger)` + `MIN(wasm_uploaded_at_ledger)` over rows where `deployer_id IS NOT NULL` |
 //!
 //! **Retired entries.** `nfts.minted_at_ledger` and
@@ -38,7 +38,8 @@
 //! **Source selection rule**: state-shaped tables under
 //! `ReplacingMergeTree` collapse history on `OPTIMIZE FINAL`, so the
 //! historic MIN must come from append-only fact tables
-//! (`transaction_participants`, `operations_appearances`). The one exception is `soroban_contracts`: deployer
+//! (`transaction_participants`, `transaction_operations`). The one
+//! exception is `soroban_contracts`: deployer
 //! info is only stored on `soroban_contracts` itself (no dedicated fact
 //! table exists for deployments), so the rebuild reads the raw
 //! pre-FINAL table and filters non-NULL rows — fragile if a full
@@ -158,12 +159,12 @@ async fn rebuild_accounts(client: &ClickhouseClient, dry_run: bool) -> Result<u6
 }
 
 /// `lp_positions.first_deposit_ledger` ← `MIN(ledger_sequence)` over
-/// `operations_appearances` filtered to `LiquidityPoolDeposit` (op
+/// `transaction_operations` filtered to `LiquidityPoolDeposit` (op
 /// type 22), joined by `(pool_id, source_id)`. The fact table
-/// `operations_appearances` does not collapse under RMT in a way that
-/// loses history (ORDER BY includes `ledger_sequence`,
-/// `transaction_id`, `application_order` — distinct deposits stay
-/// distinct), so the MIN there is the authoritative earliest deposit.
+/// `transaction_operations` does not collapse under RMT in a way that
+/// loses history (ORDER BY is `ledger_sequence`, `application_order`,
+/// `operation_index` — distinct deposits stay distinct), so the MIN
+/// there is the authoritative earliest deposit.
 ///
 /// We deliberately do NOT read MIN from `lp_positions` itself: under
 /// `RMT(last_updated_ledger)` collapse, only the latest version of the
@@ -197,7 +198,7 @@ async fn rebuild_lp_positions(
                  arrayJoin(pool_ids) AS pool_id,
                  source_id AS account_id,
                  min(ledger_sequence) AS min_ledger
-               FROM operations_appearances
+               FROM transaction_operations
               WHERE type = 22 AND isNotNull(source_id) AND notEmpty(pool_ids)
               GROUP BY pool_id, source_id
            ) AS m ON m.pool_id = lp.pool_id AND m.account_id = lp.account_id"

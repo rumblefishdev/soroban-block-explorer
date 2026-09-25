@@ -30,12 +30,10 @@ pub struct ListParams {
 /// cursor carries its own keyset and a list refuses any other:
 ///
 /// - `ChPosition` — the transaction's `application_order`, which is also its
-///   execution order. `/transactions` without an operation-type filter, and
-///   with a contract filter (task 0541); the account and asset lists (task
-///   0575).
-/// - `ChSurrogate` — the `transactions.id` hash surrogate. `/transactions`
-///   filtered by operation type only, and the contract-invocation list, until
-///   task 0538 moves them to the position.
+///   execution order. `/transactions` under every filter (tasks 0541, 0372);
+///   the account and asset lists (task 0575).
+/// - `ChSurrogate` — the `transactions.id` hash surrogate. The
+///   contract-invocation list, until task 0538 moves it to the position.
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
 /// format is opaque to clients, so the backend may change the encoding
@@ -58,15 +56,11 @@ pub enum TxListCursor {
 }
 
 impl TxListCursor {
-    /// Does this cursor anchor the keyset of the `/transactions` statement it
-    /// came back to? Only the operation-type filter without a contract filter
-    /// (statement C) keys on the surrogate.
-    pub fn fits_transaction_list(&self, contract_filter: bool, op_type_filter: bool) -> bool {
-        let keyed_by_position = contract_filter || !op_type_filter;
-        match self {
-            TxListCursor::ChPosition { .. } => keyed_by_position,
-            TxListCursor::ChSurrogate { .. } => !keyed_by_position,
-        }
+    /// Does this cursor anchor the keyset of `/transactions`? Every statement
+    /// keys on the position since task 0372; a surrogate cursor minted by the
+    /// operation-type filter before it answers `invalid_cursor` once.
+    pub fn fits_transaction_list(&self) -> bool {
+        matches!(self, TxListCursor::ChPosition { .. })
     }
 }
 
@@ -167,10 +161,9 @@ pub struct InvocationAppearanceItem {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OperationItem {
-    /// Global BIGSERIAL `operations_appearances.id`. Internal ordering
-    /// artefact only; not a within-tx index. Use `application_order`
-    /// for apply-order display and to join against
-    /// `XdrOperationDto.application_order` from the heavy overlay.
+    /// Equal to `application_order` (the table has no surrogate id since
+    /// PR #175). Use `application_order` for apply-order display and to join
+    /// against `XdrOperationDto.application_order` from the heavy overlay.
     pub appearance_id: i64,
     /// Operation type tag in canonical SCREAMING_SNAKE_CASE
     /// (e.g. `"INVOKE_HOST_FUNCTION"`).

@@ -171,8 +171,17 @@ PR 3 is written while the fill runs.
   only adds tables.
 - **prices-api:** no `prices_*` user read `operations_appearances`,
   `operation_pools` or `lp_operation_amounts` in 14 days (checked 2026-09-25).
+- **History fill done** (2026-09-25, 11:08–12:39 UTC): `fill_operations.zsh`
+  over partitions 100–128 and the head range 64,500,000–64,609,690 passed
+  every quarter gate; ClickHouse free space 784 → 703 GiB. Check after it:
+  per-partition rows of `transaction_operations` = `operations_appearances`
+  in all of 100–129; `pool_operation_amounts` = `lp_operation_amounts` except
+  101, 109, 110, where the old table holds unmerged duplicates and distinct
+  keys are equal (30,715,812 / 42,291,832 / 32,297,549).
+- **`operation_pools` dropped** (Karol, after the fill; gone from
+  `system.tables` at 12:44 UTC).
 - **PR 3 (readers)** — branch `feat/0372-readers-by-position`, commits
-  `0df844ad` (code), `bc9dc95c` (docs), local. Every API reader and
+  `0df844ad` (code), `bc9dc95c` (docs); [#500](https://github.com/rumblefishdev/soroban-block-explorer/pull/500), merged. Every API reader and
   `repair-tier1` read the new tables; `/transactions` pages on the position
   under every filter (statement C: positions from `transaction_operations`,
   then statement B's page seek); pool activity's cursor is
@@ -203,7 +212,7 @@ PR 3 is written while the fill runs.
 
 ## Acceptance Criteria
 
-- [ ] New tables filled and gated in every partition
+- [x] New tables filled and gated in every partition
 - [ ] API reads only the new tables (`query_log`: 0 reads of the old ones)
 - [ ] `operations_appearances`, `lp_operation_amounts` (old), `operation_pools`
       dropped; saving measured

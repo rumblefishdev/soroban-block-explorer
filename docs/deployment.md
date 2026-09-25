@@ -388,6 +388,16 @@ Frontend **content** is separate: `deploy-production-web`
   ([backfills.md](./backfills.md), "Operations by transaction position"). No
   pause; the readers still use the old tables.
 
+- **Operations by transaction position (task 0372), step 2: the readers.**
+  The API reads `transaction_operations` and `pool_operation_amounts` only.
+  Deploy Compute **after the history fill has passed its gates in every
+  partition**, head included: a range the fill has not reached lists
+  transactions with empty `operation_types`, drops them from the
+  operation-type filter and hides their pool activity. No operator step. The
+  operation-type filter of `/transactions` and pool activity now page on the
+  transaction's position, so a cursor minted before the deploy answers 400
+  `invalid_cursor` once.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and
