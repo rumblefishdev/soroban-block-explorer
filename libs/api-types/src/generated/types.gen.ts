@@ -2127,12 +2127,14 @@ export type PoolAssetLeg = {
   icon_url?: string | null;
   issuer?: string | null;
   /**
-   * What the pool holds of this leg: raw units as a decimal string (a JSON
-   * number is a browser double and a big reserve would lose digits). On the
-   * leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
-   * four legs. `null` when no source knows it — never `0`. Read from the
-   * latest classic snapshot; a soroban pool has none, so its legs are
-   * `null` until its own state is read.
+   * What the pool holds of this leg, in the asset's own units, as a decimal
+   * string (a JSON number is a browser double and a big reserve would lose
+   * digits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a
+   * pool has two to four legs. `null` when no source knows it — never `0`.
+   * A classic pool reads its latest snapshot. A soroban pool reads its
+   * newest `pool_state_changes` row, served for a native or classic leg
+   * (7 decimals by protocol); a soroban-token leg stays `null` until its
+   * scale is read from the token's metadata.
    */
   reserve?: string | null;
   /**
