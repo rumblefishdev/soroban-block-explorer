@@ -10,7 +10,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
-use super::leg_reserves::{Reserves, state_reserves_sql};
+use super::leg_reserves::state_reserves_sql;
 use super::total_shares::{instance_shares_sql, pool_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolLegRow, PoolRow, fee_percent_str, leg_rows};
@@ -396,12 +396,13 @@ pub async fn fetch_pool_list(
         .map(|(r, price_legs)| {
             // A soroban pool's reserves come from its state changes; a classic
             // pool's legs are its two snapshot columns, in order.
-            let reserves = Reserves::from_sources(
+            let legs = leg_rows(
+                &r.legs,
+                &identities,
+                &icons,
                 &r.state_reserves,
-                r.reserve_a.as_deref(),
-                r.reserve_b.as_deref(),
+                [r.reserve_a.as_deref(), r.reserve_b.as_deref()],
             );
-            let legs = leg_rows(&r.legs, &identities, &icons, reserves);
             let tvl = legs_tvl(&legs, &price_legs, &closes);
             let total_shares = pool_total_shares(
                 r.total_shares,

@@ -1,29 +1,39 @@
 use super::*;
 
-/// A classic snapshot is already in units and pair-shaped.
+/// A classic pool has no state change: its snapshot pair is used as it is,
+/// already in units, and a third leg has no slot in it.
 #[test]
-fn a_snapshot_pair_is_used_verbatim() {
-    let r = Reserves::Pair(Some("750.5"), None);
-    assert_eq!(r.at(0, None).as_deref(), Some("750.5"));
-    assert_eq!(r.at(1, Some(7)), None);
-    assert_eq!(r.at(2, Some(7)), None, "a third leg has no slot in a pair");
+fn a_classic_pool_reads_its_snapshot_pair() {
+    let pair = [Some("750.5"), None];
+    assert_eq!(leg_reserve(0, &[], pair, None).as_deref(), Some("750.5"));
+    assert_eq!(leg_reserve(1, &[], pair, Some(7)), None);
+    assert_eq!(leg_reserve(2, &[], pair, Some(7)), None);
 }
 
 /// Each soroban leg scales by its own decimals, and an unknown scale yields
-/// nothing rather than a guessed-7 number wrong by up to 10^11.
+/// nothing rather than a guessed-7 number wrong by 10^11.
 #[test]
 fn raw_reserves_scale_per_leg() {
-    let raw = vec![
-        "12345678".to_string(),
-        "5000000000000000000".to_string(),
-        "0".to_string(),
-        "77".to_string(),
-    ];
-    let r = Reserves::Raw(&raw);
-    assert_eq!(r.at(0, Some(7)).as_deref(), Some("1.2345678"));
-    assert_eq!(r.at(1, Some(18)).as_deref(), Some("5"));
+    let state: Vec<String> = ["12345678", "5000000000000000000", "0", "77"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let none = [None, None];
+    assert_eq!(
+        leg_reserve(0, &state, none, Some(7)).as_deref(),
+        Some("1.2345678")
+    );
+    assert_eq!(leg_reserve(1, &state, none, Some(18)).as_deref(), Some("5"));
     // Zero needs no scale.
-    assert_eq!(r.at(2, None).as_deref(), Some("0"));
-    assert_eq!(r.at(3, None), None, "no known scale, no value");
-    assert_eq!(r.at(4, Some(7)), None, "a leg the vector does not reach");
+    assert_eq!(leg_reserve(2, &state, none, None).as_deref(), Some("0"));
+    assert_eq!(
+        leg_reserve(3, &state, none, None),
+        None,
+        "no known scale, no value"
+    );
+    assert_eq!(
+        leg_reserve(4, &state, none, Some(7)),
+        None,
+        "a leg the vector does not reach"
+    );
 }

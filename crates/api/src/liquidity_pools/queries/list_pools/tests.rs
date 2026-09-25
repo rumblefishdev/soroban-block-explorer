@@ -38,7 +38,8 @@ fn soroban_tvl_prices_scaled_reserves() {
         &[1001, 1002],
         &identities,
         &HashMap::new(),
-        Reserves::Raw(&raw),
+        &raw,
+        [None, None],
     );
 
     let xlm = price_leg(0, None, None);

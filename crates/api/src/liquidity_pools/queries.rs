@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 use crate::common::asset_identity::ResolvedAsset;
 
-use leg_reserves::Reserves;
+use leg_reserves::leg_reserve;
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -94,7 +94,8 @@ fn leg_rows(
     leg_ids: &[i64],
     identities: &HashMap<i64, ResolvedAsset>,
     icons: &HashMap<i64, String>,
-    reserves: Reserves<'_>,
+    state_reserves: &[String],
+    snapshot_reserves: [Option<&str>; 2],
 ) -> Vec<PoolLegRow> {
     leg_ids
         .iter()
@@ -102,7 +103,7 @@ fn leg_rows(
         .map(|(i, id)| {
             // A raw soroban reserve scales only by decimals that are a fact.
             let scale = identities.get(id).and_then(|r| r.decimals);
-            let reserve = reserves.at(i, scale);
+            let reserve = leg_reserve(i, state_reserves, snapshot_reserves, scale);
             match identities.get(id) {
                 Some(r) if r.known => PoolLegRow {
                     family: r.asset_type,

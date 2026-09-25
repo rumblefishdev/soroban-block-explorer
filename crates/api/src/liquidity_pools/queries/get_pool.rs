@@ -8,7 +8,7 @@ use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
-use super::leg_reserves::{Reserves, state_reserves_sql};
+use super::leg_reserves::state_reserves_sql;
 use super::total_shares::{instance_shares_sql, pool_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
@@ -147,11 +147,8 @@ pub async fn fetch_pool_by_id(
             &r.legs,
             &identities,
             &icons,
-            Reserves::from_sources(
-                &r.state_reserves,
-                r.reserve_a.as_deref(),
-                r.reserve_b.as_deref(),
-            ),
+            &r.state_reserves,
+            [r.reserve_a.as_deref(), r.reserve_b.as_deref()],
         ),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
