@@ -46,4 +46,13 @@ describe('PoolKpiStrip captions', () => {
     );
     expect(screen.getAllByText('not indexed')).toHaveLength(2);
   });
+
+  // A Soroban pool's holders are not counted yet: unknown, never "0".
+  it('captions an uncounted participant total as not indexed', () => {
+    renderWithProviders(
+      <PoolKpiStrip pool={pool({ participant_count: null })} />
+    );
+    expect(screen.getByText('not indexed')).toBeInTheDocument();
+    expect(screen.queryByText('liquidity providers')).toBeNull();
+  });
 });

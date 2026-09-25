@@ -532,7 +532,8 @@ no client held a key to use them.
 Each `PoolItem` carries `legs` — the pool's assets in registration order, two
 for a classic pool and two to four for a Soroban one, replacing the
 `asset_a` / `asset_b` pair — plus `pool_kind`, `participant_count` (count of
-active LP positions; task 0246), the snapshot fields, and a compute-at-read
+active LP positions; task 0246; `null` on a Soroban pool, whose share-token
+holders are not counted yet), the snapshot fields, and a compute-at-read
 USD `tvl` (task 0199 Phase A2 — one batched price lookup per page; `volume`
 and `fee_revenue` stay `null` on the list, they are detail-only).
 

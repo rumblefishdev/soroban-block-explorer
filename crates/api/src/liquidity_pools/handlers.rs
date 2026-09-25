@@ -170,7 +170,11 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
-        participant_count: row.participant_count,
+        // `lp_positions` holds classic pool shares only, so a soroban pool's
+        // count is unknown, not 0 — until 0374 PR 5 counts its share token's
+        // holders.
+        participant_count: (row.pool_kind == domain::PoolKind::Classic)
+            .then_some(row.participant_count),
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         total_shares: row.total_shares,
         tvl: row.tvl,

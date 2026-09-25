@@ -81,8 +81,16 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       })}
       <KpiCell
         label="Participants"
-        value={formatInteger(pool.participant_count)}
-        caption="liquidity providers"
+        value={
+          pool.participant_count != null
+            ? formatInteger(pool.participant_count)
+            : '—'
+        }
+        caption={
+          pool.participant_count != null
+            ? 'liquidity providers'
+            : UNKNOWN_SUBTITLE
+        }
       />
     </Stack>
   );

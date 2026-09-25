@@ -14,6 +14,7 @@ import { PoolCharts } from './pool-detail/PoolCharts.js';
 import { PoolDetailHeader } from './pool-detail/PoolDetailHeader.js';
 import { PoolDetailSkeleton } from './pool-detail/PoolDetailSkeleton.js';
 import { PoolKpiStrip } from './pool-detail/PoolKpiStrip.js';
+import { NotIndexedSection } from './pool-detail/NotIndexedSection.js';
 import { PoolParticipants } from './pool-detail/PoolParticipants.js';
 import { PoolSummary } from './pool-detail/PoolSummary.js';
 import { PoolActivity } from './pool-detail/PoolActivity.js';
@@ -87,7 +88,17 @@ export default function LiquidityPoolDetailPage() {
       {/* Gate the sub-sections on resolved parent data so their queries never
           fire while the pool is still loading — a parent 404 then produces
           zero sub-section 404s. */}
-      {detail.data != null && (
+      {/* A Soroban pool's trades, chart series and holders are not indexed
+          yet (task 0374: chart 4d, participants PR 5, activity PR 7); the
+          sections' own empty states would claim the pool has none. */}
+      {detail.data?.pool_kind === 'soroban' && (
+        <>
+          <NotIndexedSection title="Pool chart" what="the history" />
+          <NotIndexedSection title="Pool participants" what="the holders" />
+          <NotIndexedSection title="Recent activity" what="the trades" />
+        </>
+      )}
+      {detail.data != null && detail.data.pool_kind !== 'soroban' && (
         <>
           <SectionErrorBoundary sectionName="pool-charts">
             <PoolCharts poolId={poolId} />

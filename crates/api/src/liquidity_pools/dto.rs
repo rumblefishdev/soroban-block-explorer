@@ -209,9 +209,9 @@ pub struct PoolItem {
     pub fee_percent: String,
     pub created_at_ledger: i64,
     /// Count of active liquidity providers (`lp_positions WHERE shares > 0`),
-    /// computed from the live table. `lp_positions` holds classic pool shares
-    /// only, so a Soroban pool reads 0 here without that being a measurement.
-    pub participant_count: i64,
+    /// computed from the live table. `null` on a Soroban pool: `lp_positions`
+    /// holds classic pool shares only, and its holders are not counted yet.
+    pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
     /// Pool shares outstanding, in units, as a decimal string. A classic pool's
     /// come from its latest snapshot; a soroban pool's from the pool contract's

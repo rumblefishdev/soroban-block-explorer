@@ -4292,8 +4292,7 @@
                 "legs",
                 "fee_bps",
                 "fee_percent",
-                "created_at_ledger",
-                "participant_count"
+                "created_at_ledger"
               ],
               "properties": {
                 "created_at_ledger": {
@@ -4328,9 +4327,9 @@
                   "description": "The pool's legs in registration order — two for a classic pool, two to\nfour for a soroban one. Replaces the `asset_a` / `asset_b` pair, which\ncould not express a three-leg pool and forced a soroban row to write\nplaceholder values that read as native XLM downstream."
                 },
                 "participant_count": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table. `lp_positions` holds classic pool shares\nonly, so a Soroban pool reads 0 here without that being a measurement."
+                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table. `null` on a Soroban pool: `lp_positions`\nholds classic pool shares only, and its holders are not counted yet."
                 },
                 "pool_id": {
                   "type": "string",
@@ -4576,8 +4575,7 @@
           "legs",
           "fee_bps",
           "fee_percent",
-          "created_at_ledger",
-          "participant_count"
+          "created_at_ledger"
         ],
         "properties": {
           "created_at_ledger": {
@@ -4612,9 +4610,9 @@
             "description": "The pool's legs in registration order — two for a classic pool, two to\nfour for a soroban one. Replaces the `asset_a` / `asset_b` pair, which\ncould not express a three-leg pool and forced a soroban row to write\nplaceholder values that read as native XLM downstream."
           },
           "participant_count": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int64",
-            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table. `lp_positions` holds classic pool shares\nonly, so a Soroban pool reads 0 here without that being a measurement."
+            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`),\ncomputed from the live table. `null` on a Soroban pool: `lp_positions`\nholds classic pool shares only, and its holders are not counted yet."
           },
           "pool_id": {
             "type": "string",

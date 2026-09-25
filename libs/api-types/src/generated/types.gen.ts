@@ -1871,10 +1871,10 @@ export type PaginatedPoolItem = {
     legs: Array<PoolAssetLeg>;
     /**
      * Count of active liquidity providers (`lp_positions WHERE shares > 0`),
-     * computed from the live table. `lp_positions` holds classic pool shares
-     * only, so a Soroban pool reads 0 here without that being a measurement.
+     * computed from the live table. `null` on a Soroban pool: `lp_positions`
+     * holds classic pool shares only, and its holders are not counted yet.
      */
-    participant_count: number;
+    participant_count?: number | null;
     /**
      * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
      * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
@@ -2193,10 +2193,10 @@ export type PoolItem = {
   legs: Array<PoolAssetLeg>;
   /**
    * Count of active liquidity providers (`lp_positions WHERE shares > 0`),
-   * computed from the live table. `lp_positions` holds classic pool shares
-   * only, so a Soroban pool reads 0 here without that being a measurement.
+   * computed from the live table. `null` on a Soroban pool: `lp_positions`
+   * holds classic pool shares only, and its holders are not counted yet.
    */
-  participant_count: number;
+  participant_count?: number | null;
   /**
    * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
    * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
