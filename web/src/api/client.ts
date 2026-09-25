@@ -1,15 +1,17 @@
 import { client } from '@rumblefish/api-types';
 
-import { apiBaseUrl } from './config.js';
-import { ensureSessionToken, invalidateSession } from './session.js';
+import { apiBaseUrl, turnstileSiteKey } from './config.js';
+import { createSession } from './session.js';
 
 client.setConfig({ baseUrl: apiBaseUrl });
 
+const session = createSession({ siteKey: turnstileSiteKey, apiBaseUrl });
+
 // Free-tier access layer (task 0277): attach the session JWT to every request.
-// No-op until `VITE_TURNSTILE_SITE_KEY` is set — `ensureSessionToken()` returns
+// No-op until `VITE_TURNSTILE_SITE_KEY` is set — `session.ensureToken()` returns
 // `null` and the request goes out unchanged (the backend gate is also dark).
 client.interceptors.request.use(async (request) => {
-  const token = await ensureSessionToken();
+  const token = await session.ensureToken();
   if (token) {
     request.headers.set('Authorization', `Bearer ${token}`);
   }
@@ -28,7 +30,7 @@ client.interceptors.error.use((error, response) => {
   // access layer is dark (no token was ever cached). Does not auto-retry the
   // failed request; TanStack Query's retry will, now with a valid session.
   if (status === 401) {
-    invalidateSession();
+    session.invalidate();
   }
 
   if (error instanceof Error) {
