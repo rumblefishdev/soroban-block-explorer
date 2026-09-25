@@ -54,9 +54,35 @@ three tables still joining `transactions.id` (with `nft_ownership` and
 
 ## Plan
 
-Pending decisions (threads 247–249 on 2026-09-25): approach, table name,
-whether 0487 rides the reader PR. The shape below assumes the recommended
-options.
+Decided (karolkow, 2026-09-25):
+
+- **Parallel change** (thread 247 A): a new table, filled in ClickHouse, then
+  both old tables dropped — not `ADD COLUMN` on `contract_transactions`.
+- **No codecs this time** (karolkow): the gain on the two key columns is
+  ~4 GiB (_estimate_), not worth it here.
+- **Name `contract_activity`** (thread 248 A): `transaction_contracts` was
+  one letter-swap from `contract_transactions`, and one of the two ends in a
+  `DROP`.
+- **Task 0487 rides a separate PR** right after the readers (thread 249 A),
+  so the reader PR stays behaviour-preserving and comparable to the old API.
+- **No invoked flag, no fold count:** every invocation row names exactly one
+  caller (0 rows without one in the whole table, 0 with both on
+  64,000,000–64,050,000), so "invoked" = a caller is present; nothing reads
+  the fold count (`amount`) — the stats count rows.
+
+Target shape:
+
+```sql
+CREATE TABLE contract_activity (
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    application_order  Int16,             -- transaction position
+    caller_id          Nullable(Int64),   -- invoked by an account
+    caller_contract_id Nullable(Int64)    -- invoked by a contract
+) ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, application_order);
+```
 
 | PR                                                                                                                  | Attention  | Deploy | Operator                                                                                                              |
 | ------------------------------------------------------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
