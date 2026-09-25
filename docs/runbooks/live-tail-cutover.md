@@ -671,7 +671,7 @@ SELECT 'ledgers'                            AS tbl, count() AS rows_post_cutover
 UNION ALL SELECT 'transactions',                    count() FROM transactions                    WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'transaction_hash_prefix_index',   count() FROM transaction_hash_prefix_index   WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'transaction_participants',        count() FROM transaction_participants        WHERE ledger_sequence > {cut:Int64}
-UNION ALL SELECT 'operations_appearances',          count() FROM operations_appearances          WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'transaction_operations',          count() FROM transaction_operations          WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'soroban_events',                  count() FROM soroban_events                  WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'soroban_invocations_appearances', count() FROM soroban_invocations_appearances WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'nft_ownership',                   count() FROM nft_ownership                   WHERE ledger_sequence > {cut:Int64}
@@ -708,7 +708,7 @@ FORMAT PrettyCompact
 **Interpretation:**
 
 - `ledgers`, `transactions`, `transaction_hash_prefix_index`,
-  `transaction_participants`, `operations_appearances` — **must** be `> 0`
+  `transaction_participants`, `transaction_operations` — **must** be `> 0`
   and climb every poll (pubnet ledgers always carry txs, each tx ≥ 1 op).
   Zero here = persist not running or a broken core write → page.
 - `soroban_events`, `soroban_invocations_appearances` — `> 0` over any

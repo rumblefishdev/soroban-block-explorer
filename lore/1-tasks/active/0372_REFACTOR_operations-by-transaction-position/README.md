@@ -252,11 +252,12 @@ PR 3 is written while the fill runs.
       dropped; saving measured
 - [x] `schema_conventions` allowlist shorter by three tables
 - [x] prices-api check recorded before each drop
-- [ ] **Docs updated** — schema overview, pilot, canonical SQL 02/03/07/10/18/24,
-      runbooks and merge scripts that name the tables — all done in PRs 3–4
-      (SQL 18 never named them) except the one-off historical runbooks
-      (PG→CH cutover, 0225, 0228, the 0365 re-parse example) and the PG mirror
-      script, left with the old names on purpose; open until Karol decides
+- [x] **Docs updated** — schema overview, pilot, canonical SQL 02/03/07/10/24
+      (18 never named the tables), FINAL table, indexing pipeline, deployment,
+      backfills, merge scripts (PRs 3–4); runbooks 0225, 0228, live-tail
+      cutover and the derived-table re-parse runbook moved to the new names
+      (Karol, 2026-09-25). `ch-mirror-setup.sh` keeps the old name: it copies
+      Postgres tables of that name.
 
 ## Superseded scope (2026-07, kept for the record)
 

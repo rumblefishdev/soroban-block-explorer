@@ -21,7 +21,7 @@ Or any other panic during parse / persist that aborts the runner before
 CH state post-crash, per `db_clickhouse::persist::writer.rs:40-48`
 (commit-marker pattern):
 
-- **18 streaming tables** (`transactions`, `operations_appearances`,
+- **18 streaming tables** (`transactions`, `transaction_operations`,
   `soroban_events`, `transaction_participants`, `transaction_hash_prefix_index`,
   `soroban_invocations_appearances`, `assets`, `nfts`, `nft_ownership`,
   `nfts_pending`, `nft_ownership_pending`, `account_balances_current`,
@@ -93,7 +93,8 @@ the partition never committed:
 
 ```sql
 ALTER TABLE transactions                       DELETE WHERE ledger_sequence > <last_complete_ledger>;
-ALTER TABLE operations_appearances             DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE transaction_operations             DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE pool_operation_amounts             DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE soroban_events                     DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE soroban_invocations_appearances    DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE transaction_participants           DELETE WHERE ledger_sequence > <last_complete_ledger>;
@@ -122,7 +123,7 @@ These `ALTER … DELETE` mutations are **async on CH**. Monitor:
 ```sql
 SELECT command, is_done, latest_fail_reason, create_time
   FROM system.mutations
- WHERE table IN ('transactions','operations_appearances','soroban_events',
+ WHERE table IN ('transactions','transaction_operations','pool_operation_amounts','soroban_events',
                  'soroban_invocations_appearances','transaction_participants',
                  'transaction_hash_prefix_index','accounts','soroban_contracts',
                  'account_balances_current','nfts','nft_ownership',

@@ -21,7 +21,8 @@ A "new derived table over history" is one of two very different jobs:
 | **B — expensive, from-S3 re-parse** | the new column/grain exists **only in the ledger XDR** (multi-leg ops, before/after images, per-op fan-out)   | ~1 TB of XDR streamed, ~day, disk-governed | `s5cmd` pre-fetch + `backfill-runner run --reindex` |
 
 `operation_pools` was **A** (`pool_ids` was already a column on
-`operations_appearances`). `operation_asset_appearances` was **B** (classic
+`operations_appearances`; both were dropped in task 0372, whose history fill
+into `transaction_operations` was flavour A too). `operation_asset_appearances` was **B** (classic
 multi-leg asset data lives only in XDR). **If your table is flavour A, stop here
 and use [§5](#5-flavour-a--cheap-in-db-backfill-no-re-parse).** The rest of this
 runbook is flavour B.
@@ -128,7 +129,9 @@ export S5CMD=/home/deploy/s5cmd
 If the grain already exists in ClickHouse, skip Phases A/D entirely — one query:
 
 ```bash
-# BOX — operation_pools (0365): arrayJoin an existing column, RMT-dedup
+# BOX — operation_pools (0365): arrayJoin an existing column, RMT-dedup.
+# Both tables are gone since task 0372; the shape is the example, not the names
+# (task 0372's own flavour-A fill: its notes/fill_transaction_operations.sql).
 docker exec -i app-clickhouse-1 clickhouse-client --receive_timeout 3600 --multiquery <<'SQL' 2>&1 | tee /tmp/bf-pools.log
 INSERT INTO operation_pools
 SELECT arrayJoin(pool_ids) AS pool_id, ledger_sequence, transaction_id
@@ -264,7 +267,7 @@ done
 # BOX — collapse RMT dups on "done" partitions (partition = intDiv(ledger_sequence, 500000))
 for p in $(seq 100 126); do
   for t in operation_asset_appearances transactions transaction_hash_prefix_index soroban_events \
-           operations_appearances transaction_participants liquidity_pool_snapshots; do
+           transaction_operations transaction_participants liquidity_pool_snapshots; do
     docker exec app-clickhouse-1 clickhouse-client --receive_timeout 3600 \
       -q "OPTIMIZE TABLE $t PARTITION ID '$p' FINAL SETTINGS optimize_skip_merged_partitions=1"
   done

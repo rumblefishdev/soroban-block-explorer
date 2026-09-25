@@ -125,7 +125,7 @@ account_balances_current            ledgers
 liquidity_pools                     liquidity_pool_snapshots
 lp_positions                        nft_ownership
 nft_ownership_pending               nfts
-nfts_pending                        operations_appearances
+nfts_pending                        transaction_operations
 soroban_contracts                   soroban_events
 soroban_invocations_appearances     transaction_hash_index
 transaction_participants            transactions
@@ -202,11 +202,11 @@ SELECT lp.pool_id, lp.account_id,
   FROM (SELECT pool_id, account_id, first_deposit_ledger
           FROM lp_positions FINAL
          ORDER BY rand() LIMIT 10) lp
-  LEFT JOIN (SELECT pool_id, source_id AS account_id,
+  LEFT JOIN (SELECT arrayJoin(pool_ids) AS pool_id, source_id AS account_id,
                     min(ledger_sequence) AS computed
-               FROM operations_appearances
+               FROM transaction_operations
               WHERE type = 22  -- LiquidityPoolDeposit
-                AND isNotNull(source_id) AND isNotNull(pool_id)
+                AND isNotNull(source_id) AND notEmpty(pool_ids)
               GROUP BY pool_id, source_id) oa
     ON oa.pool_id = lp.pool_id AND oa.account_id = lp.account_id
  WHERE diff > 0
@@ -331,7 +331,7 @@ jq -s --argjson exp "$(cat /tmp/expected.json)" '
 
 | Table family                                                                                                                                                               | Expected diff                                                                           |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Fact tables (`ledgers`, `transactions`, `transaction_*`, `operations_appearances`, `soroban_*`, `nft_ownership(_pending)`, `liquidity_pool_snapshots`)                     | `diff = 0` (RMT no-version preserves all rows)                                          |
+| Fact tables (`ledgers`, `transactions`, `transaction_*`, `pool_operation_amounts`, `soroban_*`, `nft_ownership(_pending)`, `liquidity_pool_snapshots`)                     | `diff = 0` (RMT no-version preserves all rows)                                          |
 | State tables (`accounts`, `assets`, `account_balances_current`, `nfts`, `nfts_pending`, `lp_positions`, `liquidity_pools`, `soroban_contracts`, `wasm_interface_metadata`) | `diff ≤ 0`, magnitude bounded by RMT collapse (one row per `ORDER BY` key in the union) |
 
 Significant negative diffs on fact tables → STOP, investigate
@@ -357,11 +357,11 @@ SELECT countIf(sequence_number = 0) AS skeletons,
 ### Step 4.2 — Orphan operations (FK to non-existent tx)
 
 ```sql
+-- transaction_operations locates its transaction by position (task 0372).
 SELECT count() AS orphans
-  FROM operations_appearances oa
- WHERE NOT EXISTS (
-     SELECT 1 FROM transactions FINAL t WHERE t.id = oa.transaction_id
- )
+  FROM transaction_operations o
+  LEFT ANTI JOIN (SELECT DISTINCT ledger_sequence, application_order FROM transactions) t
+    USING (ledger_sequence, application_order)
 ```
 
 **Pass criteria**: `orphans = 0`.
@@ -444,7 +444,7 @@ while IFS= read -r SEQ; do
     | jq -r '"\(.transaction_count)\t\(.operation_count)"')
   CH=$(ssh sorban-prod "ch-docker --query \"
     SELECT (SELECT count() FROM transactions FINAL WHERE ledger_sequence = $SEQ),
-           (SELECT count() FROM operations_appearances WHERE ledger_sequence = $SEQ)
+           (SELECT count() FROM transaction_operations WHERE ledger_sequence = $SEQ)
     FORMAT TSV\"")
   echo -e "$SEQ\t$HORIZON\t$CH"
 done < /tmp/sample-ledgers.txt > /tmp/compare.tsv
