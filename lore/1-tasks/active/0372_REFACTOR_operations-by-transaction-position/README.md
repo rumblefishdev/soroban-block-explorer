@@ -162,6 +162,11 @@ PR 3 is written while the fill runs.
   - the operations join reads 42.9 M rows in 1.2 s (2.2 GB);
   - quarter gate 6,214,520 = 6,214,520 keys;
   - amounts 7,911,730 = 7,911,730 keys.
+- **`init.sql` as the end state** (decision karolkow, 2026-09-25): the new
+  tables stand in place of the old ones, so the diff reads as each table
+  changing; the old definitions moved to `schema/transitional.sql`, applied
+  after `init.sql` by `apply_init_sql` and the compose sidecar while they are
+  still written. PR 4 removes them from there. Commit `6a8c05d7` on #499.
 - **prices-api:** no `prices_*` user read `operations_appearances`,
   `operation_pools` or `lp_operation_amounts` in 14 days (checked 2026-09-25).
 
