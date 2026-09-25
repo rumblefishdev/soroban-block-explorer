@@ -91,9 +91,9 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
             ledger_sequence: TEST_LEDGER,
             application_order: 1,
         }],
-        // Its successor with the caller (task 0586): an invoked row and a
-        // touched-only one, so both Nullable columns cross the wire set and
-        // unset.
+        // Its successor with the caller (task 0586): a row invoked by an
+        // account, one by a contract and a touched-only one, so both Nullable
+        // columns cross the wire set and unset.
         contract_activity_rows: vec![
             ContractActivityRow {
                 contract_id: CONTRACT,
@@ -106,6 +106,13 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
                 contract_id: CONTRACT,
                 ledger_sequence: TEST_LEDGER,
                 application_order: 2,
+                caller_id: None,
+                caller_contract_id: Some(7),
+            },
+            ContractActivityRow {
+                contract_id: CONTRACT,
+                ledger_sequence: TEST_LEDGER,
+                application_order: 3,
                 caller_id: None,
                 caller_contract_id: None,
             },
@@ -155,6 +162,10 @@ async fn the_writer_and_the_table_agree_on_the_event_row() {
         .expect("read back contract_activity");
     assert_eq!(
         activity,
-        vec![(CONTRACT, 1, Some(42), None), (CONTRACT, 2, None, None)]
+        vec![
+            (CONTRACT, 1, Some(42), None),
+            (CONTRACT, 2, None, Some(7)),
+            (CONTRACT, 3, None, None)
+        ]
     );
 }

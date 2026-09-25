@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use clickhouse::Row;
 use xdr_parser::types::ExtractedInvocation;
 
-use super::contract_rows;
+use super::rows;
 use crate::persist::ids;
 use crate::persist::rows::{ContractActivityRow, TransactionOperationRow, TransactionRow};
 use crate::persist::stage::StagedLedger;
@@ -85,13 +85,16 @@ fn contract_activity_is_the_presence_plus_the_invocation_caller() {
         vec![
             invocation(&by_account, &account),
             invocation(&by_contract, &caller_contract),
+            // A second invocation of the same contract in the same
+            // transaction, by another caller: the first one's caller stays.
+            invocation(&by_account, &caller_contract),
         ],
     )];
     let tx_id_by_hash = HashMap::from([(hash.clone(), tx_id)]);
     // An operation event of another transaction, position 1.
     let from_events = BTreeSet::from([(by_event, 1)]);
 
-    contract_rows(&mut out, &invocations, &tx_id_by_hash, from_events, 10).expect("stage");
+    rows(&mut out, &invocations, &tx_id_by_hash, from_events, 10).expect("stage");
 
     let row = |contract_id, application_order, caller_id, caller_contract_id| ContractActivityRow {
         contract_id,

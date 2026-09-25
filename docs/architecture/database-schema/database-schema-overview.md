@@ -834,7 +834,7 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   in the old table lacks a caller (0 of 1.13 bn, 2026-09-25).
 - **Not carried:** the invocations table's `transaction_id` surrogate
   (8.45 GiB at ratio 1.0) and its fold count, which nothing read.
-- **No codecs** (decision karolkow): the key columns would shrink by ~4 GiB
+- **No codecs** (decided in task 0586): the key columns would shrink by ~4 GiB
   (_estimate_), not worth it here.
 - Written beside both old tables until the readers move, then both are
   dropped (a parallel change, `docs/deployment.md`); history filled in

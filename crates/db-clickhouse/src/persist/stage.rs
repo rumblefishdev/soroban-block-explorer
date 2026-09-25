@@ -1762,7 +1762,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         );
     }
 
-    contract_activity::contract_rows(
+    contract_activity::rows(
         &mut out,
         invocations,
         &tx_id_by_hash,

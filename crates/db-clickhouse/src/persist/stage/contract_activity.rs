@@ -19,7 +19,7 @@ use crate::persist::rows::{
 
 /// `contract_txs` arrives holding the (contract, position) of every operation
 /// event; invocations and operations naming a contract are added here.
-pub(super) fn contract_rows(
+pub(super) fn rows(
     out: &mut StagedLedger,
     invocations: &[(String, Vec<ExtractedInvocation>)],
     tx_id_by_hash: &HashMap<String, i64>,
