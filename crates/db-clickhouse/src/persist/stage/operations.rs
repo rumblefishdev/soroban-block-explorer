@@ -1,10 +1,8 @@
-//! Operation-derived rows staged per ledger: `operations_appearances` and
-//! `transaction_operations` (the identity fold), the op-derived half of
-//! `operation_asset_appearances`, and `lp_operation_amounts` /
+//! Operation-derived rows staged per ledger: `transaction_operations` (the
+//! identity fold), the op-derived half of `operation_asset_appearances`, and
 //! `pool_operation_amounts` — every table filled by the one walk over each
-//! transaction's operations. The `*_operations` / `pool_*` twins locate the
-//! transaction by its position (task 0372) and are written beside the
-//! surrogate-keyed tables until the readers move.
+//! transaction's operations. All of them locate the transaction by its
+//! position (task 0372).
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
@@ -17,18 +15,16 @@ use super::{OpTyped, StagedLedger, decode_hash, pool_fill_amounts, staging_err};
 use crate::SchemaError;
 use crate::persist::ids;
 use crate::persist::rows::{
-    LpOperationAmountRow, OperationAppearanceRow, OperationAssetAppearanceRow,
-    PoolOperationAmountRow, TransactionOperationRow,
+    OperationAssetAppearanceRow, PoolOperationAmountRow, TransactionOperationRow,
 };
 
 pub(super) fn operation_rows(
     out: &mut StagedLedger,
     operations: &[(String, Vec<ExtractedOperation>)],
-    tx_id_by_hash: &HashMap<String, i64>,
     app_order_by_hash: &HashMap<String, i16>,
     ledger_sequence_i64: i64,
 ) -> Result<(), SchemaError> {
-    // ---- operations_appearances (identity fold per task 0163) ----
+    // ---- transaction_operations (identity fold per task 0163) ----
     #[derive(Eq, PartialEq, Hash)]
     struct OpKey {
         tx_hash_hex: String,
@@ -42,15 +38,12 @@ pub(super) fn operation_rows(
         /// the emitted row) deterministic across re-parses (task 0261/0266).
         pool_ids: Vec<[u8; 32]>,
     }
-    struct OpAgg {
-        count: i64,
-        min_apply_order: u32,
-    }
-    let mut op_agg: HashMap<OpKey, OpAgg> = HashMap::new();
+    // The group's smallest operation position.
+    let mut op_agg: HashMap<OpKey, u32> = HashMap::new();
     for (tx_hash, ops) in operations {
-        if !tx_id_by_hash.contains_key(tx_hash) {
+        let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
             continue;
-        }
+        };
         // Per-tx dedup for the asset fan-out (PR #6): N ops touching the same
         // asset in one tx would otherwise write N identical (asset, tx) rows. The
         // RMT sort key collapses them eventually, but deduping at write cuts the
@@ -63,7 +56,6 @@ pub(super) fn operation_rows(
             // the empty-string sentinel); classic credit hashes
             // code:issuer_surrogate — both via `ids::asset_id`.
             if !op.asset_appearances.is_empty() {
-                let application_order = app_order_by_hash[tx_hash];
                 for asset in &op.asset_appearances {
                     let asset_id = match asset {
                         AssetRef::Native => ids::NATIVE_ASSET_ID,
@@ -87,14 +79,12 @@ pub(super) fn operation_rows(
             pool_ids.sort_unstable();
             pool_ids.dedup();
 
-            // ---- lp_operation_amounts + pool_operation_amounts (tasks 0279, 0372) ----
+            // ---- pool_operation_amounts (tasks 0279, 0372) ----
             // `gross_volume_a_by_pool` walks the same trade atoms and sums them into one number per pool; here
             // the per-(op, pool, asset) attribution is KEPT instead of
             // discarded, and deposits/withdrawals — which have no atoms — come
             // from the op's own reserve delta.
             {
-                let tx_id = tx_id_by_hash[tx_hash];
-                let application_order = app_order_by_hash[tx_hash];
                 // Fail the ledger rather than clamp, matching the
                 // `transactions.application_order` conversion above: this
                 // column is part of the ORDER BY, so two operations squeezed
@@ -110,14 +100,6 @@ pub(super) fn operation_rows(
                     .filter(|i| *i >= 0)
                     .ok_or_else(|| staging_err("operation position 0 — expected 1-based"))?;
                 for (pool_id, asset_id, amount) in pool_fill_amounts(&op.details) {
-                    out.lp_amount_rows.push(LpOperationAmountRow {
-                        pool_id,
-                        ledger_sequence: ledger_sequence_i64,
-                        transaction_id: tx_id,
-                        application_order: op_order,
-                        asset_id,
-                        amount,
-                    });
                     out.pool_amount_rows.push(PoolOperationAmountRow {
                         pool_id,
                         ledger_sequence: ledger_sequence_i64,
@@ -141,32 +123,23 @@ pub(super) fn operation_rows(
             };
             op_agg
                 .entry(key)
-                .and_modify(|agg| {
-                    agg.count += 1;
-                    agg.min_apply_order = agg.min_apply_order.min(op.operation_index);
-                })
-                .or_insert(OpAgg {
-                    count: 1,
-                    min_apply_order: op.operation_index,
-                });
+                .and_modify(|min| *min = (*min).min(op.operation_index))
+                .or_insert(op.operation_index);
         }
     }
-    for (k, agg) in op_agg {
-        let (Some(&tx_id), Some(&application_order)) = (
-            tx_id_by_hash.get(&k.tx_hash_hex),
-            app_order_by_hash.get(&k.tx_hash_hex),
-        ) else {
+    for (k, min_apply_order) in op_agg {
+        let Some(&application_order) = app_order_by_hash.get(&k.tx_hash_hex) else {
             continue;
         };
         // The group's smallest operation position: 1-based from the parser,
         // 0-based in `transaction_operations` (ADR 0059).
-        let op_order = i16::try_from(agg.min_apply_order)
+        let op_order = i16::try_from(min_apply_order)
             .map_err(|_| staging_err("operation_index >i16 — protocol violation"))?;
         let operation_index = op_order
             .checked_sub(1)
             .filter(|i| *i >= 0)
             .ok_or_else(|| staging_err("operation position 0 — expected 1-based"))?;
-        let row = TransactionOperationRow {
+        out.tx_operation_rows.push(TransactionOperationRow {
             ledger_sequence: ledger_sequence_i64,
             application_order,
             operation_index,
@@ -177,21 +150,7 @@ pub(super) fn operation_rows(
             asset_code: k.asset_code,
             asset_issuer_id: k.asset_issuer_account.as_deref().map(ids::account_id),
             pool_ids: k.pool_ids,
-        };
-        out.op_rows.push(OperationAppearanceRow {
-            transaction_id: tx_id,
-            application_order: op_order,
-            op_type: row.op_type,
-            source_id: row.source_id,
-            destination_id: row.destination_id,
-            contract_id: row.contract_id,
-            asset_code: row.asset_code.clone(),
-            asset_issuer_id: row.asset_issuer_id,
-            pool_ids: row.pool_ids.clone(),
-            amount: agg.count,
-            ledger_sequence: ledger_sequence_i64,
         });
-        out.tx_operation_rows.push(row);
     }
     Ok(())
 }

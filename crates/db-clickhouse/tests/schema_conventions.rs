@@ -10,8 +10,6 @@ use db_clickhouse::INIT_SQL;
 /// Tables that still carry the surrogate. The 0538 programme removes one
 /// entry per table it migrates; nothing is ever added here.
 const TRANSACTION_ID_ALLOWLIST: &[&str] = &[
-    "operations_appearances",
-    "lp_operation_amounts",
     "soroban_invocations_appearances",
     "nft_ownership",
     "nft_ownership_pending",

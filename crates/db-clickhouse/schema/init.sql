@@ -31,7 +31,7 @@
 -- integers in a single CPU op vs variable-length string memcmp.
 --
 -- Other tables (`assets`, `nfts`, `liquidity_pools`,
--- `liquidity_pool_snapshots`, `operations_appearances`,
+-- `liquidity_pool_snapshots`, `transaction_operations`,
 -- `transaction_participants`, `nft_ownership`, `lp_positions`,
 -- `account_balances_current`, `wasm_interface_metadata`,
 -- `ledgers`, `transaction_hash_prefix_index`) keep their natural / composite
@@ -224,7 +224,7 @@ FROM accounts FINAL;
 --   * HERE (and in `soroban_contract_metadata`) it is a `String`: the real
 --     `C…` StrKey.
 --   * EVERYWHERE ELSE (`assets`, `nfts`, `nft_ownership`, `soroban_events`,
---     `operations_appearances`, …) it is an `Int64`: the cityhash64 surrogate
+--     `transaction_operations`, …) it is an `Int64`: the cityhash64 surrogate
 --     OF that StrKey, i.e. the value stored in `soroban_contracts.id`.
 -- So a foreign key named `contract_id` joins `soroban_contracts.id`, NEVER
 -- `soroban_contracts.contract_id`. Same value, three column names, two types
@@ -752,7 +752,7 @@ CREATE TABLE IF NOT EXISTS liquidity_pools (
     fee_bps              Int32,                  -- both worlds; soroban PER FAMILY: router = add_pool init_args[0] (u32, the one arg every measured shape shares); pair-factory = the vendor's compiled-in 30; config-factory = the pool's own CONFIG total_fee_bps (creation-time snapshot, mutable on chain)
     last_updated_ledger  Int64,
     pool_kind            UInt8                  DEFAULT 0,  -- 0=classic, 1=soroban contract
-    legs                 Array(Int64)           DEFAULT [], -- ONE id space for both kinds: ASSET surrogates (assets.id). kind 0 = pool_leg_asset_id (the lp_operation_amounts join key); kind 1 = the leg token in emission order (= get_tokens()), re-keyed at WRITE time — a bespoke type-3 token's contract surrogate IS its assets.id, a SAC leg keys onto the classic/native asset it wraps (ADR 0051 retired asset_type=2, so a SAC has no assets row and a leg keyed on its surrogate ORPHANS: 1,084 of 1,175 did, task 0374). Read-side resolution via asset_sac was the earlier plan and is withdrawn — the write side owns it, exactly as build_balance_rows does. 3- and 4-leg pools exist, so never a pair
+    legs                 Array(Int64)           DEFAULT [], -- ONE id space for both kinds: ASSET surrogates (assets.id). kind 0 = pool_leg_asset_id (the pool_operation_amounts join key); kind 1 = the leg token in emission order (= get_tokens()), re-keyed at WRITE time — a bespoke type-3 token's contract surrogate IS its assets.id, a SAC leg keys onto the classic/native asset it wraps (ADR 0051 retired asset_type=2, so a SAC has no assets row and a leg keyed on its surrogate ORPHANS: 1,084 of 1,175 did, task 0374). Read-side resolution via asset_sac was the earlier plan and is withdrawn — the write side owns it, exactly as build_balance_rows does. 3- and 4-leg pools exist, so never a pair
     deployment_id        Int64                  DEFAULT 0,  -- soroban_contracts.id surrogate of the registering router; 0 = classic. Two live router deployments share Aquarius's code and only one is Aquarius (task 0374 T1) — labels resolve from this id at read time, so a new pool is labelled the moment it registers, with no editorial UPDATE to re-run
     pool_type_raw        LowCardinality(String) DEFAULT ''  -- verbatim PER FAMILY, un-normalised on purpose (folding vocabularies is read-time interpretation): router = add_pool sym (constant|stable|concentrated|...); pair-factory = '' (the vendor emits no type); config-factory = the PairType u32 discriminant as text ("0" = XYK)
     -- share_token_id was removed from the write path before any deploy: the relation lives ONLY in pool_instance_state (a registry column would clobber the full row on RMT merge, and a permanent 0 misleads). Prod (which received the column via the registry backfill ALTER) drops it with: ALTER TABLE liquidity_pools DROP COLUMN share_token_id
@@ -892,9 +892,9 @@ ORDER BY (pool_id, account_id);
 ----------------------------------------------------------------------
 
 -- transactions: surrogate `id Int64` for cheap FK joins from
--- operations_appearances, lp_operation_amounts,
 -- soroban_invocations_appearances, nft_ownership (`soroban_events`,
--- `transaction_participants`, `operation_asset_appearances` join by
+-- `transaction_participants`, `operation_asset_appearances`,
+-- `transaction_operations`, `pool_operation_amounts` join by
 -- `(ledger_sequence, application_order)`). Legacy: new tables join on the
 -- position, never on `id` (ADR 0059, task 0538). ORDER BY
 -- (ledger_sequence, application_order) for time-series scans.
@@ -942,87 +942,25 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (hash_prefix, ledger_sequence);
 
--- `amount` is a **fold count** of identity-tuple duplicates (task 0163 /
--- ADR 0033 PG-side convention; CH inherits same semantic): the number of
--- on-chain operation envelope ops that collapsed into this single
--- appearance row by identity. NOT a stroop value or per-op amount. Real
--- per-op stroop values live in `result_meta_xdr` (Archive XDR overlay
--- on PG; read-time decode on CH via E03 statement C). API callers MUST
--- NOT interpret this column as a token amount.
-CREATE TABLE IF NOT EXISTS operations_appearances (
-    transaction_id    Int64,
-    application_order Int16,
-    type              Int16,
-    source_id         Nullable(Int64),
-    destination_id    Nullable(Int64),
-    contract_id       Nullable(Int64),
-    asset_code        LowCardinality(String),
-    asset_issuer_id   Nullable(Int64),
-    -- Crossed liquidity pools (task 0261/0268): single-element for LP
-    -- deposit/withdraw, full crossed-pool list (result claim atoms) for
-    -- path payments / offers, [] for no pool involvement (Array cannot be
-    -- Nullable; has([], x) = 0 so empty arrays miss pool filters). Sorted +
-    -- deduped by the stage fold. Filter with
-    -- has(pool_ids, toFixedString(unhex(...), 32)).
-    pool_ids          Array(FixedString(32)),
-    amount            Int64,   -- fold count, see header comment
-    ledger_sequence   Int64,
-    -- Skip index for the `has(pool_ids, …)` pool filter (E20 /
-    -- liquidity-pools/:id/transactions; task 0281 C). The read driver
-    -- (fetch_pool_transactions) seeks via read-in-order `ORDER BY ledger DESC
-    -- LIMIT`, so a POPULAR pool early-terminates near the tip; this bloom bounds
-    -- the OTHER regime — a sparse pool whose last activity is far below the tip,
-    -- where the driver must scan back to reach it. `bloom_filter(0.001)` (not the
-    -- 0.025 default) keeps that scan's false-positive floor at ~0.1 % of the table
-    -- (~6 M rows) instead of ~2.5 % (~155 M, box-measured 2026-06-17); same
-    -- tight-FP rationale as the 0290 `idx_acc_id`.
-    INDEX idx_oa_pool_ids pool_ids TYPE bloom_filter(0.001) GRANULARITY 1,
-    -- Skip index for the contract-filtered transaction-list path (E03
-    -- Statement B; task 0333). `contract_id` is NOT the ORDER BY prefix
-    -- (unlike the `soroban_events` / `soroban_invocations_appearances` arms of
-    -- the same UNION, which seek on `contract_id`), so this arm full-scanned.
-    -- The read driver seeks via read-in-order `ORDER BY ledger DESC LIMIT`: a
-    -- VERY active contract early-terminates near the tip (cheap), but a SPARSE
-    -- contract — few/old appearances — forces a scan of the entire table to
-    -- fill the page (box-measured: 42-appearance contract read 13.18 M / the
-    -- whole table; this is the ~6.2 B-rows/query full scan that blew the prod
-    -- `api_throttle.read_rows` quota on 2026-06-29, CH Code 201). This bloom
-    -- bounds that sparse regime to the granules that actually hold the contract.
-    -- `bloom_filter(0.001)` (not the 0.025 default) keeps the false-positive
-    -- floor tight, same rationale as `idx_oa_pool_ids` / the 0290 `idx_acc_id`.
-    -- contract_id is Nullable; `= <id>` never matches NULL rows, and granules
-    -- holding only NULLs carry no value → skipped.
-    INDEX idx_oa_contract_id contract_id TYPE bloom_filter(0.001) GRANULARITY 1
-    -- idx_oa_asset_issuer_id (bloom on asset_issuer_id, was here for the E10
-    -- asset-tx CLASSIC arm, task 0334) DROPPED 2026-07-13: task 0359 moved the
-    -- asset-tx driver to the `operation_asset_appearances` fan-out seek, so no
-    -- query filters `operations_appearances` by `asset_issuer_id` anymore — the
-    -- bloom's sole consumer is gone (verified across api / audit-harness /
-    -- backfill). Prod is an existing DB (this file is fresh-only): reclaim the
-    -- ~97 MiB with `ALTER TABLE operations_appearances DROP INDEX idx_oa_asset_issuer_id`.
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (ledger_sequence, transaction_id, application_order);
-
--- transaction_operations: `operations_appearances` located by the transaction
--- POSITION (task 0372, ADR 0059) — the same identity-folded rows, keyed
--- `(ledger_sequence, application_order, operation_index)` instead of the
+-- transaction_operations: one row per operation IDENTITY in a transaction
+-- (task 0163): operations of one transaction with the same type, source,
+-- destination, contract, asset and `pool_ids` fold into one row
+-- (`stage/operations.rs`). Located by the transaction POSITION (task 0372,
+-- ADR 0059); it replaced `operations_appearances`, which located it by the
 -- `transaction_id` hash surrogate (33.3 GiB, ratio 1.57 on prod, 2026-09-24).
--- Written beside the old table until the readers move here, then the old one
--- is dropped (a parallel change, `docs/deployment.md`).
 --
--- `application_order` is the TRANSACTION's 1-based position in its ledger —
--- never an operation's (in `operations_appearances` the same name held the
--- operation position). `operation_index` is the operation's 0-based position
--- in its transaction; for a folded row, the smallest of its group. The fold
--- itself is unchanged (`stage/operations.rs`, `pool_ids` in the identity), so
--- new rows match the history copied from the old table. The fold count
--- `amount` is not carried: nothing reads it.
+-- `application_order` is the TRANSACTION's 1-based position in its ledger.
+-- `operation_index` is the operation's 0-based position in its transaction;
+-- for a folded row, the smallest of its group — an operation folded into an
+-- earlier identical one has no row of its own. Per-op values (amounts, memo,
+-- arguments) are decoded from the XDR at read time, not stored here.
 --
--- No skip index: the two blooms of the old table (`pool_ids`, `contract_id`)
--- have no reader left — pool activity drives from `pool_operation_amounts`,
--- the contract list from `contract_transactions`.
+-- `pool_ids` (task 0261/0268): single-element for LP deposit/withdraw, the
+-- full crossed-pool list (result claim atoms) for path payments / offers, []
+-- for no pool involvement. Sorted + deduped by the stage fold.
+--
+-- No skip index: every read seeks the transaction position; the old table's
+-- `pool_ids` / `contract_id` blooms lost their readers in tasks 0491 / 0541.
 CREATE TABLE IF NOT EXISTS transaction_operations (
     ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
     application_order Int16 CODEC(T64, ZSTD(1)),
@@ -1089,10 +1027,12 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (asset_id, ledger_sequence, application_order);
 
--- lp_operation_amounts: what each operation actually moved through a pool
--- (task 0279, issue #371) — the driver of pool activity (task 0491). Being
--- replaced by `pool_operation_amounts`, the same rows located by the
--- transaction position (task 0372).
+-- pool_operation_amounts: what each operation actually moved through a pool
+-- (task 0279, issue #371) — the driver of pool activity (task 0491). Located
+-- by the transaction POSITION (task 0372, ADR 0059): `application_order` is
+-- the transaction's 1-based position, `operation_index` the operation's
+-- 0-based one. It replaced `lp_operation_amounts`, which held the
+-- `transaction_id` surrogate and the 1-based operation index.
 --
 -- ROW GRAIN = (operation, pool, asset), with the op's claim atoms PRE-SUMMED
 -- in Rust before the insert. NOT one row per atom: a single op can take the
@@ -1139,29 +1079,7 @@ ORDER BY (asset_id, ledger_sequence, application_order);
 -- this table by construction (per-op grain) while `gross_volume_a` counts both
 -- crossings gross, so such an op is a legitimate mismatch, not a bug.
 --
--- No skip index: every read is a `pool_id` PK-prefix seek. This file is
--- FRESH-ONLY (prod is an existing DB), so the table must be CREATEd on prod
--- BEFORE the parser deploy — otherwise live ingest writes into nothing.
-CREATE TABLE IF NOT EXISTS lp_operation_amounts (
-    pool_id           FixedString(32),
-    ledger_sequence   Int64,
-    transaction_id    Int64,
-    application_order Int16,
-    asset_id          Int64,
-    amount            Int64
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (pool_id, ledger_sequence, transaction_id, application_order, asset_id);
-
--- pool_operation_amounts: `lp_operation_amounts` located by the transaction
--- POSITION (task 0372, ADR 0059) — same grain, sign and producers as the
--- comment above describes, keyed `(pool_id, ledger_sequence,
--- application_order, operation_index, asset_id)` instead of the
--- `transaction_id` surrogate. `application_order` is the transaction's 1-based
--- position; `operation_index` the operation's 0-based one (the old table's
--- `application_order` held the 1-based operation index). Written beside the
--- old table until pool activity reads it, then the old one is dropped.
+-- No skip index: every read is a `pool_id` PK-prefix seek.
 CREATE TABLE IF NOT EXISTS pool_operation_amounts (
     pool_id           FixedString(32),
     ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),

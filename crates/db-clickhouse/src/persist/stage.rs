@@ -11,7 +11,7 @@
 //! everywhere — see `ids.rs` module docs for the why.
 //!
 //! Other tables (`assets`, `nfts`, `liquidity_pools`,
-//! `liquidity_pool_snapshots`, `operations_appearances`,
+//! `liquidity_pool_snapshots`, `transaction_operations`,
 //! `transaction_participants`, `nft_ownership`, `lp_positions`,
 //! `account_balances_current`) keep natural / composite primary
 //! keys where they're already cheap.
@@ -103,7 +103,7 @@ pub fn gross_volume_a_by_pool(
 }
 
 /// Per-(pool, asset) SIGNED amounts for ONE operation — everything it moved
-/// through a pool (task 0279 → `lp_operation_amounts`), from the two sources
+/// through a pool (task 0279 → `pool_operation_amounts`), from the two sources
 /// the XDR offers, which are disjoint by op type:
 ///
 /// - **trades** (path payments / offers): `claimedAtoms`, the same atoms and
@@ -236,16 +236,15 @@ pub struct StagedLedger {
     pub pool_state_change_rows: Vec<PoolStateChangeRow>,
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
-    pub op_rows: Vec<OperationAppearanceRow>,
-    /// `op_rows` by transaction position (task 0372) → `transaction_operations`.
+    /// Operations folded by identity (task 0163), located by transaction
+    /// position (task 0372) → `transaction_operations`.
     pub tx_operation_rows: Vec<TransactionOperationRow>,
     /// Per-(asset, tx) presence rows (task 0359) → `operation_asset_appearances`,
     /// the asset-dimension twin of `participant_rows`.
     pub op_asset_rows: Vec<OperationAssetAppearanceRow>,
-    /// Per-(op, pool, asset) amounts (task 0279) → `lp_operation_amounts`:
-    /// trades from `claimedAtoms`, deposits/withdrawals from `poolDelta`.
-    pub lp_amount_rows: Vec<LpOperationAmountRow>,
-    /// `lp_amount_rows` by transaction position (task 0372).
+    /// Per-(op, pool, asset) amounts (task 0279), located by transaction
+    /// position (task 0372) → `pool_operation_amounts`: trades from
+    /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
     pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
@@ -1689,7 +1688,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     operations::operation_rows(
         &mut out,
         operations,
-        &tx_id_by_hash,
         &app_order_by_hash,
         ledger_sequence_i64,
     )?;
@@ -1828,8 +1826,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // are exactly the sources the per-contract transaction list reads (task
     // 0541). Fee events are left out: every transaction pays one to the native
     // SAC, which would make that contract's list every transaction on the
-    // network. Invocations and operations name the transaction by its hash
-    // surrogate; the index keys it by position, as the events already do.
+    // network. Invocations name the transaction by its hash surrogate; the
+    // index keys it by position, as the events and operations already do.
     let app_order_by_tx_id: HashMap<i64, i16> = out
         .transaction_rows
         .iter()
@@ -1844,9 +1842,9 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     for inv in &out.invocation_rows {
         contract_txs.insert((inv.contract_id, position_of(inv.transaction_id)?));
     }
-    for op in &out.op_rows {
+    for op in &out.tx_operation_rows {
         if let Some(contract_id) = op.contract_id {
-            contract_txs.insert((contract_id, position_of(op.transaction_id)?));
+            contract_txs.insert((contract_id, op.application_order));
         }
     }
     out.contract_tx_rows = contract_txs

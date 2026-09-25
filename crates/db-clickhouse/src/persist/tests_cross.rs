@@ -321,26 +321,6 @@ fn hash_prefix_is_little_endian_first_eight_bytes() {
 }
 
 #[test]
-fn column_order_operations_appearances() {
-    assert_columns::<OperationAppearanceRow>(
-        "operations_appearances",
-        &[
-            "transaction_id",
-            "application_order",
-            "type",
-            "source_id",
-            "destination_id",
-            "contract_id",
-            "asset_code",
-            "asset_issuer_id",
-            "pool_ids",
-            "amount",
-            "ledger_sequence",
-        ],
-    );
-}
-
-#[test]
 fn column_order_transaction_participants() {
     assert_columns::<TransactionParticipantRow>(
         "transaction_participants",
@@ -1090,10 +1070,10 @@ fn prepare_folds_identical_operations() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 1);
-    let op_row = &staged.op_rows[0];
-    assert_eq!(op_row.amount, 2);
-    assert_eq!(op_row.application_order, 1);
+    // Two identical payments fold into one row at the first one's index.
+    assert_eq!(staged.tx_operation_rows.len(), 1);
+    let op_row = &staged.tx_operation_rows[0];
+    assert_eq!(op_row.operation_index, 0);
     assert_eq!(op_row.op_type, OperationType::Payment as i16);
     assert_eq!(op_row.destination_id, Some(ids::account_id(&dest)));
 }
@@ -1249,16 +1229,10 @@ fn prepare_stages_operation_asset_appearances() {
         staged.op_asset_rows[1].asset_id,
         ids::asset_id(1, "USDC", ids::account_id(&issuer), 0)
     );
-    // Same tx as the legacy fold row — join-back key intact: the row's
-    // position is the position of the fold row's transaction.
-    let fold_tx = staged
-        .transaction_rows
-        .iter()
-        .find(|t| t.id == staged.op_rows[0].transaction_id)
-        .expect("fold row's transaction staged");
+    // Same tx as the fold row — both carry the transaction's position.
     assert_eq!(
         staged.op_asset_rows[0].application_order,
-        fold_tx.application_order
+        staged.tx_operation_rows[0].application_order
     );
     // Task 0359 decision 1c: the credit-leg issuer is NOT a tx participant. The
     // asset's activity lives on its asset page (`op_asset_rows` above); flooding
@@ -1379,17 +1353,20 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 2, "distinct pool sets must not fold");
-    let mut rows = staged.op_rows.clone();
-    rows.sort_by_key(|r| r.application_order);
-    assert_eq!(rows[0].application_order, 1);
-    assert_eq!(rows[0].amount, 1);
+    assert_eq!(
+        staged.tx_operation_rows.len(),
+        2,
+        "distinct pool sets must not fold"
+    );
+    let mut rows = staged.tx_operation_rows.clone();
+    rows.sort_by_key(|r| r.operation_index);
+    assert_eq!(rows[0].operation_index, 0);
     assert_eq!(
         rows[0].pool_ids,
         vec![[0x11u8; 32], [0x22u8; 32]],
         "canonical sorted order regardless of crossing order"
     );
-    assert_eq!(rows[1].application_order, 2);
+    assert_eq!(rows[1].operation_index, 1);
     assert_eq!(rows[1].pool_ids, vec![[0x11u8; 32]]);
 }
 
@@ -1513,28 +1490,22 @@ fn prepare_lp_deposit_single_element_pool_ids() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 1);
-    assert_eq!(staged.op_rows[0].pool_ids, vec![[0xABu8; 32]]);
-
-    // Task 0372: the twins carry the same rows, located by the transaction
-    // position (1-based) and the 0-based operation index.
+    // Task 0372: located by the transaction position (1-based) and the
+    // 0-based operation index.
     let tx_row = &staged.transaction_rows[0];
-    let twin = &staged.tx_operation_rows;
-    assert_eq!(twin.len(), 1);
-    assert_eq!(twin[0].ledger_sequence, tx_row.ledger_sequence);
-    assert_eq!(twin[0].application_order, tx_row.application_order);
-    assert_eq!(twin[0].operation_index, 0);
-    assert_eq!(twin[0].pool_ids, staged.op_rows[0].pool_ids);
+    let ops = &staged.tx_operation_rows;
+    assert_eq!(ops.len(), 1);
+    assert_eq!(ops[0].pool_ids, vec![[0xABu8; 32]]);
+    assert_eq!(ops[0].ledger_sequence, tx_row.ledger_sequence);
+    assert_eq!(ops[0].application_order, tx_row.application_order);
+    assert_eq!(ops[0].operation_index, 0);
 
-    assert!(!staged.lp_amount_rows.is_empty());
-    assert_eq!(staged.pool_amount_rows.len(), staged.lp_amount_rows.len());
-    for (old, new) in staged.lp_amount_rows.iter().zip(&staged.pool_amount_rows) {
-        assert_eq!(
-            (new.pool_id, new.ledger_sequence, new.asset_id, new.amount),
-            (old.pool_id, old.ledger_sequence, old.asset_id, old.amount)
-        );
-        assert_eq!(new.application_order, tx_row.application_order);
-        assert_eq!(new.operation_index, old.application_order - 1);
+    assert!(!staged.pool_amount_rows.is_empty());
+    for row in &staged.pool_amount_rows {
+        assert_eq!(row.pool_id, [0xABu8; 32]);
+        assert_eq!(row.ledger_sequence, tx_row.ledger_sequence);
+        assert_eq!(row.application_order, tx_row.application_order);
+        assert_eq!(row.operation_index, 0);
     }
 }
 
@@ -1580,15 +1551,15 @@ fn prepare_offer_op_pool_ids_from_details() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 1);
-    assert_eq!(staged.op_rows[0].pool_ids, vec![[0xCDu8; 32]]);
+    assert_eq!(staged.tx_operation_rows.len(), 1);
+    assert_eq!(staged.tx_operation_rows[0].pool_ids, vec![[0xCDu8; 32]]);
 }
 
 #[test]
-fn transaction_operations_fold_like_operations_appearances() {
-    // Two identical ops in one tx fold into one row in both tables, and the
-    // position-keyed twin (task 0372) keeps the group's smallest operation
-    // index, 0-based: operations 2 and 3 (1-based) → 1.
+fn transaction_operations_fold_keeps_the_smallest_index() {
+    // Two identical ops in one tx fold into one row, which keeps the group's
+    // smallest operation index, 0-based (task 0372): operations 2 and 3
+    // (1-based) → 1.
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x34);
     let pool = "ef".repeat(32);
@@ -1623,9 +1594,6 @@ fn transaction_operations_fold_like_operations_appearances() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 1);
-    assert_eq!(staged.op_rows[0].application_order, 2);
-    assert_eq!(staged.op_rows[0].amount, 2);
     assert_eq!(staged.tx_operation_rows.len(), 1);
     assert_eq!(staged.tx_operation_rows[0].operation_index, 1);
     assert_eq!(
@@ -3360,7 +3328,7 @@ fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
         "one pool row per ledger, not one per touch"
     );
     // Legs-migration step 2: a CLASSIC row fills `legs` too — ASSET
-    // surrogates (the lp_operation_amounts join key), derived from the same
+    // surrogates (the pool_operation_amounts join key), derived from the same
     // pair the legacy columns carry, so the pair can eventually retire.
     let pr = &staged.pool_rows[0];
     assert_eq!(pr.pool_kind, 0);

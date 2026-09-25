@@ -180,6 +180,19 @@ PR 3 is written while the fill runs.
   keys are equal (30,715,812 / 42,291,832 / 32,297,549).
 - **`operation_pools` dropped** (Karol, after the fill; gone from
   `system.tables` at 12:44 UTC).
+- **PR 3 deployed** (API Lambda 2026-09-25 12:59:01 UTC). Through the dev
+  proxy: op-type cursor `ch_position`, pool activity cursor carries
+  `operation_index`, transaction page operations numbered from 1.
+  `query_log` 12:59:30–13:01 UTC: `api_reader` 474 queries, 0 errors, 50
+  reads of `transaction_operations`, 1 of `pool_operation_amounts`, 0 of the
+  old tables; only `ingestion_writer` still writes them.
+- **PR 4 (stop old writes)** — [#502](https://github.com/rumblefishdev/soroban-block-explorer/pull/502), merged.
+  Pre-drop check, 2026-09-25 13:18 UTC, `query_log` 14 days: no `prices_*`
+  user read `operations_appearances` (103.42 GiB, 7.04 bn rows) or
+  `lp_operation_amounts` (11.65 GiB, 994 M rows); `api_reader`'s last read of
+  either was 12:59:02 UTC, the PR 3 deploy; the rest are `ingestion_writer`,
+  the fill and gates (`dev_read`, `dev_shared`) and the 09-21 backup
+  (`default`).
 - **PR 3 (readers)** — branch `feat/0372-readers-by-position`, commits
   `0df844ad` (code), `bc9dc95c` (docs); [#500](https://github.com/rumblefishdev/soroban-block-explorer/pull/500), merged. Every API reader and
   `repair-tier1` read the new tables; `/transactions` pages on the position
@@ -213,7 +226,7 @@ PR 3 is written while the fill runs.
 ## Acceptance Criteria
 
 - [x] New tables filled and gated in every partition
-- [ ] API reads only the new tables (`query_log`: 0 reads of the old ones)
+- [x] API reads only the new tables (`query_log`: 0 reads of the old ones)
 - [ ] `operations_appearances`, `lp_operation_amounts` (old), `operation_pools`
       dropped; saving measured
 - [ ] `schema_conventions` allowlist shorter by three tables

@@ -212,29 +212,9 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- operations_appearances (append-only fact) — no surrogate `id` -----
-    client
-        .query(
-            "INSERT INTO operations_appearances (transaction_id, application_order, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_ids, amount, ledger_sequence) \
-             VALUES (?, 1, 1, ?, NULL, NULL, '', NULL, [], 100, ?)",
-        )
-        .bind(SMOKE_LEDGER)
-        .bind(SMOKE_LEDGER)
-        .bind(SMOKE_LEDGER)
-        .execute()
-        .await
-        .expect("insert operations_appearances");
-    assert_count(
-        &client,
-        "operations_appearances",
-        &format!("ledger_sequence = {SMOKE_LEDGER}"),
-        1,
-    )
-    .await;
-
     // ----- transaction_operations / pool_operation_amounts (task 0372) -----
-    // The position-keyed twins: two operations of one transaction are two
-    // rows, and the same operation re-inserted collapses on merge.
+    // Keyed by position: two operations of one transaction are two rows,
+    // and the same operation re-inserted collapses on merge.
     client
         .query(
             "INSERT INTO transaction_operations (ledger_sequence, application_order, operation_index, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_ids) \
@@ -614,7 +594,6 @@ async fn cleanup(client: &clickhouse::Client) {
         format!(
             "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence IN ({l}, {l} - 1)"
         ),
-        format!("ALTER TABLE operations_appearances DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE transaction_operations DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE pool_operation_amounts DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {l}"),

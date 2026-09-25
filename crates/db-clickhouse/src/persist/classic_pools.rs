@@ -40,7 +40,7 @@ pub fn build_pool_rows(
             // Legs migration step 2 (task 0374 committed follow-through):
             // classic rows fill `legs` too, so the pair columns can retire.
             // Classic legs are ASSET surrogates (`pool_leg_asset_id` — the
-            // same key `lp_operation_amounts` joins on). A soroban row's legs
+            // same key `pool_operation_amounts` joins on). A soroban row's legs
             // are asset surrogates too, so both kinds join `assets.id` alike.
             legs: vec![
                 ids::pool_leg_asset_id(a_type as i16, &asset_a_code, asset_a_issuer_id),

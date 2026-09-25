@@ -268,12 +268,12 @@ full scale. Plus +10 ms write/ledger from `LowCardinality(String)`
 dictionary build on the high-cardinality FK columns.
 
 All FK columns referencing these three tables are `Int64`
-(`transactions.source_id`, `operations_appearances.contract_id`,
+(`transactions.source_id`, `transaction_operations.contract_id`,
 `soroban_events.contract_id`, etc.) — cheap integer joins, ~7×
 smaller on-disk than 56-byte StrKey FK columns.
 
 **Other tables (`assets`, `nfts`, `liquidity_pools`, `lp_positions`,
-`liquidity_pool_snapshots`, `operations_appearances`,
+`liquidity_pool_snapshots`, `transaction_operations`,
 `transaction_participants`, `nft_ownership`)** stay on natural /
 composite primary keys — for them, composite ORDER BYs over already-
 cheap-shape columns (FixedString(32) hashes, low-cardinality codes,
