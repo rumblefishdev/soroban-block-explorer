@@ -36,10 +36,9 @@ pub struct ParticipantItem {
     /// underlying `NUMERIC(28,7)` precision (no f64 round-trip).
     pub shares: String,
     /// Share of the pool, expressed as a decimal-string percentage
-    /// (`100 * shares / total_pool_shares`). `None` when the pool has no
-    /// snapshot in the freshness window (stale pool); the frontend renders
-    /// it as "—" in that case (matches the list-endpoint stale-pool
-    /// convention from `18_get_liquidity_pools_list.sql`).
+    /// (`100 * shares / total_pool_shares`, over the pool's latest snapshot
+    /// however old — a classic pool snapshots every change). `None` when the
+    /// pool has no snapshot or its total is 0; the frontend renders "—".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
     /// Ledger of the first deposit by this account into this pool.

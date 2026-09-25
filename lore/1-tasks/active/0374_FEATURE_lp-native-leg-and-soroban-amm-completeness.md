@@ -2408,3 +2408,17 @@ on the reverted commit: production code +206 / −186 — not shorter, but one
 amount convention and one scaler; and it fixes a latent bug for PR 7 (a
 trade rate between a 7- and an 18-decimal leg read 10^11 off). It must deploy
 API and SPA together.
+
+### Participants' share survives a quiet pool — the 7-day window dropped (2026-09-25)
+
+Branch `fix/0374-participants-share-window` (the "drop the 7-day window" half
+of PR 5). Measured on production before the change: 10,910 of 26,185 pools
+with providers (41.7%) had their latest snapshot older than 120,960 ledgers,
+so 11,580 of 40,532 positions read `share_percentage = null`. In 10,833 of
+those pools the providers' shares sum exactly to the snapshot's total and no
+position is newer than the snapshot — the old snapshot is the current state.
+The other 77 hold less than the total (providers missing from `lp_positions`,
+the K4-6 coverage gap); the snapshot is still the right denominator. On a
+real quiet pool (`93D002B5…`) the old query reads `null`, the new one 100%.
+CH-gated test `quiet_pool_participants_keep_their_share`: green, red with the
+window restored.

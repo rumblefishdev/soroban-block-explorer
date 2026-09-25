@@ -1758,10 +1758,9 @@ export type PaginatedParticipantItem = {
     last_updated_ledger: number;
     /**
      * Share of the pool, expressed as a decimal-string percentage
-     * (`100 * shares / total_pool_shares`). `None` when the pool has no
-     * snapshot in the freshness window (stale pool); the frontend renders
-     * it as "—" in that case (matches the list-endpoint stale-pool
-     * convention from `18_get_liquidity_pools_list.sql`).
+     * (`100 * shares / total_pool_shares`, over the pool's latest snapshot
+     * however old — a classic pool snapshots every change). `None` when the
+     * pool has no snapshot or its total is 0; the frontend renders "—".
      */
     share_percentage?: string | null;
     /**
@@ -1985,10 +1984,9 @@ export type ParticipantItem = {
   last_updated_ledger: number;
   /**
    * Share of the pool, expressed as a decimal-string percentage
-   * (`100 * shares / total_pool_shares`). `None` when the pool has no
-   * snapshot in the freshness window (stale pool); the frontend renders
-   * it as "—" in that case (matches the list-endpoint stale-pool
-   * convention from `18_get_liquidity_pools_list.sql`).
+   * (`100 * shares / total_pool_shares`, over the pool's latest snapshot
+   * however old — a classic pool snapshots every change). `None` when the
+   * pool has no snapshot or its total is 0; the frontend renders "—".
    */
   share_percentage?: string | null;
   /**

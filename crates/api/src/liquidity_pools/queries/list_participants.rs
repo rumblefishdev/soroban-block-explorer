@@ -19,20 +19,12 @@ pub struct ParticipantRow {
     pub account_id_surrogate: i64,
     /// Numeric carried as text to preserve `NUMERIC(28,7)` precision.
     pub shares: String,
-    /// `100 * shares / total_pool_shares`, NULL when the pool has no snapshot
-    /// in the 7-day freshness window. Already a decimal string.
+    /// `100 * shares / total_pool_shares` over the pool's latest snapshot,
+    /// NULL when it has none or its total is 0. Already a decimal string.
     pub share_percentage: Option<String>,
     pub first_deposit_ledger: i64,
     pub last_updated_ledger: i64,
 }
-
-/// 7-day freshness window expressed in ledgers (~17280 ledgers/day at the
-/// ~5 s mainnet cadence). The PG path uses `snapshots.created_at >= NOW() - 7d`;
-/// CH `liquidity_pool_snapshots` carries no `created_at`, so the window is
-/// approximated by a `ledger_sequence` floor relative to chain head. Exact
-/// wall-clock parity is a documented tolerance (freshness is a stale/fresh
-/// heuristic, not an exact cutoff).
-const FRESHNESS_WINDOW_LEDGERS: i64 = 7 * 17_280;
 
 /// `true` if `s` is a plain decimal string (digits, at most one `.`, optional
 /// leading `-`). Cursor `shares` is decoded from an opaque payload and inlined
@@ -106,10 +98,14 @@ pub async fn fetch_participants(
         _ => String::new(),
     };
 
-    // `snap.ts` = total_shares of the latest snapshot within the freshness
-    // window (NULL → stale pool → share_percentage NULL). The scalar subquery
-    // is scoped to the literal pool (not correlated). CROSS JOIN broadcasts the
-    // single value to every position row (PG `LEFT JOIN latest_snap ON TRUE`).
+    // `snap.ts` = total_shares of the pool's latest snapshot, however old. A
+    // classic pool writes a snapshot on every change of its ledger entry, so an
+    // old snapshot is a quiet pool's CURRENT state, not a stale one: a 7-day
+    // window here blanked the share of 10,910 of 26,185 pools with providers
+    // (production, 2026-09-25), 10,833 of which held exactly the snapshot's
+    // total. The scalar subquery is scoped to the literal pool (not
+    // correlated). CROSS JOIN broadcasts the single value to every position row
+    // (PG `LEFT JOIN latest_snap ON TRUE`).
     let sql = format!(
         "SELECT \
             lpp.account_id                       AS account_id_surrogate, \
@@ -122,14 +118,12 @@ pub async fn fetch_participants(
          CROSS JOIN ( \
             SELECT (SELECT total_shares FROM liquidity_pool_snapshots \
                      WHERE pool_id = unhex(?) \
-                       AND ledger_sequence >= (SELECT max(sequence) FROM ledgers) - {fresh} \
                      ORDER BY ledger_sequence DESC LIMIT 1) AS ts \
          ) snap \
          WHERE lpp.pool_id = unhex(?) AND lpp.shares > 0 \
            {keyset} \
          ORDER BY lpp.shares {order}, lpp.account_id {order} \
          LIMIT ?",
-        fresh = FRESHNESS_WINDOW_LEDGERS,
         keyset = keyset,
         order = order,
     );
@@ -199,3 +193,6 @@ pub async fn fetch_participants(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod ch_tests;
