@@ -77,6 +77,9 @@ impl Modify for SecurityAddon {
 #[derive(OpenApi)]
 #[openapi(
     modifiers(&SecurityAddon),
+    // The one path listed here instead of in `register_routes`: `main::app`
+    // mounts it only when the auth layer is armed (task 0510).
+    paths(crate::auth::session),
     info(
         title = "Soroban Block Explorer API",
         version = env!("CARGO_PKG_VERSION"),

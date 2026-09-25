@@ -68,10 +68,93 @@ Step 1 is the one that matters; 2 and 3 follow from it and are small.
 
 ## Acceptance Criteria
 
-- [ ] The session endpoint appears in `libs/api-types/src/openapi.json`
-- [ ] The frontend uses the generated type; no hand-written mirror remains
-- [ ] Changing the server response shape without regenerating fails CI
-- [ ] No mutable bindings at module scope in the session module; a test can
-      create an isolated instance
-- [ ] **Docs updated** — the frontend data-contract section names the auth path
-- [ ] **API types regenerated** — required; this task's whole point
+- [x] The session endpoint appears in `libs/api-types/src/openapi.json` —
+      `POST /auth/session`, `security: [{}]`, request `SessionRequest`, 200
+      `SessionResponse`, 403/500/503 as `text/plain` (the handler answers plain
+      text, not `ErrorEnvelope`)
+- [x] The frontend uses the generated type; no hand-written mirror remains —
+      `session.ts` imports `type SessionResponse` from `@rumblefish/api-types`
+- [x] Changing the server response shape without regenerating fails CI —
+      proved: renaming `expires_in` → `expires_at` in Rust changes the
+      extracted spec (`diff` exit 1 on the `SessionResponse` schema), which is
+      what `check-generated` diffs; after regeneration `session.ts` would stop
+      typechecking on `body.expires_in`
+- [x] No mutable bindings at module scope in the session module; a test can
+      create an isolated instance — `createSession(...)` holds the token, expiry
+      and in-flight promise; `createTurnstileSolver()` holds the script promise.
+      `web/src/api/__tests__/session.test.ts`, 7 tests, including two instances
+      that do not share state
+- [x] **Docs updated** — `docs/architecture/frontend/frontend-overview.md` §4.5
+      (the session type comes from the package; plain `fetch` and why) and
+      `docs/architecture/backend/backend-overview.md` (`/auth/session` opts out
+      of the global security requirement; why it sits in `paths(...)`)
+- [x] **API types regenerated** — `pnpm nx run @rumblefish/api-types:generate`;
+      new path, `SessionRequest` / `SessionResponse` schemas, `session` SDK
+      function and mutation hook (the frontend does not call either)
+
+## Implementation Notes
+
+- `crates/api/src/auth/mod.rs` — `SessionRequest` / `SessionResponse` derive
+  `ToSchema`; `SessionResponse` is now `pub` with documented fields;
+  `#[utoipa::path]` on `session`.
+- `crates/api/src/openapi/mod.rs` — `paths(crate::auth::session)` in `ApiDoc`.
+- `crates/api/src/lib.rs` — declares `mod auth` so the lib target (which
+  `extract_openapi` uses) can see the handler; it was declared only in `main.rs`.
+- `web/src/api/session.ts` — `createSession({ siteKey, apiBaseUrl, solve? })`
+  returns `{ ensureToken, invalidate }`; the Turnstile code is unchanged apart
+  from taking its script loader as an argument.
+- `web/src/api/client.ts` — builds the one app-wide session and calls it from
+  the two interceptors.
+
+Verification (2026-09-25):
+
+- `cargo clippy -p api --all-targets -- -D warnings` clean; `cargo fmt -p api
+--check` clean; `cargo test -p api --lib auth` 14 passed.
+- `nx run web:test` 47 files / 392 tests passed; `web:typecheck` passed;
+  `web:lint` 0 errors (4 warnings, all in files this task does not touch).
+- Mutation check: removing the single-flight guard fails "shares one
+  round-trip between concurrent callers".
+
+## Design Decisions
+
+### From Plan
+
+1. **Schema first, then the type, then the state** — in the task's order.
+
+### Emerged
+
+2. **Spec-only registration through `ApiDoc` `paths(...)`**, not
+   `register_routes`. `register_routes` mounts what it lists, and the route
+   must exist only when the auth layer is armed (`main::app` mounts it by
+   hand). Listing the path in the derive puts it in the spec without mounting
+   it. Considered and rejected: moving `AuthConfig` into `AppState` so the
+   route could be mounted always and answer 503 when dark — a runtime change
+   for a spec problem.
+3. **Generated type, not generated client.** The task's step 3 assumed the
+   generated client. `session.ts` keeps plain `fetch`: the SDK client's
+   request interceptor awaits `ensureToken`, so the session call through that
+   client would wait on its own in-flight promise.
+4. **A factory with closure state**, not a class or React context. The module
+   has one consumer (`client.ts`, outside React), so a context would add a
+   provider for nothing; the closure gives each instance its own state, which
+   is what the test needs.
+5. **The Turnstile script promise moved into a solver factory** as well, so
+   the module has no mutable binding at all; `solve` is injectable, so tests
+   need no widget.
+6. **The internal note about registration is a `//` comment, not `///`** —
+   utoipa copies doc comments into the public spec description.
+
+## Issues Encountered
+
+- **`crate::auth` not found in the lib target.** The crate compiles its module
+  tree twice (lib for `extract_openapi`, bin for the Lambda); `auth` was only
+  in the bin. Fixed by declaring it in `lib.rs` (the lib already allows
+  `dead_code` for exactly this).
+- **Five page tests timed out** when `test`, `lint` and `typecheck` ran in
+  parallel alongside two other builds; each passes alone and the full `test`
+  target passes on its own run. Load, not a regression.
+
+## Future Work
+
+- `crates/api/src/auth/mod.rs` still carries its tests inline. Extracting them
+  is a move, so it belongs in its own PR, not this one.

@@ -21,6 +21,7 @@ use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Everything the access layer needs at runtime. Built only when armed.
 #[derive(Clone)]
@@ -85,19 +86,41 @@ fn no_store(mut resp: Response) -> Response {
 }
 
 // ── POST /auth/session ─────────────────────────────────────────────────
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SessionRequest {
     /// Turnstile token produced by the SPA widget.
     pub token: String,
 }
 
-#[derive(Serialize)]
-struct SessionResponse {
-    token: String,
-    expires_in: u64,
+#[derive(Serialize, ToSchema)]
+pub struct SessionResponse {
+    /// Free-tier session JWT, sent back as `Authorization: Bearer <token>`.
+    pub token: String,
+    /// Seconds until `token` expires.
+    pub expires_in: u64,
 }
 
+// In the spec through `ApiDoc`'s `paths(...)`, not `register_routes`: the
+// route is mounted by `main::app` only when the layer is armed, and the spec
+// must describe it either way (task 0510).
 /// Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.
+#[utoipa::path(
+    post,
+    path = "/auth/session",
+    tag = "auth",
+    // Exempt from the gate (see `is_exempt`) — called to OBTAIN a session.
+    security(()),
+    request_body = SessionRequest,
+    responses(
+        (status = 200, description = "Session JWT minted", body = SessionResponse),
+        (status = 403, description = "Turnstile verification failed",
+            body = String, content_type = "text/plain"),
+        (status = 500, description = "Token issue failed",
+            body = String, content_type = "text/plain"),
+        (status = 503, description = "Turnstile not configured",
+            body = String, content_type = "text/plain"),
+    ),
+)]
 pub async fn session(auth: AuthConfig, Json(req): Json<SessionRequest>) -> Response {
     let Some(ts_secret) = auth.turnstile_secret.as_ref() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "turnstile not configured").into_response();

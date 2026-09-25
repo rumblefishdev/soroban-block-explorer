@@ -5,6 +5,7 @@ import {
   type InfiniteData,
   infiniteQueryOptions,
   queryOptions,
+  type UseMutationOptions,
 } from '@tanstack/react-query';
 
 import { client } from '../client.gen.js';
@@ -37,6 +38,7 @@ import {
   listPools,
   listTransactions,
   type Options,
+  session,
 } from '../sdk.gen.js';
 import type {
   GetAccountData,
@@ -118,7 +120,33 @@ import type {
   ListTransactionsData,
   ListTransactionsError,
   ListTransactionsResponse,
+  SessionData,
+  SessionError,
+  SessionResponse2,
 } from '../types.gen.js';
+
+/**
+ * Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.
+ */
+export const sessionMutation = (
+  options?: Partial<Options<SessionData>>
+): UseMutationOptions<SessionResponse2, SessionError, Options<SessionData>> => {
+  const mutationOptions: UseMutationOptions<
+    SessionResponse2,
+    SessionError,
+    Options<SessionData>
+  > = {
+    mutationFn: async (fnOptions) => {
+      const { data } = await session({
+        ...options,
+        ...fnOptions,
+        throwOnError: true,
+      });
+      return data;
+    },
+  };
+  return mutationOptions;
+};
 
 export type QueryKey<TOptions extends Options> = [
   Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {

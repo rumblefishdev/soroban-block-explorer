@@ -29,6 +29,7 @@ export {
   listPools,
   listTransactions,
   type Options,
+  session,
 } from './sdk.gen.js';
 export type {
   AccountBalance,
@@ -227,6 +228,13 @@ export type {
   SearchGroups,
   SearchHit,
   SearchResults,
+  SessionData,
+  SessionError,
+  SessionErrors,
+  SessionRequest,
+  SessionResponse,
+  SessionResponse2,
+  SessionResponses,
   SignatureDto,
   TransactionDetailLight,
   TransactionListItem,

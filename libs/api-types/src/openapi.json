@@ -13,6 +13,66 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/auth/session": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.",
+        "operationId": "session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Session JWT minted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Turnstile verification failed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Token issue failed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turnstile not configured",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [{}]
+      }
+    },
     "/health": {
       "get": {
         "tags": ["ops"],
@@ -4736,6 +4796,32 @@
         "properties": {
           "groups": {
             "$ref": "#/components/schemas/SearchGroups"
+          }
+        }
+      },
+      "SessionRequest": {
+        "type": "object",
+        "required": ["token"],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Turnstile token produced by the SPA widget."
+          }
+        }
+      },
+      "SessionResponse": {
+        "type": "object",
+        "required": ["token", "expires_in"],
+        "properties": {
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until `token` expires.",
+            "minimum": 0
+          },
+          "token": {
+            "type": "string",
+            "description": "Free-tier session JWT, sent back as `Authorization: Bearer <token>`."
           }
         }
       },
