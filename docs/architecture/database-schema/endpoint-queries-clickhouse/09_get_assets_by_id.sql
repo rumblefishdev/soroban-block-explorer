@@ -1,120 +1,168 @@
--- ⚠️ SUPERSEDED by task 0331 (unified balances). Supply/holders come from
--- `balance_aggregates` (MV over `balances`, keyed by `assets.id`), NOT
--- `asset_aggregates`; post-ADR-0051 a SAC is a facet folded into its classic row.
--- Authoritative query: `crates/api/src/assets/queries_ch.rs`. Reference SQL below is
--- pre-0331.
 -- Endpoint:     GET /assets/:id
 -- Purpose:      Asset detail. DB returns the composed header (code, type,
---               supply, holder_count, icon, name, symbol, decimals) plus the
---               issuer's on-chain home_domain used as the SEP-1 lookup key. The
---               API then runs a runtime SEP-1 fetch against the issuer's
---               stellar.toml to overlay description + home_page.
+--               supply, holder_count, icon, name, symbol, decimals, SAC facet)
+--               plus the issuer's on-chain home_domain used as the SEP-1
+--               lookup key. The API then runs a runtime SEP-1 fetch against
+--               the issuer's stellar.toml to overlay description + home_page.
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.9
--- Schema:       ADR 0044 + PR-#175 hybrid-surrogate amendment.
+-- Impl:         crates/api/src/assets/queries.rs — `fetch_by_code_issuer`,
+--               `fetch_by_contract_id`, `fetch_native`, all through
+--               `hydrate_assets` (task 0364 two-phase read, task 0334 issuer
+--               key-seek).
+-- Schema:       assets, balance_aggregates (task 0331), asset_enrichment,
+--               asset_sac, soroban_contracts, soroban_contract_metadata,
+--               accounts; ADR 0044.
 -- Data sources: DB + runtime SEP-1 HTTP fetch (per request).
 -- Inputs:
---   $1  :asset_type    Int16   asset_type domain (0=native, 1=classic_credit, 2=sac, 3=soroban-native)
---   $2  :asset_code    String  '' for native; non-empty for credit/SAC/soroban
---   $3  :issuer_id     Int64   0 for native / soroban-native; cityhash64(strkey) otherwise
---   $4  :contract_id   Int64   0 for native / classic credit; cityhash64(strkey) otherwise
--- Indexes:      assets ORDER BY (asset_type, asset_code, issuer_id, contract_id)
---                 — natural composite key (PR #175). Direct seek.
---               accounts, soroban_contracts ORDER BY natural StrKey.
---               soroban_contract_metadata ORDER BY (contract_id) — metadata join.
---               asset_enrichment / asset_aggregates — side-table joins (below).
--- CH Engine:    assets — Replacing — FINAL required.
---               soroban_contracts — Replacing, joined WITHOUT FINAL
---                 (join miss neutralised by `nullIf`).
---               accounts — Replacing, NO LONGER joined (task 0334). The issuer
---                 StrKey + home_domain are resolved by a separate single
---                 `accounts.id` bloom-pruned key-seek (idx_acc_id), latest
---                 version via ORDER BY last_seen_ledger DESC LIMIT 1.
---               soroban_contract_metadata — Replacing(version), FINAL in the
---                 sub-select (latest row per contract_id).
---               asset_enrichment — Replacing(version), collapsed via argMax in
---                 a GROUP BY sub-select.
---               asset_aggregates — MergeTree batch table (no FINAL).
--- CH Pattern:   Two-step seek (task 0334), mirroring the list `08` (task 0319)
---               and the tx-list `02` (task 0290). Step 1 reads the asset row from
---               the accounts-join-free SELECT; step 2 resolves the issuer by an
---               `accounts.id` key-seek. The full `accounts` join (~18.5M-row hash
---               side) drove the detail to ~21M read_rows / ~1.58 GB per request
---               (prod) — removing it cuts that by orders of magnitude (the issuer
---               seek touches ~1-2 granules). The API resolves the public `:id`
---               TOKEN to the WHERE predicate at the request boundary — NOT a
---               surrogate:
---                 • contract StrKey (`C…`) → seek `soroban_contracts.contract_id`
---                 • `CODE-ISSUER`          → seek `accounts.account_id` → issuer
---                                            surrogate id, then `asset_code` +
---                                            `issuer_id` on `assets`
---                 • `native`               → `asset_type = 0`
---               (task 0243/0334, `assets/queries_ch.rs` + `canonical_id` in
---               `assets/handlers.rs`). The displayed `AssetItem.id` echoes the
---               same token, so the FE never reconstructs the tuple.
--- ADR 0044 §:   §4.5 (Replacing state). **PR #175 amendment:** the surrogate
---               `assets.id` no longer exists; routing is the composite token.
+--   $1  :issuer_strkey   String  G-StrKey of the issuer (CODE-ISSUER form)
+--   $2  :asset_code      String  asset code (CODE-ISSUER form)
+--   $3  :issuer_id       Int64   `accounts.id` resolved by A (CODE-ISSUER form)
+--   $4  :issuer_id_key   Int64   B's `issuer_id_key` (contract / native forms;
+--                                skipped when 0)
+--   C–E take the resolved key set, inlined by Rust as literal IN lists; the
+--   literals below are examples (same convention as 02 / 08).
+-- Resolution — the API maps the public `:id` TOKEN to a key at the request
+-- boundary, never to a manufactured surrogate:
+--   • `CODE-ISSUER`  → A (issuer seek by StrKey) → B (key seek) → C, D, E.
+--                      A already yields the issuer StrKey + home_domain, so F
+--                      is not run.
+--   • contract `C…`  → a bespoke type-3 token IS its contract: its whole key is
+--                      `(3, '', 0, surrogate)` and `id == surrogate`, so A/B
+--                      are skipped → C, D, E → F.
+--   • `native`       → the fixed singleton `(0, '', 0, 0)`, id =
+--                      `ids::NATIVE_ASSET_ID` → C, D, E → F (skipped: issuer 0).
+--   A SAC `C…` is NOT an asset address (ADR 0051 facet; task 0364) — it 404s.
+-- Indexes:      accounts ORDER BY account_id (A: PK point seek); `idx_acc_id`
+--                 bloom (F).
+--               assets ORDER BY (asset_type, asset_code, issuer_id,
+--                 contract_id) — B and D are PK seeks.
+--               balance_aggregates keyed by asset_id; soroban_contracts
+--                 `idx_sc_id` bloom (E).
+-- CH Engine:    assets — ReplacingMergeTree, no FINAL (B takes LIMIT 1; D
+--                 collapses versions with `LIMIT 1 BY`).
+--               accounts — latest version via `ORDER BY last_seen_ledger DESC
+--                 LIMIT 1` (home_domain is mutable), never FINAL (~16M rows).
+--               asset_enrichment — Replacing(version), argMax per key.
+--               asset_sac / balance_aggregates / soroban_contract_metadata —
+--                 as in 08.
+-- CH Pattern:   Key resolution → bounded hydration; the SAC-wrapper seek C and
+--               the contract context E run concurrently with D.
+-- ADR 0044 §:   §4.5 (Replacing state).
 -- Notes:
---   • Do NOT manufacture a cityHash64 surrogate as a routing key — `/assets/:id`
+--   • `total_supply` / `holder_count` come from `balance_aggregates` (task
+--     0331), keyed by `assets.id` — ONE aggregate row per asset, a SAC's
+--     contract-held balances folded into its classic row. The retired
+--     `asset_aggregates` is gone.
+--   • The detail hydrates WITH the SAC wrapper (C): `deployed_at_ledger` is
+--     the own contract's deploy ledger, else the SAC wrapper's. The list (08)
+--     drops that field and skips C.
+--   • name / symbol / decimals / contract StrKey are assembled in Rust
+--     (`assemble_asset_row`), same precedence as 08.
+--   • Do NOT manufacture a cityHash64 surrogate as a routing key — the route
 --     rejects it (400). Search hits carry the canonical token in `route_token`
---     (see `22_get_search.sql`), display `identifier` stays the asset code.
---   • Sentinels: `issuer_id=0` and `contract_id=0` represent absence;
---     LEFT JOIN never matches because `accounts.id` / `soroban_contracts.id`
---     are derived from `cityhash64(strkey)` (0 reserved).
---   • SEP-1 fetch still happens at API layer; not in SQL.
---   • **name / symbol / decimals are read-composed from side tables, NOT from
---     the `assets` row.** `assets.name` has had no writer since task 0297.
---     Name precedence: `asset_enrichment.name` (classic/SAC, task 0231) →
---     `soroban_contract_metadata.name` (on-chain SEP-41 `METADATA`, task 0297)
---     → `'Stellar Lumens'` for native. `symbol`/`decimals` come from
---     `soroban_contract_metadata` (decimals defaults to 7 for classic/SAC).
---     The detail now uses the SAME accounts-join-free SELECT as the list `08`
---     (task 0334 collapsed them); the issuer is resolved by a key-seek (step 2).
+--     (see 22_get_search.sql).
+--   • SEP-1 fetch happens at the API layer (`runtime_enrichment::sep1`, task
+--     0188), keyed off the issuer home_domain; not in SQL.
 
--- STEP 1 — asset row, accounts-join-free. Shown with the contract-StrKey
--- predicate (primary Soroban path). The API swaps the WHERE for the
--- CODE-ISSUER / native forms above; SELECT is identical.
+-- ============================================================================
+-- A. CODE-ISSUER form — resolve the issuer StrKey (`seek_latest_account` by
+--    `account_id`, the `accounts` primary key). A miss ⇒ 404.
+-- ============================================================================
+SELECT id AS id, account_id AS account_id, home_domain AS home_domain
+FROM accounts WHERE account_id = $1
+ORDER BY last_seen_ledger DESC LIMIT 1;
+
+-- @@ split @@
+-- ============================================================================
+-- B. CODE-ISSUER form — phase-1 key seek (no FINAL). Post-ADR 0051 a
+--    `(code, issuer)` names one classic_credit row; `ORDER BY asset_type` is
+--    the deterministic tiebreak anyway.
+-- ============================================================================
+SELECT a.asset_type AS asset_type, a.asset_code AS asset_code,
+       a.issuer_id AS issuer_id, a.contract_id AS contract_id, a.id AS id
+FROM assets a
+WHERE a.asset_code = $2 AND a.issuer_id = $3
+ORDER BY a.asset_type LIMIT 1;
+
+-- @@ split @@
+-- ============================================================================
+-- C. SAC-wrapper surrogate (detail only) — feeds E, for the wrapper's deploy
+--    ledger.
+-- ============================================================================
+SELECT DISTINCT sac_contract_id AS id
+FROM asset_sac
+WHERE (asset_type, asset_code, issuer_id, contract_id) IN ((1,'USDC',987654321,0))
+  AND sac_contract_id != 0;
+
+-- @@ split @@
+-- ============================================================================
+-- D. Phase-2 hydration (`hydrate_sql`) — identical to 08 statement B, here
+--    for one key.
+-- ============================================================================
 SELECT
-    a.asset_type                        AS asset_type,
-    nullIf(a.asset_code, '')            AS asset_code,
-    nullIf(sc.contract_id, '')          AS contract_id,
-    coalesce(nullIf(ae.name, ''), nullIf(m.name, ''),
-             if(a.asset_type = 0, 'Stellar Lumens', NULL)) AS name,
-    nullIf(m.symbol, '')                AS symbol,
-    coalesce(m.decimals, 7)             AS decimals,
-    toString(agg.total_supply)          AS total_supply,
-    agg.holder_count                    AS holder_count,
-    nullIf(sc.deployed_at_ledger, 0)    AS deployed_at_ledger,
-    nullIf(ae.icon_url, '')             AS icon_url,
-    a.issuer_id                         AS issuer_id_key,  -- → step 2 seek
-    a.contract_id                       AS contract_id_key
-    -- not in DB: description, home_page — runtime SEP-1 fetch via
-    --   `runtime_enrichment::sep1` (task 0188), keyed off issuer_home_domain.
-FROM assets a FINAL
-LEFT JOIN soroban_contracts sc  ON sc.id  = a.contract_id
+    a.asset_type                AS asset_type,
+    nullIf(a.asset_code, '')    AS asset_code,
+    nullIf(ae.name, '')         AS name_enrichment,
+    toString(bagg.total_supply) AS total_supply,
+    bagg.holder_count           AS holder_count,
+    nullIf(ae.icon_url, '')     AS icon_url,
+    a.issuer_id                 AS issuer_id_key,
+    a.contract_id               AS contract_id_key,
+    sac.sac_contract_id         AS sac_contract_surrogate,
+    sac.sac_deployed            AS sac_deployed,
+    a.id                        AS id
+FROM assets a
 LEFT JOIN (
-    SELECT contract_id, name, symbol, decimals
-    FROM soroban_contract_metadata FINAL      -- task 0297 side table; RMT(version) → latest per contract
-) m ON m.contract_id = sc.contract_id
-LEFT JOIN asset_aggregates agg
-       ON agg.asset_code = a.asset_code AND agg.issuer_id = a.issuer_id
+    SELECT asset_id, total_supply, holder_count
+    FROM balance_aggregates WHERE asset_id IN (1234567890123)
+) bagg ON bagg.asset_id = a.id
 LEFT JOIN (
     SELECT asset_type, asset_code, issuer_id, contract_id,
            argMax(icon_url, version) AS icon_url,
            argMax(name, version)     AS name
-    FROM asset_enrichment                     -- task 0231 side table
+    FROM asset_enrichment
+    WHERE (asset_type, asset_code, issuer_id, contract_id) IN ((1,'USDC',987654321,0))
     GROUP BY asset_type, asset_code, issuer_id, contract_id
-) ae ON ae.asset_type = a.asset_type AND ae.asset_code = a.asset_code
-    AND ae.issuer_id = a.issuer_id   AND ae.contract_id = a.contract_id
-WHERE sc.contract_id = $1
-LIMIT 1;
+) ae ON ae.asset_type  = a.asset_type  AND ae.asset_code  = a.asset_code
+    AND ae.issuer_id   = a.issuer_id   AND ae.contract_id = a.contract_id
+LEFT JOIN (
+    SELECT asset_type, asset_code, issuer_id, contract_id,
+           max(sac_contract_id)        AS sac_contract_id,
+           toBool(max(sac_deployed))   AS sac_deployed
+    FROM asset_sac
+    WHERE (asset_type, asset_code, issuer_id, contract_id) IN ((1,'USDC',987654321,0))
+    GROUP BY asset_type, asset_code, issuer_id, contract_id
+) sac ON sac.asset_type  = a.asset_type  AND sac.asset_code  = a.asset_code
+    AND sac.issuer_id   = a.issuer_id   AND sac.contract_id = a.contract_id
+WHERE (a.asset_type, a.asset_code, a.issuer_id, a.contract_id) IN ((1,'USDC',987654321,0))
+LIMIT 1 BY a.asset_type, a.asset_code, a.issuer_id, a.contract_id;
 
--- STEP 2 — resolve the issuer surrogate (issuer_id_key from step 1) to its
--- StrKey + home_domain via the idx_acc_id bloom-pruned key-seek (task 0334).
--- Skipped when issuer_id_key = 0 (native / no issuer). For the CODE-ISSUER form
--- this seek runs FIRST (by accounts.account_id) to resolve the issuer surrogate,
--- and the same row supplies the StrKey + home_domain.
-SELECT id, account_id, home_domain
-FROM accounts
-WHERE id = $issuer_id_key            -- CODE-ISSUER form: WHERE account_id = $strkey
-ORDER BY last_seen_ledger DESC
-LIMIT 1;
+-- @@ split @@
+-- ============================================================================
+-- E. `soroban_contracts` context (`resolve_soroban_contracts`) for the own
+--    contract (type-3) and the SAC wrapper from C — identical to 08
+--    statement C. Skipped when both are absent.
+-- ============================================================================
+SELECT sc.id AS id,
+       argMax(sc.contract_id, sc.wasm_uploaded_at_ledger)        AS contract_id,
+       argMax(sc.deployed_at_ledger, sc.wasm_uploaded_at_ledger) AS deployed_at_ledger,
+       any(m.name)     AS name,
+       any(m.symbol)   AS symbol,
+       any(m.decimals) AS decimals
+FROM soroban_contracts sc
+LEFT JOIN (
+    SELECT contract_id, name, symbol, decimals
+    FROM soroban_contract_metadata FINAL
+) m ON m.contract_id = sc.contract_id
+WHERE sc.id IN (3456789012345)
+GROUP BY sc.id;
+
+-- @@ split @@
+-- ============================================================================
+-- F. Contract / native forms — resolve D's `issuer_id_key` to StrKey +
+--    home_domain (`resolve_issuer`: the `idx_acc_id` bloom seek). Skipped
+--    when it is 0 (native, bespoke Soroban token).
+-- ============================================================================
+SELECT id AS id, account_id AS account_id, home_domain AS home_domain
+FROM accounts WHERE id = $4
+ORDER BY last_seen_ledger DESC LIMIT 1;
