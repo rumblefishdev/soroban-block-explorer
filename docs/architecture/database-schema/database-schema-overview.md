@@ -233,7 +233,7 @@ Derived explorer entities:
   staged when a write moved them (decision C′; rows before that deploy came
   from the plane's `PoolData`, equal except for mixed-decimal stable pools,
   whose history was re-derived from raw ledgers). `plane_id` is the plane the
-  pool declares — reads still filter on it (below). The target state-fact shape — classic snapshot
+  pool declared when the row was written (see below). The target state-fact shape — classic snapshot
   history joins INTO it if the snapshot models unify (ADR 0058 §3)
 - `pool_instance_state` — what a pool declares ABOUT ITSELF, read from its own
   instance storage (side table, `asset_sac` pattern; ADR 0058 §4): `plane_id`
@@ -251,12 +251,15 @@ Derived explorer entities:
   Full recompute + atomic EXCHANGE (the `accounts_recent` pattern), so it needs
   no backfill and heals from a source rebuild on the next refresh
 
-**Reserve provenance is a READ-TIME predicate, not just a stored column.** A
-plane entry names its pool in a key payload the writing contract chooses
-freely, so any contract can publish reserves under another pool's id. Reads of
-`pool_state_changes` therefore keep only rows whose `plane_id` matches the
-plane the pool itself declares in `pool_instance_state`; the same rule gates
-the pool list's activity ordering. Symmetrically, a registration is only
+**Reserve provenance comes from the writer.** Before decision C′ reserve rows
+came from a plane's `[PoolData, pool]` entry, a key any contract could publish
+under another pool's id, so reads kept only rows from the plane the pool
+declares in `pool_instance_state`. Since C′ every row is decoded from the
+pool's own instance, keyed on the entry's owner, so a contract can only write
+under its own id; on production 0 of 5,040,494 rows come from an undeclared
+plane (2026-09-25). The API reads the newest row per pool without that filter;
+`pool_activity_mv` still carries it until task 0581 rebuilds the view.
+Symmetrically, a registration is only
 written when the named pool's instance declares the emitter as its `Router`
 (see the indexing-pipeline overview).
 

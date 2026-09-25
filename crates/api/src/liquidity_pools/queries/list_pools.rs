@@ -92,9 +92,7 @@ struct PoolListChRow {
 /// `greatest` rather than a per-kind branch: a classic pool has no
 /// `pool_activity` row, so the join misses and the column wins — read live, it
 /// never lags the MV's refresh; a soroban pool's column is its registration,
-/// which its last change normally follows (every pool on production,
-/// 2026-09-24). Nothing relies on that: the reserve read is bounded by
-/// `pool_activity` alone, not by this key. A join miss yields `0`, not NULL
+/// which its last change normally follows. A join miss yields `0`, not NULL
 /// (`join_use_nulls` is refused for the read-only user), which `greatest`
 /// ignores.
 const ACTIVITY_LEDGER: &str = "greatest(lp.last_updated_ledger, pa.last_activity_ledger)";
@@ -258,8 +256,7 @@ pub async fn fetch_pool_list(
                     lp.legs AS legs, lp.fee_bps AS fee_bps, \
                     lp.pool_type_raw AS pool_type_raw, \
                     lp.last_updated_ledger AS last_updated_ledger, \
-                    {act} AS activity_ledger, \
-                    pa.last_activity_ledger AS state_ledger \
+                    {act} AS activity_ledger \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN pool_activity pa ON pa.pool_id = lp.pool_id \
              WHERE 1 = 1{filters} {keyset} \
@@ -336,10 +333,7 @@ pub async fn fetch_pool_list(
          ORDER BY lp.activity_ledger {order}, lp.pool_id {order}",
         act = ACTIVITY_LEDGER,
         // Bounded to the page, like every other side read here.
-        reserves = state_reserves_sql(
-            "SELECT pool_id FROM page",
-            "(SELECT minIf(state_ledger, pool_kind = 1) FROM page)",
-        ),
+        reserves = state_reserves_sql("SELECT pool_id FROM page"),
         shares = instance_shares_sql("SELECT pool_id FROM page"),
         filters = filters,
         keyset = keyset,

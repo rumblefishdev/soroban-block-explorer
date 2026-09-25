@@ -3,69 +3,62 @@
 //! single-pool detail.
 //!
 //! The order key comes from `pool_activity`, which a refreshable MV fills from
-//! `pool_state_changes`. That MV keeps only rows of the plane the pool itself
-//! declares in `pool_instance_state`: a plane entry names its pool in a key any
-//! contract can write, so without the filter a foreign contract could push any
-//! pool to the top of the list. The filter lives in `init.sql`, where nothing
-//! else would notice it going missing — this runs the real `init.sql` and the
-//! real list query in a throwaway database, so it can never touch shared data.
-//! Gated on `CH_URL` like the other DB-backed tests in this crate.
+//! `pool_state_changes`; the reserves and shares are joined per page. This runs
+//! the real `init.sql` and the real list query in a throwaway database, so it
+//! can never touch shared data. Gated on `CH_URL` like the other DB-backed
+//! tests in this crate.
 //!
 //!   CH_URL=http://localhost:8123 CH_USER=default CH_PASSWORD=… \
-//!     cargo test -p api list_orders_by_activity_from_the_declared_plane_only
+//!     cargo test -p api list_reads_soroban_order_reserves_and_shares
 
 use super::*;
 
 const DB: &str = "api_test_0374_pool_activity";
 
-// Pool ids as 32-byte hex: `c1` classic, `51` to `54` soroban.
+// Pool ids as 32-byte hex: `c1` classic, `51` to `53` soroban.
 const CLASSIC: &str = "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1";
-const SOROBAN_SPOOFED: &str = "5151515151515151515151515151515151515151515151515151515151515151";
+const SOROBAN_ROUTER: &str = "5151515151515151515151515151515151515151515151515151515151515151";
 const SOROBAN_ACTIVE: &str = "5252525252525252525252525252525252525252525252525252525252525252";
-const SOROBAN_LATE: &str = "5353535353535353535353535353535353535353535353535353535353535353";
-const SOROBAN_UNREFRESHED: &str =
-    "5454545454545454545454545454545454545454545454545454545454545454";
+const SOROBAN_REPOINTED: &str = "5353535353535353535353535353535353535353535353535353535353535353";
 
 async fn seed(ch: &clickhouse::Client) {
     for sql in [
         // A classic pool's own row moves with every trade: last activity 200.
-        // The soroban rows sit at their registration ledgers. LATE and
-        // UNREFRESHED register (500, 400) AFTER their last change (120, 50),
-        // so the page's activity key is no lower bound on their reserve rows.
+        // The soroban rows sit at their registration ledgers.
         format!(
             "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs, pool_type_raw) VALUES \
              (unhex('{CLASSIC}'), 30, 200, 0, [], ''), \
-             (unhex('{SOROBAN_SPOOFED}'), 30, 100, 1, [1001, 1002], 'constant'), \
+             (unhex('{SOROBAN_ROUTER}'), 30, 100, 1, [1001, 1002], 'constant'), \
              (unhex('{SOROBAN_ACTIVE}'), 30, 110, 1, [], ''), \
-             (unhex('{SOROBAN_LATE}'), 30, 500, 1, [1001, 1002], ''), \
-             (unhex('{SOROBAN_UNREFRESHED}'), 30, 400, 1, [1001, 1002], '')"
+             (unhex('{SOROBAN_REPOINTED}'), 30, 90, 1, [1001, 1002], '')"
         ),
         // Two classic legs, so both scale by the protocol's 7 decimals.
         "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, id) VALUES \
          (0, '', 0, 0, 1001), (1, 'USDC', 42, 0, 1002)"
             .to_string(),
-        // Each soroban pool declares its plane (7 and 8) and its shares. The
-        // router pool's share token (501) publishes 7 decimals; the
+        // The router pool's share token (501) publishes 7 decimals; the
         // pair-factory pool stores 0, which for that family is a measurement.
+        // REPOINTED declares plane 9, then re-points to plane 90 at 140
+        // without moving its reserves.
         format!(
             "INSERT INTO pool_instance_state (pool_id, plane_id, share_token_id, total_shares, derived_at_ledger) VALUES \
-             (unhex('{SOROBAN_SPOOFED}'), 7, 501, 252647541418, 100), \
+             (unhex('{SOROBAN_ROUTER}'), 7, 501, 252647541418, 100), \
              (unhex('{SOROBAN_ACTIVE}'), 8, 0, 0, 110), \
-             (unhex('{SOROBAN_LATE}'), 9, 0, 0, 500), \
-             (unhex('{SOROBAN_UNREFRESHED}'), 10, 0, 0, 400)"
+             (unhex('{SOROBAN_REPOINTED}'), 9, 0, 0, 90), \
+             (unhex('{SOROBAN_REPOINTED}'), 90, 0, 0, 140)"
         ),
         "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES (501, 'CSHARETOKEN', false)"
             .to_string(),
         "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES ('CSHARETOKEN', 7, 1)"
             .to_string(),
-        // The spoofed pool's own plane last moved at 150; a FOREIGN plane (666)
-        // publishes rows under its id at 900. The active pool moved at 300.
+        // Rows are staged from each pool's own instance, under the plane it
+        // declared at that ledger.
         format!(
             "INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id) VALUES \
-             (unhex('{SOROBAN_SPOOFED}'), 150, [10000000, 20000000], 7), \
-             (unhex('{SOROBAN_SPOOFED}'), 900, [999990000000, 1], 666), \
+             (unhex('{SOROBAN_ROUTER}'), 120, [50000000, 60000000], 7), \
+             (unhex('{SOROBAN_ROUTER}'), 150, [10000000, 20000000], 7), \
              (unhex('{SOROBAN_ACTIVE}'), 300, [1, 2], 8), \
-             (unhex('{SOROBAN_LATE}'), 120, [30000000, 40000000], 9)"
+             (unhex('{SOROBAN_REPOINTED}'), 120, [30000000, 40000000], 9)"
         ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
@@ -73,9 +66,9 @@ async fn seed(ch: &clickhouse::Client) {
 }
 
 #[tokio::test]
-async fn list_orders_by_activity_from_the_declared_plane_only() {
+async fn list_reads_soroban_order_reserves_and_shares() {
     let Some(base) = crate::common::ch::test_client_from_env() else {
-        eprintln!("CH_URL unset — skipping pool activity order check");
+        eprintln!("CH_URL unset — skipping soroban pool read check");
         return;
     };
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
@@ -102,15 +95,6 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
             .await
             .expect("refresh pool_activity_mv");
     }
-    // A change the refresh has not reached yet: UNREFRESHED has no
-    // `pool_activity` row, so its reserves must still read.
-    ch.query(&format!(
-        "INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id) VALUES \
-         (unhex('{SOROBAN_UNREFRESHED}'), 50, [50000000, 60000000], 10)"
-    ))
-    .execute()
-    .await
-    .expect("seed unrefreshed change");
 
     let params = ResolvedPoolListParams {
         limit: 10,
@@ -127,18 +111,18 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
         .map(|r| (r.pool_id_hex.as_str(), r.cursor_ledger))
         .collect();
 
-    // The foreign plane's 900 must not count: the spoofed pool's activity is its
-    // own 150, so it ranks LAST — below the classic pool's live 200.
+    // Soroban pools rank by their last reserve change, the classic one by its
+    // live row. REPOINTED falls back to its registration (90): the MV still
+    // counts only rows of the currently declared plane (task 0581 rebuilds it).
     assert_eq!(
         order,
         vec![
-            (SOROBAN_LATE, 500),
-            (SOROBAN_UNREFRESHED, 400),
             (SOROBAN_ACTIVE, 300),
             (CLASSIC, 200),
-            (SOROBAN_SPOOFED, 150)
+            (SOROBAN_ROUTER, 150),
+            (SOROBAN_REPOINTED, 90)
         ],
-        "list must order by last activity, counting only the declared plane"
+        "list must order by last activity"
     );
 
     let listed = |pool: &str| {
@@ -151,22 +135,19 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
     };
     let some = |v: [&str; 2]| v.map(|s| Some(s.to_string())).to_vec();
 
-    // The reserves come from the declared plane too: its latest row (1, 2 at
-    // 7 decimals), never the foreign plane's newer one.
-    let spoofed = listed(SOROBAN_SPOOFED);
-    assert_eq!(reserves(spoofed), some(["1", "2"]));
+    // The newest row wins (1, 2 at 7 decimals), not the older 5, 6.
+    let router = listed(SOROBAN_ROUTER);
+    assert_eq!(reserves(router), some(["1", "2"]));
     // Shares scale by the share token's own decimals; the pair-factory 0 is real.
-    assert_eq!(spoofed.total_shares.as_deref(), Some("25264.7541418"));
+    assert_eq!(router.total_shares.as_deref(), Some("25264.7541418"));
     assert_eq!(listed(SOROBAN_ACTIVE).total_shares.as_deref(), Some("0"));
+    // A pool that re-pointed its plane without moving keeps its reserves: its
+    // newest row sits on the old plane, and a filter on the declared plane
+    // would read nothing.
+    assert_eq!(reserves(listed(SOROBAN_REPOINTED)), some(["3", "4"]));
 
-    // The reserve read's lower bound. LATE's latest row (120) is older than
-    // every activity key on the page (lowest 150), so a bound on that key hides
-    // it; UNREFRESHED has no `pool_activity` entry, which must lift the bound.
-    assert_eq!(reserves(listed(SOROBAN_LATE)), some(["3", "4"]));
-    assert_eq!(reserves(listed(SOROBAN_UNREFRESHED)), some(["5", "6"]));
-
-    // The detail reads the same values through its own statement (8 binds).
-    let detail = crate::liquidity_pools::queries::fetch_pool_by_id(&ch, SOROBAN_SPOOFED)
+    // The detail reads the same values through its own statement.
+    let detail = crate::liquidity_pools::queries::fetch_pool_by_id(&ch, SOROBAN_ROUTER)
         .await
         .expect("detail query runs")
         .expect("pool found");

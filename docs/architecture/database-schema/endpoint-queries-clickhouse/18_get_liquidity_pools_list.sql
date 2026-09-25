@@ -104,19 +104,13 @@
 --     the asset's own page carries it with its deployment state (ADR 0051).
 --   • **Soroban reserves and shares (task 0374).** A Soroban pool has no
 --     snapshot row. The API joins, bounded to the page's pools:
---       reserves = argMax(reserves, ledger_sequence) FROM pool_state_changes,
---                  keeping only rows whose plane_id matches the plane the pool
---                  declares (argMax(plane_id, derived_at_ledger) FROM
---                  pool_instance_state) — a plane names its pool in a key any
---                  contract can write, so the filter is required, and
---                  ledger_sequence >= the oldest pool_activity ledger among
---                  the page's Soroban pools (that table is the max of these
---                  same rows, so no pool's latest row precedes its own entry;
---                  a pool the refresh has not reached joins as 0 and lifts
---                  the bound);
+--       reserves = argMax(reserves, ledger_sequence) FROM pool_state_changes
+--                  (every row comes from the pool's own instance storage, so
+--                  no provenance filter is needed — decision C′);
 --       shares   = argMax(total_shares, derived_at_ledger) FROM
 --                  pool_instance_state, with the share token's decimals from
---                  soroban_contract_metadata (NULL when it publishes none).
+--                  the shared asset identity resolution (NULL when it
+--                  publishes none).
 --     Raw integers are scaled in Rust by each leg's decimals, and only when
 --     they are a fact (protocol 7 for classic/native, published metadata for
 --     a Soroban token). A stored 0 in shares reads 0 only for a pair-factory

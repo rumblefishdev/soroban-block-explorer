@@ -118,7 +118,7 @@ pub async fn fetch_pool_by_id(
              LEFT JOIN ({shares}) inst ON inst.pool_id = lp.pool_id \
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
-        reserves = state_reserves_sql("unhex(?)", "0"),
+        reserves = state_reserves_sql("unhex(?)"),
         shares = instance_shares_sql("unhex(?)"),
     );
     let mut query = client.query(&sql);

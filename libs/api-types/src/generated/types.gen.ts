@@ -2135,8 +2135,7 @@ export type PoolAssetLeg = {
    * number is a browser double and a big reserve would lose digits). On the
    * leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
    * four legs. A classic pool's comes from its latest snapshot; a soroban
-   * pool's from its latest state change on the plane the pool itself
-   * declares, scaled by the leg's own decimals. `null` when no source knows
+   * pool's from its latest state change, scaled by the leg's own decimals. `null` when no source knows
    * it — including a soroban token that publishes no decimals, where a
    * guessed 7 would be off by up to 10^11. An empty leg is `0`.
    */

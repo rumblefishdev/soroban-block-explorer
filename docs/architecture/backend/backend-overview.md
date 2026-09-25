@@ -551,10 +551,8 @@ semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
 leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
 read the snapshot's two reserve columns in order. A Soroban pool has no
-snapshot: its legs read the latest `pool_state_changes` row from the plane the
-pool itself declares in `pool_instance_state` (a plane names its pool in a key
-any contract can write, so every read of that table carries this filter),
-scaled by each leg's own decimals — `null` when the token publishes none, `0`
+snapshot: its legs read the latest `pool_state_changes` row (decoded from the
+pool's own instance storage, so no provenance filter is needed), scaled by each leg's own decimals — `null` when the token publishes none, `0`
 for an empty leg. Its total shares come from `pool_instance_state` (the pool
 contract's own storage) scaled by the share token's decimals; a stored 0 is
 reported as `0` only for a pair-factory pool or a pool holding nothing, and as

@@ -53,36 +53,23 @@ impl<'a> Reserves<'a> {
 
 /// Each soroban pool's latest reserves, raw and in leg order, for the pools in
 /// `pool_ids` (the body of an `IN (…)`: `unhex(?)` or a subquery — bounded,
-/// never the whole table). It appears twice, so a bound value binds twice.
-/// `from_ledger` is a lower bound on the rows read (an SQL expression). The
-/// list passes the oldest `pool_activity` ledger among its page's SOROBAN pools:
-/// that table is the max of these same rows, so no pool's latest row can precede
-/// its own entry, and a soroban pool the MV has not reached yet joins as 0,
-/// which lifts the bound entirely. Classic pools have no rows here and are left
-/// out of the minimum, or their 0 would lift it on every mixed page.
-/// 0.25M rows read instead of 2.66M for a page of the busiest pools (measured
-/// 2026-09-24). The single-pool detail passes `0`.
+/// never the whole table). No ledger bound: a page of the busiest pools reads
+/// 2.4M rows / ~57 ms (measured 2026-09-25) at a few dozen requests a day.
 ///
-/// **The plane filter is required, not an optimisation.** A plane entry names
-/// its pool in a key payload the writing contract chooses freely, so any
-/// contract can publish rows under another pool's id. Only rows from the plane
-/// the pool itself declares in `pool_instance_state` — the pool contract's own
-/// storage, which nobody else can write — are its reserves. Filtering at write
-/// time is not possible: under a parallel backfill a pool's reserve rows can
-/// land before its declaration (task 0374). Every read of `pool_state_changes`
-/// carries this join.
-pub(super) fn state_reserves_sql(pool_ids: &str, from_ledger: &str) -> String {
+/// No plane filter either. Every row is staged from the pool's OWN instance,
+/// keyed on the entry's owner (decision C′, `stage.rs`), so a contract can
+/// only write rows under its own id. Before C′ rows came from a plane's
+/// `[PoolData, pool]` key, which any contract could forge; on production
+/// 0 of 5,040,494 rows come from a plane the pool does not declare
+/// (2026-09-25). The newest row wins whatever plane wrote it, so a pool that
+/// re-points its plane keeps reading its latest state.
+pub(super) fn state_reserves_sql(pool_ids: &str) -> String {
     format!(
-        "SELECT s.pool_id AS pool_id, \
-                arrayMap(x -> toString(x), argMax(s.reserves, s.ledger_sequence)) AS reserves \
-         FROM pool_state_changes AS s \
-         INNER JOIN (SELECT pool_id, argMax(plane_id, derived_at_ledger) AS plane_id \
-                     FROM pool_instance_state \
-                     WHERE pool_id IN ({pool_ids}) \
-                     GROUP BY pool_id) AS d \
-             ON d.pool_id = s.pool_id AND d.plane_id = s.plane_id \
-         WHERE s.pool_id IN ({pool_ids}) AND s.ledger_sequence >= {from_ledger} \
-         GROUP BY s.pool_id"
+        "SELECT pool_id, \
+                arrayMap(x -> toString(x), argMax(reserves, ledger_sequence)) AS reserves \
+         FROM pool_state_changes \
+         WHERE pool_id IN ({pool_ids}) \
+         GROUP BY pool_id"
     )
 }
 

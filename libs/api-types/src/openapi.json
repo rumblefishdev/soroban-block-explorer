@@ -4554,7 +4554,7 @@
           },
           "reserve": {
             "type": ["string", "null"],
-            "description": "What the pool holds of this leg, in units, as a decimal string (a JSON\nnumber is a browser double and a big reserve would lose digits). On the\nleg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to\nfour legs. A classic pool's comes from its latest snapshot; a soroban\npool's from its latest state change on the plane the pool itself\ndeclares, scaled by the leg's own decimals. `null` when no source knows\nit — including a soroban token that publishes no decimals, where a\nguessed 7 would be off by up to 10^11. An empty leg is `0`."
+            "description": "What the pool holds of this leg, in units, as a decimal string (a JSON\nnumber is a browser double and a big reserve would lose digits). On the\nleg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to\nfour legs. A classic pool's comes from its latest snapshot; a soroban\npool's from its latest state change, scaled by the leg's own decimals. `null` when no source knows\nit — including a soroban token that publishes no decimals, where a\nguessed 7 would be off by up to 10^11. An empty leg is `0`."
           },
           "symbol": {
             "type": ["string", "null"],
