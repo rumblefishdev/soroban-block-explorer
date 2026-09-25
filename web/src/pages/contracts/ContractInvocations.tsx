@@ -6,20 +6,21 @@ import {
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
-  PaginationControls,
-  QueryErrorState,
   TableEmptyState,
   useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
 
 import { useContractInvocations, usePagedRows } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
+import { DataListCard } from '../detail/DataListCard.js';
 import { ledgerColumn, statusColumn } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 type InvocationRow = PaginatedInvocationItem['data'][number];
+
+const rowKey = (row: InvocationRow, index: number) =>
+  `${row.transaction_hash}-${row.ledger_sequence}-${index}`;
 
 // Figma shows a "Function" column, but the invocations appearance index
 // carries no per-call function name (ADR 0034 — call detail is XDR-only).
@@ -77,53 +78,48 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
     goPrev
   );
 
-  let body: ReactNode;
-  if (isLoading || isPlaceholderData) {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={[]}
-        rowKey={(row, index) =>
-          `${row.transaction_hash}-${row.ledger_sequence}-${index}`
-        }
-        loading
-        skeletonRows={20}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  } else if (isError) {
-    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
-  } else if (rows.length === 0) {
-    body = (
-      <TableEmptyState
-        kind="transactions"
-        title="No invocations"
-        description="This contract has not been invoked yet."
-      />
-    );
-  } else {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={rows}
-        rowKey={(row, index) =>
-          `${row.transaction_hash}-${row.ledger_sequence}-${index}`
-        }
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  }
-
   return (
-    <Box>
-      {body}
-      <PaginationControls
-        caption="Latest results"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
-      />
-    </Box>
+    <DataListCard
+      // Bare, inside the contract page's tab card — no card of its own.
+      renderContainer={(content) => <Box>{content}</Box>}
+      columnCount={columns.length}
+      isLoading={isLoading}
+      isReloading={isPlaceholderData}
+      isError={isError}
+      error={error}
+      onRetry={() => void refetch()}
+      errorPy={6}
+      rows={rows}
+      renderSkeleton={() => (
+        <ExplorerTable
+          columns={columns}
+          rows={[]}
+          rowKey={rowKey}
+          loading
+          skeletonRows={20}
+          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+        />
+      )}
+      renderTable={(pageRows) => (
+        <ExplorerTable
+          columns={columns}
+          rows={pageRows}
+          rowKey={rowKey}
+          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+        />
+      )}
+      renderEmpty={() => (
+        <TableEmptyState
+          kind="transactions"
+          title="No invocations"
+          description="This contract has not been invoked yet."
+        />
+      )}
+      emptyNoun="invocations"
+      canPrev={canPrev}
+      canNext={canNext}
+      onPrev={handlePrev}
+      onNext={handleNext}
+    />
   );
 }

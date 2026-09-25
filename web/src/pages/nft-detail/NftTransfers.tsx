@@ -7,15 +7,13 @@ import {
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierDisplay,
-  PaginationControls,
-  QueryErrorState,
   TableSectionHeader,
   useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
 
 import { useNftTransfers, usePagedRows } from '../../api/index.js';
+import { DataListCard } from '../detail/DataListCard.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 import { NftEventBadge } from './NftEventBadge.js';
@@ -93,53 +91,52 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
     goPrev
   );
 
-  let body: ReactNode;
-  if (isLoading || isPlaceholderData) {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={[]}
-        rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
-        loading
-        skeletonRows={20}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  } else if (isError) {
-    body = (
-      <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
-    );
-  } else if (rows.length === 0) {
-    body = (
-      <EmptyState
-        icon={<SwapHorizIcon />}
-        title="No transfer history"
-        description="This NFT has no recorded mint, transfer or burn events."
-        py={8}
-      />
-    );
-  } else {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={rows}
-        rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  }
-
   return (
-    <Card>
-      <TableSectionHeader title="Transfer history" />
-      {body}
-      <PaginationControls
-        caption="Latest results"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
-      />
-    </Card>
+    <DataListCard
+      renderContainer={(content) => (
+        <Card>
+          <TableSectionHeader title="Transfer history" />
+          {content}
+        </Card>
+      )}
+      columnCount={columns.length}
+      isLoading={isLoading}
+      isReloading={isPlaceholderData}
+      isError={isError}
+      error={error}
+      onRetry={() => void refetch()}
+      rows={rows}
+      renderSkeleton={() => (
+        <ExplorerTable
+          columns={columns}
+          rows={[]}
+          rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
+          loading
+          skeletonRows={20}
+          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+        />
+      )}
+      renderTable={(pageRows) => (
+        <ExplorerTable
+          columns={columns}
+          rows={pageRows}
+          rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
+          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+        />
+      )}
+      renderEmpty={() => (
+        <EmptyState
+          icon={<SwapHorizIcon />}
+          title="No transfer history"
+          description="This NFT has no recorded mint, transfer or burn events."
+          py={8}
+        />
+      )}
+      emptyNoun="transfers"
+      canPrev={canPrev}
+      canNext={canNext}
+      onPrev={handlePrev}
+      onNext={handleNext}
+    />
   );
 }
