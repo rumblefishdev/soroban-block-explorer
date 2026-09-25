@@ -45,7 +45,7 @@ impl Sink {
     }
 
     /// Switch the whole process to the **targeted write** of task 0279: parse
-    /// as usual, but persist ONLY `lp_operation_amounts`.
+    /// as usual, but persist ONLY the pool amounts (`pool_operation_amounts`).
     ///
     /// This is what makes a historical re-parse for one new derived table
     /// additive. A normal run re-emits every table, which rewrites the 12

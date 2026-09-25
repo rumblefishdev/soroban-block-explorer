@@ -15,7 +15,7 @@
 //!
 //! Other tables stay on natural / composite primary keys (`assets`,
 //! `nfts`, `liquidity_pools`, `lp_positions`, `liquidity_pool_snapshots`,
-//! `operations_appearances`, `transaction_participants`,
+//! `transaction_operations`, `transaction_participants`,
 //! `nft_ownership`) — for them composite (StrKey-or-hash, …) works
 //! cheaply without a hash layer.
 //!
@@ -70,7 +70,7 @@ fn hash64(bytes: &[u8]) -> i64 {
 
 /// `accounts.id` from a StrKey (G…). Same helper feeds every account
 /// `Int64` FK in the schema: `transactions.source_id`,
-/// `operations_appearances.{source,destination}_id`,
+/// `transaction_operations.{source,destination}_id`,
 /// `transaction_participants.account_id`,
 /// `account_balances_current.account_id`,
 /// `lp_positions.account_id`,
@@ -86,7 +86,7 @@ pub fn account_id(strkey: &str) -> i64 {
 }
 
 /// `soroban_contracts.id` from a StrKey (C…). Same helper feeds every
-/// contract `Int64` FK: `operations_appearances.contract_id`,
+/// contract `Int64` FK: `transaction_operations.contract_id`,
 /// `assets.contract_id`,
 /// `nfts.contract_id`,
 /// `nft_ownership.contract_id`,
@@ -118,8 +118,7 @@ pub fn address_id(strkey: &str) -> i64 {
 }
 
 /// `transactions.id` from the 32-byte tx hash bytes. Same helper feeds
-/// every transaction `Int64` FK: `operations_appearances.transaction_id`,
-/// `transaction_participants.transaction_id`,
+/// every transaction `Int64` FK: `transaction_participants.transaction_id`,
 /// `soroban_invocations_appearances.transaction_id`,
 /// `nft_ownership.transaction_id`.
 #[inline]
@@ -214,7 +213,7 @@ pub fn pool_leg_asset_id(asset_type: i16, asset_code: &str, issuer_id: i64) -> i
             tracing::warn!(
                 asset_type = other,
                 "unexpected pool leg asset_type; falling back to the classic-credit \
-                 surrogate, which will not match any lp_operation_amounts row",
+                 surrogate, which will not match any pool_operation_amounts row",
             );
             asset_id(1, asset_code, issuer_id, 0)
         }
