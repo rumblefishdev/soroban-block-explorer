@@ -398,6 +398,22 @@ Frontend **content** is separate: `deploy-production-web`
   transaction's position, so a cursor minted before the deploy answers 400
   `invalid_cursor` once.
 
+- **Operations by transaction position (task 0372), step 3: stop the old
+  writes.** The indexer writes `transaction_operations` and
+  `pool_operation_amounts` only; `operations_appearances` and
+  `lp_operation_amounts` leave `init.sql`. Deploy Compute after step 2's
+  deploy (the running API must no longer read the old tables — check
+  `system.query_log`), then drop both. Before each drop, record the prices-api
+  check in task 0372. `operations_appearances` is over the 50 GB drop guard:
+
+  ```sql
+  DROP TABLE operations_appearances SETTINGS max_table_size_to_drop = 0;
+  DROP TABLE lp_operation_amounts;
+  ```
+
+  A drop before this deploy stops ingest on the next ledger: the earlier writer
+  still inserts into both.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and

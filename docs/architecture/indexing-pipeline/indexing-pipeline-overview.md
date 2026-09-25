@@ -341,8 +341,7 @@ The live ingestion path writes directly to the explorer's owned ClickHouse
 schema on Hetzner. That write includes both:
 
 - low-level structured explorer records (`ledgers`, `transactions`,
-  `operations_appearances` and its position-keyed twin `transaction_operations`
-  (task 0372), `lp_operation_amounts` and `pool_operation_amounts`,
+  `transaction_operations`, `pool_operation_amounts`,
   `transaction_participants`, and the appearance indexes `soroban_events`,
   `soroban_invocations_appearances`)
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
