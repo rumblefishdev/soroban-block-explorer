@@ -216,3 +216,15 @@ PR 3 is written while the fill runs.
 
 The task was filed to drop `pool_ids` on the premise that the frontend did not
 read it. It does (see Context), so `pool_ids` stays in the new table.
+
+### PR 3 carries a pre-existing `repair-tier1` defect onto the new table (found 2026-09-25, task 0468)
+
+The `lp_positions` rebuild matches deposits on the operation's `source_id`,
+which is NULL when the operation has no source of its own — the depositor is
+then the transaction's source. `transaction_operations` keeps the same
+semantics (312,892 of 458,856 type-22 rows NULL so far). A LEFT JOIN miss
+arrives as `0`, not NULL, so the rebuild wrote `0` over 102,693 positions on
+2026-07-16. PR 3 moves the query as-is; the join needs
+`coalesce(op source, transaction source)` and a miss must keep the stored
+value — or the entry retires with task 0468's storage fix. Until one of the
+two lands, a `repair-tier1` run re-zeroes those positions.
