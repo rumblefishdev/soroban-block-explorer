@@ -364,8 +364,14 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     {
         Ok(analytics) => {
             row.tvl = analytics.tvl;
-            row.volume = analytics.volume;
-            row.fee_revenue = analytics.fee_revenue;
+            // The analytics read "no snapshot in the window" as a zero-volume
+            // day. True for a classic pool, whose every trade writes a
+            // snapshot; a soroban pool writes none, so its `0.00` would be a
+            // claim, not a measurement — nothing records its trades yet.
+            if row.pool_kind == domain::PoolKind::Classic {
+                row.volume = analytics.volume;
+                row.fee_revenue = analytics.fee_revenue;
+            }
         }
         Err(e) => {
             tracing::error!("DB error in fetch_pool_usd_analytics({pool_id}): {e}");
