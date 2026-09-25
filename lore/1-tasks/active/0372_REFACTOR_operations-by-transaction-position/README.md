@@ -125,7 +125,7 @@ contract bloom stays only if a reader still filters by contract).
 | 1. Moves: the operations block out of `stage.rs` (3,355 lines), the list query out of `transactions/queries.rs` (1,103) | mechanical, `--color-moved` | no     | merge                                                                                                                                  |
 | 2. Both new tables, the indexer writes old and new; `operation_pools` no longer written                                 | write path                  | yes    | before: `CREATE` ×2; after: `DROP operation_pools`, history fill per 50k-ledger slice (join `transactions` on `(ledger_sequence, id)`) |
 | 3. Readers on the new tables; op-type cursor on the position (old cursors 400)                                          | read path                   | yes    | —                                                                                                                                      |
-| 4. Old tables no longer written                                                                                         | small                       | yes    | after: `DROP` ×2                                                                                                                       |
+| 4. Old tables no longer written; `pool_operation_amounts` joins the `--only` list in place of `lp_operation_amounts`    | small                       | yes    | after: `DROP` ×2                                                                                                                       |
 
 PR 3 is written while the fill runs.
 
