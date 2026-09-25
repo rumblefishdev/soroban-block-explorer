@@ -93,16 +93,12 @@ struct TableInserts {
     hash_prefix: Option<Insert<TransactionHashPrefixRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
-    lp_amounts: Option<Insert<LpOperationAmountRow>>,
-    /// Task 0372 — written beside `lp_amounts` until pool activity reads it.
     pool_amounts: Option<Insert<PoolOperationAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
     pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
     pool_state_changes: Option<Insert<PoolStateChangeRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
-    operations: Option<Insert<OperationAppearanceRow>>,
-    /// Task 0372 — written beside `operations` until the readers move.
     tx_operations: Option<Insert<TransactionOperationRow>>,
     events: Option<Insert<SorobanEventRow>>,
     invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
@@ -159,7 +155,7 @@ impl PartitionWriter {
     /// they're buffered as the partition's commit marker.
     /// Stream ONLY the named tables' rows for this ledger — the targeted write
     /// a historical re-parse for new derived tables runs (task 0279 set the
-    /// pattern with `lp_operation_amounts`; task 0540 generalised it to a list
+    /// pattern with the pool amounts, now `pool_operation_amounts`; task 0540 generalised it to a list
     /// so `asset_transfers` and `transaction_memos` ride one pass).
     ///
     /// Two things this deliberately does NOT do, both load-bearing:
@@ -187,12 +183,12 @@ impl PartitionWriter {
     ) -> Result<(), SchemaError> {
         for table in only.iter() {
             match table {
-                "lp_operation_amounts" => {
+                "pool_operation_amounts" => {
                     write_rows(
                         &self.client,
-                        &mut self.inserts.lp_amounts,
-                        "lp_operation_amounts",
-                        &staged.lp_amount_rows,
+                        &mut self.inserts.pool_amounts,
+                        "pool_operation_amounts",
+                        &staged.pool_amount_rows,
                     )
                     .await?
                 }
@@ -277,10 +273,8 @@ impl PartitionWriter {
             pool_state_change_rows,
             snapshot_rows,
             lp_position_rows,
-            op_rows,
             tx_operation_rows,
             op_asset_rows,
-            lp_amount_rows,
             pool_amount_rows,
             event_rows,
             invocation_rows,
@@ -369,13 +363,6 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.lp_amounts,
-            "lp_operation_amounts",
-            &lp_amount_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
             &mut self.inserts.pool_amounts,
             "pool_operation_amounts",
             &pool_amount_rows,
@@ -414,13 +401,6 @@ impl PartitionWriter {
             &mut self.inserts.lp_positions,
             "lp_positions",
             &lp_position_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.operations,
-            "operations_appearances",
-            &op_rows,
         )
         .await?;
         write_rows(
@@ -561,14 +541,12 @@ impl PartitionWriter {
             hash_prefix,
             participants,
             op_assets,
-            lp_amounts,
             pool_amounts,
             pools,
             pool_instance_state,
             pool_state_changes,
             snapshots,
             lp_positions,
-            operations,
             tx_operations,
             events,
             invocations,
@@ -594,14 +572,12 @@ impl PartitionWriter {
         end(hash_prefix).await?;
         end(participants).await?;
         end(op_assets).await?;
-        end(lp_amounts).await?;
         end(pool_amounts).await?;
         end(pools).await?;
         end(pool_instance_state).await?;
         end(pool_state_changes).await?;
         end(snapshots).await?;
         end(lp_positions).await?;
-        end(operations).await?;
         end(tx_operations).await?;
         end(events).await?;
         end(invocations).await?;

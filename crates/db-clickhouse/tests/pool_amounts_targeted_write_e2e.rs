@@ -1,5 +1,5 @@
-//! The 0279 targeted write must persist `lp_operation_amounts` and NOTHING
-//! else.
+//! The 0279 targeted write (now `pool_operation_amounts`, task 0372) must
+//! persist that table and NOTHING else.
 //!
 //! That promise is what keeps the historical re-parse additive: a run that
 //! also re-emitted the other tables would rewrite the 12 Tier-1 columns which
@@ -13,10 +13,10 @@
 //!
 //! ```bash
 //! CLICKHOUSE_URL=http://localhost:8123 \
-//!     cargo test -p db-clickhouse --test lp_amounts_targeted_write_e2e
+//!     cargo test -p db-clickhouse --test pool_amounts_targeted_write_e2e
 //! ```
 
-use db_clickhouse::persist::rows::{LedgerRow, LpOperationAmountRow};
+use db_clickhouse::persist::rows::{LedgerRow, PoolOperationAmountRow};
 use db_clickhouse::persist::stage::StagedLedger;
 use db_clickhouse::persist::{PartitionWriter, TargetedTables};
 use db_clickhouse::{Config, apply_init_sql, client};
@@ -25,7 +25,7 @@ use db_clickhouse::{Config, apply_init_sql, client};
 const TEST_LEDGER: i64 = 99_999_301;
 
 #[tokio::test]
-async fn targeted_write_persists_only_lp_operation_amounts() {
+async fn targeted_write_persists_only_pool_operation_amounts() {
     let Some(url) = std::env::var("CLICKHOUSE_URL").ok() else {
         eprintln!("CLICKHOUSE_URL not set — skipping");
         return;
@@ -37,7 +37,7 @@ async fn targeted_write_persists_only_lp_operation_amounts() {
     let ch = client(&cfg);
     apply_init_sql(&ch).await.expect("apply init.sql");
 
-    for table in ["lp_operation_amounts", "ledgers"] {
+    for table in ["pool_operation_amounts", "ledgers"] {
         ch.query(&format!(
             "ALTER TABLE {table} DELETE WHERE {} = ?",
             if table == "ledgers" {
@@ -65,11 +65,11 @@ async fn targeted_write_persists_only_lp_operation_amounts() {
             transaction_count: 1,
             base_fee: 100,
         }],
-        lp_amount_rows: vec![LpOperationAmountRow {
+        pool_amount_rows: vec![PoolOperationAmountRow {
             pool_id: [0x44; 32],
             ledger_sequence: TEST_LEDGER,
-            transaction_id: 7,
             application_order: 1,
+            operation_index: 0,
             asset_id: 42,
             amount: -1_000,
         }],
@@ -77,7 +77,7 @@ async fn targeted_write_persists_only_lp_operation_amounts() {
     };
 
     let mut writer = PartitionWriter::open(ch.clone());
-    let only = TargetedTables::parse("lp_operation_amounts").expect("targetable");
+    let only = TargetedTables::parse("pool_operation_amounts").expect("targetable");
     writer
         .write_only(&staged, &only)
         .await
@@ -85,7 +85,7 @@ async fn targeted_write_persists_only_lp_operation_amounts() {
     writer.commit().await.expect("commit");
 
     let amounts: u64 = ch
-        .query("SELECT count() FROM lp_operation_amounts WHERE ledger_sequence = ?")
+        .query("SELECT count() FROM pool_operation_amounts WHERE ledger_sequence = ?")
         .bind(TEST_LEDGER)
         .fetch_one()
         .await
@@ -106,7 +106,7 @@ async fn targeted_write_persists_only_lp_operation_amounts() {
         "targeted write must not write the ledgers commit marker"
     );
 
-    for table in ["lp_operation_amounts", "ledgers"] {
+    for table in ["pool_operation_amounts", "ledgers"] {
         let _ = ch
             .query(&format!(
                 "ALTER TABLE {table} DELETE WHERE {} = ?",
@@ -147,7 +147,7 @@ async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
     for table in [
         "asset_transfers",
         "transaction_memos",
-        "lp_operation_amounts",
+        "pool_operation_amounts",
         "ledgers",
     ] {
         ch.query(&format!(
@@ -176,11 +176,11 @@ async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
             base_fee: 100,
         }],
         // Must NOT land: not in the `--only` list.
-        lp_amount_rows: vec![LpOperationAmountRow {
+        pool_amount_rows: vec![PoolOperationAmountRow {
             pool_id: [0x44; 32],
             ledger_sequence: LEDGER,
-            transaction_id: 7,
             application_order: 1,
+            operation_index: 0,
             asset_id: 42,
             amount: -1_000,
         }],
@@ -251,7 +251,7 @@ async fn write_only_persists_the_value_flow_tables_and_nothing_else() {
         1
     );
     assert_eq!(
-        count("SELECT count() FROM lp_operation_amounts WHERE ledger_sequence = ?").await,
+        count("SELECT count() FROM pool_operation_amounts WHERE ledger_sequence = ?").await,
         0,
         "a table outside the --only list must not be written"
     );

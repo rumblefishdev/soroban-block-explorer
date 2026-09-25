@@ -96,7 +96,7 @@ struct Cli {
     /// historical re-parse for new derived tables needs. Task 0279 introduced
     /// it as `--lp-amounts-only`; task 0540 generalised it so several tables
     /// ride one pass: `--only asset_transfers,transaction_memos`.
-    /// `--only lp_operation_amounts` is the old behaviour.
+    /// `--only pool_operation_amounts` is the old behaviour.
     ///
     /// Without it, `run --reindex` re-emits EVERY table, which rewrites the 12
     /// Tier-1 columns that cannot survive parallel `ReplacingMergeTree`

@@ -18,7 +18,7 @@
 //! ## Natural / composite keys (everything else)
 //!
 //! `assets`, `nfts`, `liquidity_pools`, `lp_positions`,
-//! `liquidity_pool_snapshots`, `operations_appearances`,
+//! `liquidity_pool_snapshots`, `transaction_operations`,
 //! `transaction_participants`, `nft_ownership` — composite ORDER BY
 //! over already-cheap-shape columns (FixedString(32) hashes,
 //! low-cardinality codes, Int64 FK references).
@@ -312,7 +312,7 @@ pub struct LiquidityPoolRow {
     /// which): kind 1 = token-CONTRACT surrogates (`ids::contract_id`) in
     /// emission order, matching the pool's own `get_tokens()` so reserve
     /// vectors align index-for-index; kind 0 = ASSET surrogates
-    /// (`ids::pool_leg_asset_id` — the `lp_operation_amounts` join key),
+    /// (`ids::pool_leg_asset_id` — the `pool_operation_amounts` join key),
     /// legs-migration step 2 towards retiring the pair columns.
     ///
     /// NOT `assets.id` in general (an earlier comment claimed that): the two
@@ -441,34 +441,12 @@ impl TransactionHashPrefixRow {
     }
 }
 
-/// `operations_appearances` — fact, no surrogate id. ORDER BY
-/// (ledger_sequence, transaction_id, application_order).
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct OperationAppearanceRow {
-    pub transaction_id: i64,
-    pub application_order: i16,
-    /// `type` is a Rust keyword — serde rename keeps the CH column
-    /// match clean.
-    #[serde(rename = "type")]
-    pub op_type: i16,
-    pub source_id: Option<i64>,
-    pub destination_id: Option<i64>,
-    pub contract_id: Option<i64>,
-    pub asset_code: String,
-    pub asset_issuer_id: Option<i64>,
-    /// Crossed liquidity pools, sorted + deduped (canonical order — see the
-    /// stage fold). Empty = no pool involvement; `[]` replaces the legacy
-    /// scalar NULL (task 0261/0268).
-    pub pool_ids: Vec<[u8; 32]>,
-    pub amount: i64,
-    pub ledger_sequence: i64,
-}
-
-/// `transaction_operations` — the [`OperationAppearanceRow`] fold located by
-/// the transaction position (task 0372, ADR 0059). `application_order` is the
-/// transaction's 1-based position in its ledger, `operation_index` the
-/// operation's 0-based position in its transaction (the group's smallest).
-/// Column order matches `init.sql`.
+/// `transaction_operations` — fact, no surrogate id: one row per operation
+/// identity in a transaction (the task 0163 fold), located by the transaction
+/// position (task 0372, ADR 0059). `application_order` is the transaction's
+/// 1-based position in its ledger, `operation_index` the operation's 0-based
+/// position in its transaction (the group's smallest). Column order matches
+/// `init.sql`.
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
 pub struct TransactionOperationRow {
     pub ledger_sequence: i64,
@@ -481,6 +459,8 @@ pub struct TransactionOperationRow {
     pub contract_id: Option<i64>,
     pub asset_code: String,
     pub asset_issuer_id: Option<i64>,
+    /// Crossed liquidity pools, sorted + deduped (canonical order — see the
+    /// stage fold). Empty = no pool involvement (task 0261/0268).
     pub pool_ids: Vec<[u8; 32]>,
 }
 
@@ -521,9 +501,11 @@ pub struct ContractTransactionRow {
     pub application_order: i16,
 }
 
-/// `lp_operation_amounts` — fact, what one operation moved through one pool
-/// (task 0279): a pool-leading key plus the operation's 1-based index in
-/// `application_order`, `asset_id` and `amount`.
+/// `pool_operation_amounts` — fact, what one operation moved through one pool
+/// (task 0279), located by the transaction position (task 0372, ADR 0059):
+/// `application_order` is the transaction's 1-based position,
+/// `operation_index` the operation's 0-based one. Column order matches
+/// `init.sql`.
 ///
 /// One row per (operation, pool, asset) — the op's claim atoms are SUMMED into
 /// it, never written per atom: an op can take the same pool several times
@@ -533,20 +515,6 @@ pub struct ContractTransactionRow {
 /// `amount` is raw stroops SIGNED FROM THE POOL'S SIDE — positive = the asset
 /// entered the pool, negative = it left. So one shape says trade (`+/-`),
 /// deposit (`+/+`) and withdrawal (`-/-`) without an event-type column.
-#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
-pub struct LpOperationAmountRow {
-    pub pool_id: [u8; 32],
-    pub ledger_sequence: i64,
-    pub transaction_id: i64,
-    pub application_order: i16,
-    pub asset_id: i64,
-    pub amount: i64,
-}
-
-/// `pool_operation_amounts` — [`LpOperationAmountRow`] located by the
-/// transaction position (task 0372, ADR 0059): `application_order` is the
-/// transaction's 1-based position, `operation_index` the operation's 0-based
-/// one. Same grain and sign. Column order matches `init.sql`.
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
 pub struct PoolOperationAmountRow {
     pub pool_id: [u8; 32],

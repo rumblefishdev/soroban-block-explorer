@@ -155,9 +155,7 @@ async fn cleanup(cl: &clickhouse::Client) {
             "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence = {E2E_LEDGER}"
         ),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
-        format!("ALTER TABLE operations_appearances DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE transaction_operations DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
-        format!("ALTER TABLE lp_operation_amounts DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE pool_operation_amounts DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE accounts DELETE WHERE account_id = '{acct}'"),
     ] {
@@ -254,8 +252,8 @@ async fn persist_ledger_clickhouse_writes_and_dedupes() {
         "little-endian u64 of bytes 0..8"
     );
 
-    // Task 0372: the writer fills the position-keyed twins beside the old
-    // tables — the transaction at position 1, its first operation at index 0.
+    // Task 0372: the operation tables are located by position — the
+    // transaction at position 1, its first operation at index 0.
     let op_keys: Vec<(i16, i16)> = cl
         .query(
             "SELECT DISTINCT application_order, operation_index FROM transaction_operations \
@@ -266,13 +264,7 @@ async fn persist_ledger_clickhouse_writes_and_dedupes() {
         .await
         .expect("read transaction_operations");
     assert_eq!(op_keys, vec![(1, 0)]);
-    let old_amounts: u64 = cl
-        .query("SELECT count() FROM lp_operation_amounts WHERE ledger_sequence = ?")
-        .bind(E2E_LEDGER)
-        .fetch_one()
-        .await
-        .expect("count lp_operation_amounts");
-    let new_amounts: u64 = cl
+    let amounts: u64 = cl
         .query(
             "SELECT count() FROM pool_operation_amounts \
              WHERE ledger_sequence = ? AND application_order = 1 AND operation_index = 0",
@@ -281,12 +273,7 @@ async fn persist_ledger_clickhouse_writes_and_dedupes() {
         .fetch_one()
         .await
         .expect("count pool_operation_amounts");
-    let amounts = (old_amounts, new_amounts);
-    assert!(amounts.0 >= 1, "the deposit wrote lp_operation_amounts");
-    assert_eq!(
-        amounts.0, amounts.1,
-        "every amount row has its position-keyed twin"
-    );
+    assert!(amounts >= 1, "the deposit wrote pool_operation_amounts");
 
     // ---- replay: re-deliver the same S3 event (same ledger) ----
     persist_once(&cl).await;

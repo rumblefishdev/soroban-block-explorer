@@ -201,10 +201,13 @@ mod tests {
         // `pool_operation_amounts` (the operation tables located by the
         // transaction position), dropped `operation_pools` (no reader since
         // task 0491). 41 → 42.
+        // task 0372: dropped `operations_appearances` and
+        // `lp_operation_amounts` — every reader moved to the tables above.
+        // 42 → 40.
         assert_eq!(
             stmts.len(),
-            42,
-            "expected 39 tables + 3 materialized views, got {}",
+            40,
+            "expected 37 tables + 3 materialized views, got {}",
             stmts.len()
         );
     }
