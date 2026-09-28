@@ -1259,7 +1259,7 @@ fn token_id_to_string(token_id: &Value) -> String {
 /// Additionally, this fn computes `event_order` — a per-`(contract, token,
 /// ledger)` monotonic ordinal (SMALLINT) required by the schema PK
 /// `(nft_id, created_at, ledger_sequence, event_order)` and by the
-/// LEAD-window pagination in `17_get_nfts_transfers.sql`.
+/// LEAD-window pagination in `api::nfts::queries::fetch_transfers`.
 ///
 /// Events with empty `token_id` are skipped (matches `detect_nfts`
 /// behaviour). Events with `event_kind` not in {"mint","transfer","burn"}

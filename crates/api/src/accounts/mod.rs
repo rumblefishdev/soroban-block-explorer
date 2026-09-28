@@ -5,9 +5,7 @@
 //! Pure DB — no read-time XDR. Account scope is intentionally limited to
 //! summary + balances + transactions per ADR 0025 / task 0048.
 //!
-//! Canonical SQL refs:
-//!   - `docs/architecture/database-schema/endpoint-queries-clickhouse/06_get_accounts_by_id.sql`
-//!   - `docs/architecture/database-schema/endpoint-queries-clickhouse/07_get_accounts_transactions.sql`
+//! The SQL behind both is in `queries` (balance changes in `balance_changes`).
 
 mod balance_changes;
 pub mod dto;

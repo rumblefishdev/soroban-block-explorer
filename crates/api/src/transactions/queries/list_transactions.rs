@@ -4,10 +4,10 @@
 //!
 //! ### List pagination + the partition-prune / read-in-order guard
 //!
-//! Canonical SQL 02 (PR #175 amendment) bounds every page to a single
-//! `intDiv(ledger_sequence, 500000)` partition. Statements A and C reproduce
-//! that — first page prunes to the latest partition (`intDiv(max(sequence),
-//! 500000)`), subsequent pages prune to the cursor's partition. The known cost
+//! Statements A and C bound every page to a single
+//! `intDiv(ledger_sequence, 500000)` partition (PR #175): the first page
+//! prunes to the latest partition (`intDiv(max(sequence), 500000)`),
+//! subsequent pages prune to the cursor's partition. The known cost
 //! is that pagination across a 500k-ledger partition boundary stops early —
 //! and for a rare `op_type` the first page is already short or empty (task
 //! 0381). Statement B seeks an index keyed by contract and is not bounded.
@@ -235,7 +235,7 @@ pub async fn fetch_list(
 
     let (op, order) = keyset_sql_desc(direction);
     // Cursor keyset is the position `(ledger_sequence, application_order)`
-    // (canonical SQL 02) for every statement. Both parts are present together
+    // for every statement. Both parts are present together
     // or absent together, so the keyset tuple never binds a NULL.
     let cursor: Option<(i64, i16)> = params.cursor.as_ref().map(
         |TxListCursor::ChPosition {
@@ -478,9 +478,9 @@ fn contract_positions_sql(
 }
 
 /// Statement C's driver: the positions of the transactions carrying an
-/// operation of `op_type`, past the cursor, in page order, inside one partition
-/// (canonical SQL 02). `LIMIT 1 BY` folds a transaction's several operations
-/// of the type — and rows the RMT has not merged yet — into one position.
+/// operation of `op_type`, past the cursor, in page order, inside one partition. `LIMIT 1 BY` folds a
+/// transaction's several operations of the type — and rows the RMT has not
+/// merged yet — into one position.
 /// Every value is an integer literal (see `fetch_list`).
 fn op_type_positions_sql(
     op_type: i16,
