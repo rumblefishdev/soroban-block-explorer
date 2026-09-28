@@ -613,6 +613,58 @@ fn consecutive_mint_map_range_expands_to_n_mints() {
     assert_eq!(nft[2].token_id["value"], 2);
 }
 
+/// Task 0424: an NFT event keeps its source event's rpc id — the row's
+/// canonical location. Every token of one `consecutive_mint` shares it, and a
+/// transfer carries its own.
+#[test]
+fn nft_events_carry_the_source_event_id() {
+    let id = |event_index| crate::event::EventId {
+        ledger_sequence: 100,
+        transaction_index: 3,
+        operation_index: 1,
+        event_index,
+    };
+    let mut mint = make_event(
+        "CABC123",
+        vec![
+            json!({"type":"sym","value":"consecutive_mint"}),
+            json!({"type":"address","value":"GTO..."}),
+        ],
+        json!({"type":"vec","value":[{"type":"u32","value":5},{"type":"u32","value":6}]}),
+    );
+    mint.event_id = Some(id(0));
+    let mut transfer = make_event(
+        "CABC123",
+        vec![
+            json!({"type":"sym","value":"transfer"}),
+            json!({"type":"address","value":"GFROM..."}),
+            json!({"type":"address","value":"GTO..."}),
+        ],
+        json!({"type":"u32","value":5}),
+    );
+    transfer.event_id = Some(id(1));
+
+    let nft = detect_nft_events(&[mint, transfer]);
+    let ids: Vec<_> = nft
+        .iter()
+        .map(|e| (e.event_kind.as_str(), e.event_id))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            ("mint", Some(id(0))),
+            ("mint", Some(id(0))),
+            ("transfer", Some(id(1))),
+        ]
+    );
+    // …and the ownership rows keep it.
+    let rows = crate::state::extract_nft_ownership_events(&nft);
+    assert_eq!(
+        rows.iter().map(|r| r.event_id).collect::<Vec<_>>(),
+        vec![Some(id(0)), Some(id(0)), Some(id(1))]
+    );
+}
+
 #[test]
 fn consecutive_mint_vec_range_expands_to_n_mints() {
     // Alternate encoding also seen on mainnet: data = vec[from, to].

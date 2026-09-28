@@ -424,6 +424,26 @@ fn column_order_nft_ownership_pending() {
     );
 }
 
+/// One struct writes both `nft_ownership_changes` and its `_pending` twin.
+#[test]
+fn column_order_nft_ownership_changes() {
+    for table in ["nft_ownership_changes", "nft_ownership_changes_pending"] {
+        assert_columns::<NftOwnershipChangeRow>(
+            table,
+            &[
+                "contract_id",
+                "token_id",
+                "ledger_sequence",
+                "application_order",
+                "operation_index",
+                "event_index",
+                "owner_id",
+                "event_type",
+            ],
+        );
+    }
+}
+
 #[test]
 fn column_order_liquidity_pool_snapshots() {
     assert_columns::<LiquidityPoolSnapshotRow>(
@@ -1798,6 +1818,16 @@ fn synthetic_nft_event(
         event_order,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
+        // Operation 2's event `event_order`. `transaction_index` deliberately
+        // differs from the transaction's position (1, its only transaction)
+        // so the routing tests pin that `application_order` comes from the
+        // ledger's transaction order, as for `soroban_events`, not from the id.
+        event_id: Some(xdr_parser::EventId {
+            ledger_sequence: 10,
+            transaction_index: 7,
+            operation_index: 2,
+            event_index: u32::from(event_order),
+        }),
     }
 }
 
@@ -1887,6 +1917,21 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
     );
     assert_eq!(staged.nft_ownership_rows.len(), 1);
     assert_eq!(staged.nft_ownership_pending_rows.len(), 0);
+    // Task 0424: the same change, located by its event.
+    assert_eq!(
+        staged.nft_ownership_change_rows,
+        vec![NftOwnershipChangeRow {
+            contract_id: ids::contract_id(&contract),
+            token_id: "tk1".into(),
+            ledger_sequence: 10,
+            application_order: 1,
+            operation_index: 2,
+            event_index: 0,
+            owner_id: None,
+            event_type: NftEventType::Mint as i16,
+        }]
+    );
+    assert!(staged.nft_ownership_change_pending_rows.is_empty());
 
     // Classifier override visible on the contract row.
     let contract_row = &staged.contract_rows[0];
@@ -2393,6 +2438,8 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
     );
     assert!(staged.nft_ownership_rows.is_empty());
     assert!(staged.nft_ownership_pending_rows.is_empty());
+    assert!(staged.nft_ownership_change_rows.is_empty());
+    assert!(staged.nft_ownership_change_pending_rows.is_empty());
 }
 
 /// NFT row whose contract is NOT deployed in the same ledger (no
@@ -2437,6 +2484,40 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
     );
     assert_eq!(staged.nft_ownership_rows.len(), 0);
     assert_eq!(staged.nft_ownership_pending_rows.len(), 1);
+    // Task 0424: the located twin routes the same way.
+    assert!(staged.nft_ownership_change_rows.is_empty());
+    assert_eq!(staged.nft_ownership_change_pending_rows.len(), 1);
+}
+
+/// Task 0424: an NFT change without an event id is refused, as
+/// `soroban_events` refuses one — a row with no location cannot be keyed.
+#[test]
+fn prepare_refuses_an_nft_change_without_an_event_id() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x93);
+    let contract = "C".to_string() + &"C".repeat(55);
+    let nft = synthetic_nft(&contract, "tk1");
+    let mut ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
+    ev.event_id = None;
+
+    let err = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        std::slice::from_ref(&nft),
+        std::slice::from_ref(&ev),
+        &[],
+    )
+    .expect_err("an NFT change needs its event id");
+    assert!(err.to_string().contains("event id"), "{err}");
 }
 
 // ---------------------------------------------------------------------------

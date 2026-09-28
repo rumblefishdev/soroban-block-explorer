@@ -194,7 +194,9 @@ Derived explorer entities:
   and classic pool reserves for ALL asset types (Option A — no per-token `TotalSupply` key read). The
   `balances` family is ClickHouse-only (see `clickhouse-pilot.md §4f`); there is no
   `soroban_token_balances` / `soroban_asset_aggregates` (superseded by the unified model on the pivot)
-- `nfts`, `nft_ownership` — NFT registry plus partitioned ownership history
+- `nfts`, `nft_ownership` — NFT registry plus partitioned ownership history;
+  `nft_ownership_changes` is the same history located by each change's event
+  and replaces `nft_ownership` (task 0424, §4.13.2)
 - `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions` — classic LP state +
   time-series snapshots + per-account share positions
 - `liquidity_pools` is also the dimension for **Soroban AMM pools** (ADR 0058,
@@ -1401,6 +1403,41 @@ Design notes:
 - `owner_id` is the recipient's surrogate account FK (ADR 0026); NULL for burns
 - partitioned on `created_at` mirroring `transactions`; cascade via composite FK to
   `transactions` and a direct FK to `nfts`
+
+### 4.13.2 NFT Ownership by Event Location (task 0424)
+
+ClickHouse-only. `nft_ownership_changes` (and its `_pending` quarantine, same
+shape) holds one row per change of owner of one token — mint, transfer, burn —
+located by its source event's stellar-rpc id (ADR 0059), and replaces
+`nft_ownership` / `nft_ownership_pending` (a parallel change, epic 0538 step 4):
+
+```sql
+CREATE TABLE nft_ownership_changes (
+    contract_id        Int64,
+    token_id           String,
+    ledger_sequence    Int64,
+    application_order  Int16,     -- the transaction's position
+    operation_index    UInt16,    -- the operation within it
+    event_index        UInt32,    -- the event within the operation
+    owner_id           Nullable(Int64),
+    event_type         Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index);
+```
+
+- **Why:** `nft_ownership.event_order` is our own counter per (collection,
+  token, ledger) that restarts at 0, so same-ledger changes of different tokens
+  share values and the order inside a ledger is unknown (task 0424). The event
+  location is chain-derived, gives a total order, and is the same key
+  `soroban_events` and `asset_transfers` carry — no `transaction_id`.
+- **`token_id` stays in the key:** one `consecutive_mint` event mints many
+  tokens under a single event id.
+- **Staging refuses a change without an event id**, as `soroban_events` does;
+  NFT events are per-operation contract events, which always carry one.
+- Written beside the old pair until the readers move; promotion from
+  `_pending` (`nft-reclassify`) moves both pairs together.
 
 ### 4.13.1 NFT Quarantine — `nfts_pending` + `nft_ownership_pending` (task 0217)
 

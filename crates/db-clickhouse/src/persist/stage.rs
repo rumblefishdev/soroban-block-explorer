@@ -256,15 +256,14 @@ pub struct StagedLedger {
     pub asset_sac_rows: Vec<AssetSacRow>,
     pub nft_rows: Vec<NftRow>,
     pub nft_ownership_rows: Vec<NftOwnershipRow>,
-    /// Task 0217 / 0220 — quarantine bucket for NFT rows whose
-    /// contract is still `Other` / NULL-classified at staging time.
-    /// Routed alongside `nft_rows` via the per-contract verdict
-    /// computed from observed WASM interfaces in this ledger plus the
-    /// parser-emitted `contract_type` on each deployment. CH has no
-    /// per-row UPDATE, so promotion happens only via the post-backfill
-    /// drain runbook.
+    /// Task 0217 / 0220 — quarantine for NFT rows whose contract is still
+    /// `Other` / NULL-classified at staging (per-contract verdict, as for
+    /// `nft_rows`); promoted only by the post-backfill drain runbook.
     pub nft_pending_rows: Vec<NftPendingRow>,
     pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
+    /// `nft_ownership_*_rows` by the event's location (task 0424) → `nft_ownership_changes{,_pending}`.
+    pub nft_ownership_change_rows: Vec<NftOwnershipChangeRow>,
+    pub nft_ownership_change_pending_rows: Vec<NftOwnershipChangeRow>,
     /// Unified `balances` rows for ALL asset types (task 0331 Option A). Type-3
     /// tokens are built in [`prepare_with_sac_overrides`] via [`build_balance_rows`]
     /// from `StageInputs.soroban_token_balances`; classic + native per-account
@@ -1967,6 +1966,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         nft_events,
         prior_contract_verdicts,
         &tx_id_by_hash,
+        &app_order_by_hash,
     )?;
 
     // ---- unified `balances` — classic + native per-account balances (lore-0331

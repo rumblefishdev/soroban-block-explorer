@@ -159,6 +159,7 @@ fn try_parse_transfer(
         to: Some(addrs[1].clone()),
         ledger_sequence: event.ledger_sequence,
         created_at: event.created_at,
+        event_id: event.event_id,
     })
 }
 
@@ -181,6 +182,7 @@ fn try_parse_mint(
         to: Some(addrs[0].clone()),
         ledger_sequence: event.ledger_sequence,
         created_at: event.created_at,
+        event_id: event.event_id,
     })
 }
 
@@ -204,6 +206,7 @@ fn try_parse_burn(
         to: None,
         ledger_sequence: event.ledger_sequence,
         created_at: event.created_at,
+        event_id: event.event_id,
     })
 }
 
@@ -252,6 +255,7 @@ fn try_parse_consecutive_mint(
                 to: Some(to.clone()),
                 ledger_sequence: event.ledger_sequence,
                 created_at: event.created_at,
+                event_id: event.event_id,
             })
             .collect(),
     )

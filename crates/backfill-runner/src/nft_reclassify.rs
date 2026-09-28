@@ -124,6 +124,15 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<NftReclassifyStats, B
     stats.dropped_legacy_ownership =
         drop_or_count(client, "nft_ownership", &legacy_discriminants, dry_run).await?;
 
+    // Task 0424 — `nft_ownership_changes{,_pending}` hold the same changes
+    // located by their event; they take every step above with the old pair
+    // until the readers move. Same contracts, so the stats and the OPTIMIZE
+    // below go by the old pair's counts.
+    let changes = ("nft_ownership_changes", "nft_ownership_changes_pending");
+    promote_or_count(client, changes.1, changes.0, dry_run).await?;
+    drop_or_count(client, changes.1, &drop_discriminants, dry_run).await?;
+    drop_or_count(client, changes.0, &legacy_discriminants, dry_run).await?;
+
     if !dry_run {
         // OPTIMIZE FINAL after mutations to collapse tombstones.
         // Skip per-table when this run did nothing to it — saves
@@ -132,7 +141,7 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<NftReclassifyStats, B
         // after Phase 5 manual rerun). Each (mutated_count) below
         // sums the promote-from-pending + the legacy-drop / pending-
         // drop work for that table.
-        let touched: [(&str, u64); 4] = [
+        let touched: [(&str, u64); 6] = [
             ("nfts", stats.promoted_nfts + stats.dropped_legacy_nfts),
             ("nfts_pending", stats.dropped_pending_nfts),
             (
@@ -140,6 +149,11 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<NftReclassifyStats, B
                 stats.promoted_ownership + stats.dropped_legacy_ownership,
             ),
             ("nft_ownership_pending", stats.dropped_pending_ownership),
+            (
+                changes.0,
+                stats.promoted_ownership + stats.dropped_legacy_ownership,
+            ),
+            (changes.1, stats.dropped_pending_ownership),
         ];
         for (tbl, mutated) in touched {
             if mutated == 0 {

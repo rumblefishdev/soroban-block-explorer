@@ -620,6 +620,21 @@ pub struct NftOwnershipPendingRow {
     pub event_type: i16,
 }
 
+/// `nft_ownership_changes` and its `_pending` quarantine (one shape) — fact,
+/// one change of owner of one token, located by its source event's
+/// stellar-rpc id (task 0424, ADR 0059). Column order matches `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
+pub struct NftOwnershipChangeRow {
+    pub contract_id: i64,
+    pub token_id: String,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub operation_index: u16,
+    pub event_index: u32,
+    pub owner_id: Option<i64>,
+    pub event_type: i16,
+}
+
 /// `liquidity_pool_snapshots` — fact, no surrogate. ORDER BY
 /// (pool_id, ledger_sequence).
 #[derive(Debug, Clone, Row, Serialize)]
