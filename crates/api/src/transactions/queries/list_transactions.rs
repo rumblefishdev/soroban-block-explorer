@@ -25,7 +25,7 @@
 //! the belt-and-braces. The cursor keys on `application_order` for this path
 //! (also the correct in-ledger order — the old `id`-hash tie-break did not
 //! preserve it). Statement B (contract filter) keys on the same position, by a
-//! seek on the `contract_transactions` presence index (task 0541), and
+//! seek on the `contract_activity` presence index (tasks 0541, 0586), and
 //! statement C (operation type) by a scan of `transaction_operations`, keyed
 //! by the position too (task 0372).
 //!
@@ -284,7 +284,7 @@ pub async fn fetch_list(
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
             // Step 1: up to `lim_over` positions of transactions touching the
-            // contract, by a seek on the `contract_transactions` presence index
+            // contract, by a seek on the `contract_activity` presence index
             // — the shape `transaction_participants` gives the account list
             // (task 0541). Not bounded to a partition: the index is keyed by
             // contract, so the seek crosses them cheaply (task 0381).
@@ -448,7 +448,7 @@ struct PositionRow {
 
 /// Statement B's driver: the positions of the transactions touching the
 /// contract, past the cursor, in page order — one seek on the
-/// `contract_transactions` key, the way the account list seeks
+/// `contract_activity` key (every pair, invoked or not), the way the account list seeks
 /// `transaction_participants`. No partition bound: pinned to the head's
 /// partition, a contract without transactions there listed as empty (93.3% of
 /// the contracts in `soroban_contracts`, 2026-09-22). Across every partition
@@ -469,7 +469,7 @@ fn contract_positions_sql(
         format!(" AND (ledger_sequence, application_order) {op} ({l}, {a})")
     });
     format!(
-        "SELECT ledger_sequence, application_order FROM contract_transactions \
+        "SELECT ledger_sequence, application_order FROM contract_activity \
          WHERE contract_id = {contract_id} \
            AND ledger_sequence <= {head_max}{cursor} \
          ORDER BY ledger_sequence {order}, application_order {order} \

@@ -1,71 +1,70 @@
 -- ============================================================================
--- ⚠️  CH READ-COST NOTE (task 0243) — the live read path is a two-step shape:
---       1. Driver: soroban_invocations_appearances WHERE contract_id = <surrogate>
---          — contract_id is the LEADING primary key (ORDER BY (contract_id,
---          ledger_sequence, transaction_id)), so this is a contract-scoped SEEK.
---          ORDER BY (ledger_sequence, transaction_id) + keyset, LIMIT.
---       2. Fetch the page's transaction headers (hash / successful / closed_at)
---          by (ledger_sequence, id) IN (keys). Do NOT join the driver to an
---          unpruned `transactions FINAL` — that merges the whole transactions
---          table and blew the read_rows quota in the global list (CH Code: 201).
---     A contract's invocations span many partitions; the IN-keys fetch is a
---     primary-key-prefix prune per ledger (multi-partition-safe). Cursor keys on
---     (ledger_sequence, transaction_id) (CH) / (created_at, transaction_id) (PG)
---     — see transactions::dto::TxListCursor. created_at derives from the joined
---     ledger closed_at.
--- ============================================================================
 -- Endpoint:     GET /contracts/:contract_id/invocations
--- Purpose:      Paginated list of recent invocations of a contract.
---               Default ordering: most recent first.
+-- Purpose:      Paginated list of a contract's invocations, newest first, in
+--               execution order inside a ledger.
 -- Source:       backend-overview.md §6.3 / frontend-overview.md §6.10
--- Schema:       ADR 0044 (CH pilot), parallel to PG ADR 0037
--- Data sources: DB-only. function_name + args + return_value still live in
---               the archive XDR (ADR 0029/0034) on both PG and CH sides;
---               same out-of-scope semantics as PG E13.
+-- Schema:       ADR 0044 (CH pilot), ADR 0059 (position), task 0586
+-- Data sources: DB-only. function_name + args + return_value live in the
+--               archive XDR (ADR 0029/0034).
 -- Inputs:
---   $1  :contract_strkey       String   C-form contract ID
---   $2  :limit                 Int      page size
---   $3  :cursor_ledger         Int64    NULL on first page
---   $4  :cursor_tx_id          Int64    NULL on first page
--- Indexes:      soroban_contracts ORDER BY (id) — leading resolve.
---               soroban_invocations_appearances ORDER BY (contract_id,
---                 ledger_sequence, transaction_id) — contract-leading scan.
---               transactions ORDER BY (ledger_sequence, application_order, id)
---                 + intDiv partition.
---               accounts ORDER BY (id) — caller_account LEFT JOIN.
--- CH Engine:    All Replacing — FINAL.
--- CH Pattern:   leading $1 resolve via FINAL'd subquery; partition prune on
---               transactions via intDiv on cursor's ledger; FINAL on every
---               Replacing read.
--- ADR 0044 §:   §4.3 (soroban_invocations_appearances Replacing partitioned),
---               §4.2 (transactions), §4.5 (state Replacing), §5.2 (no
---               closed_at — cursor drops created_at term).
+--   $1  :contract_id          Int64    soroban_contracts.id (resolved first)
+--   $2  :limit                Int      page size (the API reads limit + 1)
+--   $3  :cursor_ledger        Int64    NULL on first page
+--   $4  :cursor_app_order     Int16    NULL on first page — the cursor is the
+--                                      transaction's position (task 0586); a
+--                                      surrogate cursor answers 400
+-- Indexes:      contract_activity ORDER BY (contract_id, ledger_sequence,
+--                 application_order) — contract-leading seek.
+--               transactions ORDER BY (ledger_sequence, application_order).
+-- CH Engine:    ReplacingMergeTree. No FINAL on the driver (with it CH merges
+--               the contract's rows across every part, ~38× read
+--               amplification measured on the invocations table it replaced);
+--               `LIMIT 1 BY` collapses an unmerged duplicate.
+-- CH Pattern:   two steps — (A) the driver seek collects the page's positions
+--               and callers; (B) the page's transaction headers
+--               (hash / successful / closed_at) by
+--               `(ledger_sequence, application_order) IN (…)`. Never a join
+--               of the driver to an unpruned `transactions FINAL` (the
+--               read_rows-quota trap, CH Code: 201). Caller StrKeys resolve by
+--               `accounts.id` bloom seek in the API.
 -- Notes:
---   • Same shape as PG E13. Caller split across `caller_id` (G/M account)
---     and `caller_contract_id` (C contract), per task 0183 / ADR 0034.
---   • Cursor drops PG's `created_at` term — natural keyset is
---     `(ledger_sequence, transaction_id)`. Equivalent semantics because
---     `(ledger_sequence, transaction_id)` is fully ordered for a single
---     contract's invocations.
---   • Partition prune is best-effort: the cursor's ledger gives us a hint
---     but the page might span partition boundaries on first page. CH
---     accepts the predicate; planner uses the partitioning if useful.
+--   • `invocation_count > 0` keeps the invoked pairs: `contract_activity`
+--     also holds pairs a transaction only touched (an operation event, an
+--     operation naming the contract), which count 0.
+--   • The caller is split across `caller_id` (an account) and
+--     `caller_contract_id` (a contract), exactly one set on an invoked row.
+--     The API reads `caller_id` only (task 0487 fixes that).
+--   • Before task 0586 this read `soroban_invocations_appearances`, keyed by
+--     the `transaction_id` surrogate — so a ledger's invocations came in hash
+--     order.
 
+-- A. Driver. The LIMIT sits inside the subquery so the read stops at it in
+-- key order; `LIMIT 1 BY` beside the LIMIT disables that (a SAC with 10 M
+-- weekly invocations: 22.3 M rows read flat, 4.4 M nested, 2026-09-25 —
+-- 199 freshly filled parts; the invocations table read 0.6 M over 57).
+SELECT m.ledger_sequence, m.application_order, m.caller_id
+FROM (
+    SELECT ledger_sequence, application_order, caller_id
+    FROM contract_activity
+    WHERE contract_id = $1
+      AND invocation_count > 0
+      AND ledger_sequence <= (SELECT max(sequence) FROM ledgers)
+      AND ($3 IS NULL OR (ledger_sequence, application_order) < ($3, $4))
+    ORDER BY ledger_sequence DESC, application_order DESC
+    LIMIT $2
+) m
+LIMIT 1 BY m.ledger_sequence, m.application_order;
+
+-- @@ split @@
+
+-- B. The page's transaction headers — the literals are an example.
 SELECT
-    lower(hex(t.hash))                              AS transaction_hash_hex,
-    sia.ledger_sequence,
-    caller.account_id                               AS caller_account,
-    caller_contract.contract_id                     AS caller_contract,
-    sia.amount,
+    t.ledger_sequence AS ledger_sequence,
+    t.application_order AS application_order,
+    lower(hex(t.hash)) AS hash,
     t.successful,
-    t.id                                            AS cursor_tx_id
-    -- not in DB: function_name, args, return_value — Archive XDR (ADR 0029/0034).
-FROM soroban_invocations_appearances sia FINAL
-JOIN transactions t FINAL ON t.id = sia.transaction_id AND t.ledger_sequence = sia.ledger_sequence
-LEFT JOIN accounts          caller          FINAL ON caller.id          = sia.caller_id
-LEFT JOIN soroban_contracts caller_contract FINAL ON caller_contract.id = sia.caller_contract_id
-WHERE
-    sia.contract_id = (SELECT id FROM soroban_contracts FINAL WHERE contract_id = $1 LIMIT 1)
-    AND ($3 IS NULL OR (sia.ledger_sequence, sia.transaction_id) < ($3, $4))
-ORDER BY sia.ledger_sequence DESC, sia.transaction_id DESC
-LIMIT $2;
+    l.closed_at AS created_at
+FROM transactions t
+INNER JOIN ledgers l ON l.sequence = t.ledger_sequence
+WHERE (t.ledger_sequence, t.application_order) IN ((64613990, 233), (64613989, 17))
+  AND intDiv(t.ledger_sequence, 500000) IN (129);
