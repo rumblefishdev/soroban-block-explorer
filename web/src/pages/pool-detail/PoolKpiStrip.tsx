@@ -11,12 +11,9 @@ import { KpiCell } from '../detail/KpiCell.js';
 
 import {
   assetLegLabel,
-  isPoolStale,
   legHref,
   reserveDotColor,
 } from '../pool-shared/helpers.js';
-
-const STALE_SUBTITLE = 'no recent snapshot';
 
 interface PoolKpiStripProps {
   pool: PoolItem;
@@ -28,10 +25,11 @@ interface PoolKpiStripProps {
  * notation (`1.2M`, `480K`); the subtitle carries the asset code so the value
  * reads cleanly without units stacked on top.
  *
- * Stale pools (no fresh snapshot in 7 days) come back with null reserves
- * and shares — those cells render as "—". `participant_count` stays
- * accurate regardless of freshness (per task 0246); it is `null` for a
- * soroban pool, whose providers are not indexed yet.
+ * A value the API does not know renders as "—". There is no "stale" state:
+ * a classic pool writes a snapshot on every change, so an old snapshot is a
+ * quiet pool's current state, and a soroban pool has no snapshot at all.
+ * `participant_count` is `null` for a soroban pool, whose providers are not
+ * indexed yet.
  */
 function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);
@@ -48,8 +46,6 @@ function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
 }
 
 export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
-  const stale = isPoolStale(pool.latest_snapshot_at);
-
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
@@ -64,7 +60,7 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       <KpiCell
         label="Total shares"
         value={formatCompactAmount(pool.total_shares)}
-        caption={stale ? STALE_SUBTITLE : 'shares outstanding'}
+        caption="shares outstanding"
       />
       {pool.legs.map((leg, i) => {
         const code = assetLegLabel(leg);
@@ -73,7 +69,7 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
             key={i}
             label={`${code} reserve`}
             value={formatCompactAmount(leg.reserve)}
-            caption={stale ? STALE_SUBTITLE : assetSubtitle(leg, code)}
+            caption={assetSubtitle(leg, code)}
             valueColor={reserveDotColor(leg)}
           />
         );

@@ -2433,3 +2433,24 @@ a soroban pool, a classic pool unchanged at 50,457,493). `volume` /
 until something records soroban trades (W1). Neither field is rendered by the
 page today. CH-gated test `detail_created_at_falls_back_without_a_snapshot`:
 green; red with plain `min` (left 0, right 60,059,011).
+
+### 26a — soroban native and classic leg reserves served (2026-09-25)
+
+Branch `feat/0374-soroban-classic-leg-reserves`. List and detail read each
+soroban pool's newest `pool_state_changes` row and scale the native and
+classic legs (7 decimals by protocol); a soroban-token leg stays `null` for
+26b. Leg order verified on chain first: 16/16 pools across router constant,
+stable (2 and 3 legs), concentrated, elastic, pair-factory and config-factory
+list their tokens in our `legs` order; 15/16 hold exactly our reserves, the
+16th traded after our row. Local API against production: 1,460/1,460 native
+and classic legs carry a reserve, TVL on 526 soroban pools (was 0), classic
+list unchanged. Cost: 3.66M rows / 55 ms for the 20 busiest pools.
+
+Measurement trap met on the way: a first count said 1,461 classic/native legs
+— a LEFT JOIN miss on `assets` filled `asset_type = 0`, turning a leg the
+dimension does not know into "native". The same default-on-miss trap as the
+0468 zeros.
+
+The KPI strip's "no recent snapshot" caption is gone with `isPoolStale`: an
+old classic snapshot is a quiet pool's current state (item 30) and a soroban
+pool has none, so every newly served soroban reserve would have carried it.

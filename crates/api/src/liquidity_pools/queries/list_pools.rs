@@ -10,6 +10,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
+use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
@@ -332,6 +333,15 @@ pub async fn fetch_pool_list(
     let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
+    // A soroban pool writes no snapshot; its reserves are its newest
+    // `pool_state_changes` row, read for the page's soroban pools only.
+    let soroban_ids: Vec<&str> = rows
+        .iter()
+        .filter(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind) == domain::PoolKind::Soroban)
+        .map(|r| r.pool_id_hex.as_str())
+        .collect();
+    let soroban_raw = fetch_raw_reserves(client, &soroban_ids).await?;
+
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
     // endpoint (latest reserves × last 1h close per leg; both legs required)
     // from ONE batched price lookup over the page's distinct identities.
@@ -367,16 +377,24 @@ pub async fn fetch_pool_list(
         .into_iter()
         .zip(page_legs)
         .map(|(r, legs)| {
-            // The snapshot is classic: its two columns are a classic pool's
-            // two legs, in order. A soroban pool has no snapshot row, so its
-            // legs carry no reserve and its TVL stays unknown.
-            let reserves = [r.reserve_a.clone(), r.reserve_b.clone()];
+            // A classic pool's snapshot columns are its two legs, in order; a
+            // soroban pool's reserves come from its state rows (see
+            // `soroban_reserves` for which legs carry a value).
+            let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
+            let reserves = match pool_kind {
+                domain::PoolKind::Classic => vec![r.reserve_a.clone(), r.reserve_b.clone()],
+                domain::PoolKind::Soroban => leg_reserves(
+                    &r.legs,
+                    &identities,
+                    soroban_raw.get(&r.pool_id_hex).map_or(&[], Vec::as_slice),
+                ),
+            };
             let reserve_strs: Vec<Option<&str>> = (0..legs.len())
                 .map(|i| reserves.get(i).and_then(|r| r.as_deref()))
                 .collect();
             let tvl = tvl_usd(&reserve_strs, &legs, &closes).map(usd_str);
             PoolRow {
-                pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
+                pool_kind,
                 pool_id_hex: r.pool_id_hex,
                 legs: leg_rows(&r.legs, &identities, &icons, &reserves),
                 fee_bps: r.fee_bps,
