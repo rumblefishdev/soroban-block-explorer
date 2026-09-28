@@ -19,13 +19,15 @@ pub struct ParticipantRow {
     /// Holder surrogate — used only to encode the next cursor; not exposed in
     /// the response DTO.
     pub account_id_surrogate: i64,
-    /// Numeric carried as text to preserve `NUMERIC(28,7)` precision.
+    /// Decimal text: the classic `NUMERIC(28,7)` position, or the soroban
+    /// share-token balance scaled by the token's decimals.
     pub shares: String,
     /// The value the keyset compares, carried in the cursor: `shares` for a
     /// classic pool, the raw share-token amount for a soroban one.
     pub cursor_shares: String,
-    /// `100 * shares / total_pool_shares` over the pool's latest snapshot,
-    /// NULL when it has none or its total is 0. Already a decimal string.
+    /// `100 * shares / total`, already a decimal string. Classic: over the
+    /// pool's latest snapshot, NULL when it has none or its total is 0.
+    /// Soroban: over the holders' sum, never NULL.
     pub share_percentage: Option<String>,
     /// `None` for a soroban pool: `balances` keeps no first-deposit ledger.
     pub first_deposit_ledger: Option<i64>,
@@ -206,18 +208,32 @@ struct SorobanParticipantChRow {
     share_percentage: String,
     last_updated_ledger: i64,
     decimals: Option<u32>,
+    /// Sum of every holder's balance (not just this page's).
+    holders_total: String,
+    /// The pool's own `total_shares`; `"0"` where it keeps none.
+    stored_total: String,
+}
+
+/// The index holds every share of the pool: its holders add up to the total
+/// the pool itself stores. A pool storing `0` (a config-factory pool keeps
+/// its supply on the token; an emptied pool holds nothing) cannot be checked
+/// and is taken as it reads.
+fn holders_cover_the_pool(stored_total: &str, holders_total: &str) -> bool {
+    stored_total == "0" || stored_total == holders_total
 }
 
 /// A soroban pool's providers: the holders of its share token in `balances`,
-/// ordered like the classic list. `None` when the pool has no share token (a
-/// concentrated pool keeps positions, not shares) or the token publishes no
-/// decimals — the endpoint then says "not indexed" rather than listing
-/// nobody.
+/// ordered like the classic list. `None` — "not indexed", never a list that
+/// looks complete — when the pool has no share token (a concentrated pool
+/// keeps positions, not shares), the token publishes no decimals, or the
+/// holders do not add up to the pool's stored total. Production, 2026-09-28:
+/// they add up for 573 of 575 pools storing one; in the other two the chain's
+/// `total_supply` equals the stored total, and our index misses 99.99% of one
+/// pool's shares and holds a stale, too-large balance in the other.
 ///
-/// The denominator is the sum of the holders' balances: it equals the pool's
-/// stored total shares for 573 of 575 pools holding one (production,
-/// 2026-09-28), and it is the only total a config-factory pool has. The
-/// window runs before the keyset so every page divides by the whole.
+/// The denominator is the holders' sum — equal to the stored total wherever
+/// one is kept, and the only total a config-factory pool has. The window runs
+/// before the keyset so every page divides by the whole.
 ///
 /// `balances` is sorted by `(holder_id, asset_id)`, so the `asset_id` filter
 /// scans the table (~120M rows); the pool pages see a few dozen requests a
@@ -250,6 +266,10 @@ pub async fn fetch_soroban_participants(
                 toString(amt) AS raw_shares, \
                 toString(toDecimal128(amt * 100 / total, 7)) AS share_percentage, \
                 lul AS last_updated_ledger, \
+                toString(total) AS holders_total, \
+                toString(ifNull((SELECT argMax(total_shares, derived_at_ledger) \
+                                 FROM pool_instance_state WHERE pool_id = unhex(?)), 0)) \
+                    AS stored_total, \
                 (SELECT argMax(tuple(m.decimals), m.version).1 \
                    FROM soroban_contract_metadata m \
                   WHERE m.contract_id = (SELECT contract_id FROM soroban_contracts \
@@ -271,20 +291,23 @@ pub async fn fetch_soroban_participants(
     let rows = client
         .query(&sql)
         .bind(pool_id_hex)
+        .bind(pool_id_hex)
         .bind(limit)
         .fetch_all::<SorobanParticipantChRow>()
         .await?;
     if rows.is_empty() {
-        // Past the last page an empty page is just the end of the list.
-        if cursor.is_some() {
-            return Ok(Some(Vec::new()));
-        }
+        // No holder on this page: past the last page of a readable pool, a
+        // pool with truly no providers, or one whose providers are unreadable
+        // — the count tells them apart.
         let count = count_soroban_participants(client, pool_id_hex).await?;
         return Ok(count.map(|_| Vec::new()));
     }
     let Some(decimals) = rows[0].decimals else {
         return Ok(None);
     };
+    if !holders_cover_the_pool(&rows[0].stored_total, &rows[0].holders_total) {
+        return Ok(None);
+    }
 
     // A holder is an account or a contract (a gauge, a vault); each
     // surrogate lives in exactly one of the two tables (4,088 of 4,088
@@ -310,10 +333,22 @@ pub async fn fetch_soroban_participants(
                     );
                     return None;
                 };
+                // `raw_shares` is ClickHouse's own `toString(Int128)`, so this
+                // cannot fail; if it ever does, say so — a silent drop can
+                // take the page's sentinel row and hide the rest of the list.
+                let Some(shares) = scale_raw(&r.raw_shares, decimals) else {
+                    tracing::error!(
+                        holder_id = r.holder_id,
+                        pool_id = pool_id_hex,
+                        raw_shares = %r.raw_shares,
+                        "share-token balance does not scale: participant dropped"
+                    );
+                    return None;
+                };
                 Some(ParticipantRow {
                     account,
                     account_id_surrogate: r.holder_id,
-                    shares: scale_raw(&r.raw_shares, decimals)?,
+                    shares,
                     cursor_shares: r.raw_shares,
                     share_percentage: Some(r.share_percentage),
                     first_deposit_ledger: None,
@@ -328,16 +363,17 @@ pub async fn fetch_soroban_participants(
 struct HolderCountRow {
     token_id: i64,
     total_shares: String,
+    held: String,
     n: u64,
 }
 
 /// How many providers the soroban participants list holds — the detail
 /// KPI. Same `balances` scan as the list.
 ///
-/// `None` (not indexed) when the pool has no share token, or when no holder
-/// is indexed yet the pool stores a positive total — then the holders are
-/// unreadable, not absent. Production, 2026-09-28: 133 pools hold a token
-/// and no holder; every one stores a total of 0, and the only one still
+/// `None` (not indexed) when the pool has no share token, or when its
+/// holders do not add up to the total it stores — see
+/// [`fetch_soroban_participants`]. Production, 2026-09-28: 133 pools hold a
+/// token and no holder; every one stores a total of 0, and the only one still
 /// holding reserves (`CALL3ZZS…`) has no holder on chain either.
 pub async fn count_soroban_participants(
     client: &clickhouse::Client,
@@ -351,6 +387,7 @@ pub async fn count_soroban_participants(
                     toString(ifNull((SELECT argMax(total_shares, derived_at_ledger) \
                                      FROM pool_instance_state WHERE pool_id = unhex(?)), 0)) \
                         AS total_shares, \
+                    toString(sumIf(amt, amt > 0)) AS held, \
                     countIf(amt > 0) AS n \
              FROM ( \
                  SELECT argMax(amount, last_updated_ledger) AS amt FROM balances \
@@ -361,8 +398,8 @@ pub async fn count_soroban_participants(
         .bind(pool_id_hex)
         .fetch_one::<HolderCountRow>()
         .await?;
-    let unreadable = row.n == 0 && row.total_shares != "0";
-    Ok((row.token_id != 0 && !unreadable).then_some(row.n as i64))
+    let readable = holders_cover_the_pool(&row.total_shares, &row.held);
+    Ok((row.token_id != 0 && readable).then_some(row.n as i64))
 }
 
 #[cfg(test)]

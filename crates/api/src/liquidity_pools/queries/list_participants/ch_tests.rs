@@ -85,6 +85,7 @@ const SOROBAN_DB: &str = "api_test_0374_soroban_participants";
 const SOROBAN_POOL: &str = "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3";
 const NO_TOKEN_POOL: &str = "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4";
 const EMPTY_POOL: &str = "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5";
+const PARTIAL_POOL: &str = "b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7";
 const UNREAD_POOL: &str = "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6";
 const SHARE_TOKEN: &str = "CDMH535JSD224YXPET3B4SJOLXTQQ24GRSCWACGYBKSH2DKFJYWI7SUW";
 const GAUGE: &str = "CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB";
@@ -118,8 +119,9 @@ async fn soroban_participants_are_share_token_holders() {
     for sql in [
         format!(
             "INSERT INTO pool_instance_state (pool_id, plane_id, share_token_id, total_shares, derived_at_ledger) VALUES \
-             (unhex('{SOROBAN_POOL}'), 1, 77, 400, 10), (unhex('{NO_TOKEN_POOL}'), 1, 0, 0, 10), \
-             (unhex('{EMPTY_POOL}'), 1, 88, 0, 10), (unhex('{UNREAD_POOL}'), 1, 99, 500, 10)"
+             (unhex('{SOROBAN_POOL}'), 1, 77, 4000000000, 10), (unhex('{NO_TOKEN_POOL}'), 1, 0, 0, 10), \
+             (unhex('{EMPTY_POOL}'), 1, 88, 0, 10), (unhex('{UNREAD_POOL}'), 1, 99, 500, 10), \
+             (unhex('{PARTIAL_POOL}'), 1, 77, 9000000000, 10)"
         ),
         "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) VALUES \
              (42, 77, 9990000000, 5), (42, 77, 3000000000, 20), (43, 77, 1000000000, 30), (44, 77, 0, 40)"
@@ -189,6 +191,21 @@ async fn soroban_participants_are_share_token_holders() {
     );
     assert_eq!(
         count_soroban_participants(&ch, UNREAD_POOL)
+            .await
+            .expect("count runs"),
+        None
+    );
+    // Same token, a stored total the holders do not reach: a partial list
+    // would look complete, so it is not served.
+    assert!(
+        fetch_soroban_participants(&ch, PARTIAL_POOL, None, 10, Direction::Next)
+            .await
+            .expect("participants query runs")
+            .is_none(),
+        "holders short of the stored total are not a complete list"
+    );
+    assert_eq!(
+        count_soroban_participants(&ch, PARTIAL_POOL)
             .await
             .expect("count runs"),
         None

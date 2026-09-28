@@ -1792,14 +1792,16 @@ export type PaginatedParticipantItem = {
     last_updated_ledger: number;
     /**
      * Share of the pool, expressed as a decimal-string percentage
-     * (`100 * shares / total_pool_shares`, over the pool's latest snapshot
-     * however old — a classic pool snapshots every change). `None` when the
-     * pool has no snapshot or its total is 0; the frontend renders "—".
+     * (`100 * shares / total`). Classic: over the pool's latest snapshot
+     * however old — a classic pool snapshots every change — and `None` when
+     * the pool has no snapshot or its total is 0; the frontend renders "—".
+     * Soroban: over the sum of the share token's holders, always present.
      */
     share_percentage?: string | null;
     /**
-     * Pool-share balance carried as a decimal string preserving the
-     * underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+     * Pool-share balance as a decimal string (no f64 round-trip): the
+     * `NUMERIC(28,7)` position of a classic pool, the share-token balance
+     * scaled by the token's decimals for a soroban one.
      */
     shares: string;
   }>;
@@ -2035,14 +2037,16 @@ export type ParticipantItem = {
   last_updated_ledger: number;
   /**
    * Share of the pool, expressed as a decimal-string percentage
-   * (`100 * shares / total_pool_shares`, over the pool's latest snapshot
-   * however old — a classic pool snapshots every change). `None` when the
-   * pool has no snapshot or its total is 0; the frontend renders "—".
+   * (`100 * shares / total`). Classic: over the pool's latest snapshot
+   * however old — a classic pool snapshots every change — and `None` when
+   * the pool has no snapshot or its total is 0; the frontend renders "—".
+   * Soroban: over the sum of the share token's holders, always present.
    */
   share_percentage?: string | null;
   /**
-   * Pool-share balance carried as a decimal string preserving the
-   * underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+   * Pool-share balance as a decimal string (no f64 round-trip): the
+   * `NUMERIC(28,7)` position of a classic pool, the share-token balance
+   * scaled by the token's decimals for a soroban one.
    */
   shares: string;
 };
@@ -3547,7 +3551,7 @@ export type ListParticipantsData = {
 
 export type ListParticipantsErrors = {
   /**
-   * Invalid pool_id, limit, or cursor
+   * Invalid pool_id, limit, or cursor; or `not_indexed`: a soroban pool whose providers are not readable (no share token — a concentrated pool — or holders the index does not hold)
    */
   400: ErrorEnvelope;
   /**

@@ -42,7 +42,9 @@ use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
     responses(
         (status = 200, description = "Paginated participants list",
          body = Paginated<ParticipantItem>),
-        (status = 400, description = "Invalid pool_id, limit, or cursor", body = ErrorEnvelope),
+        (status = 400, description = "Invalid pool_id, limit, or cursor; or `not_indexed`: \
+         a soroban pool whose providers are not readable (no share token — a concentrated \
+         pool — or holders the index does not hold)", body = ErrorEnvelope),
         (status = 404, description = "Pool not found",  body = ErrorEnvelope),
         (status = 500, description = "Database error",  body = ErrorEnvelope),
     )
@@ -113,11 +115,12 @@ pub async fn list_participants(
             return errors::bad_request(
                 errors::NOT_INDEXED,
                 "this pool's providers are not indexed: it has no share token \
-                 (a concentrated pool keeps positions) or the token publishes no decimals",
+                 (a concentrated pool keeps positions), or its holders or their \
+                 decimals are not in the index",
             );
         }
         Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_participants");
+            tracing::error!(pool_id = %pool_id, soroban, error = %e, "DB error in the participants read");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -409,9 +412,10 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     // A soroban pool's providers are its share token's holders — the count
     // the participants section lists. Degrades to "not indexed" on error.
     match soroban_count {
-        Ok(n) => item.participant_count = item.participant_count.or(n),
+        Ok(n) if soroban => item.participant_count = n,
+        Ok(_) => {}
         Err(e) => {
-            tracing::error!("DB error in count_soroban_participants({pool_id}): {e}");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in count_soroban_participants");
         }
     }
     let mut resp = Json(item).into_response();
