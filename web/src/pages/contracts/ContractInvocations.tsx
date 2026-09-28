@@ -21,6 +21,24 @@ import { TransactionTime } from '../transactions/TransactionTime.js';
 
 type InvocationRow = PaginatedInvocationItem['data'][number];
 
+/**
+ * The invocation's caller: an account or a contract (task 0487 — a contract
+ * caller used to render as a dash). The dash is left for a row with neither.
+ */
+export function CallerCell({
+  row,
+}: {
+  row: Pick<InvocationRow, 'caller_account' | 'caller_contract'>;
+}) {
+  if (row.caller_account) {
+    return <IdentifierDisplay value={row.caller_account} type="account" />;
+  }
+  if (row.caller_contract) {
+    return <IdentifierDisplay value={row.caller_contract} type="contract" />;
+  }
+  return <Dash />;
+}
+
 // Figma shows a "Function" column, but the invocations appearance index
 // carries no per-call function name (ADR 0034 — call detail is XDR-only).
 // The transaction hash takes its place: it links to the full call detail.
@@ -37,12 +55,7 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
     id: 'caller',
     header: 'Caller',
     width: 160,
-    cell: (row) =>
-      row.caller_account ? (
-        <IdentifierDisplay value={row.caller_account} type="account" />
-      ) : (
-        <Dash />
-      ),
+    cell: (row) => <CallerCell row={row} />,
   },
   statusColumn<InvocationRow>(),
   ledgerColumn<InvocationRow>(),

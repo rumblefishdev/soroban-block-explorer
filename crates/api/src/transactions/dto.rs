@@ -138,6 +138,9 @@ pub struct InvocationAppearanceItem {
     pub contract_id: String,
     /// Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
     pub caller_account: Option<String>,
+    /// Root caller C-StrKey when a contract made the call; exactly one of the
+    /// two callers is set.
+    pub caller_contract: Option<String>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
