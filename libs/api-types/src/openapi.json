@@ -2045,13 +2045,7 @@
       "AccountBalance": {
         "type": "object",
         "description": "Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have\nboth; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`\ninstead (the account portfolio includes Soroban balances, task 0331 Option C).",
-        "required": [
-          "type",
-          "balance",
-          "decimals",
-          "last_updated_ledger",
-          "sac_deployed"
-        ],
+        "required": ["type", "balance", "last_updated_ledger", "sac_deployed"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -2072,9 +2066,9 @@
             "description": "C-strkey of the Soroban token's contract (type-3 only) — the identity +\nlink target (`/assets/${contract_id}`). `null` for native / classic."
           },
           "decimals": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.",
+            "description": "Display decimals — 7 for native and classic, on-chain metadata for a\nSoroban token. `null` when the token publishes none we could read: the\nbalance then has no known scale, and a guessed 7 would be off by 10^11\nfor an 18-decimal token.",
             "minimum": 0
           },
           "last_updated_ledger": {
@@ -2103,7 +2097,7 @@
       "AccountBalanceChange": {
         "type": "object",
         "description": "One asset's net balance change for the account whose page this is\n(task 0540). Relative to that account by construction: the same\ntransaction seen from another account carries different numbers.",
-        "required": ["asset", "decimals", "nft_delta"],
+        "required": ["asset", "nft_delta"],
         "properties": {
           "amount": {
             "type": ["string", "null"],
@@ -2118,9 +2112,9 @@
             "description": "Display code (`\"USDC\"`, or a bespoke token's on-chain symbol).\n`null` for native — render as XLM — and for a token with no symbol."
           },
           "decimals": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "Display decimals — 7 for native/classic/SAC, on-chain `METADATA` for a\nbespoke Soroban token.",
+            "description": "Display decimals — 7 for native/classic/SAC, on-chain metadata for a\nbespoke Soroban token; `null` when none could be read (never a guessed 7).",
             "minimum": 0
           },
           "nft_delta": {
@@ -2350,7 +2344,7 @@
           {
             "type": "object",
             "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
-            "required": ["id", "asset_type", "decimals"],
+            "required": ["id", "asset_type"],
             "properties": {
               "asset_code": {
                 "type": ["string", "null"]
@@ -2369,9 +2363,9 @@
                 "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
               },
               "decimals": {
-                "type": "integer",
+                "type": ["integer", "null"],
                 "format": "int32",
-                "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+                "description": "Display decimals — 7 for native and classic (Stellar precision), a\nSoroban token's on-chain metadata. Load-bearing for amount rendering.\n`null` when the token publishes none we could read: its amounts then\nhave no known scale, and a guessed 7 would be off by 10^11 for an\n18-decimal token.",
                 "minimum": 0
               },
               "holder_count": {
@@ -2436,7 +2430,7 @@
       "AssetItem": {
         "type": "object",
         "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
-        "required": ["id", "asset_type", "decimals"],
+        "required": ["id", "asset_type"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -2455,9 +2449,9 @@
             "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
           },
           "decimals": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+            "description": "Display decimals — 7 for native and classic (Stellar precision), a\nSoroban token's on-chain metadata. Load-bearing for amount rendering.\n`null` when the token publishes none we could read: its amounts then\nhave no known scale, and a guessed 7 would be off by 10^11 for an\n18-decimal token.",
             "minimum": 0
           },
           "holder_count": {
@@ -3784,7 +3778,7 @@
             "items": {
               "type": "object",
               "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
-              "required": ["id", "asset_type", "decimals"],
+              "required": ["id", "asset_type"],
               "properties": {
                 "asset_code": {
                   "type": ["string", "null"]
@@ -3803,9 +3797,9 @@
                   "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
                 },
                 "decimals": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int32",
-                  "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+                  "description": "Display decimals — 7 for native and classic (Stellar precision), a\nSoroban token's on-chain metadata. Load-bearing for amount rendering.\n`null` when the token publishes none we could read: its amounts then\nhave no known scale, and a guessed 7 would be off by 10^11 for an\n18-decimal token.",
                   "minimum": 0
                 },
                 "holder_count": {

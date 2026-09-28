@@ -75,3 +75,19 @@ setting), merged accounts (0321).
 - [ ] Config-factory fee drift measured on production; outcome recorded here
 - [ ] No read scales a soroban token amount by an assumed 7; `decimals` is `null` where the token publishes none, and the frontend does not scale it
 - [ ] API types regenerated; docs updated where a field became nullable
+
+## 2026-09-28 — guessed 7 decimals: fixed on `fix/0584-unknown-token-decimals`
+
+Re-applied from the reference branch `fix/0374-unknown-token-decimals`
+(b89dcdc0, f54da92c; it sat on the closed #496) onto develop, plus two
+additions: a published value above 38 is not a scale (an `i128` has at most
+39 digits; two live `PIKA` contracts publish 43,224), and the resolver reads
+the newest metadata row (`argMax(tuple(decimals), version).1`, the #518 fix).
+`known_decimals` in `common/asset_identity.rs` is the one home of the rule:
+7 for native and classic credit, the published value for a Soroban token,
+`None` otherwise; account balances, balance changes and asset supply all go
+through it. Production (2026-09-28): 607 of 4,470 Soroban assets publish no
+decimals. Local API against production: USST (`CBZ4DCE7…`, 18 decimals on
+chain, no metadata row — task 0473) now serves `decimals: null`; its
+balance on `GBQYWQHE…` and its total supply render "—" (before: scaled by 7,
+a balance of 1,125,292,924,600 instead of 11.25).

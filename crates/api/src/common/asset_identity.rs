@@ -82,10 +82,14 @@ pub(crate) struct ResolvedAsset {
 /// while still reading as a number. `family` is `None` when no `assets` row
 /// resolved: an unmatched join's default 0 would otherwise claim native.
 /// The one place this rule lives; every reader of `decimals` goes through it.
+///
+/// A published value above 38 is not a scale either: an `i128` amount has at
+/// most 39 digits, and two live contracts publish 43,224 (production,
+/// 2026-09-28).
 pub(crate) fn known_decimals(family: Option<i16>, published: Option<u32>) -> Option<u32> {
     match family.map(AssetFamily::try_from) {
         Some(Ok(AssetFamily::Native | AssetFamily::ClassicCredit)) => Some(7),
-        _ => published,
+        _ => published.filter(|d| *d <= 38),
     }
 }
 
@@ -213,7 +217,7 @@ async fn fetch_identity_rows(
                     WHERE id IN ({in_list}) LIMIT 1 BY id) sc ON sc.id = ids.id \
          LEFT JOIN (SELECT contract_id, \
                            argMax(symbol, version)   AS symbol, \
-                           argMax(decimals, version) AS decimals \
+                           argMax(tuple(decimals), version).1 AS decimals \
                     FROM soroban_contract_metadata GROUP BY contract_id) m \
                 ON m.contract_id = sc.contract_id"
     );

@@ -114,4 +114,7 @@ fn known_decimals_is_a_fact_or_none() {
     assert_eq!(known_decimals(Some(3), None), None);
     assert_eq!(known_decimals(None, None), None);
     assert_eq!(known_decimals(None, Some(6)), Some(6));
+    // Junk metadata is not a scale: an i128 has at most 39 digits.
+    assert_eq!(known_decimals(Some(3), Some(38)), Some(38));
+    assert_eq!(known_decimals(Some(3), Some(43_224)), None);
 }
