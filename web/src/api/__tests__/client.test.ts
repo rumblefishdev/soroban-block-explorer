@@ -1,3 +1,4 @@
+import type * as ApiTypes from '@rumblefish/api-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The session is wired into the shared API client by `client.ts` at import
@@ -52,7 +53,9 @@ function stubFetch(dataStatuses: number[]) {
 async function freshClient() {
   vi.resetModules();
   await import('../client.js');
-  return import('@rumblefish/api-types');
+  // Not `import('@rumblefish/api-types')`: Nx reads a dynamic import as lazy
+  // loading and then forbids every static import of the lib across `web`.
+  return vi.importActual<typeof ApiTypes>('@rumblefish/api-types');
 }
 
 describe('client.ts session wiring', () => {
