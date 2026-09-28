@@ -551,8 +551,11 @@ semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
 **`GET /liquidity-pools/:id`** - Pool detail: legs, kind, fee, reserves, total
 shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
 leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
-read the snapshot's two reserve columns in order, and a Soroban pool's legs
-carry `null` until its own state is read. TVL sums every leg's reserve × price
+read the snapshot's two reserve columns in order; a Soroban pool's legs read
+its newest `pool_state_changes` row, in the pool's own token order (the order
+`legs` stores), scaled for native and classic legs only — a Soroban-token leg
+is `null` until its decimals are read. The list does the same for the page's
+Soroban pools in one batched read. TVL sums every leg's reserve × price
 and is `null` unless every leg has both. Reserves / total shares come from
 the latest snapshot row; clients that care about freshness read
 `latest_snapshot_at` in the response. `participant_count` is independent of

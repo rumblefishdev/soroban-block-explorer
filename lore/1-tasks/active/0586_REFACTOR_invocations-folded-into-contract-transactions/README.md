@@ -146,6 +146,66 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   shipped task 0497's writer (the `minted_at_ledger` defaults were already
   on production).
 
+- **Fill complete** (2026-09-25, 16:10–16:50 UTC): every slice gated;
+  coverage over all 30 partitions — 2,997,455,423 pairs = the
+  `contract_transactions` keys, 1,109,006,747 invoked = the invocation keys.
+
+- **PR 2 (readers) opened** (2026-09-25): the move alone in
+  [#512](https://github.com/rumblefishdev/soroban-block-explorer/pull/512)
+  (`fetch_invocation_appearances` into `contracts/queries/list_invocations.rs`,
+  `contracts/queries.rs` 1165 → 995 lines, 172 moved), the readers in
+  [#513](https://github.com/rumblefishdev/soroban-block-explorer/pull/513),
+  stacked (draft). Local API on production ClickHouse against the deployed
+  API: detail stats same for 6 contracts, list counts 50/50, Invocations tab
+  same rows for 4 contracts over whole ledgers, old cursor 400, transaction
+  page 18/18, `/transactions` contract filter same for 6. The tab's first
+  driver put `LIMIT 1 BY` beside `LIMIT`, which disables the read-in-order
+  early stop (21.7 M rows vs 0.59 M); `LIMIT` moved into a subquery →
+  4.37 M rows / 78 ms vs 0.54 M / 32 ms, the rest from 199 unmerged parts
+  after the fill (6.6 per partition vs 1.9), left to background merges.
+
+- **Review of PR 2** (standards + spec, 2026-09-28): #512 merged, #513
+  retargeted to `develop`. No defect in the readers: every API read moved,
+  `invocation_count > 0` on the four invocation readers and not on the
+  `/transactions` filter, dedup kept, unique callers still `caller_id` only
+  (249 A). Fixed: `contracts/queries.rs` had grown 995 → 999 (now 993),
+  a comment pointed at deleted SQL, the schema overview / pilot / pipeline
+  docs still named the old readers. Behaviour change to state in the PR:
+  within one ledger the Invocations tab now lists by execution order, not by
+  the hash surrogate. Open: `TxListCursor::ChSurrogate` still decodes only
+  to be refused — dropping it makes the three list guards dead; names
+  `fetch_invocation_appearances` / `InvocationAppearanceRow` describe the
+  retired table.
+
+- **#513 merged** (2026-09-28, 07:17 UTC) before the review fixes were
+  pushed; they follow in
+  [#515](https://github.com/rumblefishdev/soroban-block-explorer/pull/515)
+  with the `ChSurrogate` variant removed (thread 273 B): a surrogate cursor
+  now fails to decode (400 `invalid_cursor` from the extractor) and the four
+  per-list guards go. The rename of the "appearances" names rides its own
+  PR before task 0487 (thread 274 A).
+
+- **#515, #516 merged** (2026-09-28); the rename landed as
+  [#516](https://github.com/rumblefishdev/soroban-block-explorer/pull/516).
+
+- **PR 3 (stop the old writes)** — branch `feat/0586-stop-old-contract-writes`,
+  local: `311d9435` — the writer, staging and `init.sql` drop
+  `soroban_invocations_appearances` and `contract_transactions`; the fold keys
+  its rows by position straight from the ledger's own order
+  (`app_order_by_hash`), so staging maps no surrogate; allowlist without the
+  invocations table; `contract_activity` in `scripts/merge-*.sh`. `2a6b24d8` —
+  schema overview §4.5.6 rewritten for `contract_activity` alone, pilot,
+  pipeline, README, backfills ("not repeatable after step 3"), deployment
+  step 3 with the drops, crash-recovery and cutover runbooks, backups.
+  Checks: workspace clippy clean; `db-clickhouse` all tests pass on the local
+  ClickHouse 26.3 (smoke and the events e2e write `contract_activity`);
+  indexer, backfill-runner, xdr-parser, domain 645 tests pass. PR only after
+  the step-2 deploy is verified in `query_log`.
+- **prices-api check** (2026-09-28, read-only, `system.query_log`, 14 days):
+  no `prices_*` user read either table. Readers were `api_reader` (last
+  2026-09-26, before the step-2 deploy), `dev_read` / `dev_shared` (this
+  task's checks), `default` (3, 2026-09-21) and `ingestion_writer` (writes).
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared

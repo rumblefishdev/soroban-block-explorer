@@ -8,6 +8,7 @@ use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
+use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -122,17 +123,25 @@ pub async fn fetch_pool_by_id(
     let leg_ids: BTreeSet<i64> = r.legs.iter().copied().collect();
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
+    // A classic pool's legs are its two snapshot columns in order; a soroban
+    // pool has no snapshot row, so its reserves come from its state rows.
+    let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
+    let reserves = match pool_kind {
+        domain::PoolKind::Classic => vec![r.reserve_a.clone(), r.reserve_b.clone()],
+        domain::PoolKind::Soroban => {
+            let raw = fetch_raw_reserves(client, &[r.pool_id_hex.as_str()]).await?;
+            leg_reserves(
+                &r.legs,
+                &identities,
+                raw.get(&r.pool_id_hex).map_or(&[], Vec::as_slice),
+            )
+        }
+    };
+
     Ok(Some(PoolRow {
-        pool_kind: decode_pool_kind(&r.pool_id_hex, r.pool_kind),
+        pool_kind,
         pool_id_hex: r.pool_id_hex,
-        // The snapshot is classic, and a classic pool's legs are its two
-        // snapshot columns in order; a soroban pool has no snapshot row.
-        legs: leg_rows(
-            &r.legs,
-            &identities,
-            &icons,
-            &[r.reserve_a.clone(), r.reserve_b.clone()],
-        ),
+        legs: leg_rows(&r.legs, &identities, &icons, &reserves),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
         created_at_ledger: r.created_at_ledger,
