@@ -4413,6 +4413,10 @@
                   "$ref": "#/components/schemas/PoolKind",
                   "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
                 },
+                "protocol": {
+                  "type": ["string", "null"],
+                  "description": "The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),\nnamed only when the protocol's own publications claim the router or\nfactory that registered the pool. `null` for a classic pool and for a\nsoroban pool registered by a deployment no protocol claims — never a\nguess from matching code."
+                },
                 "total_shares": {
                   "type": ["string", "null"],
                   "description": "Pool shares outstanding, as a decimal string. Classic: the latest\nsnapshot. Soroban: the pool's own instance storage, scaled by its share\ntoken's published decimals; `null` when the pool keeps no total there\n(concentrated and config-factory pools) or the scale is unknown — a\n`0` is served only for a pool whose every reserve is `0`."
@@ -4695,6 +4699,10 @@
           "pool_kind": {
             "$ref": "#/components/schemas/PoolKind",
             "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
+          },
+          "protocol": {
+            "type": ["string", "null"],
+            "description": "The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),\nnamed only when the protocol's own publications claim the router or\nfactory that registered the pool. `null` for a classic pool and for a\nsoroban pool registered by a deployment no protocol claims — never a\nguess from matching code."
           },
           "total_shares": {
             "type": ["string", "null"],

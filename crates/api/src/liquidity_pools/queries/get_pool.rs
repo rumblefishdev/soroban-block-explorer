@@ -19,6 +19,7 @@ use super::{PoolRow, fee_percent_str, leg_rows};
 struct PoolDetailChRow {
     pool_id_hex: String,
     pool_kind: i16,
+    deployment_id: i64,
     legs: Vec<i64>,
     fee_bps: i32,
     created_at_ledger: i64,
@@ -80,6 +81,7 @@ pub async fn fetch_pool_by_id(
             "SELECT \
                 lower(hex(lp.pool_id))               AS pool_id_hex, \
                 toInt16(lp.pool_kind)                AS pool_kind, \
+                lp.deployment_id                     AS deployment_id, \
                 lp.legs                              AS legs, \
                 lp.fee_bps                           AS fee_bps, \
                 ifNull( \
@@ -152,6 +154,7 @@ pub async fn fetch_pool_by_id(
 
     Ok(Some(PoolRow {
         pool_kind,
+        deployment_id: r.deployment_id,
         pool_id_hex: r.pool_id_hex,
         legs: leg_rows(&r.legs, &identities, &icons, &reserves),
         fee_bps: r.fee_bps,

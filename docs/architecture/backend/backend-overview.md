@@ -551,7 +551,7 @@ filter page membership, and the old SQL pre-filter read a snapshot column that
 is never written, so it silently returned an empty page. Filter and projection
 semantics in `crates/api/src/liquidity_pools/queries/list_pools.rs`.
 
-**`GET /liquidity-pools/:id`** - Pool detail: legs, kind, fee, reserves, total
+**`GET /liquidity-pools/:id`** - Pool detail: legs, kind, protocol, fee, reserves, total
 shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
 leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
 read the snapshot's two reserve columns in order; a Soroban pool's legs read
@@ -562,7 +562,11 @@ otherwise; a token that publishes none keeps its leg `null`. The list does the
 same for the page's Soroban pools in batched reads. TVL sums every leg's reserve × price
 and is `null` unless every leg has both. A classic pool's reserves and total
 shares come from its latest snapshot row; clients that care about freshness
-read `latest_snapshot_at` in the response. A Soroban pool's total shares come
+read `latest_snapshot_at` in the response. `protocol` names who runs a Soroban
+pool (`Aquarius`, `Soroswap`, `Phoenix`) from the router or factory that
+registered it (`deployment_id`), and only for a deployment the protocol's own
+publications claim (`liquidity_pools/protocol_labels.rs`); it is `null` for a
+classic pool and for any other deployment. A Soroban pool's total shares come
 from its own instance storage (`pool_instance_state.total_shares`), scaled by
 the share token's published decimals; the stored `0` also means "no
 `TotalShares` key" (concentrated and config-factory pools), so `0` is served

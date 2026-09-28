@@ -1912,6 +1912,14 @@ export type PaginatedPoolItem = {
      */
     pool_kind: PoolKind;
     /**
+     * The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),
+     * named only when the protocol's own publications claim the router or
+     * factory that registered the pool. `null` for a classic pool and for a
+     * soroban pool registered by a deployment no protocol claims — never a
+     * guess from matching code.
+     */
+    protocol?: string | null;
+    /**
      * Pool shares outstanding, as a decimal string. Classic: the latest
      * snapshot. Soroban: the pool's own instance storage, scaled by its share
      * token's published decimals; `null` when the pool keeps no total there
@@ -2237,6 +2245,14 @@ export type PoolItem = {
    * an error.
    */
   pool_kind: PoolKind;
+  /**
+   * The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),
+   * named only when the protocol's own publications claim the router or
+   * factory that registered the pool. `null` for a classic pool and for a
+   * soroban pool registered by a deployment no protocol claims — never a
+   * guess from matching code.
+   */
+  protocol?: string | null;
   /**
    * Pool shares outstanding, as a decimal string. Classic: the latest
    * snapshot. Soroban: the pool's own instance storage, scaled by its share

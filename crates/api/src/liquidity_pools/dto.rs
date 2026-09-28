@@ -199,6 +199,12 @@ pub struct PoolItem {
     /// rendering one as the other yields a well-formed WRONG key rather than
     /// an error.
     pub pool_kind: domain::PoolKind,
+    /// The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),
+    /// named only when the protocol's own publications claim the router or
+    /// factory that registered the pool. `null` for a classic pool and for a
+    /// soroban pool registered by a deployment no protocol claims — never a
+    /// guess from matching code.
+    pub protocol: Option<String>,
     /// The pool's legs in registration order — two for a classic pool, two to
     /// four for a soroban one. Replaces the `asset_a` / `asset_b` pair, which
     /// could not express a three-leg pool and forced a soroban row to write

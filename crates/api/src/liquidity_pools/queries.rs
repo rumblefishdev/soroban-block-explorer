@@ -38,6 +38,9 @@ pub struct PoolRow {
     pub pool_id_hex: String,
     /// `liquidity_pools.pool_kind`, decoded once by `decode_pool_kind`.
     pub pool_kind: domain::PoolKind,
+    /// `liquidity_pools.deployment_id`: the router or factory that registered
+    /// a soroban pool; `0` for a classic one.
+    pub deployment_id: i64,
     /// The pool's legs in registration order: two for a classic pool, two to
     /// four for a soroban one.
     pub legs: Vec<PoolLegRow>,
