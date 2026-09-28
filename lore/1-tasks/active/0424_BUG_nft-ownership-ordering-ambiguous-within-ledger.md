@@ -123,6 +123,25 @@ ones (key `(contract_id, token_id, ledger_sequence, application_order,
 operation_index, event_index)`, no `transaction_id`, no `event_order`), dual
 write, fill, readers, stop the old writes, drop.
 
+- **Names** (295 A): `nft_ownership_changes`, `nft_ownership_changes_pending`
+  — a row is any change of owner (mint, transfer, burn).
+- **`nfts` current owner** (296 A): its same-ledger tie is fixed in its own
+  PR after the readers — another table, another step.
+- **PRs** (297 A):
+
+| PR  | What                                                                                         | Deploy                 | Operator           |
+| --- | -------------------------------------------------------------------------------------------- | ---------------------- | ------------------ |
+| 0   | move: `nft.rs` tests → `nft/tests.rs`, NFT state → `state/nfts.rs`                           | no                     | —                  |
+| 1   | parser carries the event position; new tables beside the old; promotion moves both           | yes                    | `CREATE` ×2 before |
+| 2   | fill tool from `soroban_events` + gate against the old tables                                | no (run from a laptop) | —                  |
+| 3   | readers: transfers tab by position, new wire fields + frontend; `balance_changes` exact join | yes                    | —                  |
+| 4   | old tables no longer written; allowlist empty                                                | yes                    | `DROP` ×2 after    |
+
+- **PR 0 opened** (2026-09-28):
+  [#521](https://github.com/rumblefishdev/soroban-block-explorer/pull/521),
+  `refactor/0424-move-nft-parsing` — `nft.rs` 1,203 → 425, `state.rs`
+  1,344 → 1,191; 926 lines moved, glue only; `xdr-parser` 501 tests pass.
+
 ## Implementation
 
 - Thread the transaction's **application order** (and the event's index within the
