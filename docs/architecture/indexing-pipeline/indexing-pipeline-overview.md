@@ -343,7 +343,7 @@ schema on Hetzner. That write includes both:
 - low-level structured explorer records (`ledgers`, `transactions`,
   `transaction_operations`, `pool_operation_amounts`,
   `transaction_participants`, and the appearance indexes `soroban_events`,
-  `soroban_invocations_appearances`)
+  `contract_activity`)
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
   `wasm_interface_metadata`, `assets`, `nfts`, `nft_ownership`,
   `nfts_pending`, `nft_ownership_pending`, `liquidity_pools`,
@@ -365,20 +365,17 @@ transaction by its position `(ledger_sequence, application_order)` (task
 0575), which staging takes from the ledger's own transaction order
 (`persist/stage/presence.rs`), not by the hash surrogate.
 
-`contract_transactions` (task 0541) is the contract-dimension presence index,
-built at staging from rows the ledger already produced: every contract that
-emitted an **operation** event in the transaction, was invoked in it, or is named
-by one of its operations — one row per (contract, transaction position). Fee
-events are skipped by the source the parser gives them: every transaction
-pays one to the native SAC, and they would put every transaction in that
-contract's list. Invocation and operation rows name the transaction by its hash
-surrogate; staging maps it to the position through the ledger's own
-`transactions` rows, and a transaction missing from them is a staging error.
-`contract_activity` (task 0586) is the same set of pairs with the invocation's
-caller attached, staged in the same pass (`persist/stage/contract_activity.rs`)
-and written beside `contract_transactions` and
-`soroban_invocations_appearances`, which no reader uses any more, until task
-0586 stops writing them.
+`contract_activity` (tasks 0541, 0586) is the contract-dimension index, built
+at staging from rows the ledger already produced
+(`persist/stage/contract_activity.rs`): every contract that emitted an
+**operation** event in the transaction, was invoked in it, or is named by one of
+its operations — one row per (contract, transaction position). Fee events are
+skipped by the source the parser gives them: every transaction pays one to the
+native SAC, and they would put every transaction in that contract's list. The
+invocations of a (contract, transaction) fold into its row (ADR 0034): the
+first call's caller and the number of calls. Invocations name the transaction
+by its hash; staging maps it to the position through the ledger's own
+transaction order.
 
 `operation_asset_appearances` is pure presence. The `net_settled` value column
 (task 0393) was REMOVED on 2026-09-04 — the per-(tx, asset) aggregate carried no

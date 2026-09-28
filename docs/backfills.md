@@ -1198,6 +1198,10 @@ already wrote collapse in the ReplacingMergeTree.
   rows in 0.74 s with 1.1 GiB.
 - **Order:** whole partitions from the floor up, then the head's partition as
   an `A-B` range up to the first dual-written ledger.
+- **Not repeatable after step 3 of the deploy:** both source tables are
+  dropped after the deploy that stops writing them. A range lost from
+  `contract_activity` is re-parsed from S3 like any other table — the
+  invocation count is only in the XDR (diagnostic events are not stored).
 
 ## Hash prefix index (task 0580) — rebuilt from `transactions`
 

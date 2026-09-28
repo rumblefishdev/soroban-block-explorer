@@ -436,6 +436,21 @@ Frontend **content** is separate: `deploy-production-web`
   The Invocations tab now pages on the transaction's position, so a cursor
   minted before the deploy answers 400 `invalid_cursor` once.
 
+- **Contract activity (task 0586), step 3: stop the old writes.** The indexer
+  writes `contract_activity` only; `contract_transactions` and
+  `soroban_invocations_appearances` leave `init.sql`. Deploy Compute after
+  step 2's deploy (the running API must no longer read the old tables — check
+  `system.query_log`), then drop both. Before each drop, record the prices-api
+  check in task 0586. Both are under the 50 GB drop guard:
+
+  ```sql
+  DROP TABLE soroban_invocations_appearances;
+  DROP TABLE contract_transactions;
+  ```
+
+  A drop before this deploy stops ingest on the next ledger: the earlier writer
+  still inserts into both.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and
