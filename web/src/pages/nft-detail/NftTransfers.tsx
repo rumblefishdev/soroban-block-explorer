@@ -82,41 +82,22 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
     resetKey: `${contractId}/${tokenId}`,
   });
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useNftTransfers(contractId, tokenId, cursor);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = useNftTransfers(contractId, tokenId, cursor);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
     <Card>
       <TableSectionHeader title="Transfer history" />
       <DataList
-        columnCount={columns.length}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
-        rows={rows}
-        renderSkeleton={() => (
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
           <ExplorerTable
             columns={columns}
-            rows={[]}
+            rows={rows}
             rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
-            loading
+            loading={loading}
             skeletonRows={20}
-            rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-          />
-        )}
-        renderTable={(pageRows) => (
-          <ExplorerTable
-            columns={columns}
-            rows={pageRows}
-            rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
             rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
           />
         )}
@@ -128,11 +109,6 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
             py={8}
           />
         )}
-        emptyNoun="transfers"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </Card>
   );

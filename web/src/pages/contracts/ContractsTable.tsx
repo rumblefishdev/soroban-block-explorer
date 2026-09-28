@@ -89,9 +89,6 @@ const columns: ExplorerTableColumn<ContractListItem>[] = [
   },
 ];
 
-/** Number of columns — sizes the loading skeleton consistently. */
-export const CONTRACT_COLUMN_COUNT = columns.length;
-
 interface ContractsTableProps {
   rows: readonly ContractListItem[];
   loading?: boolean;
