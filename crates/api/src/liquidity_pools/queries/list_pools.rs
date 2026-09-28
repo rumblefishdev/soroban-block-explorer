@@ -11,6 +11,7 @@ use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
 use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
+use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
@@ -341,6 +342,7 @@ pub async fn fetch_pool_list(
         .map(|r| r.pool_id_hex.as_str())
         .collect();
     let soroban_raw = fetch_raw_reserves(client, &soroban_ids).await?;
+    let soroban_shares = fetch_total_shares(client, &soroban_ids).await?;
 
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
     // endpoint (latest reserves × last 1h close per leg; both legs required)
@@ -381,12 +383,17 @@ pub async fn fetch_pool_list(
             // soroban pool's reserves come from its state rows (see
             // `soroban_reserves` for which legs carry a value).
             let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
-            let reserves = match pool_kind {
-                domain::PoolKind::Classic => vec![r.reserve_a.clone(), r.reserve_b.clone()],
-                domain::PoolKind::Soroban => leg_reserves(
-                    &r.legs,
-                    &identities,
-                    soroban_raw.get(&r.pool_id_hex).map_or(&[], Vec::as_slice),
+            let raw = soroban_raw
+                .get(&r.pool_id_hex)
+                .map_or(&[][..], Vec::as_slice);
+            let (reserves, total_shares) = match pool_kind {
+                domain::PoolKind::Classic => (
+                    vec![r.reserve_a.clone(), r.reserve_b.clone()],
+                    r.total_shares.clone(),
+                ),
+                domain::PoolKind::Soroban => (
+                    leg_reserves(&r.legs, &identities, raw),
+                    served_total_shares(soroban_shares.get(&r.pool_id_hex), raw),
                 ),
             };
             let reserve_strs: Vec<Option<&str>> = (0..legs.len())
@@ -403,7 +410,7 @@ pub async fn fetch_pool_list(
                 cursor_ledger: r.cursor_ledger,
                 participant_count: r.participant_count,
                 latest_snapshot_ledger: r.latest_snapshot_ledger,
-                total_shares: r.total_shares,
+                total_shares,
                 tvl,
                 volume: None,
                 fee_revenue: None,

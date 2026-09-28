@@ -9,6 +9,7 @@ use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
 use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
+use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -126,14 +127,21 @@ pub async fn fetch_pool_by_id(
     // A classic pool's legs are its two snapshot columns in order; a soroban
     // pool has no snapshot row, so its reserves come from its state rows.
     let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
-    let reserves = match pool_kind {
-        domain::PoolKind::Classic => vec![r.reserve_a.clone(), r.reserve_b.clone()],
+    let (reserves, total_shares) = match pool_kind {
+        domain::PoolKind::Classic => (
+            vec![r.reserve_a.clone(), r.reserve_b.clone()],
+            r.total_shares.clone(),
+        ),
         domain::PoolKind::Soroban => {
-            let raw = fetch_raw_reserves(client, &[r.pool_id_hex.as_str()]).await?;
-            leg_reserves(
-                &r.legs,
-                &identities,
-                raw.get(&r.pool_id_hex).map_or(&[], Vec::as_slice),
+            let ids = [r.pool_id_hex.as_str()];
+            let (raw, shares) = futures::try_join!(
+                fetch_raw_reserves(client, &ids),
+                fetch_total_shares(client, &ids),
+            )?;
+            let raw = raw.get(&r.pool_id_hex).map_or(&[][..], Vec::as_slice);
+            (
+                leg_reserves(&r.legs, &identities, raw),
+                served_total_shares(shares.get(&r.pool_id_hex), raw),
             )
         }
     };
@@ -149,7 +157,7 @@ pub async fn fetch_pool_by_id(
         cursor_ledger: r.created_at_ledger,
         participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
-        total_shares: r.total_shares,
+        total_shares,
         // Filled by the handler from `fetch_pool_usd_analytics` (0199
         // compute-at-read); the snapshot columns are not read.
         tvl: None,

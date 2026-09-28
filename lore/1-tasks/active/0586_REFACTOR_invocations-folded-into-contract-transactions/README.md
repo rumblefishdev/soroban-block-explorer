@@ -206,6 +206,18 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   2026-09-26, before the step-2 deploy), `dev_read` / `dev_shared` (this
   task's checks), `default` (3, 2026-09-21) and `ingestion_writer` (writes).
 
+- **PR 3 opened and merged** (2026-09-28):
+  [#519](https://github.com/rumblefishdev/soroban-block-explorer/pull/519),
+  merged 08:48 UTC. It ships in the same deploy as #513 (thread 288 A):
+  rollback only to a commit that includes #513.
+
+- **Whole-row comparison before the drops** (2026-09-28, read-only,
+  `check_fill_matches_live.sql` over every 10k-ledger slice,
+  50,450,000–64,659,000): 1,421 slices, **0 rows only in the old tables, 0
+  only in `contract_activity`**, 65 min. Holds until the deploy of #519; the
+  ledgers from 64,659,000 to that deploy are compared the same way right after
+  it, before the drops.
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared

@@ -11,7 +11,7 @@ import { PoolDetailHeader } from './PoolDetailHeader.js';
 /** KPI strip cells, mirroring `PoolKpiStrip` (asset codes unknown pre-data, so
  *  the two reserve cells use a generic 'Reserve' label). */
 const KPI_CELLS = [
-  { label: 'Total shares', caption: 'shares outstanding' },
+  { label: 'TVL', caption: 'total value locked' },
   { label: 'Reserve' },
   { label: 'Reserve' },
   { label: 'Participants', caption: 'liquidity providers' },
