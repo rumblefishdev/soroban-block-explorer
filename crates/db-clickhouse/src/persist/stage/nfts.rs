@@ -23,6 +23,7 @@ pub(super) fn nft_rows(
     nft_events: &[ExtractedNftEvent],
     prior_contract_verdicts: &HashMap<String, ContractType>,
     tx_id_by_hash: &HashMap<String, i64>,
+    app_order_by_hash: &HashMap<String, i16>,
 ) -> Result<(), SchemaError> {
     // ---- NFT routing verdict map (task 0217 / 0220) -------------------
     //
@@ -160,7 +161,10 @@ pub(super) fn nft_rows(
         if matches!(route, NftRoute::Drop) {
             continue;
         }
-        let Some(&tx_id) = tx_id_by_hash.get(&ev.transaction_hash) else {
+        let (Some(&tx_id), Some(&application_order)) = (
+            tx_id_by_hash.get(&ev.transaction_hash),
+            app_order_by_hash.get(&ev.transaction_hash),
+        ) else {
             continue;
         };
         let event_order =
@@ -170,8 +174,10 @@ pub(super) fn nft_rows(
         let owner_id = ev.owner_account.as_deref().map(ids::account_id);
         let event_type = ev.event_type as i16;
 
-        // Task 0424: the same change located by its source event. An NFT
-        // event is a per-operation contract event, which always has an id;
+        // Task 0424: the same change located as `soroban_events` locates its
+        // event — the transaction's position from the ledger's own order, the
+        // operation and the event from the rpc id. An NFT event is a
+        // per-operation contract event, which always has an id;
         // `soroban_events` refuses one without, and so does this.
         let id = ev
             .event_id
@@ -180,8 +186,7 @@ pub(super) fn nft_rows(
             contract_id,
             token_id: ev.token_id.clone(),
             ledger_sequence,
-            application_order: i16::try_from(id.transaction_index)
-                .map_err(|_| staging_err("nft event transaction_index overflow"))?,
+            application_order,
             operation_index: id.operation_index,
             event_index: id.event_index,
             owner_id,

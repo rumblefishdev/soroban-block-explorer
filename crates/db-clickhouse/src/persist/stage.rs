@@ -1966,6 +1966,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         nft_events,
         prior_contract_verdicts,
         &tx_id_by_hash,
+        &app_order_by_hash,
     )?;
 
     // ---- unified `balances` — classic + native per-account balances (lore-0331

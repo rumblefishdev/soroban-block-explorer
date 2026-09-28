@@ -1818,10 +1818,13 @@ fn synthetic_nft_event(
         event_order,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
-        // Operation 2's event `event_order` of transaction 1.
+        // Operation 2's event `event_order`. `transaction_index` deliberately
+        // differs from the transaction's position (1, its only transaction)
+        // so the routing tests pin that `application_order` comes from the
+        // ledger's transaction order, as for `soroban_events`, not from the id.
         event_id: Some(xdr_parser::EventId {
             ledger_sequence: 10,
-            transaction_index: 1,
+            transaction_index: 7,
             operation_index: 2,
             event_index: u32::from(event_order),
         }),
