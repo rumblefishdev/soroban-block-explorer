@@ -2379,7 +2379,7 @@ sections say "Not indexed yet" instead of their empty states.
 | --- | -------------------------------------------------------------------------------------------------- | ---------- |
 | 5   | Soroban participants = share-token holders from `balances`; drop the 7-day window                  | read       |
 | W1  | Stage Soroban pool operations (swap, deposit, withdraw) with amounts + backfill; per-ledger volume | write      |
-| W2  | `total_shares` nullable, concentrated pools' shares key, stored `pool_family`, instance backfill   | write      |
+| W2  | moved to task 0590 (2026-09-28): `total_shares` into `pool_state_changes` as nullable history      | write      |
 | 4d  | Soroban chart: reserves + W1 volume; volume rule moves into `PoolPriceContext` (109 A)             | read       |
 | 7   | Soroban activity from W1                                                                           | read       |
 | 6   | Drop the pair columns (deployment window)                                                          | write      |
