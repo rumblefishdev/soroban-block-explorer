@@ -307,7 +307,8 @@ jobs:
 
       # Tier-1 gate for the documented endpoint queries (task 0478): every
       # statement of every NN_*.sql must plan against the canonical schema.
-      # Read-only (`--format=Null` on the empty tables) and seconds long. Runs
+      # Read-only (`--format=Null`; the e2e suites above leave rows behind, so
+      # the tables are not empty here) and seconds long. Runs
       # whenever ClickHouse came up, even if the e2e step above failed, so one
       # red run reports both.
       - name: Endpoint queries parse (Tier 1)

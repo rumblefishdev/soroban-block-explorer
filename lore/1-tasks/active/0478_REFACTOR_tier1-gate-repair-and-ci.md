@@ -46,6 +46,16 @@ history:
       liquidity_pools/queries.rs; only its 01 + runner parts are reusable, and
       its ci.yml / ch.rs changes belong to 0480. CI already starts ClickHouse
       (ci.yml, task 0406), so the gate is one extra step.
+  - date: '2026-09-28'
+    status: active
+    who: karolkow
+    note: >
+      Review follow-up (/devils-advocate on the PR). The README no longer lets
+      a green gate read as "the docs are current": 23 contradicts its Rust
+      (0354 removed the accounts join), so the banner now names what was
+      checked, what is stale and what was not audited. Hand-kept copies and
+      the NULL-only cursor checks are stated. The CI comment no longer claims
+      empty tables. A separate CI job and typed cursor checks moved to 0587.
 ---
 
 # REFACTOR: repair the Tier-1 query docs and gate them in CI
@@ -217,3 +227,24 @@ each FAIL with their own message, exit 1.
   or wait for generated docs.
 - Generating these files from the Rust queries remains out of scope (see
   above).
+
+## Review follow-up (2026-09-28)
+
+A /devils-advocate pass returned "ship with changes". Applied in this PR:
+
+- **The README banner no longer implies the docs are current.** `23` passes
+  the gate but still has `JOIN accounts acc FINAL` and a tuple keyset. The
+  Rust removed the join in 0354 (`list_participants.rs:139-141`) and avoids
+  the Decimal tuple comparison on purpose (`:83-87`). The banner now lists
+  which files were checked against the Rust (01/08/09/21/22), which are known
+  stale (06, 23) and which were not audited (everything else). The Tier-1
+  row says the gate proves planning, not equivalence.
+- **The hand-kept copies are named** (the 21 interval table, the stub view's
+  column types, the query bodies), and so is the limit that cursor and filter
+  parameters are checked with `NULL` everywhere except 08.
+- **The "empty tables" wording is corrected** in `ci.yml` and the README. In
+  CI the e2e suites run first and leave rows behind.
+
+Deferred to **0587**: a separate small CI job (empty tables, and no Rust
+build for a SQL-only change) and a second pass with typed cursor values for
+the files that take a cursor.

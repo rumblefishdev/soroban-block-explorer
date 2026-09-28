@@ -1,11 +1,22 @@
 # ClickHouse endpoint SQL query reference set
 
-> ⚠️ **`06_get_accounts_by_id` still carries pre-0331 SQL.** Task 0331 (unified
-> balances) moved the account portfolio onto the `balances` table; the 06 body
-> still reads `account_balances_current` (it parses — the table exists — but is
-> not what the API runs). Authoritative query:
-> `crates/api/src/accounts/queries.rs::fetch_balances`. `08` / `09` were
-> re-derived from `crates/api/src/assets/queries.rs` by task 0478.
+> This set is hand-copied from the Rust queries, and the Tier 1 gate below
+> only proves each statement **plans** against the schema, not that it matches
+> what the API runs. Where each file stands (2026-09-25):
+>
+> - **Checked against the Rust** by task 0478: `01`, `08`, `09`, `21`, `22`.
+> - ⚠️ **Known stale:**
+>   - `06_get_accounts_by_id` still reads `account_balances_current`. Task 0331
+>     moved the portfolio onto `balances`; the authoritative query is
+>     `crates/api/src/accounts/queries.rs::fetch_balances`.
+>   - `23_get_liquidity_pools_participants` still has `JOIN accounts acc FINAL`
+>     and a `(shares, account_id)` tuple keyset. The Rust removed the join in
+>     task 0354 (StrKeys are resolved by surrogate id instead) and uses a
+>     scalar `shares` comparison on purpose, because a Decimal inside a tuple
+>     comparison is a known trap. Authoritative query:
+>     `crates/api/src/liquidity_pools/queries/list_participants.rs`.
+> - **Not audited against the Rust:** every other file. Read the Rust
+>   before copying from them.
 
 Hand-tuned read queries — **one script per public REST endpoint** defined in
 [`backend-overview.md §6.2`](../../backend/backend-overview.md#62-endpoint-inventory).
@@ -166,12 +177,12 @@ docker compose exec clickhouse clickhouse-client \
 
 ## Validation tiers
 
-| Tier | What                                                                                                                                    | Status                                                                                                                                                                                                                                                                                                                                |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | Schema parse — every statement of every file planned with `clickhouse-client --format=Null` against the canonical schema (empty tables) | **Green, gated in CI.** 67 of 67 checks pass across 23 files (64 statements; 08 statement A is checked unfiltered and filtered, 21 once per interval), measured 2026-09-25 on ClickHouse 26.3 (task 0478). Runs in the `rust` job of `.github/workflows/ci.yml`; the runner exits 1 on any failure. See [§Tier 1 gate](#tier-1-gate). |
-| 2    | Row-count equivalence — same params against PG (audit DB) and CH (mirror of same ledger range) → row counts match within tolerance      | **Deferred.** Gated on the CH writer becoming non-stub (`db_clickhouse::persist::persist_ledger_clickhouse` is a no-op per task 0205). Smoke-tested end-to-end on E01/E04/E08 with hand-inserted rows.                                                                                                                                |
-| 3    | Sample-row diff — 10 random keys from result set, column-by-column PG vs CH compare. Expected diffs per §5 documented in each header    | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                                                   |
-| 4    | Aggregate equivalence — aggregating queries (E01 stats, E22 search) compare totals PG vs CH; tolerance per §5                           | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                                                   |
+| Tier | What                                                                                                                                                                                           | Status                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | Schema parse — every statement of every file planned with `clickhouse-client --format=Null` against the canonical schema (empty locally; in CI the e2e suites run first and leave rows behind) | **Green, gated in CI** — proves the SQL plans, not that it matches the Rust (see the banner). 67 of 67 checks pass across 23 files (64 statements; 08 statement A is checked unfiltered and filtered, 21 once per interval), measured 2026-09-25 on ClickHouse 26.3 (task 0478). Runs in the `rust` job of `.github/workflows/ci.yml`; the runner exits 1 on any failure. See [§Tier 1 gate](#tier-1-gate). |
+| 2    | Row-count equivalence — same params against PG (audit DB) and CH (mirror of same ledger range) → row counts match within tolerance                                                             | **Deferred.** Gated on the CH writer becoming non-stub (`db_clickhouse::persist::persist_ledger_clickhouse` is a no-op per task 0205). Smoke-tested end-to-end on E01/E04/E08 with hand-inserted rows.                                                                                                                                                                                                      |
+| 3    | Sample-row diff — 10 random keys from result set, column-by-column PG vs CH compare. Expected diffs per §5 documented in each header                                                           | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                                                                                                                         |
+| 4    | Aggregate equivalence — aggregating queries (E01 stats, E22 search) compare totals PG vs CH; tolerance per §5                                                                                  | **Deferred** — same gate as Tier 2.                                                                                                                                                                                                                                                                                                                                                                         |
 
 The scaffold helper `compare_pg_ch.sh` is in place so the Tier 2-4 work
 is a small follow-up once the CH writer lands — it does not require
@@ -199,9 +210,18 @@ schema does not create; the gate substitutes an empty inline stand-in with the
 same columns, so the view names and column types are the one part of `21` it
 cannot check.
 
-The gate checks that the SQL plans, not that it matches the Rust query it
-documents — the two are still hand-copied. Generating these files from the
-Rust queries is the step after this one, if the set drifts again.
+Three hand-kept copies drift without the gate noticing:
+
+- the per-interval table in `21`'s header and runner arm, against
+  `get_pool_chart.rs`;
+- the column types of that stand-in view;
+- every query body against the Rust it documents.
+
+The gate proves the SQL plans. It does not prove the SQL matches the Rust:
+`23` passes while contradicting its Rust (see the banner). Cursor and filter
+parameters are checked with `NULL` everywhere except `08`, so a type mismatch in
+a keyset predicate is not caught either. Generating these files from the Rust
+queries would remove the copies.
 
 ## Reviewer guide
 
