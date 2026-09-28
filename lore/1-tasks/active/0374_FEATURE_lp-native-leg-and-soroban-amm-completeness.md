@@ -2659,3 +2659,12 @@ faithfully; the chain is inconsistent with itself. Attributing it to the
 protocol-23 state-restore defect is inference from the `restored` change
 type and timing, not checked against a network disclosure. So the coverage
 guard above hides two correct holder lists; see decision 115 in the session.
+
+**Decision 115 (karolkow, 2026-09-28): the chain is the source of truth even
+where it shows wrong data.** The coverage guard is dropped. A soroban
+participant's percentage divides by the pool's stored `total_shares` (the
+figure withdrawals pay against, as classic divides by its snapshot); a pool
+keeping none (config family) or emptied divides by the holders' sum. The two
+stale-restored pools list their holders; their percentages sum to 0.006% and
+105%. Verified through the local API on production: 99.9999992% and
+99.9999975% on two ordinary pools, `not_indexed` on a concentrated one.
