@@ -2517,3 +2517,35 @@ stay a second read — they need the legs' identities, resolved after the main
 query. Old vs new against production: identical again (775 soroban pools, 300
 default rows); total shares 575 positive, 133 `0`, 67 `null` (the 66 measured
 plus the `NOT_A_POOL` pool). Red with the joined value dropped: `left: None`.
+
+### Can classic and soroban pools share more tables? (2026-09-28)
+
+Owner asked whether plain views, or merging tables, could remove the per-kind
+split. Inventory on production:
+
+| Fact             | Classic                                                                                                   | Soroban                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| registry         | `liquidity_pools` (shared, 74k rows)                                                                      | same                                                                   |
+| state per ledger | `liquidity_pool_snapshots` (333M rows, 7.0 GiB; `Decimal(38,7)` pair + `total_shares` + `gross_volume_a`) | `pool_state_changes` (5.1M rows, 90 MiB; `Array(Int128)` + `plane_id`) |
+| current instance | —                                                                                                         | `pool_instance_state` (822 rows: plane, share token, total shares)     |
+| operations       | `pool_operation_amounts` (990M rows; net amount per op per asset, `Int64`)                                | none (W1)                                                              |
+| holders          | `lp_positions` (114k rows)                                                                                | share-token rows in `balances`                                         |
+
+- **A plain view over both state tables works.** `EXPLAIN ESTIMATE` of an
+  `argMax` over `liquidity_pool_snapshots UNION ALL pool_state_changes`
+  (classic pair turned into a raw `Int128` array) filtered on one pool reads
+  exactly the sum of the two direct seeks — 532,581 + 49,445 rows for a busy
+  classic pool, 321,304 + 123,099 for a busy soroban pool. The pool filter
+  reaches both branches, so nothing is scanned whole.
+- **A physical merge of the state tables is not worth it now.** It is a
+  333M-row rebuild, a classic writer change, and two columns without a soroban
+  counterpart (`gross_volume_a` belongs to operations; soroban total shares
+  have no history), for readers that the view already unifies.
+- **Operations can share a table.** W1 fits `pool_operation_amounts`'s key
+  (pool, ledger, application order, operation, asset) and its net-per-op
+  meaning; the blocker is `amount Int64`. 0 of 843,058 soroban trades since
+  ledger 64,000,000 overflow it, but an 18-decimal leg can (a reserve of
+  1.28e24 is live).
+- **Not mergeable:** `pool_instance_state` into `liquidity_pools` (different
+  writer and clock; a whole-row RMT would clobber the registry — decided
+  2026-08-27).
