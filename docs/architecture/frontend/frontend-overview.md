@@ -234,6 +234,13 @@ Authoring rule: changes to API DTOs, request params, or routes must be made in t
 Rust crate; the frontend regenerates and consumes the result. Hand-edited types in
 `libs/api-types/src/generated/` will be overwritten on the next regeneration.
 
+The session exchange `POST /auth/session` is in the spec too (task 0510), so the
+frontend takes its `SessionResponse` type from the package. `web/src/api/session.ts`
+calls it with plain `fetch`, not the generated SDK: the SDK client's request
+interceptor waits for the session, so routing the session call through that client
+would wait on itself. Session state lives in the object `createSession` returns;
+`web/src/api/client.ts` holds the one the app uses.
+
 ### 4.6 State Strategy
 
 The frontend should keep local state intentionally small:
@@ -266,6 +273,10 @@ Navigation rules:
 - exact search hits should resolve directly to the detail page when confidence is high
 - broad or ambiguous matches should remain on a grouped search results page
 - list routes should preserve filters and cursor state in the URL when practical
+- `/api` and `/api/*` are not explorer routes: CloudFront serves the Stellar Prices
+  API portal there, a separate SPA. The navbar and the footer link it with a plain
+  anchor (`PRICES_API_URL`), never through the router, and no explorer route may live
+  under `/api`
 
 ## 6. Routes and Pages
 
@@ -287,6 +298,7 @@ Navigation rules:
 | `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                      |
 | `/liquidity-pools/:id`   | Liquidity Pool  | `GET /liquidity-pools/:id`                                                  |
 | `/search?q=`             | Search Results  | `GET /search`                                                               |
+| `/privacy-policy`        | Privacy Policy  | none (static text)                                                          |
 
 Each route should be implemented as a dedicated page module with:
 
@@ -417,7 +429,7 @@ The card shows:
   auth-entry tree (what the transaction was signed to do), and the backend
   stamps every node with the whole transaction's verdict — so the UI
   deliberately renders no per-node ✓/✗ there;
-- the operation's own events, matched via `XdrEventDto.op_index`
+- the operation's own events, matched via `XdrEventDto.operation_index`
   (`application_order - 1`);
 - an "Operation details" disclosure with every raw `details` key — exactness
   preserved; nothing null/empty that matters for debugging is hidden;
@@ -426,7 +438,7 @@ The card shows:
 Consumed heavy fields: `operations[].details`, `operations[].result_code`
 (per-op result names straight from the XDR library — the fail-reason source),
 `operation_tree`, `diagnostic_events` (execution trace + Resources counters),
-`contract_events[].op_index`, `result_code`, `fee_bump_source`, `signatures`,
+`contract_events[].operation_index`, `result_code`, `fee_bump_source`, `signatures`,
 `envelope_xdr`, `result_xdr`, `result_meta_xdr`.
 Large payload areas stay collapsible.
 
@@ -434,11 +446,13 @@ Large payload areas stay collapsible.
 
 The transaction's **Events** card lists `heavy.contract_events` only: the
 tx-level and per-operation containers, hashed into the ledger, which is what
-CAP-67 and `getEvents` mean by the events of a transaction. Its `Where` column
-names the raising operation (`op_index`) or, for tx-level events, the CAP-67
-`stage` (`before all txs` / `after all txs`) — `event_index` follows XDR
-container order, so the fee refund is numbered ahead of the operation it
-refunds and the number alone would read as a timeline it is not.
+CAP-67 and `getEvents` mean by the events of a transaction. Rows arrive in
+execution order (the fee charge, the operation events, the fee refund) and the
+`ID` column shows each event's stellar-rpc id verbatim — the identity
+`getEvents` returns, so a row can be looked up outside this explorer (ADR
+0059); a diagnostic entry has none and shows `—`. The `Where` column names the
+raising operation (`operation_index`) or, for tx-level events, the CAP-67
+`stage` (`before all txs` / `after all txs`).
 
 `heavy.diagnostic_events` sits under its own disclosure, **raw** — the call
 trace, contract logs, failure diagnostics, and the byte-identical copies of the
@@ -551,7 +565,7 @@ measured.
 An `amount` of `null` inside an entry is also not zero: it is a NON-FUNGIBLE
 movement, where no amount exists by nature. The cell renders the signed count of
 pieces and, when the API could name the single piece that moved, its id
-(`+1 NFT #44`) — resolved from `nft_ownership`, which is where a token id lives;
+(`+1 NFT #44`) — resolved from `nft_ownership_changes`, which is where a token id lives;
 the edge table deliberately does not carry one.
 
 **Where the asset code links, most specific first:** the PIECE
@@ -718,13 +732,14 @@ Contract details and interface.
 - Contract interface - list of public functions with parameter names and types, allowing
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state
-- Invocations tab - recent invocations table (transaction hash, caller account, status,
+- Invocations tab - recent invocations table (transaction hash, caller — an account or a
+  contract, each linked (task 0487) — status,
   ledger, timestamp). The appearance index carries no per-call function name — call
   detail is XDR-only (ADR 0034), so the transaction hash links to the full detail
 - Events tab - recent events table (event type, topics, data, ledger). Only `contract`
   and `system` events are returned; the diagnostic-events container is dropped
   server-side (task 0182)
-- Stats - recent invocations and unique callers over a rolling window (`stats_window`,
+- Stats - recent invocations and unique callers (accounts and contracts together, task 0487) over a rolling window (`stats_window`,
   e.g. last 7 days) — the API exposes windowed counts, not full-history totals
 
 Expanded behavior:
@@ -770,34 +785,51 @@ Expanded behavior:
 
 Paginated table of all liquidity pools.
 
-- Pool table - pool ID (truncated), asset pair (e.g. XLM/USDC), total shares, reserves
-  per asset, fee percentage, participant count (active LP positions; task 0246)
-- Filters - asset (`filter[asset_code]`, case-insensitive **substring** of either
+- Pool table - pool ID (truncated), the pool's **legs** (e.g. `XLM / USDC`, or
+  `USDC / EURC / DAI` for a three-leg stable pool), total shares, reserves per
+  leg, fee percentage, participant count (active LP positions; task 0246)
+- Filters - asset (`filter[asset_code]`, case-insensitive **substring** of any
   leg, so `USD` matches the `USDC` pools; `A/B` is a pair query requiring both
-  codes in either order; native legs match on `XLM` despite storing an empty
-  code; task 0440). The same box also accepts a pool **identifier** in the `L…`
-  SEP-23 form and then selects that one pool — pasting an id used to be matched
-  as an asset-code substring, so the page answered "no pools" about a pool that
-  exists (task 0470). Per-leg `(code, issuer)` exact match is the alternative
-  mode. `filter[min_tvl]` is **rejected with a 400**: pool TVL is computed at
-  read time, so there is nothing to pre-filter on
+  codes on two DIFFERENT legs, in either order; native legs match on `XLM`
+  despite storing an empty code; task 0440). The same box also accepts a pool
+  **identifier** and then selects that one pool — pasting an id used to be
+  matched as an asset-code substring, so the page answered "no pools" about a
+  pool that exists (task 0470). A chip row filters by **pool kind**
+  (`filter[pool_kind]` — All pools / Classic / Soroban), the same control the
+  assets list uses for its type axis. `filter[min_tvl]` is **rejected with a
+  400**: pool TVL is computed at read time, so there is nothing to pre-filter on
 - Cursor-based pagination controls
 
 Expanded behavior:
 
-- Rows should emphasize the pool pair and current scale at a glance.
+- Rows should emphasize the pool's composition and current scale at a glance.
 - Formatting for reserves and TVL-like values should remain consistent across the app.
 - Filters should support both quick pair lookup and broader discovery of larger pools.
 - **Every leg links to its asset** (`legHref`, list + detail): native →
   `/assets/native` (the canonical token since task 0243 — the older "native has
   no on-chain address" carve-out left XLM as the app's only dead leg, fixed in
-  task 0472), SAC mirror → `/assets/{C…}`, classic → `/assets/{CODE-ISSUER}`.
-  Only genuine schema drift (no type, no code/issuer) renders unlinked text.
+  task 0472), classic → `/assets/{CODE-ISSUER}`, Soroban token →
+  `/assets/{C…}`. A leg nothing identifies renders unlinked text. A leg's SAC
+  mirror is **context, never a route** — the assets endpoint pins a contract
+  lookup to the Soroban family, so a SAC address resolves nothing (ADR 0051).
+- **One ladder names every asset in the app** (`assetDisplayCode`, task 0374):
+  native → `XLM`, else the classic code, else the on-chain SEP-41 symbol, else
+  the **truncated contract address**. It carries the app's single "is this
+  native" rule; the pool legs, the asset pages and the account balance-change
+  rows each used to hold a copy of it, with three different answers for
+  "nothing names this" (a dash, a thrown error, and the words "Unnamed token").
+  The address rung matters now that Soroban pools are listed: a token that
+  publishes no symbol is named by the contract that IS its identity, rather
+  than rendering as an empty cell. What no rung names — a token the registry
+  never got a row for (task 0542) — reads `Unregistered token`, in the pool
+  legs and the balance-change rows alike.
 
 ### 6.14 Liquidity Pool (`/liquidity-pools/:id`)
 
-- Pool summary - pool ID (full, copyable), asset pair, fee percentage, total shares,
-  reserves per asset, participant count (task 0246)
+- Pool summary - pool ID (full, copyable), the pool's legs, fee percentage,
+  total shares, reserves per leg (`legs[i].reserve`), participant count (task
+  0246). A leg with no known reserve lists with "—" rather than disappearing
+  from the composition.
 - Charts - TVL over time, volume over time, fee revenue
 - Pool participants - table of liquidity providers and their share
 - Recent transactions - deposits, withdrawals, and trades involving this pool

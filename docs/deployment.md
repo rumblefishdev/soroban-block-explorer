@@ -308,6 +308,236 @@ Frontend **content** is separate: `deploy-production-web`
   3. **Then the catch-up backfills and the window-closure check** — see
      "Soroban-AMM pool passes" in [backfills.md](./backfills.md).
 
+- **Canonical event location (task 0541): no `production-*` tag between the
+  merge and the window.** The task-0541 writer keys `soroban_events` by the
+  stellar-rpc event id (`transaction_index`, `operation_index`, `event_index`,
+  `application_order`) and no longer names `transaction_id`; it stops writing
+  `asset_transfers.event_index`; and it writes a new table,
+  `contract_transactions`. Against the tables as they stand before the window,
+  the clickhouse-rs 0.15 client refuses all three inserts — the 0310 outage
+  class, on every ledger. `EXCHANGE TABLES` renames `soroban_events` only; it
+  does nothing for the other two. So once the task-0541 code is on `master`,
+  nothing ships until its window runs, in this order (the task's rollout plan,
+  phase 4, carries the gates and the rollback):
+
+  0. **`contract_transactions` exists and its history is filled** through the
+     partitions filled before the window. Created verbatim from `init.sql`;
+     filled in-DB, slice by slice after the `soroban_events` rekey of the same
+     slice ([backfills.md](./backfills.md), "Canonical event location fill").
+     An empty table is a working indexer and a contract transaction list with
+     no past — fill it, do not just create it. This must return `1`:
+     ```bash
+     chq "EXISTS TABLE default.contract_transactions"
+     ```
+  1. **`asset_transfers.event_index` has a DEFAULT — read it, do not assume
+     it.** This must return `DEFAULT`:
+     ```bash
+     chq "SELECT default_kind FROM system.columns WHERE database = 'default' AND table = 'asset_transfers' AND name = 'event_index'"
+     ```
+     If it does not, the operator runs
+     `ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0` — a
+     metadata change, safe under the running writer, which still names the
+     column.
+  2. **Pause durably:** `indexerLambdaConcurrency = 0`, deployed from a
+     checkout at the last `production-*` tag (a disabled trigger alone is
+     re-enabled by the next Compute deploy).
+  3. **Fill the tail** up to the paused head — `soroban_events_staging_canonical`
+     first, then `contract_transactions` for the same slices — and gate both.
+  4. **Deploy the new code, still at concurrency 0.**
+  5. **Swap:** `EXCHANGE TABLES soroban_events AND soroban_events_staging_canonical`.
+  6. **Resume:** concurrency back to `1` — the value production runs, not the
+     unset default — then deploy Compute and Web.
+
+  **After the swap the hold turns around:** only code that carries task 0541
+  may deploy Compute. The earlier writer still names `transaction_id`, which the
+  new `soroban_events` does not have, so a Compute deploy from `master` or a
+  `production-*` tag that predates the change stops ingest on its first ledger —
+  a hotfix included. The window deploys from `develop`; the hold lasts until
+  `master` carries the change and a `production-*` tag is cut from it.
+
+  Remove this item once that tag exists.
+
+- **Change a table's shape as a parallel change, not a swap window**
+  (decided in task 0580). The clickhouse-rs 0.15 client checks every insert
+  against `DESCRIBE`, so a writer and the table it names must change together;
+  swapping a table under the same name forces an indexer pause and a gap in
+  which readers fail (task 0575: ingest stood 51 minutes). Instead: create the
+  new table under a **new name**, deploy a writer that writes both, fill the
+  history in ClickHouse, switch the readers in a later deploy, then stop
+  writing the old table and drop it. Every step is an ordinary deploy, and
+  until the drop the rollback is the previous deploy. Drop the old table
+  only after the deploy that stops writing it — the earlier writer still
+  inserts, and a drop before that deploy stops ingest on the next ledger.
+  The server refuses to drop a table over 50 GB unless told:
+  `DROP TABLE <old> SETTINGS max_table_size_to_drop = 0`.
+
+- **Operations by transaction position (task 0372), step 1 of that pattern.**
+  The indexer writes `transaction_operations` and `pool_operation_amounts`
+  beside `operations_appearances` and `lp_operation_amounts`, and stops
+  writing `operation_pools`. Create both tables on production **before** the
+  Compute deploy — without them the client refuses the insert on every
+  ledger. The command prints the two statements; run each through `chw`:
+
+  ```bash
+  for t in transaction_operations pool_operation_amounts; do awk "/CREATE TABLE IF NOT EXISTS $t \\(/,/^ORDER BY/" crates/db-clickhouse/schema/init.sql; done
+  ```
+
+  Then deploy Compute; then `DROP TABLE operation_pools` (no reader since task
+  0491, no writer after this deploy; prices-api check recorded in task 0372);
+  then fill the history
+  ([backfills.md](./backfills.md), "Operations by transaction position"). No
+  pause; the readers still use the old tables.
+
+- **Operations by transaction position (task 0372), step 2: the readers.**
+  The API reads `transaction_operations` and `pool_operation_amounts` only.
+  Deploy Compute **after the history fill has passed its gates in every
+  partition**, head included: a range the fill has not reached lists
+  transactions with empty `operation_types`, drops them from the
+  operation-type filter and hides their pool activity. No operator step. The
+  operation-type filter of `/transactions` and pool activity now page on the
+  transaction's position, so a cursor minted before the deploy answers 400
+  `invalid_cursor` once.
+
+- **Operations by transaction position (task 0372), step 3: stop the old
+  writes.** The indexer writes `transaction_operations` and
+  `pool_operation_amounts` only; `operations_appearances` and
+  `lp_operation_amounts` leave `init.sql`. Deploy Compute after step 2's
+  deploy (the running API must no longer read the old tables — check
+  `system.query_log`), then drop both. Before each drop, record the prices-api
+  check in task 0372. `operations_appearances` is over the 50 GB drop guard:
+
+  ```sql
+  DROP TABLE operations_appearances SETTINGS max_table_size_to_drop = 0;
+  DROP TABLE lp_operation_amounts;
+  ```
+
+  A drop before this deploy stops ingest on the next ledger: the earlier writer
+  still inserts into both.
+
+- **Contract activity (task 0586), step 1 of that pattern.** The indexer
+  writes `contract_activity` beside `contract_transactions` and
+  `soroban_invocations_appearances`. Create the table on production **before**
+  the Compute deploy — without it the client refuses the insert on every
+  ledger. The command prints the statement; run it through `chw`:
+
+  ```bash
+  awk '/CREATE TABLE IF NOT EXISTS contract_activity \(/,/^ORDER BY/' crates/db-clickhouse/schema/init.sql
+  ```
+
+  Then deploy Compute; then fill the history ([backfills.md](./backfills.md),
+  "Contract activity"). No pause; the readers still use the old tables.
+
+- **Contract activity (task 0586), step 2: the readers.** The API reads
+  `contract_activity` only: the contract invocation stats, the Invocations
+  tab, the transaction page's invocations and the `/transactions` contract
+  filter. Deploy Compute **after the history fill has passed its gates in
+  every partition**, head included: a range the fill has not reached would
+  show no invocations and drop out of the contract filter. No operator step.
+  The Invocations tab now pages on the transaction's position, so a cursor
+  minted before the deploy answers 400 `invalid_cursor` once.
+
+- **Contract activity (task 0586), step 3: stop the old writes.** The indexer
+  writes `contract_activity` only; `contract_transactions` and
+  `soroban_invocations_appearances` leave `init.sql`. Deploy Compute after
+  step 2's deploy (the running API must no longer read the old tables — check
+  `system.query_log`), then drop both. Before each drop, record the prices-api
+  check in task 0586. Both are under the 50 GB drop guard:
+
+  ```sql
+  DROP TABLE soroban_invocations_appearances;
+  DROP TABLE contract_transactions;
+  ```
+
+  A drop before this deploy stops ingest on the next ledger: the earlier writer
+  still inserts into both.
+
+- **NFT ownership by event location (task 0424), step 1 of that pattern.**
+  The indexer writes `nft_ownership_changes` and `nft_ownership_changes_pending`
+  beside `nft_ownership` and `nft_ownership_pending`. Create both on production
+  **before** the Compute deploy — without them the client refuses the insert on
+  every ledger that stages an NFT change. The command prints the statements;
+  run them through `chw`:
+
+  ```bash
+  awk '/CREATE TABLE IF NOT EXISTS nft_ownership_changes(_pending)? \(/,/^ORDER BY/' crates/db-clickhouse/schema/init.sql
+  ```
+
+  Then deploy Compute; then fill the history (task 0424's one-off fill from
+  `soroban_events`, removed in step 3). No pause; the readers still use the
+  old tables.
+
+- **NFT ownership by event location (task 0424), step 2: the readers.** The
+  API reads `nft_ownership_changes` only: the NFT transfers tab, the mint
+  ledger on `/nfts` and `/nfts/{contract}/{token}`, and the pieces an
+  account's balance change names. Deploy Compute and the SPA **after the fill
+  has passed its gate** (the new tables hold the same changes as the old
+  ones): an unfilled range would show no transfers and no mint ledger. The
+  transfers tab pages on the change's location, so a cursor minted before the
+  deploy answers 400 `invalid_cursor` once; its rows carry `application_order`
+  / `operation_index` / `event_index` in place of `event_order`, and the SPA
+  keys rows by them — ship the SPA with this Compute deploy. No operator step.
+
+- **NFT ownership by event location (task 0424), step 3: stop the old
+  writes.** The indexer writes `nft_ownership_changes{,_pending}` only;
+  `nft_ownership` and `nft_ownership_pending` leave `init.sql`, and with them
+  the last `transaction_id` column outside `transactions`. Deploy Compute after
+  step 2's deploy (the running API must no longer read the old tables — check
+  `system.query_log`), then drop both. Before each drop, record the prices-api
+  check in task 0424:
+
+  ```sql
+  DROP TABLE nft_ownership;
+  DROP TABLE nft_ownership_pending;
+  ```
+
+  A drop before this deploy stops ingest on the next ledger with an NFT change:
+  the earlier writer still inserts into both.
+
+- **Presence tables by position (task 0575): no `production-*` tag between
+  the merge and the window.** The task-0575 writer names `application_order`
+  instead of `transaction_id` in `transaction_participants` and
+  `operation_asset_appearances`, and its API reads the same. Against the tables
+  as they stand before the window, the clickhouse-rs 0.15 client refuses both
+  inserts on every ledger (the 0310 outage class). A `DEFAULT` cannot bridge
+  it: `transaction_id` is in the sort key, so only a swap removes it. Order:
+
+  0. **Both staging tables exist and every whole partition below the head is
+     filled and gated** ([backfills.md](./backfills.md), "Presence tables by
+     transaction position"). Created from `init.sql` under the staging name —
+     extract, do not retype:
+     ```bash
+     for t in transaction_participants operation_asset_appearances; do
+       awk "/CREATE TABLE IF NOT EXISTS $t \\(/,/^ORDER BY/" crates/db-clickhouse/schema/init.sql \
+         | sed "s/EXISTS $t (/EXISTS ${t}_staging_position (/"
+     done
+     ```
+  1. **Read benchmark on the staging tables** (read-only): the account and
+     asset transaction lists pointed at `*_staging_position`, on the hottest
+     account, native XLM and one mid asset — each statement under 1 s and
+     1 GiB. A failure stops here; the staging tables are dropped.
+  2. **Pause durably:** `indexerLambdaConcurrency = 0`, deployed from a
+     checkout at the last `production-*` tag.
+  3. **Fill the tail** from the first unfilled ledger up to the paused head
+     (`A-B` with `B = max(sequence) + 1` from `ledgers`) for both tables, gated.
+  4. **Deploy the new code, still at concurrency 0.**
+  5. **Swap both:**
+     `EXCHANGE TABLES transaction_participants AND transaction_participants_staging_position`,
+     then the same for `operation_asset_appearances`. Between step 4 and this
+     step the account and asset transaction lists answer errors; keep it short.
+  6. **Resume:** concurrency back to `1`, then deploy Compute. Check that
+     `ledgers` advances, the DLQ stays empty, and every row the new writer adds
+     names a transaction that exists (a `NOT IN` against `transactions` over
+     the new ledgers returns 0).
+  7. **Drop the old tables** — now under the staging names — only after the
+     checks and the production pages look right:
+     `DROP TABLE <table>_staging_position SETTINGS max_table_size_to_drop = 0`
+     (the server keeps the default 50 GB limit). Until then, rollback is the
+     reverse `EXCHANGE` plus a Compute deploy of the previous code.
+
+  **After the swap the hold turns around:** only code that carries task 0575
+  may deploy Compute — an earlier writer still names `transaction_id`. The hold
+  lasts until a `production-*` tag carries the change. Remove this item then.
+
 - **A SPA build without the Turnstile site key takes production down for
   users.** With `enableAuthLayer: true` the API rejects unauthenticated
   requests; a bundle built without `VITE_TURNSTILE_SITE_KEY` ships an

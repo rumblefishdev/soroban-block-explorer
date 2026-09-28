@@ -190,7 +190,7 @@ loop. **Reject** — too invasive for a focused bug fix.
 
 5. **`cargo nextest run -p xdr-parser`** must remain green.
 
-6. **`nx run rust:lint`** + clippy `-D warnings` clean.
+6. **`cargo clippy --workspace --all-targets -- -D warnings`** clean.
 
 ## Risk + roll-out
 

@@ -30,6 +30,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import { usePagedRows, usePoolActivity } from '../../api/index.js';
 import { AssetIcon } from '../assets/AssetIcon.js';
+import { assetDisplayCode } from '../assets/assetType.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { assetLegLabel, legHref } from '../pool-shared/helpers.js';
@@ -91,7 +92,7 @@ export interface AmountLegPart {
  * What ONE operation moved through this pool, as ordered display parts — or
  * `null` when it carries no readable leg.
  *
- * `amount_a` / `amount_b` are raw stroops **signed from the pool's side**:
+ * `amounts[i]` is what moved in `legs[i]`, raw and **signed from the pool's side**:
  * positive = the asset entered the pool. That sign is the whole direction
  * story. One leg in and one out is a swap (`swap: true`) and the parts come
  * ordered from what entered the pool to what left it; two legs pointing the
@@ -108,15 +109,12 @@ export interface AmountLegPart {
  * A leg that is `null` did not move in this operation — never rendered as `0`.
  */
 export function poolAmountLegs(
-  op: Pick<PoolActivityItem, 'amount_a' | 'amount_b'>,
-  pool: Pick<PoolItem, 'asset_a' | 'asset_b'>
+  op: Pick<PoolActivityItem, 'amounts'>,
+  pool: Pick<PoolItem, 'legs'>
 ): { legs: AmountLegPart[]; swap: boolean } | null {
-  const legs = (
-    [
-      [op.amount_a, pool.asset_a],
-      [op.amount_b, pool.asset_b],
-    ] as const
-  ).flatMap(([amount, leg]) => {
+  const legs = op.amounts.flatMap((amount, i) => {
+    // `amounts[i]` is what moved in `legs[i]`; the API sends one per leg.
+    const leg = pool.legs[i];
     if (amount == null || amount === '') return [];
     const raw = amount.replace(/^-/, '');
     // The sign is carried by the ordering and the separator, not the digits.
@@ -134,6 +132,9 @@ export function poolAmountLegs(
   });
   if (legs.length === 0) return null;
 
+  // ponytail: a swap is two legs in opposite directions — the only shape
+  // classic data has. A three- or four-leg Soroban swap gets its own reading
+  // when Soroban activity is served; until then it joins with `+`.
   const swap = legs.length === 2 && legs[0].incoming !== legs[1].incoming;
   // A swap reads from what entered the pool to what left it.
   const ordered = swap && !legs[0].incoming ? [...legs].reverse() : legs;
@@ -143,8 +144,8 @@ export function poolAmountLegs(
 /** The plain-text form of the same parts — the amount cell's `aria-label`,
  *  and the shape the unit tests pin. */
 export function formatPoolAmount(
-  op: Pick<PoolActivityItem, 'amount_a' | 'amount_b'>,
-  pool: Pick<PoolItem, 'asset_a' | 'asset_b'>
+  op: Pick<PoolActivityItem, 'amounts'>,
+  pool: Pick<PoolItem, 'legs'>
 ): string | null {
   const parts = poolAmountLegs(op, pool);
   if (parts == null) return null;
@@ -261,7 +262,7 @@ function activityColumns(
                     {l.amount}
                   </Typography>
                   <AssetIcon
-                    code={assetLegLabel(l.leg)}
+                    code={assetDisplayCode(l.leg)}
                     iconUrl={l.leg.icon_url}
                     size={16}
                   />

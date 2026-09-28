@@ -774,7 +774,7 @@ fn pool_constant_product<'a>(
 /// `amountA` / `amountB` are AFTER MINUS BEFORE, i.e. **signed from the pool's
 /// side** — a deposit reads `+/+`, a withdrawal `-/-` — which is the sign the
 /// claim-atom consumers already use for trades, so one downstream shape covers
-/// all three event kinds (`lp_operation_amounts`). The boundary cases fall out
+/// all three event kinds (`pool_operation_amounts`). The boundary cases fall out
 /// of the same subtraction: a pool created by its first deposit has no `state`
 /// pre-image (before = 0) and one emptied by its last withdrawal is `Removed`
 /// with no post-image (after = 0).

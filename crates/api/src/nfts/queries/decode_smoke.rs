@@ -1,0 +1,287 @@
+//! Live-CH decode smoke for the NFT read path. The curl `FORMAT` box smokes
+//! do NOT exercise the clickhouse-rs RowBinary decoder, so a wire-type↔struct
+//! mismatch (e.g. a Nullable column decoded into a non-Option field, or a
+//! positional reorder) passes a curl check yet 500s the live endpoint. This
+//! decodes rows a real CH produced for each NFT fetch fn.
+//!
+//! **Skips cleanly when `CH_URL` is unset**, so CI (no CH access) is green.
+//! Run against a reachable CH (local replica or SSH tunnel):
+//!
+//! ```text
+//! CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
+//!   cargo test -p api --lib nfts::queries::decode_smoke -- --nocapture
+//! ```
+
+use super::*;
+use crate::common::cursor::Direction;
+
+fn client() -> Option<clickhouse::Client> {
+    let url = std::env::var("CH_URL").ok()?;
+    let mut c = clickhouse::Client::default().with_url(url);
+    if let Ok(u) = std::env::var("CH_USER") {
+        c = c.with_user(u);
+    }
+    if let Ok(p) = std::env::var("CH_PASSWORD") {
+        c = c.with_password(p);
+    }
+    if let Ok(d) = std::env::var("CH_DATABASE") {
+        c = c.with_database(d);
+    }
+    Some(c)
+}
+
+/// Every NFT CH row struct must decode the rows a real CH emits.
+#[tokio::test]
+async fn nft_ch_rows_decode() {
+    let Some(ch) = client() else {
+        eprintln!("CH_URL unset — skipping NFT CH decode smoke");
+        return;
+    };
+
+    // `list` returns rows on any populated CH → always exercises the
+    // `NftListChRow` decode, and bootstraps a real (contract_id, token_id)
+    // for the per-NFT fetches below.
+    let params = ResolvedListParams {
+        limit: 5,
+        cursor: None,
+        filter_collection: None,
+        filter_contract_id: None,
+        filter_name: None,
+    };
+    let list = fetch_list(&ch, &params, Direction::Next)
+        .await
+        .expect("NftListChRow must decode");
+
+    let Some(first) = list.first() else {
+        eprintln!("CH has no NFTs — list decode ok, skipping per-NFT smoke");
+        return;
+    };
+    let (contract_id, token_id) = (first.contract_id.clone(), first.token_id.clone());
+
+    nft_exists(&ch, &contract_id, &token_id)
+        .await
+        .expect("nft_exists must run");
+    fetch_by_composite(&ch, &contract_id, &token_id)
+        .await
+        .expect("NftChRow (detail) must decode");
+    fetch_transfers(&ch, &contract_id, &token_id, None, 5, Direction::Next)
+        .await
+        .expect("NftTransferChRow must decode");
+}
+
+/// Task 0528 regression — a token with a transfer or burn AFTER its mint must
+/// still SERVE its mint ledger, derived from the append-only `nft_ownership_changes`.
+///
+/// That later event is what used to clobber the stored copy: it replaced the
+/// whole `nfts` row with one carrying no mint ledger (621 / 13 915 tokens read
+/// `None` on prod when 0528 was filed). `nfts` stores no mint ledger since
+/// task 0497, so the subject is picked from `nft_ownership_changes` alone.
+///
+/// Skips cleanly when the CH under test has no such token — a freshly seeded
+/// CH where nothing has moved since its mint is a legitimate empty case.
+#[tokio::test]
+async fn clobbered_mint_ledger_is_served_from_ownership() {
+    let Some(ch) = client() else {
+        eprintln!("CH_URL unset — skipping 0528 mint-ledger regression");
+        return;
+    };
+
+    // One token in `nfts` whose journal holds its mint AND a later non-mint
+    // event — the condition that clobbered the stored copy.
+    let subject = ch
+        .query(
+            "SELECT sc.contract_id, n.token_id, m.minted_at_ledger \
+             FROM ( \
+                 SELECT DISTINCT contract_id, token_id \
+                 FROM nfts \
+             ) n \
+             INNER JOIN ( \
+                 SELECT contract_id, token_id, \
+                        minIf(ledger_sequence, event_type = 0) AS minted_at_ledger \
+                 FROM nft_ownership_changes \
+                 GROUP BY contract_id, token_id \
+                 HAVING countIf(event_type = 0) > 0 \
+                    AND maxIf(ledger_sequence, event_type != 0) > minted_at_ledger \
+             ) m ON m.contract_id = n.contract_id AND m.token_id = n.token_id \
+             INNER JOIN soroban_contracts sc ON sc.id = n.contract_id \
+             LIMIT 1",
+        )
+        .fetch_optional::<(String, String, i64)>()
+        .await
+        .expect("subject probe must run");
+
+    let Some((contract_id, token_id, expected)) = subject else {
+        eprintln!("no NFT moved after its mint on this CH — skipping 0528 regression");
+        return;
+    };
+
+    let item = fetch_by_composite(&ch, &contract_id, &token_id)
+        .await
+        .expect("detail must decode")
+        .expect("subject token must exist in nfts");
+
+    assert_eq!(
+        item.minted_at_ledger,
+        Some(expected),
+        "detail served the clobbered stored column instead of deriving the \
+         mint ledger from nft_ownership_changes (contract {contract_id}, token {token_id})"
+    );
+}
+
+/// Task 0528 — keyset pagination must stay TOTAL now that the lead sort key
+/// is derived rather than stored.
+///
+/// The risk this covers: the ORDER BY, the keyset predicate and the cursor
+/// payload each reference the mint ledger separately. If any one of them
+/// read a stored mint ledger while the others read the derived
+/// value, pages would order by one key and seek by another — silently
+/// skipping or repeating rows, which no single-page test would notice.
+/// Tokens minted at many different ledgers interleave, so a mismatch
+/// cannot cancel out.
+///
+/// Walks the whole list in 2-row pages and asserts every token is seen
+/// exactly once, in non-increasing mint-ledger order.
+#[tokio::test]
+async fn keyset_pagination_is_total_over_derived_mint_ledger() {
+    let Some(ch) = client() else {
+        eprintln!("CH_URL unset — skipping 0528 pagination totality check");
+        return;
+    };
+
+    let total = ch
+        .query("SELECT count() FROM (SELECT contract_id, token_id FROM nfts GROUP BY contract_id, token_id)")
+        .fetch_one::<u64>()
+        .await
+        .expect("count probe must run") as usize;
+    if total < 2 {
+        eprintln!("CH has <2 NFTs — skipping 0528 pagination totality check");
+        return;
+    }
+
+    const PAGE: usize = 2;
+    let mut seen: Vec<(String, String)> = Vec::new();
+    let mut prev_ledger: Option<i64> = None;
+    let mut cursor = None;
+
+    // `total` pages of `PAGE` rows is a strict upper bound; overrunning it
+    // means the cursor stopped advancing (repeat loop), which is itself the
+    // failure we are hunting.
+    for _ in 0..=total {
+        let params = ResolvedListParams {
+            // `limit` is the handler's peek+1, so PAGE rows come back plus
+            // one lookahead we drop.
+            limit: (PAGE + 1) as i64,
+            cursor: cursor.take(),
+            filter_collection: None,
+            filter_contract_id: None,
+            filter_name: None,
+        };
+        let mut rows = fetch_list(&ch, &params, Direction::Next)
+            .await
+            .expect("page must decode");
+        let has_more = rows.len() > PAGE;
+        rows.truncate(PAGE);
+        if rows.is_empty() {
+            break;
+        }
+
+        for r in &rows {
+            let ledger = r.minted_at_ledger.unwrap_or(0);
+            if let Some(p) = prev_ledger {
+                assert!(
+                    ledger <= p,
+                    "mint-ledger order broke across the page boundary: {ledger} after {p} \
+                     — ORDER BY and the keyset predicate disagree"
+                );
+            }
+            prev_ledger = Some(ledger);
+            seen.push((r.contract_id.clone(), r.token_id.clone()));
+        }
+
+        if !has_more {
+            break;
+        }
+        let last = rows.last().expect("non-empty");
+        cursor = Some(NftListCursor {
+            minted_at_ledger: last.minted_at_ledger.unwrap_or(0),
+            contract_surrogate: last.contract_surrogate,
+            token_id: last.token_id.clone(),
+        });
+    }
+
+    let mut deduped = seen.clone();
+    deduped.sort();
+    deduped.dedup();
+    assert_eq!(
+        deduped.len(),
+        seen.len(),
+        "pagination repeated a token — cursor and sort key disagree"
+    );
+    assert_eq!(
+        seen.len(),
+        total,
+        "pagination skipped tokens: walked {} of {total}",
+        seen.len()
+    );
+}
+
+/// Task 0424 — a token that changed owner more than once inside one ledger is
+/// listed in the chain's order, and each change's `from_account` is the owner
+/// the previous change left. Before the changes were located by their event,
+/// the order inside a ledger was our own per-token counter.
+///
+/// Skips cleanly when the CH under test has no such token.
+#[tokio::test]
+async fn same_ledger_changes_come_in_chain_order() {
+    let Some(ch) = client() else {
+        eprintln!("CH_URL unset — skipping 0424 same-ledger order check");
+        return;
+    };
+    #[derive(Debug, clickhouse::Row, serde::Deserialize)]
+    struct Subject {
+        contract: String,
+        token_id: String,
+    }
+    let subject = ch
+        .query(
+            "SELECT c.contract_id AS contract, x.token_id AS token_id \
+             FROM ( \
+                 SELECT contract_id, token_id FROM nft_ownership_changes \
+                 GROUP BY contract_id, token_id, ledger_sequence HAVING count() > 1 \
+                 LIMIT 1 \
+             ) x \
+             INNER JOIN soroban_contracts c ON c.id = x.contract_id \
+             LIMIT 1",
+        )
+        .fetch_optional::<Subject>()
+        .await
+        .expect("subject query runs");
+    let Some(s) = subject else {
+        eprintln!("no token with two changes in one ledger on this CH — skipping");
+        return;
+    };
+
+    let rows = fetch_transfers(&ch, &s.contract, &s.token_id, None, 50, Direction::Next)
+        .await
+        .expect("transfers decode");
+    assert!(rows.len() >= 2, "the subject has two changes: {rows:?}");
+    let location = |r: &NftTransferItem| {
+        (
+            r.ledger_sequence,
+            r.application_order,
+            r.operation_index,
+            r.event_index,
+        )
+    };
+    for pair in rows.windows(2) {
+        let (newer, older) = (&pair[0], &pair[1]);
+        assert!(
+            location(newer) > location(older),
+            "newest first, by location: {newer:?} then {older:?}"
+        );
+        assert_eq!(
+            newer.from_account, older.to_account,
+            "a change starts from the owner the previous change left"
+        );
+    }
+}

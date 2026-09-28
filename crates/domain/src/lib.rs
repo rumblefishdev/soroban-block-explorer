@@ -12,14 +12,11 @@ pub mod balance;
 pub mod classification_cache;
 pub mod enums;
 pub mod ledger;
-pub mod nft;
-pub mod operation;
-pub mod pool;
 pub mod soroban;
 pub mod transaction;
 
 pub use classification_cache::ClassificationCache;
 pub use enums::{
     AssetFamily, AssetType, ContractEventType, ContractType, EnumDecodeError, NftEventType,
-    OperationType,
+    OperationType, PoolKind,
 };

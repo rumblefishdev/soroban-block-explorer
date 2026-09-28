@@ -71,3 +71,32 @@ writer/RMT grounds. 0357 produced the numbers that argument lacked: lplist is
 - [ ] Docs updated — a write-side column change fires the ADR 0032 gate; mark
       each `docs/architecture/**` file updated or `N/A — reason`.
 - [ ] API types regenerated if `crates/api/**` or `Cargo.*` changed.
+
+## 2026-09-24 — the list does not need `created_at_ledger` at all (decision 92 A)
+
+Measured while reviewing 0374 PR 4b (production `query_log`, user
+`api_reader`): one list load is four sequential round trips — the list
+query, then asset identities and icons (in parallel), then the last hourly
+closes for TVL.
+
+| step               | before 2026-09-24 09:33 UTC (p50) | after (p50 / p90)        |
+| ------------------ | --------------------------------- | ------------------------ |
+| list query         | ~540–600 ms, 11.8–14.8M rows      | 169 / 400 ms, 10.2M rows |
+| identities + icons | (inside the list query)           | ~30–95 / ~190 ms         |
+| last hourly closes | ~105–145 ms, 1.1–3.7M rows        | 167 / 772 ms, 4.5M rows  |
+
+(The 09:33 UTC deploy carried 0374 PR 3, which dropped the pair-keyed CTEs.)
+
+- **`created_at_ledger` on the list is dead weight.** Its `cr` subquery
+  (`min(ledger_sequence)` over each page pool's whole snapshot history) reads
+  ~9M of the list query's 8–17M rows, and the frontend never reads the field
+  on the list (`web/src`, 2026-09-24). Pool detail keeps it. So for the list
+  the answer is not "store it" (Path 1) but "drop it"; storing it only
+  matters if a list consumer appears.
+- **The closes are re-read on every load** although the hourly series moves
+  once an hour: 4.5M rows per load. An in-process cache (`crate::cache`,
+  a few minutes) removes the repeat.
+
+Plan (92 A): one small PR after 0374 PR 4b — drop `created_at_ledger` from
+`PoolItem` on the list (API change, types regenerated), cache the last
+closes. Re-measure with the same `query_log` cut.

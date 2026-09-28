@@ -164,8 +164,10 @@ pub struct ExtractedEvent {
     pub topics: serde_json::Value,
     /// ScVal-decoded event data payload as JSON.
     pub data: serde_json::Value,
-    /// Zero-based index of this event within the transaction.
-    pub event_index: u32,
+    /// Ordinal across all containers of the transaction (tx-level, per-op,
+    /// diagnostic). In memory only — never stored, never on the wire; the
+    /// event's identity is `event_id`.
+    pub position_in_tx: u32,
     /// Zero-based envelope position of the operation that emitted this event.
     /// Only the CAP-67 V4 per-operation container carries the attribution —
     /// `None` for tx-level, diagnostic and V3 events (task 0453 D7).
@@ -174,19 +176,21 @@ pub struct ExtractedEvent {
     /// list (`v4.operations[op_index].events`). Together with `op_index` this
     /// is Stellar's official event identity — the `getEvents` cursor is
     /// `(ledger, tx, op, event)` with `event` reset per operation (stellar-rpc
-    /// `db/event.go`) — and it is what keys the edge table (task 0540).
+    /// `db/event.go`).
     /// `None` whenever `op_index` is `None`.
     pub event_pos_in_op: Option<u32>,
     /// CAP-67 `TransactionEvent.stage` — when in ledger application the event
-    /// fired. Measured on mainnet (`tests/tx_event_stage_real_meta.rs`): the
-    /// fee charge is `BeforeAllTxs` and the refund is `AfterAllTxs` — settled
-    /// after every transaction in the ledger, not after this one.
-    /// The protocol's own statement of ordering, and the only one there is:
-    /// `event_index` is our flat counter over the three containers, so an
+    /// fired. The fee charge is `BeforeAllTxs`; the refund is `AfterTx` before
+    /// protocol 23 and `AfterAllTxs` from it (`tests/tx_event_stage_real_meta.rs`).
+    /// `position_in_tx` is a flat counter over the three containers, so a
     /// refund is numbered ahead of the operations it refunds.
     /// `None` for per-op, diagnostic and V3 events — only `v4.events` carries
     /// a stage.
     pub stage: Option<TransactionEventStage>,
+    /// stellar-rpc event id (ADR 0059), set by
+    /// [`crate::event::LedgerEvents`]. `None` for diagnostic events and
+    /// for a tx-level event without a stage.
+    pub event_id: Option<crate::event::EventId>,
     /// Parent ledger sequence number.
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time (Unix seconds), used for monthly partitioning.
@@ -194,7 +198,7 @@ pub struct ExtractedEvent {
 }
 
 /// Extracted Soroban invocation data, aggregated at indexer staging into
-/// `soroban_invocations_appearances` rows (ADR 0034). At read time the API
+/// `contract_activity` rows (ADR 0034). At read time the API
 /// re-extracts this structure from the public archive's XDR to render E13
 /// per-node detail (function name, caller, success, args, return value).
 ///
@@ -288,6 +292,9 @@ pub struct NftEvent {
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time.
     pub created_at: i64,
+    /// The source event's stellar-rpc id (ADR 0059) — its canonical location.
+    /// Every token a `consecutive_mint` expands to shares it.
+    pub event_id: Option<crate::event::EventId>,
 }
 
 /// Extracted ledger entry change from `TransactionMeta` V3/V4.
@@ -546,6 +553,9 @@ pub struct ExtractedNftEvent {
     pub ledger_sequence: u32,
     /// Unix seconds. Matches parent transaction partitioning key.
     pub created_at: i64,
+    /// The source event's stellar-rpc id (ADR 0059): the row's location in
+    /// `nft_ownership_changes` (task 0424).
+    pub event_id: Option<crate::event::EventId>,
 }
 
 /// LP position change carried from the parser into `lp_positions`.
@@ -571,29 +581,30 @@ pub struct ExtractedLpPosition {
     pub closed: bool,
 }
 
-/// Extracted operation data. Feeds the `operations_appearances` indexer path
+/// Extracted operation data. Feeds the `transaction_operations` indexer path
 /// (task 0163) where operations of identical identity are collapsed into a
-/// single appearance row, and the API's XDR re-materialisation path
+/// single row, and the API's XDR re-materialisation path
 /// (`stellar_archive::extractors`) where `operation_index` is surfaced as
 /// `application_order` in the DTO.
 ///
 /// **Note:** field names do not directly mirror DB column names:
-/// - `transaction_hash` → resolved to `transaction_id` (BIGSERIAL) by the persistence layer
-/// - `operation_index` → not persisted in `operations_appearances` (ordering is
-///   re-derived from XDR by the API when needed); still surfaced in the
-///   `stellar_archive` DTO as `application_order`
+/// - `transaction_hash` → resolved to the transaction's position
+///   (`application_order`) by the persistence layer
+/// - `operation_index` → `transaction_operations.operation_index`, minus one
+///   (the table is 0-based, ADR 0059); surfaced in the `stellar_archive` DTO
+///   as `application_order`
 /// - `op_type` → `type` (`type` is a Rust keyword)
 /// - `source_account: None` → operation inherits the transaction source account
 #[derive(Debug, Clone)]
 pub struct ExtractedOperation {
     /// Parent transaction hash, hex-encoded (64 chars). Used to resolve the
-    /// surrogate `transaction_id` FK at persistence time.
+    /// transaction's position at persistence time.
     pub transaction_hash: String,
     /// 1-based index of this operation within the transaction (matches Horizon
-    /// `paging_token` convention; see ADR 0028 / task 0172). Not persisted in
-    /// `operations_appearances` — the API re-derives ordering from XDR.
+    /// `paging_token` convention; see ADR 0028 / task 0172). Persisted 0-based
+    /// as `transaction_operations.operation_index` (ADR 0059).
     pub operation_index: u32,
-    /// Operation type (ADR 0031). Maps to `operations_appearances.type SMALLINT`.
+    /// Operation type (ADR 0031). Maps to `transaction_operations.type SMALLINT`.
     pub op_type: OperationType,
     /// Per-operation source account override. `None` if the operation inherits the transaction
     /// source.

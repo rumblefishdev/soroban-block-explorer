@@ -104,22 +104,32 @@ Backbone timeline:
 
 - `ledgers` — ledger-close timeline (anchor)
 - `transactions` — primary explorer activity entity (partitioned by `created_at`)
-- `transaction_hash_index` — unpartitioned hash-to-ledger lookup for direct detail routes
-- `operations_appearances` — transaction-scoped appearance index for classic and
-  mixed transaction inspection (partitioned; per-op detail recovered from XDR on
-  demand per task 0163)
+- `transaction_hash_prefix_index` — hash-prefix-to-ledger lookup for direct detail routes
+  and search (replaces `transaction_hash_index`, task 0580)
+- `transaction_operations` — one row per operation identity in a transaction,
+  located by the transaction's position (partitioned; per-op detail recovered
+  from XDR on demand per task 0163; replaced `operations_appearances`, task 0372)
 - `transaction_participants` — derived participant links for account-history reads (partitioned)
 - `operation_asset_appearances` — per-(asset, transaction) presence index powering
   `/assets/:id/transactions` (task 0359; the asset-dimension twin of
   `transaction_participants`, keyed asset-first; native XLM is a first-class
   surrogate, not absence)
-- `operation_pools` — per-(pool, transaction) presence index powering
-  `/liquidity-pools/:id/transactions` (task 0365; the pool-dimension twin of
-  `transaction_participants`, keyed pool-first; `pool_id` is the raw 32-byte pool
-  hash — the same value `operations_appearances.pool_ids` stores per crossing)
-- `lp_operation_amounts` — per-(operation, pool, asset) amounts behind that
-  endpoint's "Amount" column (task 0279 / issue #371; the value twin of
-  `operation_pools`, same pool-leading prefix). `amount` is raw stroops in a
+- `contract_activity` — per-(contract, transaction) index (tasks 0541, 0586;
+  the contract-dimension twin of `transaction_participants`, keyed
+  contract-first and by the transaction's **position**
+  `(ledger_sequence, application_order)`, not the hash surrogate). A
+  transaction touches a contract through an operation event, an invocation or
+  an operation naming it; fee events do not count, or the native SAC's list
+  would be every transaction on the network ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md)).
+  An invoked row adds the caller (`caller_id` / `caller_contract_id`) and
+  call count (`invocation_count`, 0 when not invoked). Powers
+  `/transactions?filter[contract_id]=` (every pair) and, over the invoked
+  rows, the contract stats, the contract's Invocations tab and the
+  transaction page's invocations. Replaced `contract_transactions` and
+  `soroban_invocations_appearances` (task 0586)
+- `pool_operation_amounts` — per-(operation, pool, asset) amounts, the driver of
+  pool activity (task 0279 / issue #371, 0491), keyed pool-first and by the
+  transaction position (replaced `lp_operation_amounts`, task 0372). `amount` is raw stroops in a
   signed `Int64`, positive when the asset entered the pool — so the sign pattern
   names the event (trade `+/-`, deposit `+/+`, withdrawal `-/-`) without a type
   column. Rows are per-op sums of the op's claim atoms, never per atom
@@ -131,7 +141,7 @@ Stellar archive, not stored in the DB):
 - `soroban_contracts` — deployed contracts (`BIGSERIAL id` + `VARCHAR(56)` natural `contract_id`)
 - `wasm_interface_metadata` — WASM ABI keyed by `wasm_hash`
 - `soroban_events_appearances` — contract-event appearance index (partitioned)
-- `soroban_invocations_appearances` — contract-invocation appearance index (partitioned)
+- contract invocations — folded into `contract_activity` (task 0586)
 
 Derived explorer entities:
 
@@ -184,12 +194,17 @@ Derived explorer entities:
   and classic pool reserves for ALL asset types (Option A — no per-token `TotalSupply` key read). The
   `balances` family is ClickHouse-only (see `clickhouse-pilot.md §4f`); there is no
   `soroban_token_balances` / `soroban_asset_aggregates` (superseded by the unified model on the pivot)
-- `nfts`, `nft_ownership` — NFT registry plus partitioned ownership history
+- `nfts`, `nft_ownership_changes` — NFT registry plus partitioned ownership
+  history, each change located by its event (task 0424, §4.13)
 - `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions` — classic LP state +
   time-series snapshots + per-account share positions
 - `liquidity_pools` is also the dimension for **Soroban AMM pools** (ADR 0058,
   task 0374): `pool_kind = 1` rows discovered from router `add_pool` events,
-  carrying `legs Array(Int64)` (token-contract surrogates, 2–4 legs),
+  carrying `legs Array(Int64)` (ASSET surrogates, 2–4 legs — one id space with
+  the classic rows: a Soroban-native token's contract surrogate IS its
+  `assets.id`, while a SAC leg keys onto the classic/native asset it wraps,
+  because ADR 0051 retired `asset_type = 2` and a SAC has no `assets` row of
+  its own),
   `deployment_id` (registering router), `pool_type_raw` and `fee_bps`.
   Registration provenance (the subpool salt, raw `init_args` beyond the fee)
   is deliberately NOT materialised — the `add_pool` event sits complete in
@@ -231,6 +246,14 @@ Derived explorer entities:
   an authority. A Soroban token IS an LP share exactly when it appears here
   (`share_token_id = 0` is structural for concentrated pools, which never mint
   one)
+- `pool_activity` (+ refreshable MV `pool_activity_mv`, every 2 minutes) —
+  each Soroban pool's last reserve change, `max(ledger_sequence)` over its own
+  plane's `pool_state_changes` rows. The pool list orders on
+  `greatest(liquidity_pools.last_updated_ledger, last_activity_ledger)`: a
+  Soroban pool's `liquidity_pools` row is written once at registration, while
+  a classic pool's row already moves with every trade and has no row here.
+  Full recompute + atomic EXCHANGE (the `accounts_recent` pattern), so it needs
+  no backfill and heals from a source rebuild on the next refresh
 
 **Reserve provenance is a READ-TIME predicate, not just a stored column.** A
 plane entry names its pool in a key payload the writing contract chooses
@@ -246,30 +269,29 @@ High-level relationship sketch:
 ```text
 ledgers
   └─ transactions (partitioned)
-       ├─ operations_appearances (partitioned)
+       ├─ transaction_operations (partitioned)   # operation identities by tx position (0372)
        ├─ transaction_participants (partitioned)
        ├─ operation_asset_appearances (partitioned)
-       ├─ operation_pools (partitioned)
-       ├─ lp_operation_amounts (partitioned)
+       ├─ contract_activity (partitioned)         # (contract, tx position) + invocation caller (0541, 0586)
+       ├─ pool_operation_amounts (partitioned)   # per-(op, pool, asset) amounts (0279, 0372)
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
-       ├─ soroban_events_appearances (partitioned)
-       ├─ soroban_event_ops (partitioned)        # op attribution per event (0541)
-       └─ soroban_invocations_appearances (partitioned)
+       └─ soroban_events_appearances (partitioned)
 
 soroban_contracts                           # contracts OBSERVED being deployed (0548)
   ├─ wasm_interface_metadata
   ├─ contract_executable_refs               # (owner, tag) -> wasm_hash, CAP-85 (0548)
   ├─ soroban_events_appearances
-  ├─ soroban_invocations_appearances
+  ├─ contract_activity
   ├─ assets
-  └─ nfts ─ nft_ownership (partitioned)
+  └─ nfts ─ nft_ownership_changes (partitioned)
 
 liquidity_pools                       # classic (pool_kind=0) + soroban AMM (pool_kind=1)
   ├─ liquidity_pool_snapshots (partitioned)   # classic only
   ├─ lp_positions                             # classic only
   ├─ pool_state_changes (partitioned)         # soroban reserves, one row per (pool, ledger)
-  └─ pool_instance_state                      # soroban pool's own declaration: plane + share token
+  ├─ pool_instance_state                      # soroban pool's own declaration: plane + share token
+  └─ pool_activity (refreshable MV)           # soroban pool's last reserve change — list order key
 
 claimable_balance_holdings                  # value held by a B… balance, balances' shape (0210)
 
@@ -307,7 +329,7 @@ All closed-domain enum columns are `SMALLINT` backed by a Rust `#[repr(i16)]` en
 `crates/domain/src/enums/`, with a `CHECK` range constraint and a `<name>_name(ty)` SQL
 helper function for psql/BI debugging. Columns: `operations_appearances.type`,
 `assets.asset_type`, `account_balances_current.asset_type`,
-`nft_ownership.event_type`,
+`nft_ownership_changes.event_type`,
 `liquidity_pools.asset_a_type`, `liquidity_pools.asset_b_type`,
 `soroban_contracts.contract_type`. Parser code binds integers directly; API serializers
 render the canonical string.
@@ -427,114 +449,79 @@ Design notes:
 - small, unpartitioned, hot-cached — every `/transactions/:hash` lookup goes through
   it before touching the partitioned parent
 
-### 4.4 Operations — Appearance Index
+**ClickHouse, task 0580:** replaced by `transaction_hash_prefix_index`
+`(hash_prefix UInt64, ledger_sequence Int64 CODEC(T64, ZSTD(1)))`, `ORDER BY
+(hash_prefix, ledger_sequence)` — the hash's first 8 bytes (little-endian)
+instead of all 32, which compress at ratio 1.0 (154 GiB of the old index's
+175, 2026-09-23; 36.24 → 10.22 B/row). A prefix can name more than one ledger,
+so the reader takes every candidate and `transactions` decides by the full
+hash; the ledger is in the sort key so the ReplacingMergeTree never collapses
+two candidates. Shipped as a parallel change (`docs/deployment.md`): the API
+reads it through `lookup_hash_ledgers` (transaction page and search), and
+`transaction_hash_index` is no longer written and was dropped.
 
-Per task 0163, `operations` was collapsed to an appearance index and renamed
-to `operations_appearances`. Pattern matches ADRs 0033/0034 for events and
-invocations: one row per distinct operation identity per transaction,
-`amount BIGINT` counts collapsed duplicates. Per-op detail (envelope decode,
-soroban args, memos, claimants, predicates, etc.) is re-materialised from
-XDR at read time via the `runtime_enrichment::stellar_archive` extractors.
+### 4.4 Operations — `transaction_operations`
+
+One row per distinct operation **identity** in a transaction: operations of one
+transaction with the same type, source, destination, contract, asset and
+`pool_ids` fold into one row (task 0163). Per-op detail (amounts, soroban args,
+memos, claimants, predicates) is re-materialised from XDR at read time via the
+`runtime_enrichment::stellar_archive` extractors.
 
 ```sql
-CREATE TABLE operations_appearances (
-    id                BIGSERIAL    NOT NULL,
-    transaction_id    BIGINT       NOT NULL,
-    type              SMALLINT     NOT NULL,                               -- ADR 0031 OperationType
-    source_id         BIGINT       REFERENCES accounts(id),                -- ADR 0026
-    destination_id    BIGINT       REFERENCES accounts(id),                -- ADR 0026
-    contract_id       BIGINT       REFERENCES soroban_contracts(id),       -- ADR 0030
-    asset_code        VARCHAR(12),
-    asset_issuer_id   BIGINT       REFERENCES accounts(id),                -- ADR 0026
-    pool_id           BYTEA,                                               -- 32-byte LP hash (ADR 0024)
-    amount            BIGINT       NOT NULL,                               -- collapsed-duplicate count
-    application_order SMALLINT,                                            -- task 0192: 1-based MIN apply pos across folded ops
-    ledger_sequence   BIGINT       NOT NULL,
-    created_at        TIMESTAMPTZ  NOT NULL,
-    PRIMARY KEY (id, created_at),
-    FOREIGN KEY (transaction_id, created_at)
-        REFERENCES transactions (id, created_at) ON DELETE CASCADE,
-    CONSTRAINT ck_ops_app_pool_id_len CHECK (pool_id IS NULL OR octet_length(pool_id) = 32),
-    CONSTRAINT ck_ops_app_type_range  CHECK (type BETWEEN 0 AND 127),      -- ADR 0031 range
-    CONSTRAINT ck_ops_app_amount_pos  CHECK (amount > 0),
-    CONSTRAINT ck_ops_app_application_order_range
-        CHECK (application_order IS NULL OR (application_order BETWEEN 1 AND 32767)),
-    CONSTRAINT uq_ops_app_identity    UNIQUE NULLS NOT DISTINCT
-        (transaction_id, type, source_id, destination_id,
-         contract_id, asset_code, asset_issuer_id, pool_id,
-         ledger_sequence, created_at)
-) PARTITION BY RANGE (created_at);
+CREATE TABLE transaction_operations (
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1)),   -- the TRANSACTION's 1-based position
+    operation_index   Int16 CODEC(T64, ZSTD(1)),   -- the operation's 0-based position
+    type              Int16 CODEC(T64, ZSTD(1)),   -- ADR 0031 OperationType
+    source_id         Nullable(Int64),             -- NULL = the transaction's source
+    destination_id    Nullable(Int64),
+    contract_id       Nullable(Int64),
+    asset_code        LowCardinality(String),
+    asset_issuer_id   Nullable(Int64),
+    pool_ids          Array(FixedString(32))       -- crossed pools, sorted + deduped
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (ledger_sequence, application_order, operation_index);
 ```
 
-No explicit `idx_ops_app_tx` — `WHERE transaction_id = X` is served by the
-leftmost prefix of `uq_ops_app_identity` (starts with `transaction_id, type, …`).
-A dedicated narrower index is reversible via `CREATE INDEX CONCURRENTLY` per
-partition if production telemetry shows it's needed.
-
-Purpose:
-
-- index which operation identities appeared in which transaction, with a
-  count of how many physical operations collapsed into each identity
-- anchor cascade cleanup of transaction children
-- preserve the typed summary columns (account/contract/asset/pool surrogates)
-  needed for filtered list endpoints without per-request XDR decode
+Readers: the list `operation_types` aggregate, the `/transactions`
+operation-type filter, the transaction page's operations, pool activity's
+operation source and `pools_crossed`, and `repair-tier1`.
 
 Design notes:
 
-- `type` is `SMALLINT` backed by the Rust `OperationType` enum
-  ([ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md));
-  the `op_type_name(ty)` SQL helper renders the canonical string for psql/BI
-- every account/contract/issuer reference is a `BIGINT` surrogate FK
-  (ADRs 0026 / 0030); `pool_id` is a binary 32-byte pool hash (ADR 0024) with a
-  deferred FK attached once `liquidity_pools` exists in migration 0006.
-  **CH divergence (task 0261/0268):** the ClickHouse parallel store replaces
-  the scalar with `pool_ids Array(FixedString(32))` — path payments record
-  every pool crossed by their result claim atoms (multi-hop lossless), LP
-  deposit/withdraw a single element, `[]` = no pool. PG keeps the legacy
-  scalar (path payments stay NULL) pending its retirement
-- composite `(id, created_at)` PK is required because the partition key must be in
-  every unique index on a partitioned table; `created_at` is inherited verbatim from
-  the parent transaction so per-partition cascade is well-defined
-- `uq_ops_app_identity` uses PG 15+ `NULLS NOT DISTINCT` so NULL-heavy shapes
-  (e.g. type-14 `CREATE_CLAIMABLE_BALANCE` with source inherited from tx)
-  collapse correctly. Observed compression: 28% overall on backfill sample,
-  type-14 collapses from 12 709 operations to 179 rows
-- `transfer_amount NUMERIC(28,7)` was dropped — no API endpoint reads it, and
-  per-op detail is already re-materialised from XDR by
-  `runtime_enrichment::stellar_archive` extractors per
-  [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)
-- `application_order SMALLINT` was dropped together with `transfer_amount` in
-  task 0163 on the premise "no API endpoint reads it", and re-introduced by
-  [task 0192](../../../lore/1-tasks/active/0192_BUG_operations-appearances-ordering-not-apply-order.md)
-  after empirical evidence showed endpoint 03 Statement C had implicitly
-  re-introduced an ordering dependency through `ORDER BY oa.id`. The column
-  carries the 1-based on-chain apply position; for folded rows (multiple
-  identical-identity envelope ops collapsed into one row) it stores the
-  MIN of the folded ops' indices — the position of the row's first
-  occurrence in `tx.operations[]`. NULLABLE for backward compatibility
-  with pre-task-0192 historical rows
-- ingest staging aggregates operations at the
-  `HashMap<OpIdentity, (count, min_apply_order)>` level before the bulk
-  INSERT, with `min_apply_order` tracked via explicit `min()` reduction so
-  the value is independent of HashMap iteration order. The pre-task-0192
-  alphabetic-identity sort that produced the ordering bug
-  (`oa.id` BIGSERIAL alphabetic-by-asset_code on multi-asset bulk txs)
-  has been replaced with `sort_by_key((tx_hash_hex, application_order))`.
-  Write layer uses `ON CONFLICT ON CONSTRAINT uq_ops_app_identity DO NOTHING`
-  for replay idempotency
+- **Located by position** (ADR 0059): `(ledger_sequence, application_order)`
+  is the transaction, `operation_index` the operation — 0-based, like
+  stellar-rpc's `operationIndex`. The API sends `operation_index + 1`, the
+  1-based position the wire has always carried (the `#op-N` anchor).
+- **A folded row carries the group's smallest `operation_index`**, reduced with
+  an explicit `min()` so it does not depend on HashMap order (task 0192). An
+  operation folded into an earlier identical one has no row of its own.
+- **`pool_ids`** (task 0261/0268): every pool a path payment's or offer's result
+  claim atoms crossed, a single element for LP deposit/withdraw, `[]` for none.
+- **No skip index**: every read seeks the transaction position.
+
+History: the Postgres `operations` table became the appearance index
+`operations_appearances` (task 0163, fold count `amount`), gained
+`application_order` as the operation's 1-based position (task 0192) and moved
+to ClickHouse keyed by the `transaction_id` surrogate. Task 0372 replaced it
+with this table as a parallel change: the surrogate (33.3 GiB at ratio 1.57,
+2026-09-24), the unread fold count and both skip indexes are gone, and
+`application_order` now names the transaction's position (`docs/deployment.md`).
 
 ### 4.5 Transaction Participants
 
 ```sql
 CREATE TABLE transaction_participants (
-    transaction_id BIGINT      NOT NULL,
-    account_id     BIGINT      NOT NULL REFERENCES accounts(id),     -- ADR 0026
-    created_at     TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (account_id, created_at, transaction_id),
-    FOREIGN KEY (transaction_id, created_at)
-        REFERENCES transactions (id, created_at) ON DELETE CASCADE
-) PARTITION BY RANGE (created_at);
-CREATE INDEX idx_tp_tx ON transaction_participants (transaction_id);
+    account_id        Int64,                        -- accounts.id surrogate, ADR 0026
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1))     -- the transaction's position
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (account_id, ledger_sequence, application_order);
 ```
 
 Purpose:
@@ -551,12 +538,17 @@ Design notes:
   (via `source_id`, `destination_id`, `asset_issuer_id`) and `transactions.source_id`,
   which is where the UI already gets them. `transaction_participants` is a pure
   account-feed index
-- PK `(account_id, created_at, transaction_id)` is designed for the
-  account-feed read pattern (`WHERE account_id = $1 ORDER BY created_at DESC`);
-  the secondary `idx_tp_tx` supports the reverse direction
-- partitioned on `created_at`, mirrors `transactions` partitions exactly;
-  cascade driven by the composite FK back to `transactions`
-- `account_id` is the surrogate BIGINT FK per
+- the transaction is located by its position `(ledger_sequence,
+application_order)` — the `transactions` key — not the `transaction_id` hash
+  surrogate ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md),
+  task 0575). The account feed therefore pages in execution order inside a
+  ledger, and the surrogate's 8 B/row (ratio 1.0) is gone: measured on
+  partition 128, the row went from 11.19 B to 1.95 B with the two codecs
+- key `(account_id, ledger_sequence, application_order)` is the account-feed
+  read pattern (`WHERE account_id = ? ORDER BY ledger_sequence DESC,
+application_order DESC`); `ledger_sequence` rises within an account, which is
+  what `Delta` exploits
+- `account_id` is the surrogate `Int64` of
   [ADR 0026](../../../lore/2-adrs/0026_accounts-surrogate-bigint-id.md)
 
 ### 4.5.1 Operation Asset Appearances (task 0359)
@@ -567,22 +559,20 @@ presence index so a per-asset activity page is a PK-prefix seek.
 
 ```sql
 CREATE TABLE operation_asset_appearances (
-    asset_id        Int64,   -- ids::asset_id surrogate; native = ids::asset_id(0,'',0,0)
-    ledger_sequence Int64,
-    transaction_id  Int64,
-    INDEX idx_oaa_transaction_id transaction_id TYPE bloom_filter(0.001) GRANULARITY 1
+    asset_id          Int64,   -- ids::asset_id surrogate; native = ids::asset_id(0,'',0,0)
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1))   -- the transaction's position (task 0575)
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (asset_id, ledger_sequence, transaction_id);
+ORDER BY (asset_id, ledger_sequence, application_order);
 ```
 
-> **Read-path.** The tx-list value read filters `(ledger, tx)` on this
-> `asset_id`-leading table — not a prefix seek, so unaided it is a partition scan
-> (~26 M rows/page on a full partition). Mitigated by the `idx_oaa_transaction_id` > **bloom skip index** (task 0393), which prunes granules holding none of a page's
-> tx_ids (~10×); same pattern as `idx_oa_contract_id`. A projection is not a
-> candidate (CH 26.3 refuses projections on a ReplacingMergeTree, and a `(ledger,
-tx)`-ordered companion would re-store the incompressible `transaction_id` ~85 GiB)
+> **Read-path.** Every read filters by `asset_id`, the leading key: the asset
+> transaction list seeks it and fetches the page's transactions by their
+> position, the `transactions` key. The `idx_oaa_transaction_id` bloom (task 0393) was dropped on 2026-08-06 for zero consumers (19.87 GiB), and the
+> surrogate column itself left with task 0575 (row 9.09 B → 1.12 B on
+> partition 128).
 > **`net_settled` was REMOVED (2026-09-04).** The per-(transaction, asset) aggregate
 > `max(Σ+, Σ−)` carried no direction and no account, so on an account page an
 > inbound and an outbound transfer rendered identically. It is replaced by a
@@ -611,59 +601,33 @@ Purpose / design notes:
   run it in the SAME rollout as the read swap or the endpoint shows only
   post-deploy classic activity.
 
-### 4.5.2 Operation Pools (task 0365)
+### 4.5.2 Operation Pools (task 0365) — dropped (task 0372)
 
-ClickHouse-only. The **pool-dimension twin of `transaction_participants`** — a
-per-(pool, transaction) presence index so `/liquidity-pools/:id/transactions` is a
-PK-prefix seek instead of the density-dependent `has(pool_ids, X)` scan over
-`operations_appearances` (the 0281-C read-in-order driver, superseded).
+`operation_pools`, the per-(pool, transaction) presence index, lost its only
+reader when pool activity moved to the pool amounts (task 0491). Task 0372
+stopped writing it and dropped it.
+
+### 4.5.3 Pool Operation Amounts (tasks 0279, 0372)
+
+ClickHouse-only. What each operation actually moved through a pool (issue #371);
+since task 0491 the paging driver of pool activity. Located by the transaction
+position (ADR 0059): `application_order` is the transaction's 1-based position,
+`operation_index` the operation's 0-based one. Task 0372 replaced
+`lp_operation_amounts`, which held the `transaction_id` surrogate and the
+operation's 1-based position in `application_order`.
 
 ```sql
-CREATE TABLE operation_pools (
-    pool_id         FixedString(32),  -- raw 32-byte pool hash (no surrogate)
-    ledger_sequence Int64,
-    transaction_id  Int64
+CREATE TABLE pool_operation_amounts (
+    pool_id           FixedString(32),             -- raw 32-byte pool hash (no surrogate)
+    ledger_sequence   Int64 CODEC(Delta, ZSTD(1)),
+    application_order Int16 CODEC(T64, ZSTD(1)),   -- the transaction's position
+    operation_index   Int16 CODEC(T64, ZSTD(1)),   -- the operation's 0-based position
+    asset_id          Int64,                       -- ids::asset_id surrogate (native first-class)
+    amount            Int64                        -- raw stroops, SIGNED from the pool's side
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (pool_id, ledger_sequence, transaction_id);
-```
-
-Purpose / design notes:
-
-- `pool_id` is the raw 32-byte hash — the exact value `operations_appearances.pool_ids`
-  stores per crossing — so no surrogate resolution is needed (unlike the asset twin).
-- **Pure presence** — no `role` / `application_order` / `amount`. Duplicate (pool, tx)
-  rows within a tx are deduped at write (per-tx set) and collapse in the RMT; the read
-  also applies `LIMIT 1 BY (ledger, tx)`.
-- Populated by the indexer as a per-op Rust fan-out over each op's `pool_ids`,
-  written beside `transaction_participants` / `operation_asset_appearances`. (The
-  Path B backfill below re-keys history via `arrayJoin(pool_ids)`.)
-- **Backfill (task 0365 Path B)**: unlike the asset twin, the source `pool_ids` is
-  already in ClickHouse, so history is backfilled by a plain CH re-key
-  (`INSERT … SELECT arrayJoin(pool_ids), ledger_sequence, transaction_id
-FROM operations_appearances`) — no XDR re-parse.
-
-### 4.5.3 LP Operation Amounts (task 0279)
-
-ClickHouse-only. The **value twin of `operation_pools`** — what each operation
-actually moved through a pool, so `/liquidity-pools/:id/transactions` can render
-an "Amount" column (`12,059.29 XLM → 38.5M KALE`) instead of a bare event chip
-(issue #371). `operation_pools` remains the paging driver; this table is the
-value lookup for the page's `(ledger, tx)` set.
-
-```sql
-CREATE TABLE lp_operation_amounts (
-    pool_id           FixedString(32),  -- raw 32-byte pool hash (no surrogate)
-    ledger_sequence   Int64,
-    transaction_id    Int64,
-    application_order Int16,            -- op position within the tx
-    asset_id          Int64,            -- ids::asset_id surrogate (native first-class)
-    amount            Int64             -- raw stroops, SIGNED from the pool's side
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (pool_id, ledger_sequence, transaction_id, application_order, asset_id);
+ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id);
 ```
 
 Purpose / design notes:
@@ -689,8 +653,8 @@ Purpose / design notes:
   max/min bounds, not what actually moved).
 - **Backfill**: a targeted XDR re-parse — the per-pool amounts were never
   persisted, so unlike `operation_pools` there is no CH-side re-key. Scope is the
-  ~13.15M ledgers with pool activity (`SELECT DISTINCT ledger_sequence FROM
-operation_pools`), ~20.6% of history. Additive: no existing table is touched, the
+  ~13.15M ledgers with pool activity (then counted from `operation_pools`,
+  since dropped), ~20.6% of history. Additive: no existing table is touched, the
   indexer keeps running, rollback is `DROP TABLE`. Validation gate:
   `sum(abs(amount))` over the asset-A legs per (pool, ledger) must equal
   `liquidity_pool_snapshots.gross_volume_a` — both derive from the same atoms.
@@ -716,7 +680,6 @@ CREATE TABLE asset_transfers (
     application_order  Int16                   CODEC(ZSTD(3)),
     op_index           Int16                   CODEC(ZSTD(3)),  -- official identity…
     event_pos_in_op    Int16                   CODEC(ZSTD(3)),  -- …(op, event-in-op)
-    event_index        Int16                   CODEC(ZSTD(3)),  -- ours; joins soroban_events
     asset_id           Int64                   CODEC(ZSTD(3)),  -- emitter-gated; bespoke = contract id
     amount             Nullable(Int128)        CODEC(ZSTD(3)),  -- NULL = non-fungible, nothing else
     from_id            Nullable(Int64)         CODEC(ZSTD(3)),  -- NULL for mint
@@ -737,8 +700,8 @@ Design notes (every figure measured — lore task 0540 and its research note):
 
 - **Sort key = Stellar's official event identity.** The `getEvents` cursor is
   `(ledger, tx, op, event)` with `event` reset per operation (stellar-rpc
-  `db/event.go`). It is defined by the XDR, so a re-parse cannot renumber it;
-  our flat `event_index` rides along only to join `soroban_events`. Identical
+  `db/event.go`). It is defined by the XDR, so a re-parse cannot renumber it.
+  Identical
   transfers really do repeat inside one operation (a path payment crossing two
   offers from one maker at one price) — `event_pos_in_op` keeps them two rows
   where any coarser key would let the RMT collapse them and under-report.
@@ -780,7 +743,7 @@ Design notes (every figure measured — lore task 0540 and its research note):
   `ALTER … MODIFY COLUMN` after the driver-vs-`DESCRIBE` check on a local
   instance (task 0310).
 - **Coverage**: the table holds every token movement from the ingest floor on,
-  filled by one from-S3 re-parse with `--only asset_transfers,transaction_memos,soroban_event_ops`
+  filled by one from-S3 re-parse with `--only asset_transfers,transaction_memos`
   (additive, no Tier-1 column touched) and proven three ways — per-partition
   counts against `soroban_events`, a byte-for-byte re-decode of archive ledgers,
   and account sums against network state (`backfill-runner/tests/redecode_diff.rs`,
@@ -808,6 +771,63 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, application_order);
 ```
+
+### 4.5.6 Contract Activity (tasks 0541, 0586)
+
+ClickHouse-only. The **contract-dimension twin of `transaction_participants`** — a
+per-(contract, transaction) index, so the contract-filtered transaction list is a
+key seek — carrying the caller and call count when the contract was invoked.
+Before task 0541, that list merged three tables none of which could answer "the
+next N transactions of this contract": `soroban_events` holds one row per _event_
+(hundreds per transaction for a busy contract), the invocations table covered
+invocations only, and the operations table had no `contract_id` in its key. The
+read guessed how many rows made a page and retried wider — a mechanism with a
+density cliff, where a page could end before the list did. Task 0541 added the
+presence index `contract_transactions`; task 0586 folded the invocations table
+(`soroban_invocations_appearances`, keyed by the `transaction_id` surrogate) into
+it as `contract_activity` and dropped both.
+
+```sql
+CREATE TABLE contract_activity (
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    application_order  Int16,             -- the transaction's position (ADR 0059)
+    caller_id          Nullable(Int64),   -- invoked by an account
+    caller_contract_id Nullable(Int64),   -- invoked by a contract
+    invocation_count   Int32              -- calls in the transaction; 0 = touched only
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, application_order);
+```
+
+Purpose / design notes:
+
+- **Sources:** an operation event the transaction emits, an invocation, an
+  operation naming the contract.
+- **Fee events do not count.** Every transaction pays a fee, and the fee is an
+  event on the native SAC; counting it would make that contract's list every
+  transaction on the network. A fee event is recognised by its rpc id, which
+  carries a sentinel (`transaction_index` 0 or 1048575, or `operation_index`
+  4095): only an operation event has `transaction_index = application_order`.
+- **Keyed by position**, not by the `transactions.id` hash surrogate — the shape
+  task 0538 moves the whole family to. The invocations table's surrogate
+  (8.45 GiB at ratio 1.0) is not carried.
+- **Invoked = `invocation_count > 0`**, which is also the row with a caller: an
+  invoked row carries exactly one of the two callers (the first invocation's);
+  a row touched only by an operation event or an operation naming the contract
+  carries neither. No invocation in the old table lacked a caller (0 of
+  1.13 bn, 2026-09-25).
+- **`invocation_count`** is the ADR 0034 fold count under a clear name: how
+  many times the transaction called the contract (the execution trace's
+  `fn_call`s merged with the auth tree). Nothing reads it yet, but no other
+  table holds it — diagnostic events are not stored.
+- Duplicates left by re-ingest collapse in the RMT and on read (`FINAL` /
+  `LIMIT 1 BY`).
+- **No codecs** (decided in task 0586): the key columns would shrink by ~4 GiB
+  (_estimate_), not worth it here.
+- **Backfill** is in-DB — no XDR re-parse; the per-slice statements are
+  referenced from `docs/backfills.md`.
 
 ### 4.6 Soroban Contracts
 
@@ -1036,40 +1056,6 @@ Design notes:
 - partitioned on `created_at` mirroring `transactions`; cascade via composite FK
 - diagnostic events are filtered on ingest (they are not counted in `amount` and do
   not produce appearance rows); the detail view re-derives them on demand if needed
-
-### 4.8.1 Soroban Event Ops — operation attribution (task 0541)
-
-ClickHouse-only. **Which operation emitted each event**, as a narrow side
-table. The column belongs on `soroban_events` and will end up there (task
-0541 "Target shape": `ALTER … ADD COLUMN`, then a per-partition
-`ALTER … UPDATE` sourced from this table — a mutation rewrites only the
-mutated columns, so no re-insert of 10.4 bn rows and no second copy on disk);
-until that fold this table is what the S3 pass can write additively. Only per-operation
-events have a row — a transaction-level (fee) or diagnostic event has no
-operation, and absence is the honest encoding. Retires the read-time XDR decode
-the transaction-detail page paid on every render (task 0453). Written by the
-same S3 pass as `asset_transfers`.
-
-```sql
-CREATE TABLE soroban_event_ops (
-    ledger_sequence    Int64   CODEC(ZSTD(3)),
-    application_order  Int16   CODEC(ZSTD(3)),  -- tx position in the ledger → transactions.id → soroban_events
-    event_index        Int16   CODEC(ZSTD(3)),  -- joins soroban_events
-    op_index           Int16   CODEC(ZSTD(3)),  -- envelope position, 0-based
-    event_pos_in_op    Int16   CODEC(ZSTD(3))   -- position inside that op's event list
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (ledger_sequence, application_order, event_index);
-```
-
-Keyed by the transaction's position, not its id, on purpose: `transaction_id`
-is a random hash and cost 4.66 of a 5.07-byte row (measured 2026-09-07 on
-39.5 M events), while the position compresses to nothing — 0.63 B/row, ~3.6 GB
-on ~5.7 bn rows instead of ~29 GB. The canonical home of the two numbers is a
-column on `soroban_events` itself; this table is the vehicle the S3 pass can
-write additively and the source of the later per-partition fold (task 0541,
-"Target shape").
 
 ### 4.9 Soroban Invocations — Appearance Index
 
@@ -1308,7 +1294,7 @@ Design notes:
   `operations_appearances.destination_id`, `operations_appearances.asset_issuer_id`,
   `soroban_contracts.deployer_id`,
   `soroban_invocations_appearances.caller_id`, `assets.issuer_id`, `nfts.current_owner_id`,
-  `nft_ownership.owner_id`, `transaction_participants.account_id`,
+  `nft_ownership_changes.owner_id`, `transaction_participants.account_id`,
   `account_balances_current.account_id`,
   `liquidity_pools.asset_a_issuer_id`, `liquidity_pools.asset_b_issuer_id`,
   `lp_positions.account_id`
@@ -1356,7 +1342,8 @@ CREATE TABLE nfts (
     media_url            TEXT,                                                    -- task 0195 §2d (Lambda 2)
     -- (`metadata JSONB` dropped per ADR 0043 / task 0195 §2d — detail-only,
     --  served at request time via `runtime_enrichment::nft_token_uri`)
-    minted_at_ledger     BIGINT,
+    -- (`minted_at_ledger` dropped per task 0497 — the mint is the
+    --  `nft_ownership_changes` row with event_type = 0; a copy here drifted)
     current_owner_id     BIGINT       REFERENCES accounts(id),                    -- ADR 0026
     current_owner_ledger BIGINT,
     UNIQUE (contract_id, token_id)
@@ -1381,42 +1368,54 @@ Design notes:
 - `current_owner_id` is the `accounts.id` surrogate (ADR 0026); the displayed
   `G...` StrKey is obtained via JOIN back to `accounts.account_id`
 - `metadata` and `media_url` remain optional because NFT contract conventions vary
-  heavily; full transfer history lives in `nft_ownership` (§4.13)
+  heavily; full transfer history lives in `nft_ownership_changes` (§4.13)
 
-### 4.13 NFT Ownership
+### 4.13 NFT Ownership — `nft_ownership_changes` (task 0424)
+
+`nft_ownership_changes` (and its `_pending` quarantine, same shape) holds one
+row per change of owner of one token — mint, transfer, burn — located by its
+source event's stellar-rpc id (ADR 0059). It replaced `nft_ownership` /
+`nft_ownership_pending`, dropped in task 0424 (a parallel change, epic 0538
+step 4):
 
 ```sql
-CREATE TABLE nft_ownership (
-    nft_id          INTEGER      NOT NULL REFERENCES nfts(id) ON DELETE CASCADE,
-    transaction_id  BIGINT       NOT NULL,
-    owner_id        BIGINT       REFERENCES accounts(id),              -- ADR 0026
-    event_type      SMALLINT     NOT NULL,                             -- ADR 0031 NftEventType
-    ledger_sequence BIGINT       NOT NULL,
-    event_order     SMALLINT     NOT NULL,
-    created_at      TIMESTAMPTZ  NOT NULL,
-    PRIMARY KEY (nft_id, created_at, ledger_sequence, event_order),
-    FOREIGN KEY (transaction_id, created_at)
-        REFERENCES transactions (id, created_at) ON DELETE CASCADE,
-    CONSTRAINT ck_nft_own_event_type_range CHECK (event_type BETWEEN 0 AND 15)
-) PARTITION BY RANGE (created_at);
+CREATE TABLE nft_ownership_changes (
+    contract_id        Int64,
+    token_id           String,
+    ledger_sequence    Int64,
+    application_order  Int16,     -- the transaction's position
+    operation_index    UInt16,    -- the operation within it
+    event_index        UInt32,    -- the event within the operation
+    owner_id           Nullable(Int64),
+    event_type         Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index);
 ```
 
-Purpose:
-
-- record every mint/transfer/burn event per NFT instance for the NFT detail page's
-  history tab
-- support owner-centric NFT feeds (account → NFTs currently held + history)
-
-Design notes:
-
-- `event_type` is `SMALLINT` Rust `NftEventType` enum (`0=mint`, `1=transfer`,
+- **Why:** the old `nft_ownership.event_order` was our own counter per
+  (collection, token, ledger) that restarted at 0, so same-ledger changes of
+  different tokens shared values and the order inside a ledger was unknown
+  (task 0424). The event location is chain-derived, gives a total order, and
+  is the same key `soroban_events` and `asset_transfers` carry — no
+  `transaction_id`.
+- `event_type` is the Rust `NftEventType` enum (`0=mint`, `1=transfer`,
   `2=burn`) per [ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md);
-  helper `nft_event_type_name(ty)` for psql/BI
-- `owner_id` is the recipient's surrogate account FK (ADR 0026); NULL for burns
-- partitioned on `created_at` mirroring `transactions`; cascade via composite FK to
-  `transactions` and a direct FK to `nfts`
+  `owner_id` is the recipient's account surrogate, NULL for a burn.
+- **`token_id` stays in the key:** one `consecutive_mint` event mints many
+  tokens under a single event id.
+- **Staging refuses a change without an event id**, as `soroban_events` does;
+  NFT events are per-operation contract events, which always carry one.
+- The API reads it alone: the NFT transfers tab (keyset on the location),
+  the mint ledger, and the pieces an account's balance change names (by
+  transaction position). Promotion from `_pending` is `nft-reclassify`.
 
-### 4.13.1 NFT Quarantine — `nfts_pending` + `nft_ownership_pending` (task 0217)
+### 4.13.1 NFT Quarantine — `nfts_pending` + `nft_ownership_changes_pending` (task 0217)
+
+The ClickHouse quarantine for ownership changes is
+`nft_ownership_changes_pending`, the same shape as `nft_ownership_changes`
+(§4.13). The Postgres DDL below is the original design of task 0217.
 
 ```sql
 CREATE TABLE nfts_pending (
@@ -1425,7 +1424,6 @@ CREATE TABLE nfts_pending (
     collection_name       VARCHAR(256),
     name                  VARCHAR(256),
     media_url             TEXT,
-    minted_at_ledger      BIGINT,
     current_owner_id      BIGINT,                  -- no FK to accounts
     current_owner_ledger  BIGINT,
     PRIMARY KEY (contract_id, token_id)
@@ -1451,17 +1449,17 @@ Purpose:
 
 - isolate NFT-candidate rows whose contract has not yet been definitively
   classified (verdict `Other` or NULL — no usable WASM observed in any indexed
-  ledger so far). The API-facing hot tables (`nfts` / `nft_ownership`) stay
-  clean by design.
+  ledger so far). The API-facing hot tables (`nfts` / `nft_ownership_changes`)
+  stay clean by design.
 
 Persist routing (task 0217 Phase B, see
 [`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)):
 
-| Classifier verdict   | Target tables                            |
-| -------------------- | ---------------------------------------- |
-| `Nft` (=2)           | `nfts` + `nft_ownership` (hot)           |
-| `Fungible` / `Token` | _none_ (filtered out)                    |
-| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_pending` |
+| Classifier verdict   | Target tables                                    |
+| -------------------- | ------------------------------------------------ |
+| `Nft` (=2)           | `nfts` + `nft_ownership_changes` (hot)           |
+| `Fungible` / `Token` | _none_ (filtered out)                            |
+| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_changes_pending` |
 
 Promotion is wired through the existing `reclassify_contracts_from_wasm`
 UPDATE path (originally task 0118 Phase 2). When a contract's verdict flips
@@ -1792,21 +1790,13 @@ CH read-acceleration model has four layers, all declared in
    inventory (each entry in `init.sql` carries the measurement and — per the
    0400 lesson — its named consumer; keep prod and file in sync both ways):
 
-   | Table                    | Index                | Type                  | Serves                                                                                                                         |
-   | ------------------------ | -------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-   | `ledgers`                | `closed_at_mm`       | `minmax`              | time-window → ledger-range resolution (LP chart); measured 77.9M → 26.3M read_rows/req on the 2026-07-17 load test (task 0357) |
-   | `accounts`               | `idx_acc_id`         | `bloom_filter(0.001)` | surrogate-id → StrKey seeks: tx-list/search in `crates/api` + SEP-1 issuer resolve in the enrichment worker (tasks 0290, 0397) |
-   | `soroban_contracts`      | `idx_sc_id`          | `bloom_filter(0.001)` | tx-detail surrogate-id → `contract_id` resolve (task 0344)                                                                     |
-   | `transactions`           | `idx_tx_hash_bloom`  | `bloom_filter(0.01)`  | point lookup by hash within the partition named by `transaction_hash_index`                                                    |
-   | `operations_appearances` | `idx_oa_pool_ids`    | `bloom_filter(0.001)` | sparse-pool regime of the pool-transactions scan (task 0365)                                                                   |
-   | `operations_appearances` | `idx_oa_contract_id` | `bloom_filter(0.001)` | sparse-contract regime of the contract-filtered tx list (task 0333; the 2026-06-29 quota blowout)                              |
+   | Table               | Index          | Type                  | Serves                                                                                                                         |
+   | ------------------- | -------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+   | `ledgers`           | `closed_at_mm` | `minmax`              | time-window → ledger-range resolution (LP chart); measured 77.9M → 26.3M read_rows/req on the 2026-07-17 load test (task 0357) |
+   | `accounts`          | `idx_acc_id`   | `bloom_filter(0.001)` | surrogate-id → StrKey seeks: tx-list/search in `crates/api` + SEP-1 issuer resolve in the enrichment worker (tasks 0290, 0397) |
+   | `soroban_contracts` | `idx_sc_id`    | `bloom_filter(0.001)` | tx-detail surrogate-id → `contract_id` resolve (task 0344)                                                                     |
 
-3. **A `Dictionary`** (`transaction_hash_dict`) serves hot
-   hash → `(ledger_sequence, application_order)` point lookups without
-   touching the base table (§4e in `clickhouse-pilot.md`, task 0204). Its
-   `ComplexKeyCache` layout reports `element_count` as _currently cached_
-   entries, not source size — 1 on a cold cache is healthy, not broken.
-4. **Projections: none, by constraint.** ClickHouse 26.3 refuses projections
+3. **Projections: none, by constraint.** ClickHouse 26.3 refuses projections
    on `ReplacingMergeTree` (`Code 344`, measured in task 0353); anything a
    projection would have served is done with an MV or a skip index instead.
 
@@ -1895,25 +1885,27 @@ The schema should continue to prioritize those explorer patterns over generic an
 
 #### Canonical query references
 
-Each `/v1/*` list / detail endpoint has a canonical SQL projection committed
-in this repo:
+The SQL of each `/v1/*` list / detail endpoint is the Rust query function
+that runs it, in `crates/api/src/<module>/queries…`
+([`crates/api/`](../../../crates/api)), checked against the canonical schema
+by that module's ClickHouse-backed tests (`decode_smoke` / `ch_tests`; gated on
+`CH_URL`, not yet run in CI — task 0480). The exact executed text is in
+`system.query_log`.
 
-- [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/) — **ClickHouse**
-  canonical source of truth for the live API handlers in
-  [`crates/api/`](../../../crates/api)
-  ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md),
-  tasks 0204 / 0206 / 0207). Every endpoint enumerated in
+- Per [ADR 0060](../../../lore/2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md)
+  there is no separate copy of that SQL: the hand-kept ClickHouse reference set
+  (task 0207) drifted from the Rust and was retired in task 0588. Every endpoint
+  enumerated in
   [`backend-overview.md §6.2 Endpoint Inventory`](../backend/backend-overview.md#62-endpoint-inventory)
-  maps 1:1 to a `NN_*.sql` file here.
+  has its query in the matching module.
   Field-allocation per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule-list-vs-detail.md);
   list-endpoint completeness verified by audit task 0197
   (see [`docs/audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md`](../../audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md)).
 
-The retired PostgreSQL reference set (`endpoint-queries/`) was removed with the
-PG backend (task 0244).
+The retired PostgreSQL reference set was removed with the PG backend (task 0244).
 
-When editing a `/v1/*` endpoint behaviour, update the CH canonical SQL in the
-same PR.
+When editing a `/v1/*` endpoint behaviour, keep the notes beside its Rust query
+true in the same PR.
 
 ### 7.3 Raw vs Derived Storage
 

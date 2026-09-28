@@ -1,0 +1,1198 @@
+---
+id: '0541'
+title: 'FEATURE: locate every Soroban event by its canonical identity — soroban_events keyed by (ledger, tx position, operation, event in operation)'
+type: FEATURE
+status: completed
+related_adr: ['0059']
+related_tasks:
+  ['0453', '0457', '0540', '0182', '0538', '0374', '0381', '0486', '0558']
+tags:
+  ['clickhouse', 'indexer', 'xdr-parsing', 'effort-medium', 'priority-medium']
+links:
+  - crates/db-clickhouse/schema/init.sql
+  - crates/xdr-parser/src/event.rs
+history:
+  - date: 2026-09-04
+    status: backlog
+    who: karolkow
+    note: >
+      Filed from [[0540]]. `soroban_events` does not store which operation
+      emitted an event, although the data exists across the whole ingested
+      range — measured, not assumed: 1 265 of 1 265 archive transactions carry
+      `TransactionMeta::V4` at protocols 20, 22 and 27, and all 1 770
+      non-diagnostic token events carry an operation index. Three tasks already
+      pay for the gap. Rides 0540's S3 pass.
+  - date: 2026-09-06
+    status: backlog
+    who: karolkow
+    note: >
+      Parser (`event_pos_in_op`), `SorobanEventOpRow`, staging
+      (`persist/value_flow.rs`), the `soroban_event_ops` DDL and the `--only`
+      targeted write all landed on 0540's branch. Left here: the backfill run
+      itself (0540 rollout step 6), coverage proof, and retiring 0453's
+      read-time decode.
+  - date: 2026-09-16
+    status: backlog
+    who: karolkow
+    note: >
+      Re-scoped. Stellar's event identity, read from stellar-rpc's source, is
+      total for every row `soroban_events` stores, so the schema's two reasons
+      for our own flat `event_index` do not hold. Decided (option A): the
+      canonical location becomes the sort key of `soroban_events`; the side
+      table is its source and is dropped afterwards. The "micro-backend
+      removed" criterion was wrong and is replaced. First table of the
+      natural-key programme in 0538.
+  - date: 2026-09-16
+    status: active
+    who: karolkow
+    note: >
+      Promoted. First step: prove `soroban_event_ops` covers every
+      non-diagnostic `soroban_events` row, partition by partition, before it
+      becomes the source of the new sort key.
+  - date: 2026-09-21
+    status: active
+    who: karolkow
+    note: >
+      After two reviews of the phase-2 code: the contract-filtered transaction
+      list reads a new `contract_transactions` presence index instead of merged
+      ledger windows, and fee events do not count as touching a contract. Six
+      merge blockers fixed. See notes/S-review-and-contract-transactions.md.
+  - date: 2026-09-22
+    status: active
+    who: karolkow
+    note: >
+      The window ran: `soroban_events` is keyed by the rpc event id on
+      production and the indexer writes the new tables; the reconciliation
+      test and the cheap full content check pass. Next: phase 5. See "The
+      window".
+  - date: 2026-09-22
+    status: completed
+    who: karolkow
+    note: >
+      `soroban_events` is keyed by the stellar-rpc event id on production.
+      10,681,742,743 rows rekeyed inside ClickHouse, equal in all 2,821
+      slices; the reconciliation test is green on 3,298 ids; the contract
+      transaction list reads `contract_transactions` (2.99 bn pairs). Phase 5
+      dropped the old table, `soroban_event_ops` and
+      `asset_transfers.event_index`, ~242 GiB. PRs #465 and #473, ADR 0059.
+---
+
+# Canonical event identity — `soroban_events` keyed by the stellar-rpc event id
+
+> **Completed 2026-09-22.** The delivered shape is not the side table this
+> summary describes: after the re-scope of 2026-09-16, `soroban_events` itself
+> was rebuilt with the rpc id as its key. See "Acceptance Criteria" and "The
+> window".
+
+## Summary
+
+Store which operation emitted each Soroban event. First as a **narrow side
+table** written by 0540's S3 pass (the only additive write available), then
+folded into two columns on `soroban_events` itself — see "Target shape" below
+(decided 2026-09-07, reversing the "never as a column" stance this task was
+filed with).
+
+## Context
+
+`xdr_parser` already computes the operation index: `extract_events` sets
+`ExtractedEvent.op_index` from the CAP-67 V4 per-operation container.
+`stage.rs` then drops it when building `SorobanEventRow`. The column simply
+does not exist in ClickHouse.
+
+Three consumers pay for that today:
+
+| Task               | What it does instead                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **0453**           | Built a read-time "micro-backend": decodes `op_index` from archive XDR on **every** transaction-detail render, exposed as `XdrEventDto.op_index` |
+| **0457** (Effects) | Will need the same attribution, for every event and not only token verbs                                                                         |
+| **0540**           | Needs an S3 pass rather than a ClickHouse-local transform                                                                                        |
+
+## Why a side table, not a column (original reasoning — superseded by "Target shape")
+
+The obvious fix — `ALTER TABLE soroban_events ADD COLUMN op_index` — looked
+wrong here, for the reason [[0540]] hit first:
+
+- `soroban_events` is **10.4 bn rows / 223 GiB**, a version-less
+  `ReplacingMergeTree`. Filling a new column means re-inserting **whole rows**,
+  which then compete with the existing ones on the same sort key. Which row
+  survives a merge is not controlled. This is the documented failure that made
+  the 0383 backfill unsafe to re-run after the `net_settled` column landed.
+- Rebuilding the table and swapping it (`EXCHANGE TABLES`, the house pattern)
+  needs **both copies on disk**: ~446 GiB against 459 GiB free.
+
+A side table avoids both: nothing competes, nothing is rewritten.
+
+```
+soroban_event_ops(
+    ledger_sequence    Int64,
+    application_order  Int16,    -- tx position in the ledger → transactions.id → soroban_events
+    event_index        Int16,
+    op_index           Int16,    -- envelope position of the emitting operation
+    event_pos_in_op    Int16     -- position within that operation's container
+)
+```
+
+Keyed by the transaction's position, not its id (see "Why now" for the
+measurement: the id was 92% of the row). The join to `soroban_events` goes
+through `transactions` on `(ledger_sequence, application_order)`, the same hop
+`asset_transfers` makes.
+
+Together, `(op_index, event_pos_in_op)` is Stellar's **official** event identity
+(TOID plus position within the operation), which 0540 measured as total for
+token verbs. It is **not** total for `soroban_events` as a whole — tx-level (fee)
+and diagnostic events have no operation — so those rows are simply absent from
+this table rather than carrying a null. Absence is the honest encoding: the
+question "which operation emitted the fee charge" has no answer.
+
+## Why now
+
+0540's S3 re-parse decodes every event of every ledger anyway. Writing this
+table on the same pass costs the extra inserts and nothing else. Done
+separately it costs a second ~1-day pass over ~1 TB of XDR.
+
+**Size, measured 2026-09-07** on 39.5 M local events with the final DDL: the
+first DDL keyed the table like `soroban_events` (`ledger_sequence,
+transaction_id, event_index`) and cost **5.07 B/row — 4.66 of them the
+`transaction_id`**, a random hash that does not compress; the two payload
+columns cost 0.24. Re-keyed by the transaction's position
+(`ledger_sequence, application_order, event_index`, the join going through
+`transactions` as `asset_transfers` does) it is **0.63 B/row → ~3.6 GB** on
+~5.7 bn rows, instead of ~29 GB. The same two columns inside `soroban_events`
+would cost 0.24 B/row (ZSTD) — ~2.5 GB on 10.4 bn rows — which is the target
+shape above.
+
+`event_pos_in_op` needed a one-line parser change (the per-operation loop in
+`event.rs` did not `enumerate()` the events within the operation) — landed on
+0540's branch.
+
+## Target shape — a column on `soroban_events`, the side table as the vehicle (decided 2026-09-07)
+
+The deep review of 0540 asked the principled question: where does the
+operation index of an event belong? Canonically **on the event**. stellar-rpc
+identifies an event by the cursor `(ledger, tx, op, event)` and, since
+Protocol 23, returns the operation index as an attribute of each event in
+`getEvents` (per the RPC docs — verify the field name when implementing). A
+separate table keyed like `soroban_events` is the right data in the wrong
+place; it exists only because filling a column on a 10.4 bn-row table looked
+like a rewrite.
+
+It is not. The reasoning above ("re-inserting whole rows", "`EXCHANGE TABLES`
+needs both copies") misses ClickHouse mutations: `ALTER TABLE … ADD COLUMN` is
+metadata-only and instant, and `ALTER TABLE … UPDATE col = …` rewrites **only
+the mutated column's files** — every other column of the part is hard-linked
+into the new part. Filling two `Int16` columns over 10.4 bn rows costs one
+narrow column-write on the box, no S3, no second copy of the table.
+
+So the side table is kept for 0540's pass — it is what the S3 pass can write
+additively today, and it is the **source** for the fold — and the target is:
+
+1. `ALTER TABLE soroban_events ADD COLUMN op_index Nullable(Int16), ADD COLUMN
+event_pos_in_op Nullable(Int16)` — instant; NULL = "not yet folded, or a
+   tx-level / diagnostic event" (the two must be told apart by the fold's
+   completion, not by the value).
+2. Live indexer writes both from the deploy on (`SorobanEventRow` gains two
+   fields — same deploy-window rule as any struct change, driver validates
+   against `DESCRIBE`).
+3. History: one mutation **per partition**, sourced from `soroban_event_ops`
+   joined to `transactions` on `(ledger_sequence, application_order)` to
+   recover `transaction_id`, loaded into a `Join`-engine table for that
+   partition (~200 M rows, ~5 GB in memory — fits; 125 GB box), `WHERE` on
+   the partition key so each mutation touches one partition's parts.
+4. Coverage gate: per partition, `countIf(op_index IS NULL)` on
+   `soroban_events` equals the partition's tx-level + diagnostic event count.
+5. `DROP TABLE soroban_event_ops`; 0453/0457 read the columns.
+
+Why not do the column now: the live path change and the ALTER need their own
+deploy window, and 0540's window is already carrying `DROP COLUMN
+net_settled` plus three new tables. One schema change per window (0310).
+
+## Implementation Plan
+
+1. **Parser** — capture the position within the operation (one `enumerate()`).
+2. **Row + staging** — new row type; extend the targeted-write mode 0540 adds so
+   one pass writes both new tables and touches nothing else.
+3. **Table** — create by hand on prod (`init.sql` is fresh-install only).
+4. **Backfill** — rides 0540's pass.
+5. **Consumers** — retire 0453's read-time decode; hand 0457 the join.
+
+## Acceptance Criteria
+
+Rewritten at completion for the re-scoped task (2026-09-16); the side-table
+criteria it replaced are listed struck through below.
+
+- [x] Every stored event carries its stellar-rpc id: `transaction_index`,
+      `operation_index` and `event_index` lead the sort key of
+      `soroban_events` after the contract and the ledger; fee events carry
+      rpc's sentinels (ADR 0059)
+- [x] One parser entry point assigns the ids (`LedgerEvents`), for the indexer
+      and for the transaction page's archive read; checked on a real ledger
+      (`event_ids_real_ledger`)
+- [x] The ids equal `getEvents` on production: `event_id_reconciliation`
+      green on 5 ledgers, 3,298 ids, on all three sides (2026-09-22)
+- [x] History rekeyed inside ClickHouse, without a re-parse: 10,681,742,743
+      rows; row counts equal in every slice, the key-and-length check equal in
+      all 2,821 slices, the full content hash equal in 191
+- [x] Readers follow the new key: the contract events page by rpc id in
+      execution order, the transaction page's events in execution order with an
+      `ID` column; old event cursors answer 400
+- [x] The contract-filtered transaction list reads the `contract_transactions`
+      presence index: full pages, execution order (decided 2026-09-21)
+- [x] The old table, `soroban_event_ops` and `asset_transfers.event_index`
+      dropped (phase 5, 2026-09-22)
+- [x] **Docs updated** — ADR 0059; `database-schema/**` (overview, ClickHouse
+      pilot, endpoint queries 02, 03 and 14), `indexing-pipeline/**`,
+      `xdr-parsing/**`, `frontend/frontend-overview.md`; `docs/deployment.md`,
+      `docs/backfills.md`, `docs/backups.md`
+
+Superseded by the re-scope of 2026-09-16:
+
+- ~~`soroban_event_ops` created, keyed like `soroban_events`~~ — created on
+  0540's branch, then dropped here
+- ~~Written by the same pass as 0540 — no second re-parse~~ — the rekey ran
+  in ClickHouse, with no archive pass at all
+- ~~`soroban_events` is not re-inserted; two columns added by `ALTER`~~ —
+  rebuilt and swapped instead
+- ~~Coverage of the side table proven against the source~~ — measured
+  2026-09-16 (see "Coverage"), then the table's role ended
+- ~~0453's transaction-detail render reads the table instead of decoding XDR,
+  and the micro-backend is removed~~ — withdrawn 2026-09-16: the
+  micro-backend also serves signatures, envelope/result/meta XDR, the
+  operation list and the invocation tree; `op_index` is one field of many
+
+## Canonical event identity — measured and decided (2026-09-16)
+
+### What Stellar defines (stellar-rpc v23+, read from source)
+
+`getEvents` returns `id` = `%019d-%010d` of `TOID(ledger, tx, op)` and the event
+number (`go-stellar-sdk/protocols/rpc/cursor.go`; built in stellar-rpc
+`internal/db/event.go`, `InsertEvents`). The same string is the paging cursor
+and sorts chronologically inside a ledger.
+
+| Component | Meaning                                     | Base  |
+| --------- | ------------------------------------------- | ----- |
+| ledger    | ledger sequence                             | —     |
+| tx        | application order in the ledger             | **1** |
+| op        | index into `TransactionMetaV4.operations[]` | **0** |
+| event     | position **within the operation**           | **0** |
+
+Transaction-level (fee) events are NOT id-less — they get sentinels by stage:
+`BEFORE_ALL_TXS` → `(ledger, 0, 0, n)` counting across the ledger;
+`AFTER_TX` → `(ledger, tx, 4095, n)` counting per tx;
+`AFTER_ALL_TXS` → `(ledger, 1048575, 0, n)` counting across the ledger.
+Diagnostic events get no id and are absent from `getEvents` since v23.
+`transactionIndex` / `operationIndex` are returned per event since v23.0.0.
+Before rpc v23 the id was `(ledger, tx, 0, index over the whole tx)` and is not
+comparable with v23+ ids. SEP-35 / Horizon number operations from 1; rpc from 0.
+
+### Where the project stands
+
+|             | canonical location                                                          | ours                                                                           |
+| ----------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| tables      | `asset_transfers`, `soroban_event_ops`, `transactions`, `transaction_memos` | `soroban_events`, `soroban_invocations_appearances`, the four presence indexes |
+| transaction | `application_order` (1-based, = rpc tx)                                     | `transaction_id` = hash64 of the hash                                          |
+| event       | `op_index`, `event_pos_in_op` (0-based, = rpc)                              | `event_index`: flat per tx, fee events first                                   |
+
+Measured on production 2026-09-16: `transactions.application_order` runs 1..N;
+`soroban_event_ops.op_index` / `event_pos_in_op` start at 0 — identical to rpc.
+`soroban_event_ops`: 5.69 bn rows, 3.34 GiB, written live up to the ingest head,
+**read by nothing**.
+
+### Why the schema's defence of `event_index` does not hold
+
+`init.sql` gives two reasons. (1) "Deterministic on replay" — true, and equally
+true of the canonical identity, which is a function of the ledger meta alone
+(the schema says so itself for `asset_transfers`). (2) "Not expressible for
+fee and diagnostic events" — fee events have rpc ids (sentinels above, and the
+parser already knows each one's `stage`); diagnostic events are not stored:
+staging drops them (`stage.rs`, `is_diagnostic`). The comment is stale on both.
+
+### What it costs today
+
+- Contract events and contract invocations are ordered
+  `(ledger, transaction_id, event_index)` (`api/src/contracts/queries.rs`), so
+  events of different transactions in one ledger come out in hash order, not in
+  execution order; inside a transaction the fee refund (settled after every
+  transaction) is numbered before the operations.
+- The event number on the transaction page cannot be matched to `getEvents`
+  or any other tool.
+- `soroban_events` is 235.95 GiB / 10.59 bn rows; its `transaction_id` column is
+  **50.48 GiB (21%)**, `event_index` 4.69 GiB. Position columns sorted after the
+  ledger cost 0.12–0.23 B/row (`asset_transfers`, `soroban_event_ops`).
+- `application_order` names two things: the transaction's position in
+  `transactions` / `asset_transfers` / `soroban_event_ops`, the operation's
+  position in `operations_appearances` / `lp_operation_amounts`.
+
+### Decision (karolkow, 2026-09-16) — option A
+
+`soroban_events` is keyed by the canonical location:
+`(contract_id, ledger_sequence, application_order, op_index, event_pos)` with
+the rpc sentinels for fee events, and the API exposes the rpc-format id.
+
+1. New table with the new key; filled per partition from `soroban_events` +
+   `soroban_event_ops` + `transactions` (no S3); fee-event sentinels from the
+   stage the parser already extracts (not stored today — the fill needs it).
+2. Live writer switched in the same window; swap by `EXCHANGE TABLES`
+   (indexer stopped, per `docs/backfills.md`).
+3. Coverage gate per partition before the swap: row counts equal, every
+   per-op event has a location, every fee event has a sentinel.
+4. Readers: contract events and invocations in execution order; rpc ids on the
+   wire; `#op-N` anchors possible; 0457 gets its attribution.
+5. Drop `soroban_event_ops`; rewrite the stale `init.sql` comment; resolve the
+   `application_order` double meaning.
+
+Space: production free 368.72 GiB of 1.72 TiB (backups share the volume); the
+new table is smaller than the 236 GiB it replaces — confirm per partition.
+
+### Coverage of `soroban_event_ops` against `soroban_events` — measured (2026-09-16)
+
+Exact row-by-row join over every ledger below 64,440,000 (50,457,424 onward),
+in 20k-ledger slices (5k where the join exceeded the per-query memory cap):
+`soroban_events` → `transactions` (`id` → `application_order`) → full outer
+join with `soroban_event_ops` on `(ledger_sequence, application_order,
+event_index)`.
+
+| check                                                                             | result                                                     |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| events without their transaction                                                  | 0                                                          |
+| events without an op row that are not a native-XLM fee event                      | 0                                                          |
+| op rows without an event                                                          | 0                                                          |
+| native-XLM fee events (index 0/1, `contract_id` of the native SAC) with an op row | 0                                                          |
+| events without an op row                                                          | 4,974,589,984 — all native-XLM `fee`, `event_index` 0 or 1 |
+| events with an op row                                                             | 5,595,366,384 distinct                                     |
+
+So "has no op row" is exactly "tx-level fee event"; the fill can tell the two
+apart by the join, never by the event name — 39 events named `fee` come from
+another contract's own operation and do have op rows.
+
+**Duplicates in the side table.** 85,970,362 extra rows, every one a byte-equal
+copy (0 keys with differing `op_index` / `event_pos_in_op`): ledgers
+64,128,000–64,317,019 written twice (582 keys three times), plus single
+ledgers 55,077,289 and 59,697,154. `soroban_events` and `transactions` carry no
+duplicates in those ranges. The fill deduplicates on the key; nothing to repair.
+
+Not yet checked against the chain: this proves the two tables agree, both
+written by the same parser. The rpc-id comparison (`getEvents` on a recent
+range) belongs to the swap gate, and must also settle how the fee sentinel is
+derived — the stage is not stored; one real fixture shows index 0 =
+`BeforeAllTxs` charge, index 1 = `AfterAllTxs` refund — settled in "Fee event identity" below.
+
+### Fee event identity — verified against the chain (2026-09-16)
+
+The fee sentinel needs the event's stage, which is not stored. It is derivable
+from what is stored — the event's position among the transaction's fee events
+and the ledger — with no re-parse.
+
+**Rule.**
+
+| our row                                         | stage (from archive meta) | rpc id                                                     |
+| ----------------------------------------------- | ------------------------- | ---------------------------------------------------------- |
+| fee event, `event_index` 0 (charge)             | `BeforeAllTxs`, always    | tx 0, op 0, event = rank of the charge in the ledger       |
+| fee event, `event_index` 1, ledger ≤ 58,762,517 | `AfterTx`                 | tx = `application_order`, op 4095, event 0                 |
+| fee event, `event_index` 1, ledger ≥ 58,762,518 | `AfterAllTxs`             | tx 1048575, op 0, event = rank of the refund in the ledger |
+
+Rank = 0-based position among the same-stage fee events of that ledger, by
+`application_order` (stellar-rpc `internal/db/event.go`, `txEventIndices`:
+one counter per stage per ledger, `afterTx` reset per transaction). Every
+transaction is charged, so a charge's rank equals `application_order − 1`;
+refunds exist only for some, so theirs does not.
+
+**Evidence.**
+
+- Live rpc (`getEvents`, v28.0.1, native SAC `fee` topic), ledgers 64,340,000 /
+  64,370,000 / 64,400,000 / 64,430,000 / 64,450,000: 2,104 rpc events = 2,104
+  of our rows, 0 mismatches on transaction and amount; 1,530 charges and 574
+  refunds, every rpc event index equal to the rank rule.
+- Archive meta decoded with the official CLI (`stellar xdr decode --type
+LedgerCloseMetaBatch`), stage per transaction: protocols 20, 21, 22 (ledgers
+  50,475,303 / 53,015,049 / 56,019,779 / 58,513,130) — refunds `after_tx`;
+  protocols 23, 24 (58,816,920 / 60,016,783) — `after_all_txs`. At the upgrade:
+  58,762,516 (p22) and 58,762,517 (header already p23, transactions applied
+  under p22) `after_tx`; 58,762,518 `after_all_txs`, the first with
+  `post_tx_apply_fee_processing`. No transaction carries more than one refund.
+- The pre-23 id (`AfterTx`) is taken from stellar-rpc's source; no live rpc
+  retains those ledgers, so it is not confirmed by an rpc answer.
+
+**Official sources (checked 2026-09-16).**
+
+- CAP-67 (`stellar-protocol/core/cap-0067.md`, "New Events for Representing
+  Fees"): the charge is always `BEFORE_ALL_TXS`; a refund is emitted only when
+  non-zero, `AFTER_TX` before protocol 23 and `AFTER_ALL_TXS` from 23. It also
+  says future protocols may add more fee events following the same stage
+  pattern — the reason the live writer must use the parsed stage, not this
+  position rule.
+- stellar-core `src/transactions/TransactionFrame.cpp`: the refund stage is
+  chosen from the ledger header's version at apply time
+  (`protocolVersionStartsFrom(... V_23)`), before that ledger's upgrades are
+  applied — which is why the upgrade ledger 58,762,517 still carries `after_tx`.
+- stellar-docs OpenRPC `getEvents`: `id` is "based on the TOID format" (SEP-35)
+  plus a 10-digit event index. The docs do not describe the fee sentinels, and
+  SEP-35 counts operations from 1 while rpc counts them from 0; the only full
+  statement of the id is stellar-rpc's `internal/db/event.go`.
+
+**Further checks.**
+
+- Every event id, not only fees: 8 ledgers inside the rpc window (including 3
+  with `system` events), 7,365 rpc events = 7,365 ids derived from our tables,
+  same transaction for each. Per-operation events use `application_order`,
+  `op_index` (0-based) and `event_pos_in_op` directly.
+- Every transaction has exactly one charge: 4,181,443,104 charge events =
+  4,181,443,104 transactions below ledger 64,440,000, equal in every partition.
+  So a charge's counter is always `application_order − 1`; only refunds need a
+  per-ledger rank.
+- Archive meta across the whole ingested range: one refund-heavy ledger per
+  64k-ledger archive partition plus the three upgrade ledgers — 248 ledgers,
+  50,490,188–64,451,818, protocols 20–27 (30/45/71/15/25/26/17/19), 104,454
+  transactions, 27,512 refunds. For every transaction: `application_order`
+  equals its position in `tx_processing`; the tx-level events are only
+  native-XLM `fee`, at most two; the charge is `before_all_txs`; the refund's
+  stage follows the ledger rule; amounts and positions equal our rows.
+  0 anomalies.
+
+## Design — `soroban_events` keyed by the canonical location (2026-09-16)
+
+### Table
+
+```sql
+CREATE TABLE soroban_events_staging_canonical
+(
+    contract_id        Int64,
+    ledger_sequence    Int64,
+    transaction_index  UInt32,  -- rpc id: 1..N; 0 = before all txs; 1048575 = after all txs
+    operation_index    UInt16,  -- rpc id: 0-based; 4095 = after the transaction's operations
+    event_index        UInt32,  -- rpc id: position in the operation; fee events: stage counter
+    application_order  Int16,   -- the transaction the event belongs to (joins `transactions`)
+    event_type         Int16,
+    signature          LowCardinality(Nullable(String)),
+    topics_xdr         String CODEC(ZSTD(3)),
+    data_xdr           String CODEC(ZSTD(3))
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, ledger_sequence, transaction_index, operation_index, event_index);
+```
+
+- Dropped: `transaction_id` (50.48 GiB) and the flat `event_index` (4.69 GiB).
+- `application_order` stays although it repeats `transaction_index` for every
+  operation event: a refund settled after all transactions carries the
+  sentinel in its id, and only this column says which transaction it refunds.
+  The transaction page filters on it for every row alike.
+- The sort key within a contract is execution order, fee charges first and
+  end-of-ledger refunds last — the contract event list pages on it directly.
+
+| row                         | `transaction_index` | `operation_index` | `event_index`                   |
+| --------------------------- | ------------------- | ----------------- | ------------------------------- |
+| operation event             | `application_order` | `op_index`        | `event_pos_in_op`               |
+| fee charge (position 0)     | 0                   | 0                 | `application_order − 1`         |
+| refund, ledger ≤ 58,762,517 | `application_order` | 4095              | 0                               |
+| refund, ledger ≥ 58,762,518 | 1048575             | 0                 | rank among the ledger's refunds |
+
+### Fill — per 5k-ledger slice, in ClickHouse, no S3
+
+```sql
+INSERT INTO soroban_events_staging_canonical
+SELECT
+    e.contract_id,
+    e.ledger_sequence,
+    toUInt32(multiIf(o.has_op = 1, t.application_order,
+                     e.event_index = 0, 0,
+                     e.ledger_sequence >= 58762518, 1048575,
+                     t.application_order)),
+    toUInt16(multiIf(o.has_op = 1, o.op_index,
+                     e.event_index = 0, 0,
+                     e.ledger_sequence >= 58762518, 0,
+                     4095)),
+    toUInt32(multiIf(o.has_op = 1, o.event_pos_in_op,
+                     e.event_index = 0, t.application_order - 1,
+                     e.ledger_sequence >= 58762518, r.refund_rank,
+                     0)),
+    t.application_order,
+    e.event_type, e.signature, e.topics_xdr, e.data_xdr
+FROM soroban_events AS e
+INNER JOIN (SELECT id, application_order FROM transactions
+            WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS t
+    ON t.id = e.transaction_id
+LEFT JOIN (SELECT ledger_sequence, application_order, event_index,
+                  any(op_index) AS op_index, any(event_pos_in_op) AS event_pos_in_op,
+                  toUInt8(1) AS has_op
+           FROM soroban_event_ops
+           WHERE ledger_sequence >= {A} AND ledger_sequence < {B}
+           GROUP BY ledger_sequence, application_order, event_index) AS o
+    ON o.ledger_sequence = e.ledger_sequence
+   AND o.application_order = t.application_order
+   AND o.event_index = e.event_index
+LEFT JOIN (SELECT f.ledger_sequence, f.transaction_id,
+                  toUInt32(row_number() OVER (PARTITION BY f.ledger_sequence
+                                              ORDER BY ft.application_order) - 1) AS refund_rank
+           FROM soroban_events AS f
+           INNER JOIN (SELECT id, application_order FROM transactions
+                       WHERE ledger_sequence >= {A} AND ledger_sequence < {B}) AS ft
+               ON ft.id = f.transaction_id
+           WHERE f.ledger_sequence >= {A} AND f.ledger_sequence < {B}
+             AND f.contract_id = -6164601581949826601   -- native SAC
+             AND f.signature = 'fee' AND f.event_index = 1) AS r
+    ON r.ledger_sequence = e.ledger_sequence AND r.transaction_id = e.transaction_id
+WHERE e.ledger_sequence >= {A} AND e.ledger_sequence < {B};
+```
+
+"No op row" is the fee test, never the event name (coverage section above).
+The `GROUP BY` collapses the side table's duplicate copies.
+
+Dry run of this SELECT (read-only, 2026-09-16):
+
+| slice                 | rows      | distinct new keys | distinct old keys | before all | after tx | after all |
+| --------------------- | --------- | ----------------- | ----------------- | ---------- | -------- | --------- |
+| 64,000,000–64,005,000 | 4,887,885 | 4,887,885         | 4,887,885         | 1,738,003  | 0        | 685,689   |
+| 56,000,000–56,010,000 | 6,251,653 | 6,251,653         | 6,251,653         | 2,772,663  | 42,554   | 0         |
+| 58,760,000–58,765,000 | 2,937,803 | 2,937,803         | 2,937,803         | 1,102,737  | 177,896  | 54,687    |
+
+No key collisions; the boundary slice carries both refund kinds. The ids this
+exact SQL produces for the 8 rpc-window ledgers: 7,365 of 7,365 equal to
+`getEvents`, same transaction.
+
+### Gates
+
+1. Before each INSERT (read-only): distinct new keys = distinct old keys for
+   the slice — a collision would be silently merged away by the engine.
+2. After the fill, per partition: distinct rows equal to the old table;
+   `transaction_index = 0` rows equal the partition's transactions; `4095`
+   only below 58,762,518, `1048575` only from it.
+3. Ids read back from the new table match `getEvents` on recent ledgers.
+
+### Live writer
+
+Staging computes the id from the parsed event, not from the rule above:
+operation events from `op_index` / `event_pos_in_op`; tx-level events from
+their `stage`, with per-ledger counters for `BeforeAllTxs` / `AfterAllTxs` and
+a per-transaction counter for `AfterTx`, walked in application order. A future
+protocol that adds stage events stays correct. A tx-level event without a
+stage (V3 meta — absent from the archive and from live ingest) is a staging
+error, never a guessed id. `soroban_event_ops` writes stop.
+
+### Readers (same PR)
+
+| reader                                       | change                                                                                                                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| contract events (`contracts/queries.rs`)     | order and cursor on the new key; transaction resolved by `(ledger_sequence, application_order)`; wire carries the rpc `id` instead of `transaction_id` (the frontend does not read it) |
+| contract stats `recent_events`               | none (contract + ledger)                                                                                                                                                               |
+| transactions filtered by contract (arm)      | arm yields `(ledger_sequence, application_order)`, mapped to the id through the `transactions` key until 0538 moves the driver to positions                                            |
+| transaction detail `fetch_event_appearances` | filter `(ledger_sequence, application_order)`                                                                                                                                          |
+| `balance_seed` (backfill-runner)             | reads `contract_id` / topics / data only; test fixtures' column lists                                                                                                                  |
+
+API types regenerated; architecture docs (schema, pipeline, xdr parsing);
+`init.sql` comment on the table rewritten; `docs/backfills.md` gets the fill.
+
+### Space
+
+Built alongside the old table: ~185 GiB by column arithmetic (236 GiB − 55 GiB
+dropped + the new integer columns, estimate) against 368.72 GiB free.
+Measured on the first filled partition before the rest.
+
+### Decisions (karolkow, 2026-09-16)
+
+- **Column names — rpc names** (`transaction_index`, `operation_index`,
+  `event_index`). `event_index` changes meaning; every reader of the table is
+  rewritten in the same change and a grep confirms no query keeps the old
+  column.
+- **Cutover — one change, one window** (a phased dual write was considered and
+  rejected: three deploys, a second write path for the whole fill, and the old
+  name occupied until the end). `EXCHANGE TABLES` keeps the name
+  `soroban_events`.
+
+### Rollout
+
+1. Operator creates `soroban_events_staging_canonical` (DDL above). Nothing
+   writes it.
+2. Fill partition 127 first; measure size per column and run the gates. Stop
+   there if the table is not smaller than the old partition.
+3. Fill the remaining partitions while the indexer runs, one partition at a
+   time, gate per partition.
+4. One PR: live writer, the five readers, API types, docs, ADR for the naming.
+   Merged, not deployed.
+5. Window: stop the indexer → fill the tail up to the head → gates on the tail
+   → `EXCHANGE TABLES soroban_events AND soroban_events_staging_canonical` →
+   deploy Compute → start the indexer. Ingest paused ~30–60 min (estimate,
+   nothing lost — the queue holds it); event reads fail for the minutes between
+   the swap and the end of the deploy.
+6. After production checks (ids against `getEvents`, contract event order):
+   drop the old table (now under the staging name) and `soroban_event_ops`.
+   Until then the old table is the rollback; ledgers indexed after the swap
+   are only in the new one.
+
+### Pre-fill gate on partition 127 (read-only, 2026-09-16)
+
+100 slices of 5k ledgers (20k exceeds the read profile's memory cap for the
+distinct counts; the INSERT itself carries no such aggregate): 452,275,397
+rows = distinct new keys = distinct old keys = the partition's active row
+count. `transaction_index = 0` rows 170,740,563 = the partition's
+transactions; `operation_index = 4095` rows 0 (all ledgers ≥ 58,762,518);
+`transaction_index = 1048575` rows 78,294,908.
+
+## Pre-implementation review (2026-09-16) — rollout above is superseded
+
+Stopped before any production write to check what the plan assumed. Verified
+facts first, then what they change.
+
+### Verified
+
+- `default` is an `Atomic` database, so `EXCHANGE TABLES` is available. No
+  materialized view, view or dictionary depends on `soroban_events` or
+  `soroban_event_ops`; the co-located `prices` database does not read them.
+- Last 14 days of `system.query_log`: only `ingestion_writer` (indexer),
+  `api_reader`, the operator account and read-only development access touch
+  the two tables.
+- Operator writes (`chw`) run under the `admin` profile: 20 GB per query, no
+  execution cap. Server memory cap 100 GiB, shared with the API and indexer.
+- Disk: 368.32 GiB free; `/backups/` is the same volume. Weekly backup is
+  `FREEZE` (hardlinks) → Borg → `UNFREEZE`, Sunday 03:30 UTC.
+- Pausing the indexer by disabling its SQS trigger is undone by the next
+  Compute deploy (`docs/deployment.md`); only `indexerLambdaConcurrency: 0`
+  plus a deploy is durable. Failed deliveries move to the DLQ after 10 receives.
+
+### What the plan missed
+
+1. **The window as written is unsafe.** "Stop the indexer → … → deploy" with
+   the quick pause lets the deploy re-enable the trigger; old indexer code
+   inserting into the swapped table fails every ledger toward the DLQ. The
+   pause must be the durable one, deployed from the code currently in
+   production, and the new code deployed after the swap.
+2. **Programme order skipped.** 0538 puts the naming ADR and a measured trial
+   (size and read-path benchmark) before any migration. Column names in a
+   DDL are the expensive thing to change later, and the table holds both
+   `transaction_index` (rpc id, with sentinels) and `application_order` (the
+   real position).
+3. **Scope gaps.** The transaction page's archive-decoded events expose and
+   display our flat `event_index` (`XdrEventDto`, `EventsSection.tsx`), so it
+   would still number events differently from the contract page; its doc
+   comment also claims pre-23 events carry no stage, which the archive
+   refutes. `asset_transfers.event_index` exists only to join the old key and
+   is orphaned by the change (dropping it needs the DEFAULT-first order).
+   `account_reconciliation` and `redecode_diff` tests, the `--only
+soroban_event_ops` backfill flag, `docs/backfills.md` and the merge scripts'
+   table lists reference the old shape.
+4. **Backups.** A `FREEZE` during the fill pins parts that merges would
+   replace, and Borg uploads the new ~185 GiB table as new data — then the old
+   one again under the staging name until it is dropped.
+5. **Load.** Fill queries may take 20 GB each on the box serving the API; they
+   run one at a time, outside the backup window, with the API latency watched.
+6. **Rollback is asymmetric.** After the swap the new writer stops
+   `soroban_events` (old shape) and `soroban_event_ops`; going back needs a
+   re-ingest of every ledger since the swap into both.
+7. **Live writer proof.** The id counters depend on walking transactions in
+   application order; tests need real meta for a pre-23 refund, a post-23
+   ledger with several refunds, and a runnable `getEvents` comparison kept as a
+   check (ADR 0057).
+
+### Revised order
+
+1. ADR: canonical event identity and names (`application_order` = SEP-35
+   transaction application order, the real position; rpc id components named
+   as rpc).
+2. Trial: create the staging table with the final DDL, fill partition 127,
+   measure per-column size, benchmark the three read paths against the old
+   table on that range. Go / no-go.
+3. PR: writer, readers (contract events, transactions-by-contract arm,
+   transaction detail and its archive-decoded ids, frontend numbering),
+   `asset_transfers.event_index` out of the struct, `soroban_event_ops` writes
+   removed, tests above, docs, API types. Merged, released only in step 6.
+4. Fill the remaining partitions one at a time, gates and disk check after
+   each, never across Sunday 03:30 UTC.
+5. `asset_transfers.event_index` gets a DEFAULT (no pause needed).
+6. Window: deploy `indexerLambdaConcurrency: 0` from the production code →
+   fill the tail, gate → `EXCHANGE TABLES` → deploy the new code with
+   concurrency 1 → `getEvents` check, contract event order, transaction page.
+7. After the rollback horizon: drop the old table, `soroban_event_ops`, and
+   `asset_transfers.event_index`.
+
+### Decisions after the review (karolkow, 2026-09-17)
+
+- **Transaction page numbering — same PR.** The archive-decoded events on the
+  transaction page carry the rpc id, computed from the ledger meta (stage and
+  per-ledger counters), and the frontend shows it; one numbering on every page
+  from the first day.
+- **`asset_transfers.event_index` — dropped in this change:** DEFAULT before
+  the window, out of the writer struct in the PR, `DROP COLUMN` after the
+  rollback horizon.
+- **Rollback horizon — until the next backup.** Production checks on the day
+  of the swap; the old table and `soroban_event_ops` are dropped before the
+  following Sunday 03:30 UTC backup. Re-ingest stays the fallback after that.
+
+> Corrected 2026-09-21: after the horizon the old shape is still derivable
+> inside ClickHouse from the new table, so re-ingesting the archive is not the
+> only way back (plan 4.6).
+
+### Naming found during the ADR draft
+
+The same per-operation location already has names in `asset_transfers` and
+`soroban_event_ops`: `application_order` (transaction, 1-based), `op_index`,
+`event_pos_in_op` (0-based). `operations_appearances` and
+`lp_operation_amounts` use `application_order` for the operation's position.
+ClickHouse cannot rename a sort-key column ("Columns specified in the key
+expression of the table … cannot be renamed", ALTER COLUMN docs), so aligning
+`asset_transfers` would mean rebuilding it (43.96 GiB, 5.60 bn rows). Fee
+events make the rpc id and the location differ, so both concepts exist
+regardless of names.
+
+**Decided (karolkow, 2026-09-17): stellar-rpc names everywhere** — ADR 0059
+(proposed). stellar-rpc itself names a transaction's position
+`applicationOrder` (`getTransaction` / `getTransactions`, 1-based) and uses
+`transactionIndex` / `operationIndex` only on events, where fee events carry
+the sentinel. So `application_order` stays in every table for the transaction;
+the operation becomes `operation_index` and the event-in-operation
+`event_index`; `transaction_index` exists only on event rows. The new
+`soroban_events` DDL above already matches. `asset_transfers` renames
+`op_index` / `event_pos_in_op` at its rebuild — task 0558 (backlog, not yet on
+`develop`) plans a rebuild-and-swap of the same table for `token_id`; one
+rebuild serves both. `operations_appearances` / `lp_operation_amounts` rename
+their operation position in 0538.
+
+Code work runs on `feat/0541_canonical-event-location` (worktree
+`.claude/worktrees/feat-0541_canonical-event-location`, from `develop`
+c765f4d8); lore and the ADR land on `develop`.
+
+## Implementation and rollout plan (2026-09-17)
+
+[`notes/S-implementation-and-rollout-plan.md`](notes/S-implementation-and-rollout-plan.md) — phases 1–5 (trial and benchmark, code tasks 2.1–2.8, partition fill, window runbook, cleanup), with the fill and gate SQL in [`notes/fill_insert.sql`](notes/fill_insert.sql) and [`notes/fill_gate.sql`](notes/fill_gate.sql). It supersedes the "Rollout" and "Revised order" lists above.
+
+**Decided (karolkow, 2026-09-17): the transaction page shows the rpc id.** Its `#` column becomes `ID` with the full `getEvents` id, rows in execution order; the bare `event_index` (ledger-wide counter for fees, position in the operation otherwise) and a short `op N · M` form were rejected. Plan task 2.6–2.7.
+
+## Phase 1 trial — partition 127 (2026-09-17)
+
+Operator created `soroban_events_staging_canonical` and filled partition 127
+(100 slices of 5k ledgers; 583 s of query time, median 5.6 s, peak 3.68 GiB per
+statement).
+
+**Correctness.** 452,275,397 rows = the old partition, in every one of the 100
+slices; 452,275,397 distinct keys; `transaction_index = 0` rows 170,740,563 (=
+the partition's transactions), `operation_index = 4095` 0, `transaction_index =
+1048575` 78,294,908 — all equal to the pre-fill gate.
+
+**Size.** 5.31 GiB against 7.19 GiB (−26%; still 6 parts, merges may shrink it
+further). Per column (bytes/row, old → new): `topics_xdr` 8.516 → 8.332,
+`data_xdr` 2.182 → 2.094, `transaction_id` 5.036 → gone, flat `event_index`
+0.699 → gone; new `transaction_index` 0.634, `application_order` 0.460,
+`event_index` 0.361, `operation_index` 0.150; `signature` 0.124 → 0.059. Whole
+table by the same ratio ≈ 174 GiB (estimate).
+
+> Corrected 2026-09-22: the whole table came out at 195.91 GiB, −17.6% per
+> row, not −26%. The saving is close to constant in bytes, not in percent:
+> −4.21 B/row measured on the whole table (23.9 → 19.69) and −4.5 on the
+> trial partition. Partition 127's rows are among the lightest (12.48 B/row new, against
+> ~25 in partitions 100–108), so its percentage overstated the table's. The
+> per-row arithmetic ("Space" above, ~185 GiB) was the better estimate. Merging
+> changes little: partition 127 went from 6 parts to 1 for −0.9%, partition
+> 128 from 12 to 1 for −1.8% (5.69 → 5.59 GiB, 234 s, rows unchanged). The
+> rest is left to background merges: ~2–4 GiB at most (_estimate_), not worth
+> ~2 hours of full merges on the server that serves the API.
+
+**Read path** (median of 3, `system.query_log`; contracts: native XLM 271 M
+events in the partition, `546855837558613593` 14 M, `5314455185855296541`
+1,034):
+
+| case                                                          | old                      | new                           |
+| ------------------------------------------------------------- | ------------------------ | ----------------------------- |
+| contract events, first page — XLM / mid / small               | 285 / 392 / 13 ms        | 119 / 193 / 9 ms              |
+| contract events, cursor page — XLM / mid / small              | 290 / 354 / 15 ms        | 123 / 155 / 9 ms              |
+| memory, first page — XLM / mid                                | 1.19 / 1.90 GiB          | 573 MiB / 1.10 GiB            |
+| transaction resolve by id vs by position                      | 4 ms                     | 4 ms                          |
+| transaction page event appearances                            | 81 ms, 24.7 M rows read  | 5 ms, 49 k rows read          |
+| contract tx-list arm, `IN` over positions — XLM / mid / small | 315 / 29 / 3 ms          | **over 4 GB** / 4,331 / 57 ms |
+| contract tx-list, today's full driver — XLM                   | **over 4 GB (6.04 GiB)** | —                             |
+| contract tx-list arm, position window — XLM / mid             | —                        | 87 / 32 ms                    |
+
+Verdict: the table and the contract-event and transaction-page reads pass with
+margin. The `IN` mapping for the contract-filtered transaction list fails, and
+the list is already broken for native XLM today; plan task 2.5 moves that list
+to positions with bounded windows (measured 87 ms for native XLM).
+
+> Corrected 2026-09-21: the transaction-page "5 ms, 49 k rows" is a warm re-run
+> of a statement without the shipped `JOIN ledgers`; cold, the shipped query is
+> ~1.6–2× faster than the old one. The bounded windows were later replaced by
+> the `contract_transactions` index. See
+> [S-review-and-contract-transactions](notes/S-review-and-contract-transactions.md).
+
+**Disk before phase 3 (2026-09-17, decision 231 A).** Free space 360.71 GiB (20.5%); filling the remaining partitions (+~169 GiB) plus two weeks of growth would leave ~9% until the old table is dropped. Server logs without retention hold 174.50 GiB (≥ 89 GiB older than 30 days); reclaiming them first was proposed (task 0563) and deferred by karolkow the same day — no log is deleted now. So phase 3 runs as late as possible, right before the window, to shorten the weeks both tables share the disk, and stops if free space before a partition is under 120 GiB. Adding columns to the old table instead of swapping was rejected: the sort key cannot drop `transaction_id`, so the table would end ~78 GiB larger than the swap result and keep hash order.
+
+## Phase 2 — the code (2026-09-17/18)
+
+Branch `feat/0541_canonical-event-location`, one PR, deploy only in phase 4.
+Tests: `cargo test --workspace`, `pnpm nx run-many -t test typecheck lint` green.
+
+| task | what changed                                                                                                                                                                                                                                        |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.1  | `xdr_parser::EventId` + `tx_level_event_ids` / `assign_event_ids`; `ExtractedEvent.event_id`; the flat counter renamed `position_in_tx` (in memory only). `ExtractedAssetTransfer` loses it entirely.                                               |
+| 2.2  | The indexer assigns ids per ledger. New test on ledger 58,816,920 from the public archive: every consensus event has an id, all unique, charge and refund counters contiguous, no `after_tx` under protocol 23.                                     |
+| 2.3  | `SorobanEventRow` = the rpc id + `application_order`; a consensus event without an id is a staging error. `soroban_event_ops` deleted (rows, writer slot, targetable list, DDL); `asset_transfers` stops writing the flat counter.                  |
+| 2.4  | Contract events page and cursor on the rpc id; the wire carries `id` instead of `transaction_id`; the transaction is resolved by `(ledger_sequence, application_order)`. A cursor minted before the change gets 400 `invalid_cursor`.               |
+| 2.5  | The contract-filtered transaction list moved to positions: per-arm ledger windows merged in Rust (`transactions/contract_positions.rs`), page and cursor on `(ledger_sequence, application_order)`. `fetch_event_appearances` filters the position. |
+| 2.6  | Transaction-page events (archive XDR) carry the id, come back in execution order, and name the operation as `operation_index`; the dead `extract_e14_heavy` is gone.                                                                                |
+| 2.7  | The events table's `#` column is now `ID` with the full rpc id (diagnostic rows `—`); `OperationCard` and `ContractEvents` key on it.                                                                                                               |
+| 2.8  | `init.sql`, backfill tooling, `docs/**` per ADR 0032, ADR 0059 → accepted, and a new `backfill-runner/tests/event_id_reconciliation.rs` comparing `getEvents` against both the table and a fresh parse of the archive (skips until the swap).       |
+
+### Read-path measurements on production (read-only, 2026-09-18)
+
+Partition 127 of `soroban_events_staging_canonical`, native XLM
+(`-6164601581949826601`) unless stated — the heaviest contract there is. Window
+84 rows (`limit × 4`), from `system.query_log`.
+
+| query                                                     | time           | read                           | memory   |
+| --------------------------------------------------------- | -------------- | ------------------------------ | -------- |
+| tx-list arm window — events / invocations / operations    | 13 / 6 / 58 ms | 3.88 MiB / 454 KiB / 51.68 MiB | ≤ 13 MiB |
+| tx-list arm rows — events / invocations / operations      | 5 / 7 / 22 ms  | 83 KiB / 264 KiB / 12.89 MiB   | ≤ 8 MiB  |
+| tx-list page by position (`IN` over the merged positions) | 9 ms           | 572 KiB                        | 6.65 MiB |
+| contract events, first page — native XLM                  | 135 ms         | 481 MiB                        | 435 MiB  |
+| contract events, cursor page — native XLM                 | 116 ms         | 533 MiB                        | 380 MiB  |
+| contract events, first page — `546855837558613593`        | 60 ms          | 187 MiB                        | 114 MiB  |
+
+One contract-filtered list page is the three arms plus the page: ~111 ms and
+~69 MiB for native XLM, against the 6.04 GiB that fails today. Every statement
+is under the gate (< 1 s, < 1 GiB). The event pages read more than phase 1
+measured because the partition was filled in 100 slices and its parts are not
+merged yet.
+
+> Superseded 2026-09-21: these measured one round of the window mechanism. Its
+> cap ended a dense contract's list early (804 transactions, 13 shown), and it
+> was replaced by the `contract_transactions` index — re-measure the list after
+> the index's trial on partition 127.
+
+### Where the code differs from the plan
+
+- The indexer's id test is an integration test
+  (`crates/indexer/tests/event_ids_real_ledger.rs`), not a unit test inside
+  `process.rs`: `parse_ledger` reads the network passphrase from the process
+  environment, and an integration test has that process to itself.
+- The transaction-page test (2.6) runs on the same real ledger fixture instead
+  of the single-transaction meta the plan named — it exercises the real
+  application order and the ledger's fee counters, which one transaction cannot.
+- ~~`MergeResult::NeedWiderWindow` carries the positions it already has, so the
+  last round can return a short page instead of recomputing it.~~ The window
+  mechanism is gone (review, 2026-09-21).
+- Also moved under `__tests__` because the change touched them:
+  `ExecutionTrace.test.ts`, and `transactions/dto.rs`'s inline tests.
+- Added, not in the plan: `crates/db-clickhouse/tests/soroban_events_write_e2e.rs`
+  inserts a staged `SorobanEventRow` into a real table. The driver checks the
+  row against `DESCRIBE` only at insert time, the check that stopped ingest in
+  0310; a unit test cannot see it.
+- Task 2.4 asked for `event_cursor_matches_source` to match the new variant;
+  it was deleted instead, with its handler check. `EventCursor` has one
+  variant, so the check could only return true; a cursor minted before the
+  change still fails at decode with 400 `invalid_cursor`.
+- The transaction-list cursor names its key (decision 2026-09-22): `Ch
+{ tiebreak }` held the position for the unfiltered list and the id surrogate
+  for the operation-type list and the account, asset and invocation lists, so
+  a cursor carried between the two `/transactions` lists was read with the
+  wrong key. Now `ChPosition` (unfiltered and contract-filtered) and
+  `ChSurrogate { transaction_id }` (the rest), each list refusing the other;
+  a cursor minted before the change gets 400 `invalid_cursor` once.
+- The id assignment has one entry point, `xdr_parser::LedgerEvents`, which the
+  indexer, the transaction page and the tests go through; the two steps it
+  wraps are private to the parser. Two real-history tests had done them by
+  hand, one step short (review, 2026-09-21).
+
+## Review and the contract index (2026-09-20/21)
+
+Two reviews of `abd5a801`: the deep protocol and the two-axis `/code-review`.
+Design confirmed; six merge blockers fixed; one design change. Full record:
+[S-review-and-contract-transactions](notes/S-review-and-contract-transactions.md).
+
+**Decided (karolkow, 2026-09-21):**
+
+- **The contract-filtered transaction list reads a new presence index,
+  `contract_transactions`**, built in this task. The window mechanism of task
+  2.5 existed because contracts, unlike accounts, assets and pools, had no
+  per-(entity, transaction) index; its cap could end a dense contract's list
+  early. The list is now one seek, like the account list.
+- **Fee events do not count as touching a contract.** Otherwise the native SAC's
+  list is every transaction on the network.
+
+**Owed before the window:** ~~create `contract_transactions` and trial it on
+partition 127~~ (done 2026-09-21: 160,521,800 pairs, gate 100 of 100 slices,
+every tested first page full; the dense contract's whole list pages through,
+484 of 484); fill it in the phase-3 loop after the rekey of each slice;
+~~`asset_transfers.event_index` `DEFAULT`, gated by a read~~ (done 2026-09-21,
+`system.columns` reads `DEFAULT 0`); hand over two query shapes of a client
+outside this repository that the swap breaks. Run task 0517 (event names) only
+after the swap: 132,256 resolvable `NULL` names were already copied with
+partition 127.
+
+**Decided (karolkow, 2026-09-21): the window this week.** Phase 3 fill on
+Tuesday 2026-09-22, the window on Wednesday 2026-09-23, provided PR #465 and the
+release PR `develop → master` are merged by Tuesday; phase 5 drops before
+Sunday 2026-09-27 03:30 UTC. Free disk 344.75 GiB (19.6%) on 2026-09-21; the
+fill adds ~180 GiB (_estimate_), leaving ~165 GiB against the 120 GiB stop
+line. Later the same day 476.01 GiB (27.1%): the `system` database dropped to
+51.14 GiB from the 174.50 GiB of server logs recorded on 2026-09-17, most likely
+task 0563's retention; ~296 GiB would remain after the fill.
+
+**Decided (karolkow, 2026-09-21): phase 3 starts the same day**, partition by
+partition as each passes its pre-fill gate; with the disk no longer the
+constraint, Tuesday stays for the head's partition and the checks.
+
+Pre-fill gate, 2026-09-21 (read-only, `fill_gate.sql` per 5k slice): 28 of 28
+partitions pass (100–126, 128) — new keys = old keys in every slice, no
+duplicates in the old table, charges = the partition's transactions, pre-23
+refunds only up to partition 117 and post-23 ones only from it (117 holds the
+boundary and both). 10,176,445,797 rows to copy.
+
+**Phase 3 filled, 2026-09-21** (operator, 12:14–20:50 UTC): every whole
+partition, 100–128. The staging table holds 10,628,721,194 rows = the gated
+10,176,445,797 + partition 127's 452,275,397; every one of the 2,900 slices
+equals its gate's `n`, none over. `contract_transactions` holds 2,975,298,311
+pairs; its per-slice gate passes in all 29 partitions (2,900 slices, no
+duplicates), and the per-partition sums add up to the table's total exactly. Staging 195.06 GiB
+on 254 unmerged parts (the old table 237.65 GiB); free disk 265.92 GiB (15.1%).
+API p95 in the two hours of real traffic during the fill (390 and 223
+requests): 313 and 269 ms, against ~280–390 ms the day before; the other hours
+had too few requests to judge.
+
+Two interruptions, both clean at a slice boundary: a manual stop, and the
+operator's laptop sleeping mid-slice. The second showed a hole in the script's
+guard — `curl`'s transport error goes to stderr with a non-zero exit, and the
+guard read only stdout for `DB::Exception`, so the loop printed `ok` and went on.
+That slice had landed server-side regardless (checked per slice). The guard now
+stops on any output or a non-zero exit, and a partition resumes from a slice
+with `P:A`; both exercised with a stub `chw`.
+
+The head's partition has nothing to fill before the window: the head is 47,640
+ledgers into partition 129, under the 50,000-ledger margin, so all of 129 goes
+into the window's tail.
+
+**Decided (karolkow, 2026-09-21): the window follows the two merges** (PR #465,
+then the release PR `develop → master`, untagged) — Tuesday at the earliest,
+Wednesday at the latest.
+
+**Decided (karolkow, 2026-09-22):**
+
+- **The window deploys from `develop`, not `master`.** PR #465 is merged
+  (`4cc95aee`); the new code is deployed from `develop` at `60bba1b9`
+  (`0baddade` plus docs), and
+  `master` takes the change later. Until a `production-*` tag carries it,
+  a Compute deploy from `master` or an older tag stops ingest after the swap —
+  recorded as the reverse hold in `docs/deployment.md`.
+- **The client outside this repository is not warned; its two query shapes
+  break at the swap**, accepted.
+
+Preconditions read on 2026-09-22: every copied partition's old row count still
+equals its gate (29 of 29 — no backfill since the copy); `contract_transactions`
+exists; `asset_transfers.event_index` reads `DEFAULT 0`; free disk 277.57 GiB;
+ingest queue and DLQ empty, retention 14 days.
+
+Phase 3 runs as one command per list of partitions,
+[`fill_partitions.zsh`](notes/fill_partitions.zsh): both tables per partition,
+disk checked before each, stop at the first error. Dry-run with a stub `chw`
+on partitions 100–101: 400 statements, 200 per table, bounds 50,000,000 to
+51,000,000, no placeholder left.
+
+> 2026-09-21: the contract-events page, re-measured after the operator merged
+> the staging partition to one part, reads fewer rows than the old page (median
+> 1,490,944 against 1,515,520): the `read_rows ≤ old` gate passes.
+
+## The window (2026-09-22)
+
+Run as planned (`notes/S-implementation-and-rollout-plan.md`, phase 4), from
+two local checkouts: `prod` at `production-2026.09.21-1`, `new` at `develop`
+`60bba1b9`. Ingest stood still for ~32 minutes; the explorer kept serving
+throughout, three of its reads failing for ~6 of those minutes.
+
+| UTC         | step                                                                                                                                                                                                                 |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 08:48       | Pause: Compute from `prod` with `indexerLambdaConcurrency: 0`. Last indexer write to the old table 08:47:57; **H = 64,556,219** (closed 08:47:53).                                                                   |
+| 09:04–09:05 | Tail: `fill_partitions.zsh 129`, both tables.                                                                                                                                                                        |
+| 09:11:40    | New code, still paused: Compute from `new`, concurrency 0.                                                                                                                                                           |
+| ~09:18      | Swap: `EXCHANGE TABLES soroban_events AND soroban_events_staging_canonical`. Between 09:11:40 and the swap the contract events tab, the contract transaction list and the transaction page's events returned errors. |
+| ~09:20      | Resume: Compute from `new`, concurrency 1; web deployed, CloudFront invalidation done 09:20:26.                                                                                                                      |
+
+**Checks before the swap** (read-only):
+
+- Partition 129's pre-fill gate: 53,021,549 rows, no duplicates, charges =
+  the partition's 14,623,286 transactions. After the fill, 100 of 100 slices
+  equal the gate; `contract_transactions` 10,924,157 pairs, no differences, no
+  duplicates.
+- Totals over partitions 100–129: old 10,681,742,743 = new 10,681,742,743,
+  every partition equal on its own; the new table ends at H.
+- No writer on either table: the indexer's last write 08:47:57, the tail's
+  09:05:02.
+- Content hash per slice (contract, ledger, transaction — for the new table
+  mapped back from the position through `transactions` —, type, name, topics,
+  data): 9 of 9 slices identical, 35.3 M events. The slices: the first with
+  data, partition 106's resume point, the protocol-23 boundary, partition 127,
+  the tail at H.
+
+**Checks after the resume** (read-only):
+
+- The indexer's trigger is enabled, errors 0, the DLQ empty (again at 09:56).
+  After H the new indexer writes only the new tables: `soroban_events` in the
+  new shape, `contract_transactions`, `asset_transfers`; 0 rows reached the
+  old table. It caught up with the network by ~09:29 (~65 ledgers a minute
+  against 12 arriving).
+- The SQL fill and the Rust writer agree: `fill_contract_transactions.sql`
+  as a `SELECT` over the first 80 ledgers the new indexer wrote gives 15,638
+  pairs, the writer 15,638; `EXCEPT` both ways empty.
+- Ids equal `getEvents` on 7 ledgers, 5,806 events: 3 ledgers from the fill
+  (H among them), 4 written by the new indexer. Run by hand with the
+  reconciliation test's logic.
+- The site, run locally on the deployed code against the production database
+  (read-only): the native SAC's events carry rpc ids and page on; its
+  transaction list is a full page of 20, newest first by position, and pages
+  on; a transaction page's `ID` column shows the charge first
+  (`…-0000000162` for the transaction at position 163), then operation 0's
+  events.
+
+**Found during the window:**
+
+- **The reconciliation test sent `startLedger = endLedger`.** `getEvents`
+  treats `endLedger` as exclusive, so the range was empty and the test would
+  have failed on its first ledger. It had never run on production — it skips
+  until the swap. Fixed to `[L, L + 1)` (PR #473, merged).
+- **A full content hash does not fit the development read quota.** The run
+  over every slice was stopped after 182 contiguous slices, all identical: it
+  used the whole hourly quota (2 TiB, counted uncompressed; topics and data are
+  ~11 GiB a slice, ~28 TB for the table). Estimated at 2 hours, it would have
+  taken ~14.
+
+**Decided (karolkow, 2026-09-22):**
+
+- **Swap first, compare in full afterwards.** Both tables stay until phase 5,
+  so the comparison does not need the indexer paused.
+- **The full check is the cheap one** (option A): per slice, count and a hash
+  of contract, ledger, transaction, type, name and the lengths of topics and
+  data, over all 2,821 slices up to H. A copy moves topics and data unchanged,
+  so a same-length substitution has no way to arise; content itself is hashed
+  on 191 slices (~6.8%). One slice (60,000,000, identical) read 1.51 GiB
+  over both tables against ~11 GiB for the content hash: ~4.2 TiB for all
+  slices (_estimate_), about two hours of the whole quota.
+- **The test fix goes in its own PR** (option A), PR #473.
+- **`transaction_index` stays.** A three-value stage would save ~6–7 GiB
+  (_estimate_) but needs another rebuild and window:
+  [I-stage-enum-instead-of-transaction-index](notes/I-stage-enum-instead-of-transaction-index.md).
+
+**Owed before phase 5** (drops before Sunday 2026-09-27 03:30 UTC):
+
+- [x] the cheap full check, all 2,821 slices equal — 50,455,000 to H, done
+      13:05 UTC, paced to half the hourly quota; 10,681,742,743 rows on each
+      side, so every new row up to H maps back to its transaction;
+- [x] `event_id_reconciliation` run against production and green — 5 ledgers
+      written by the new indexer (64,556,788–64,556,936), 3,298 ids equal on
+      all three sides: `getEvents`, the table, the parser on the archive;
+- [x] the production site in a clean browser (Turnstile), by the operator —
+      data loads; the deployed bundle carries the site key and this change's
+      frontend code.
+
+Phase 5 frees 241.98 GiB against the day's sizes: the old table 237.81 GiB,
+`soroban_event_ops` 3.38 GiB, `asset_transfers.event_index` 0.79 GiB. The
+plan's drop of the old table would have failed: the server keeps the default
+50 GB `max_table_size_to_drop`, so the command carries the query-level override
+(checked on a local 26.3 server; plan, phase 5). Read before handing it over:
+the table under the staging name is the old one (sort key with
+`transaction_id`) and ends at H; nothing depends on either table;
+`soroban_event_ops` was last written at 08:47:57; `asset_transfers.event_index`
+is outside the sort key, `DEFAULT 0`, absent from the writer's row. The
+reverse hold in `docs/deployment.md` stays until a `production-*` tag carries
+this change.
+
+## Phase 5 (2026-09-22)
+
+Run by the operator at ~13:11 UTC, after the three checks above:
+`DROP TABLE soroban_events_staging_canonical SETTINGS max_table_size_to_drop = 0`,
+`DROP TABLE soroban_event_ops`,
+`ALTER TABLE asset_transfers DROP COLUMN event_index`. Checked by reads: both
+tables gone, the column gone, its mutation done without a failure. The files
+went at 13:19, after the 480 s delay: free disk 241.68 → 482.92 GiB. The
+indexer kept writing all three live tables at the head, the DLQ stayed empty,
+and the indexer, API and enrichment Lambdas logged no errors from 12:00 UTC
+to the check. The local API on the deployed code against production answered 200
+on the contract events, the contract transaction list, an account's
+transactions with balance changes and a transaction page. No query on the
+server failed on a dropped object.
+
+## Implementation Notes
+
+- **Code** — PR #465 (merged `4cc95aee`, 89 files): parser ids
+  (`LedgerEvents`), the staging writer for the new `soroban_events` and
+  `contract_transactions`, the readers (contract events, contract transaction
+  list, transaction page), the frontend `ID` column, the list cursors split by
+  key. PR #473: the reconciliation test's `endLedger`.
+- **Migration** — `notes/fill_insert.sql`, `notes/fill_contract_transactions.sql`,
+  the gates and `notes/fill_partitions.zsh`; phase 3 on 2026-09-21, the window
+  and phase 5 on 2026-09-22 (sections above).
+- **Plan and review** — [S-implementation-and-rollout-plan](notes/S-implementation-and-rollout-plan.md),
+  [S-review-and-contract-transactions](notes/S-review-and-contract-transactions.md).
+
+**Tests changed:**
+
+- Test files beside the code moved into subdirectories per the placement rule
+  (`stage/*`, `value_flow/tests.rs`, `writer/tests.rs`,
+  `asset_transfers/tests.rs`, `event/tests.rs`, `contracts/queries/ch_tests.rs`,
+  web `__tests__/`). Moves only.
+- The real-history staging tests (`config_pool_stage_real_e2e`,
+  `pair_factory_stage_real_e2e`, `tx_event_stage_real_meta`) assign rpc ids
+  through `LedgerEvents`, as the indexer does. Intentional.
+- `resources.test.ts` expects `(unnamed #0)` and `(unnamed #1)`: nameless
+  counters are keyed by their place in the stream; before, the second
+  overwrote the first. A fix, not a regression.
+- `ExecutionTrace.test.ts` compares events by identity instead of a marker
+  field smuggled into the fixture.
+- `event_id_reconciliation` asks `getEvents` for `[L, L + 1)`; the old
+  `[L, L]` was empty and had never run (PR #473).
+- New: `event_ids_real_ledger`, `soroban_events_write_e2e`, the cursor
+  round-trip and rejection tests in `transactions/dto/tests.rs`.
+
+## Issues Encountered
+
+- **A review fix that would have misplaced fee events.** Reading
+  `operation_index` from the id puts every fee event on operation 1's card;
+  rejected, with a guard comment where the card reads it.
+- **The fill script's guard missed transport errors.** `curl` reports them on
+  stderr with a non-zero exit; the guard read only stdout, so a timed-out
+  slice printed `ok`. The slice had landed; the guard now checks both.
+- **The query condition cache made warm re-runs look fast.** The read-only
+  profile cannot turn it off, so each benchmark run used distinct bounds.
+- **`getEvents` treats `endLedger` as exclusive** — see "Tests changed".
+- **The development read quota counts uncompressed bytes.** The full content
+  hash needed ~28 TB; the key-and-length check replaced it.
+- **The server's 50 GB drop guard.** The plan's `DROP TABLE` of the 237.81 GiB
+  old table would have failed; the command carries a query-level override,
+  the server setting is unchanged.
+- **The client outside this repository** fails on
+  `soroban_events.transaction_id` since the swap, as accepted on 2026-09-22.
+
+## Design Decisions
+
+### From Plan
+
+1. **The rpc id is the key, stored literally** (ADR 0059): no derived
+   surrogate, the same numbers `getEvents` returns.
+2. **Rekey inside ClickHouse, per 5,000-ledger slice, gated per slice** —
+   no archive pass.
+3. **One window**: pause, tail, new code, `EXCHANGE TABLES`, resume; the old
+   table kept as the way back until the next weekly backup.
+
+### Emerged
+
+4. **`contract_transactions`** (2026-09-21, after the review): the contract
+   list had no per-(entity, transaction) index; merged ledger windows could
+   end a dense contract's list early.
+5. **Fee events do not count as touching a contract** — otherwise the native
+   SAC's list is every transaction on the network. The writer takes per-operation
+   events only; `is_operation_event` was removed.
+6. **List cursors name their key** (`ChSurrogate` / `ChPosition`), so a cursor
+   minted by one list shape is refused by another.
+7. **The window deployed from `develop`**, with a reverse hold in
+   `docs/deployment.md` until a `production-*` tag carries the change.
+8. **Swap first, compare in full afterwards**, with a key-and-length check in
+   place of the content hash (quota).
+9. **`transaction_index` kept**: a three-value stage and a `UInt16`
+   `event_index` would save ~7 GiB (_estimate_) but need another rebuild
+   ([I-stage-enum-instead-of-transaction-index](notes/I-stage-enum-instead-of-transaction-index.md)).
+
+## Future Work
+
+- Review follow-ups outside this change sit in existing tasks: 0381 (list
+  findings), 0486 (the NFT name filter), 0538 (in-memory hash joins). See the
+  review note.
+- The stage enum and a narrower `event_index` wait for the next rebuild of
+  `soroban_events`; an idea note, not a task, since no rebuild is planned.
+  0572 measures the one saving that could justify a rebuild: topics and data
+  as binary XDR instead of JSON text (88% of the table).
+- The reverse hold leaves `docs/deployment.md` with the release that carries
+  this change: the guide's item names its own end, and the guide is read
+  before every deploy. No task.

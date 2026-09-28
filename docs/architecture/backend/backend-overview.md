@@ -127,7 +127,10 @@ The backend implementation direction implied by the current design is:
   schemes (task 0277/0287) — `api_key` (`x-api-key` header, paid tier) and
   `bearer_jwt` (free-tier session JWT) — as a global OR requirement, so Swagger
   UI renders an "Authorize" dialog and "Try it out" can reach the gated `/v1`
-  surface; `/health` opts out with an empty per-path requirement.
+  surface; `/health` and `POST /auth/session` opt out with an empty per-path
+  requirement. `/auth/session` is listed in `ApiDoc`'s `paths(...)` rather than
+  `register_routes`, because it is mounted only when the auth layer is armed and
+  the spec must describe it either way (task 0510).
 - **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)
 - **API Gateway** for public HTTP ingress, throttling, request validation, and response
   caching
@@ -449,7 +452,7 @@ tables**, not from the `assets` row — `assets.name` has had no writer since ta
 (classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (on-chain
 SEP-41 `METADATA`, task 0297) → `'Stellar Lumens'` for native; `symbol` /
 `decimals` come from `soroban_contract_metadata` (decimals defaults to 7 for
-classic/SAC). See `endpoint-queries-clickhouse/{08,09}_get_assets*.sql`.
+classic/SAC). See `crates/api/src/assets/queries.rs`.
 
 **`GET /assets/:id/transactions`** - Paginated transactions involving this asset
 (addressed by the same `:id` token forms).
@@ -473,7 +476,7 @@ upgrade past ~5M rows), skipped entirely when the page holds no SAC. `null`
 on non-SAC rows and on the rare SAC with no resolvable facet row (frontend
 keeps the bare badge).
 
-**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`, `sac_asset` — the mirrored classic asset per the list-endpoint semantics above, task 0441), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with a typed `name` column, historically consumed by the search query; the detail page previously returned `{}` for every row and lost no information when the field was dropped. That `name` column has had no writer since task 0297 (empty going forward; on-chain token metadata now lives in the `soroban_contract_metadata` side table and is surfaced via /assets, not /contracts). Post-0243 (CH cutover complete, PG retired) it has **no reader**: the CH global search resolves contract names from `soroban_contract_metadata` (`22_get_search.sql`), and task 0304 dropped the last reader — the contracts-LIST name-search fallback on `sc.name`. The dead column is pending `DROP COLUMN` (task 0310).
+**`GET /contracts/:contract_id`** - Contract identity (id, contract_id, deployer, WASM hash, deployed_at_ledger), classification (`contract_type`, `is_sac`, `sac_asset` — the mirrored classic asset per the list-endpoint semantics above, task 0441), mutability (`upgradeable`), and per-contract activity stats. `upgradeable` (task 0327) is 3-state: `true` iff the contract's current WASM imports the `update_current_contract_wasm` host fn (a self-upgrade path), `false` if it does not (effectively immutable/frozen; a SAC has no WASM and is always `false`), and `null`/Unknown when the WASM interface has not been parsed with the flag yet (the frontend renders no chip). There is no on-ledger immutability flag — the import set is the only signal. Resolved in the contract-header query from a `LEFT JOIN wasm_interface_metadata` (`JSONExtractBool(metadata,'upgradeable')`); ClickHouse-only, the retired PG path returns `null`. Per ADR 0042 / task 0156 the response no longer carries a `metadata` field — the underlying `soroban_contracts.metadata JSONB` was replaced with a typed `name` column, historically consumed by the search query; the detail page previously returned `{}` for every row and lost no information when the field was dropped. That `name` column has had no writer since task 0297 (empty going forward; on-chain token metadata now lives in the `soroban_contract_metadata` side table and is surfaced via /assets, not /contracts). Post-0243 (CH cutover complete, PG retired) it has **no reader**: the CH global search resolves contract names from `soroban_contract_metadata` (`crates/api/src/search/queries.rs`), and task 0304 dropped the last reader — the contracts-LIST name-search fallback on `sc.name`. The dead column is pending `DROP COLUMN` (task 0310).
 
 **`GET /contracts/:contract_id/interface`** - Public function signatures (names, parameter
 types, return types).
@@ -501,7 +504,7 @@ place where indexed contract metadata and decoded usage history are exposed.
 
 **`GET /nfts`** - Paginated list of NFTs. Query params: `limit`, `cursor`,
 `filter[collection]` (exact match), `filter[contract_id]` (C-StrKey), `filter[name]`
-(substring; rejects `%`/`_` literals — canonical SQL `15_get_nfts_list.sql`).
+(substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`).
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL.
@@ -519,23 +522,55 @@ matches the `USDC` pools; `A/B` is a pair query where each needle claims its own
 leg in either order; native legs match on `XLM` despite storing an empty code —
 tasks 0246/0440. The same parameter also accepts a pool **identifier** in the
 `L…` SEP-23 form, which selects that one pool instead of matching codes —
-task 0470), `filter[asset_a_code]`, `filter[asset_a_issuer]` (G-StrKey),
-`filter[asset_b_code]`, `filter[asset_b_issuer]` (G-StrKey),
-`filter[min_tvl]` (decimal). Per-leg `(code, issuer)` must be supplied paired
-or both omitted (classic identity). The single-asset and per-leg modes coexist
-additively. Each `PoolItem` carries `participant_count` (count of active LP
-positions; task 0246) alongside the snapshot fields, plus a compute-at-read
+task 0470), `filter[pool_kind]` (`classic` | `soroban`; an unknown value is
+**rejected with 400**, never ignored — a silently dropped filter returns a page
+that contradicts the request), and `filter[min_tvl]` (decimal). The two filters
+combine additively.
+
+The four per-leg positional filters (`filter[asset_a_code]` / `[asset_a_issuer]`
+and the same for `b`) were **removed in task 0374**: they named a leg by its
+position in a pair, which a list of two to four legs has no equivalent for, and
+no client held a key to use them.
+
+Each `PoolItem` carries `legs` — the pool's assets in registration order, two
+for a classic pool and two to four for a Soroban one, replacing the
+`asset_a` / `asset_b` pair — plus `pool_kind`, `participant_count` (count of
+active LP positions; task 0246 — `null` for a Soroban pool, whose providers
+hold its share token and are not indexed yet), the snapshot fields, and a compute-at-read
 USD `tvl` (task 0199 Phase A2 — one batched price lookup per page; `volume`
 and `fee_revenue` stay `null` on the list, they are detail-only).
+
+A leg names its asset family in the **same vocabulary `/v1/assets` uses**
+(`native` | `classic_credit` | `soroban`). It used to speak the XDR `AssetType`
+domain here (`credit_alphanum4` / `pool_share`) while the sibling endpoint spoke
+the family one — one field name, two vocabularies, coinciding on the single word
+`native`. The raw discriminant is no longer published beside the label: the
+label is a pure function of it, and it has no honest value for a Soroban token.
 `filter[min_tvl]` is **rejected with 400**: a value computed at read cannot
 filter page membership, and the old SQL pre-filter read a snapshot column that
 is never written, so it silently returned an empty page. Filter and projection
-semantics in canonical SQL `18_get_liquidity_pools_list.sql`.
+semantics in `crates/api/src/liquidity_pools/queries/list_pools.rs`.
 
-**`GET /liquidity-pools/:id`** - Pool detail: asset pair, fee, reserves, total shares,
-TVL, plus `participant_count` (task 0246). Reserves / total shares come from
-the latest snapshot row; clients that care about freshness read
-`latest_snapshot_at` in the response. `participant_count` is independent of
+**`GET /liquidity-pools/:id`** - Pool detail: legs, kind, protocol, fee, reserves, total
+shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
+leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
+read the snapshot's two reserve columns in order; a Soroban pool's legs read
+its newest `pool_state_changes` row, in the pool's own token order (the order
+`legs` stores), scaled by the leg's known decimals: 7 for native and classic
+legs, the `decimals` a Soroban token publishes in its contract metadata
+otherwise; a token that publishes none keeps its leg `null`. The list does the
+same for the page's Soroban pools in batched reads. TVL sums every leg's reserve × price
+and is `null` unless every leg has both. A classic pool's reserves and total
+shares come from its latest snapshot row; clients that care about freshness
+read `latest_snapshot_at` in the response. `protocol` names who runs a Soroban
+pool (`Aquarius`, `Soroswap`, `Phoenix`) from the router or factory that
+registered it (`deployment_id`), and only for a deployment the protocol's own
+publications claim (`liquidity_pools/protocol_labels.rs`); it is `null` for a
+classic pool and for any other deployment. A Soroban pool's total shares come
+from its own instance storage (`pool_instance_state.total_shares`), scaled by
+the share token's published decimals; the stored `0` also means "no
+`TotalShares` key" (concentrated and config-factory pools), so `0` is served
+only for a pool whose every reserve is `0`, and `null` otherwise. `participant_count` is independent of
 snapshot freshness — populated even on stale pools. The money fields
 (`tvl`, `volume`, `fee_revenue`) do NOT come from the snapshot row: they are
 computed at read from the in-cluster `prices.*` views (task 0199,
@@ -545,12 +580,13 @@ three fields to `null` — it never fails the request.
 
 **`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
 pool. Each row carries `amounts` (task 0279): **one entry per operation**, in
-application order, each with `amount_a` / `amount_b` for the pool's canonical
-legs as raw-stroop decimal **strings** (same reason as `reserve_a` — a JSON
-number is a browser double and a big leg would lose digits), **signed from the
-pool's side** — positive = the asset entered the pool. A trade reads `+/-`, a
-deposit `+/+`, a withdrawal `-/-`, so the sign alone gives the direction and no
-event-type field is needed.
+application order, each with `amounts` — one entry per pool leg, in the order
+of the pool's `legs` (`amounts[i]` moved in `legs[i]`), a list rather than an
+`a` / `b` pair because a Soroban pool has two to four legs — as raw decimal
+**strings** (same reason as a leg's `reserve` — a JSON number is a browser double and
+a big leg would lose digits), **signed from the pool's side** — positive = the
+asset entered the pool. A trade reads `+/-`, a deposit `+/+`, a withdrawal
+`-/-`, so the sign alone gives the direction.
 
 Per operation rather than summed per transaction because **8.2% of (pool,
 transaction) pairs run more than one operation against the same pool** (measured
@@ -565,8 +601,8 @@ Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,
 default `1d`), `from` (ISO 8601, default `to` minus interval-appropriate
 window — `1h→7d`, `1d→90d`, `1w→104w`), `to` (ISO 8601, default `now()`,
 exclusive upper bound). `from < to` enforced; bucket count capped to keep
-aggregation bounded. Bucket aggregation policy in canonical SQL
-`21_get_liquidity_pools_chart.sql`.
+aggregation bounded. Bucket aggregation policy in
+`crates/api/src/liquidity_pools/queries/get_pool_chart.rs`.
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, first deposit ledger, and last
@@ -586,16 +622,16 @@ and the database-schema overview §4.14 "Sentinel placeholder rows". Marker:
 `created_at_ledger = 0` (no real Stellar pool can carry this value — pubnet
 genesis seq is 1). Every pool-surfacing endpoint above hides sentinel rows at
 two layers: the handler-level `pool_exists()` gate filters them (so per-pool
-endpoints return 404), and each of the five canonical SQL queries carries its
-own sentinel predicate (`18` / `19` inline `lp.created_at_ledger > 0`,
-`20` / `21` / `23` an `EXISTS` guard) for defense-in-depth against callers that
-bypass the handler. Task 0193 implements this filter.
+endpoints return 404). On ClickHouse, which dropped `created_at_ledger`,
+`pool_exists` treats a row's presence as the existence signal and the pool
+queries carry no separate sentinel predicate. Task 0193 implemented the filter
+on the retired PG path.
 
 #### Search
 
 **`GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`** - Generic
 search across all entity types. The classifier maps the raw `q` to two derived inputs
-consumed by the canonical SQL: `hash_bytes` (32-byte BYTEA — drives `transaction` and
+consumed by the bucket queries in `crates/api/src/search/queries.rs`: `hash_bytes` (32-byte BYTEA — drives `transaction` and
 `pool` exact-match branches because pool ids are also 32-byte BYTEA) and `strkey_prefix`
 (upper-cased StrKey or any `G…` / `C…` prefix — drives the `account` and `contract`
 prefix branches). The raw `q` is also fed to the trigram / FTS branches (`assets`,
@@ -614,7 +650,8 @@ returned 0 in search while the pools page returned 58.
 Behaviour:
 
 - when `q` is a fully-typed entity id (64-hex hash, full G-StrKey, full C-StrKey) **and**
-  an exact row exists in `transaction_hash_index` / `liquidity_pools` / `accounts` /
+  an exact row exists (a transaction by its own or fee-bump inner hash, found through
+  `transaction_hash_prefix_index`) in `transactions` / `liquidity_pools` / `accounts` /
   `soroban_contracts`, the response is `{ "type": "redirect", "entity_type", "entity_id" }`
   and the frontend navigates directly to the entity page.
 - otherwise the response is `{ "type": "results", "groups": {...} }` with up to `limit`
@@ -631,14 +668,13 @@ Behaviour:
   one match — empty buckets are omitted from the response (the OpenAPI schema marks them
   optional); frontend treats absent and empty array identically.
 
-Authoritative SQL:
-[`22_get_search.sql`](../database-schema/endpoint-queries-clickhouse/22_get_search.sql) — UNION ALL
-of six narrow CTEs, each `LIMIT $per_group_limit`-bounded, with `:include_*` BOOLEAN
-flags resolved from the optional `?type=` filter (the planner removes branches whose
-flag is FALSE).
+Authoritative SQL: `crates/api/src/search/queries.rs` (the Rust queries are the
+reference, [ADR 0060](../../../lore/2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md))
+— one narrow query per entity bucket, each bounded by the per-group limit, fired only
+for the buckets the classifier says can match and the optional `?type=` filter allows.
 
-No caching: `q` variability makes a TTL cache useless and the per-CTE `LIMIT` keeps each
-query bounded.
+No caching: `q` variability makes a TTL cache useless and the per-bucket `LIMIT` keeps
+each query bounded.
 
 ### 6.5 Response Caching
 

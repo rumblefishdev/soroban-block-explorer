@@ -94,9 +94,9 @@ struct Cli {
 
     /// Persist ONLY the named tables (comma-separated) — the targeted write a
     /// historical re-parse for new derived tables needs. Task 0279 introduced
-    /// it as `--lp-amounts-only`; task 0540 generalised it so its three tables
-    /// ride one pass: `--only asset_transfers,transaction_memos,soroban_event_ops`.
-    /// `--only lp_operation_amounts` is the old behaviour.
+    /// it as `--lp-amounts-only`; task 0540 generalised it so several tables
+    /// ride one pass: `--only asset_transfers,transaction_memos`.
+    /// `--only pool_operation_amounts` is the old behaviour.
     ///
     /// Without it, `run --reindex` re-emits EVERY table, which rewrites the 12
     /// Tier-1 columns that cannot survive parallel `ReplacingMergeTree`
@@ -178,15 +178,11 @@ enum Command {
     },
 
     /// Tier-1 post-merge column rebuild for the Hetzner CH
-    /// (task 0228 Phase 5). Reconstructs 6 of the 12 Tier-1 columns
-    /// across 5 state tables (`accounts.first_seen_ledger`,
+    /// (task 0228 Phase 5). Reconstructs 4 MIN-semantics columns
+    /// across 3 state tables (`accounts.first_seen_ledger`,
     /// `lp_positions.first_deposit_ledger`,
-    /// `nfts.minted_at_ledger`, `nfts_pending.minted_at_ledger`,
     /// `soroban_contracts.deployer_id` + `deployed_at_ledger`).
-    /// These silently corrupt under cross-machine
-    /// `ReplacingMergeTree` collapse. The remaining 6 columns
-    /// (NFT metadata: `collection_name`, `name`, `media_url` × 2
-    /// tables) are filled by Stage 2 enrichment (task 0231).
+    /// These silently corrupt under `ReplacingMergeTree` collapse.
     /// Per-table staging + EXCHANGE TABLES atomic swap.
     RepairTier1 {
         /// Build staging tables and log their row counts, then drop
@@ -250,7 +246,7 @@ enum Command {
     /// - Promote `nfts_pending` rows → `nfts` for contracts now
     ///   classified `Nft`.
     /// - Drop pending rows for contracts now `Fungible` or `Token`.
-    /// - Drop legacy false positives from hot `nfts` / `nft_ownership`.
+    /// - Drop legacy false positives from hot `nfts` / `nft_ownership_changes`.
     ///
     /// Uses `ALTER TABLE … DELETE` with `mutations_sync = 1` followed
     /// by `OPTIMIZE FINAL` to collapse tombstones. CH-only.
@@ -340,12 +336,10 @@ async fn main() {
                 .await
                 .expect("repair_tier1 failed");
             println!(
-                "repair_tier1 completed (dry_run={}): accounts={} lp_positions={} nfts={} nfts_pending={} soroban_contracts={}",
+                "repair_tier1 completed (dry_run={}): accounts={} lp_positions={} soroban_contracts={}",
                 stats.dry_run,
                 stats.accounts_rows,
                 stats.lp_positions_rows,
-                stats.nfts_rows,
-                stats.nfts_pending_rows,
                 stats.soroban_contracts_rows,
             );
         }

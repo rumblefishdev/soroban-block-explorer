@@ -519,7 +519,7 @@ mod tests {
             .write(&TransactionParticipantRow {
                 account_id: skel_id,
                 ledger_sequence: i64::from(ledger),
-                transaction_id: 1,
+                application_order: 1,
             })
             .await
             .expect("write skel participant");
@@ -527,7 +527,7 @@ mod tests {
             .write(&TransactionParticipantRow {
                 account_id: filled_id,
                 ledger_sequence: i64::from(ledger),
-                transaction_id: 1,
+                application_order: 1,
             })
             .await
             .expect("write filled participant");

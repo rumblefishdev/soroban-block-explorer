@@ -1,7 +1,7 @@
 import { Stack } from '@mui/material';
 import {
   DetailErrorState,
-  isPoolId,
+  isPoolIdentifier,
   NotFoundState,
   SectionErrorBoundary,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -13,6 +13,7 @@ import { usePoolDetail } from '../api/index.js';
 import { PoolCharts } from './pool-detail/PoolCharts.js';
 import { PoolDetailHeader } from './pool-detail/PoolDetailHeader.js';
 import { PoolDetailSkeleton } from './pool-detail/PoolDetailSkeleton.js';
+import { NotIndexedSection } from './pool-detail/NotIndexedSection.js';
 import { PoolKpiStrip } from './pool-detail/PoolKpiStrip.js';
 import { PoolParticipants } from './pool-detail/PoolParticipants.js';
 import { PoolSummary } from './pool-detail/PoolSummary.js';
@@ -23,7 +24,7 @@ import { PoolActivity } from './pool-detail/PoolActivity.js';
  * Figma-defined sections from top to bottom:
  *
  *   1. Header (breadcrumb, pair name, Active/Stale badge, truncated id)
- *   2. KPI strip (Total shares, A-leg reserve, B-leg reserve, participants)
+ *   2. KPI strip (TVL, one reserve per leg, participants)
  *   3. Summary (key-value rows for Pool ID, Fee, Total shares, reserves)
  *   4. Activity chart (TVL/Volume/Fees tabs, 1D/7D/30D/1Y range)
  *   5. Pool participants table
@@ -41,11 +42,11 @@ export default function LiquidityPoolDetailPage() {
   // never actually observed at runtime.
   const { id = '' } = useParams<{ id: string }>();
   const poolId = id;
-  // Pool ids must be a CAP-38 `L...` strkey (56 chars, base32). Validate
-  // up-front so a malformed id renders the entity-specific NotFoundState
-  // instead of firing a doomed request. `usePoolDetail` is hardcoded to
-  // skip the network when the id is empty.
-  const validPoolId = isPoolId(poolId);
+  // A pool is addressed by whichever form its kind uses — `L…` for a classic
+  // pool, `C…` for a Soroban one, which IS a contract. Validate up-front so a
+  // malformed id renders the entity-specific NotFoundState instead of firing a
+  // doomed request; `usePoolDetail` skips the network when the id is empty.
+  const validPoolId = isPoolIdentifier(poolId);
   const detail = usePoolDetail(validPoolId ? poolId : '');
   if (!validPoolId) {
     return <NotFoundState entity="liquidity-pool" identifier={poolId} />;
@@ -87,7 +88,20 @@ export default function LiquidityPoolDetailPage() {
       {/* Gate the sub-sections on resolved parent data so their queries never
           fire while the pool is still loading — a parent 404 then produces
           zero sub-section 404s. */}
-      {detail.data != null && (
+      {/* A soroban pool's operations and providers are not indexed yet, so
+          these sections say so instead of firing queries that can only come
+          back empty and read as "no activity". */}
+      {detail.data?.pool_kind === 'soroban' && (
+        <>
+          <NotIndexedSection title="Activity chart" what="Pool history" />
+          <NotIndexedSection
+            title="Pool participants"
+            what="Liquidity providers"
+          />
+          <NotIndexedSection title="Recent activity" what="Pool activity" />
+        </>
+      )}
+      {detail.data != null && detail.data.pool_kind !== 'soroban' && (
         <>
           <SectionErrorBoundary sectionName="pool-charts">
             <PoolCharts poolId={poolId} />

@@ -15,8 +15,8 @@
 //!
 //! Other tables stay on natural / composite primary keys (`assets`,
 //! `nfts`, `liquidity_pools`, `lp_positions`, `liquidity_pool_snapshots`,
-//! `operations_appearances`, `transaction_participants`,
-//! `nft_ownership`) — for them composite (StrKey-or-hash, …) works
+//! `transaction_operations`, `transaction_participants`,
+//! `nft_ownership_changes`) — for them composite (StrKey-or-hash, …) works
 //! cheaply without a hash layer.
 //!
 //! ## Determinism is load-bearing
@@ -70,28 +70,28 @@ fn hash64(bytes: &[u8]) -> i64 {
 
 /// `accounts.id` from a StrKey (G…). Same helper feeds every account
 /// `Int64` FK in the schema: `transactions.source_id`,
-/// `operations_appearances.{source,destination}_id`,
+/// `transaction_operations.{source,destination}_id`,
 /// `transaction_participants.account_id`,
 /// `account_balances_current.account_id`,
 /// `lp_positions.account_id`,
 /// `nfts.current_owner_id`,
-/// `nft_ownership.owner_id`,
+/// `nft_ownership_changes.owner_id`,
 /// `soroban_contracts.deployer_id`,
 /// `assets.issuer_id`,
 /// `liquidity_pools.asset_{a,b}_issuer_id`,
-/// `soroban_invocations_appearances.caller_id`.
+/// `contract_activity.caller_id`.
 #[inline]
 pub fn account_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
 }
 
 /// `soroban_contracts.id` from a StrKey (C…). Same helper feeds every
-/// contract `Int64` FK: `operations_appearances.contract_id`,
+/// contract `Int64` FK: `transaction_operations.contract_id`,
 /// `assets.contract_id`,
 /// `nfts.contract_id`,
-/// `nft_ownership.contract_id`,
+/// `nft_ownership_changes.contract_id`,
 /// `soroban_events.contract_id`,
-/// `soroban_invocations_appearances.{contract,caller_contract}_id`.
+/// `contract_activity.{contract,caller_contract}_id`.
 #[inline]
 pub fn contract_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
@@ -117,12 +117,9 @@ pub fn address_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
 }
 
-/// `transactions.id` from the 32-byte tx hash bytes. Same helper feeds
-/// every transaction `Int64` FK: `operations_appearances.transaction_id`,
-/// `transaction_participants.transaction_id`,
-/// `soroban_events.transaction_id`,
-/// `soroban_invocations_appearances.transaction_id`,
-/// `nft_ownership.transaction_id`.
+/// `transactions.id` from the 32-byte tx hash bytes. No other table
+/// references it: each locates a transaction by `(ledger_sequence,
+/// application_order)` (ADR 0059, task 0538).
 #[inline]
 pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
     hash64(hash_bytes)
@@ -215,7 +212,7 @@ pub fn pool_leg_asset_id(asset_type: i16, asset_code: &str, issuer_id: i64) -> i
             tracing::warn!(
                 asset_type = other,
                 "unexpected pool leg asset_type; falling back to the classic-credit \
-                 surrogate, which will not match any lp_operation_amounts row",
+                 surrogate, which will not match any pool_operation_amounts row",
             );
             asset_id(1, asset_code, issuer_id, 0)
         }

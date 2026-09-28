@@ -1,0 +1,191 @@
+//! NFT rows staged per ledger: the per-contract routing verdict and the
+//! `nfts` / `nfts_pending` rows and the ownership changes it routes (task
+//! 0217 / 0220), each change located by its event →
+//! `nft_ownership_changes{,_pending}` (task 0424).
+//!
+//! Lives in its own file because `stage.rs` is past the module size limit.
+
+use std::collections::HashMap;
+
+use domain::ContractType;
+use xdr_parser::types::{ExtractedNft, ExtractedNftEvent};
+
+use super::{StagedLedger, staging_err};
+use crate::SchemaError;
+use crate::persist::ids;
+use crate::persist::rows::{NftOwnershipChangeRow, NftPendingRow, NftRow};
+
+pub(super) fn nft_rows(
+    out: &mut StagedLedger,
+    nfts: &[ExtractedNft],
+    nft_events: &[ExtractedNftEvent],
+    prior_contract_verdicts: &HashMap<String, ContractType>,
+    app_order_by_hash: &HashMap<String, i16>,
+) -> Result<(), SchemaError> {
+    // ---- NFT routing verdict map (task 0217 / 0220) -------------------
+    //
+    // Build a per-contract verdict map keyed by strkey. Sources, in
+    // precedence order:
+    //   1. Same-ledger `contract_rows` carrying a definitive
+    //      `contract_type` (Token / Nft / Fungible). Either:
+    //        - SAC deploy (`is_sac=true` → Token).
+    //        - WASM-classified deploy (the override `prepare_with_sac_overrides`
+    //          applies before calling this function).
+    //   2. SAC overrides (also Token) — these were skipped from Pass-2
+    //      stubs, so they're in `out.contract_rows` already.
+    // Contracts with NO entry in EITHER source → treat as `Other`/uncached →
+    // route to pending. The stage itself has no DB access; cross-ledger
+    // verdicts arrive via `prior_contract_verdicts` (task 0283 live G9), the
+    // writer's lookup of `soroban_contracts` for contracts emitting NFT
+    // rows/events here but deployed earlier. This restores the PG
+    // `ClassificationCache` semantic the CH cutover dropped — without it a
+    // later transfer from an already-classified NFT would quarantine.
+    let mut verdict_by_contract: HashMap<&str, ContractType> = HashMap::new();
+    for row in &out.contract_rows {
+        if let Some(ty_i16) = row.contract_type
+            && let Ok(ty) = ContractType::try_from(ty_i16)
+        {
+            verdict_by_contract.insert(row.contract_id.as_str(), ty);
+        }
+    }
+
+    // 3-way routing helper. Mirrors PG `resolve_nft_filter` bucketing.
+    // This-ledger `contract_rows` take precedence; `prior_contract_verdicts`
+    // (G9, cross-ledger) is the fallback for contracts not deployed here.
+    enum NftRoute {
+        Hot,
+        Pending,
+        Drop,
+    }
+    let route_for = |strkey: &str| -> NftRoute {
+        let verdict = verdict_by_contract
+            .get(strkey)
+            .copied()
+            .or_else(|| prior_contract_verdicts.get(strkey).copied());
+        match verdict {
+            Some(ContractType::Token) | Some(ContractType::Fungible) => NftRoute::Drop,
+            Some(ContractType::Nft) => NftRoute::Hot,
+            // `Other` and uncached (no entry in either source) both go to
+            // quarantine — same semantic as PG-side `resolve_nft_filter`.
+            _ => NftRoute::Pending,
+        }
+    };
+
+    // ---- nfts / nfts_pending (dedup by (contract_id, token_id),
+    //                            latest watermark) ----
+    //
+    // Each `(contract_id, token_id)` row lives in exactly one bucket
+    // (hot OR pending) per partition — picked by the per-contract
+    // verdict above. Dedup keys are per-bucket so a contract that
+    // somehow appeared with mixed verdicts within the same ledger
+    // (impossible today, defensive) would have separate slots.
+    let mut nft_hot_indices: HashMap<(i64, String), usize> = HashMap::new();
+    let mut nft_pending_indices: HashMap<(i64, String), usize> = HashMap::new();
+    for nft in nfts {
+        let route = route_for(nft.contract_id.as_str());
+        if matches!(route, NftRoute::Drop) {
+            continue;
+        }
+        let contract_id_int = ids::contract_id(&nft.contract_id);
+        let watermark = i64::from(nft.last_seen_ledger);
+        let key = (contract_id_int, nft.token_id.clone());
+        let owner_id = nft.owner_account.as_deref().map(ids::account_id);
+
+        match route {
+            NftRoute::Hot => match nft_hot_indices.get(&key).copied() {
+                Some(idx) => {
+                    let existing = &mut out.nft_rows[idx];
+                    if watermark >= existing.current_owner_ledger {
+                        existing.current_owner_id = owner_id;
+                        existing.current_owner_ledger = watermark;
+                    }
+                    existing.collection_name = existing
+                        .collection_name
+                        .clone()
+                        .or_else(|| nft.collection_name.clone());
+                    existing.name = existing.name.clone().or_else(|| nft.name.clone());
+                    existing.media_url =
+                        existing.media_url.clone().or_else(|| nft.media_url.clone());
+                }
+                None => {
+                    nft_hot_indices.insert(key, out.nft_rows.len());
+                    out.nft_rows.push(NftRow {
+                        contract_id: contract_id_int,
+                        token_id: nft.token_id.clone(),
+                        collection_name: nft.collection_name.clone(),
+                        name: nft.name.clone(),
+                        media_url: nft.media_url.clone(),
+                        current_owner_id: owner_id,
+                        current_owner_ledger: watermark,
+                    });
+                }
+            },
+            NftRoute::Pending => match nft_pending_indices.get(&key).copied() {
+                Some(idx) => {
+                    let existing = &mut out.nft_pending_rows[idx];
+                    if watermark >= existing.current_owner_ledger {
+                        existing.current_owner_id = owner_id;
+                        existing.current_owner_ledger = watermark;
+                    }
+                    existing.collection_name = existing
+                        .collection_name
+                        .clone()
+                        .or_else(|| nft.collection_name.clone());
+                    existing.name = existing.name.clone().or_else(|| nft.name.clone());
+                    existing.media_url =
+                        existing.media_url.clone().or_else(|| nft.media_url.clone());
+                }
+                None => {
+                    nft_pending_indices.insert(key, out.nft_pending_rows.len());
+                    out.nft_pending_rows.push(NftPendingRow {
+                        contract_id: contract_id_int,
+                        token_id: nft.token_id.clone(),
+                        collection_name: nft.collection_name.clone(),
+                        name: nft.name.clone(),
+                        media_url: nft.media_url.clone(),
+                        current_owner_id: owner_id,
+                        current_owner_ledger: watermark,
+                    });
+                }
+            },
+            NftRoute::Drop => unreachable!("filtered above"),
+        }
+    }
+
+    // ---- nft_ownership_changes / nft_ownership_changes_pending ----
+    for ev in nft_events {
+        let route = route_for(ev.contract_id.as_str());
+        if matches!(route, NftRoute::Drop) {
+            continue;
+        }
+        let Some(&application_order) = app_order_by_hash.get(&ev.transaction_hash) else {
+            continue;
+        };
+
+        // Task 0424: the change located as `soroban_events` locates its
+        // event — the transaction's position from the ledger's own order, the
+        // operation and the event from the rpc id. An NFT event is a
+        // per-operation contract event, which always has an id;
+        // `soroban_events` refuses one without, and so does this.
+        let id = ev
+            .event_id
+            .ok_or_else(|| staging_err("nft event without an event id"))?;
+        let change = NftOwnershipChangeRow {
+            contract_id: ids::contract_id(&ev.contract_id),
+            token_id: ev.token_id.clone(),
+            ledger_sequence: i64::from(ev.ledger_sequence),
+            application_order,
+            operation_index: id.operation_index,
+            event_index: id.event_index,
+            owner_id: ev.owner_account.as_deref().map(ids::account_id),
+            event_type: ev.event_type as i16,
+        };
+        match route {
+            NftRoute::Hot => out.nft_ownership_change_rows.push(change),
+            NftRoute::Pending => out.nft_ownership_change_pending_rows.push(change),
+            NftRoute::Drop => unreachable!("filtered above"),
+        }
+    }
+
+    Ok(())
+}

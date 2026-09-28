@@ -57,28 +57,6 @@ pub struct E3HeavyFields {
     pub operation_tree: Option<serde_json::Value>,
 }
 
-/// E14 (`GET /contracts/:id/events`) — per-event payload materialised from
-/// the ledger XDR.
-///
-/// ADR 0033: the DB appearance index only tells us *which* `(contract, tx,
-/// ledger)` trios carry events and how many. The actual event payload (type,
-/// topics, data, per-event index within the tx) is extracted from the
-/// public-archive XDR at request time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct E14HeavyEventFields {
-    /// Event index within its transaction. Stable per-tx identifier that
-    /// survives across requests — used for client-side de-duplication when a
-    /// page redraw overlaps a previous page.
-    pub event_index: i16,
-    /// Transaction hash (hex) this event belongs to — needed because a
-    /// single ledger's events may span many transactions.
-    pub transaction_hash: String,
-    /// Full topics array as decoded JSON.
-    pub topics: Vec<serde_json::Value>,
-    /// Event data payload as decoded JSON.
-    pub data: serde_json::Value,
-}
-
 /// Single signature on a transaction envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SignatureDto {
@@ -99,21 +77,23 @@ pub struct XdrEventDto {
     pub topics: Vec<serde_json::Value>,
     /// Decoded event data payload.
     pub data: serde_json::Value,
-    /// Event index within the transaction (zero-based).
-    pub event_index: i16,
+    /// The stellar-rpc event id, exactly as `getEvents` returns it (ADR 0059).
+    /// Consensus events arrive sorted by it, which is execution order: fee
+    /// charge, operation events, fee refund. `None` for diagnostic events.
+    pub id: Option<String>,
     /// Zero-based envelope position of the operation that emitted this event
-    /// (CAP-67 V4 per-operation container only; `None` for tx-level,
-    /// diagnostic and pre-Protocol-23 events). Matches
-    /// `XdrOperationDto.application_order - 1`.
-    pub op_index: Option<i16>,
+    /// (CAP-67 per-operation container only; `None` for fee and diagnostic
+    /// events). Matches `XdrOperationDto.application_order - 1`.
+    pub operation_index: Option<i16>,
+    /// The id's event number: the position in the operation, or for a fee
+    /// event the ledger's (or, for `after_tx`, the transaction's) counter of
+    /// that stage. `None` for diagnostic events.
+    pub event_index: Option<u32>,
     /// CAP-67 `TransactionEvent.stage` — `"before_all_txs"`, `"after_tx"` or
-    /// `"after_all_txs"`. The protocol's only statement of when a tx-level
-    /// event fired, and the reason `event_index` must not be read as a
-    /// timeline: the fee refund is numbered ahead of the operation it
-    /// refunds. Observed values on mainnet are `before_all_txs` for the charge
-    /// and `after_all_txs` for the refund; `after_tx` exists in the protocol
-    /// and is passed through unchanged if it appears. `None` for per-operation, diagnostic and
-    /// pre-Protocol-23 events, which carry no stage.
+    /// `"after_all_txs"`: when a tx-level event fired. The fee charge is
+    /// `before_all_txs`; the refund is `after_tx` before protocol 23 and
+    /// `after_all_txs` from it (archive meta, task 0541). `None` for
+    /// per-operation and diagnostic events, which carry no stage.
     pub stage: Option<String>,
 }
 

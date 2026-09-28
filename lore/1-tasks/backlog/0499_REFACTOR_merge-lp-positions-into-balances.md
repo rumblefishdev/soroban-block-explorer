@@ -150,3 +150,18 @@ classic path.
 - [ ] `repair-tier1` no longer touches lp data; `docs/backfills.md` updated
 - [ ] **Docs updated** — schema + read path + frontend contract
 - [ ] **API types regenerated** — yes, DTOs change
+
+## Trap for the `first_deposit_ledger` derivation (found 2026-09-25, task 0468)
+
+A derivation from `operations_appearances` type 22 joined on `source_id`
+misses 42% of deposits: the column is NULL when the operation has no source of
+its own (664,198 of 1,594,568 deposit ops), and the depositor is then the
+transaction's source. The current `repair-tier1` entry does exactly that and,
+through a LEFT JOIN miss that yields `0` rather than NULL, wrote `0` over
+102,693 of 109,768 positions on 2026-07-16 (details in 0468). Any replacement
+must match on `coalesce(op source, transaction source)` and treat a miss as
+unknown.
+
+Read-time derivation is not an option for this column either: the busiest pool
+(`59FA1DC5…`, 16,179 deposits) reads 12.48 B rows / 82.7 GB in 12.5 s through
+the `has(pool_ids, …)` filter.

@@ -2,6 +2,7 @@ import { Stack } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
   formatCompactAmount,
+  formatCompactUsd,
   formatInteger,
   IdentifierDisplay,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -11,26 +12,27 @@ import { KpiCell } from '../detail/KpiCell.js';
 
 import {
   assetLegLabel,
-  isPoolStale,
   legHref,
   reserveDotColor,
 } from '../pool-shared/helpers.js';
-
-const STALE_SUBTITLE = 'no recent snapshot';
 
 interface PoolKpiStripProps {
   pool: PoolItem;
 }
 
 /**
- * Four-cell KPI strip above the Summary card on the LP detail page —
- * Total shares, per-leg reserves, and participant count. Reserves render
- * with compact notation (`1.2M`, `480K`); the subtitle carries the asset
- * code so the value reads cleanly without units stacked on top.
+ * KPI strip above the Summary card on the LP detail page — TVL, one cell per
+ * leg reserve, and participant count. Total shares live in the Summary card:
+ * a count of LP tokens in the pool's own unit reads as nothing on its own and
+ * compares with nothing across pools, so it does not headline the page. Reserves render with compact
+ * notation (`1.2M`, `480K`); the subtitle carries the asset code so the value
+ * reads cleanly without units stacked on top.
  *
- * Stale pools (no fresh snapshot in 7 days) come back with null reserves
- * and shares — those cells render as "—". `participant_count` stays
- * accurate regardless of freshness (per task 0246).
+ * A value the API does not know renders as "—". There is no "stale" state:
+ * a classic pool writes a snapshot on every change, so an old snapshot is a
+ * quiet pool's current state, and a soroban pool has no snapshot at all.
+ * `participant_count` is `null` for a soroban pool, whose providers are not
+ * indexed yet.
  */
 function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);
@@ -47,37 +49,46 @@ function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
 }
 
 export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
-  const codeA = assetLegLabel(pool.asset_a);
-  const codeB = assetLegLabel(pool.asset_b);
-  const stale = isPoolStale(pool.latest_snapshot_at);
-
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
+      // The strip was exactly four cells; it is now two plus one per leg, so a
+      // four-leg pool puts six across. Wrapping keeps every reserve visible
+      // rather than compressing the labels past reading — `rowGap` because
+      // `spacing` only sets the gap along the main axis.
+      flexWrap="wrap"
       spacing={{ xs: 2, sm: 3 }}
-      sx={{ width: '100%' }}
+      sx={{ width: '100%', rowGap: { xs: 2, sm: 3 } }}
     >
       <KpiCell
-        label="Total shares"
-        value={formatCompactAmount(pool.total_shares)}
-        caption={stale ? STALE_SUBTITLE : 'shares outstanding'}
+        label="TVL"
+        value={pool.tvl == null ? '—' : formatCompactUsd(pool.tvl)}
+        caption="total value locked"
       />
-      <KpiCell
-        label={`${codeA} reserve`}
-        value={formatCompactAmount(pool.reserve_a)}
-        caption={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_a, codeA)}
-        valueColor={reserveDotColor(pool.asset_a)}
-      />
-      <KpiCell
-        label={`${codeB} reserve`}
-        value={formatCompactAmount(pool.reserve_b)}
-        caption={stale ? STALE_SUBTITLE : assetSubtitle(pool.asset_b, codeB)}
-        valueColor={reserveDotColor(pool.asset_b)}
-      />
+      {pool.legs.map((leg, i) => {
+        const code = assetLegLabel(leg);
+        return (
+          <KpiCell
+            key={i}
+            label={`${code} reserve`}
+            value={formatCompactAmount(leg.reserve)}
+            caption={assetSubtitle(leg, code)}
+            valueColor={reserveDotColor(leg)}
+          />
+        );
+      })}
       <KpiCell
         label="Participants"
-        value={formatInteger(pool.participant_count)}
-        caption="liquidity providers"
+        value={
+          pool.participant_count == null
+            ? '—'
+            : formatInteger(pool.participant_count)
+        }
+        caption={
+          pool.participant_count == null
+            ? 'not indexed yet'
+            : 'liquidity providers'
+        }
       />
     </Stack>
   );

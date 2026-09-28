@@ -172,6 +172,14 @@ history:
     transaction. Both are correct and they disagree on screen with nothing
     reconciling them. The picker shows the count; the card does not say which
     of how many it is.
+22. **A WASM upload operation does not name the code it uploads.** Its
+    details carry only `wasmLength` (`crates/xdr-parser/src/operation.rs`,
+    `uploadContractWasm` arm), so the card cannot link to the code's page.
+    The hash is SHA-256 of the bytes the operation already carries; adding
+    `wasmHash` to the details is one parser line, and history needs a
+    re-parse to get it. Unverified: what the meta shows when the same code
+    is uploaded a second time. Added 2026-09-22 from an audit of values we
+    could derive instead of storing, looking up or omitting.
 
 ## Status (2026-07-31)
 
@@ -183,10 +191,11 @@ waits for a third consumer), **12** (route-strip "actual" labels),
 fresh-eyes review of a claimable-balance transaction — **18** (escrow wording
 and naming the escrow), **19** (amount and asset printed twice), **20**
 (canonical asset id is not an identifier), **21** (no sense of scale on a
-multi-operation transaction). The task stays active until each of those is
+multi-operation transaction), and — added 2026-09-22 — **22** (a WASM
+upload does not name its code). The task stays active until each of those is
 shipped or withdrawn with a reason.
 
 ## Acceptance criteria
 
 - [ ] Each item shipped or explicitly withdrawn with a recorded reason
-      (10 of 21 shipped; items 18-21 added 2026-09-09)
+      (10 of 22 shipped; items 18-21 added 2026-09-09, 22 on 2026-09-22)

@@ -121,12 +121,12 @@ Two related wins, both bigger than the split itself:
   end usable days early; the worker whose range it duplicates re-does the slice
   later at no cost beyond time.
 
-### 3. The MIN-semantics trap — 12 Tier-1 columns corrupt silently
+### 3. The MIN-semantics trap — 10 Tier-1 columns corrupt silently
 
 RMT keeps the **highest-version whole row**, so it **cannot express MIN
 semantics**. Worker N stamps `first_seen_ledger` with the first ledger of _its_
 range, with no visibility into earlier workers' ranges — so the surviving value
-reflects the latest-touching worker, not the true minimum. **Twelve Tier-1
+reflects the latest-touching worker, not the true minimum. **Ten Tier-1
 columns corrupt this way, silently.**
 
 Scale, measured: the 0228 repair moved `first_seen_ledger` for **10.13M
@@ -142,29 +142,38 @@ accounts**.
 >
 > - `nfts.minted_at_ledger` — 643 of 13 932 tokens were wrong, growing **~30 per
 >   day**. Served correctly since task 0528, which reads the value from the
->   append-only `nft_ownership` instead of the stored column.
+>   append-only ownership history (`nft_ownership_changes` since task 0424)
+>   instead of the stored column, and the column
+>   itself is gone from `nfts` and `nfts_pending`, so `repair-tier1` no longer
+>   rebuilds it.
 > - `accounts.first_seen_ledger` — **14 of 400 sampled rows diverge (3.5%)**, all
 >   of them later than the true first appearance. Still wrong today, and it is
 >   rendered on the account page and the account list.
 > - `soroban_contracts.deployed_at_ledger` — **1 597 of 146 397 diverge (1.1%)**.
+> - `lp_positions.first_deposit_ledger` — **the repair itself is broken for this
+>   column** (task 0468). It matches deposits on the operation's source, which is
+>   NULL for 42% of deposits, and a miss writes `0`: its 2026-07-16 run zeroed
+>   102 693 positions, and every run zeroes them again while the rebuild keeps
+>   that join.
 >
 > So a clean `repair-tier1` after a backfill does **not** mean the Tier-1 columns
 > stay correct: they start drifting again immediately. Treat the pass as
-> point-in-time cleanup, not as a guarantee. Task 0531 replaces it with storage
-> that carries MIN semantics natively, and retires this rule.
+> point-in-time cleanup, not as a guarantee. Storage that carries MIN semantics
+> natively replaces it, and retires this rule.
 
 **Unless the run writes one table that has no such column.** A re-parse whose
 only purpose is to populate a NEW derived table does not need to re-emit the
 other twenty-odd — and if it does, it re-arms this trap for nothing. Task 0266
 did this with a bespoke harness ("targeted write only — do NOT run the full
-persist pipeline"); task 0279 turned it into a flag:
+persist pipeline"); task 0279 turned it into a flag (its table is
+`pool_operation_amounts` since task 0372):
 
 ```bash
-backfill-runner run --start <A> --end <B> --only lp_operation_amounts
+backfill-runner run --start <A> --end <B> --only pool_operation_amounts
 ```
 
-Task 0540 generalised the flag to a list — `--only asset_transfers,transaction_memos,soroban_event_ops`
-writes its three tables in one pass; task 0518 added the three pool tables, so a
+Task 0540 generalised the flag to a list — `--only asset_transfers,transaction_memos`
+writes both tables in one pass; task 0518 added the three pool tables, so a
 full-range targeted re-parse can carry the pool families' whole history in the
 same descent. Only tables that are additive (deterministic from the XDR, **no
 Tier-1 column**) are accepted, and the list is closed in code
@@ -255,7 +264,7 @@ whole ingested range). Until that was proven a ledger floor in the API answered
 code guards this any more**. A pass that indexes transactions the table does not
 cover — a re-parse below the ingest floor, a gap refill — would make every such
 transaction show "no change" when nobody looked. Include `asset_transfers` (and
-its companions `soroban_event_ops`, `transaction_memos`) in that pass, then run
+its companion `transaction_memos`) in that pass, then run
 the completion gate on the new range before anyone reads it — the per-partition
 query is "Gate 7a" in
 [`lore/1-tasks/archive/0540_FEATURE_lossless-value-flow-index/notes/G-rollout-commands.md`](../lore/1-tasks/archive/0540_FEATURE_lossless-value-flow-index/notes/G-rollout-commands.md).
@@ -418,14 +427,14 @@ new binary.
 
 **Flags — with the traps:**
 
-| Flag                | Reality                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--start` / `--end` | u32, inclusive. This is also how you parallelise (disjoint ranges).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `--reindex`         | Bypasses the resume-skip so an already-ingested range is re-parsed. Without it, re-parsing history is a silent **0-row no-op** — `run` skips whatever is already in `ledgers`.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--only <t,…>`      | Persists **only** the named additive tables — `lp_operation_amounts` (task 0279, formerly `--lp-amounts-only`), `asset_transfers`, `transaction_memos`, `soroban_event_ops` (task 0540/0541), `liquidity_pools`, `pool_state_changes`, `pool_instance_state` (task 0518); anything else is refused at parse time. Implies `--reindex`. Writes no `ledgers` marker, so resume is manual — narrow `--start`; re-running a range is a no-op **for one decoder version only** (after a decoder change the old and new rows share a key — run the 0503 tie query below before trusting a re-run). See the rule-3 note below. |
-| `--keep-partitions` | **Debug only.** "Do not pass this for a real backfill — disk grows linearly."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--target`          | **Does not exist.** Survives only in stale doc comments; PG was retired (0244), CH is the sole target.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--workers`         | **Does not exist.** Run K processes instead.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Flag                | Reality                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--start` / `--end` | u32, inclusive. This is also how you parallelise (disjoint ranges).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `--reindex`         | Bypasses the resume-skip so an already-ingested range is re-parsed. Without it, re-parsing history is a silent **0-row no-op** — `run` skips whatever is already in `ledgers`.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `--only <t,…>`      | Persists **only** the named additive tables — `pool_operation_amounts` (task 0279 as `lp_operation_amounts`, formerly `--lp-amounts-only`; task 0372), `asset_transfers`, `transaction_memos` (task 0540), `liquidity_pools`, `pool_state_changes`, `pool_instance_state` (task 0518); anything else is refused at parse time. Implies `--reindex`. Writes no `ledgers` marker, so resume is manual — narrow `--start`; re-running a range is a no-op **for one decoder version only** (after a decoder change the old and new rows share a key — run the 0503 tie query below before trusting a re-run). See the rule-3 note below. |
+| `--keep-partitions` | **Debug only.** "Do not pass this for a real backfill — disk grows linearly."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `--target`          | **Does not exist.** Survives only in stale doc comments; PG was retired (0244), CH is the sole target.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `--workers`         | **Does not exist.** Run K processes instead.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 **Config** (flag-or-env): `CLICKHOUSE_URL`, `CLICKHOUSE_USER`,
 `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`; `CLICKHOUSE_CERT` / `_KEY` / `_CA`
@@ -446,7 +455,7 @@ rows); `BACKFILL_TEMP_DIR` (default `.temp/backfill-runner`).
 3. **Only then** drop the pre-op snapshot ([`docs/backups.md`](backups.md)).
 
 > Steps 1–2 are not bookkeeping. A re-parse that skips `repair-tier1` leaves the
-> 12 Tier-1 columns wrong (rule 3), and the damage is invisible until someone
+> 10 Tier-1 columns wrong (rule 3), and the damage is invisible until someone
 > reads `first_seen_ledger` — which is why "the write finished" is not the same
 > as "the backfill is done".
 
@@ -1001,6 +1010,16 @@ over `topics_xdr` — flavour A, no re-parse, no S3. The SQL mirrors
 `extract_event_signature` (stage.rs) exactly; version-less RMT keeps the
 last insert per key (rule 4), so re-running a slice is harmless.
 
+**Timing against the task-0541 rekey.** That rekey copies `soroban_events`
+into `soroban_events_staging_canonical` partition by partition, `signature`
+included, and then swaps the two tables. Run this backfill **before that copy
+starts** (the copy then carries the names) **or after the swap** (on the new
+table) — never in between: a partition already copied keeps its `NULL` names
+in the table that becomes `soroban_events`, and nothing flags it. The copy
+began with the rekey's trial partition, so from then on **after the swap** is
+the only safe moment (partition 127 held 132,256 resolvable `NULL` names when
+copied — measured 2026-09-21).
+
 **Run it per partition** — a bare `WHERE signature IS NULL` scans all 10G+
 rows in one query, which blows the hourly read quota; the partition key is
 `intDiv(ledger_sequence, 500000)` and each partition is ~300-420M rows, so
@@ -1008,11 +1027,15 @@ one partition per query prunes cleanly (~4-5/hour under quota, or loop them
 all as the box operator where no quota applies). Partition ids:
 `SELECT DISTINCT partition FROM system.parts WHERE table='soroban_events' AND active`.
 
+`SELECT * REPLACE` re-inserts each row with only `signature` recomputed, in the
+table's own column order — so the statement is the same before and after the
+task-0541 rekey, and no column list can drift out of step with the table
+(verified read-only on both shapes, 2026-09-21).
+
 ```sql
 -- one slice; substitute {P} with a partition id and iterate
 INSERT INTO soroban_events
-SELECT
-    contract_id, transaction_id, ledger_sequence, event_index, event_type,
+SELECT * REPLACE (
     multiIf(
         JSONExtractString(topics_xdr,1,'type') = 'string'
           AND JSONExtractString(topics_xdr,2,'type') = 'sym'
@@ -1022,8 +1045,8 @@ SELECT
           AND JSONExtractString(topics_xdr,1,'value') != '',
             JSONExtractString(topics_xdr,1,'value'),
         CAST(NULL, 'Nullable(String)')
-    ) AS signature,
-    topics_xdr, data_xdr
+    ) AS signature
+)
 FROM soroban_events
 WHERE signature IS NULL
   AND intDiv(ledger_sequence, 500000) = {P}
@@ -1053,6 +1076,161 @@ WHERE signature IS NULL
 
 Verification criteria for the deployed result live in task 0374's
 final-phase notes.
+
+## Canonical event location fill (task 0541) — in-DB, per 5k-ledger slice
+
+Two new tables are filled from what ClickHouse already holds — no S3, no
+re-parse — before the task-0541 window, one partition at a time, in the same
+5,000-ledger slices (20k exceeds the read profile's memory cap for the gates).
+Per slice `[A, B)`, in this order:
+
+1. **`soroban_events_staging_canonical`** — the rekeyed `soroban_events`. The
+   statement and its pre/post gates are in the task's notes
+   ([`fill_insert.sql`](../lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_insert.sql),
+   [`fill_gate.sql`](../lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_gate.sql)).
+2. **`contract_transactions`** — the per-(contract, transaction) presence index:
+   [`fill_contract_transactions.sql`](../lore/1-tasks/archive/0541_FEATURE_canonical-event-location/notes/fill_contract_transactions.sql).
+   A `SELECT DISTINCT` over the three ways a transaction touches a contract —
+   operation events, invocations, operations naming it — mapping the hash
+   surrogate to the transaction's position through `transactions`. It reads
+   step 1's output, so it runs after it. Only this one-time history fill needs
+   it: afterwards the indexer writes the table, and a re-ingest goes through
+   the same writer.
+
+The event arm tells an operation event by its id: a fee event's carries a
+sentinel, so only an operation event names its own transaction in
+`transaction_index`. The live writer needs no such inference — the parser
+states each event's source (`EventSource::PerOp`); the check after the window
+(below) confirms the two agree on real rows. Measured read-only on 63,700,000–
+63,705,000 (2026-09-21): 1,554,897 pairs across 8,369 contracts, 740 ms,
+586 MiB — well inside the read profile. The sentinel test was checked on the
+whole of partition 127: it selects 249,035,471 rows, exactly the partition's
+170,740,563 charges plus 78,294,908 refunds, and none outside the native SAC.
+
+**Gate, per slice:** `uniqExact(contract_id, ledger_sequence,
+application_order)` of the slice in `contract_transactions` equals the same
+`SELECT DISTINCT` run as a count — a short count means a partial insert
+(`uniqExact`, not `count()`: a re-run slice holds duplicates until the RMT
+merges them). The id format and its sentinels:
+[ADR 0059](../lore/2-adrs/0059_canonical-event-identity-and-location-names.md).
+**After the window:** for the first ledgers the new indexer writes,
+that statement run over the same range must return exactly the writer's rows
+(`EXCEPT` both ways is empty) — the one check that the SQL and the Rust agree.
+
+## Presence tables by transaction position (task 0575) — in-DB, per 50k-ledger slice
+
+`transaction_participants` and `operation_asset_appearances` are rebuilt keyed
+by the transaction's position `(ledger_sequence, application_order)` instead of
+the `transaction_id` surrogate. Each gets a staging copy, created from the
+table's definition in `init.sql` under the name `<table>_staging_position`,
+and filled from what ClickHouse already holds — no S3, no re-parse: the old
+row's surrogate is joined to `transactions` for the position.
+
+- **Statement and gate:**
+  [`fill_presence.sql`](../lore/1-tasks/archive/0575_REFACTOR_presence-tables-canonical-position/notes/fill_presence.sql),
+  [`gate_presence.sql`](../lore/1-tasks/archive/0575_REFACTOR_presence-tables-canonical-position/notes/gate_presence.sql);
+  the loop that runs both per slice and stops at the first mismatch:
+  [`fill_presence.zsh`](../lore/1-tasks/archive/0575_REFACTOR_presence-tables-canonical-position/notes/fill_presence.zsh).
+- **Slice width 50,000 ledgers.** The gate's `uniqExact` over a 100,000-ledger
+  slice of `transaction_participants` exceeds the read profile's 3.73 GiB
+  memory cap. The account- / asset-leading key does not prune on the ledger, so
+  a slice reads more than its rows: ~109 M / ~51 M rows for the fill, ~93 M /
+  ~35 M for the gate's old side (measured 2026-09-23).
+- **Gate per slice:** `uniqExact` of the old key equals `uniqExact` of the new
+  key. The fill uses `INNER JOIN`, so a row without its transaction would show
+  up as a short new count; 0 such rows were measured on partition 128 of both
+  tables.
+- **The indexer keeps running** while whole partitions below the head are
+  filled — it writes the old tables, and the staging copies are static. The
+  head's partition and the tail are filled with an explicit range after the
+  indexer is paused, inside the window ([deployment.md](./deployment.md),
+  "Presence tables by position").
+
+## Operations by transaction position (task 0372) — in-DB, per 50k-ledger slice
+
+`transaction_operations` and `pool_operation_amounts` hold what
+`operations_appearances` and `lp_operation_amounts` hold, located by the
+transaction position instead of `transaction_id`. Once the indexer writes both
+(the step in [deployment.md](./deployment.md)), the history is copied from the
+old tables joined to `transactions` on `(ledger_sequence, id)` inside each
+ledger slice — no S3. The indexer keeps running; ledgers it already wrote to
+both collapse in the ReplacingMergeTrees.
+
+- **Statements and gate:**
+  [`fill_transaction_operations.sql`](../lore/1-tasks/archive/0372_REFACTOR_operations-by-transaction-position/notes/fill_transaction_operations.sql),
+  [`fill_pool_operation_amounts.sql`](../lore/1-tasks/archive/0372_REFACTOR_operations-by-transaction-position/notes/fill_pool_operation_amounts.sql),
+  [`gate_operations.sql`](../lore/1-tasks/archive/0372_REFACTOR_operations-by-transaction-position/notes/gate_operations.sql);
+  the loop that runs them per slice and stops at the first mismatch:
+  [`fill_operations.zsh`](../lore/1-tasks/archive/0372_REFACTOR_operations-by-transaction-position/notes/fill_operations.zsh).
+- **Gate per slice:** distinct keys of each old table against its new twin,
+  per quarter slice. A position is unique in its ledger, as the surrogate is,
+  so the keys map one to one.
+- **Cost** (read-only dry run, 64,000,000–64,050,000): the operations join reads
+  42.9 M rows in 1.2 s; the amounts join 32.2 M in 0.8 s. Both old tables lead
+  with the ledger or are partitioned by it, so a ledger slice stays cheap —
+  unlike the hash-sorted source of task 0580.
+- **Order:** whole partitions from the floor up, then the head's partition as
+  an `A-B` range up to the first dual-written ledger.
+- **Not repeatable after step 3 of the deploy:** the source tables are
+  dropped after the deploy that stops writing them. A range lost from the new tables is
+  re-parsed from S3 like any other table (`--only pool_operation_amounts` for
+  the amounts).
+
+## Contract activity (task 0586) — in-DB, per 10k-ledger slice
+
+`contract_activity` holds the pairs of `contract_transactions` with the
+caller of `soroban_invocations_appearances` attached, located by the
+transaction position. Once the indexer writes it (the step in
+[deployment.md](./deployment.md)), the history is copied from the two old
+tables, the invocations joined to `transactions` on `(ledger_sequence, id)`
+inside each ledger slice — no S3. The indexer keeps running; ledgers it
+already wrote collapse in the ReplacingMergeTree.
+
+- **Statements, gate, loop:**
+  [`fill_contract_activity.sql`](../lore/1-tasks/active/0586_REFACTOR_invocations-folded-into-contract-transactions/notes/fill_contract_activity.sql),
+  [`gate_contract_activity.sql`](../lore/1-tasks/active/0586_REFACTOR_invocations-folded-into-contract-transactions/notes/gate_contract_activity.sql),
+  [`fill_contract_activity.zsh`](../lore/1-tasks/active/0586_REFACTOR_invocations-folded-into-contract-transactions/notes/fill_contract_activity.zsh);
+  before the fill, a whole-row comparison on the first dual-written slice:
+  [`check_fill_matches_live.sql`](../lore/1-tasks/active/0586_REFACTOR_invocations-folded-into-contract-transactions/notes/check_fill_matches_live.sql).
+- **Gate per slice:** distinct pairs of `contract_transactions` = of
+  `contract_activity`, and distinct invocations = pairs with a caller.
+- **Slices of 10,000 ledgers:** the fill SELECT over 50,000 exceeded the
+  3.73 GiB memory cap; over 10,000 (64,000,000–64,010,000) it read 17.4 M
+  rows in 0.74 s with 1.1 GiB.
+- **Order:** whole partitions from the floor up, then the head's partition as
+  an `A-B` range up to the first dual-written ledger.
+- **Not repeatable after step 3 of the deploy:** both source tables are
+  dropped after the deploy that stops writing them. A range lost from
+  `contract_activity` is re-parsed from S3 like any other table — the
+  invocation count is only in the XDR (diagnostic events are not stored).
+
+## NFT ownership changes (task 0424) — re-parse only
+
+`nft_ownership_changes{,_pending}` is the ownership history located by each
+change's event. Its history was filled once, on 2026-09-28, by a one-off
+`backfill-runner nft-ownership-fill` that re-ran the indexer's NFT extraction
+over `soroban_events` and was gated against the old `nft_ownership` tables;
+both the command and those tables are gone. A lost range now comes back by
+re-parsing from S3 like any other table.
+
+## Hash prefix index (task 0580) — rebuilt from `transactions`
+
+`transaction_hash_prefix_index` is derived from `transactions` alone: one row
+per outer hash and one per fee-bump inner hash. A re-parse writes it like any
+other table. To rebuild a ledger range in ClickHouse instead, slice by ledger —
+`transactions` leads with it, so a slice reads only its own granules (slice
+along the source's sort key; slicing the former hash-sorted index by ledger
+read the whole partition every time):
+
+```sql
+INSERT INTO transaction_hash_prefix_index (hash_prefix, ledger_sequence)
+SELECT reinterpretAsUInt64(substring(h, 1, 8)), ledger_sequence
+FROM transactions
+ARRAY JOIN arrayFilter(x -> x != '', [toString(hash), toString(ifNull(inner_tx_hash, ''))]) AS h
+WHERE ledger_sequence >= {A} AND ledger_sequence < {B};
+```
+
+Duplicates of rows already there collapse in the ReplacingMergeTree.
 
 ## Superseded — do not follow
 

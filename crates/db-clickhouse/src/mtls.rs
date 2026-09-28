@@ -229,7 +229,7 @@ pub fn client_with_mtls(
             // multiplies:
             //   * `search::fetch_search` — `try_join!` over 6 arms → 6.
             //   * `transactions::get_transaction` — 3 arms, one of which is
-            //     `fetch_invocation_appearances`, itself a 2-arm join → 4. That
+            //     `fetch_transaction_invocations`, itself a 2-arm join → 4. That
             //     is the archive-degraded path, so the pool is tightest exactly
             //     when the request is already struggling.
             //

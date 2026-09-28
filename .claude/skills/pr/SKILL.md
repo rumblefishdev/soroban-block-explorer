@@ -58,14 +58,10 @@ Check if `develop` branch exists (local or remote). If yes, use `develop`. Other
 
 ### 5. Verify
 
-Before pushing, run format and verify checks:
-
-```bash
-pnpm run -s format:staged
-pnpm run -s verify:staged
-```
-
-If checks fail, fix the issues and amend the commit before proceeding.
+The git hooks run the checks: `pre-commit` formats the staged files and runs
+lint, typecheck and test for the Nx projects they reach; `pre-push` does the
+same for the pushed commits and runs clippy when they touch Rust. Never bypass
+them. If one fails, fix the issue in a new commit.
 
 ### 6. Push and create PR
 

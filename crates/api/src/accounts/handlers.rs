@@ -116,7 +116,7 @@ fn map_item(r: AccountListRow) -> AccountListItem {
 // ---------------------------------------------------------------------------
 
 /// Account detail — header from `accounts` + balances from
-/// `account_balances_current` (canonical 06 statements A + B).
+/// `balances` (`queries::fetch_account` + `queries::fetch_balances`).
 #[utoipa::path(
     get,
     path = "/accounts/{account_id}",
@@ -277,16 +277,6 @@ pub async fn list_account_transactions(
         Err(err) => return err.into_response(),
     };
 
-    // Reject a stale cursor minted under the retired PG backend. Its keyset is
-    // meaningless under CH, so per ADR 0008 fail with `invalid_cursor` instead
-    // of silently mis-paginating. A legacy/untagged cursor already fails decode
-    // upstream in the extractor; this guards the decodes-but-wrong-intent case.
-    if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(cursor)
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
-
     let header = match fetch_account_for_source(&state, &account_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("account '{account_id}' not found")),
@@ -413,18 +403,12 @@ async fn fetch_account_tx_for_source(
     queries::fetch_transactions(&state.ch(), account_id, limit, cursor, sort, direction).await
 }
 
-/// Build the opaque account-transactions cursor for a boundary row. CH keys on
-/// `(ledger_sequence, id)` (the `transaction_participants` / `transactions`
-/// keyset).
+/// Build the opaque account-transactions cursor for a boundary row. The list
+/// keys on the transaction's position `(ledger_sequence, application_order)` —
+/// the `transaction_participants` and `transactions` key (task 0575).
 fn account_tx_cursor_for(r: &AccountTxRow) -> TxListCursor {
-    TxListCursor::Ch {
+    TxListCursor::ChPosition {
         ledger_sequence: r.ledger_sequence,
-        tiebreak: r.id,
+        application_order: r.application_order,
     }
-}
-
-/// True when the decoded cursor is a current (CH) cursor. A stale cursor minted
-/// under the retired PG backend is rejected (ADR 0008 fail-clean).
-fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::Ch { .. })
 }

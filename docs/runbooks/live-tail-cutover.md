@@ -299,6 +299,9 @@ galexie-production:galexie
 > are no longer mapped. The enrichment producer is stubbed pending its CH
 > rewrite, so `lambda-enrichment-*` stays unmapped (it would 403 if it
 > connected).
+> Since then the enrichment worker has moved to CH: production maps
+> `lambda-enrichment-production:ingestion_writer` (checked on the box
+> 2026-09-28, task 0591).
 
 Then replay ansible with the narrow `caddy_reload` tag — re-renders the
 CN map snippet and reloads Caddy without touching the rest of the
@@ -652,7 +655,7 @@ Galexie + S3 propagation + Lambda processing).
 The gap check above only proves `ledgers` is gapless. It does **not** prove
 the production `persist_ledger_clickhouse` fills the _other_ 16 tables — the
 `persist_e2e` fixture only populated `ledgers` + the transaction-derived
-tables (`transactions`, `transaction_hash_index`, `transaction_participants`,
+tables (`transactions`, `transaction_hash_prefix_index`, `transaction_participants`,
 `accounts`), leaving every other slice empty. The only place the full
 multi-table write is exercised with real data is live traffic, so confirm it
 here. (Invocation matches B-0 / D-7: container `app-clickhouse-1` +
@@ -669,12 +672,12 @@ ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
   --config-file=/etc/clickhouse-backup/client.xml --param_cut=$CUTOVER -q \"
 SELECT 'ledgers'                            AS tbl, count() AS rows_post_cutover FROM ledgers                          WHERE sequence        > {cut:Int64}
 UNION ALL SELECT 'transactions',                    count() FROM transactions                    WHERE ledger_sequence > {cut:Int64}
-UNION ALL SELECT 'transaction_hash_index',          count() FROM transaction_hash_index          WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'transaction_hash_prefix_index',   count() FROM transaction_hash_prefix_index   WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'transaction_participants',        count() FROM transaction_participants        WHERE ledger_sequence > {cut:Int64}
-UNION ALL SELECT 'operations_appearances',          count() FROM operations_appearances          WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'transaction_operations',          count() FROM transaction_operations          WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'soroban_events',                  count() FROM soroban_events                  WHERE ledger_sequence > {cut:Int64}
-UNION ALL SELECT 'soroban_invocations_appearances', count() FROM soroban_invocations_appearances WHERE ledger_sequence > {cut:Int64}
-UNION ALL SELECT 'nft_ownership',                   count() FROM nft_ownership                   WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'contract_activity',               count() FROM contract_activity               WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'nft_ownership_changes',           count() FROM nft_ownership_changes           WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'liquidity_pool_snapshots',        count() FROM liquidity_pool_snapshots        WHERE ledger_sequence > {cut:Int64}
 ORDER BY tbl FORMAT PrettyCompact
 \""
@@ -687,7 +690,7 @@ ssh deploy@$HETZNER_IP "docker exec app-clickhouse-1 clickhouse-client \
 SELECT 'accounts'                  AS tbl, count() AS rows_touched FROM accounts                  WHERE last_seen_ledger        > {cut:Int64}
 UNION ALL SELECT 'account_balances_current', count() FROM account_balances_current WHERE last_updated_ledger     > {cut:Int64}
 UNION ALL SELECT 'soroban_contracts',        count() FROM soroban_contracts        WHERE wasm_uploaded_at_ledger > {cut:Int64}
-UNION ALL SELECT 'nfts',                      count() FROM nfts                      WHERE minted_at_ledger        > {cut:Int64}
+UNION ALL SELECT 'nfts',                      count() FROM nfts                      WHERE current_owner_ledger    > {cut:Int64}
 UNION ALL SELECT 'liquidity_pools',           count() FROM liquidity_pools           WHERE last_updated_ledger     > {cut:Int64}
 UNION ALL SELECT 'lp_positions',              count() FROM lp_positions              WHERE last_updated_ledger     > {cut:Int64}
 ORDER BY tbl FORMAT PrettyCompact
@@ -707,18 +710,18 @@ FORMAT PrettyCompact
 
 **Interpretation:**
 
-- `ledgers`, `transactions`, `transaction_hash_index`,
-  `transaction_participants`, `operations_appearances` — **must** be `> 0`
+- `ledgers`, `transactions`, `transaction_hash_prefix_index`,
+  `transaction_participants`, `transaction_operations` — **must** be `> 0`
   and climb every poll (pubnet ledgers always carry txs, each tx ≥ 1 op).
   Zero here = persist not running or a broken core write → page.
-- `soroban_events`, `soroban_invocations_appearances` — `> 0` over any
+- `soroban_events`, `contract_activity` — `> 0` over any
   non-trivial pubnet window (Soroban traffic is continuous). The parser
   extracts these (`extract_events` / `extract_invocations` in
   `process.rs`) and persist writes them — they are **not** behind the
   enrichment stub. Sustained `0` across thousands of post-cutover ledgers
   points at a specific broken/unported persist branch, not a generic write
   failure → investigate that slice.
-- `nft_ownership`, `nfts`, `liquidity_pools`, `liquidity_pool_snapshots`,
+- `nft_ownership_changes`, `nfts`, `liquidity_pools`, `liquidity_pool_snapshots`,
   `lp_positions` — activity-dependent; may legitimately be low/0 in a short
   window. Cross-check against a known-active ledger range before concluding
   a regression.

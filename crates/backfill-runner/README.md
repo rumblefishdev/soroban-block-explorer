@@ -116,7 +116,7 @@ Four clauses, in order:
 | `run`, `status` | the backfill itself |
 | `bootstrap` | ⚠ **recurring mop — reclassified 2026-07-21 by measurement.** It reads as a one-off ("top up accounts the ingest window never observed"), but live re-creates the gap: the account writer stamps `sequence_number = 0` whenever it has no account-state override (`persist/stage.rs:699`), and the RMT version (`last_seen_ledger`) is bumped by that same write, so the zeroed row wins. Measured: **61.7% of accounts that sent a transaction** in a recent window carry `sequence_number = 0`, and skeletons are twice as common among *active* accounts (14.7%) as among dormant ones (6.75%). The live indexer has no bootstrap of any kind. Retire via lore 0421 |
 | `balance-seed` | RPC snapshot of holders who have not transacted since the parser shipped. Live writes a balance only when it **observes** a `ContractData Balance(Address)` change, so this is not a hole in live logic — it is a state read live cannot express. **Not yet measured the way `bootstrap` was**; treat the classification as provisional |
-| `repair-tier1` | ⚠ **recurring mop.** `ReplacingMergeTree` cannot express MIN, so the 6 Tier-1 columns re-drift under live ingest. Retire via lore 0232 / 0421 (`AggregatingMergeTree` + `SimpleAggregateFunction(min)`) |
+| `repair-tier1` | ⚠ **recurring mop.** `ReplacingMergeTree` cannot express MIN, so the 4 Tier-1 columns it rebuilds re-drift under live ingest. Retire via lore 0232 / 0421 (`AggregatingMergeTree` + `SimpleAggregateFunction(min)`) |
 | `nft-reclassify` | ⚠ **recurring mop.** No continuous `pending → hot` promotion in live. Retire via lore 0392 |
 | `contract-type-rebuild` | ⚠ **partly covered.** Live has the G1 / G9 cross-ledger verdicts (`persist/stage.rs`); contracts the classifier cannot name still default to `Other`. Lore 0309 |
 
@@ -439,10 +439,10 @@ Reference throughput per partition is **to be measured** on a `us-east-1`
 instance against the production DB. Update this section after the first
 dry-run.
 
-## Nx targets
+## Build, test, lint
 
 ```bash
-pnpm nx build rust     # cargo build --workspace
-pnpm nx test rust      # cargo test --workspace
-pnpm nx lint rust      # cargo clippy --workspace -- -D warnings
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```

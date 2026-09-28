@@ -6,10 +6,6 @@
 //! verifies the round-trip, and deletes the test data via partition
 //! drop or `ALTER TABLE … DELETE`.
 //!
-//! Also exercises the `transaction_hash_dict` Dictionary: inserts a row
-//! into `transaction_hash_index`, reloads the dictionary, and checks
-//! `dictGet(...)` returns the expected `ledger_sequence`.
-//!
 //! Gated on `CLICKHOUSE_URL` env: skipped cleanly if unset, so CI
 //! without a ClickHouse instance is green.
 
@@ -186,53 +182,95 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- transaction_hash_index (append-only fact, source for Dictionary) -----
+    // ----- transaction_hash_prefix_index (task 0580) -----
+    // Two hashes sharing the 8-byte prefix in different ledgers must both
+    // survive a merge — the ledger is part of the sort key.
     client
         .query(
-            "INSERT INTO transaction_hash_index (hash, ledger_sequence) \
-             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000aa'), ?)",
+            "INSERT INTO transaction_hash_prefix_index (hash_prefix, ledger_sequence) VALUES \
+             (reinterpretAsUInt64(substring(unhex('00000000000000000000000000000000000000000000000000000000000000aa'), 1, 8)), ?), \
+             (reinterpretAsUInt64(substring(unhex('00000000000000000000000000000000000000000000000000000000000000bb'), 1, 8)), ?)",
         )
         .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER - 1)
         .execute()
         .await
-        .expect("insert transaction_hash_index");
+        .expect("insert transaction_hash_prefix_index");
+    client
+        .query("OPTIMIZE TABLE transaction_hash_prefix_index FINAL")
+        .execute()
+        .await
+        .expect("merge transaction_hash_prefix_index");
     assert_count(
         &client,
-        "transaction_hash_index",
-        &format!("ledger_sequence = {SMOKE_LEDGER}"),
-        1,
+        "transaction_hash_prefix_index",
+        &format!(
+            "hash_prefix = 0 AND ledger_sequence IN ({SMOKE_LEDGER}, {})",
+            SMOKE_LEDGER - 1
+        ),
+        2,
     )
     .await;
 
-    // ----- operations_appearances (append-only fact) — no surrogate `id` -----
+    // ----- transaction_operations / pool_operation_amounts (task 0372) -----
+    // Keyed by position: two operations of one transaction are two rows,
+    // and the same operation re-inserted collapses on merge.
     client
         .query(
-            "INSERT INTO operations_appearances (transaction_id, application_order, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_ids, amount, ledger_sequence) \
-             VALUES (?, 1, 1, ?, NULL, NULL, '', NULL, [], 100, ?)",
+            "INSERT INTO transaction_operations (ledger_sequence, application_order, operation_index, type, source_id, destination_id, contract_id, asset_code, asset_issuer_id, pool_ids) \
+             VALUES (?, 1, 0, 1, ?, NULL, NULL, '', NULL, []), (?, 1, 1, 1, ?, NULL, NULL, '', NULL, []), (?, 1, 1, 1, ?, NULL, NULL, '', NULL, [])",
         )
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
         .await
-        .expect("insert operations_appearances");
+        .expect("insert transaction_operations");
+    client
+        .query(&format!(
+            "OPTIMIZE TABLE transaction_operations PARTITION ID '{}' FINAL",
+            SMOKE_LEDGER / 500_000
+        ))
+        .execute()
+        .await
+        .expect("optimize transaction_operations");
     assert_count(
         &client,
-        "operations_appearances",
+        "transaction_operations",
         &format!("ledger_sequence = {SMOKE_LEDGER}"),
-        1,
+        2,
+    )
+    .await;
+    client
+        .query(
+            "INSERT INTO pool_operation_amounts (pool_id, ledger_sequence, application_order, operation_index, asset_id, amount) \
+             VALUES (unhex(repeat('ab', 32)), ?, 1, 0, 0, 1000), (unhex(repeat('ab', 32)), ?, 1, 0, 1, -2000)",
+        )
+        .bind(SMOKE_LEDGER)
+        .bind(SMOKE_LEDGER)
+        .execute()
+        .await
+        .expect("insert pool_operation_amounts");
+    assert_count(
+        &client,
+        "pool_operation_amounts",
+        &format!("ledger_sequence = {SMOKE_LEDGER}"),
+        2,
     )
     .await;
 
     // ----- transaction_participants (append-only fact) -----
     client
         .query(
-            "INSERT INTO transaction_participants (account_id, ledger_sequence, transaction_id) \
+            "INSERT INTO transaction_participants (account_id, ledger_sequence, application_order) \
              VALUES (?, ?, ?)",
         )
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
-        .bind(SMOKE_LEDGER)
+        .bind(1_i16)
         .execute()
         .await
         .expect("insert transaction_participants");
@@ -247,10 +285,9 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- soroban_events (append-only fact, full-content; the v3 design) -----
     client
         .query(
-            "INSERT INTO soroban_events (contract_id, transaction_id, ledger_sequence, event_index, event_type, signature, topics_xdr, data_xdr) \
-             VALUES (?, ?, ?, 0, 1, 'transfer', 'topics', 'data')",
+            "INSERT INTO soroban_events (contract_id, ledger_sequence, transaction_index, operation_index, event_index, application_order, event_type, signature, topics_xdr, data_xdr) \
+             VALUES (?, ?, 1, 0, 0, 1, 1, 'transfer', 'topics', 'data')",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
@@ -264,22 +301,21 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- soroban_invocations_appearances (append-only fact) -----
+    // ----- contract_activity (append-only fact) -----
     client
         .query(
-            "INSERT INTO soroban_invocations_appearances (contract_id, transaction_id, ledger_sequence, caller_id, caller_contract_id, amount) \
-             VALUES (?, ?, ?, ?, NULL, 1)",
+            "INSERT INTO contract_activity (contract_id, ledger_sequence, application_order, caller_id, caller_contract_id, invocation_count) \
+             VALUES (?, ?, 1, ?, NULL, 1)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
         .await
-        .expect("insert soroban_invocations_appearances");
+        .expect("insert contract_activity");
     assert_count(
         &client,
-        "soroban_invocations_appearances",
+        "contract_activity",
         &format!("ledger_sequence = {SMOKE_LEDGER}"),
         1,
     )
@@ -288,10 +324,9 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- nfts (state) — composite PK, no surrogate `id` -----
     client
         .query(
-            "INSERT INTO nfts (contract_id, token_id, collection_name, name, media_url, minted_at_ledger, current_owner_id, current_owner_ledger) \
-             VALUES (?, 'tok-1', NULL, NULL, NULL, ?, ?, ?)",
+            "INSERT INTO nfts (contract_id, token_id, collection_name, name, media_url, current_owner_id, current_owner_ledger) \
+             VALUES (?, 'tok-1', NULL, NULL, NULL, ?, ?)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
@@ -306,22 +341,21 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- nft_ownership (append-only fact) — composite PK, no `nft_id` -----
+    // ----- nft_ownership_changes (append-only fact) — located by its event -----
     client
         .query(
-            "INSERT INTO nft_ownership (contract_id, token_id, ledger_sequence, event_order, transaction_id, owner_id, event_type) \
-             VALUES (?, 'tok-1', ?, 0, ?, ?, 0)",
+            "INSERT INTO nft_ownership_changes (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index, owner_id, event_type) \
+             VALUES (?, 'tok-1', ?, 1, 0, 0, ?, 0)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
         .await
-        .expect("insert nft_ownership");
+        .expect("insert nft_ownership_changes");
     assert_count(
         &client,
-        "nft_ownership",
+        "nft_ownership_changes",
         &format!("ledger_sequence = {SMOKE_LEDGER}"),
         1,
     )
@@ -383,27 +417,6 @@ async fn smoke_inserts_and_reads_each_table() {
         1,
     )
     .await;
-
-    // ----- transaction_hash_dict Dictionary -----
-    // Force the cache to refresh against the row we just inserted.
-    client
-        .query("SYSTEM RELOAD DICTIONARY transaction_hash_dict")
-        .execute()
-        .await
-        .expect("reload dict");
-
-    let resolved: i64 = client
-        .query(
-            "SELECT dictGet('transaction_hash_dict', 'ledger_sequence', \
-             tuple(toString(unhex('00000000000000000000000000000000000000000000000000000000000000aa'))))",
-        )
-        .fetch_one()
-        .await
-        .expect("dictGet");
-    assert_eq!(
-        resolved, SMOKE_LEDGER,
-        "dictGet must resolve hash → ledger_sequence"
-    );
 
     cleanup(&client).await;
 }
@@ -576,13 +589,16 @@ async fn cleanup(client: &clickhouse::Client) {
         format!("ALTER TABLE soroban_contracts DELETE WHERE id = {l}"),
         "ALTER TABLE wasm_interface_metadata DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {l}"),
-        format!("ALTER TABLE transaction_hash_index DELETE WHERE ledger_sequence = {l}"),
-        format!("ALTER TABLE operations_appearances DELETE WHERE ledger_sequence = {l}"),
+        format!(
+            "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence IN ({l}, {l} - 1)"
+        ),
+        format!("ALTER TABLE transaction_operations DELETE WHERE ledger_sequence = {l}"),
+        format!("ALTER TABLE pool_operation_amounts DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {l}"),
-        format!("ALTER TABLE soroban_invocations_appearances DELETE WHERE ledger_sequence = {l}"),
+        format!("ALTER TABLE contract_activity DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE nfts DELETE WHERE contract_id = {l} AND token_id = 'tok-1'"),
-        format!("ALTER TABLE nft_ownership DELETE WHERE ledger_sequence = {l}"),
+        format!("ALTER TABLE nft_ownership_changes DELETE WHERE ledger_sequence = {l}"),
         "ALTER TABLE liquidity_pools DELETE WHERE hex(pool_id) = '00000000000000000000000000000000000000000000000000000000000000BB'".into(),
         format!("ALTER TABLE liquidity_pool_snapshots DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE lp_positions DELETE WHERE account_id = {l}"),

@@ -77,9 +77,6 @@ const columns: ExplorerTableColumn<NftItem>[] = [
   },
 ];
 
-/** Column count — used to size the loading skeleton consistently. */
-export const NFT_COLUMN_COUNT = columns.length;
-
 /**
  * The NFTs list table — preview + name (linked to detail), collection,
  * contract id and current owner, per the Figma design.

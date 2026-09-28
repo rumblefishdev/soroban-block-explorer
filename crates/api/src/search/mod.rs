@@ -2,13 +2,13 @@
 //!
 //! Spec sources:
 //!   * lore task 0053
-//!   * `docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`
-//!     (authoritative SQL — six narrow CTEs unioned, `:include_*` flags
-//!     per entity bucket, `:per_group_limit` cap)
+//!   * `queries` (authoritative SQL — one narrow query per entity bucket,
+//!     fired only when the classifier says it can match, `per_group_limit`
+//!     cap)
 //!   * `docs/architecture/backend/backend-overview.md §6.3 Search`
 //!
 //! No caching (per task 0053): variable `q` makes a TTL cache useless
-//! and the per-CTE `LIMIT` keeps each query bounded.
+//! and the per-bucket `LIMIT` keeps each query bounded.
 
 mod classifier;
 pub mod dto;

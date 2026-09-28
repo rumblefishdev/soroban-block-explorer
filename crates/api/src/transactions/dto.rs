@@ -22,31 +22,28 @@ pub struct ListParams {
     pub filter_operation_type: Option<String>,
 }
 
-/// Opaque pagination payload for `GET /v1/transactions` (encoded via
-/// [`common::cursor`](crate::common::cursor)).
+/// Opaque pagination payload for `GET /v1/transactions` and the other
+/// transaction lists (encoded via [`common::cursor`](crate::common::cursor)).
 ///
-/// The PG and CH read paths key their list scans on different columns, so
-/// the cursor is a **datasource-tagged** enum rather than a shared superset:
-///
-/// - `Pg` — `(created_at, id)` keyset (`transactions.id` is a `BIGSERIAL`).
-/// - `Ch` — `(ledger_sequence, id)` keyset with single-partition prune on
-///   `intDiv(ledger_sequence, 500000)` (canonical SQL 02); `tiebreak` is the
-///   `transactions.id` hash surrogate (the within-ledger tie-break).
+/// Every list pages on the transaction position
+/// `(ledger_sequence, application_order)` — `application_order` is also the
+/// execution order: `/transactions` under every filter (tasks 0541, 0372), the account and asset lists (task
+/// 0575) and the contract's invocations (task 0586).
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
 /// format is opaque to clients, so the backend may change the encoding
-/// freely; the flip side is that a cursor which decodes but carries a
-/// legacy backend's intent MUST be rejected with `invalid_cursor` rather
-/// than silently mis-paginating. `list_transactions` enforces that the
-/// decoded variant is the current `Ch` keyset, and a legacy/untagged
-/// cursor (pre-0243, no `src`) fails to decode at all — both surface as a
-/// clean HTTP 400, exactly the "fail, don't silent-promote" contract ADR
-/// 0008 prescribes. The tie-break is non-optional on the `Ch` variant, so a
-/// CH keyset can never bind a NULL tuple element.
+/// freely; the flip side is that a cursor of a retired keyset MUST fail with
+/// `invalid_cursor` rather than silently mis-paginate. It does so by failing
+/// to decode: the `ch_surrogate` cursor (the `transactions.id` hash surrogate,
+/// retired by task 0586) and a legacy/untagged one (pre-0243, no `src`). Both
+/// fields are non-optional, so a keyset never binds a NULL tuple element.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum TxListCursor {
-    Ch { ledger_sequence: i64, tiebreak: i64 },
+    ChPosition {
+        ledger_sequence: i64,
+        application_order: i16,
+    },
 }
 
 /// Slim transaction row returned in the list endpoint.
@@ -83,7 +80,7 @@ pub struct TransactionListItem {
 // already pays for the archive XDR fetch for the full transaction view.
 // Adding memo here would require an archive fetch per ledger touched by
 // the page, which is wasteful for the list use case and inconsistent
-// with the DB-only contract advertised by canonical SQL 02.
+// with the list's DB-only contract.
 
 /// DB-sourced light slice for the transaction detail endpoint.
 ///
@@ -140,16 +137,18 @@ pub struct InvocationAppearanceItem {
     pub contract_id: String,
     /// Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
     pub caller_account: Option<String>,
+    /// Root caller C-StrKey when a contract made the call; exactly one of the
+    /// two callers is set.
+    pub caller_contract: Option<String>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OperationItem {
-    /// Global BIGSERIAL `operations_appearances.id`. Internal ordering
-    /// artefact only; not a within-tx index. Use `application_order`
-    /// for apply-order display and to join against
-    /// `XdrOperationDto.application_order` from the heavy overlay.
+    /// Equal to `application_order` (the table has no surrogate id since
+    /// PR #175). Use `application_order` for apply-order display and to join
+    /// against `XdrOperationDto.application_order` from the heavy overlay.
     pub appearance_id: i64,
     /// Operation type tag in canonical SCREAMING_SNAKE_CASE
     /// (e.g. `"INVOKE_HOST_FUNCTION"`).
@@ -186,65 +185,6 @@ pub struct OperationItem {
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::common::cursor::{self, CursorError, Direction};
-    use chrono::TimeZone;
-
-    #[test]
-    fn ch_cursor_round_trips() {
-        // CH variant: ledger_sequence is the partition key + primary sort;
-        // tiebreak is the transactions.id hash surrogate (the SQL `id`
-        // column in the (ledger_sequence, id) keyset — may be negative,
-        // cityhash64 lower bits as i64).
-        let c = TxListCursor::Ch {
-            ledger_sequence: 50_000,
-            tiebreak: -123,
-        };
-        let encoded = cursor::encode(&c, Direction::Prev);
-        let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
-        assert_eq!(dir, Direction::Prev);
-        assert!(matches!(
-            decoded,
-            TxListCursor::Ch {
-                ledger_sequence: 50_000,
-                tiebreak: -123
-            }
-        ));
-    }
-
-    #[test]
-    fn variant_carries_the_src_tag_on_the_wire() {
-        // The `src` discriminant is what lets `list_transactions` reject a
-        // stale PG cursor (ADR 0008 fail-clean): a decoded cursor without the
-        // current `ch` tag is refused.
-        assert_eq!(
-            serde_json::to_value(TxListCursor::Ch {
-                ledger_sequence: 1,
-                tiebreak: 2
-            })
-            .unwrap()["src"],
-            "ch"
-        );
-    }
-
-    #[test]
-    fn legacy_untagged_cursor_is_rejected() {
-        // A pre-0243 `{ts, id}` cursor carries no `src` tag, so it MUST fail
-        // to decode as the tagged enum — surfacing as `invalid_cursor` (400)
-        // rather than silently promoting to a PG (or CH) walk. This is the
-        // ADR 0008 "clean break / no silent-promotion" contract: a cursor
-        // that lacks the current backend's intent fails, it does not
-        // mis-paginate.
-        #[derive(serde::Serialize)]
-        struct Legacy {
-            ts: DateTime<Utc>,
-            id: i64,
-        }
-        let ts = Utc.with_ymd_and_hms(2026, 5, 29, 12, 0, 0).unwrap();
-        let encoded = cursor::encode(&Legacy { ts, id: 7 }, Direction::Prev);
-        let err = cursor::decode::<TxListCursor>(&encoded).unwrap_err();
-        assert!(matches!(err, CursorError::InvalidPayload));
-    }
-}
+mod tests;

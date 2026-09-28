@@ -13,6 +13,66 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/auth/session": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.",
+        "operationId": "mint_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Session JWT minted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Turnstile verification failed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Token issue failed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turnstile not configured",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [{}]
+      }
+    },
     "/health": {
       "get": {
         "tags": ["ops"],
@@ -113,7 +173,7 @@
     "/v1/accounts/{account_id}": {
       "get": {
         "tags": ["accounts"],
-        "summary": "Account detail — header from `accounts` + balances from\n`account_balances_current` (canonical 06 statements A + B).",
+        "summary": "Account detail — header from `accounts` + balances from\n`balances` (`queries::fetch_account` + `queries::fetch_balances`).",
         "operationId": "get_account",
         "parameters": [
           {
@@ -1101,39 +1161,16 @@
           {
             "name": "filter[asset_code]",
             "in": "query",
-            "description": "Free-text asset filter — case-insensitive substring of either\n`asset_a_code` or `asset_b_code` (input is trimmed before the\nquery). The needle is matched literally: `%`, `_` and regex\nmetacharacters have no special meaning.\n\nA `/` makes it a **pair** query: `USDC/XLM` requires both codes to be\npresent, one on each leg, and the typed order does not matter. Only the\nfirst `/` splits, so `USDC/XLM/BTC` searches for the literal second code\n`XLM/BTC` and therefore matches nothing — a pool has two legs.\n\nNative legs match on `XLM` even though they store an empty code, so\n`XLM` returns the pools that actually hold native XLM. Note that it\n*also* returns credit assets minted under the code `XLM` — asset codes\nare not unique on Stellar, and this filter matches codes, not asset\nidentity. Callers needing one specific issuer's asset should use the\nper-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.\n\nA pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,\nthe one canonical form (task 0264) — and selects that single pool\ninstead of matching asset codes (task 0470). Previously an identifier\nwas matched as a substring of an asset code, found nothing, and the\nlist answered \"no pools\" about a pool that exists.",
+            "description": "Free-text asset filter — case-insensitive substring of any leg's\ndisplayed code (input is trimmed before the query). The needle is\nmatched literally: `%`, `_` and regex metacharacters have no special\nmeaning.\n\nA `/` makes it a **pair** query: `USDC/XLM` requires both codes to be\npresent on TWO DIFFERENT legs, and the typed order does not matter.\nOnly the first `/` splits, so `USDC/XLM/BTC` searches for the literal\nsecond code `XLM/BTC` and therefore matches nothing.\n\nNative legs match on `XLM` even though they store an empty code, so\n`XLM` returns the pools that actually hold native XLM. Note that it\n*also* returns credit assets minted under the code `XLM` — asset codes\nare not unique on Stellar, and this filter matches codes, not asset\nidentity.\n\nA pool IDENTIFIER is also accepted here — a classic pool's `L…` SEP-23\nStrKey or a soroban pool's `C…` contract address — and selects that\nsingle pool\ninstead of matching asset codes (task 0470). Previously an identifier\nwas matched as a substring of an asset code, found nothing, and the\nlist answered \"no pools\" about a pool that exists.",
             "required": false,
             "schema": {
               "type": ["string", "null"]
             }
           },
           {
-            "name": "filter[asset_a_code]",
+            "name": "filter[pool_kind]",
             "in": "query",
-            "required": false,
-            "schema": {
-              "type": ["string", "null"]
-            }
-          },
-          {
-            "name": "filter[asset_a_issuer]",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": ["string", "null"]
-            }
-          },
-          {
-            "name": "filter[asset_b_code]",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": ["string", "null"]
-            }
-          },
-          {
-            "name": "filter[asset_b_issuer]",
-            "in": "query",
+            "description": "`classic` | `soroban` — which protocol built the pool.\n\nReplaces the four per-leg POSITIONAL filters\n(`filter[asset_a_code]` + issuer, and the same for `b`). Those named a\nleg by its position in a pair, which a list of two-to-four legs has no\nequivalent for; `filter[asset_code]` answers the same question without\npinning a position. No client used them — the frontend's only pool\nfilter is the free-text code box.\n\nAn unknown value is rejected with 400 rather than ignored: a silently\ndropped filter returns a page that contradicts what was asked for.",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -1191,7 +1228,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "description": "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1252,7 +1289,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "description": "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1341,7 +1378,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars).",
+            "description": "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1427,7 +1464,7 @@
           {
             "name": "pool_id",
             "in": "path",
-            "description": "Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.",
+            "description": "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.",
             "required": true,
             "schema": {
               "type": "string"
@@ -1503,7 +1540,7 @@
       "get": {
         "tags": ["network"],
         "summary": "Get top-level chain overview stats.",
-        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + planner row-count\nestimates for accounts / contracts) and caches the assembled\nresponse **keyed on the chain head** (`latest_ledger_sequence`) in\nprocess memory — see `network/cache.rs`. See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
+        "description": "Reads the single-statement network-stats query (latest ledger row +\n`ledgers` 60s aggregate for TPS + deduped counts of accounts /\ncontracts) and caches the assembled response **keyed on the chain head**\n(`latest_ledger_sequence`) in process memory — see `network/cache.rs`.\nSee the task 0045 spec and `network::queries::fetch_stats` for the full\ndata-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
         "operationId": "get_network_stats",
         "responses": {
           "200": {
@@ -1781,7 +1818,7 @@
       "get": {
         "tags": ["search"],
         "summary": "Unified search across all entity types.",
-        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `route_token`\n  (asset routing token or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`.",
+        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `route_token`\n  (asset routing token or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL: `search::queries`.",
         "operationId": "get_search",
         "parameters": [
           {
@@ -2070,7 +2107,7 @@
         "properties": {
           "amount": {
             "type": ["string", "null"],
-            "description": "SIGNED raw amount as an `Int128` string: positive received, negative\nspent. Scale by `decimals`.\n\n**`null` is not zero.** It means a NON-FUNGIBLE movement, where no\namount exists by nature — the event carries a token id, not a value.\nThe piece changed hands; rendering `0` would say it did not. See\n`nft_delta`, and `nfts` / `nft_ownership` for which piece it was (this\nfield's source does not carry the token id)."
+            "description": "SIGNED raw amount as an `Int128` string: positive received, negative\nspent. Scale by `decimals`.\n\n**`null` is not zero.** It means a NON-FUNGIBLE movement, where no\namount exists by nature — the event carries a token id, not a value.\nThe piece changed hands; rendering `0` would say it did not. See\n`nft_delta`, and `nfts` / `nft_ownership_changes` for which piece it was (this\nfield's source does not carry the token id)."
           },
           "asset": {
             "type": "string",
@@ -2312,7 +2349,7 @@
         "allOf": [
           {
             "type": "object",
-            "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+            "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
             "required": ["id", "asset_type", "decimals"],
             "properties": {
               "asset_code": {
@@ -2398,7 +2435,7 @@
       },
       "AssetItem": {
         "type": "object",
-        "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+        "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
         "required": ["id", "asset_type", "decimals"],
         "properties": {
           "asset_code": {
@@ -2465,7 +2502,7 @@
       },
       "AssetTransactionItem": {
         "type": "object",
-        "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors\ncanonical SQL `10_get_assets_transactions.sql`.",
+        "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; filled by\n`queries::fetch_transactions`.",
         "required": [
           "hash",
           "ledger_sequence",
@@ -2560,7 +2597,7 @@
           },
           "pool_id": {
             "type": "string",
-            "description": "Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the\nclient supplied in the path."
+            "description": "Echoed pool ID — `L…` or `C…`, same form the client supplied in the\npath."
           },
           "to": {
             "type": "string",
@@ -3084,9 +3121,9 @@
         "type": "object",
         "description": "One row per event — the full-content `soroban_events` table stores one\nrow per event (no appearance-fold expansion).",
         "required": [
+          "id",
           "transaction_hash",
           "ledger_sequence",
-          "transaction_id",
           "successful",
           "created_at",
           "event_type",
@@ -3102,6 +3139,10 @@
           "event_type": {
             "type": "string"
           },
+          "id": {
+            "type": "string",
+            "description": "The stellar-rpc event id, exactly as `getEvents` returns it\n(ADR 0059)."
+          },
           "ledger_sequence": {
             "type": "integer",
             "format": "int64"
@@ -3115,10 +3156,6 @@
           },
           "transaction_hash": {
             "type": "string"
-          },
-          "transaction_id": {
-            "type": "integer",
-            "format": "int64"
           }
         }
       },
@@ -3158,6 +3195,10 @@
             "type": ["string", "null"],
             "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
           },
+          "caller_contract": {
+            "type": ["string", "null"],
+            "description": "Root caller C-StrKey when a contract made the call; exactly one of the\ntwo callers is set."
+          },
           "contract_id": {
             "type": "string"
           },
@@ -3181,7 +3222,12 @@
         ],
         "properties": {
           "caller_account": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Caller G-StrKey when an account made the call."
+          },
+          "caller_contract": {
+            "type": ["string", "null"],
+            "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
           },
           "created_at": {
             "type": "string",
@@ -3347,7 +3393,7 @@
         "allOf": [
           {
             "type": "object",
-            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`).\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
             "required": ["contract_id", "token_id"],
             "properties": {
               "collection_name": {
@@ -3392,11 +3438,11 @@
             }
           }
         ],
-        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row, see\n`15_get_nfts_list.sql` for the on-the-wire columns), plus a\n`metadata` field fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSON blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). `metadata` is always present\nin the response, set to `null` when the fetch fails or the contract\nreturns a non-JSON `image/*` URI (fail-soft per ADR 0043)."
+        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row), plus a\n`metadata` field fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSON blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). `metadata` is always present\nin the response, set to `null` when the fetch fails or the contract\nreturns a non-JSON `image/*` URI (fail-soft per ADR 0043)."
       },
       "NftItem": {
         "type": "object",
-        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`).\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
         "required": ["contract_id", "token_id"],
         "properties": {
           "collection_name": {
@@ -3432,22 +3478,30 @@
       },
       "NftTransferItem": {
         "type": "object",
-        "description": "One row of NFT transfer history. Shape pinned to canonical SQL\n`17_get_nfts_transfers.sql`.",
+        "description": "One row of NFT transfer history (`queries::fetch_transfers`).",
         "required": [
           "transaction_hash",
           "ledger_sequence",
           "event_type",
           "created_at",
-          "event_order"
+          "application_order",
+          "operation_index",
+          "event_index"
         ],
         "properties": {
+          "application_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Where the change happened — its source event's location (task 0424,\nADR 0059): the transaction's position in the ledger, the operation\nwithin it, the event within the operation."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
           },
-          "event_order": {
+          "event_index": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "minimum": 0
           },
           "event_type": {
             "type": "integer",
@@ -3465,6 +3519,11 @@
           "ledger_sequence": {
             "type": "integer",
             "format": "int64"
+          },
+          "operation_index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           },
           "to_account": {
             "type": ["string", "null"],
@@ -3489,7 +3548,7 @@
           "appearance_id": {
             "type": "integer",
             "format": "int64",
-            "description": "Global BIGSERIAL `operations_appearances.id`. Internal ordering\nartefact only; not a within-tx index. Use `application_order`\nfor apply-order display and to join against\n`XdrOperationDto.application_order` from the heavy overlay."
+            "description": "Equal to `application_order` (the table has no surrogate id since\nPR #175). Use `application_order` for apply-order display and to join\nagainst `XdrOperationDto.application_order` from the heavy overlay."
           },
           "application_order": {
             "type": ["integer", "null"],
@@ -3724,7 +3783,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+              "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
               "required": ["id", "asset_type", "decimals"],
               "properties": {
                 "asset_code": {
@@ -3804,7 +3863,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors\ncanonical SQL `10_get_assets_transactions.sql`.",
+              "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; filled by\n`queries::fetch_transactions`.",
               "required": [
                 "hash",
                 "ledger_sequence",
@@ -3933,9 +3992,9 @@
               "type": "object",
               "description": "One row per event — the full-content `soroban_events` table stores one\nrow per event (no appearance-fold expansion).",
               "required": [
+                "id",
                 "transaction_hash",
                 "ledger_sequence",
-                "transaction_id",
                 "successful",
                 "created_at",
                 "event_type",
@@ -3951,6 +4010,10 @@
                 "event_type": {
                   "type": "string"
                 },
+                "id": {
+                  "type": "string",
+                  "description": "The stellar-rpc event id, exactly as `getEvents` returns it\n(ADR 0059)."
+                },
                 "ledger_sequence": {
                   "type": "integer",
                   "format": "int64"
@@ -3964,10 +4027,6 @@
                 },
                 "transaction_hash": {
                   "type": "string"
-                },
-                "transaction_id": {
-                  "type": "integer",
-                  "format": "int64"
                 }
               }
             }
@@ -3994,7 +4053,12 @@
               ],
               "properties": {
                 "caller_account": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Caller G-StrKey when an account made the call."
+                },
+                "caller_contract": {
+                  "type": ["string", "null"],
+                  "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
                 },
                 "created_at": {
                   "type": "string",
@@ -4083,7 +4147,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`).\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
               "required": ["contract_id", "token_id"],
               "properties": {
                 "collection_name": {
@@ -4132,22 +4196,30 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row of NFT transfer history. Shape pinned to canonical SQL\n`17_get_nfts_transfers.sql`.",
+              "description": "One row of NFT transfer history (`queries::fetch_transfers`).",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
                 "event_type",
                 "created_at",
-                "event_order"
+                "application_order",
+                "operation_index",
+                "event_index"
               ],
               "properties": {
+                "application_order": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Where the change happened — its source event's location (task 0424,\nADR 0059): the transaction's position in the ledger, the operation\nwithin it, the event within the operation."
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
                 },
-                "event_order": {
+                "event_index": {
                   "type": "integer",
-                  "format": "int32"
+                  "format": "int32",
+                  "minimum": 0
                 },
                 "event_type": {
                   "type": "integer",
@@ -4165,6 +4237,11 @@
                 "ledger_sequence": {
                   "type": "integer",
                   "format": "int64"
+                },
+                "operation_index": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
                 },
                 "to_account": {
                   "type": ["string", "null"],
@@ -4190,7 +4267,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
+              "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
               "required": [
                 "account",
                 "shares",
@@ -4214,7 +4291,7 @@
                 },
                 "share_percentage": {
                   "type": ["string", "null"],
-                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`, over the pool's latest snapshot\nhowever old — a classic pool snapshots every change). `None` when the\npool has no snapshot or its total is 0; the frontend renders \"—\"."
                 },
                 "shares": {
                   "type": "string",
@@ -4242,16 +4319,17 @@
                 "transaction_hash",
                 "ledger_sequence",
                 "application_order",
+                "amounts",
                 "source_account",
                 "created_at"
               ],
               "properties": {
-                "amount_a": {
-                  "type": ["string", "null"],
-                  "description": "Signed from the POOL's perspective: positive entered the pool, negative\nleft it. Raw stroops as a decimal string, scaled by 7 at render like\nevery other amount here — a JSON number is a double in the browser, so\na leg above 2^53 stroops would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\n`null` on both legs in the malformed case above."
-                },
-                "amount_b": {
-                  "type": ["string", "null"]
+                "amounts": {
+                  "type": "array",
+                  "items": {
+                    "type": ["string", "null"]
+                  },
+                  "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nEvery entry is `null` in the malformed case above."
                 },
                 "application_order": {
                   "type": "integer",
@@ -4269,7 +4347,7 @@
                     },
                     {
                       "$ref": "#/components/schemas/PoolEvent",
-                      "description": "`null` only for the malformed case where the pool's two legs did not\nboth land in `lp_operation_amounts`. Unreachable by construction — an\nop that touches a pool moves both legs — but the read stays total\nrather than classifying a half-row."
+                      "description": "`null` when not every leg of the pool landed in `pool_operation_amounts`\nfor this operation. Rare but real: 350 of 6.09M operations in the\n100k ledgers to 64,576,995 carry one leg only. The read stays total\nrather than classifying a half-row."
                     }
                   ]
                 },
@@ -4307,23 +4385,16 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+              "description": "One pool row returned by the list endpoint (`queries::list_pools`).\nPools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
               "required": [
                 "pool_id",
-                "asset_a",
-                "asset_b",
+                "pool_kind",
+                "legs",
                 "fee_bps",
                 "fee_percent",
-                "created_at_ledger",
-                "participant_count"
+                "created_at_ledger"
               ],
               "properties": {
-                "asset_a": {
-                  "$ref": "#/components/schemas/PoolAssetLeg"
-                },
-                "asset_b": {
-                  "$ref": "#/components/schemas/PoolAssetLeg"
-                },
                 "created_at_ledger": {
                   "type": "integer",
                   "format": "int64"
@@ -4348,23 +4419,33 @@
                   "type": ["integer", "null"],
                   "format": "int64"
                 },
+                "legs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PoolAssetLeg"
+                  },
+                  "description": "The pool's legs in registration order — two for a classic pool, two to\nfour for a soroban one. Replaces the `asset_a` / `asset_b` pair, which\ncould not express a three-leg pool and forced a soroban row to write\nplaceholder values that read as native XLM downstream."
+                },
                 "participant_count": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+                  "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL).\n\n`null` for a soroban pool: its providers are the holders of its share\ntoken, which `lp_positions` does not index, so a `0` there would claim\nan empty pool rather than an unread one."
                 },
                 "pool_id": {
                   "type": "string",
-                  "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
+                  "description": "A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract\naddress (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR\n0024); the handler encodes them by kind at the response boundary."
                 },
-                "reserve_a": {
-                  "type": ["string", "null"]
+                "pool_kind": {
+                  "$ref": "#/components/schemas/PoolKind",
+                  "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
                 },
-                "reserve_b": {
-                  "type": ["string", "null"]
+                "protocol": {
+                  "type": ["string", "null"],
+                  "description": "The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),\nnamed only when the protocol's own publications claim the router or\nfactory that registered the pool. `null` for a classic pool and for a\nsoroban pool registered by a deployment no protocol claims — never a\nguess from matching code."
                 },
                 "total_shares": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Pool shares outstanding, as a decimal string. Classic: the latest\nsnapshot. Soroban: the pool's own instance storage, scaled by its share\ntoken's published decimals; `null` when the pool keeps no total there\n(concentrated and config-factory pools) or the scale is unknown — a\n`0` is served only for a pool whose every reserve is `0`."
                 },
                 "tvl": {
                   "type": ["string", "null"],
@@ -4462,7 +4543,7 @@
       },
       "ParticipantItem": {
         "type": "object",
-        "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
+        "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
         "required": [
           "account",
           "shares",
@@ -4486,7 +4567,7 @@
           },
           "share_percentage": {
             "type": ["string", "null"],
-            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`). `None` when the pool has no\nsnapshot in the freshness window (stale pool); the frontend renders\nit as \"—\" in that case (matches the list-endpoint stale-pool\nconvention from `18_get_liquidity_pools_list.sql`)."
+            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`, over the pool's latest snapshot\nhowever old — a classic pool snapshots every change). `None` when the\npool has no snapshot or its total is 0; the frontend renders \"—\"."
           },
           "shares": {
             "type": "string",
@@ -4501,16 +4582,17 @@
           "transaction_hash",
           "ledger_sequence",
           "application_order",
+          "amounts",
           "source_account",
           "created_at"
         ],
         "properties": {
-          "amount_a": {
-            "type": ["string", "null"],
-            "description": "Signed from the POOL's perspective: positive entered the pool, negative\nleft it. Raw stroops as a decimal string, scaled by 7 at render like\nevery other amount here — a JSON number is a double in the browser, so\na leg above 2^53 stroops would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\n`null` on both legs in the malformed case above."
-          },
-          "amount_b": {
-            "type": ["string", "null"]
+          "amounts": {
+            "type": "array",
+            "items": {
+              "type": ["string", "null"]
+            },
+            "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nEvery entry is `null` in the malformed case above."
           },
           "application_order": {
             "type": "integer",
@@ -4528,7 +4610,7 @@
               },
               {
                 "$ref": "#/components/schemas/PoolEvent",
-                "description": "`null` only for the malformed case where the pool's two legs did not\nboth land in `lp_operation_amounts`. Unreachable by construction — an\nop that touches a pool moves both legs — but the read stays total\nrather than classifying a half-row."
+                "description": "`null` when not every leg of the pool landed in `pool_operation_amounts`\nfor this operation. Rare but real: 350 of 6.09M operations in the\n100k ledgers to 64,576,995 carry one leg only. The read stays total\nrather than classifying a half-row."
               }
             ]
           },
@@ -4553,58 +4635,53 @@
       },
       "PoolAssetLeg": {
         "type": "object",
-        "description": "One leg of an LP's asset pair. Surfaces both the decoded\n`asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`\nSMALLINT — same contract as `assets/dto::AssetItem`.\n\nLinkable identifiers (task 0263 / F-K-9). All link targets are the\n**asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic\nand accepts both C-strkey (SAC) and `code-issuer` composite, so all\nnon-native legs resolve to the same asset row.\n\n  * `asset_type == 0` — native XLM; routes to `/assets/native`, the\n    reserved token for the classic XLM singleton (it has no `code-issuer`\n    identity to compose).\n  * `contract_id` — C-strkey of the SAC mirror for a classic credit OR\n    native leg (populated when the leg's `(asset_code, issuer)`\n    classic_credit / native `assets` row carries a deployed SAC facet —\n    `sac_contract_id` resolving a `soroban_contracts.contract_id`,\n    ADR 0051). `None` for legs without a deployed SAC mirror.\n\n    Native legs were excluded from this until task 0470. The exclusion was\n    deliberate (`a19ac8f6`) and its reason was Postgres parity — PG returned\n    NULL there. Postgres is retired, and the same native `assets` row\n    already publishes that SAC as `sac_contract_id` on `/v1/assets/native`\n    and in the assets list, which the frontend renders. Withholding it here\n    alone made one asset describe itself two ways depending on the endpoint.\n    Pool legs only carry XDR `AssetType` (native /\n    credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,\n    so SAC / Soroban legs are not directly representable here;\n    `contract_id` surfaces the SAC mirror look-up so the FE can\n    route to the asset detail page via `/assets/${contract_id}`.\n  * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE\n    routes to `/assets/${asset_code}-${issuer}` (composite form\n    accepted by `parse_asset_id`).",
-        "required": ["asset_type"],
+        "description": "One leg of a pool.\n\nAn element of [`PoolItem::legs`], never half of a pair: a classic pool has\nexactly two legs, a soroban pool has two to four (three- and four-leg stable\npools exist on mainnet).\n\n# Which vocabulary the kind speaks\n\n`asset_type_name` speaks the asset **FAMILY** domain — `native` |\n`classic_credit` | `soroban` — the same three labels `/v1/assets` emits and\nthe frontend already maps. It used to speak the XDR `AssetType` domain here\n(`credit_alphanum4` / `credit_alphanum12` / `pool_share`) while the sibling\nendpoint spoke the family one: one field name, two vocabularies, coinciding\non the single word `native`. The rule it now follows is the one task 0496\npaid for in production — a renderer may only use the vocabulary of the enum\nits value came from — and the value is produced by\n[`domain::AssetFamily::as_str`] rather than by a local match, so there is no\ncopy to drift.\n\nThe raw discriminant is deliberately NOT published beside the label. It was,\nand it carried nothing the label does not (the label is a pure function of\nit) while inviting exactly the mismatch above. The alphanum4/alphanum12\nwidth it distinguished is rendered nowhere in the app, and is recoverable\nfrom the code's length if it is ever wanted. It also has no honest value for\na soroban token: XDR has no slot for one, and its `3` already means\n`pool_share`.\n\n# Linkable identifiers\n\nEvery link target is the asset detail page. The precedence is not a\npreference — each rung is the only form that resolves for its kind:\n\n  * native → `/assets/native`, the reserved token for the XLM singleton,\n    which has no `code-issuer` identity to compose.\n  * `asset_code` + `issuer` → `/assets/{code}-{issuer}`.\n  * `contract_id` → `/assets/{contract_id}`, for a soroban token, whose\n    contract IS its asset identity.\n\nA classic or native leg's SAC mirror is not published here. It is not a\nlink target — the asset endpoint pins a contract lookup to the soroban\nfamily, so a SAC address resolves nothing (measured 2026-08-13, after an\nearlier contract-first order sent ~93k classic legs to a dead page) — and\nno pool surface renders it. The asset's own page (`/v1/assets`) carries it\nwith its deployment state.",
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
           },
-          "asset_type": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Raw SMALLINT, XDR `AssetType`: 0=native, 1=credit_alphanum4,\n2=credit_alphanum12. Not the `assets.asset_type` family domain."
-          },
           "asset_type_name": {
             "type": ["string", "null"],
-            "description": "Label in the **XDR `AssetType`** vocabulary — this is a pool LEG, and\nleg types come from `liquidity_pools.asset_a_type`/`asset_b_type`,\nwhich store the protocol discriminant: `native` |\n`credit_alphanum4` | `credit_alphanum12`. `null` only on schema drift.\n(Task 0496 mirror: this doc used to carry the `AssetFamily` legend,\ndeclaring 2 \"retired\" — while 54 456 production legs carry\n2 = `credit_alphanum12`.)"
+            "description": "`native` | `classic_credit` | `soroban`. `None` for a leg whose token\nthe registry has no row for (one live pool has one) — there is no\nfamily to name."
           },
           "contract_id": {
             "type": ["string", "null"],
-            "description": "C-strkey of the deployed SAC mirror for the leg's `(asset_code, issuer)`\nclassic_credit / native asset (ADR 0051 — resolved via the row's\n`sac_contract_id` facet). `None` only when no SAC is deployed for that\nasset. Native XLM has one, and reports it here (task 0470) exactly as\n`/v1/assets/native` already did."
+            "description": "The token's own contract, set ONLY for a `soroban` leg. `None` for\nnative and classic credit."
           },
           "icon_url": {
             "type": ["string", "null"],
-            "description": "Asset icon URL, resolved from `asset_enrichment` (ADR 0050) so pool\navatars render the same icon as the assets list. Until task 0310 this\nread the dead `assets.icon_url` column, which was never populated —\nevery leg icon came back `None`. Still `None` for assets without an\nenriched icon — the FE falls back to the asset-code initial."
+            "description": "Asset icon URL from `asset_enrichment` (ADR 0050), so pool avatars match\nthe assets list. NOT from `assets`, whose `icon_url` column was dropped\nin task 0310 after measuring 0 of 411,654 rows populated. `None` for an\nasset with no enriched icon — the frontend falls back to the initial."
           },
           "issuer": {
             "type": ["string", "null"]
+          },
+          "reserve": {
+            "type": ["string", "null"],
+            "description": "What the pool holds of this leg, in the asset's own units, as a decimal\nstring (a JSON number is a browser double and a big reserve would lose\ndigits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a\npool has two to four legs. `null` when no source knows it — never `0`.\nA classic pool reads its latest snapshot. A soroban pool reads its\nnewest `pool_state_changes` row, scaled by 7 for a native or classic\nleg and by the `decimals` a soroban token publishes in its metadata; a\ntoken that publishes none keeps its leg `null`."
+          },
+          "symbol": {
+            "type": ["string", "null"],
+            "description": "The token's self-declared SEP-41 symbol, from contract metadata — what\nnames a soroban leg that has no classic code. Not unique: many\ncontracts claim the same one, so `contract_id` stays the identity."
           }
         }
       },
       "PoolEvent": {
         "type": "string",
-        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `lp_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
+        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `pool_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
         "enum": ["trade", "deposit", "withdrawal"]
       },
       "PoolItem": {
         "type": "object",
-        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,\n`fee_revenue`, `latest_snapshot_*`); frontend renders these as \"stale\".",
+        "description": "One pool row returned by the list endpoint (`queries::list_pools`).\nPools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
         "required": [
           "pool_id",
-          "asset_a",
-          "asset_b",
+          "pool_kind",
+          "legs",
           "fee_bps",
           "fee_percent",
-          "created_at_ledger",
-          "participant_count"
+          "created_at_ledger"
         ],
         "properties": {
-          "asset_a": {
-            "$ref": "#/components/schemas/PoolAssetLeg"
-          },
-          "asset_b": {
-            "$ref": "#/components/schemas/PoolAssetLeg"
-          },
           "created_at_ledger": {
             "type": "integer",
             "format": "int64"
@@ -4629,23 +4706,33 @@
             "type": ["integer", "null"],
             "format": "int64"
           },
+          "legs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolAssetLeg"
+            },
+            "description": "The pool's legs in registration order — two for a classic pool, two to\nfour for a soroban one. Replaces the `asset_a` / `asset_b` pair, which\ncould not express a three-leg pool and forced a soroban row to write\nplaceholder values that read as native XLM downstream."
+          },
           "participant_count": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int64",
-            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL)."
+            "description": "Count of active liquidity providers (`lp_positions WHERE shares > 0`).\nComputed from the live table — not dependent on the snapshot\nfreshness window, so it is populated even on stale pools (where\n`tvl`/`volume`/`fee_revenue` are NULL).\n\n`null` for a soroban pool: its providers are the holders of its share\ntoken, which `lp_positions` does not index, so a `0` there would claim\nan empty pool rather than an unread one."
           },
           "pool_id": {
             "type": "string",
-            "description": "SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR\n0024; the handler encodes to strkey at the response boundary so\nthe wire shape matches the Stellar ecosystem canonical form\n(CAP-38 / SEP-23)."
+            "description": "A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract\naddress (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR\n0024); the handler encodes them by kind at the response boundary."
           },
-          "reserve_a": {
-            "type": ["string", "null"]
+          "pool_kind": {
+            "$ref": "#/components/schemas/PoolKind",
+            "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
           },
-          "reserve_b": {
-            "type": ["string", "null"]
+          "protocol": {
+            "type": ["string", "null"],
+            "description": "The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),\nnamed only when the protocol's own publications claim the router or\nfactory that registered the pool. `null` for a classic pool and for a\nsoroban pool registered by a deployment no protocol claims — never a\nguess from matching code."
           },
           "total_shares": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Pool shares outstanding, as a decimal string. Classic: the latest\nsnapshot. Soroban: the pool's own instance storage, scaled by its share\ntoken's published decimals; `null` when the pool keeps no total there\n(concentrated and config-factory pools) or the scale is unknown — a\n`0` is served only for a pool whose every reserve is `0`."
           },
           "tvl": {
             "type": ["string", "null"],
@@ -4656,6 +4743,10 @@
             "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
           }
         }
+      },
+      "PoolKind": {
+        "type": "string",
+        "enum": ["classic", "soroban"]
       },
       "SacAsset": {
         "type": "object",
@@ -4755,6 +4846,32 @@
         "properties": {
           "groups": {
             "$ref": "#/components/schemas/SearchGroups"
+          }
+        }
+      },
+      "SessionRequest": {
+        "type": "object",
+        "required": ["token"],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Turnstile token produced by the SPA widget."
+          }
+        }
+      },
+      "SessionResponse": {
+        "type": "object",
+        "required": ["token", "expires_in"],
+        "properties": {
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until `token` expires.",
+            "minimum": 0
+          },
+          "token": {
+            "type": "string",
+            "description": "Free-tier session JWT, sent back as `Authorization: Bearer <token>`."
           }
         }
       },
@@ -4937,7 +5054,7 @@
       "XdrEventDto": {
         "type": "object",
         "description": "Common shape for contract events and diagnostic events.",
-        "required": ["event_type", "topics", "data", "event_index"],
+        "required": ["event_type", "topics", "data"],
         "properties": {
           "contract_id": {
             "type": ["string", "null"],
@@ -4947,22 +5064,27 @@
             "description": "Decoded event data payload."
           },
           "event_index": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "Event index within the transaction (zero-based)."
+            "description": "The id's event number: the position in the operation, or for a fee\nevent the ledger's (or, for `after_tx`, the transaction's) counter of\nthat stage. `None` for diagnostic events.",
+            "minimum": 0
           },
           "event_type": {
             "type": "string",
             "description": "`\"contract\"`, `\"system\"`, or `\"diagnostic\"`."
           },
-          "op_index": {
+          "id": {
+            "type": ["string", "null"],
+            "description": "The stellar-rpc event id, exactly as `getEvents` returns it (ADR 0059).\nConsensus events arrive sorted by it, which is execution order: fee\ncharge, operation events, fee refund. `None` for diagnostic events."
+          },
+          "operation_index": {
             "type": ["integer", "null"],
             "format": "int32",
-            "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 V4 per-operation container only; `None` for tx-level,\ndiagnostic and pre-Protocol-23 events). Matches\n`XdrOperationDto.application_order - 1`."
+            "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 per-operation container only; `None` for fee and diagnostic\nevents). Matches `XdrOperationDto.application_order - 1`."
           },
           "stage": {
             "type": ["string", "null"],
-            "description": "CAP-67 `TransactionEvent.stage` — `\"before_all_txs\"`, `\"after_tx\"` or\n`\"after_all_txs\"`. The protocol's only statement of when a tx-level\nevent fired, and the reason `event_index` must not be read as a\ntimeline: the fee refund is numbered ahead of the operation it\nrefunds. Observed values on mainnet are `before_all_txs` for the charge\nand `after_all_txs` for the refund; `after_tx` exists in the protocol\nand is passed through unchanged if it appears. `None` for per-operation, diagnostic and\npre-Protocol-23 events, which carry no stage."
+            "description": "CAP-67 `TransactionEvent.stage` — `\"before_all_txs\"`, `\"after_tx\"` or\n`\"after_all_txs\"`: when a tx-level event fired. The fee charge is\n`before_all_txs`; the refund is `after_tx` before protocol 23 and\n`after_all_txs` from it (archive meta, task 0541). `None` for\nper-operation and diagnostic events, which carry no stage."
           },
           "topics": {
             "type": "array",

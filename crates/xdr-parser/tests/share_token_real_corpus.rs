@@ -133,10 +133,11 @@ fn every_mainnet_deposit_resolves_like_share_id() {
                 contract_id: Some(e.contract.clone()),
                 topics: serde_json::from_str(&e.topics).expect("topics json"),
                 data: serde_json::from_str(&e.data).expect("data json"),
-                event_index: e.idx,
+                position_in_tx: e.idx,
                 op_index: None,
                 event_pos_in_op: None,
                 stage: None,
+                event_id: None,
                 ledger_sequence: tx.ledger as u32,
                 created_at: 0,
             })
@@ -244,11 +245,11 @@ pub fn detect_share_tokens(events: &[(String, Vec<ExtractedEvent>)]) -> Vec<Shar
             continue;
         }
         for (pool, shares) in deposits {
-            // Highest event_index wins the (single-occurrence) migration tie.
+            // Highest position_in_tx wins the (single-occurrence) migration tie.
             let winner = evs
                 .iter()
                 .filter(|ev| sep41_mint_matches(ev, pool, &shares))
-                .max_by_key(|ev| ev.event_index)
+                .max_by_key(|ev| ev.position_in_tx)
                 .and_then(|ev| ev.contract_id.clone());
             if let Some(token) = winner {
                 out.push(ShareTokenSighting {
@@ -321,10 +322,11 @@ mod shape_tests {
             contract_id: Some(contract.into()),
             topics,
             data,
-            event_index: idx,
+            position_in_tx: idx,
             op_index: None,
             event_pos_in_op: None,
             stage: None,
+            event_id: None,
             ledger_sequence: 61_777_648,
             created_at: 0,
         }

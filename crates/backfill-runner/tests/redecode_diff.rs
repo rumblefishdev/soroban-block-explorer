@@ -44,22 +44,19 @@
 //! partition:
 //!
 //! ```sql
-//! SELECT ledger_sequence, application_order, op_index, event_pos_in_op, event_index, asset_id,
+//! SELECT ledger_sequence, application_order, op_index, event_pos_in_op, asset_id,
 //!        amount, from_id, from_kind, from_muxed_id, to_id, to_kind, to_muxed_id, verb
 //! FROM asset_transfers FINAL WHERE ledger_sequence IN (L)
 //! ORDER BY ledger_sequence, application_order, op_index, event_pos_in_op FORMAT TSV;
 //! SELECT ledger_sequence, application_order, memo_type, hex(memo)
 //! FROM transaction_memos FINAL WHERE ledger_sequence IN (L)
 //! ORDER BY ledger_sequence, application_order FORMAT TSV;
-//! SELECT ledger_sequence, application_order, event_index, op_index, event_pos_in_op
-//! FROM soroban_event_ops FINAL WHERE ledger_sequence IN (L)
-//! ORDER BY ledger_sequence, application_order, event_index FORMAT TSV;
 //! SELECT hex(pool_id), ledger_sequence, reserves, plane_id
 //! FROM pool_state_changes FINAL WHERE ledger_sequence IN (L)
 //! ORDER BY hex(pool_id), plane_id, ledger_sequence FORMAT TSV;
-//! SELECT hex(pool_id), ledger_sequence, transaction_id, application_order, asset_id, amount
-//! FROM lp_operation_amounts FINAL WHERE ledger_sequence IN (L)  -- per partition: FINAL over many is slow
-//! ORDER BY hex(pool_id), ledger_sequence, transaction_id, application_order, asset_id FORMAT TSV;
+//! SELECT hex(pool_id), ledger_sequence, application_order, operation_index, asset_id, amount
+//! FROM pool_operation_amounts FINAL WHERE ledger_sequence IN (L)  -- per partition: FINAL over many is slow
+//! ORDER BY hex(pool_id), ledger_sequence, application_order, operation_index, asset_id FORMAT TSV;
 //! -- the two state tables: the current version of chosen pools, compared with the
 //! -- re-decoded row whose version ledger equals it (`*.all-versions.tsv`)
 //! SELECT hex(pool_id), asset_a_type, asset_a_code, asset_a_issuer_id, asset_b_type, asset_b_code,
@@ -235,7 +232,6 @@ fn redecode_value_flow_tables() {
     };
     let mut transfers = Vec::new();
     let mut memos = Vec::new();
-    let mut event_ops = Vec::new();
 
     for &seq in LEDGERS {
         for staged in stage_ledger(&cache, seq) {
@@ -252,7 +248,6 @@ fn redecode_value_flow_tables() {
                         r.application_order.to_string(),
                         r.op_index.to_string(),
                         r.event_pos_in_op.to_string(),
-                        r.event_index.to_string(),
                         r.asset_id.to_string(),
                         opt(r.amount),
                         opt(r.from_id),
@@ -278,28 +273,14 @@ fn redecode_value_flow_tables() {
                     .join("\t"),
                 ));
             }
-            for r in &staged.event_op_rows {
-                event_ops.push((
-                    (r.ledger_sequence, r.application_order, r.event_index),
-                    [
-                        r.ledger_sequence.to_string(),
-                        r.application_order.to_string(),
-                        r.event_index.to_string(),
-                        r.op_index.to_string(),
-                        r.event_pos_in_op.to_string(),
-                    ]
-                    .join("\t"),
-                ));
-            }
         }
     }
 
     println!(
-        "{} ledgers: {} transfers, {} memos, {} event ops",
+        "{} ledgers: {} transfers, {} memos",
         LEDGERS.len(),
         write_tsv(&out, "asset_transfers.tsv", transfers),
         write_tsv(&out, "transaction_memos.tsv", memos),
-        write_tsv(&out, "soroban_event_ops.tsv", event_ops),
     );
 }
 
@@ -322,21 +303,21 @@ fn redecode_pool_tables() {
             for r in &staged.pool_state_change_rows {
                 state_changes.push(state_change_line(r));
             }
-            for r in &staged.lp_amount_rows {
+            for r in &staged.pool_amount_rows {
                 let id = hex_upper(&r.pool_id);
                 amounts.push((
                     (
                         id.clone(),
                         r.ledger_sequence,
-                        r.transaction_id,
                         r.application_order,
+                        r.operation_index,
                         r.asset_id,
                     ),
                     [
                         id,
                         r.ledger_sequence.to_string(),
-                        r.transaction_id.to_string(),
                         r.application_order.to_string(),
+                        r.operation_index.to_string(),
                         r.asset_id.to_string(),
                         r.amount.to_string(),
                     ]
@@ -383,10 +364,10 @@ fn redecode_pool_tables() {
     }
 
     println!(
-        "{} ledgers: {} pool state changes, {} lp amounts, {} pool rows, {} instance rows",
+        "{} ledgers: {} pool state changes, {} pool amounts, {} pool rows, {} instance rows",
         LEDGERS.len() + POOL_LEDGERS.len(),
         write_tsv(&out, "pool_state_changes.tsv", state_changes),
-        write_tsv(&out, "lp_operation_amounts.tsv", amounts),
+        write_tsv(&out, "pool_operation_amounts.tsv", amounts),
         write_tsv(&out, "liquidity_pools.all-versions.tsv", pools),
         write_tsv(&out, "pool_instance_state.all-versions.tsv", instances),
     );

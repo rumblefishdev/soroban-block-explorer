@@ -191,7 +191,10 @@ histories:
 3. **A retired discriminant number stays dead.** (The 0496 lesson.)
 4. **New tables and artifacts key on surrogates, never on the natural
    tuple.** (The audit found the side tables' 4-column joins evolution-hostile
-   — task 0498.)
+   — task 0498.) Scope: asset / holder identity (`asset_id` over the
+   `(asset_type, asset_code, issuer_id, contract_id)` tuple). A transaction
+   is the opposite case — located by its position, never by the
+   `transaction_id` surrogate (ADR 0059, clarified 2026-09-23).
 5. **A holding lives outside `balances` only when its lifecycle requires it**
    (amendment 2026-09-15, below).
 

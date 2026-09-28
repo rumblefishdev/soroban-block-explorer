@@ -11,8 +11,8 @@
 //! everywhere — see `ids.rs` module docs for the why.
 //!
 //! Other tables (`assets`, `nfts`, `liquidity_pools`,
-//! `liquidity_pool_snapshots`, `operations_appearances`,
-//! `transaction_participants`, `nft_ownership`, `lp_positions`,
+//! `liquidity_pool_snapshots`, `transaction_operations`,
+//! `transaction_participants`, `nft_ownership_changes`, `lp_positions`,
 //! `account_balances_current`) keep natural / composite primary
 //! keys where they're already cheap.
 //!
@@ -39,7 +39,7 @@
 //! convention: `WHERE amount > 0` to recover "active trustlines"
 //! semantics.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
@@ -47,7 +47,6 @@ use xdr_parser::ExtractedAssetTransfer;
 use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
-use xdr_parser::asset_appearances::AssetRef;
 use xdr_parser::claimable_balance::ExtractedClaimableBalance;
 use xdr_parser::executable_ref::ExtractedExecutableRefTarget;
 use xdr_parser::scval;
@@ -104,7 +103,7 @@ pub fn gross_volume_a_by_pool(
 }
 
 /// Per-(pool, asset) SIGNED amounts for ONE operation — everything it moved
-/// through a pool (task 0279 → `lp_operation_amounts`), from the two sources
+/// through a pool (task 0279 → `pool_operation_amounts`), from the two sources
 /// the XDR offers, which are disjoint by op type:
 ///
 /// - **trades** (path payments / offers): `claimedAtoms`, the same atoms and
@@ -230,40 +229,39 @@ pub struct StagedLedger {
     /// here, never a rewrite of the members that follow it.
     pub executable_ref_rows: Vec<ContractExecutableRefRow>,
     pub transaction_rows: Vec<TransactionRow>,
-    pub hash_index_rows: Vec<TransactionHashIndexRow>,
+    pub hash_prefix_rows: Vec<TransactionHashPrefixRow>,
     pub participant_rows: Vec<TransactionParticipantRow>,
     pub pool_rows: Vec<LiquidityPoolRow>,
     pub pool_instance_state_rows: Vec<PoolInstanceStateRow>,
     pub pool_state_change_rows: Vec<PoolStateChangeRow>,
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
-    pub op_rows: Vec<OperationAppearanceRow>,
+    /// Operations folded by identity (task 0163), located by transaction
+    /// position (task 0372) → `transaction_operations`.
+    pub tx_operation_rows: Vec<TransactionOperationRow>,
     /// Per-(asset, tx) presence rows (task 0359) → `operation_asset_appearances`,
     /// the asset-dimension twin of `participant_rows`.
     pub op_asset_rows: Vec<OperationAssetAppearanceRow>,
-    /// Per-(pool, tx) presence rows (task 0365) → `operation_pools`, the
-    /// pool-dimension twin of `participant_rows` / `op_asset_rows`.
-    pub op_pool_rows: Vec<OperationPoolRow>,
-    /// Per-(op, pool, asset) amounts (task 0279) → `lp_operation_amounts`, the
-    /// value twin of `op_pool_rows`. Trades from `claimedAtoms`, deposits and
-    /// withdrawals from the op's own reserve delta (`poolDelta`).
-    pub lp_amount_rows: Vec<LpOperationAmountRow>,
+    /// Per-(op, pool, asset) amounts (task 0279), located by transaction
+    /// position (task 0372) → `pool_operation_amounts`: trades from
+    /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
+    pub pool_amount_rows: Vec<PoolOperationAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
-    pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
+    /// Per-(contract, tx) presence plus the invocation's caller and call count
+    /// (tasks 0541, 0586) → `contract_activity`, the contract-dimension twin of
+    /// `participant_rows`.
+    pub contract_activity_rows: Vec<ContractActivityRow>,
     pub asset_rows: Vec<AssetRow>,
     /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
     pub asset_sac_rows: Vec<AssetSacRow>,
     pub nft_rows: Vec<NftRow>,
-    pub nft_ownership_rows: Vec<NftOwnershipRow>,
-    /// Task 0217 / 0220 — quarantine bucket for NFT rows whose
-    /// contract is still `Other` / NULL-classified at staging time.
-    /// Routed alongside `nft_rows` via the per-contract verdict
-    /// computed from observed WASM interfaces in this ledger plus the
-    /// parser-emitted `contract_type` on each deployment. CH has no
-    /// per-row UPDATE, so promotion happens only via the post-backfill
-    /// drain runbook.
+    /// Task 0217 / 0220 — quarantine for NFT rows whose contract is still
+    /// `Other` / NULL-classified at staging (per-contract verdict, as for
+    /// `nft_rows`); promoted only by the post-backfill drain runbook.
     pub nft_pending_rows: Vec<NftPendingRow>,
-    pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
+    /// Ownership changes located by their event (task 0424) → `nft_ownership_changes{,_pending}`.
+    pub nft_ownership_change_rows: Vec<NftOwnershipChangeRow>,
+    pub nft_ownership_change_pending_rows: Vec<NftOwnershipChangeRow>,
     /// Unified `balances` rows for ALL asset types (task 0331 Option A). Type-3
     /// tokens are built in [`prepare_with_sac_overrides`] via [`build_balance_rows`]
     /// from `StageInputs.soroban_token_balances`; classic + native per-account
@@ -280,8 +278,6 @@ pub struct StagedLedger {
     pub asset_transfer_rows: Vec<AssetTransferRow>,
     /// Task 0540 — one row per transaction that carries a memo → `transaction_memos`.
     pub transaction_memo_rows: Vec<TransactionMemoRow>,
-    /// Task 0541 — operation attribution per event → `soroban_event_ops`.
-    pub event_op_rows: Vec<SorobanEventOpRow>,
 }
 
 /// Named, borrowed inputs to [`prepare_with_sac_overrides`].
@@ -567,12 +563,8 @@ pub fn build_balance_rows(
     let mut rows: Vec<BalanceRow> = Vec::with_capacity(balances.len());
     let mut idx: HashMap<(i64, i64), usize> = HashMap::with_capacity(balances.len());
     for b in balances {
-        let contract = ids::contract_id(&b.contract_id);
         let holder_id = ids::address_id(&b.holder);
-        let asset_id = sac_classic
-            .get(&contract)
-            .copied()
-            .unwrap_or_else(|| ids::asset_id(3, "", 0, contract));
+        let asset_id = contract_token_asset_id(&b.contract_id, sac_classic);
         let row = BalanceRow {
             holder_id,
             asset_id,
@@ -1035,17 +1027,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // in the asset-emission pass. A real deploy still writes its contract row
     // from `contract_deployments` (site above).
 
-    // ---- transactions + transaction_hash_index ----
-    // `(surrogate id, application_order)` per hash: the surrogate keys joins,
-    // the application order is the ledger's own temporal position — the ONLY
+    // ---- transactions + transaction_hash_prefix_index ----
+    // `application_order` per hash, the ledger's own temporal position — the ONLY
     // valid intra-ledger ordering (a hash surrogate sorts randomly; the task
     // 0374 e2e caught pool state picking an intermediate write as "last" on
     // 127 of 1,410 real pairs when ordered by tx_id).
-    let mut tx_id_by_hash: HashMap<String, i64> = HashMap::with_capacity(transactions.len());
+    let mut app_order_by_hash: HashMap<String, i16> = HashMap::with_capacity(transactions.len());
     for (idx, tx) in transactions.iter().enumerate() {
         let hash = decode_hash(&tx.hash, "tx.hash")?;
         let tx_id = ids::transaction_id(&hash);
-        tx_id_by_hash.insert(tx.hash.clone(), tx_id);
 
         let inner_tx_hash = match tx.inner_tx_hash.as_deref() {
             Some(h) => Some(decode_hash(h, "inner_tx_hash")?),
@@ -1053,6 +1043,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         };
         let app_order =
             i16::try_from(idx + 1).map_err(|_| staging_err("application_order overflow (>i16)"))?;
+        app_order_by_hash.insert(tx.hash.clone(), app_order);
         let op_count = op_count_by_tx.get(tx.hash.as_str()).copied().unwrap_or(0);
 
         out.transaction_rows.push(TransactionRow {
@@ -1069,42 +1060,26 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             parse_error: tx.parse_error,
         });
 
-        out.hash_index_rows.push(TransactionHashIndexRow {
-            hash,
-            ledger_sequence: ledger_sequence_i64,
-        });
+        out.hash_prefix_rows
+            .push(TransactionHashPrefixRow::new(&hash, ledger_sequence_i64));
 
         // Fee-bump: also index the inner-tx hash so a lookup by the inner
         // hash resolves to the wrapping fee-bump (Horizon `inner_transaction`
         // semantics). `inner_tx_hash → ledger_sequence` is immutable, same as
         // the outer key (task 0375).
         if let Some(inner) = inner_tx_hash {
-            out.hash_index_rows.push(TransactionHashIndexRow {
-                hash: inner,
-                ledger_sequence: ledger_sequence_i64,
-            });
+            out.hash_prefix_rows
+                .push(TransactionHashPrefixRow::new(&inner, ledger_sequence_i64));
         }
     }
 
     // ---- transaction_participants ----
-    for tx in transactions {
-        let Some(set) = participants_per_tx.get(&tx.hash) else {
-            continue;
-        };
-        let Some(&tx_id) = tx_id_by_hash.get(&tx.hash) else {
-            continue;
-        };
-        for key in set {
-            if !is_strkey_account(key) {
-                continue;
-            }
-            out.participant_rows.push(TransactionParticipantRow {
-                account_id: ids::account_id(key),
-                ledger_sequence: ledger_sequence_i64,
-                transaction_id: tx_id,
-            });
-        }
-    }
+    out.participant_rows = presence::participant_rows(
+        ledger_sequence_i64,
+        transactions,
+        &participants_per_tx,
+        &app_order_by_hash,
+    );
 
     // ---- liquidity_pools (classic; shared with `snapshot-seed`) ----
     out.pool_rows = super::classic_pools::build_pool_rows(liquidity_pools)?;
@@ -1205,7 +1180,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 continue;
             }
         }
-        match pool_registry_row(&reg.event, &reg.router, ledger_sequence_i64) {
+        match pool_registry_row(&reg.event, &reg.router, ledger_sequence_i64, sac_map) {
             Ok(row) => out.pool_rows.push(row),
             Err(reason) => tracing::error!(
                 ledger_sequence = ledger.sequence,
@@ -1266,7 +1241,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 continue;
             }
         }
-        match factory_pair_registry_row(&reg, ledger_sequence_i64) {
+        match factory_pair_registry_row(&reg, ledger_sequence_i64, sac_map) {
             Ok(row) => out.pool_rows.push(row),
             Err(reason) => tracing::error!(
                 ledger_sequence = ledger.sequence,
@@ -1382,7 +1357,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
         match declared_config.get(reg.pool.as_str()) {
             Some(&(Some(config), true)) => {
-                match config_pool_registry_row(reg, config, ledger_sequence_i64) {
+                match config_pool_registry_row(reg, config, ledger_sequence_i64, sac_map) {
                     Ok(row) => out.pool_rows.push(row),
                     Err(reason) => tracing::error!(
                         ledger_sequence = ledger.sequence,
@@ -1704,182 +1679,29 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     }
     out.lp_position_rows.extend(lp_dedup.into_values());
 
-    // ---- operations_appearances (identity fold per task 0163) ----
-    #[derive(Eq, PartialEq, Hash)]
-    struct OpKey {
-        tx_hash_hex: String,
-        op_type: i16,
-        source_account: Option<String>,
-        destination_account: Option<String>,
-        contract_strkey: Option<String>,
-        asset_code: String,
-        asset_issuer_account: Option<String>,
-        /// Sorted + deduped — canonical order makes the fold identity (and
-        /// the emitted row) deterministic across re-parses (task 0261/0266).
-        pool_ids: Vec<[u8; 32]>,
-    }
-    struct OpAgg {
-        count: i64,
-        min_apply_order: u32,
-    }
-    let mut op_agg: HashMap<OpKey, OpAgg> = HashMap::new();
-    for (tx_hash, ops) in operations {
-        if !tx_id_by_hash.contains_key(tx_hash) {
-            continue;
-        }
-        // Per-tx dedup for the asset fan-out (PR #6): N ops touching the same
-        // asset in one tx would otherwise write N identical (asset, tx) rows. The
-        // RMT sort key collapses them eventually, but deduping at write cuts the
-        // backfilled volume up front. Scoped per tx — one entry per tx_hash here.
-        let mut seen_tx_asset_ids: HashSet<i64> = HashSet::new();
-        // Same per-tx dedup for the pool fan-out (task 0365): N ops crossing the
-        // same pool in one tx → one (pool, tx) row.
-        let mut seen_tx_pool_ids: HashSet<[u8; 32]> = HashSet::new();
-        for op in ops {
-            // ---- operation_asset_appearances (task 0359, pure presence) ----
-            // Asset-dimension twin of transaction_participants: one row per
-            // (asset the op touches, tx). Native is a FIRST-CLASS surrogate (never
-            // the empty-string sentinel); classic credit hashes
-            // code:issuer_surrogate — both via `ids::asset_id`.
-            if !op.asset_appearances.is_empty() {
-                let tx_id = tx_id_by_hash[tx_hash];
-                for asset in &op.asset_appearances {
-                    let asset_id = match asset {
-                        AssetRef::Native => ids::NATIVE_ASSET_ID,
-                        AssetRef::Credit { code, issuer } => ids::credit_asset_id(code, issuer),
-                    };
-                    if seen_tx_asset_ids.insert(asset_id) {
-                        out.op_asset_rows.push(OperationAssetAppearanceRow {
-                            asset_id,
-                            ledger_sequence: ledger_sequence_i64,
-                            transaction_id: tx_id,
-                            // `Some(v)` = reduced; `None` (-> NULL) = touched but
-                        });
-                    }
-                }
-            }
-
-            let typed = OpTyped::from_details(op.op_type, &op.details);
-            let mut pool_ids = Vec::with_capacity(typed.pool_ids_hex.len());
-            for h in &typed.pool_ids_hex {
-                pool_ids.push(decode_hash(h, "op.pool_ids")?);
-            }
-            pool_ids.sort_unstable();
-            pool_ids.dedup();
-
-            // ---- operation_pools (task 0365, pure presence) ----
-            // Pool-dimension twin of the asset fan-out above: one row per (pool
-            // the op crossed, tx). `pool_ids` is already the sorted+deduped
-            // crossing list; dedup per-tx so N ops crossing the same pool in one
-            // tx write one (pool, tx) row (the RMT collapses any residual). Sourced
-            // from `oa.pool_ids` — no XDR-only data, so a plain CH re-key can
-            // backfill it (task 0365 Path B).
-            if !pool_ids.is_empty() {
-                let tx_id = tx_id_by_hash[tx_hash];
-                for pool_id in &pool_ids {
-                    if seen_tx_pool_ids.insert(*pool_id) {
-                        out.op_pool_rows.push(OperationPoolRow {
-                            pool_id: *pool_id,
-                            ledger_sequence: ledger_sequence_i64,
-                            transaction_id: tx_id,
-                        });
-                    }
-                }
-            }
-
-            // ---- lp_operation_amounts (task 0279) ----
-            // The value twin of the block above: `gross_volume_a_by_pool` walks
-            // the same trade atoms and sums them into one number per pool; here
-            // the per-(op, pool, asset) attribution is KEPT instead of
-            // discarded, and deposits/withdrawals — which have no atoms — come
-            // from the op's own reserve delta.
-            {
-                let tx_id = tx_id_by_hash[tx_hash];
-                // Fail the ledger rather than clamp, matching the
-                // `transactions.application_order` conversion above: this
-                // column is part of the ORDER BY, so two operations squeezed
-                // onto one saturated value would share a key and the RMT would
-                // drop a fill silently — the loss the per-op summing exists to
-                // prevent. Unreachable while Stellar caps ops per tx at 100.
-                let order = i16::try_from(op.operation_index)
-                    .map_err(|_| staging_err("lp_operation_amounts application_order (>i16)"))?;
-                for (pool_id, asset_id, amount) in pool_fill_amounts(&op.details) {
-                    out.lp_amount_rows.push(LpOperationAmountRow {
-                        pool_id,
-                        ledger_sequence: ledger_sequence_i64,
-                        transaction_id: tx_id,
-                        application_order: order,
-                        asset_id,
-                        amount,
-                    });
-                }
-            }
-
-            let key = OpKey {
-                tx_hash_hex: tx_hash.clone(),
-                op_type: op.op_type as i16,
-                source_account: op.source_account.clone(),
-                destination_account: typed.destination,
-                contract_strkey: typed.contract_id,
-                asset_code: typed.asset_code.unwrap_or_default(),
-                asset_issuer_account: typed.asset_issuer,
-                pool_ids,
-            };
-            op_agg
-                .entry(key)
-                .and_modify(|agg| {
-                    agg.count += 1;
-                    agg.min_apply_order = agg.min_apply_order.min(op.operation_index);
-                })
-                .or_insert(OpAgg {
-                    count: 1,
-                    min_apply_order: op.operation_index,
-                });
-        }
-    }
-    for (k, agg) in op_agg {
-        let Some(&tx_id) = tx_id_by_hash.get(&k.tx_hash_hex) else {
-            continue;
-        };
-        let app_order = i16::try_from(agg.min_apply_order)
-            .map_err(|_| staging_err("operation_index >i16 — protocol violation"))?;
-        out.op_rows.push(OperationAppearanceRow {
-            transaction_id: tx_id,
-            application_order: app_order,
-            op_type: k.op_type,
-            source_id: k.source_account.as_deref().map(ids::account_id),
-            destination_id: k.destination_account.as_deref().map(ids::account_id),
-            contract_id: k.contract_strkey.as_deref().map(ids::contract_id),
-            asset_code: k.asset_code,
-            asset_issuer_id: k.asset_issuer_account.as_deref().map(ids::account_id),
-            pool_ids: k.pool_ids,
-            amount: agg.count,
-            ledger_sequence: ledger_sequence_i64,
-        });
-    }
+    operations::operation_rows(
+        &mut out,
+        operations,
+        &app_order_by_hash,
+        ledger_sequence_i64,
+    )?;
 
     // ---- operation_asset_appearances: event-derived (task 0383, K3-4) ----
-    // SAC / bespoke token moves (transfer / mint / burn / clawback) make the
-    // moved asset appear in the tx. Same (asset, tx) grain as the op-derived
-    // rows above; the RMT collapses any overlap. Presence only (model A).
-    for (tx_hash, asset_ids) in &event_assets_per_tx {
-        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
-            continue;
-        };
-        for &asset_id in asset_ids {
-            out.op_asset_rows.push(OperationAssetAppearanceRow {
-                asset_id,
-                ledger_sequence: ledger_sequence_i64,
-                transaction_id: tx_id,
-            });
-        }
-    }
+    out.op_asset_rows.extend(presence::event_asset_rows(
+        ledger_sequence_i64,
+        &event_assets_per_tx,
+        &app_order_by_hash,
+    ));
 
-    // ---- soroban_events (UNFOLDED per ADR 0044 §4a) ----
+    // ---- soroban_events (UNFOLDED per ADR 0044 §4a, keyed by rpc id per ADR 0059) ----
     let mut diagnostic_dropped: usize = 0;
     let mut contract_orphan_dropped: usize = 0;
+    // (contract, transaction) of every operation event, for
+    // `contract_activity` below: the parser says where an event came from,
+    // so a fee event is left out by its source, not inferred from its id.
+    let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
     for (tx_hash, evs) in events {
-        let Some(&tx_id) = tx_id_by_hash.get(tx_hash) else {
+        let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
             continue;
         };
         for ev in evs {
@@ -1891,18 +1713,30 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 contract_orphan_dropped += 1;
                 continue;
             };
-            let event_index = i16::try_from(ev.event_index)
-                .map_err(|_| staging_err("event_index overflow (>i16)"))?;
+            // Never guessed: an id is the parser's reading of the meta, and a
+            // wrong one would silently merge two events under the RMT key.
+            let Some(id) = ev.event_id else {
+                return Err(staging_err(&format!(
+                    "event without a stellar-rpc id (tx {tx_hash}, source {:?}) — ADR 0059",
+                    ev.source
+                )));
+            };
             let topics_xdr = serde_json::to_string(&ev.topics)
                 .map_err(|e| staging_err(&format!("event topics serialize: {e}")))?;
             let data_xdr = serde_json::to_string(&ev.data)
                 .map_err(|e| staging_err(&format!("event data serialize: {e}")))?;
             let signature = extract_event_signature(&ev.topics);
+            let contract_id = ids::contract_id(contract_strkey);
+            if ev.source == EventSource::PerOp {
+                contract_txs.insert((contract_id, application_order));
+            }
             out.event_rows.push(SorobanEventRow {
-                contract_id: ids::contract_id(contract_strkey),
-                transaction_id: tx_id,
+                contract_id,
                 ledger_sequence: ledger_sequence_i64,
-                event_index,
+                transaction_index: id.transaction_index,
+                operation_index: id.operation_index,
+                event_index: id.event_index,
+                application_order,
                 event_type: ev.event_type as i16,
                 signature,
                 topics_xdr,
@@ -1920,64 +1754,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         );
     }
 
-    // ---- soroban_invocations_appearances (ADR 0034 fold) ----
-    #[derive(Eq, PartialEq, Hash)]
-    struct InvKey {
-        contract_strkey: String,
-        tx_hash_hex: String,
-    }
-    struct InvAgg {
-        amount: i32,
-        caller_account: Option<String>,
-        caller_contract_strkey: Option<String>,
-    }
-    let mut inv_agg: HashMap<InvKey, InvAgg> = HashMap::new();
-    for (tx_hash, invs) in invocations {
-        if !tx_id_by_hash.contains_key(tx_hash) {
-            continue;
-        }
-        for inv in invs {
-            let Some(contract) = &inv.contract_id else {
-                continue;
-            };
-            let (caller_account, caller_contract) = match inv.caller_account.as_deref() {
-                Some(k) if is_strkey_account(k) => (Some(k.to_string()), None),
-                Some(k) if k.starts_with('C') => (None, Some(k.to_string())),
-                _ => (None, None),
-            };
-            let key = InvKey {
-                contract_strkey: contract.clone(),
-                tx_hash_hex: tx_hash.clone(),
-            };
-            inv_agg
-                .entry(key)
-                .and_modify(|agg| {
-                    agg.amount = agg.amount.saturating_add(1);
-                    if agg.caller_account.is_none() && agg.caller_contract_strkey.is_none() {
-                        agg.caller_account = caller_account.clone();
-                        agg.caller_contract_strkey = caller_contract.clone();
-                    }
-                })
-                .or_insert(InvAgg {
-                    amount: 1,
-                    caller_account,
-                    caller_contract_strkey: caller_contract,
-                });
-        }
-    }
-    for (k, agg) in inv_agg {
-        let Some(&tx_id) = tx_id_by_hash.get(&k.tx_hash_hex) else {
-            continue;
-        };
-        out.invocation_rows.push(SorobanInvocationAppearanceRow {
-            contract_id: ids::contract_id(&k.contract_strkey),
-            transaction_id: tx_id,
-            ledger_sequence: ledger_sequence_i64,
-            caller_id: agg.caller_account.as_deref().map(ids::account_id),
-            caller_contract_id: agg.caller_contract_strkey.as_deref().map(ids::contract_id),
-            amount: agg.amount,
-        });
-    }
+    contract_activity::rows(
+        &mut out,
+        invocations,
+        &app_order_by_hash,
+        contract_txs,
+        ledger_sequence_i64,
+    );
 
     // ---- assets identity rows (dedup by 4-tuple) + asset_sac facet rows ----
     //
@@ -2172,186 +1955,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         });
     }
 
-    // ---- NFT routing verdict map (task 0217 / 0220) -------------------
-    //
-    // Build a per-contract verdict map keyed by strkey. Sources, in
-    // precedence order:
-    //   1. Same-ledger `contract_rows` carrying a definitive
-    //      `contract_type` (Token / Nft / Fungible). Either:
-    //        - SAC deploy (`is_sac=true` → Token).
-    //        - WASM-classified deploy (the override applied above).
-    //   2. SAC overrides (also Token) — these were skipped from Pass-2
-    //      stubs, so they're in `out.contract_rows` already.
-    // Contracts with NO entry in EITHER source → treat as `Other`/uncached →
-    // route to pending. The stage itself has no DB access; cross-ledger
-    // verdicts arrive via `prior_contract_verdicts` (task 0283 live G9), the
-    // writer's lookup of `soroban_contracts` for contracts emitting NFT
-    // rows/events here but deployed earlier. This restores the PG
-    // `ClassificationCache` semantic the CH cutover dropped — without it a
-    // later transfer from an already-classified NFT would quarantine.
-    let mut verdict_by_contract: HashMap<&str, ContractType> = HashMap::new();
-    for row in &out.contract_rows {
-        if let Some(ty_i16) = row.contract_type
-            && let Ok(ty) = ContractType::try_from(ty_i16)
-        {
-            verdict_by_contract.insert(row.contract_id.as_str(), ty);
-        }
-    }
-
-    // 3-way routing helper. Mirrors PG `resolve_nft_filter` bucketing.
-    // This-ledger `contract_rows` take precedence; `prior_contract_verdicts`
-    // (G9, cross-ledger) is the fallback for contracts not deployed here.
-    enum NftRoute {
-        Hot,
-        Pending,
-        Drop,
-    }
-    let route_for = |strkey: &str| -> NftRoute {
-        let verdict = verdict_by_contract
-            .get(strkey)
-            .copied()
-            .or_else(|| prior_contract_verdicts.get(strkey).copied());
-        match verdict {
-            Some(ContractType::Token) | Some(ContractType::Fungible) => NftRoute::Drop,
-            Some(ContractType::Nft) => NftRoute::Hot,
-            // `Other` and uncached (no entry in either source) both go to
-            // quarantine — same semantic as PG-side `resolve_nft_filter`.
-            _ => NftRoute::Pending,
-        }
-    };
-
-    // ---- nfts / nfts_pending (dedup by (contract_id, token_id),
-    //                            latest watermark) ----
-    //
-    // Each `(contract_id, token_id)` row lives in exactly one bucket
-    // (hot OR pending) per partition — picked by the per-contract
-    // verdict above. Dedup keys are per-bucket so a contract that
-    // somehow appeared with mixed verdicts within the same ledger
-    // (impossible today, defensive) would have separate slots.
-    let mut nft_hot_indices: HashMap<(i64, String), usize> = HashMap::new();
-    let mut nft_pending_indices: HashMap<(i64, String), usize> = HashMap::new();
-    for nft in nfts {
-        let route = route_for(nft.contract_id.as_str());
-        if matches!(route, NftRoute::Drop) {
-            continue;
-        }
-        let contract_id_int = ids::contract_id(&nft.contract_id);
-        let watermark = i64::from(nft.last_seen_ledger);
-        let key = (contract_id_int, nft.token_id.clone());
-        let owner_id = nft.owner_account.as_deref().map(ids::account_id);
-        let minted = nft.minted_at_ledger.map(i64::from);
-
-        match route {
-            NftRoute::Hot => match nft_hot_indices.get(&key).copied() {
-                Some(idx) => {
-                    let existing = &mut out.nft_rows[idx];
-                    if watermark >= existing.current_owner_ledger {
-                        existing.current_owner_id = owner_id;
-                        existing.current_owner_ledger = watermark;
-                    }
-                    existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (Some(a), None) => Some(a),
-                        (None, b) => b,
-                    };
-                    existing.collection_name = existing
-                        .collection_name
-                        .clone()
-                        .or_else(|| nft.collection_name.clone());
-                    existing.name = existing.name.clone().or_else(|| nft.name.clone());
-                    existing.media_url =
-                        existing.media_url.clone().or_else(|| nft.media_url.clone());
-                }
-                None => {
-                    nft_hot_indices.insert(key, out.nft_rows.len());
-                    out.nft_rows.push(NftRow {
-                        contract_id: contract_id_int,
-                        token_id: nft.token_id.clone(),
-                        collection_name: nft.collection_name.clone(),
-                        name: nft.name.clone(),
-                        media_url: nft.media_url.clone(),
-                        minted_at_ledger: minted,
-                        current_owner_id: owner_id,
-                        current_owner_ledger: watermark,
-                    });
-                }
-            },
-            NftRoute::Pending => match nft_pending_indices.get(&key).copied() {
-                Some(idx) => {
-                    let existing = &mut out.nft_pending_rows[idx];
-                    if watermark >= existing.current_owner_ledger {
-                        existing.current_owner_id = owner_id;
-                        existing.current_owner_ledger = watermark;
-                    }
-                    existing.minted_at_ledger = match (existing.minted_at_ledger, minted) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (Some(a), None) => Some(a),
-                        (None, b) => b,
-                    };
-                    existing.collection_name = existing
-                        .collection_name
-                        .clone()
-                        .or_else(|| nft.collection_name.clone());
-                    existing.name = existing.name.clone().or_else(|| nft.name.clone());
-                    existing.media_url =
-                        existing.media_url.clone().or_else(|| nft.media_url.clone());
-                }
-                None => {
-                    nft_pending_indices.insert(key, out.nft_pending_rows.len());
-                    out.nft_pending_rows.push(NftPendingRow {
-                        contract_id: contract_id_int,
-                        token_id: nft.token_id.clone(),
-                        collection_name: nft.collection_name.clone(),
-                        name: nft.name.clone(),
-                        media_url: nft.media_url.clone(),
-                        minted_at_ledger: minted,
-                        current_owner_id: owner_id,
-                        current_owner_ledger: watermark,
-                    });
-                }
-            },
-            NftRoute::Drop => unreachable!("filtered above"),
-        }
-    }
-
-    // ---- nft_ownership / nft_ownership_pending ----
-    for ev in nft_events {
-        let route = route_for(ev.contract_id.as_str());
-        if matches!(route, NftRoute::Drop) {
-            continue;
-        }
-        let Some(&tx_id) = tx_id_by_hash.get(&ev.transaction_hash) else {
-            continue;
-        };
-        let event_order =
-            i16::try_from(ev.event_order).map_err(|_| staging_err("nft event_order overflow"))?;
-        let contract_id = ids::contract_id(&ev.contract_id);
-        let ledger_sequence = i64::from(ev.ledger_sequence);
-        let owner_id = ev.owner_account.as_deref().map(ids::account_id);
-        let event_type = ev.event_type as i16;
-
-        match route {
-            NftRoute::Hot => out.nft_ownership_rows.push(NftOwnershipRow {
-                contract_id,
-                token_id: ev.token_id.clone(),
-                ledger_sequence,
-                event_order,
-                transaction_id: tx_id,
-                owner_id,
-                event_type,
-            }),
-            NftRoute::Pending => out.nft_ownership_pending_rows.push(NftOwnershipPendingRow {
-                contract_id,
-                token_id: ev.token_id.clone(),
-                ledger_sequence,
-                event_order,
-                transaction_id: tx_id,
-                owner_id,
-                event_type,
-            }),
-            NftRoute::Drop => unreachable!("filtered above"),
-        }
-    }
+    nfts::nft_rows(
+        &mut out,
+        nfts,
+        nft_events,
+        prior_contract_verdicts,
+        &app_order_by_hash,
+    )?;
 
     // ---- unified `balances` — classic + native per-account balances (lore-0331
     // Option A single-write). `account_balances_current` is no longer written (only
@@ -2530,17 +2140,15 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         ledger_sequence_i64,
     ));
 
-    // ---- asset_transfers + transaction_memos + soroban_event_ops (0540/0541) --
+    // ---- asset_transfers + transaction_memos (0540) ----
     let value_flow = super::value_flow::build_value_flow_rows(
         ledger_sequence_i64,
         transactions,
         operations,
-        events,
         asset_transfers,
     )?;
     out.asset_transfer_rows = value_flow.transfers;
     out.transaction_memo_rows = value_flow.memos;
-    out.event_op_rows = value_flow.event_ops;
 
     Ok(out)
 }
@@ -2709,6 +2317,46 @@ fn parse_supply(raw: Option<&str>) -> Result<i128, ()> {
     }
 }
 
+/// The `assets.id` surrogate for a token named by its CONTRACT address —
+/// a soroban pool leg, or a contract-held balance.
+///
+/// Such a token is one of two things, and only one of them may keep its own
+/// contract surrogate. A genuine Soroban token IS its contract as far as asset
+/// identity goes (`ids::asset_id`'s type-3 arm returns `contract_id`). A SAC is
+/// NOT: ADR 0051 retired `asset_type = 2`, so a SAC has no `assets` row of its
+/// own and a leg keyed on its surrogate points at nothing — the same orphaning
+/// `build_balance_rows` exists to prevent for contract-held balances, and the
+/// reason 1,084 of 1,175 soroban legs resolved to no asset at all (task 0374,
+/// measured on production 2026-09-08).
+///
+/// `sac_classic` is the SAME map the balance path uses (seeded with this
+/// ledger's own SAC carriers before either caller runs), so both paths key the
+/// same asset identically. A token ABSENT from the map is a Soroban-native
+/// token, and it goes through `ids::asset_id` rather than returning the
+/// contract surrogate directly — the two are equal only because that is what
+/// the type-3 arm does, and spelling it as an ASSET id is what the defect
+/// above was missing.
+///
+/// Both callers key the same asset identically because they are the same
+/// function. They were two copies, which had already drifted cosmetically (one
+/// spelled the family `3`, the other named the enum).
+#[inline]
+fn contract_token_asset_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 {
+    let contract = ids::contract_id(token);
+    sac_classic
+        .get(&contract)
+        .copied()
+        .unwrap_or_else(|| ids::asset_id(domain::AssetFamily::Soroban as i16, "", 0, contract))
+}
+
+/// Whether this ledger's events register any soroban pool, in any of the three
+/// families — i.e. whether [`contract_token_asset_id`] will be asked for a leg.
+pub fn registers_soroban_pools(events: &[(String, Vec<ExtractedEvent>)]) -> bool {
+    !xdr_parser::pool_router::detect_pool_registrations(events).is_empty()
+        || !xdr_parser::pool_pair_factory::detect_pair_registrations(events).is_empty()
+        || !xdr_parser::pool_config_factory::detect_config_pool_registrations(events).is_empty()
+}
+
 /// Registry row for one corroborated `new_pair` registration (task 0518).
 ///
 /// `pool_type_raw` stays EMPTY: the vendor emits no type — Soroswap is one
@@ -2722,6 +2370,7 @@ fn parse_supply(raw: Option<&str>) -> Result<i128, ()> {
 fn factory_pair_registry_row(
     reg: &xdr_parser::pool_pair_factory::PairRegistration,
     ledger_sequence: i64,
+    sac_classic: &HashMap<i64, i64>,
 ) -> Result<LiquidityPoolRow, &'static str> {
     let pool_id =
         ids::contract_payload(&reg.event.pair).ok_or("pair address is not a valid C… strkey")?;
@@ -2737,8 +2386,8 @@ fn factory_pair_registry_row(
         last_updated_ledger: ledger_sequence,
         pool_kind: 1,
         legs: vec![
-            ids::contract_id(&reg.event.token_0),
-            ids::contract_id(&reg.event.token_1),
+            contract_token_asset_id(&reg.event.token_0, sac_classic),
+            contract_token_asset_id(&reg.event.token_1, sac_classic),
         ],
         deployment_id: ids::contract_id(&reg.factory),
         pool_type_raw: String::new(),
@@ -2758,6 +2407,7 @@ fn config_pool_registry_row(
     reg: &xdr_parser::pool_config_factory::ConfigPoolRegistration,
     config: &xdr_parser::pool_config_factory::PoolConfig,
     ledger_sequence: i64,
+    sac_classic: &HashMap<i64, i64>,
 ) -> Result<LiquidityPoolRow, &'static str> {
     let pool_id =
         ids::contract_payload(&reg.pool).ok_or("pool address is not a valid C… strkey")?;
@@ -2778,8 +2428,8 @@ fn config_pool_registry_row(
         last_updated_ledger: ledger_sequence,
         pool_kind: 1,
         legs: vec![
-            ids::contract_id(&config.token_a),
-            ids::contract_id(&config.token_b),
+            contract_token_asset_id(&config.token_a, sac_classic),
+            contract_token_asset_id(&config.token_b, sac_classic),
         ],
         deployment_id: ids::contract_id(&reg.factory),
         pool_type_raw: config.pool_type.to_string(),
@@ -2802,6 +2452,7 @@ fn pool_registry_row(
     reg: &xdr_parser::pool_router::AddPoolEvent,
     router_strkey: &str,
     ledger_sequence: i64,
+    sac_classic: &HashMap<i64, i64>,
 ) -> Result<LiquidityPoolRow, &'static str> {
     let pool_id =
         ids::contract_payload(&reg.pool).ok_or("pool address is not a valid C… strkey")?;
@@ -2825,7 +2476,11 @@ fn pool_registry_row(
         fee_bps,
         last_updated_ledger: ledger_sequence,
         pool_kind: 1,
-        legs: reg.tokens.iter().map(|t| ids::contract_id(t)).collect(),
+        legs: reg
+            .tokens
+            .iter()
+            .map(|t| contract_token_asset_id(t, sac_classic))
+            .collect(),
         deployment_id: ids::contract_id(router_strkey),
         pool_type_raw: reg.pool_type.clone(),
     })
@@ -3264,22 +2919,25 @@ pub fn ledger_deltas_net_settled(
     xdr_parser::net_settled(&resolved)
 }
 
+mod contract_activity;
+mod nfts;
+mod operations;
+mod presence;
+
 #[cfg(test)]
-#[path = "stage_pool_fill_amount_tests.rs"]
+mod stage_tests;
+
+#[cfg(test)]
 mod pool_fill_amount_tests;
 
 #[cfg(test)]
-#[path = "stage_ledger_deltas_net_settled_tests.rs"]
 mod ledger_deltas_net_settled_tests;
 
 #[cfg(test)]
-#[path = "stage_derive_token_event_tests.rs"]
 mod derive_token_event_tests;
 
 #[cfg(test)]
-#[path = "stage_balance_tests.rs"]
 mod balance_tests;
 
 #[cfg(test)]
-#[path = "stage_executable_ref_tests.rs"]
 mod executable_ref_tests;

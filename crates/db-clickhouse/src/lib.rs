@@ -186,10 +186,37 @@ mod tests {
         // executable tag points at (CAP-85). 38 → 39.
         // task 0210: added `claimable_balance_holdings` — `balances`' twin for
         // value held by a claimable balance. 39 → 40.
+        // task 0541: dropped `soroban_event_ops` — the operation is part of
+        // the `soroban_events` key (ADR 0059). 40 → 39.
+        // task 0541: added `contract_transactions` — the per-(contract, tx)
+        // presence index the contract-filtered transaction list seeks. 39 → 40.
+        // task 0396: dropped `transaction_hash_dict` — never called. 40 → 39.
+        // task 0580: added `transaction_hash_prefix_index` — the hash index
+        // keyed by an 8-byte prefix. 39 → 40.
+        // task 0374: added `pool_activity` + its refreshable MV — the soroban
+        // pool's last reserve change, the pool list's order key. 40 → 42.
+        // task 0580: dropped `transaction_hash_index` — the readers moved to
+        // `transaction_hash_prefix_index`. 42 → 41.
+        // task 0372: added `transaction_operations` and
+        // `pool_operation_amounts` (the operation tables located by the
+        // transaction position), dropped `operation_pools` (no reader since
+        // task 0491). 41 → 42.
+        // task 0372: dropped `operations_appearances` and
+        // `lp_operation_amounts` — every reader moved to the tables above.
+        // 42 → 40.
+        // task 0586: added `contract_activity` — `contract_transactions` and
+        // the invocations' callers in one position-keyed table. 40 → 41.
+        // task 0586: dropped `contract_transactions` and
+        // `soroban_invocations_appearances` — every reader moved to
+        // `contract_activity`. 41 → 39.
+        // task 0424: added `nft_ownership_changes` + `_pending` — the
+        // ownership rows located by their event. 39 → 41.
+        // task 0424: dropped `nft_ownership` + `_pending` — every reader moved
+        // to `nft_ownership_changes`. 41 → 39.
         assert_eq!(
             stmts.len(),
-            40,
-            "expected 35 tables + 2 materialized views + 1 dictionary, got {}",
+            39,
+            "expected 36 tables + 3 materialized views, got {}",
             stmts.len()
         );
     }

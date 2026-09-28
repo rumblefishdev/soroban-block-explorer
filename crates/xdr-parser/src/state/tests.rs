@@ -1629,6 +1629,7 @@ fn nft_mint_event_produces_nft() {
         to: Some("GOWNER".into()),
         ledger_sequence: 100,
         created_at: 1700000000,
+        event_id: None,
     }];
 
     let nfts = detect_nfts(&events);
@@ -1650,6 +1651,7 @@ fn nft_transfer_event() {
         to: Some("GTO".into()),
         ledger_sequence: 200,
         created_at: 1700001000,
+        event_id: None,
     }];
 
     let nfts = detect_nfts(&events);
@@ -1669,6 +1671,7 @@ fn nft_burn_event() {
         to: None,
         ledger_sequence: 300,
         created_at: 1700002000,
+        event_id: None,
     }];
 
     let nfts = detect_nfts(&events);
@@ -1688,6 +1691,7 @@ fn empty_token_id_skipped() {
         to: Some("GOWNER".into()),
         ledger_sequence: 100,
         created_at: 1700000000,
+        event_id: None,
     }];
 
     let nfts = detect_nfts(&events);
@@ -1713,6 +1717,7 @@ fn make_nft_event(
         to: to.map(Into::into),
         ledger_sequence: ledger,
         created_at: 1700000000 + ledger as i64,
+        event_id: None,
     }
 }
 
@@ -1816,6 +1821,7 @@ fn token_id_jsonvalue_stringified() {
         to: Some("GA".into()),
         ledger_sequence: 100,
         created_at: 1700000000,
+        event_id: None,
     };
     // String token_id → "uuid-abc".
     let string = NftEvent {
@@ -1827,6 +1833,7 @@ fn token_id_jsonvalue_stringified() {
         to: Some("GB".into()),
         ledger_sequence: 100,
         created_at: 1700000000,
+        event_id: None,
     };
 
     let out = extract_nft_ownership_events(&[numeric, string]);
@@ -1849,6 +1856,7 @@ fn empty_token_id_event_skipped() {
         to: Some("GA".into()),
         ledger_sequence: 100,
         created_at: 1700000000,
+        event_id: None,
     }];
 
     let out = extract_nft_ownership_events(&events);

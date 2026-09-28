@@ -286,6 +286,16 @@ is on screen today. The two defects must be fixed in this order: resolving the
 `i128` ids first stops step 6's collections from ever reaching the registry as
 fungible candidates.
 
+**Measured again from the read side, 2026-09-22 (task 0374 split, PR #477).**
+The same gap counted where a user meets it — the balance-change column of an
+account page. Fungible movements whose `asset_id` has no `assets` row:
+**274 rows over 66 contracts**, 64 of which the classifier calls `Other` and 3
+`Nft`. The cell now says `Unregistered token` for them (it said "Unnamed
+token"), because the movement IS indexed and only the registry row is missing —
+the distinction this task exists to remove. A symbol-less token that DOES have
+a row reads as its truncated contract address in the same cell, so the marker
+is left carrying exactly this defect and nothing else.
+
 **The witness this task was named for, found 2026-09-09.** The 27 movements are
 not a decoder failing in isolation — they are two decoders reading the SAME
 BYTES and disagreeing. The event, out of `soroban_events`, decoded:

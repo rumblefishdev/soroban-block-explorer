@@ -74,6 +74,9 @@ inside the `TypeScript` job via the nx graph's `rust:test` target
 (`cargo test --workspace`). Several minutes per build, and it makes a job's
 name describe something other than what it does.
 
+> Resolved by task 0555 (2026-09-23): the Nx project `rust` is removed, so
+> the `TypeScript` job no longer runs cargo; question 6 below is answered.
+
 ## Questions to answer
 
 1. Which tests execute in CI today, per crate? The answer should be a count

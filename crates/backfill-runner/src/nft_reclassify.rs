@@ -5,19 +5,19 @@
 //!
 //! After the parallel backfill merge into Hetzner CH, the full WASM
 //! universe is visible — many contracts that landed in
-//! `nfts_pending` / `nft_ownership_pending` with `contract_type =
+//! `nfts_pending` / `nft_ownership_changes_pending` with `contract_type =
 //! Other` (discriminant 1) now have a WASM-derived verdict. Three
 //! outcomes need to be applied:
 //!
 //! 1. **Promote**: contracts that resolved to `Nft` (discriminant 2)
 //!    move from `nfts_pending` → `nfts` and from
-//!    `nft_ownership_pending` → `nft_ownership`.
+//!    `nft_ownership_changes_pending` → `nft_ownership_changes`.
 //! 2. **Drop from quarantine**: contracts that resolved to `Fungible`
 //!    (discriminant 3) — and any stray `Token` (discriminant 0,
 //!    defensive; SAC tokens are dropped at persist-filter time and
 //!    should never reach pending) — have their rows DELETEd from
-//!    `nfts_pending` / `nft_ownership_pending`.
-//! 3. **Legacy cleanup**: rows in the hot `nfts` / `nft_ownership`
+//!    `nfts_pending` / `nft_ownership_changes_pending`.
+//! 3. **Legacy cleanup**: rows in the hot `nfts` / `nft_ownership_changes`
 //!    tables whose contract resolves to `Fungible` (3) or `Token`
 //!    (0) — these are pre-quarantine false positives. Defensive
 //!    DELETE; should be 0 in a fully-0217-aware pipeline but cheap
@@ -94,8 +94,13 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<NftReclassifyStats, B
 
     // 1. PROMOTE pending → hot for Nft-classified contracts.
     stats.promoted_nfts = promote_or_count(client, "nfts_pending", "nfts", dry_run).await?;
-    stats.promoted_ownership =
-        promote_or_count(client, "nft_ownership_pending", "nft_ownership", dry_run).await?;
+    stats.promoted_ownership = promote_or_count(
+        client,
+        "nft_ownership_changes_pending",
+        "nft_ownership_changes",
+        dry_run,
+    )
+    .await?;
 
     // 2. DROP pending rows for Nft-promoted + Fungible/Token contracts.
     //    The Nft side completes the promotion (pending → hot, then
@@ -110,19 +115,24 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<NftReclassifyStats, B
         drop_or_count(client, "nfts_pending", &drop_discriminants, dry_run).await?;
     stats.dropped_pending_ownership = drop_or_count(
         client,
-        "nft_ownership_pending",
+        "nft_ownership_changes_pending",
         &drop_discriminants,
         dry_run,
     )
     .await?;
 
     // 3. LEGACY cleanup in hot tables — false positives that landed in
-    //    `nfts` / `nft_ownership` from pre-0217 pipelines.
+    //    `nfts` / `nft_ownership_changes` from pre-0217 pipelines.
     let legacy_discriminants = [CONTRACT_TYPE_TOKEN, CONTRACT_TYPE_FUNGIBLE];
     stats.dropped_legacy_nfts =
         drop_or_count(client, "nfts", &legacy_discriminants, dry_run).await?;
-    stats.dropped_legacy_ownership =
-        drop_or_count(client, "nft_ownership", &legacy_discriminants, dry_run).await?;
+    stats.dropped_legacy_ownership = drop_or_count(
+        client,
+        "nft_ownership_changes",
+        &legacy_discriminants,
+        dry_run,
+    )
+    .await?;
 
     if !dry_run {
         // OPTIMIZE FINAL after mutations to collapse tombstones.
@@ -136,10 +146,13 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<NftReclassifyStats, B
             ("nfts", stats.promoted_nfts + stats.dropped_legacy_nfts),
             ("nfts_pending", stats.dropped_pending_nfts),
             (
-                "nft_ownership",
+                "nft_ownership_changes",
                 stats.promoted_ownership + stats.dropped_legacy_ownership,
             ),
-            ("nft_ownership_pending", stats.dropped_pending_ownership),
+            (
+                "nft_ownership_changes_pending",
+                stats.dropped_pending_ownership,
+            ),
         ];
         for (tbl, mutated) in touched {
             if mutated == 0 {

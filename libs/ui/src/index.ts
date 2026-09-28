@@ -121,6 +121,7 @@ export {
   Footer,
   type FooterProps,
   type FooterNavItem,
+  PRIVACY_POLICY_URL,
   PageGridBackdrop,
 } from './layout/index.js';
 
@@ -145,6 +146,7 @@ export {
   isContractId,
   isLedgerSequence,
   isPoolId,
+  isPoolIdentifier,
   isTransactionHash,
   NATIVE_ASSET_CODE,
   isNativeAssetString,

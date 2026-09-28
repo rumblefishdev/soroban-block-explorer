@@ -83,7 +83,7 @@ export type AccountBalanceChange = {
    * **`null` is not zero.** It means a NON-FUNGIBLE movement, where no
    * amount exists by nature — the event carries a token id, not a value.
    * The piece changed hands; rendering `0` would say it did not. See
-   * `nft_delta`, and `nfts` / `nft_ownership` for which piece it was (this
+   * `nft_delta`, and `nfts` / `nft_ownership_changes` for which piece it was (this
    * field's source does not carry the token id).
    */
   amount?: string | null;
@@ -368,7 +368,7 @@ export type AssetDetailResponse = {
 /**
  * Asset row returned by list and detail. Surfaces both the decoded
  * `asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`
- * SMALLINT — canonical SQL `08_get_assets_list.sql` projection.
+ * SMALLINT.
  */
 export type AssetItem = {
   asset_code?: string | null;
@@ -454,8 +454,8 @@ export type AssetItem = {
 };
 
 /**
- * Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors
- * canonical SQL `10_get_assets_transactions.sql`.
+ * Transaction row for `/assets/:id/transactions`. Pure-DB; filled by
+ * `queries::fetch_transactions`.
  */
 export type AssetTransactionItem = {
   created_at: string;
@@ -508,8 +508,8 @@ export type ChartResponse = {
   from: string;
   interval: string;
   /**
-   * Echoed pool ID — SEP-23 strkey (`L...`, 56 chars), same form the
-   * client supplied in the path.
+   * Echoed pool ID — `L…` or `C…`, same form the client supplied in the
+   * path.
    */
   pool_id: string;
   to: string;
@@ -916,11 +916,15 @@ export type EventItem = {
   created_at: string;
   data: unknown;
   event_type: string;
+  /**
+   * The stellar-rpc event id, exactly as `getEvents` returns it
+   * (ADR 0059).
+   */
+  id: string;
   ledger_sequence: number;
   successful: boolean;
   topics: Array<unknown>;
   transaction_hash: string;
-  transaction_id: number;
 };
 
 /**
@@ -943,13 +947,26 @@ export type InvocationAppearanceItem = {
    * Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
    */
   caller_account?: string | null;
+  /**
+   * Root caller C-StrKey when a contract made the call; exactly one of the
+   * two callers is set.
+   */
+  caller_contract?: string | null;
   contract_id: string;
   created_at: string;
   ledger_sequence: number;
 };
 
 export type InvocationItem = {
+  /**
+   * Caller G-StrKey when an account made the call.
+   */
   caller_account?: string | null;
+  /**
+   * Caller C-StrKey when a contract made the call; exactly one of the two
+   * is set on an invocation.
+   */
+  caller_contract?: string | null;
   created_at: string;
   ledger_sequence: number;
   successful: boolean;
@@ -1086,8 +1103,7 @@ export type NetworkStats = {
 
 /**
  * Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are
- * flattened in (same shape as the list-endpoint row, see
- * `15_get_nfts_list.sql` for the on-the-wire columns), plus a
+ * flattened in (same shape as the list-endpoint row), plus a
  * `metadata` field fetched at request time via
  * `runtime_enrichment::nft_token_uri` — full JSON blob from the
  * per-token `token_uri()` IPFS / HTTP URL (attributes, traits,
@@ -1127,8 +1143,7 @@ export type NftDetailResponse = {
 
 /**
  * One NFT row. Same shape on `GET /v1/nfts` list rows and as the
- * flattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned
- * to canonical SQL `15_get_nfts_list.sql` for the column projection.
+ * flattened core of `GET /v1/nfts/:id` (which adds `metadata`).
  *
  * The numeric surrogate `id` was dropped (task 0243 NFT slice): the
  * external NFT identity is the composite `(contract_id, token_id)` per
@@ -1158,12 +1173,17 @@ export type NftItem = {
 };
 
 /**
- * One row of NFT transfer history. Shape pinned to canonical SQL
- * `17_get_nfts_transfers.sql`.
+ * One row of NFT transfer history (`queries::fetch_transfers`).
  */
 export type NftTransferItem = {
+  /**
+   * Where the change happened — its source event's location (task 0424,
+   * ADR 0059): the transaction's position in the ledger, the operation
+   * within it, the event within the operation.
+   */
+  application_order: number;
   created_at: string;
-  event_order: number;
+  event_index: number;
   /**
    * Raw NftEventType discriminant (ADR 0031).
    */
@@ -1184,6 +1204,7 @@ export type NftTransferItem = {
    */
   from_account?: string | null;
   ledger_sequence: number;
+  operation_index: number;
   /**
    * New owner G-StrKey. `null` on burn.
    */
@@ -1193,10 +1214,9 @@ export type NftTransferItem = {
 
 export type OperationItem = {
   /**
-   * Global BIGSERIAL `operations_appearances.id`. Internal ordering
-   * artefact only; not a within-tx index. Use `application_order`
-   * for apply-order display and to join against
-   * `XdrOperationDto.application_order` from the heavy overlay.
+   * Equal to `application_order` (the table has no surrogate id since
+   * PR #175). Use `application_order` for apply-order display and to join
+   * against `XdrOperationDto.application_order` from the heavy overlay.
    */
   appearance_id: number;
   /**
@@ -1586,11 +1606,15 @@ export type PaginatedEventItem = {
     created_at: string;
     data: unknown;
     event_type: string;
+    /**
+     * The stellar-rpc event id, exactly as `getEvents` returns it
+     * (ADR 0059).
+     */
+    id: string;
     ledger_sequence: number;
     successful: boolean;
     topics: Array<unknown>;
     transaction_hash: string;
-    transaction_id: number;
   }>;
   page: PageInfo;
 };
@@ -1606,7 +1630,15 @@ export type PaginatedEventItem = {
  */
 export type PaginatedInvocationItem = {
   data: Array<{
+    /**
+     * Caller G-StrKey when an account made the call.
+     */
     caller_account?: string | null;
+    /**
+     * Caller C-StrKey when a contract made the call; exactly one of the two
+     * is set on an invocation.
+     */
+    caller_contract?: string | null;
     created_at: string;
     ledger_sequence: number;
     successful: boolean;
@@ -1695,8 +1727,14 @@ export type PaginatedNftItem = {
  */
 export type PaginatedNftTransferItem = {
   data: Array<{
+    /**
+     * Where the change happened — its source event's location (task 0424,
+     * ADR 0059): the transaction's position in the ledger, the operation
+     * within it, the event within the operation.
+     */
+    application_order: number;
     created_at: string;
-    event_order: number;
+    event_index: number;
     /**
      * Raw NftEventType discriminant (ADR 0031).
      */
@@ -1717,6 +1755,7 @@ export type PaginatedNftTransferItem = {
      */
     from_account?: string | null;
     ledger_sequence: number;
+    operation_index: number;
     /**
      * New owner G-StrKey. `null` on burn.
      */
@@ -1751,10 +1790,9 @@ export type PaginatedParticipantItem = {
     last_updated_ledger: number;
     /**
      * Share of the pool, expressed as a decimal-string percentage
-     * (`100 * shares / total_pool_shares`). `None` when the pool has no
-     * snapshot in the freshness window (stale pool); the frontend renders
-     * it as "—" in that case (matches the list-endpoint stale-pool
-     * convention from `18_get_liquidity_pools_list.sql`).
+     * (`100 * shares / total_pool_shares`, over the pool's latest snapshot
+     * however old — a classic pool snapshots every change). `None` when the
+     * pool has no snapshot or its total is 0; the frontend renders "—".
      */
     share_percentage?: string | null;
     /**
@@ -1778,17 +1816,19 @@ export type PaginatedParticipantItem = {
 export type PaginatedPoolActivityItem = {
   data: Array<{
     /**
+     * One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
+     * what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
+     * reason the pool's legs are one: a Soroban pool has two to four.
+     *
      * Signed from the POOL's perspective: positive entered the pool, negative
-     * left it. Raw stroops as a decimal string, scaled by 7 at render like
-     * every other amount here — a JSON number is a double in the browser, so
-     * a leg above 2^53 stroops would silently lose digits.
+     * left it. Raw units as a decimal string — a JSON number is a double in
+     * the browser, so an amount above 2^53 would silently lose digits.
      *
      * The sign is the payload, not decoration: it is what names `event`, so
      * the frontend must not take an absolute value before deciding direction.
-     * `null` on both legs in the malformed case above.
+     * Every entry is `null` in the malformed case above.
      */
-    amount_a?: string | null;
-    amount_b?: string | null;
+    amounts: Array<string | null>;
     /**
      * The operation's 1-based position in its transaction (Horizon's
      * `application_order`), and the `#op-N` anchor on the transaction detail
@@ -1839,8 +1879,6 @@ export type PaginatedPoolActivityItem = {
  */
 export type PaginatedPoolItem = {
   data: Array<{
-    asset_a: PoolAssetLeg;
-    asset_b: PoolAssetLeg;
     created_at_ledger: number;
     fee_bps: number;
     /**
@@ -1856,21 +1894,52 @@ export type PaginatedPoolItem = {
     latest_snapshot_at?: string | null;
     latest_snapshot_ledger?: number | null;
     /**
+     * The pool's legs in registration order — two for a classic pool, two to
+     * four for a soroban one. Replaces the `asset_a` / `asset_b` pair, which
+     * could not express a three-leg pool and forced a soroban row to write
+     * placeholder values that read as native XLM downstream.
+     */
+    legs: Array<PoolAssetLeg>;
+    /**
      * Count of active liquidity providers (`lp_positions WHERE shares > 0`).
      * Computed from the live table — not dependent on the snapshot
      * freshness window, so it is populated even on stale pools (where
      * `tvl`/`volume`/`fee_revenue` are NULL).
+     *
+     * `null` for a soroban pool: its providers are the holders of its share
+     * token, which `lp_positions` does not index, so a `0` there would claim
+     * an empty pool rather than an unread one.
      */
-    participant_count: number;
+    participant_count?: number | null;
     /**
-     * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-     * 0024; the handler encodes to strkey at the response boundary so
-     * the wire shape matches the Stellar ecosystem canonical form
-     * (CAP-38 / SEP-23).
+     * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
+     * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
+     * 0024); the handler encodes them by kind at the response boundary.
      */
     pool_id: string;
-    reserve_a?: string | null;
-    reserve_b?: string | null;
+    /**
+     * `classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not
+     * decoration: the same 32 bytes render as a SEP-23 `L…` strkey for a
+     * classic pool and a `C…` contract address for a soroban one, and
+     * rendering one as the other yields a well-formed WRONG key rather than
+     * an error.
+     */
+    pool_kind: PoolKind;
+    /**
+     * The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),
+     * named only when the protocol's own publications claim the router or
+     * factory that registered the pool. `null` for a classic pool and for a
+     * soroban pool registered by a deployment no protocol claims — never a
+     * guess from matching code.
+     */
+    protocol?: string | null;
+    /**
+     * Pool shares outstanding, as a decimal string. Classic: the latest
+     * snapshot. Soroban: the pool's own instance storage, scaled by its share
+     * token's published decimals; `null` when the pool keeps no total there
+     * (concentrated and config-factory pools) or the scale is unknown — a
+     * `0` is served only for a pool whose every reserve is `0`.
+     */
     total_shares?: string | null;
     /**
      * USD, decimal string rounded to cents (task 0199 compute-at-read).
@@ -1944,8 +2013,8 @@ export type PaginatedTransactionListItem = {
 };
 
 /**
- * One participant row returned by the participants list. Shape pinned to
- * `docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.
+ * One participant row returned by the participants list
+ * (`queries::list_participants`).
  */
 export type ParticipantItem = {
   /**
@@ -1962,10 +2031,9 @@ export type ParticipantItem = {
   last_updated_ledger: number;
   /**
    * Share of the pool, expressed as a decimal-string percentage
-   * (`100 * shares / total_pool_shares`). `None` when the pool has no
-   * snapshot in the freshness window (stale pool); the frontend renders
-   * it as "—" in that case (matches the list-endpoint stale-pool
-   * convention from `18_get_liquidity_pools_list.sql`).
+   * (`100 * shares / total_pool_shares`, over the pool's latest snapshot
+   * however old — a classic pool snapshots every change). `None` when the
+   * pool has no snapshot or its total is 0; the frontend renders "—".
    */
   share_percentage?: string | null;
   /**
@@ -1988,17 +2056,19 @@ export type ParticipantItem = {
  */
 export type PoolActivityItem = {
   /**
+   * One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
+   * what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
+   * reason the pool's legs are one: a Soroban pool has two to four.
+   *
    * Signed from the POOL's perspective: positive entered the pool, negative
-   * left it. Raw stroops as a decimal string, scaled by 7 at render like
-   * every other amount here — a JSON number is a double in the browser, so
-   * a leg above 2^53 stroops would silently lose digits.
+   * left it. Raw units as a decimal string — a JSON number is a double in
+   * the browser, so an amount above 2^53 would silently lose digits.
    *
    * The sign is the payload, not decoration: it is what names `event`, so
    * the frontend must not take an absolute value before deciding direction.
-   * `null` on both legs in the malformed case above.
+   * Every entry is `null` in the malformed case above.
    */
-  amount_a?: string | null;
-  amount_b?: string | null;
+  amounts: Array<string | null>;
   /**
    * The operation's 1-based position in its transaction (Horizon's
    * `application_order`), and the `#op-N` anchor on the transaction detail
@@ -2037,78 +2107,94 @@ export type PoolActivityItem = {
 };
 
 /**
- * One leg of an LP's asset pair. Surfaces both the decoded
- * `asset_type_name` (SQL `asset_type_name()`) and the raw `asset_type`
- * SMALLINT — same contract as `assets/dto::AssetItem`.
+ * One leg of a pool.
  *
- * Linkable identifiers (task 0263 / F-K-9). All link targets are the
- * **asset detail page** (`/assets/...`) — `parse_asset_id` is polymorphic
- * and accepts both C-strkey (SAC) and `code-issuer` composite, so all
- * non-native legs resolve to the same asset row.
+ * An element of [`PoolItem::legs`], never half of a pair: a classic pool has
+ * exactly two legs, a soroban pool has two to four (three- and four-leg stable
+ * pools exist on mainnet).
  *
- * * `asset_type == 0` — native XLM; routes to `/assets/native`, the
- * reserved token for the classic XLM singleton (it has no `code-issuer`
- * identity to compose).
- * * `contract_id` — C-strkey of the SAC mirror for a classic credit OR
- * native leg (populated when the leg's `(asset_code, issuer)`
- * classic_credit / native `assets` row carries a deployed SAC facet —
- * `sac_contract_id` resolving a `soroban_contracts.contract_id`,
- * ADR 0051). `None` for legs without a deployed SAC mirror.
+ * # Which vocabulary the kind speaks
  *
- * Native legs were excluded from this until task 0470. The exclusion was
- * deliberate (`a19ac8f6`) and its reason was Postgres parity — PG returned
- * NULL there. Postgres is retired, and the same native `assets` row
- * already publishes that SAC as `sac_contract_id` on `/v1/assets/native`
- * and in the assets list, which the frontend renders. Withholding it here
- * alone made one asset describe itself two ways depending on the endpoint.
- * Pool legs only carry XDR `AssetType` (native /
- * credit_alphanum4 / credit_alphanum12) per `0006_liquidity_pools.sql`,
- * so SAC / Soroban legs are not directly representable here;
- * `contract_id` surfaces the SAC mirror look-up so the FE can
- * route to the asset detail page via `/assets/${contract_id}`.
- * * `issuer` + `asset_code` (classic credit, no SAC mirror) — FE
- * routes to `/assets/${asset_code}-${issuer}` (composite form
- * accepted by `parse_asset_id`).
+ * `asset_type_name` speaks the asset **FAMILY** domain — `native` |
+ * `classic_credit` | `soroban` — the same three labels `/v1/assets` emits and
+ * the frontend already maps. It used to speak the XDR `AssetType` domain here
+ * (`credit_alphanum4` / `credit_alphanum12` / `pool_share`) while the sibling
+ * endpoint spoke the family one: one field name, two vocabularies, coinciding
+ * on the single word `native`. The rule it now follows is the one task 0496
+ * paid for in production — a renderer may only use the vocabulary of the enum
+ * its value came from — and the value is produced by
+ * [`domain::AssetFamily::as_str`] rather than by a local match, so there is no
+ * copy to drift.
+ *
+ * The raw discriminant is deliberately NOT published beside the label. It was,
+ * and it carried nothing the label does not (the label is a pure function of
+ * it) while inviting exactly the mismatch above. The alphanum4/alphanum12
+ * width it distinguished is rendered nowhere in the app, and is recoverable
+ * from the code's length if it is ever wanted. It also has no honest value for
+ * a soroban token: XDR has no slot for one, and its `3` already means
+ * `pool_share`.
+ *
+ * # Linkable identifiers
+ *
+ * Every link target is the asset detail page. The precedence is not a
+ * preference — each rung is the only form that resolves for its kind:
+ *
+ * * native → `/assets/native`, the reserved token for the XLM singleton,
+ * which has no `code-issuer` identity to compose.
+ * * `asset_code` + `issuer` → `/assets/{code}-{issuer}`.
+ * * `contract_id` → `/assets/{contract_id}`, for a soroban token, whose
+ * contract IS its asset identity.
+ *
+ * A classic or native leg's SAC mirror is not published here. It is not a
+ * link target — the asset endpoint pins a contract lookup to the soroban
+ * family, so a SAC address resolves nothing (measured 2026-08-13, after an
+ * earlier contract-first order sent ~93k classic legs to a dead page) — and
+ * no pool surface renders it. The asset's own page (`/v1/assets`) carries it
+ * with its deployment state.
  */
 export type PoolAssetLeg = {
   asset_code?: string | null;
   /**
-   * Raw SMALLINT, XDR `AssetType`: 0=native, 1=credit_alphanum4,
-   * 2=credit_alphanum12. Not the `assets.asset_type` family domain.
-   */
-  asset_type: number;
-  /**
-   * Label in the **XDR `AssetType`** vocabulary — this is a pool LEG, and
-   * leg types come from `liquidity_pools.asset_a_type`/`asset_b_type`,
-   * which store the protocol discriminant: `native` |
-   * `credit_alphanum4` | `credit_alphanum12`. `null` only on schema drift.
-   * (Task 0496 mirror: this doc used to carry the `AssetFamily` legend,
-   * declaring 2 "retired" — while 54 456 production legs carry
-   * 2 = `credit_alphanum12`.)
+   * `native` | `classic_credit` | `soroban`. `None` for a leg whose token
+   * the registry has no row for (one live pool has one) — there is no
+   * family to name.
    */
   asset_type_name?: string | null;
   /**
-   * C-strkey of the deployed SAC mirror for the leg's `(asset_code, issuer)`
-   * classic_credit / native asset (ADR 0051 — resolved via the row's
-   * `sac_contract_id` facet). `None` only when no SAC is deployed for that
-   * asset. Native XLM has one, and reports it here (task 0470) exactly as
-   * `/v1/assets/native` already did.
+   * The token's own contract, set ONLY for a `soroban` leg. `None` for
+   * native and classic credit.
    */
   contract_id?: string | null;
   /**
-   * Asset icon URL, resolved from `asset_enrichment` (ADR 0050) so pool
-   * avatars render the same icon as the assets list. Until task 0310 this
-   * read the dead `assets.icon_url` column, which was never populated —
-   * every leg icon came back `None`. Still `None` for assets without an
-   * enriched icon — the FE falls back to the asset-code initial.
+   * Asset icon URL from `asset_enrichment` (ADR 0050), so pool avatars match
+   * the assets list. NOT from `assets`, whose `icon_url` column was dropped
+   * in task 0310 after measuring 0 of 411,654 rows populated. `None` for an
+   * asset with no enriched icon — the frontend falls back to the initial.
    */
   icon_url?: string | null;
   issuer?: string | null;
+  /**
+   * What the pool holds of this leg, in the asset's own units, as a decimal
+   * string (a JSON number is a browser double and a big reserve would lose
+   * digits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a
+   * pool has two to four legs. `null` when no source knows it — never `0`.
+   * A classic pool reads its latest snapshot. A soroban pool reads its
+   * newest `pool_state_changes` row, scaled by 7 for a native or classic
+   * leg and by the `decimals` a soroban token publishes in its metadata; a
+   * token that publishes none keeps its leg `null`.
+   */
+  reserve?: string | null;
+  /**
+   * The token's self-declared SEP-41 symbol, from contract metadata — what
+   * names a soroban leg that has no classic code. Not unique: many
+   * contracts claim the same one, so `contract_id` stays the identity.
+   */
+  symbol?: string | null;
 };
 
 /**
  * What an operation did to the pool, named by the SIGN PAIR of its two legs
- * and nothing else — `lp_operation_amounts.amount` is signed from the pool's
+ * and nothing else — `pool_operation_amounts.amount` is signed from the pool's
  * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
  * There is no operation-type column to read and no join to `operations`.
  *
@@ -2120,15 +2206,13 @@ export type PoolAssetLeg = {
 export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 
 /**
- * One pool row returned by the list endpoint. Shape pinned to canonical
- * SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
+ * One pool row returned by the list endpoint (`queries::list_pools`).
+ * Pools without a fresh snapshot
  * in the freshness window come back with `null` for every dynamic field
- * (`reserve_a`, `reserve_b`, `total_shares`, `tvl`, `volume`,
- * `fee_revenue`, `latest_snapshot_*`); frontend renders these as "stale".
+ * (each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,
+ * `latest_snapshot_*`); frontend renders these as "stale".
  */
 export type PoolItem = {
-  asset_a: PoolAssetLeg;
-  asset_b: PoolAssetLeg;
   created_at_ledger: number;
   fee_bps: number;
   /**
@@ -2144,21 +2228,52 @@ export type PoolItem = {
   latest_snapshot_at?: string | null;
   latest_snapshot_ledger?: number | null;
   /**
+   * The pool's legs in registration order — two for a classic pool, two to
+   * four for a soroban one. Replaces the `asset_a` / `asset_b` pair, which
+   * could not express a three-leg pool and forced a soroban row to write
+   * placeholder values that read as native XLM downstream.
+   */
+  legs: Array<PoolAssetLeg>;
+  /**
    * Count of active liquidity providers (`lp_positions WHERE shares > 0`).
    * Computed from the live table — not dependent on the snapshot
    * freshness window, so it is populated even on stale pools (where
    * `tvl`/`volume`/`fee_revenue` are NULL).
+   *
+   * `null` for a soroban pool: its providers are the holders of its share
+   * token, which `lp_positions` does not index, so a `0` there would claim
+   * an empty pool rather than an unread one.
    */
-  participant_count: number;
+  participant_count?: number | null;
   /**
-   * SEP-23 strkey (`L...`, 56 chars). DB stores `BYTEA(32)` per ADR
-   * 0024; the handler encodes to strkey at the response boundary so
-   * the wire shape matches the Stellar ecosystem canonical form
-   * (CAP-38 / SEP-23).
+   * A classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract
+   * address (`C…`), 56 chars. DB stores the same 32 bytes for both (ADR
+   * 0024); the handler encodes them by kind at the response boundary.
    */
   pool_id: string;
-  reserve_a?: string | null;
-  reserve_b?: string | null;
+  /**
+   * `classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not
+   * decoration: the same 32 bytes render as a SEP-23 `L…` strkey for a
+   * classic pool and a `C…` contract address for a soroban one, and
+   * rendering one as the other yields a well-formed WRONG key rather than
+   * an error.
+   */
+  pool_kind: PoolKind;
+  /**
+   * The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),
+   * named only when the protocol's own publications claim the router or
+   * factory that registered the pool. `null` for a classic pool and for a
+   * soroban pool registered by a deployment no protocol claims — never a
+   * guess from matching code.
+   */
+  protocol?: string | null;
+  /**
+   * Pool shares outstanding, as a decimal string. Classic: the latest
+   * snapshot. Soroban: the pool's own instance storage, scaled by its share
+   * token's published decimals; `null` when the pool keeps no total there
+   * (concentrated and config-factory pools) or the scale is unknown — a
+   * `0` is served only for a pool whose every reserve is `0`.
+   */
   total_shares?: string | null;
   /**
    * USD, decimal string rounded to cents (task 0199 compute-at-read).
@@ -2176,6 +2291,8 @@ export type PoolItem = {
    */
   volume?: string | null;
 };
+
+export type PoolKind = 'classic' | 'soroban';
 
 /**
  * The classic asset a SAC contract is the contract-side facet of (ADR 0051,
@@ -2270,6 +2387,24 @@ export type SearchHit = {
  */
 export type SearchResults = {
   groups: SearchGroups;
+};
+
+export type SessionRequest = {
+  /**
+   * Turnstile token produced by the SPA widget.
+   */
+  token: string;
+};
+
+export type SessionResponse = {
+  /**
+   * Seconds until `token` expires.
+   */
+  expires_in: number;
+  /**
+   * Free-tier session JWT, sent back as `Authorization: Bearer <token>`.
+   */
+  token: string;
 };
 
 /**
@@ -2406,29 +2541,33 @@ export type XdrEventDto = {
    */
   data: unknown;
   /**
-   * Event index within the transaction (zero-based).
+   * The id's event number: the position in the operation, or for a fee
+   * event the ledger's (or, for `after_tx`, the transaction's) counter of
+   * that stage. `None` for diagnostic events.
    */
-  event_index: number;
+  event_index?: number | null;
   /**
    * `"contract"`, `"system"`, or `"diagnostic"`.
    */
   event_type: string;
   /**
-   * Zero-based envelope position of the operation that emitted this event
-   * (CAP-67 V4 per-operation container only; `None` for tx-level,
-   * diagnostic and pre-Protocol-23 events). Matches
-   * `XdrOperationDto.application_order - 1`.
+   * The stellar-rpc event id, exactly as `getEvents` returns it (ADR 0059).
+   * Consensus events arrive sorted by it, which is execution order: fee
+   * charge, operation events, fee refund. `None` for diagnostic events.
    */
-  op_index?: number | null;
+  id?: string | null;
+  /**
+   * Zero-based envelope position of the operation that emitted this event
+   * (CAP-67 per-operation container only; `None` for fee and diagnostic
+   * events). Matches `XdrOperationDto.application_order - 1`.
+   */
+  operation_index?: number | null;
   /**
    * CAP-67 `TransactionEvent.stage` — `"before_all_txs"`, `"after_tx"` or
-   * `"after_all_txs"`. The protocol's only statement of when a tx-level
-   * event fired, and the reason `event_index` must not be read as a
-   * timeline: the fee refund is numbered ahead of the operation it
-   * refunds. Observed values on mainnet are `before_all_txs` for the charge
-   * and `after_all_txs` for the refund; `after_tx` exists in the protocol
-   * and is passed through unchanged if it appears. `None` for per-operation, diagnostic and
-   * pre-Protocol-23 events, which carry no stage.
+   * `"after_all_txs"`: when a tx-level event fired. The fee charge is
+   * `before_all_txs`; the refund is `after_tx` before protocol 23 and
+   * `after_all_txs` from it (archive meta, task 0541). `None` for
+   * per-operation and diagnostic events, which carry no stage.
    */
   stage?: string | null;
   /**
@@ -2464,6 +2603,40 @@ export type XdrOperationDto = {
    */
   result_code?: string | null;
 };
+
+export type MintSessionData = {
+  body: SessionRequest;
+  path?: never;
+  query?: never;
+  url: '/auth/session';
+};
+
+export type MintSessionErrors = {
+  /**
+   * Turnstile verification failed
+   */
+  403: string;
+  /**
+   * Token issue failed
+   */
+  500: string;
+  /**
+   * Turnstile not configured
+   */
+  503: string;
+};
+
+export type MintSessionError = MintSessionErrors[keyof MintSessionErrors];
+
+export type MintSessionResponses = {
+  /**
+   * Session JWT minted
+   */
+  200: SessionResponse;
+};
+
+export type MintSessionResponse =
+  MintSessionResponses[keyof MintSessionResponses];
 
 export type HealthData = {
   body?: never;
@@ -3132,34 +3305,44 @@ export type ListPoolsData = {
      */
     cursor?: string;
     /**
-     * Free-text asset filter — case-insensitive substring of either
-     * `asset_a_code` or `asset_b_code` (input is trimmed before the
-     * query). The needle is matched literally: `%`, `_` and regex
-     * metacharacters have no special meaning.
+     * Free-text asset filter — case-insensitive substring of any leg's
+     * displayed code (input is trimmed before the query). The needle is
+     * matched literally: `%`, `_` and regex metacharacters have no special
+     * meaning.
      *
      * A `/` makes it a **pair** query: `USDC/XLM` requires both codes to be
-     * present, one on each leg, and the typed order does not matter. Only the
-     * first `/` splits, so `USDC/XLM/BTC` searches for the literal second code
-     * `XLM/BTC` and therefore matches nothing — a pool has two legs.
+     * present on TWO DIFFERENT legs, and the typed order does not matter.
+     * Only the first `/` splits, so `USDC/XLM/BTC` searches for the literal
+     * second code `XLM/BTC` and therefore matches nothing.
      *
      * Native legs match on `XLM` even though they store an empty code, so
      * `XLM` returns the pools that actually hold native XLM. Note that it
      * *also* returns credit assets minted under the code `XLM` — asset codes
      * are not unique on Stellar, and this filter matches codes, not asset
-     * identity. Callers needing one specific issuer's asset should use the
-     * per-leg `filter[asset_a_code]` + `filter[asset_a_issuer]` pair.
+     * identity.
      *
-     * A pool IDENTIFIER is also accepted here — the `L…` SEP-23 StrKey,
-     * the one canonical form (task 0264) — and selects that single pool
+     * A pool IDENTIFIER is also accepted here — a classic pool's `L…` SEP-23
+     * StrKey or a soroban pool's `C…` contract address — and selects that
+     * single pool
      * instead of matching asset codes (task 0470). Previously an identifier
      * was matched as a substring of an asset code, found nothing, and the
      * list answered "no pools" about a pool that exists.
      */
     'filter[asset_code]'?: string | null;
-    'filter[asset_a_code]'?: string | null;
-    'filter[asset_a_issuer]'?: string | null;
-    'filter[asset_b_code]'?: string | null;
-    'filter[asset_b_issuer]'?: string | null;
+    /**
+     * `classic` | `soroban` — which protocol built the pool.
+     *
+     * Replaces the four per-leg POSITIONAL filters
+     * (`filter[asset_a_code]` + issuer, and the same for `b`). Those named a
+     * leg by its position in a pair, which a list of two-to-four legs has no
+     * equivalent for; `filter[asset_code]` answers the same question without
+     * pinning a position. No client used them — the frontend's only pool
+     * filter is the free-text code box.
+     *
+     * An unknown value is rejected with 400 rather than ignored: a silently
+     * dropped filter returns a page that contradicts what was asked for.
+     */
+    'filter[pool_kind]'?: string | null;
     /**
      * Minimum TVL threshold as a decimal string (matches the underlying
      * `NUMERIC(28,7)` column without an f64 round-trip).
@@ -3195,7 +3378,7 @@ export type GetPoolData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
+     * Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.
      */
     pool_id: string;
   };
@@ -3233,7 +3416,7 @@ export type ListPoolActivityData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
+     * Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.
      */
     pool_id: string;
   };
@@ -3286,7 +3469,7 @@ export type GetPoolChartData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars).
+     * Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.
      */
     pool_id: string;
   };
@@ -3341,7 +3524,7 @@ export type ListParticipantsData = {
   body?: never;
   path: {
     /**
-     * Pool ID — SEP-23 strkey (`L...`, 56 chars). Internal DB form is hex (ADR 0024); strkey is the canonical wire form.
+     * Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars.
      */
     pool_id: string;
   };

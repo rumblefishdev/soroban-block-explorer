@@ -203,10 +203,10 @@ Contract details and interface.
   ledger (link), WASM hash, SAC badge if applicable
 - Contract interface — list of public functions with parameter names and types, allowing
   users to understand the contract's API without reading source code
-- Invocations tab — recent invocations table (function name, caller account, status,
-  ledger, timestamp)
+- Invocations tab — recent invocations table (function name, caller account or
+  contract, status, ledger, timestamp)
 - Events tab — recent events table (event type, topics, data, ledger)
-- Stats — total invocations count, unique callers
+- Stats — total invocations count, unique callers (accounts and contracts)
 
 #### NFTs (`/nfts`)
 
@@ -230,15 +230,17 @@ Single NFT overview.
 
 Paginated table of all liquidity pools.
 
-- Pool table — pool ID (truncated), asset pair (e.g. XLM/USDC), total shares, reserves
-  per asset, fee percentage
-- Filters — asset pair, minimum TVL
+- Pool table — pool ID (truncated), the pool's legs (e.g. `XLM / USDC`, or three
+  for a Soroban stable pool), total shares, reserves per leg, fee percentage,
+  kind badge
+- Filters — asset code or pair, pool kind (classic / Soroban); minimum TVL is
+  rejected with a 400 (computed at read, so it cannot filter page membership)
 - Cursor-based pagination controls
 
 #### Liquidity Pool (`/liquidity-pools/:strkey`)
 
-- Pool summary — pool ID (full, copyable), asset pair, fee percentage, total shares,
-  reserves per asset
+- Pool summary — pool ID (full, copyable), the pool's legs, fee percentage,
+  total shares, reserves per leg
 - Charts — TVL over time, volume over time, fee revenue
 - Pool participants — table of liquidity providers and their share
 - Recent transactions — deposits, withdrawals, and trades involving this pool
@@ -423,9 +425,9 @@ media URL.
 #### Liquidity Pools
 
 **`GET /liquidity-pools`** — Paginated list of pools. Query params: `limit`, `cursor`,
-`filter[assets]`, `filter[min_tvl]`.
+`filter[asset_code]`, `filter[pool_kind]`.
 
-**`GET /liquidity-pools/:strkey`** — Pool detail: asset pair, fee, reserves, total shares, TVL.
+**`GET /liquidity-pools/:strkey`** — Pool detail: legs, kind, fee, reserves, total shares, TVL.
 
 **`GET /liquidity-pools/:strkey/transactions`** — Deposits, withdrawals, and trades for this
 pool.
@@ -507,7 +509,7 @@ Caching operates at two levels:
 │  │ accounts · transaction_participants · tx_hash_index  │                     │
 │  │ soroban_contracts · wasm_interface_metadata · assets │                     │
 │  │ soroban_events_appearances · soroban_invocations_…   │                     │
-│  │ nfts · nft_ownership · liquidity_pools · lp_…        │                     │
+│  │ nfts · nft_ownership_changes · liquidity_pools · lp_…│                     │
 │  │ account_balances_current (ADR 0035: history dropped) │                     │
 │  └──────────────────────────┬───────────────────────────┘                     │
 │                             │                                                 │
@@ -750,7 +752,7 @@ Stellar Network (mainnet peers)
 │     accounts, account_balances_current                  │
 │ 10. Detect SEP-41 token contracts, NFT contracts,       │
 │     classic LPs → assets, nfts, liquidity_pools,        │
-│     nft_ownership, lp_positions                         │
+│     nft_ownership_changes, lp_positions                 │
 │ 11. Flush the `ledgers` row LAST, after every other      │
 │     insert has ack'd — it is the commit marker           │
 └─────────────────────────────────────────────────────────┘
@@ -934,7 +936,7 @@ XDR parsing happens in two places, each with a different scope:
   persisted; E14 re-expands it from the archive via
   `xdr_parser::extract_events`
 - Known SEP-41 / NFT transfer patterns also drive derived-state upserts on
-  `assets`, `nfts`, and `nft_ownership`. Per-account Soroban token holdings
+  `assets`, `nfts`, and `nft_ownership_changes`. Per-account Soroban token holdings
   are explicitly out of scope: `account_balances_current` (§4.17 of the
   schema overview) carries only classic balances (native XLM + trustlines)
   per ADR 0035; Soroban `ContractData` `Balance(address)` entries are not
@@ -1030,7 +1032,7 @@ Cross-cutting schema disciplines applied to every table:
   API layer.
 - **SMALLINT enums** ([ADR 0031](../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md)):
   every closed-domain "type" column (`operations_appearances.type`, `assets.asset_type`,
-  `soroban_contracts.contract_type`, `nft_ownership.event_type`, etc.) is `SMALLINT`
+  `soroban_contracts.contract_type`, `nft_ownership_changes.event_type`, etc.) is `SMALLINT`
   backed by a Rust `#[repr(i16)]` enum with a `CHECK` range constraint and a
   `<name>_name(ty)` SQL helper for psql/BI.
 - **Range partitioning on ledger sequence** for high-volume child tables
@@ -1235,12 +1237,11 @@ CREATE TABLE nfts (
     name                 VARCHAR(256),
     media_url            TEXT,
     metadata             JSONB,
-    minted_at_ledger     BIGINT,
     current_owner_id     BIGINT       REFERENCES accounts(id),                     -- ADR 0026
     current_owner_ledger BIGINT,
     UNIQUE (contract_id, token_id)
 );
--- companion table nft_ownership (partitioned) records mint/transfer/burn history
+-- companion table nft_ownership_changes (partitioned) records mint/transfer/burn history
 -- with event_type SMALLINT (NftEventType) per ADR 0031.
 ```
 
@@ -1314,7 +1315,7 @@ user carries no `<grants>` block in `users.d/services.xml` — unlike
 Partitioned (`PARTITION BY RANGE (created_at)`, monthly):
 `transactions`, `operations_appearances`, `transaction_participants`,
 `soroban_events_appearances`, `soroban_invocations_appearances`,
-`liquidity_pool_snapshots`, `nft_ownership`.
+`liquidity_pool_snapshots`, `nft_ownership_changes`.
 
 Unpartitioned anchors and registries:
 `ledgers`, `transaction_hash_index`, `accounts`, `soroban_contracts`,

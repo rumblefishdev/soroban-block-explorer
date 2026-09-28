@@ -4,6 +4,7 @@ import { createBrowserRouter } from 'react-router-dom';
 import {
   DetailSkeleton,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
+  PRIVACY_POLICY_URL,
   routeSegments,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { AccountDetailSkeleton } from '../pages/accounts/AccountDetailSkeleton.js';
@@ -153,6 +154,10 @@ export const router = createBrowserRouter([
       {
         path: 'search',
         element: page(() => import('../pages/SearchResultsPage.js')),
+      },
+      {
+        path: PRIVACY_POLICY_URL,
+        element: page(() => import('../pages/PrivacyPolicyPage.js')),
       },
       {
         path: '*',

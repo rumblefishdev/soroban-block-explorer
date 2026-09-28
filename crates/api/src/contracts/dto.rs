@@ -1,5 +1,5 @@
 //! Request and response DTOs for the contracts endpoints.
-//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{11..14}_*.sql`.
+//! The SQL behind these shapes is in `contracts::queries`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -153,7 +153,11 @@ pub struct InterfaceResponse {
 pub struct InvocationItem {
     pub transaction_hash: String,
     pub ledger_sequence: i64,
+    /// Caller G-StrKey when an account made the call.
     pub caller_account: Option<String>,
+    /// Caller C-StrKey when a contract made the call; exactly one of the two
+    /// is set on an invocation.
+    pub caller_contract: Option<String>,
     pub created_at: DateTime<Utc>,
     pub successful: bool,
 }
@@ -162,9 +166,11 @@ pub struct InvocationItem {
 /// row per event (no appearance-fold expansion).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EventItem {
+    /// The stellar-rpc event id, exactly as `getEvents` returns it
+    /// (ADR 0059).
+    pub id: String,
     pub transaction_hash: String,
     pub ledger_sequence: i64,
-    pub transaction_id: i64,
     pub successful: bool,
     pub created_at: DateTime<Utc>,
     pub event_type: String,
@@ -172,21 +178,21 @@ pub struct EventItem {
     pub data: serde_json::Value,
 }
 
-/// Opaque pagination cursor for `GET /contracts/:id/events`, datasource-tagged
-/// (ADR 0008) so a cursor minted for one backend is rejected after a flag flip;
-/// a legacy/untagged cursor (no `src`) fails to decode → clean 400.
+/// Opaque pagination cursor for `GET /contracts/:id/events`, tagged (ADR 0008)
+/// so a cursor of an older keyset fails to decode → clean 400.
 ///
-/// Keyset `(ledger_sequence, transaction_id, event_index)` over the
-/// full-content `soroban_events` table (per-event rows; `event_index` is the
-/// multi-event-tx tie-break, non-optional so a keyset never binds a NULL
-/// tuple element).
+/// Keyset = the stellar-rpc event id `(ledger_sequence, transaction_index,
+/// operation_index, event_index)`, the `soroban_events` key after the
+/// contract (ADR 0059). A cursor minted before it (`src: ch`, keyed by
+/// `transaction_id`) no longer decodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum EventCursor {
-    Ch {
+    ChEventId {
         ledger_sequence: i64,
-        transaction_id: i64,
-        event_index: i16,
+        transaction_index: u32,
+        operation_index: u16,
+        event_index: u32,
     },
 }
 /// Pagination payload for `GET /v1/contracts`. `soroban_contracts` is

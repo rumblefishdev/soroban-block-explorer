@@ -1,0 +1,184 @@
+import type { PoolAssetLeg } from '@rumblefish/api-types';
+import { formatCompactAmount } from '@rumblefish/soroban-block-explorer-ui';
+import { describe, expect, it } from 'vitest';
+
+import { assetLegLabel, legHref, poolLabel } from '../helpers.js';
+import { UNREGISTERED_TOKEN_LABEL } from '../../assets/assetType.js';
+
+function makeLeg(overrides: Partial<PoolAssetLeg> = {}): PoolAssetLeg {
+  return {
+    asset_code: 'USDC',
+    asset_type_name: 'classic_credit',
+    contract_id: null,
+    issuer: 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN',
+    icon_url: null,
+    symbol: null,
+    ...overrides,
+  };
+}
+
+describe('legHref', () => {
+  // Changed in task 0472 — this case previously asserted `undefined`. Not a
+  // regression: `/assets/native` became the canonical asset token in 0243,
+  // which retired the "native has no address" rationale this rule was built
+  // on. XLM was the only leg in the app that rendered as dead text.
+  it('links native legs to the canonical /assets/native token', () => {
+    expect(legHref(makeLeg({ asset_type_name: 'native' }))).toBe(
+      '/assets/native'
+    );
+  });
+
+  it('prefers the canonical native token over an XLM SAC mirror', () => {
+    expect(
+      legHref(
+        makeLeg({
+          asset_type_name: 'native',
+          asset_code: null,
+          issuer: null,
+          contract_id:
+            'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA',
+        })
+      )
+    ).toBe('/assets/native');
+  });
+
+  // Flipped in task 0472 — this case previously asserted contract_id-first.
+  // Intentional: task 0364 dropped SAC-facet aliasing from the assets
+  // endpoint, so /assets/{SAC C…} 404s and the pair is the only live route
+  // for a classic leg (~93k legs carry a SAC mirror on prod).
+  it('prefers code-issuer over the SAC mirror, whose address now 404s', () => {
+    expect(
+      legHref(
+        makeLeg({
+          contract_id:
+            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+        })
+      )
+    ).toBe(
+      `/assets/${encodeURIComponent(
+        'USDC-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
+      )}`
+    );
+  });
+
+  it('falls back to contract_id only when the pair is incomplete', () => {
+    expect(
+      legHref(
+        makeLeg({
+          asset_code: null,
+          issuer: null,
+          asset_type_name: 'soroban',
+          contract_id:
+            'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+        })
+      )
+    ).toBe('/assets/CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC');
+  });
+
+  it('falls back to /assets/{code}-{issuer} for classic credit legs', () => {
+    const href = legHref(makeLeg());
+    expect(href).toBe(
+      `/assets/${encodeURIComponent(
+        'USDC-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
+      )}`
+    );
+  });
+
+  it('returns undefined for schema-drift legs (no code, no contract id)', () => {
+    expect(
+      legHref(makeLeg({ asset_code: null, issuer: null, contract_id: null }))
+    ).toBeUndefined();
+  });
+});
+
+describe('assetLegLabel', () => {
+  it('returns "XLM" for the native leg', () => {
+    expect(
+      assetLegLabel(makeLeg({ asset_type_name: 'native', asset_code: null }))
+    ).toBe('XLM');
+  });
+
+  it('returns the asset_code for non-native legs', () => {
+    expect(assetLegLabel(makeLeg({ asset_code: 'USDC' }))).toBe('USDC');
+    expect(assetLegLabel(makeLeg({ asset_code: 'EURC' }))).toBe('EURC');
+  });
+
+  // The case that made this worth changing: a soroban token publishes no
+  // classic code, and this used to throw for every one of them — which would
+  // have taken down the whole list the moment soroban pools appeared in it.
+  it('names a code-less soroban leg by its truncated contract address', () => {
+    expect(
+      assetLegLabel(
+        makeLeg({
+          asset_type_name: 'soroban',
+          asset_code: null,
+          issuer: null,
+          contract_id:
+            'CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB',
+        })
+      )
+    ).toBe('CAQC…RZQB');
+  });
+
+  it('names a code-less soroban leg by its symbol when it publishes one', () => {
+    expect(
+      assetLegLabel(
+        makeLeg({
+          asset_type_name: 'soroban',
+          asset_code: null,
+          issuer: null,
+          symbol: 'USDx',
+          contract_id:
+            'CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB',
+        })
+      )
+    ).toBe('USDx');
+  });
+
+  // A leg with no registry row carries nothing the ladder can name. It must
+  // say so rather than throw: the list renders outside any section boundary,
+  // so a throw here blanked the whole app.
+  it('names a leg nothing identifies as an unregistered token', () => {
+    expect(
+      assetLegLabel(
+        makeLeg({
+          asset_code: null,
+          issuer: null,
+          contract_id: null,
+          asset_type_name: null,
+        })
+      )
+    ).toBe(UNREGISTERED_TOKEN_LABEL);
+  });
+});
+
+describe('poolLabel', () => {
+  it('joins every leg, not just a left and a right', () => {
+    expect(
+      poolLabel([
+        makeLeg({ asset_type_name: 'native', asset_code: null }),
+        makeLeg({ asset_code: 'USDC' }),
+        makeLeg({ asset_code: 'EURC' }),
+      ])
+    ).toBe('XLM / USDC / EURC');
+  });
+});
+
+describe('formatCompactAmount', () => {
+  it('returns em-dash for null, undefined, and non-numeric input', () => {
+    expect(formatCompactAmount(null)).toBe('—');
+    expect(formatCompactAmount(undefined)).toBe('—');
+    expect(formatCompactAmount('not a number')).toBe('—');
+  });
+
+  it('formats small numbers without notation', () => {
+    expect(formatCompactAmount(0)).toBe('0');
+    expect(formatCompactAmount(42)).toBe('42');
+  });
+
+  it('uses compact notation for larger numbers', () => {
+    expect(formatCompactAmount(1_500)).toBe('1.5K');
+    expect(formatCompactAmount(1_200_000)).toBe('1.2M');
+    expect(formatCompactAmount('753982100.00')).toBe('754M');
+  });
+});

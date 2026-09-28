@@ -6,7 +6,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
-use domain::OperationType;
+use domain::{OperationType, PoolKind};
 
 use crate::common::cache_control;
 use crate::common::conditional;
@@ -29,7 +29,7 @@ use super::dto::{
     TransactionDetailLight, TransactionListItem, TxListCursor,
 };
 use super::queries::{
-    self, EventAppearanceRow, InvocationAppearanceRow, OpRow, ResolvedListParams, TxDetailRow,
+    self, EventAppearanceRow, OpRow, ResolvedListParams, TransactionInvocationRow, TxDetailRow,
     TxListRow,
 };
 
@@ -88,17 +88,6 @@ pub async fn list_transactions(
         return resp;
     }
 
-    // Reject a stale cursor minted under the retired PG backend. Its keyset
-    // values are meaningless under CH, so per ADR 0008 we fail with
-    // `invalid_cursor` instead of silently mis-paginating. A legacy/untagged
-    // cursor already fails to decode upstream in the extractor; this guards the
-    // decodes-but-wrong-intent case.
-    if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(cursor)
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
-
     // Conditional GET on the LIVE first page only (task 0292): the list is
     // always newest-first, so with no cursor its content is a pure function of
     // the chain head → the head is a valid `ETag`. Filtered first pages are
@@ -146,14 +135,13 @@ pub async fn list_transactions(
         pagination.limit,
         direction,
         has_predecessor,
-        |dir, r| cursor::encode(&list_cursor_for(&resolved, r), dir),
+        |dir, r| cursor::encode(&list_cursor_for(r), dir),
     );
 
     // Pure DB-only mapping — no archive XDR fetch. Memo / heavy fields
     // belong on the transaction detail endpoint (E3) inside the E3 heavy
     // block, not in the list response. Keeping the list path archive-free
-    // matches canonical SQL 02's `Data sources: DB-only` contract and
-    // avoids an N-fan-out fetch per page.
+    // keeps it DB-only and avoids an N-fan-out fetch per page.
     let data: Vec<TransactionListItem> = rows
         .into_iter()
         .map(|row| TransactionListItem {
@@ -192,41 +180,16 @@ pub async fn list_transactions(
     resp
 }
 
-/// Build the opaque list cursor for a boundary row. PG keys the list scan on
-/// `(created_at, id)`. CH keys on `(ledger_sequence, <tie-break>)`, where the
-/// tie-break depends on which list statement served the page — the cursor must
-/// anchor the *same* keyset the next page's query will use:
-///
-/// - **Statement A** (no filter, the polled hot path) reads `transactions` in
-///   primary-key order `(ledger_sequence, application_order)` with FINAL
-///   dropped (the `read_rows` quota fix — see `queries::fetch_list`), so its
-///   tie-break is `application_order`.
-/// - **Statements B/C** (contract / op_type filter) drive off
-///   `operations_appearances` and key on the `transactions.id` surrogate, so
-///   their tie-break is `id`.
-///
-/// The emitted variant is tagged with the active datasource so a later request
-/// can reject a cursor minted for the other backend (see `list_transactions`).
-/// A cursor is not tagged with its statement: switching filters mid-pagination
-/// resets the page in practice, and per ADR 0008 a stale opaque cursor that
-/// anchors the wrong keyset degrades to a re-aligned page, never a hard error.
-fn list_cursor_for(params: &ResolvedListParams, r: &TxListRow) -> TxListCursor {
-    TxListCursor::Ch {
+/// Build the opaque list cursor for a boundary row: the transaction position
+/// `(ledger_sequence, application_order)`, the keyset of every statement —
+/// A reads `transactions` in primary-key order, B seeks the
+/// `contract_activity` index (tasks 0541, 0586), C scans
+/// `transaction_operations` (task 0372).
+fn list_cursor_for(r: &TxListRow) -> TxListCursor {
+    TxListCursor::ChPosition {
         ledger_sequence: r.ledger_sequence,
-        tiebreak: if params.contract_id.is_none() && params.op_type.is_none() {
-            i64::from(r.application_order)
-        } else {
-            r.id
-        },
+        application_order: r.application_order,
     }
-}
-
-/// True when the decoded cursor is a current (CH) cursor. A stale cursor minted
-/// under the retired PG backend decodes but lacks the current `ch` intent, so
-/// it is rejected with `invalid_cursor` rather than silently mis-paginating
-/// (ADR 0008 fail-clean, HTTP 400).
-fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::Ch { .. })
 }
 
 // ---------------------------------------------------------------------------
@@ -323,13 +286,14 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             .collect();
         let invocations = i_res
             .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "DB fallback: fetch_invocation_appearances failed");
+                tracing::warn!(error = %e, "DB fallback: fetch_transaction_invocations failed");
                 Vec::new()
             })
             .into_iter()
             .map(|r| InvocationAppearanceItem {
                 contract_id: r.contract_id,
                 caller_account: r.caller_account,
+                caller_contract: r.caller_contract,
                 ledger_sequence: r.ledger_sequence,
                 created_at: r.created_at,
             })
@@ -435,7 +399,11 @@ fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
             pool_ids: op
                 .pool_ids
                 .iter()
-                .map(|h| pool_id_hex_to_strkey(h))
+                // Classic by construction: these ids come from classic
+                // operation XDR, where a pool is a CAP-38 `PoolId`, never a
+                // contract. Measured on production: 53,368 distinct pool ids
+                // reach here and not one is a soroban pool.
+                .map(|h| pool_id_hex_to_strkey(h, PoolKind::Classic))
                 .collect(),
             application_order: op.application_order,
             ledger_sequence: op.ledger_sequence,
@@ -468,140 +436,50 @@ async fn fetch_list_for_source(
 }
 
 /// Resolve a tx hash to its DB header. CH keys the detail read by
-/// `(ledger_sequence, hash)` resolved via `transaction_hash_index`. A miss at
-/// either step is `Ok(None)` → 404.
+/// `(ledger_sequence, hash)`; the candidate ledgers come from
+/// `transaction_hash_prefix_index` (a hash prefix, so more than one only when
+/// two hashes share it), and the first whose `transactions` row carries the
+/// full hash wins. No candidate, or none that matches, is `Ok(None)` → 404.
 async fn lookup_detail_for_source(
     state: &AppState,
     hash_hex: &str,
 ) -> Result<Option<TxDetailRow>, clickhouse::error::Error> {
-    let Some(ledger_sequence) = queries::lookup_hash_ledger(&state.ch(), hash_hex).await? else {
-        return Ok(None);
-    };
-    queries::fetch_detail(&state.ch(), hash_hex, ledger_sequence).await
+    for ledger_sequence in queries::lookup_hash_ledgers(&state.ch(), hash_hex).await? {
+        if let Some(row) = queries::fetch_detail(&state.ch(), hash_hex, ledger_sequence).await? {
+            return Ok(Some(row));
+        }
+    }
+    Ok(None)
 }
 
 async fn fetch_operations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<OpRow>, clickhouse::error::Error> {
-    queries::fetch_operations(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_operations(&state.ch(), tx.ledger_sequence, tx.application_order).await
 }
 
 async fn fetch_participants_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<String>, clickhouse::error::Error> {
-    queries::fetch_participants(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_participants(&state.ch(), tx.ledger_sequence, tx.application_order).await
 }
 
 async fn fetch_events_for_source(
     state: &AppState,
     tx: &TxDetailRow,
 ) -> Result<Vec<EventAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_event_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
+    queries::fetch_event_appearances(&state.ch(), tx.ledger_sequence, tx.application_order).await
 }
 
 async fn fetch_invocations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
+) -> Result<Vec<TransactionInvocationRow>, clickhouse::error::Error> {
+    queries::fetch_transaction_invocations(&state.ch(), tx.ledger_sequence, tx.application_order)
+        .await
 }
 
 #[cfg(test)]
-mod conditional_tests {
-    //! `CH_URL`-gated conditional-GET tests for `GET /v1/transactions`.
-    //! Skips cleanly when the env var is unset/unreachable. Runs against a real
-    //! ClickHouse — a migrated (possibly empty) `transactions` table is enough.
-    use std::sync::atomic::Ordering;
-
-    use axum::body::{self, Body};
-    use axum::http::{Request, StatusCode, header};
-    use tower::ServiceExt;
-    use utoipa_axum::router::OpenApiRouter;
-
-    use crate::common::ch::test_client_from_env;
-    use crate::runtime_enrichment::RuntimeEnrichment;
-    use crate::runtime_enrichment::sep1::Sep1Fetcher;
-    use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
-    use crate::state::AppState;
-
-    fn test_state(ch: clickhouse::Client) -> AppState {
-        let runtime_enrichment = RuntimeEnrichment {
-            stellar_archive: StellarArchiveFetcher::new(
-                crate::runtime_enrichment::stellar_archive::test_client(),
-            ),
-            sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
-            nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
-                .expect("build nft_token_uri fetcher"),
-            wasm_code: crate::runtime_enrichment::wasm_code::WasmCodeFetcher::new()
-                .expect("build wasm_code fetcher"),
-        };
-        AppState::for_tests(ch, runtime_enrichment)
-    }
-
-    fn app(state: AppState) -> axum::Router {
-        let (router, _spec) = OpenApiRouter::new()
-            .nest("/v1", crate::transactions::router())
-            .with_state(state)
-            .split_for_parts();
-        router
-    }
-
-    /// The load-bearing acceptance criterion (task 0292): a matching
-    /// `If-None-Match` on the live first page returns `304` with an empty body
-    /// **without** running the heavy list query — asserted via the shared
-    /// `list_query_count` audit counter, which only the heavy path increments.
-    #[tokio::test]
-    async fn live_list_304_short_circuits_before_heavy_query() {
-        let Some(ch) = test_client_from_env() else {
-            eprintln!("CH_URL unset — skipping tx conditional-GET test");
-            return;
-        };
-        let state = test_state(ch);
-
-        // 1) Live first page → 200 + ETag; the heavy query runs exactly once.
-        let resp = app(state.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/transactions?limit=5")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let etag = resp
-            .headers()
-            .get(header::ETAG)
-            .expect("ETag on live 200")
-            .to_str()
-            .unwrap()
-            .to_owned();
-        assert_eq!(
-            state.list_query_count.load(Ordering::Relaxed),
-            1,
-            "first live request must run the heavy query"
-        );
-
-        // 2) Same head via If-None-Match → 304, empty body, heavy query NOT run.
-        let resp = app(state.clone())
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/transactions?limit=5")
-                    .header(header::IF_NONE_MATCH, &etag)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
-        let bytes = body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        assert!(bytes.is_empty(), "304 body must be empty");
-        assert_eq!(
-            state.list_query_count.load(Ordering::Relaxed),
-            1,
-            "304 short-circuit must NOT run the heavy query"
-        );
-    }
-}
+mod conditional_tests;

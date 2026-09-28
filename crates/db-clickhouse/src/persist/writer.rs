@@ -29,7 +29,7 @@
 //! ≈ 3 100 `INSERT` statements over the entire 11 M-ledger backfill
 //! (plus one `ledgers` INSERT per partition as the commit marker).
 //! Well within the merger's comfort zone. The two new pending tables
-//! (`nfts_pending`, `nft_ownership_pending`, task 0217 / 0220) only
+//! (`nfts_pending`, `nft_ownership_changes_pending`, task 0217 / 0220) only
 //! open when the partition contains at least one `Other`-classified
 //! NFT-candidate contract, so partitions with full classifier coverage
 //! still see exactly the 16 prior inserts.
@@ -61,79 +61,8 @@ use super::rows::*;
 use super::stage::StagedLedger;
 use crate::SchemaError;
 
-/// The set of tables a targeted (`--only`) re-parse persists.
-///
-/// Only tables that are **additive** may be targeted — a new derived table
-/// whose rows are deterministic from the XDR, carry no Tier-1 MIN-semantics
-/// column, and can be rolled back with `DROP TABLE`. The list is closed on
-/// purpose: adding a name here is a statement that the table meets those
-/// conditions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetedTables(Vec<&'static str>);
-
-impl TargetedTables {
-    pub const TARGETABLE: &'static [&'static str] = &[
-        "lp_operation_amounts",
-        "asset_transfers",
-        "transaction_memos",
-        "soroban_event_ops",
-        // Task 0518 — the three pool tables, so a full-range targeted
-        // re-parse carries the pool families' whole history (and the classic
-        // `legs` migration) in the SAME descent instead of owing a second one.
-        //
-        // None carries a Tier-1 MIN-semantics column, which is the condition
-        // that actually matters here: `pool_state_changes` is version-less
-        // RMT keyed by the row's own ledger, and both others version on a
-        // "when we last saw it" ledger where MAX is the correct answer — so a
-        // re-parsed historical row LOSES to a newer live one, as it should.
-        //
-        // `liquidity_pools` is the one that is NOT droppable (it holds the
-        // classic pools too), so its rollback is a 3 MiB table copy rather
-        // than a DROP. It earns the seat: the re-parse puts its soroban rows
-        // through the live two-stage registration gate, which the in-DB
-        // registry generators structurally cannot do (instance storage is not
-        // in `soroban_events`, so they need a hand-rolled duplicate guard
-        // instead of corroboration).
-        //
-        // MEASURED tie-break caveat, why the run owes an `OPTIMIZE ... FINAL`
-        // on `liquidity_pools`: a re-parsed row ties on version with the row
-        // the original ingest wrote for the same last-change ledger. On a tie
-        // a merge keeps the LAST INSERTED row — the backfill's, correctly —
-        // but until that merge runs both rows are live, and a read's
-        // `argMax(..., last_updated_ledger)` picks arbitrarily between them.
-        "pool_state_changes",
-        "pool_instance_state",
-        "liquidity_pools",
-    ];
-    /// Parse a comma-separated list; rejects unknown or duplicate names.
-    pub fn parse(spec: &str) -> Result<Self, String> {
-        let mut out: Vec<&'static str> = Vec::new();
-        for raw in spec.split(',') {
-            let name = raw.trim();
-            if name.is_empty() {
-                continue;
-            }
-            let Some(known) = Self::TARGETABLE.iter().copied().find(|t| *t == name) else {
-                return Err(format!(
-                    "`{name}` is not a targetable table (targetable: {})",
-                    Self::TARGETABLE.join(", ")
-                ));
-            };
-            if out.contains(&known) {
-                return Err(format!("`{name}` listed twice"));
-            }
-            out.push(known);
-        }
-        if out.is_empty() {
-            return Err("no table named".into());
-        }
-        Ok(Self(out))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.0.iter().copied()
-    }
-}
+mod targeted;
+pub use targeted::TargetedTables;
 
 /// Lifecycle handle for a single 0204-schema partition write.
 ///
@@ -161,39 +90,38 @@ struct TableInserts {
     metadata: Option<Insert<SorobanContractMetadataRow>>,
     executable_refs: Option<Insert<ContractExecutableRefRow>>,
     transactions: Option<Insert<TransactionRow>>,
-    hash_index: Option<Insert<TransactionHashIndexRow>>,
+    hash_prefix: Option<Insert<TransactionHashPrefixRow>>,
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
-    op_pools: Option<Insert<OperationPoolRow>>,
-    lp_amounts: Option<Insert<LpOperationAmountRow>>,
+    pool_amounts: Option<Insert<PoolOperationAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
     pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
     pool_state_changes: Option<Insert<PoolStateChangeRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
-    operations: Option<Insert<OperationAppearanceRow>>,
+    tx_operations: Option<Insert<TransactionOperationRow>>,
     events: Option<Insert<SorobanEventRow>>,
-    invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
+    contract_activity: Option<Insert<ContractActivityRow>>,
     assets: Option<Insert<AssetRow>>,
     asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
-    nft_ownership: Option<Insert<NftOwnershipRow>>,
     /// Task 0217 / 0220 — quarantine inserts. Lazy-opened only when the
     /// `stage::prepare` routing actually produces pending rows for the
     /// partition (any contract still classified `Other` / NULL at the
     /// time of staging). Empty `Other`-free partitions never open the
     /// HTTP request, keeping the part economy unchanged from PR #180.
     nfts_pending: Option<Insert<NftPendingRow>>,
-    nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
+    /// Task 0424 — ownership changes located by their event.
+    nft_ownership_changes: Option<Insert<NftOwnershipChangeRow>>,
+    nft_ownership_changes_pending: Option<Insert<NftOwnershipChangeRow>>,
     /// Unified per-holder balances — ALL asset types (task 0331 Option A). The
     /// legacy `account_balances_current` insert was removed (single-write).
     unified_balances: Option<Insert<BalanceRow>>,
     /// Task 0210 — `balances`' twin for value held by a claimable balance.
     claimable_balance_holdings: Option<Insert<BalanceRow>>,
-    /// Task 0540 / 0541 — the value-flow tables.
+    /// Task 0540 — the value-flow tables.
     asset_transfers: Option<Insert<AssetTransferRow>>,
     transaction_memos: Option<Insert<TransactionMemoRow>>,
-    event_ops: Option<Insert<SorobanEventOpRow>>,
 }
 
 impl PartitionWriter {
@@ -227,9 +155,8 @@ impl PartitionWriter {
     /// they're buffered as the partition's commit marker.
     /// Stream ONLY the named tables' rows for this ledger — the targeted write
     /// a historical re-parse for new derived tables runs (task 0279 set the
-    /// pattern with `lp_operation_amounts`; task 0540 generalised it to a list
-    /// so `asset_transfers`, `transaction_memos` and `soroban_event_ops` ride
-    /// one pass).
+    /// pattern with the pool amounts, now `pool_operation_amounts`; task 0540 generalised it to a list
+    /// so `asset_transfers` and `transaction_memos` ride one pass).
     ///
     /// Two things this deliberately does NOT do, both load-bearing:
     ///
@@ -256,12 +183,12 @@ impl PartitionWriter {
     ) -> Result<(), SchemaError> {
         for table in only.iter() {
             match table {
-                "lp_operation_amounts" => {
+                "pool_operation_amounts" => {
                     write_rows(
                         &self.client,
-                        &mut self.inserts.lp_amounts,
-                        "lp_operation_amounts",
-                        &staged.lp_amount_rows,
+                        &mut self.inserts.pool_amounts,
+                        "pool_operation_amounts",
+                        &staged.pool_amount_rows,
                     )
                     .await?
                 }
@@ -280,15 +207,6 @@ impl PartitionWriter {
                         &mut self.inserts.transaction_memos,
                         "transaction_memos",
                         &staged.transaction_memo_rows,
-                    )
-                    .await?
-                }
-                "soroban_event_ops" => {
-                    write_rows(
-                        &self.client,
-                        &mut self.inserts.event_ops,
-                        "soroban_event_ops",
-                        &staged.event_op_rows,
                     )
                     .await?
                 }
@@ -348,30 +266,28 @@ impl PartitionWriter {
             metadata_rows,
             executable_ref_rows,
             transaction_rows,
-            hash_index_rows,
+            hash_prefix_rows,
             participant_rows,
             pool_rows,
             pool_instance_state_rows,
             pool_state_change_rows,
             snapshot_rows,
             lp_position_rows,
-            op_rows,
+            tx_operation_rows,
             op_asset_rows,
-            op_pool_rows,
-            lp_amount_rows,
+            pool_amount_rows,
             event_rows,
-            invocation_rows,
+            contract_activity_rows,
             asset_rows,
             asset_sac_rows,
             nft_rows,
-            nft_ownership_rows,
             nft_pending_rows,
-            nft_ownership_pending_rows,
+            nft_ownership_change_rows,
+            nft_ownership_change_pending_rows,
             unified_balance_rows,
             claimable_balance_rows,
             asset_transfer_rows,
             transaction_memo_rows,
-            event_op_rows,
         } = staged;
 
         write_rows(
@@ -425,9 +341,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.hash_index,
-            "transaction_hash_index",
-            &hash_index_rows,
+            &mut self.inserts.hash_prefix,
+            "transaction_hash_prefix_index",
+            &hash_prefix_rows,
         )
         .await?;
         write_rows(
@@ -446,16 +362,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.op_pools,
-            "operation_pools",
-            &op_pool_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.lp_amounts,
-            "lp_operation_amounts",
-            &lp_amount_rows,
+            &mut self.inserts.pool_amounts,
+            "pool_operation_amounts",
+            &pool_amount_rows,
         )
         .await?;
         write_rows(
@@ -495,9 +404,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.operations,
-            "operations_appearances",
-            &op_rows,
+            &mut self.inserts.tx_operations,
+            "transaction_operations",
+            &tx_operation_rows,
         )
         .await?;
         write_rows(
@@ -509,9 +418,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.invocations,
-            "soroban_invocations_appearances",
-            &invocation_rows,
+            &mut self.inserts.contract_activity,
+            "contract_activity",
+            &contract_activity_rows,
         )
         .await?;
 
@@ -531,13 +440,6 @@ impl PartitionWriter {
         .await?;
         write_rows(&self.client, &mut self.inserts.nfts, "nfts", &nft_rows).await?;
 
-        write_rows(
-            &self.client,
-            &mut self.inserts.nft_ownership,
-            "nft_ownership",
-            &nft_ownership_rows,
-        )
-        .await?;
         // Task 0217 / 0220 — quarantine inserts. Slot stays `None` (and
         // the HTTP request never opens) on partitions where every
         // NFT-candidate contract has a definitive `Nft` verdict.
@@ -550,9 +452,16 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.nft_ownership_pending,
-            "nft_ownership_pending",
-            &nft_ownership_pending_rows,
+            &mut self.inserts.nft_ownership_changes,
+            "nft_ownership_changes",
+            &nft_ownership_change_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.nft_ownership_changes_pending,
+            "nft_ownership_changes_pending",
+            &nft_ownership_change_pending_rows,
         )
         .await?;
         write_rows(
@@ -583,13 +492,6 @@ impl PartitionWriter {
             &transaction_memo_rows,
         )
         .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.event_ops,
-            "soroban_event_ops",
-            &event_op_rows,
-        )
-        .await?;
 
         Ok(())
     }
@@ -608,7 +510,7 @@ impl PartitionWriter {
         // Step 1: drain every non-ledger insert. Order roughly mirrors
         // PG's write order (accounts → wasm → contracts → tx → hash
         // index → participants → pools/snapshots/positions → ops →
-        // events → invocations → assets → nfts/ownership → balances).
+        // events → contract activity → assets → nfts/ownership → balances).
         //
         // EXHAUSTIVE destructure, deliberately no `..`: an insert that is
         // written but never ended buffers its rows and drops them SILENTLY
@@ -628,30 +530,28 @@ impl PartitionWriter {
             metadata,
             executable_refs,
             transactions,
-            hash_index,
+            hash_prefix,
             participants,
             op_assets,
-            op_pools,
-            lp_amounts,
+            pool_amounts,
             pools,
             pool_instance_state,
             pool_state_changes,
             snapshots,
             lp_positions,
-            operations,
+            tx_operations,
             events,
-            invocations,
+            contract_activity,
             assets,
             asset_sac,
             nfts,
-            nft_ownership,
             nfts_pending,
-            nft_ownership_pending,
+            nft_ownership_changes,
+            nft_ownership_changes_pending,
             unified_balances,
             claimable_balance_holdings,
             asset_transfers,
             transaction_memos,
-            event_ops,
         } = self.inserts;
         end(accounts).await?;
         end(account_entry_state).await?;
@@ -660,23 +560,21 @@ impl PartitionWriter {
         end(metadata).await?;
         end(executable_refs).await?;
         end(transactions).await?;
-        end(hash_index).await?;
+        end(hash_prefix).await?;
         end(participants).await?;
         end(op_assets).await?;
-        end(op_pools).await?;
-        end(lp_amounts).await?;
+        end(pool_amounts).await?;
         end(pools).await?;
         end(pool_instance_state).await?;
         end(pool_state_changes).await?;
         end(snapshots).await?;
         end(lp_positions).await?;
-        end(operations).await?;
+        end(tx_operations).await?;
         end(events).await?;
-        end(invocations).await?;
+        end(contract_activity).await?;
         end(assets).await?;
         end(asset_sac).await?;
         end(nfts).await?;
-        end(nft_ownership).await?;
         // Task 0217 / 0220 — drain quarantine inserts in the same
         // pre-`ledgers` step. They share the commit-marker guarantee:
         // a partial commit that fails between any of these and the
@@ -684,12 +582,12 @@ impl PartitionWriter {
         // partition, so the resume path re-does it cleanly. RMT
         // dedupes the orphan rows on the next merge.
         end(nfts_pending).await?;
-        end(nft_ownership_pending).await?;
+        end(nft_ownership_changes).await?;
+        end(nft_ownership_changes_pending).await?;
         end(unified_balances).await?;
         end(claimable_balance_holdings).await?;
         end(asset_transfers).await?;
         end(transaction_memos).await?;
-        end(event_ops).await?;
 
         // Step 2: commit marker. Open `ledgers` insert, write every
         // buffered row, end the request.
@@ -820,5 +718,4 @@ async fn end<T>(slot: Option<Insert<T>>) -> Result<(), SchemaError> {
 }
 
 #[cfg(test)]
-#[path = "writer_tests.rs"]
 mod tests;

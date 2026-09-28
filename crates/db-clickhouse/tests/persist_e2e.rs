@@ -25,7 +25,8 @@
 
 use db_clickhouse::persist::persist_ledger_clickhouse;
 use db_clickhouse::{Config, apply_init_sql, client};
-use xdr_parser::types::{ExtractedLedger, ExtractedTransaction};
+use domain::OperationType;
+use xdr_parser::types::{ExtractedLedger, ExtractedOperation, ExtractedTransaction};
 
 /// Out-of-band sentinel sequence — distinct from `smoke.rs`
 /// (`99_999_001`) and far above any real backfilled / live-tail
@@ -55,6 +56,9 @@ fn fixture_ledger() -> ExtractedLedger {
 
 fn fixture_tx() -> ExtractedTransaction {
     let mut bytes = vec![0u8; 32];
+    // A distinct first 8 bytes, so the hash-prefix check below pins the byte
+    // order, not a zero (task 0580).
+    bytes[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
     bytes[31] = 0x42;
     ExtractedTransaction {
         hash: hex::encode(&bytes),
@@ -78,18 +82,46 @@ fn fixture_tx() -> ExtractedTransaction {
     }
 }
 
-/// Drive the production per-ledger persist wrapper once. Empty slices
-/// for everything except the ledger + one transaction keeps the
-/// fixture minimal while still exercising the multi-table write
-/// (ledgers + transactions + the surrogate-id `accounts` hub).
+/// One liquidity-pool deposit — enough to exercise both operation tables and
+/// both amount tables through the real writer (task 0372).
+fn fixture_ops(tx_hash: &str) -> Vec<(String, Vec<ExtractedOperation>)> {
+    let pool = "ab".repeat(32);
+    let op = ExtractedOperation {
+        transaction_hash: tx_hash.to_string(),
+        operation_index: 1,
+        op_type: OperationType::LiquidityPoolDeposit,
+        source_account: None,
+        asset_appearances: vec![],
+        counterparties: vec![],
+        source_muxed_id: None,
+        destination_muxed_id: None,
+        details: serde_json::json!({
+            "liquidityPoolId": pool,
+            "poolDelta": {
+                "poolId": pool,
+                "assetA": "native",
+                "amountA": 1_000,
+                "assetB": "native",
+                "amountB": 2_000,
+            },
+        }),
+    };
+    vec![(tx_hash.to_string(), vec![op])]
+}
+
+/// Drive the production per-ledger persist wrapper once. Empty slices for
+/// everything except the ledger, one transaction and its one operation keep
+/// the fixture minimal while still exercising the multi-table write
+/// (ledgers + transactions + operations + the surrogate-id `accounts` hub).
 async fn persist_once(cl: &clickhouse::Client) {
     let ledger = fixture_ledger();
     let txs = vec![fixture_tx()];
+    let ops = fixture_ops(&txs[0].hash);
     persist_ledger_clickhouse(
         cl,
         &ledger,
         &txs,
-        &[],
+        &ops,
         &[],
         &[],
         &[],
@@ -119,8 +151,12 @@ async fn cleanup(cl: &clickhouse::Client) {
     for stmt in [
         format!("ALTER TABLE ledgers DELETE WHERE sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
-        format!("ALTER TABLE transaction_hash_index DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
+        format!(
+            "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence = {E2E_LEDGER}"
+        ),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
+        format!("ALTER TABLE transaction_operations DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
+        format!("ALTER TABLE pool_operation_amounts DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE accounts DELETE WHERE account_id = '{acct}'"),
     ] {
         // Best-effort: mutations are async server-side; failures here
@@ -194,6 +230,50 @@ async fn persist_ledger_clickhouse_writes_and_dedupes() {
         acct_rows >= 1,
         "source account hub row written, got {acct_rows}"
     );
+
+    // The prefix row the writer computed in Rust is the one ClickHouse finds
+    // from the full hash — `reinterpretAsUInt64(substring(…, 1, 8))`, the
+    // readers' expression (task 0580).
+    let prefix: u64 = cl
+        .query(
+            "SELECT hash_prefix FROM transaction_hash_prefix_index \
+             WHERE ledger_sequence = ? \
+               AND hash_prefix = (SELECT reinterpretAsUInt64(substring(hash, 1, 8)) \
+                                  FROM transactions WHERE ledger_sequence = ? LIMIT 1) \
+             LIMIT 1",
+        )
+        .bind(E2E_LEDGER)
+        .bind(E2E_LEDGER)
+        .fetch_one()
+        .await
+        .expect("prefix row found by the SQL prefix of the transaction's hash");
+    assert_eq!(
+        prefix, 0x0807_0605_0403_0201,
+        "little-endian u64 of bytes 0..8"
+    );
+
+    // Task 0372: the operation tables are located by position — the
+    // transaction at position 1, its first operation at index 0.
+    let op_keys: Vec<(i16, i16)> = cl
+        .query(
+            "SELECT DISTINCT application_order, operation_index FROM transaction_operations \
+             WHERE ledger_sequence = ?",
+        )
+        .bind(E2E_LEDGER)
+        .fetch_all()
+        .await
+        .expect("read transaction_operations");
+    assert_eq!(op_keys, vec![(1, 0)]);
+    let amounts: u64 = cl
+        .query(
+            "SELECT count() FROM pool_operation_amounts \
+             WHERE ledger_sequence = ? AND application_order = 1 AND operation_index = 0",
+        )
+        .bind(E2E_LEDGER)
+        .fetch_one()
+        .await
+        .expect("count pool_operation_amounts");
+    assert!(amounts >= 1, "the deposit wrote pool_operation_amounts");
 
     // ---- replay: re-deliver the same S3 event (same ledger) ----
     persist_once(&cl).await;

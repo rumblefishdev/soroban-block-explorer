@@ -1,4 +1,4 @@
-//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{06,07}_*.sql`.
+//! Wire shapes for the accounts endpoints; the SQL behind them is in `accounts::queries`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -186,7 +186,7 @@ pub struct AccountBalanceChange {
     /// **`null` is not zero.** It means a NON-FUNGIBLE movement, where no
     /// amount exists by nature — the event carries a token id, not a value.
     /// The piece changed hands; rendering `0` would say it did not. See
-    /// `nft_delta`, and `nfts` / `nft_ownership` for which piece it was (this
+    /// `nft_delta`, and `nfts` / `nft_ownership_changes` for which piece it was (this
     /// field's source does not carry the token id).
     pub amount: Option<String>,
     /// Signed count of non-fungible pieces moved (`+1` received, `−1` sent);

@@ -1,5 +1,5 @@
-//! Staging for the value-flow tables (task 0540 / 0541): `asset_transfers`,
-//! `transaction_memos`, `soroban_event_ops`.
+//! Staging for the value-flow tables (task 0540): `asset_transfers`,
+//! `transaction_memos`.
 //!
 //! The parser has already decided *what* moved (`xdr_parser::extract_asset_transfers`:
 //! emitter gate, payload shapes, official identity). This module only turns
@@ -19,11 +19,11 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
-use xdr_parser::types::{ExtractedEvent, ExtractedOperation, ExtractedTransaction};
-use xdr_parser::{EventAsset, EventSource, ExtractedAssetTransfer, TokenEventKind};
+use xdr_parser::types::{ExtractedOperation, ExtractedTransaction};
+use xdr_parser::{EventAsset, ExtractedAssetTransfer, TokenEventKind};
 
 use super::ids;
-use super::rows::{AssetTransferRow, SorobanEventOpRow, TransactionMemoRow};
+use super::rows::{AssetTransferRow, TransactionMemoRow};
 use super::stage::event_asset_surrogate;
 use crate::SchemaError;
 
@@ -31,7 +31,6 @@ use crate::SchemaError;
 pub struct ValueFlowRows {
     pub transfers: Vec<AssetTransferRow>,
     pub memos: Vec<TransactionMemoRow>,
-    pub event_ops: Vec<SorobanEventOpRow>,
 }
 
 /// Per-transaction facts the edge rows borrow from the envelope.
@@ -45,7 +44,6 @@ pub fn build_value_flow_rows(
     ledger_sequence: i64,
     transactions: &[ExtractedTransaction],
     operations: &[(String, Vec<ExtractedOperation>)],
-    events: &[(String, Vec<ExtractedEvent>)],
     transfers: &[ExtractedAssetTransfer],
 ) -> Result<ValueFlowRows, SchemaError> {
     let mut out = ValueFlowRows::default();
@@ -116,8 +114,8 @@ pub fn build_value_flow_rows(
         let emitter_id = ids::contract_id(&t.emitter);
         let asset_id = event_asset_surrogate(&t.asset, Some(emitter_id)).ok_or_else(|| {
             SchemaError::Staging(format!(
-                "asset transfer without a resolvable asset (tx {}, event {})",
-                t.transaction_hash, t.event_index
+                "asset transfer without a resolvable asset (tx {}, op {}, event {})",
+                t.transaction_hash, t.op_index, t.event_pos_in_op
             ))
         })?;
 
@@ -126,7 +124,6 @@ pub fn build_value_flow_rows(
             application_order: tx.application_order,
             op_index: narrow(t.op_index, "op_index")?,
             event_pos_in_op: narrow(t.event_pos_in_op, "event_pos_in_op")?,
-            event_index: narrow(t.event_index, "event_index")?,
             asset_id,
             amount: t.amount,
             from_id,
@@ -137,27 +134,6 @@ pub fn build_value_flow_rows(
             to_muxed_id,
             verb: verb(t.kind).to_string(),
         });
-    }
-
-    for (hash, evs) in events {
-        let Some(tx) = tx_by_hash.get(hash.as_str()) else {
-            continue;
-        };
-        for ev in evs {
-            if ev.source == EventSource::Diagnostic {
-                continue;
-            }
-            let (Some(op_index), Some(pos)) = (ev.op_index, ev.event_pos_in_op) else {
-                continue; // tx-level: no operation, no row (0541)
-            };
-            out.event_ops.push(SorobanEventOpRow {
-                ledger_sequence,
-                application_order: tx.application_order,
-                event_index: narrow(ev.event_index, "event_index")?,
-                op_index: narrow(op_index, "op_index")?,
-                event_pos_in_op: narrow(pos, "event_pos_in_op")?,
-            });
-        }
     }
 
     Ok(out)
@@ -231,5 +207,4 @@ fn narrow(v: u32, what: &str) -> Result<i16, SchemaError> {
 }
 
 #[cfg(test)]
-#[path = "value_flow_tests.rs"]
 mod tests;

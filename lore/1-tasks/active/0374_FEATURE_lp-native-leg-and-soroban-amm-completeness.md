@@ -2033,6 +2033,65 @@ the pool on every run and its stale reserves stay visible.
   `pool_reserves_reconciliation` at ledger 64,454,699: **769 of 770 pools equal
   their own storage**; the one failure is `CAZ6W4WH…` (task 0325).
 
+### SAC legs keyed on the asset — shipped and repaired (2026-09-22)
+
+The first PR split out of #455: #474 (`fix/0374-sac-leg-rekey`). A soroban
+pool leg keys on the asset it is (`assets.id`), not on the SAC contract
+surrogate; the SAC → classic map loads on every ledger that registers a pool,
+live and under `--only`; one fn keys legs and contract-held balances; runbook
+`docs/runbooks/0374_lp_legs_sac_rekey_repair.md`.
+
+- **Deploy:** Compute from `develop` at `9a89d35c` (the #474 merge), which also
+  carried task 0381's `536dbcdb` and `c346117c`. Indexer Lambda updated
+  15:26:12 UTC, API 15:26:14; the index at the chain's tip afterwards, DLQ
+  empty.
+- **Repair A** (runbook step 3, operator): `mutation_1995468`, created
+  15:33:01, done, no failure. No registry backfill was running.
+- **Verified after the mutation**, reading `legs` directly:
+
+  |                                         | before (dry run) | after          |
+  | --------------------------------------- | ---------------- | -------------- |
+  | soroban legs keyed on a SAC, latest row | 1,454 of 1,553   | **0**          |
+  | same, every physical row (duplicates)   | —                | **0**          |
+  | soroban legs with no `assets` row       | 1,455            | **1**          |
+  | soroban pools carrying native XLM's id  | 0 of 770         | **260 of 770** |
+  | classic legs with no `assets` row       | —                | 0 of 107,056   |
+
+  The one unresolved leg is pool `8FE06922…`, the inert config-family pool
+  the runbook names.
+
+- **Still open, task 0571:** the live map keeps only facets with
+  `max(sac_deployed) = 1`, and 138 SACs are marked not deployed. The repair's
+  map has no such filter, so their legs are fixed now, but a new registration
+  naming one of them orphans its leg again until 0571's root is found. The same
+  gap keys 286 contract-held balance pairs on the SAC; that predates #474 and
+  is not this defect.
+- **Not closable yet:** the read side does not show soroban legs until the
+  read PRs of the split land; issue #405 stays open.
+
+### Pool as legs — PR 3 of the split (2026-09-23)
+
+PR #479 (`feat/0374-pool-legs`): the list and detail endpoints read `legs`,
+`filter[pool_kind]` replaces the four positional leg filters, a Soroban pool is
+addressed by its `C…` contract, and the frontend renders every leg with a
+kind chip row and badge.
+
+- **Measured before it:** 770 Soroban pools list on production as `XLM / XLM`
+  under a wrong `L…` id (positions 21,329 onward in the default order) — their
+  pair columns hold placeholders and develop's list has no kind filter.
+- **No data step:** `legs` is filled for every row (0 empty of 54,303; 11
+  Soroban pools with more than two legs).
+- **Found while rebuilding it:** a leg nothing identifies made
+  `assetLegLabel` throw outside any section boundary, which blanks the app.
+  One live pool has one (`CCH6A2JC…`, the inert pool whose leg has no `assets`
+  row). It now reads `Unregistered token`, one label shared with the
+  balance-change cell.
+- **DECIDED (karolkow, 2026-09-23): deploy PR 3 together with PR 4 and PR 5.**
+  Until those land a Soroban pool shows `—` for reserves, TVL and shares, and
+  the participant and activity sections show zeros that are not measurements.
+  The zeros are on production today as well, under the wrong pair, but the
+  kind filter would make them easy to reach.
+
 ## 2026-09-17 (karolkow) — can a Soroban pool delete a key we read? No deployed one can
 
 Spawned from task 0210's pool-removal fix: the classic extractor stored a
@@ -2075,3 +2134,479 @@ snapshots. The same question for the six Soroban-side extractors that skip
   four-function sweep contract and is still in the pool registry;
   `soroban_contracts` shows `f74d87d7…` for `CBENABXP…`, which runs `6fe099b6…`
   (task 0320's stale-hash symptom). Both under audit.
+
+## 2026-09-22 — joining or leaving a classic pool is not a pool operation
+
+Open, found in an audit of values we could derive instead of storing, looking
+up or omitting.
+
+- **`change_trust` on a pool share carries no pool id.** For
+  `ChangeTrustAsset::PoolShare` the parser writes only the variant name —
+  `{"type": "liquidityPool", "params": "LiquidityPoolConstantProduct"}`
+  (`crates/xdr-parser/src/operation.rs`, `format_change_trust_asset`). The
+  pool id is derivable from the parameters the operation carries: CAP-38
+  defines it as `SHA256(LiquidityPoolParameters)` (asset pair + fee), the same
+  identity `extract_liquidity_pools` already relies on. `operation_pools`
+  takes a pool id only from `liquidityPoolId` or `poolIds`
+  (`crates/db-clickhouse/src/persist/stage.rs`, `OpTyped::from_details`), so
+  opening or closing a pool-share trustline is missing from the pool's
+  activity, and the transaction detail shows a generic label instead of the
+  pool. Fix: derive the id in the parser, emit it as `liquidityPoolId`; history
+  needs a re-parse. Scale not measured — operation details are not in
+  ClickHouse.
+- **No oracle pins the derivation.** Nothing recomputes
+  `SHA256(LiquidityPoolParameters)` and compares it with the
+  `liquidity_pool_id` of a real `LiquidityPoolEntry`. A corpus test with no
+  network would pin the function the fix above adds.
+
+### One-legged activity rows are round trips, not lost data (2026-09-23)
+
+Found while reviewing PR 3 (#479): `PoolActivityItem.event` was documented as
+null only in an "unreachable" malformed case. Measured in the 100k ledgers to
+64,576,995: **350 of 6.09M** operations carry one leg only in
+`lp_operation_amounts`.
+
+- **Every one is a multi-pool path payment** (types 2 and 13, routes through
+  2–5 pools), and the stored leg is always positive — the asset ENTERED the
+  pool.
+- **Cause, verified on one transaction** (`0d22447e…`, strict receive through
+  5 pools): the route crosses pool `1746987b…` (EURC/yXLM) twice in a row, there
+  and back — hop 3 takes 415,847 yXLM and pays 37,745 EURC, hop 4 takes the same
+  37,745 EURC and pays 413,354 yXLM. EURC nets to exactly zero, and
+  `pool_fill_amounts` drops a leg that nets to zero (`stage.rs:185`); what is
+  left is +2,493 yXLM, the pool's take on the round trip.
+- **Not an indexer defect:** the row is the op's true net effect on the pool.
+- **Open for the activity PR (split PR 7):** such a row has `event = null` and
+  renders `—`. It is a trade in substance; whether to classify a round trip as
+  one (and how to show a leg that moved and came back) is a display decision.
+  PR 3 corrects the DTO comment to say the case is real and keeps the handling.
+
+### Pool as legs merged (2026-09-24)
+
+PR #479 merged (`3cebd913`), ten commits: the test moves and the base change, plus
+the SAC field dropped from legs, activity amounts and reserves keyed by leg,
+dead guards removed on both sides, a plain rewrite of the pool code filter
+(SQL byte-identical) and the unnamed-leg avatar fixed. **Not deployed — held
+for PR 4 and PR 5 (decision 2026-09-23).** Follow-ups recorded elsewhere: one
+display name from API to frontend (0546), rank pool results so `XLM` lists
+native pools first (0485), filter pools by asset identity (0470 stage 3,
+undecided), round-trip activity rows (this task, for PR 7).
+
+### PR 4 split into 4a–4d; 4a and 4b (2026-09-24)
+
+PR 4 lands as four PRs: 4a split the pool queries by topic, 4b order the list
+by activity, 4c Soroban reserves / shares / TVL, 4d Soroban chart.
+
+- **4a, #494 (`refactor/0374-split-pool-queries`):** `queries.rs` (1,928
+  lines) into one file per handler (`list_pools`, `get_pool`,
+  `get_pool_chart`, `list_participants`, `list_pool_activity`) plus the shared
+  `usd_analytics`. Pure move, SQL byte-identical. The naming rule it
+  prompted is now in `CLAUDE.md` (`6226e9a7`).
+- **4b (`fix/0374-pool-list-activity-order`, stacked on 4a):** the list orders
+  by `greatest(last_updated_ledger, max(pool_state_changes.ledger_sequence))`.
+  Measured on production: 699 of 770 Soroban pools are active later than
+  their row says (250 days on average, 801 at worst), and no Soroban pool
+  reached the first 5,000 rows of the full list; with the key 49 are in the
+  first 1,000 and 127 in the first 5,000. 310 were active in the last 7 days.
+- **Found while measuring 4b:** as one query the key cost 37–45M read_rows
+  and ~350 ms per page against 8–10M / ~180 ms before. ClickHouse
+  re-evaluates a `WITH` subquery at every reference and the list references
+  its page CTE six times, so the 5.1M-row aggregate ran six times; the #455
+  branch's "+3.5M" had measured one run. Decision (2026-09-24): two queries —
+  pick the page (5.1M rows / 30–60 ms), then enrich those pool ids (8–14M /
+  ~180 ms). Paging forward and back, the filters and the id lookup verified
+  on the local API against production.
+
+### 4b reworked: the activity key is stored, not derived per request (2026-09-24)
+
+Decision 90 A replaced the two-query list: `pool_activity` (table) and
+`pool_activity_mv` (refreshable MV, every 2 minutes, the `accounts_recent_mv`
+pattern) keep each Soroban pool's last reserve change; the list is one query
+again with `LEFT JOIN pool_activity`, ordered by
+`greatest(last_updated_ledger, last_activity_ledger)`.
+
+- **Plane filter added.** The MV keeps only `pool_state_changes` rows of the
+  plane the pool declares in `pool_instance_state`, as the schema requires:
+  a plane entry names its pool in an attacker-writable key. The first cut of
+  4b took the max over every row. No foreign row exists today (0 of 5.02M;
+  the order differed for 0 of 774 pools).
+- **DDL run on production by the operator, 2026-09-24 ~11:01 UTC**; first
+  refresh 11:02 UTC, 774 rows, latest activity 14 ledgers behind the tip, no
+  exception in `system.view_refreshes`. The MV's SELECT reads 5.0M rows in
+  ~0.1 s per refresh.
+- **Cost per list page** (local API against production, `query_log`):
+  7–15M rows, 170–490 ms — against 37–45M for the single query that derived
+  the key inline and 5.1M + 8–14M for the two-query version.
+- **Deploy order:** the API reads `pool_activity`, so the table must exist
+  before the API deploy — done.
+- **PR 3 is live after all.** The hold (decision 2026-09-23) was overtaken:
+  the production API Lambda was updated from `develop` 2026-09-24 09:33:49
+  UTC and the SPA redeployed at 11:01:57 UTC (its bundle carries
+  `pool_kind`). Between the two the pool list crashed on the old SPA — task 0582. Until 4b–4d and PR 5 ship, a Soroban pool on production shows `—` for
+  reserves, TVL and shares, zeros for participants and activity, and sits
+  deep in the default order (reachable through the kind filter).
+
+### 4c — Soroban reserves, shares and TVL (2026-09-24)
+
+Branch `feat/0374-soroban-pool-reserves`. Measured through the local API
+against production, all 770 Soroban pools:
+
+|                         | before 4c | after 4c                         |
+| ----------------------- | --------- | -------------------------------- |
+| legs with a reserve     | 0 / 1,553 | 1,549 (269 of them `0`)          |
+| pools with total shares | 0 / 770   | 705 (130 of them a measured `0`) |
+| pools with a TVL        | 0 / 770   | 527                              |
+
+- **Reserves** come from `pool_state_changes` on the plane the pool declares
+  (95 C: every reader carries the filter, with a comment saying why), scaled
+  only by decimals that are a fact. Unscalable: 4 legs of Soroban tokens with
+  no published metadata and 1 unknown asset. Verified against on-chain
+  `get_reserves` for 4 pools (constant, stable 3-leg, concentrated) — exact.
+- **Total shares** from `pool_instance_state`, scaled by the share token's
+  decimals (NULL when unpublished — 0 today). Decision 96 A: a stored 0 reads
+  `0` for a pair-factory pool or a pool whose every reserve is 0, else `null`.
+  Measured: 83 of 84 constant and 39 of 39 stable router pools with a 0 hold
+  nothing; two sampled on chain answer `get_total_shares() = 0`; the one
+  constant pool holding reserves (`CALL3ZZS…`) has no `get_total_shares`.
+- **Volume** on a Soroban detail is `null` instead of `$0.00` — nothing
+  records it, and an empty window used to read as a zero-volume day.
+- **Cost:** a 20-row Soroban list page reads 8.1M rows (4b shape 7.5M); the
+  reserve read is bounded by the oldest `pool_activity` ledger among the
+  page's Soroban pools (0.25M rows instead of 2.66M). Detail 0.6M rows /
+  ~130 ms.
+- **Tests:** the CH-gated list test now also pins the reserve plane filter
+  (red without it: the foreign row's `99999` / `0.0000001`) and the reserve
+  bound: a pool registered after its last change, and one the refresh has
+  not reached (red under the old activity-key bound, and under a bound that
+  skips a missing `pool_activity` entry).
+- **Known gap, accepted (review of the 4c follow-ups):** when a pool
+  declares a NEW plane, `pool_activity` still holds the old plane's maximum
+  until the next refresh. If the new plane's latest row sits below that
+  value, the pool's reserves read `null` for up to 2 minutes. Reasoned, not
+  reproduced: 0 of 813 pools in `pool_instance_state` have ever declared a
+  second plane (production, 2026-09-24). Empty, never wrong, so no code
+  change.
+- **Simplify pass (2026-09-24).** An asset's decimals are one `Option<u32>`
+  (`None` = not a fact) instead of a number plus a trust flag; a share
+  token's decimals come from the shared identity resolution, dropping a
+  per-request whole-table read of `soroban_contracts` and
+  `soroban_contract_metadata`.
+- **For 4d (decision 109 A):** the Soroban volume guard sits in the detail
+  handler, but the cause is `usd_analytics`, which reads "no snapshot rows"
+  as a zero-volume day and still runs the volume query for a Soroban pool.
+  Move the rule into `PoolPriceContext` when the chart needs it.
+- **Known limitation (decision 110 A):** the writer stores `total_shares = 0`
+  when the pool's key is absent, so the API infers from the pool type and
+  reserves whether a 0 was measured (96 A). The root fix (a nullable
+  column, an indexer change and a backfill) is not worth a task while the
+  rule covers every measured case; pools that keep their supply on the
+  share token would read 0 even then.
+
+### The plane filter guarded nothing since C′ — dropped from the API reads (2026-09-25)
+
+Decision 113 E. The review asked why the Soroban reads were so involved;
+the main cause was the declared-plane filter (95 C), and it is obsolete:
+
+- Before C′ reserve rows came from a plane's `[PoolData, pool]` entry, a key
+  any contract could publish under another pool's id. Since C′ (deployed
+  2026-09-16) every row is decoded from the pool's own instance, keyed on the
+  entry's owner (`pool_state.rs`, `stage.rs`), so a contract writes only under
+  its own id.
+- Production, 2026-09-25: 0 of 5,040,494 `pool_state_changes` rows come from
+  a plane the pool does not declare; 0 rows without a declaration; 0 of 775
+  pools with more than one plane.
+- The filter also hid a re-pointed pool's reserves until its next move (gap
+  104). The CH-gated test now pins that case (red with the filter restored:
+  `[None, None]`), replacing the foreign-row scenario C′ made impossible.
+- The `minIf` ledger bound went with it: the pool endpoints see 36 production
+  requests a day (`query_log`, 24 h), and the unbounded read costs 2.4M rows /
+  57 ms for a page of the busiest pools. A plain view (113 D) was measured and
+  dropped: its reason was to keep the filter in one place.
+- `pool_activity_mv` still filters in `init.sql` (DDL to change); task 0581
+  rebuilds that view and drops it there.
+
+**Other per-request rebuilds (114 A, sweep of `crates/api`):** the NFT list
+derives its sort key (mint ledger) from all of `nft_ownership` per page
+(23k rows today, cheap); contract list/detail count 7-day invocations per
+request (99.5M rows for the hottest contract). Neither is worth a task at
+current traffic. The one large background cost found on the way,
+`balance_aggregates_mv` at 45% of database CPU, is task 0583.
+
+### The 7-day "freshness window" is a leftover — removed from 4c, one left for PR 5 (2026-09-24)
+
+The PG design treated a pool with no snapshot in 7 days as stale and blanked
+its dynamic fields. The ClickHouse port (0243) dropped that for list and
+detail but kept it in the participants endpoint and in the frontend's
+`isPoolStale` caption. It no longer describes anything: a classic pool
+writes a snapshot on every change of its ledger entry (52,284 of 52,284
+pools have their latest snapshot at their last change), so an old snapshot
+is a quiet pool's CURRENT state. On 2026-09-24 the caption "no recent
+snapshot" sat under correct values on 29,284 of 53,554 classic pools (55%).
+
+- **Removed in 4c (decision 99 A):** `isPoolStale` and its caption; the DTO,
+  handler, table and module comments that still described the window.
+- **For PR 5:** `list_participants.rs` still reads `total_shares` only from a
+  snapshot inside `FRESHNESS_WINDOW_LEDGERS`, so a quiet pool's participants
+  lose their share percentage. Drop the window there too.
+
+### Soroban pools are half-indexed — the band-aid map and the new split (2026-09-25)
+
+A sweep of the pool read path and the rest of the API (two review agents,
+every finding read in code) traced most pool band-aids to one root: the
+indexer stores a Soroban pool's STATE but not its operations or holders,
+while the read path presents both kinds alike. Fundamentally the indexer
+should write the same four facts for every pool, classic or Soroban:
+
+| Fact                                     | Classic                            | Soroban today                                         | Band-aid it causes                                                           |
+| ---------------------------------------- | ---------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Registry (family, fee, legs)             | yes                                | family inferred from `pool_type_raw = ''`; fee frozen | family guessing in the zero-shares rule                                      |
+| State per ledger (reserves, shares)      | yes                                | reserves yes; shares `0` stored for "key absent"      | `Reserves` Pair/Raw; `zero_shares_is_measured`; concentrated shares read "—" |
+| Operations (swap/deposit/withdraw, amts) | `lp_operation_amounts`, volume col | none                                                  | volume guard in `handlers.rs`; activity and chart said "none"                |
+| Holders                                  | `lp_positions`                     | none (they are the share token's holders)             | participants said 0                                                          |
+
+**Volume was planned and lost in the split (decision 122 B).** Step C above
+(`soroban_pool_trades`, ~4.16M-row backfill, Δreserve check) and a
+read-time version (`0ff56188`, 2026-09-01, from `soroban_events`) existed;
+the PR 1–7 split of #455 carried neither. It returns as W1 below.
+
+**Interim honesty, in #496 (decision 123 A):** `participant_count` is
+`null` for a Soroban pool, and its chart, participants and activity
+sections say "Not indexed yet" instead of their empty states.
+
+**Remaining split (decision 126, supersedes the list under "PR 4 split"):**
+
+| PR  | Scope                                                                                              | Write/read |
+| --- | -------------------------------------------------------------------------------------------------- | ---------- |
+| 5   | Soroban participants = share-token holders from `balances`; drop the 7-day window                  | read       |
+| W1  | Stage Soroban pool operations (swap, deposit, withdraw) with amounts + backfill; per-ledger volume | write      |
+| W2  | moved to task 0590 (2026-09-28): `total_shares` into `pool_state_changes` as nullable history      | write      |
+| 4d  | Soroban chart: reserves + W1 volume; volume rule moves into `PoolPriceContext` (109 A)             | read       |
+| 7   | Soroban activity from W1                                                                           | read       |
+| 6   | Drop the pair columns (deployment window)                                                          | write      |
+
+W2 removes the zero-shares inference (110) and the family guess; W1 removes
+the volume guard (109). Classic/Soroban storage unification (ADR 0058) and
+the activity column (0581) stay where they are.
+
+**Outside the pools** (same sweep): guessed 7 decimals in account balances,
+balance changes and asset supply show wrong numbers today (USST 10^11 too
+large); task 0473 covers only the parser, not the rendering — decision 119
+moved to task 0584 (2026-09-28, decision 92 B). Merged accounts shown open: 0321. `resolves_on_asset_page`: 0542.
+Smaller defaults that render a plausible wrong value: task 0584 (127 A).
+The read-only user's refused `join_use_nulls`, behind most `nullIf` /
+`toNullable` tricks, is an infra setting left to the operator.
+
+### Raw pool amounts pulled out of #496 into their own PR (2026-09-25)
+
+Decision 135 A. #496 had grown to five topics; the last one, pool amounts
+served RAW with their `decimals` (the house contract of account balances
+and asset supply, client-side scaling, activity scaled per leg instead of a
+hard-coded 7), was added after review and changes the API contract. It is
+reverted on #496 (`7ab811a0` reverts `9e7be181`) and lands as its own PR
+after #496 merges: a branch from develop that reverts `7ab811a0`. Measured
+on the reverted commit: production code +206 / −186 — not shorter, but one
+amount convention and one scaler; and it fixes a latent bug for PR 7 (a
+trade rate between a 7- and an 18-decimal leg read 10^11 off). It must deploy
+API and SPA together.
+
+### Participants' share survives a quiet pool — the 7-day window dropped (2026-09-25)
+
+Branch `fix/0374-participants-share-window` (the "drop the 7-day window" half
+of PR 5). Measured on production before the change: 10,910 of 26,185 pools
+with providers (41.7%) had their latest snapshot older than 120,960 ledgers,
+so 11,580 of 40,532 positions read `share_percentage = null`. In 10,833 of
+those pools the providers' shares sum exactly to the snapshot's total and no
+position is newer than the snapshot — the old snapshot is the current state.
+The other 77 hold less than the total (providers missing from `lp_positions`,
+the K4-6 coverage gap); the snapshot is still the right denominator. On a
+real quiet pool (`93D002B5…`) the old query reads `null`, the new one 100%.
+CH-gated test `quiet_pool_participants_keep_their_share`: green, red with the
+window restored.
+
+### Soroban detail: two wire zeros removed (2026-09-25)
+
+Branch `fix/0374-soroban-detail-zeros`. `created_at_ledger` read `0` for every
+soroban pool — `min` over zero snapshot rows is `0`, so `ifNull` never fell
+back to the pool's row; `minOrNull` fixes it (production: `0` → 64,607,060 on
+a soroban pool, a classic pool unchanged at 50,457,493). `volume` /
+`fee_revenue` read `"0.00"` on a priceable soroban pool; they stay `null`
+until something records soroban trades (W1). Neither field is rendered by the
+page today. CH-gated test `detail_created_at_falls_back_without_a_snapshot`:
+green; red with plain `min` (left 0, right 60,059,011).
+
+### 26a — soroban native and classic leg reserves served (2026-09-25)
+
+Branch `feat/0374-soroban-classic-leg-reserves`. List and detail read each
+soroban pool's newest `pool_state_changes` row and scale the native and
+classic legs (7 decimals by protocol); a soroban-token leg stays `null` for
+26b. Leg order verified on chain first: 16/16 pools across router constant,
+stable (2 and 3 legs), concentrated, elastic, pair-factory and config-factory
+list their tokens in our `legs` order; 15/16 hold exactly our reserves, the
+16th traded after our row. Local API against production: 1,460/1,460 native
+and classic legs carry a reserve, TVL on 526 soroban pools (was 0), classic
+list unchanged. Cost: 3.66M rows / 55 ms for the 20 busiest pools.
+
+Measurement trap met on the way: a first count said 1,461 classic/native legs
+— a LEFT JOIN miss on `assets` filled `asset_type = 0`, turning a leg the
+dimension does not know into "native". The same default-on-miss trap as the
+0468 zeros.
+
+The KPI strip's "no recent snapshot" caption is gone with `isPoolStale`: an
+old classic snapshot is a quiet pool's current state (item 30) and a soroban
+pool has none, so every newly served soroban reserve would have carried it.
+
+**Review of 26a (2026-09-28).** Adversarial pass against production: 0 of
+775 pools whose newest reserve vector differs in length from `legs`, 0 with
+no state row, 0 with more than one plane; `pool_reserves_reconciliation` at
+ledger 64,659,134: 774 of 775 equal their own storage. The one failure is
+`CAZ6W4WH…`, whose code stopped being a pool at 54,515,539 and whose
+balances left at 63,767,534 — 26a would have turned its "—" into 26,351 PHO,
+13,194 USDC and a TVL. A rule "code replaced after the newest state row"
+was measured and rejected: it hits 155 pools, 154 of them correct. Decision
+60 C: `soroban_reserves::NOT_A_POOL` lists that one pool and serves it no
+reserve, until task 0325 writes the verdict at the code change. CH-gated
+test: green; red without the filter (left `26351.2715771`, `13194.8815702`).
+
+### 26c — soroban total shares served (2026-09-25)
+
+Branch `feat/0374-soroban-total-shares`, stacked on 26a. List and detail read
+`pool_instance_state.total_shares`, scaled by the share token's published
+decimals. Measured first on production, per family: constant 296 positive /
+86 empty 0 / 1 holding 0 (old code, no key); pair 232 / 3 / 0; stable 46 / 39
+/ 0; elastic 1 / 2 / 0; concentrated 0 / 0 / 48 (no share token); config
+0 / 3 / 17 (supply on the share token). Share-token decimals: 726/726
+published, all 7. Chain: 15/15 sampled values (positive and zero, four
+families) equal `get_total_shares` / `total_supply`. Rule: a positive total is
+scaled; `0` only for a pool whose every reserve is `0`; otherwise `null`.
+Local API against production: 575 positive, 133 `0`, 66 `null` — the
+measured split exactly; classic unchanged. CH-gated test
+`soroban_total_shares_follow_the_measured_rule`: green, red with the value
+taken from the snapshot as before.
+
+**Where total shares show (2026-09-28, decisions 77 A, 78 B).** A count of
+LP tokens in the pool's own unit says nothing on its own and compares with
+nothing across pools, yet it headlined the detail page's KPI strip and had a
+column in the list — while the detail page showed no TVL figure at all. The
+KPI strip's first cell is now TVL (the detail endpoint already returned it);
+the list's Total shares column is gone; the Summary card keeps the value.
+Shipped inside #514, which makes the value appear for soroban pools.
+
+### 26b — soroban-token legs scaled by their published decimals (2026-09-28)
+
+Branch `feat/0374-soroban-token-leg-reserves`, stacked on 26c (PR held until
+#511 merges — the stack is at its two-PR limit). Measured first: 100
+soroban-token legs in 68 pools (40 tokens); 96 publish `decimals` in
+`soroban_contract_metadata` (6, 7, 8, 9, 18), 4 publish none. Chain, 12
+pools with such legs across constant, stable, concentrated and pair: token
+order 12/12 equal to our legs; reserves 10/12 equal (2 traded after our
+row); published decimals 13/13 equal to the token's `decimals()`. The one
+sampled token without metadata answers `decimals() = 7` on chain — a
+metadata gap on our side, not a missing scale; its leg stays `null` rather
+than assume. Local API against production: 96/100 token legs carry a
+reserve, 770/775 soroban pools a reserve on every leg (was 705). TVL is
+unchanged for pools with a token leg: the list's pricing knows native and
+classic legs only. CH-gated reserves test extended (18-decimal token and an
+unpublished one): green, red with token legs unscaled.
+
+### Can classic and soroban pools share more tables? (2026-09-28)
+
+Owner asked whether plain views, or merging tables, could remove the per-kind
+split. Inventory on production:
+
+| Fact             | Classic                                                                                                   | Soroban                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| registry         | `liquidity_pools` (shared, 74k rows)                                                                      | same                                                                   |
+| state per ledger | `liquidity_pool_snapshots` (333M rows, 7.0 GiB; `Decimal(38,7)` pair + `total_shares` + `gross_volume_a`) | `pool_state_changes` (5.1M rows, 90 MiB; `Array(Int128)` + `plane_id`) |
+| current instance | —                                                                                                         | `pool_instance_state` (822 rows: plane, share token, total shares)     |
+| operations       | `pool_operation_amounts` (990M rows; net amount per op per asset, `Int64`)                                | none (W1)                                                              |
+| holders          | `lp_positions` (114k rows)                                                                                | share-token rows in `balances`                                         |
+
+- **A plain view over both state tables works.** `EXPLAIN ESTIMATE` of an
+  `argMax` over `liquidity_pool_snapshots UNION ALL pool_state_changes`
+  (classic pair turned into a raw `Int128` array) filtered on one pool reads
+  exactly the sum of the two direct seeks — 532,581 + 49,445 rows for a busy
+  classic pool, 321,304 + 123,099 for a busy soroban pool. The pool filter
+  reaches both branches, so nothing is scanned whole.
+- **A physical merge of the state tables is not worth it now.** It is a
+  333M-row rebuild, a classic writer change, and two columns without a soroban
+  counterpart (`gross_volume_a` belongs to operations; soroban total shares
+  have no history), for readers that the view already unifies.
+- **Operations can share a table.** W1 fits `pool_operation_amounts`'s key
+  (pool, ledger, application order, operation, asset) and its net-per-op
+  meaning; the blocker is `amount Int64`. 0 of 843,058 soroban trades since
+  ledger 64,000,000 overflow it, but an 18-decimal leg can (a reserve of
+  1.28e24 is live).
+- **Not mergeable:** `pool_instance_state` into `liquidity_pools` (different
+  writer and clock; a whole-row RMT would clobber the registry — decided
+  2026-08-27).
+
+Decisions (owner, 2026-09-28): **71 B** — no `pool_state` view (it would save
+a few lines and cost a production DDL, plus a per-branch band condition,
+since the classic ±10k ledger band would cut quiet soroban pools). **72 A** — W1 writes soroban
+pool operations into `pool_operation_amounts`, not a new
+`soroban_pool_trades`; the `amount Int64` width is decided when W1 starts
+(widening 990M rows is an operator mutation).
+
+**Total shares sit in the wrong soroban table (2026-09-28).** A classic
+snapshot row carries reserves and total shares together — both fields of one
+`LiquidityPoolEntry`. A soroban pool keeps reserves as history in
+`pool_state_changes` but total shares only as the current value in
+`pool_instance_state`, a one-row-per-pool table meant for the pool's
+relations (plane, share token). Yet for the pair and router families both
+come from the same instance write: newest state row and newest instance row
+share their ledger for 235 of 235 pair pools, 244 of 383 constant, 66 of 85
+stable, 40 of 49 concentrated, 3 of 3 elastic (the rest: instance rewrites
+that leave the reserves alone). Consequences: every read joins two tables;
+soroban total shares have no history; and the non-nullable column stores `0`
+for "no such key", which is why `served_total_shares` has to infer from the
+reserves (decision 110). The root fix is W2 reshaped: `total_shares
+Nullable(Int128)` on `pool_state_changes`, staged in the same pass as the
+reserves, history re-parsed, then dropped from `pool_instance_state`. After
+it the classic and soroban state rows have the same logical shape (pool,
+ledger, reserves, total shares), which is what a shared view or table needs.
+
+**One query for both kinds' reads — built and withdrawn (2026-09-28,
+decisions 65, 67, 86 → 96 A).** PR #526 moved the soroban reserves and stored
+total shares into the list and detail queries as LEFT JOINs beside the
+classic snapshot, and took the share token's scale through the shared token
+resolver instead of a join through `soroban_contracts` (a whole-table scan
+per request: 152,397 of 154,364 rows, filter on `id`, sort key
+`contract_id`). Responses were identical against production (775 of 775
+soroban pools). It was closed unmerged: the code did not get simpler (+176
+−154) — SQL fragments templated with `.replace` inside `format!`,
+soroban-only fields on every pool row, and five hops to scale one number.
+The complexity is the data model's (total shares apart from the reserves,
+`0` for a missing key: task 0590; guessed decimals in the resolver: task
+0584); the reads simplify once those land. Branch
+`refactor/0374-soroban-reserves-one-query` keeps the attempt.
+
+**Token decimals from the newest metadata row (2026-09-28, decision 87 A,
+#518).** `argMax(decimals, version)` skips a `NULL` argument, so a newest
+metadata version without `decimals` fell back to an older version's value
+instead of reading as unpublished; `fetch_token_decimals` reads
+`argMax(tuple(decimals), version).1`. No token on production differs today.
+The CH test that pins it stops merges on `soroban_contract_metadata` (#530):
+a background merge would leave only the newer row and let the old query
+pass. Red with plain `argMax`: the unpublished leg reads `Some("0.0000999")`.
+
+### Protocol name on a soroban pool (2026-09-28)
+
+Branch `feat/0374-soroban-pool-protocol-label`. Issue #405 names Aquarius and
+Soroswap, yet a soroban pool showed only a "Soroban" chip. `PoolItem.protocol`
+now names the protocol from the pool's `deployment_id` — the router or
+factory that registered it — only when the protocol's own publications claim
+that contract (the evidence rule of the earlier `protocol_labels.rs`,
+1e5b959b7, revived as `liquidity_pools/protocol_labels.rs`):
+
+| Protocol | Deployment              | Evidence (checked 2026-09-28)                    | Pools |
+| -------- | ----------------------- | ------------------------------------------------ | ----: |
+| Aquarius | router `CBQDHNBF…6QUK`  | docs.aqua.network, "prerequisites and basics"    |   355 |
+| Soroswap | factory `CA4HEQTL…7AW2` | `soroswap/core` `public/mainnet.contracts.json`  |   214 |
+| Phoenix  | factory `CB4SVAWJ…CKMI` | `phoenix-contracts` `scripts/upgrade_mainnet.sh` |    14 |
+
+The other 192 soroban pools (the second router that runs Aquarius's code with
+different admins, and eight dead routers and factories) read `protocol:
+null`. No database read: the surrogate is `ids::contract_id(address)`, pinned
+by a test against the production ids. Local API against production: 355 / 214
+/ 14 / 192 null of 775, exactly the measured split. The list row and the pool
+header show the name as a second chip beside "Soroban".

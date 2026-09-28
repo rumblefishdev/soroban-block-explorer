@@ -41,7 +41,7 @@ interface OperationCardProps {
    *  (protocol 21+: one InvokeHostFunction per transaction). */
   operationTree?: unknown;
   /** Tx-level `heavy.contract_events`; the card shows the ones whose
-   *  `op_index` points at this operation (D7). Absent index → tx-level
+   *  `operation_index` points at this operation (D7). Absent index → tx-level
    *  events section only. */
   contractEvents?: readonly XdrEventDto[];
   /** Tx-level `heavy.diagnostic_events` — the host-VM execution trace
@@ -122,7 +122,7 @@ export function OperationCard({
     isInvoke && traceNodes.length === 0
       ? parseOperationTree(operationTree)
       : [];
-  // op_index is the 0-based envelope position (CAP-67 V4 attribution);
+  // operation_index is the 0-based envelope position (CAP-67 V4 attribution);
   // responses parsed before the field landed simply match nothing.
   //
   // Suppressed when the execution trace is present: the trace already shows
@@ -133,7 +133,7 @@ export function OperationCard({
   const opEvents =
     heavy?.application_order != null && traceNodes.length === 0
       ? contractEvents.filter(
-          (event) => event.op_index === heavy.application_order - 1
+          (event) => event.operation_index === heavy.application_order - 1
         )
       : [];
   const detailCount = Object.keys(detailsObj(heavy) ?? {}).length;
@@ -271,9 +271,9 @@ export function OperationCard({
         {opEvents.length > 0 && (
           <Box sx={{ mt: 1.25 }}>
             <Overline mb={0.5}>Events · {opEvents.length}</Overline>
-            {opEvents.map((event) => (
+            {opEvents.map((event, index) => (
               <Stack
-                key={event.event_index}
+                key={event.id ?? index}
                 direction="row"
                 spacing={1}
                 alignItems="center"
