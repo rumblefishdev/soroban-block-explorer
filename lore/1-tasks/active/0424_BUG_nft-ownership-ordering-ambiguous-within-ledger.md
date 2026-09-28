@@ -99,9 +99,10 @@ contracts, from ledger 51,827,994. No storage gain — the step is what lets
   in every protocol (only transaction-level events without a stage lack one).
 - `consecutive_mint` expands one event into many rows with one id — the key
   keeps `token_id`.
-- Readers: the transfers tab keys `(ledger_sequence, event_order)` and its
-  `LIMIT 1 BY` collapses distinct same-ledger rows (every token counts from
-  0); `accounts/balance_changes.rs` joins on `transaction_id` and infers the
+- Readers: the transfers tab keys `(ledger_sequence, event_order)` —
+  **corrected 2026-09-28:** it reads ONE token, whose counter is distinct
+  within a ledger, so its `LIMIT 1 BY` does not collapse distinct rows (the
+  first map said it did); `accounts/balance_changes.rs` joins on `transaction_id` and infers the
   moved pieces from the owner timeline; `event_order` is on the wire
   (`NftTransferItem`) and in the frontend row key.
 - Promotion `_pending` → live is `INSERT … SELECT *`
@@ -192,6 +193,28 @@ work:
   have collapsed and shown in `only_old`). Tests: routing by verdict, position
   from the row, one `consecutive_mint` under one id, bad stored JSON is an
   error, the multiset difference.
+- **PR 2 opened** (2026-09-28):
+  [#525](https://github.com/rumblefishdev/soroban-block-explorer/pull/525),
+  draft, stacked on #523.
+- **PR 3 (readers)** — branch `feat/0424-nft-ownership-changes-readers`,
+  local, stacked on #523: `87d8f1ce` — transfers tab on
+  `nft_ownership_changes` (keyset and `LIMIT 1 BY` on the location,
+  `transactions` joined on the position); `NftTransferItem` carries
+  `application_order` / `operation_index` / `event_index` in place of
+  `event_order` (294 A), the cursor the same (an old cursor fails to decode →
+  400); mint ledger on `/nfts` and the detail from the new table (0497's
+  reader); `balance_changes` names pieces by `(ledger_sequence,
+application_order)` — `TxKey.transaction_id` and the account page's
+  `t.id` read are gone; the SPA keys transfer rows by the location; API types
+  regenerated. New smoke `same_ledger_changes_come_in_chain_order` (newest
+  first by location, each `from_account` the previous change's owner).
+  `041b2d2f` — canonical SQL 15–17, FINAL table, deployment step 2 (after the
+  fill's gate, with the SPA). Checks: clippy clean; `api` 675 tests pass;
+  NFT smokes on a local ClickHouse seeded with one token changed twice in one
+  ledger (they skip on an empty one): 5 pass, the new one ran; web 397 tests,
+  typecheck, lint clean. Not exercised: `resolve_moved_pieces` against data
+  (runs only on a page with an NFT movement) — the new tables do not exist
+  on production yet.
 
 ## Implementation
 
