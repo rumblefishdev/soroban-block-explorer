@@ -29,7 +29,7 @@
 //! ≈ 3 100 `INSERT` statements over the entire 11 M-ledger backfill
 //! (plus one `ledgers` INSERT per partition as the commit marker).
 //! Well within the merger's comfort zone. The two new pending tables
-//! (`nfts_pending`, `nft_ownership_pending`, task 0217 / 0220) only
+//! (`nfts_pending`, `nft_ownership_changes_pending`, task 0217 / 0220) only
 //! open when the partition contains at least one `Other`-classified
 //! NFT-candidate contract, so partitions with full classifier coverage
 //! still see exactly the 16 prior inserts.
@@ -105,15 +105,13 @@ struct TableInserts {
     assets: Option<Insert<AssetRow>>,
     asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
-    nft_ownership: Option<Insert<NftOwnershipRow>>,
     /// Task 0217 / 0220 — quarantine inserts. Lazy-opened only when the
     /// `stage::prepare` routing actually produces pending rows for the
     /// partition (any contract still classified `Other` / NULL at the
     /// time of staging). Empty `Other`-free partitions never open the
     /// HTTP request, keeping the part economy unchanged from PR #180.
     nfts_pending: Option<Insert<NftPendingRow>>,
-    nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
-    /// Task 0424 — written beside `nft_ownership{,_pending}` until the readers move.
+    /// Task 0424 — ownership changes located by their event.
     nft_ownership_changes: Option<Insert<NftOwnershipChangeRow>>,
     nft_ownership_changes_pending: Option<Insert<NftOwnershipChangeRow>>,
     /// Unified per-holder balances — ALL asset types (task 0331 Option A). The
@@ -283,9 +281,7 @@ impl PartitionWriter {
             asset_rows,
             asset_sac_rows,
             nft_rows,
-            nft_ownership_rows,
             nft_pending_rows,
-            nft_ownership_pending_rows,
             nft_ownership_change_rows,
             nft_ownership_change_pending_rows,
             unified_balance_rows,
@@ -444,13 +440,6 @@ impl PartitionWriter {
         .await?;
         write_rows(&self.client, &mut self.inserts.nfts, "nfts", &nft_rows).await?;
 
-        write_rows(
-            &self.client,
-            &mut self.inserts.nft_ownership,
-            "nft_ownership",
-            &nft_ownership_rows,
-        )
-        .await?;
         // Task 0217 / 0220 — quarantine inserts. Slot stays `None` (and
         // the HTTP request never opens) on partitions where every
         // NFT-candidate contract has a definitive `Nft` verdict.
@@ -459,13 +448,6 @@ impl PartitionWriter {
             &mut self.inserts.nfts_pending,
             "nfts_pending",
             &nft_pending_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.nft_ownership_pending,
-            "nft_ownership_pending",
-            &nft_ownership_pending_rows,
         )
         .await?;
         write_rows(
@@ -563,9 +545,7 @@ impl PartitionWriter {
             assets,
             asset_sac,
             nfts,
-            nft_ownership,
             nfts_pending,
-            nft_ownership_pending,
             nft_ownership_changes,
             nft_ownership_changes_pending,
             unified_balances,
@@ -595,7 +575,6 @@ impl PartitionWriter {
         end(assets).await?;
         end(asset_sac).await?;
         end(nfts).await?;
-        end(nft_ownership).await?;
         // Task 0217 / 0220 — drain quarantine inserts in the same
         // pre-`ledgers` step. They share the commit-marker guarantee:
         // a partial commit that fails between any of these and the
@@ -603,7 +582,6 @@ impl PartitionWriter {
         // partition, so the resume path re-does it cleanly. RMT
         // dedupes the orphan rows on the next merge.
         end(nfts_pending).await?;
-        end(nft_ownership_pending).await?;
         end(nft_ownership_changes).await?;
         end(nft_ownership_changes_pending).await?;
         end(unified_balances).await?;

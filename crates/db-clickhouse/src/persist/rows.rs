@@ -19,7 +19,7 @@
 //!
 //! `assets`, `nfts`, `liquidity_pools`, `lp_positions`,
 //! `liquidity_pool_snapshots`, `transaction_operations`,
-//! `transaction_participants`, `nft_ownership` — composite ORDER BY
+//! `transaction_participants`, `nft_ownership_changes` — composite ORDER BY
 //! over already-cheap-shape columns (FixedString(32) hashes,
 //! low-cardinality codes, Int64 FK references).
 //!
@@ -244,7 +244,7 @@ pub struct BalanceRow {
 
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
 /// = (contract_id, token_id). No surrogate id. No mint ledger: the mint is
-/// the `nft_ownership` row with `event_type = 0`, and a copy here was
+/// the `nft_ownership_changes` row with `event_type = 0`, and a copy here was
 /// replaced by every later transfer (task 0497).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct NftRow {
@@ -591,38 +591,11 @@ pub struct SorobanEventRow {
     pub data_xdr: String,
 }
 
-/// `nft_ownership` — fact, no surrogate. ORDER BY
-/// (contract_id, token_id, ledger_sequence, event_order).
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct NftOwnershipRow {
-    pub contract_id: i64,
-    pub token_id: String,
-    pub ledger_sequence: i64,
-    pub event_order: i16,
-    pub transaction_id: i64,
-    pub owner_id: Option<i64>,
-    pub event_type: i16,
-}
-
-/// `nft_ownership_pending` — task 0217 quarantine companion to
-/// [`NftOwnershipRow`]. Same row shape + same partitioning as the hot
-/// `nft_ownership` table so promotion (`INSERT … SELECT FROM
-/// nft_ownership_pending`) is a clean part copy. Routed by the same
-/// per-contract classifier verdict as [`NftPendingRow`].
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct NftOwnershipPendingRow {
-    pub contract_id: i64,
-    pub token_id: String,
-    pub ledger_sequence: i64,
-    pub event_order: i16,
-    pub transaction_id: i64,
-    pub owner_id: Option<i64>,
-    pub event_type: i16,
-}
-
-/// `nft_ownership_changes` and its `_pending` quarantine (one shape) — fact,
-/// one change of owner of one token, located by its source event's
-/// stellar-rpc id (task 0424, ADR 0059). Column order matches `init.sql`.
+/// `nft_ownership_changes` and its `_pending` quarantine (one shape, so
+/// promotion is `INSERT … SELECT *`) — fact, one change of owner of one
+/// token, located by its source event's stellar-rpc id (task 0424, ADR
+/// 0059). Routed by the same per-contract classifier verdict as
+/// [`NftPendingRow`]. Column order matches `init.sql`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
 pub struct NftOwnershipChangeRow {
     pub contract_id: i64,

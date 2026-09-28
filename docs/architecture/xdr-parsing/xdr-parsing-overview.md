@@ -239,7 +239,7 @@ From `SorobanTransactionMeta.events`, the ingest path extracts one
 Full decoded event detail (`eventType` as `SMALLINT`, `topics` as decoded
 `ScVal[]`, `data` as decoded `ScVal`) is **not** stored. Known NFT-related
 event patterns are still interpreted at ingest into derived state updates on
-`nfts` / `nft_ownership` / `assets` (classification happens by looking at the
+`nfts` / `nft_ownership_changes` / `assets` (classification happens by looking at the
 events without persisting them).
 
 At read time, `xdr_parser::extract_events` re-expands the decoded payload from
@@ -459,7 +459,7 @@ per [ADR 0033](../../../lore/2-adrs/0033_soroban-events-appearances-read-time-de
 - at read time, E14 re-parses the archive via `xdr_parser::extract_events` and
   renders decoded `ScVal` topics / data per event
 - known NFT / SEP-41 patterns are still interpreted at ingest to drive
-  `assets` / `nfts` / `nft_ownership` upserts, but the triggering events
+  `assets` / `nfts` / `nft_ownership_changes` upserts, but the triggering events
   themselves are not retained as rows
 
 #### V3 vs V4 meta dispatch (Protocol 22 ↔ Protocol 23+)
@@ -633,7 +633,7 @@ dropped with a `tracing::warn!` tripwire (not silently), so unhandled future sha
 surface instead of vanishing. The parser is deliberately permissive here; the
 authoritative NFT-vs-fungible-vs-other decision is the downstream WASM-spec classifier
 (`soroban_contracts.contract_type`): only `Nft`-classified contracts' rows reach the hot
-`nfts`/`nft_ownership` tables, `Fungible`/`Token` are dropped, and `Other`/`NULL` wait in
+`nfts`/`nft_ownership_changes` tables, `Fungible`/`Token` are dropped, and `Other`/`NULL` wait in
 the `nfts_pending` quarantine until a later WASM observation reclassifies them. A
 parse-time false-positive (a non-NFT emitting a `token_id`-keyed map) is therefore
 contained in quarantine and never reaches the hot tables. (See lore task 0296 for the
@@ -811,7 +811,7 @@ Typed summary columns / structured artifacts retained for normal explorer reads:
   indexes only (per §4.4 / §4.5)
 - `soroban_contracts`, `wasm_interface_metadata` — with surrogate PK, BYTEA
   wasm_hash, SMALLINT contract_type, JSONB metadata
-- derived explorer entities: `accounts`, `assets`, `nfts`, `nft_ownership`,
+- derived explorer entities: `accounts`, `assets`, `nfts`, `nft_ownership_changes`,
   `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions`,
   `account_balances_current` (the previously-planned
   `account_balance_history` was dropped per

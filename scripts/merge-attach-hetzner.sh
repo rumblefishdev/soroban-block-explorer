@@ -173,8 +173,6 @@ PARTITIONED_TABLES=(
   soroban_events
   contract_activity
   liquidity_pool_snapshots
-  nft_ownership
-  nft_ownership_pending
   nft_ownership_changes
   nft_ownership_changes_pending
 )

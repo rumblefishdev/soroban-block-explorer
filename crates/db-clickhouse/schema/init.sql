@@ -32,7 +32,7 @@
 --
 -- Other tables (`assets`, `nfts`, `liquidity_pools`,
 -- `liquidity_pool_snapshots`, `transaction_operations`,
--- `transaction_participants`, `nft_ownership`, `lp_positions`,
+-- `transaction_participants`, `nft_ownership_changes`, `lp_positions`,
 -- `account_balances_current`, `wasm_interface_metadata`,
 -- `ledgers`, `transaction_hash_prefix_index`) keep their natural / composite
 -- primary keys — no surrogate `id`. Composite (StrKey-or-hash, …)
@@ -225,7 +225,7 @@ FROM accounts FINAL;
 -- NAMING TRAP (task 0398) — `contract_id` means two different things:
 --   * HERE (and in `soroban_contract_metadata`) it is a `String`: the real
 --     `C…` StrKey.
---   * EVERYWHERE ELSE (`assets`, `nfts`, `nft_ownership`, `soroban_events`,
+--   * EVERYWHERE ELSE (`assets`, `nfts`, `nft_ownership_changes`, `soroban_events`,
 --     `transaction_operations`, …) it is an `Int64`: the cityhash64 surrogate
 --     OF that StrKey, i.e. the value stored in `soroban_contracts.id`.
 -- So a foreign key named `contract_id` joins `soroban_contracts.id`, NEVER
@@ -893,12 +893,9 @@ ORDER BY (pool_id, account_id);
 -- Append-only fact tables (ReplacingMergeTree, partitioned)
 ----------------------------------------------------------------------
 
--- transactions: surrogate `id Int64` for cheap FK joins from
--- nft_ownership (`soroban_events`, `contract_activity`,
--- `transaction_participants`, `operation_asset_appearances`,
--- `transaction_operations`, `pool_operation_amounts` join by
--- `(ledger_sequence, application_order)`). Legacy: new tables join on the
--- position, never on `id` (ADR 0059, task 0538). ORDER BY
+-- transactions: surrogate `id Int64`, legacy — no table references it since
+-- task 0424 retired `nft_ownership`, the last one; every table joins by
+-- `(ledger_sequence, application_order)` (ADR 0059, task 0538). ORDER BY
 -- (ledger_sequence, application_order) for time-series scans.
 CREATE TABLE IF NOT EXISTS transactions (
     id                Int64,
@@ -1263,48 +1260,14 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, application_order);
 
-CREATE TABLE IF NOT EXISTS nft_ownership (
-    contract_id      Int64,
-    token_id         String,
-    ledger_sequence  Int64,
-    event_order      Int16,
-    transaction_id   Int64,
-    owner_id         Nullable(Int64),
-    event_type       Int16
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (contract_id, token_id, ledger_sequence, event_order);
-
--- Task 0217 — quarantine companion to `nft_ownership`. Same row shape +
--- partitioning so promotion (`INSERT … SELECT FROM nft_ownership_pending`)
--- copies parts cleanly. API endpoints never read this table.
-CREATE TABLE IF NOT EXISTS nft_ownership_pending (
-    contract_id      Int64,
-    token_id         String,
-    ledger_sequence  Int64,
-    event_order      Int16,
-    transaction_id   Int64,
-    owner_id         Nullable(Int64),
-    event_type       Int16
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (contract_id, token_id, ledger_sequence, event_order);
-
--- nft_ownership_changes: replaces `nft_ownership` (task 0424, epic 0538 step
--- 4), which is dropped once the readers move here (a parallel change,
--- `docs/deployment.md`). One row per change of owner of one token — mint,
--- transfer, burn — located by its source event's stellar-rpc id (ADR 0059):
--- the transaction position, the operation and the event within it. One
--- `consecutive_mint` event mints many tokens under one id, so `token_id` stays
--- in the key. Replaces `event_order`, a per-token counter that restarted at 0
+-- nft_ownership_changes: replaced `nft_ownership` (task 0424, epic 0538 step
+-- 4). One row per change of owner of one token — mint, transfer, burn —
+-- located by its source event's stellar-rpc id (ADR 0059): the transaction
+-- position, the operation and the event within it. One `consecutive_mint`
+-- event mints many tokens under one id, so `token_id` stays in the key. The
+-- old table ordered by `event_order`, a per-token counter that restarted at 0
 -- for every token in every ledger, so same-ledger rows had no order and bulk
 -- moves shared one value. No `transaction_id` surrogate.
---
--- PROD: created by hand BEFORE the indexer that writes it deploys — the driver
--- validates the row struct against `DESCRIBE`, and a missing table fails every
--- insert client-side (task 0310).
 CREATE TABLE IF NOT EXISTS nft_ownership_changes (
     contract_id        Int64,
     token_id           String,
