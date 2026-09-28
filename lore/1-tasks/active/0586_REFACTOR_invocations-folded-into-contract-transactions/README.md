@@ -185,6 +185,27 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   per-list guards go. The rename of the "appearances" names rides its own
   PR before task 0487 (thread 274 A).
 
+- **#515, #516 merged** (2026-09-28); the rename landed as
+  [#516](https://github.com/rumblefishdev/soroban-block-explorer/pull/516).
+
+- **PR 3 (stop the old writes)** — branch `feat/0586-stop-old-contract-writes`,
+  local: `311d9435` — the writer, staging and `init.sql` drop
+  `soroban_invocations_appearances` and `contract_transactions`; the fold keys
+  its rows by position straight from the ledger's own order
+  (`app_order_by_hash`), so staging maps no surrogate; allowlist without the
+  invocations table; `contract_activity` in `scripts/merge-*.sh`. `2a6b24d8` —
+  schema overview §4.5.6 rewritten for `contract_activity` alone, pilot,
+  pipeline, README, backfills ("not repeatable after step 3"), deployment
+  step 3 with the drops, crash-recovery and cutover runbooks, backups.
+  Checks: workspace clippy clean; `db-clickhouse` all tests pass on the local
+  ClickHouse 26.3 (smoke and the events e2e write `contract_activity`);
+  indexer, backfill-runner, xdr-parser, domain 645 tests pass. PR only after
+  the step-2 deploy is verified in `query_log`.
+- **prices-api check** (2026-09-28, read-only, `system.query_log`, 14 days):
+  no `prices_*` user read either table. Readers were `api_reader` (last
+  2026-09-26, before the step-2 deploy), `dev_read` / `dev_shared` (this
+  task's checks), `default` (3, 2026-09-21) and `ingestion_writer` (writes).
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared
