@@ -495,9 +495,22 @@ run_one() {
         check 3 "mirrored asset" "$(stmt "$FILE" 3 "" "" "$ctr_id")"
         ;;
 
-    12|13|14)
+    13)
+        # $1=contract_id (Int64 surrogate, task 0586), $2=limit,
+        # $3=cursor_ledger, $4=cursor_app_order.
+        local ctr
+        if [[ "$SYNTAX_ONLY" == "1" ]]; then
+            ctr="1"
+        else
+            ctr=$(ch_oneshot "SELECT id FROM soroban_contracts FINAL ORDER BY id DESC LIMIT 1")
+            require_value "$ctr" "soroban_contracts" || return 2
+            echo "  contract id = $ctr"
+        fi
+        run_all_stmts "$FILE" "$ctr" "50" "NULL" "NULL"
+        ;;
+
+    12|14)
         # 12: $1=contract_strkey.
-        # 13: $1=contract_strkey, $2=limit, $3=cursor_ledger, $4=cursor_tx_id.
         # 14: $1=contract_strkey, $2=limit, $3..$6=cursor (ledger,
         #     transaction_index, operation_index, event_index).
         local strkey

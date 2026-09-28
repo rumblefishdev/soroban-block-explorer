@@ -248,3 +248,10 @@ A /devils-advocate pass returned "ship with changes". Applied in this PR:
 Deferred to **0587**: a separate small CI job (empty tables, and no Rust
 build for a SQL-only change) and a second pass with typed cursor values for
 the files that take a cursor.
+
+**First catch (2026-09-28).** After develop was merged in, CI went red on
+`13`: task 0586 had changed its `$1` from the contract StrKey to the Int64
+surrogate id (`contract_activity.contract_id`), while the runner still fed
+the shared `12|13|14` arm a `'CAAA'` string — `Cannot convert string 'CAAA'
+to type Int64`. `13` now has its own arm with an Int64 id; 68 of 68 checks
+pass locally (the count grew by one with 0586's extra statement).
