@@ -80,9 +80,7 @@ pub struct AssetRow {
     /// On-chain SEP-41 token symbol from `soroban_contract_metadata` (task 0297);
     /// `None` for classic/native.
     pub symbol: Option<String>,
-    /// Display decimals — 7 for native and classic (Stellar precision), a
-    /// Soroban token's on-chain metadata; `None` when it publishes none we
-    /// could read.
+    /// Display decimals ([`known_decimals`]); `None` when not a fact.
     pub decimals: Option<u32>,
     pub total_supply: Option<String>,
     pub holder_count: Option<i32>,
@@ -557,8 +555,7 @@ async fn hydrate_assets(
 /// Assemble one [`AssetListChRow`] from its `assets`-side header and the
 /// `soroban_contracts` context map (task 0364 2c). Replicates the pre-2c SQL
 /// projection exactly: `name = coalesce(ae.name, metadata.name, native-default)`,
-/// `decimals` = 7 for native/classic, else the metadata's (`None` when absent —
-/// never a guessed 7), `deployed_at_ledger` prefers the
+/// `decimals` per [`known_decimals`], `deployed_at_ledger` prefers the
 /// own contract then the SAC-wrapper (both `nullIf 0`), StrKey / symbol are
 /// non-empty-or-`None`.
 fn assemble_asset_row(h: AssetHydrateRow, ctx: &HashMap<i64, SorobanCtxRow>) -> AssetListChRow {

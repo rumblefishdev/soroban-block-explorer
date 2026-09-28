@@ -81,7 +81,10 @@ pub(crate) struct ResolvedAsset {
 /// publishes none — a guessed 7 renders an 18-decimal amount 10^11 too large
 /// while still reading as a number. `family` is `None` when no `assets` row
 /// resolved: an unmatched join's default 0 would otherwise claim native.
-/// The one place this rule lives; every reader of `decimals` goes through it.
+/// The one place this rule lives for account balances, balance changes and
+/// asset supply. The pool reads (`liquidity_pools`) keep their own: token legs
+/// scale by the published value (a junk one overflows `scale_raw` to `None`),
+/// and the share-token read moves to the state table in task 0590.
 ///
 /// A published value above 38 is not a scale either: an `i128` amount has at
 /// most 39 digits, and two live contracts publish 43,224 (production,
