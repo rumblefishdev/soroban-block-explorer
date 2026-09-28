@@ -294,6 +294,10 @@ event_index)` equals `nfts.current_owner_id` for **all 14,187** (and the
   arises between two writes of one ledger, which carry the same rows.
   Measurement trap: `argMax(owner_id, …)` skips a NULL owner (burn) and
   reported 828 false mismatches — use `argMax(tuple(owner_id), …).1`.
+- **Decided (karolkow, 2026-09-28, thread 328): skip** the `nfts` tie fix
+  and its regression test — the measurement shows no wrong owner, and the
+  fold that keeps it right is staging's last-wins over the ledger's own
+  event order. Dropped for good, not deferred.
 
 ## Implementation
 
@@ -368,11 +372,16 @@ if so, promote it as the convention instead of spreading in-process dedup.
 
 ## Acceptance Criteria
 
-- [ ] Ownership events carry a total, chain-derived order within a ledger
-- [ ] `nfts` RMT version breaks same-ledger ties deterministically
-- [ ] Re-ingested range: the 88 at-risk tokens resolve to a stable current owner
-      across repeated merges
-- [ ] Regression test covers both emission orders in a single ledger
+- [x] Ownership events carry a total, chain-derived order within a ledger
+      (`nft_ownership_changes`, deployed and filled 2026-09-28)
+- [ ] ~~`nfts` RMT version breaks same-ledger ties deterministically~~ —
+      skipped (thread 328): measured 14,187 / 14,187 owners correct; no tie
+      can differ, staging folds a ledger last-wins in chain order
+- [x] Re-ingested range: the at-risk tokens resolve to a stable current owner
+      — 70 tokens with several changes in their last ledger, all equal to the
+      chain's last; 0 version ties with different owners in `nfts`
+- [ ] ~~Regression test covers both emission orders in a single ledger~~ —
+      skipped with the fix (thread 328)
 - [ ] 0415's consistency checks re-run against the corrected ordering (the earlier
       "transfer before mint" signal must be re-evaluated, not carried over)
 - [ ] Every ledger-only-versioned RMT table audited and classified
