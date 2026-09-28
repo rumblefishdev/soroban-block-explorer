@@ -90,7 +90,12 @@ pub struct NftTransferItem {
     /// New owner G-StrKey. `null` on burn.
     pub to_account: Option<String>,
     pub created_at: DateTime<Utc>,
-    pub event_order: i16,
+    /// Where the change happened — its source event's location (task 0424,
+    /// ADR 0059): the transaction's position in the ledger, the operation
+    /// within it, the event within the operation.
+    pub application_order: i16,
+    pub operation_index: u16,
+    pub event_index: u32,
 }
 
 /// Cursor payload for `GET /v1/nfts`. Replaces the old `NftIdCursor{id}`
@@ -112,13 +117,14 @@ pub struct NftListCursor {
     pub token_id: String,
 }
 
-/// Cursor payload for `GET /v1/nfts/:id/transfers`. The natural keyset
-/// is the `nft_ownership` PK `(nft_id, created_at, ledger_sequence,
-/// event_order)`; `nft_id` is a path parameter so only the trailing
-/// three components live in the cursor.
+/// Cursor payload for `GET /v1/nfts/:id/transfers`: the keyset of
+/// `nft_ownership_changes` after its `(contract_id, token_id)` prefix, which
+/// the path carries (task 0424). A cursor minted before it (`event_order`)
+/// fails to decode → 400 `invalid_cursor`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NftTransferCursor {
-    pub created_at: DateTime<Utc>,
     pub ledger_sequence: i64,
-    pub event_order: i16,
+    pub application_order: i16,
+    pub operation_index: u16,
+    pub event_index: u32,
 }

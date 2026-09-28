@@ -40,7 +40,7 @@
 //! our data — so it is carried as [`BalanceChange::nft_delta`] (signed count of
 //! pieces, `+` received / `−` sent) with `amount = None`, and must never render
 //! as `0`. The piece's own identity is NOT in this table; `nfts` /
-//! `nft_ownership` are the source for "which piece".
+//! `nft_ownership_changes` are the source for "which piece".
 //!
 //! An empty list, by contrast, is always a measurement: this account's
 //! balances did not change. That holds because `asset_transfers` covers every
@@ -94,14 +94,13 @@ pub struct BalanceChange {
     pub token_id: Option<String>,
 }
 
-/// One page transaction, by the three ids this read needs: the pair that seeks
-/// `asset_transfers` and the transaction id that names a non-fungible piece in
-/// `nft_ownership`. The caller holds all three after its own step 2.
+/// One page transaction, by its position — the pair that seeks both
+/// `asset_transfers` and `nft_ownership_changes` (task 0424). The caller holds
+/// it after its own step 2.
 #[derive(Debug, Clone, Copy)]
 pub struct TxKey {
     pub ledger_sequence: i64,
     pub application_order: i16,
-    pub transaction_id: i64,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -116,7 +115,7 @@ struct DeltaChRow {
     delta: Option<String>,
     nft_delta: i64,
     /// The new owner of the piece(s) this row covers — the edge's `to_id`, and
-    /// the key that names them in `nft_ownership`. `None` for a burn (no new
+    /// the key that names them in `nft_ownership_changes`. `None` for a burn (no new
     /// owner) and for every fungible row.
     nft_owner: Option<i64>,
 }
@@ -171,21 +170,10 @@ pub async fn fetch_balance_changes(
     // Which PIECE moved. Only asked when the page actually carries a
     // non-fungible entry — one row in 2 256 264 on production today — so this
     // statement usually does not run at all.
-    let tx_by_pair: HashMap<(i64, i16), i64> = if delta_rows.iter().any(|r| r.nft_delta != 0) {
-        keys.iter()
-            .map(|k| ((k.ledger_sequence, k.application_order), k.transaction_id))
-            .collect()
-    } else {
-        HashMap::new()
-    };
-    let nft_lookups: BTreeSet<(i64, i64)> = delta_rows
+    let nft_lookups: BTreeSet<(i64, i64, i16)> = delta_rows
         .iter()
         .filter(|r| r.nft_delta != 0)
-        .filter_map(|r| {
-            tx_by_pair
-                .get(&(r.ledger_sequence, r.application_order))
-                .map(|tx| (r.asset_id, *tx))
-        })
+        .map(|r| (r.asset_id, r.ledger_sequence, r.application_order))
         .collect();
     let pieces = resolve_moved_pieces(client, &nft_lookups).await?;
 
@@ -222,7 +210,7 @@ pub async fn fetch_balance_changes(
         // pieces can be named — that is what makes each NFT in a bulk move its
         // own clickable row rather than a `+3 NFT` lump.
         //
-        // The count is the proof, and it is not ceremony: `nft_ownership` is
+        // The count is the proof, and it is not ceremony: the pieces are
         // joined on the new OWNER, so a transaction where somebody else also
         // moved pieces to that same owner would hand back more ids than this
         // account moved. When the set size and the movement count disagree the
@@ -233,9 +221,12 @@ pub async fn fetch_balance_changes(
         let moved = usize::try_from(row.nft_delta.unsigned_abs()).unwrap_or(usize::MAX);
         let pieces_here = (row.nft_delta != 0)
             .then(|| {
-                tx_by_pair
-                    .get(&(row.ledger_sequence, row.application_order))
-                    .and_then(|tx| pieces.get(&(row.asset_id, *tx, row.nft_owner)))
+                pieces.get(&(
+                    row.asset_id,
+                    row.ledger_sequence,
+                    row.application_order,
+                    row.nft_owner,
+                ))
             })
             .flatten()
             .filter(|tokens| tokens.len() == moved)
@@ -301,7 +292,8 @@ struct AssetIdentity {
 #[derive(Debug, Row, Deserialize)]
 struct MovedPieceChRow {
     contract_id: i64,
-    transaction_id: i64,
+    ledger_sequence: i64,
+    application_order: i16,
     owner_id: Option<i64>,
     /// Every token id this transaction moved to this owner in this collection.
     token_ids: Vec<String>,
@@ -310,46 +302,49 @@ struct MovedPieceChRow {
 /// Which non-fungible PIECES each `(collection, transaction, new owner)` moved.
 ///
 /// `asset_transfers` deliberately does not carry the token id — it is an edge
-/// table, and the id belongs to the piece, not to the movement. `nft_ownership`
-/// is where it lives, keyed `(contract_id, token_id, ledger_sequence,
-/// event_order)`, so this filters on the leading `contract_id` and reads at
-/// most that one collection's rows (17 816 for the largest on production;
-/// measured 18 ms / 1 509 rows).
+/// table, and the id belongs to the piece, not to the movement.
+/// `nft_ownership_changes` is where it lives, keyed `(contract_id, token_id,
+/// ledger_sequence, application_order, operation_index, event_index)`, so this
+/// filters on the leading `contract_id` and reads at most that one
+/// collection's rows (17 816 for the largest on production; measured on
+/// `nft_ownership`, 18 ms / 1 509 rows). The transaction is its position
+/// (task 0424), the same pair that seeks `asset_transfers`.
 ///
-/// Grouped by OWNER because that is the only join the data supports: a bulk
-/// transfer writes ten ownership rows that share an owner and carry
-/// `event_order = 0` on every one of them (measured), so nothing pairs a single
-/// piece with a single edge. The owner does pair a SET of pieces with a set of
-/// edges, and the caller checks that set's size against the movement count
-/// before showing any of it.
+/// Grouped by OWNER — the join this read has always made: a bulk transfer
+/// writes ten ownership rows that share an owner, so the owner pairs a SET of
+/// pieces with a set of edges, and the caller checks that set's size against
+/// the movement count before showing any of it. (Each change now also carries
+/// its operation and event, which could pair a piece with its own edge once
+/// `asset_transfers` is located the same way — task 0558.)
 async fn resolve_moved_pieces(
     client: &clickhouse::Client,
-    lookups: &BTreeSet<(i64, i64)>,
-) -> Result<HashMap<(i64, i64, Option<i64>), Vec<String>>, clickhouse::error::Error> {
+    lookups: &BTreeSet<(i64, i64, i16)>,
+) -> Result<HashMap<(i64, i64, i16, Option<i64>), Vec<String>>, clickhouse::error::Error> {
     if lookups.is_empty() {
         return Ok(HashMap::new());
     }
     let contracts = lookups
         .iter()
-        .map(|(c, _)| c.to_string())
+        .map(|(c, _, _)| c.to_string())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>()
         .join(",");
-    let txs = lookups
+    // Integers only, inlined — no injection surface (see the delta read).
+    let positions = lookups
         .iter()
-        .map(|(_, t)| t.to_string())
+        .map(|(_, l, a)| format!("({l},{a})"))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT contract_id, transaction_id, owner_id, \
+        "SELECT contract_id, ledger_sequence, application_order, owner_id, \
                 groupUniqArray(token_id) AS token_ids \
-         FROM nft_ownership \
+         FROM nft_ownership_changes \
          WHERE contract_id IN (CAST([{contracts}] AS Array(Int64))) \
-           AND transaction_id IN (CAST([{txs}] AS Array(Int64))) \
-         GROUP BY contract_id, transaction_id, owner_id"
+           AND (ledger_sequence, application_order) IN ({positions}) \
+         GROUP BY contract_id, ledger_sequence, application_order, owner_id"
     );
     Ok(client
         .query(&sql)
@@ -361,7 +356,15 @@ async fn resolve_moved_pieces(
             // Deterministic order: the cell lists these one per line, and a
             // page boundary must not reshuffle them.
             tokens.sort_unstable();
-            ((r.contract_id, r.transaction_id, r.owner_id), tokens)
+            (
+                (
+                    r.contract_id,
+                    r.ledger_sequence,
+                    r.application_order,
+                    r.owner_id,
+                ),
+                tokens,
+            )
         })
         .collect())
 }
@@ -419,13 +422,15 @@ fn balance_change_identity(r: &ResolvedAsset) -> AssetIdentity {
 /// **Non-fungible movements group by their NEW OWNER** (`nft_owner`, the
 /// edge's `to_id`; `NULL` for a burn, and `NULL` throughout for a fungible
 /// asset so those still aggregate per asset). That is what lets a bulk move be
-/// listed piece by piece: `nft_ownership` records the new owner, so the group's
+/// listed piece by piece: `nft_ownership_changes` records the new owner, so the group's
 /// `(collection, transaction, owner)` names the exact set of pieces that moved,
 /// and its own count verifies the set before any of it is shown.
 ///
-/// It has to be the owner rather than the event position, which was measured
-/// and does not work: `nft_ownership.event_order` is `0` on every row of a
-/// ten-piece transfer, so nothing there pairs one piece with one edge.
+/// It is the owner rather than the event position because `asset_transfers`
+/// has no event position to match yet; the old `nft_ownership.event_order` was
+/// `0` on every row of a ten-piece transfer, and the changes' event location
+/// (task 0424) can pair one piece with one edge once `asset_transfers` carries
+/// it too (task 0558).
 ///
 /// **Fungible and non-fungible movements of the SAME asset are separate rows**
 /// — `is_non_fungible` is part of the grouping key. `asset_id` is the EMITTING

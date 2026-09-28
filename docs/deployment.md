@@ -465,6 +465,18 @@ Frontend **content** is separate: `deploy-production-web`
   Then deploy Compute; then fill the history (task 0424's fill from
   `soroban_events`). No pause; the readers still use the old tables.
 
+- **NFT ownership by event location (task 0424), step 2: the readers.** The
+  API reads `nft_ownership_changes` only: the NFT transfers tab, the mint
+  ledger on `/nfts` and `/nfts/{contract}/{token}`, and the pieces an
+  account's balance change names. Deploy Compute and the SPA **after the fill
+  has passed its gate** (`nft-ownership-fill --dry-run`: `only_old=0
+only_new=0`, [backfills.md](./backfills.md)): an unfilled range would show
+  no transfers and no mint ledger. The transfers tab pages on the change's
+  location, so a cursor minted before the deploy answers 400 `invalid_cursor`
+  once; its rows carry `application_order` / `operation_index` /
+  `event_index` in place of `event_order`, and the SPA keys rows by them —
+  ship the SPA with this Compute deploy. No operator step.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and

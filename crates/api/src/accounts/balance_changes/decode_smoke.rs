@@ -101,12 +101,10 @@ async fn the_delta_statement_runs_and_an_empty_page_is_empty() {
         TxKey {
             ledger_sequence: 64_318_000,
             application_order: 1,
-            transaction_id: 1,
         },
         TxKey {
             ledger_sequence: 1,
             application_order: 0,
-            transaction_id: 2,
         },
     ];
     let got = fetch_balance_changes(&ch, i64::MIN, &keys)
