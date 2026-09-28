@@ -113,6 +113,9 @@ struct TableInserts {
     /// HTTP request, keeping the part economy unchanged from PR #180.
     nfts_pending: Option<Insert<NftPendingRow>>,
     nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
+    /// Task 0424 — written beside `nft_ownership{,_pending}` until the readers move.
+    nft_ownership_changes: Option<Insert<NftOwnershipChangeRow>>,
+    nft_ownership_changes_pending: Option<Insert<NftOwnershipChangeRow>>,
     /// Unified per-holder balances — ALL asset types (task 0331 Option A). The
     /// legacy `account_balances_current` insert was removed (single-write).
     unified_balances: Option<Insert<BalanceRow>>,
@@ -283,6 +286,8 @@ impl PartitionWriter {
             nft_ownership_rows,
             nft_pending_rows,
             nft_ownership_pending_rows,
+            nft_ownership_change_rows,
+            nft_ownership_change_pending_rows,
             unified_balance_rows,
             claimable_balance_rows,
             asset_transfer_rows,
@@ -465,6 +470,20 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
+            &mut self.inserts.nft_ownership_changes,
+            "nft_ownership_changes",
+            &nft_ownership_change_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.nft_ownership_changes_pending,
+            "nft_ownership_changes_pending",
+            &nft_ownership_change_pending_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
             &mut self.inserts.unified_balances,
             "balances",
             &unified_balance_rows,
@@ -547,6 +566,8 @@ impl PartitionWriter {
             nft_ownership,
             nfts_pending,
             nft_ownership_pending,
+            nft_ownership_changes,
+            nft_ownership_changes_pending,
             unified_balances,
             claimable_balance_holdings,
             asset_transfers,
@@ -583,6 +604,8 @@ impl PartitionWriter {
         // dedupes the orphan rows on the next merge.
         end(nfts_pending).await?;
         end(nft_ownership_pending).await?;
+        end(nft_ownership_changes).await?;
+        end(nft_ownership_changes_pending).await?;
         end(unified_balances).await?;
         end(claimable_balance_holdings).await?;
         end(asset_transfers).await?;

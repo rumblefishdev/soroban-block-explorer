@@ -149,6 +149,7 @@ pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEven
             event_order,
             ledger_sequence: event.ledger_sequence,
             created_at: event.created_at,
+            event_id: event.event_id,
         });
     }
 

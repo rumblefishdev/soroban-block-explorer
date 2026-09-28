@@ -1,6 +1,7 @@
 //! NFT rows staged per ledger: the per-contract routing verdict and the
 //! `nfts` / `nfts_pending` and `nft_ownership` / `nft_ownership_pending` rows
-//! it routes (task 0217 / 0220).
+//! it routes (task 0217 / 0220), plus the same ownership changes located by
+//! their event → `nft_ownership_changes{,_pending}` (task 0424).
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
@@ -12,7 +13,9 @@ use xdr_parser::types::{ExtractedNft, ExtractedNftEvent};
 use super::{StagedLedger, staging_err};
 use crate::SchemaError;
 use crate::persist::ids;
-use crate::persist::rows::{NftOwnershipPendingRow, NftOwnershipRow, NftPendingRow, NftRow};
+use crate::persist::rows::{
+    NftOwnershipChangeRow, NftOwnershipPendingRow, NftOwnershipRow, NftPendingRow, NftRow,
+};
 
 pub(super) fn nft_rows(
     out: &mut StagedLedger,
@@ -166,6 +169,29 @@ pub(super) fn nft_rows(
         let ledger_sequence = i64::from(ev.ledger_sequence);
         let owner_id = ev.owner_account.as_deref().map(ids::account_id);
         let event_type = ev.event_type as i16;
+
+        // Task 0424: the same change located by its source event. An NFT
+        // event is a per-operation contract event, which always has an id;
+        // `soroban_events` refuses one without, and so does this.
+        let id = ev
+            .event_id
+            .ok_or_else(|| staging_err("nft event without an event id"))?;
+        let change = NftOwnershipChangeRow {
+            contract_id,
+            token_id: ev.token_id.clone(),
+            ledger_sequence,
+            application_order: i16::try_from(id.transaction_index)
+                .map_err(|_| staging_err("nft event transaction_index overflow"))?,
+            operation_index: id.operation_index,
+            event_index: id.event_index,
+            owner_id,
+            event_type,
+        };
+        match route {
+            NftRoute::Hot => out.nft_ownership_change_rows.push(change),
+            NftRoute::Pending => out.nft_ownership_change_pending_rows.push(change),
+            NftRoute::Drop => unreachable!("filtered above"),
+        }
 
         match route {
             NftRoute::Hot => out.nft_ownership_rows.push(NftOwnershipRow {

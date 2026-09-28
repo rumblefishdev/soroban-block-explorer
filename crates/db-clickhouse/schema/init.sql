@@ -1290,6 +1290,49 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, token_id, ledger_sequence, event_order);
 
+-- nft_ownership_changes: replaces `nft_ownership` (task 0424, epic 0538 step
+-- 4), which is dropped once the readers move here (a parallel change,
+-- `docs/deployment.md`). One row per change of owner of one token — mint,
+-- transfer, burn — located by its source event's stellar-rpc id (ADR 0059):
+-- the transaction position, the operation and the event within it. One
+-- `consecutive_mint` event mints many tokens under one id, so `token_id` stays
+-- in the key. Replaces `event_order`, a per-token counter that restarted at 0
+-- for every token in every ledger, so same-ledger rows had no order and bulk
+-- moves shared one value. No `transaction_id` surrogate.
+--
+-- PROD: created by hand BEFORE the indexer that writes it deploys — the driver
+-- validates the row struct against `DESCRIBE`, and a missing table fails every
+-- insert client-side (task 0310).
+CREATE TABLE IF NOT EXISTS nft_ownership_changes (
+    contract_id        Int64,
+    token_id           String,
+    ledger_sequence    Int64,
+    application_order  Int16,
+    operation_index    UInt16,
+    event_index        UInt32,
+    owner_id           Nullable(Int64),
+    event_type         Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index);
+
+-- Quarantine companion to `nft_ownership_changes` (task 0217's pattern): same
+-- shape, so promotion is `INSERT … SELECT`. API endpoints never read it.
+CREATE TABLE IF NOT EXISTS nft_ownership_changes_pending (
+    contract_id        Int64,
+    token_id           String,
+    ledger_sequence    Int64,
+    application_order  Int16,
+    operation_index    UInt16,
+    event_index        UInt32,
+    owner_id           Nullable(Int64),
+    event_type         Int16
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index);
+
 CREATE TABLE IF NOT EXISTS liquidity_pool_snapshots (
     pool_id         FixedString(32),
     ledger_sequence Int64,

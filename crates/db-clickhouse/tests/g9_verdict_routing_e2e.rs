@@ -147,6 +147,12 @@ fn fixture_event(contract_id: &str, token: &str, order: u16) -> ExtractedNftEven
         event_order: order,
         ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
+        event_id: Some(xdr_parser::EventId {
+            ledger_sequence: E2E_LEDGER,
+            transaction_index: 1,
+            operation_index: 0,
+            event_index: u32::from(order),
+        }),
     }
 }
 
@@ -159,6 +165,8 @@ async fn cleanup(cl: &clickhouse::Client, contracts: &[&str]) {
             format!("ALTER TABLE nfts_pending DELETE WHERE contract_id = {id}"),
             format!("ALTER TABLE nft_ownership DELETE WHERE contract_id = {id}"),
             format!("ALTER TABLE nft_ownership_pending DELETE WHERE contract_id = {id}"),
+            format!("ALTER TABLE nft_ownership_changes DELETE WHERE contract_id = {id}"),
+            format!("ALTER TABLE nft_ownership_changes_pending DELETE WHERE contract_id = {id}"),
         ] {
             let _ = cl.query(&stmt).execute().await;
         }
@@ -276,6 +284,8 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
         "nfts_pending",
         "nft_ownership",
         "nft_ownership_pending",
+        "nft_ownership_changes",
+        "nft_ownership_changes_pending",
     ] {
         assert_eq!(
             count(&cl, table, &fungible).await,
@@ -303,6 +313,26 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
     assert_eq!(count(&cl, "nft_ownership_pending", &unknown).await, 1);
     assert_eq!(count(&cl, "nfts", &unknown).await, 0);
     assert_eq!(count(&cl, "nft_ownership", &unknown).await, 0);
+
+    // Task 0424: the located twins route the same way, and the event's
+    // location crosses the wire.
+    assert_eq!(count(&cl, "nft_ownership_changes", &nft).await, 1);
+    assert_eq!(count(&cl, "nft_ownership_changes_pending", &nft).await, 0);
+    assert_eq!(
+        count(&cl, "nft_ownership_changes_pending", &unknown).await,
+        1
+    );
+    assert_eq!(count(&cl, "nft_ownership_changes", &unknown).await, 0);
+    let location: Vec<(i16, u16, u32)> = cl
+        .query(
+            "SELECT application_order, operation_index, event_index \
+             FROM nft_ownership_changes WHERE contract_id = ?",
+        )
+        .bind(ids::contract_id(&nft))
+        .fetch_all()
+        .await
+        .expect("read back the location");
+    assert_eq!(location, vec![(1, 0, 1)]);
 
     // Task 0320: the prior-row prefetch must succeed (pre-fix it SELECTed the
     // dropped `name` column → Code 47 → no upgrade row ever written) and the
