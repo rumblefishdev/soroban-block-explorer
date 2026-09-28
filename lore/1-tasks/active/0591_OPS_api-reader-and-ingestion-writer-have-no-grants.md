@@ -2,7 +2,7 @@
 id: '0591'
 title: 'OPS: api_reader and ingestion_writer have no <grants> — ClickHouse gives them ALL ON *.*'
 type: OPS
-status: backlog
+status: active
 related_adr: ['0032']
 related_tasks: ['0240', '0314', '0567', '0568', '0569']
 tags: [clickhouse, security, infra-hetzner, priority-high, effort-small]
@@ -19,6 +19,10 @@ history:
       ch-prod-01 on 2026-09-25 and found that both wide users are this
       repo's, not prices'. The fix lives in this repo's services.xml, so the
       task lives here; 0258 points at it.
+  - date: '2026-09-28'
+    status: active
+    who: stkrolikiewicz
+    note: Activated.
 ---
 
 # OPS: api_reader and ingestion_writer have no `<grants>` — ClickHouse gives them ALL ON \*.\*
