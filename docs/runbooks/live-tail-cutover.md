@@ -673,7 +673,7 @@ UNION ALL SELECT 'transaction_hash_prefix_index',   count() FROM transaction_has
 UNION ALL SELECT 'transaction_participants',        count() FROM transaction_participants        WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'transaction_operations',          count() FROM transaction_operations          WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'soroban_events',                  count() FROM soroban_events                  WHERE ledger_sequence > {cut:Int64}
-UNION ALL SELECT 'soroban_invocations_appearances', count() FROM soroban_invocations_appearances WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'contract_activity',               count() FROM contract_activity               WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'nft_ownership',                   count() FROM nft_ownership                   WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'liquidity_pool_snapshots',        count() FROM liquidity_pool_snapshots        WHERE ledger_sequence > {cut:Int64}
 ORDER BY tbl FORMAT PrettyCompact
@@ -711,7 +711,7 @@ FORMAT PrettyCompact
   `transaction_participants`, `transaction_operations` — **must** be `> 0`
   and climb every poll (pubnet ledgers always carry txs, each tx ≥ 1 op).
   Zero here = persist not running or a broken core write → page.
-- `soroban_events`, `soroban_invocations_appearances` — `> 0` over any
+- `soroban_events`, `contract_activity` — `> 0` over any
   non-trivial pubnet window (Soroban traffic is continuous). The parser
   extracts these (`extract_events` / `extract_invocations` in
   `process.rs`) and persist writes them — they are **not** behind the

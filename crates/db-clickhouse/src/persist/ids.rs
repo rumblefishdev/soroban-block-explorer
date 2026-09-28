@@ -79,7 +79,7 @@ fn hash64(bytes: &[u8]) -> i64 {
 /// `soroban_contracts.deployer_id`,
 /// `assets.issuer_id`,
 /// `liquidity_pools.asset_{a,b}_issuer_id`,
-/// `soroban_invocations_appearances.caller_id`.
+/// `contract_activity.caller_id`.
 #[inline]
 pub fn account_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
@@ -91,7 +91,7 @@ pub fn account_id(strkey: &str) -> i64 {
 /// `nfts.contract_id`,
 /// `nft_ownership.contract_id`,
 /// `soroban_events.contract_id`,
-/// `soroban_invocations_appearances.{contract,caller_contract}_id`.
+/// `contract_activity.{contract,caller_contract}_id`.
 #[inline]
 pub fn contract_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
@@ -119,7 +119,6 @@ pub fn address_id(strkey: &str) -> i64 {
 
 /// `transactions.id` from the 32-byte tx hash bytes. Same helper feeds
 /// every transaction `Int64` FK: `transaction_participants.transaction_id`,
-/// `soroban_invocations_appearances.transaction_id`,
 /// `nft_ownership.transaction_id`.
 #[inline]
 pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {

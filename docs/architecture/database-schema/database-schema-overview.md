@@ -114,22 +114,19 @@ Backbone timeline:
   `/assets/:id/transactions` (task 0359; the asset-dimension twin of
   `transaction_participants`, keyed asset-first; native XLM is a first-class
   surrogate, not absence)
-- `contract_transactions` — per-(contract, transaction) presence index that
-  powered `/transactions?filter[contract_id]=` (task 0541; the contract-dimension twin of
-  `transaction_participants`, keyed contract-first and by the transaction's
-  **position** `(ledger_sequence, application_order)`, not the hash surrogate).
-  A transaction touches a contract through an operation event, an invocation or
+- `contract_activity` — per-(contract, transaction) index (tasks 0541, 0586;
+  the contract-dimension twin of `transaction_participants`, keyed
+  contract-first and by the transaction's **position**
+  `(ledger_sequence, application_order)`, not the hash surrogate). A
+  transaction touches a contract through an operation event, an invocation or
   an operation naming it; fee events do not count, or the native SAC's list
   would be every transaction on the network ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md)).
-  Still written, no longer read: replaced by `contract_activity` (task 0586)
-- `contract_activity` — the same pairs plus the invocation's caller
-  (`caller_id` / `caller_contract_id`, set only on an invoked row) and call
-  count (`invocation_count`, 0 when not invoked; an invoked row is
-  `invocation_count > 0`, which is also the row with a caller); replaces
-  `contract_transactions` and `soroban_invocations_appearances` (task 0586).
-  Powers `/transactions?filter[contract_id]=` (every pair) and, over the
-  invoked rows, the contract stats, the contract's Invocations tab and the
-  transaction page's invocations
+  An invoked row adds the caller (`caller_id` / `caller_contract_id`) and
+  call count (`invocation_count`, 0 when not invoked). Powers
+  `/transactions?filter[contract_id]=` (every pair) and, over the invoked
+  rows, the contract stats, the contract's Invocations tab and the
+  transaction page's invocations. Replaced `contract_transactions` and
+  `soroban_invocations_appearances` (task 0586)
 - `pool_operation_amounts` — per-(operation, pool, asset) amounts, the driver of
   pool activity (task 0279 / issue #371, 0491), keyed pool-first and by the
   transaction position (replaced `lp_operation_amounts`, task 0372). `amount` is raw stroops in a
@@ -144,8 +141,7 @@ Stellar archive, not stored in the DB):
 - `soroban_contracts` — deployed contracts (`BIGSERIAL id` + `VARCHAR(56)` natural `contract_id`)
 - `wasm_interface_metadata` — WASM ABI keyed by `wasm_hash`
 - `soroban_events_appearances` — contract-event appearance index (partitioned)
-- `soroban_invocations_appearances` — contract-invocation appearance index (partitioned);
-  still written, no longer read: replaced by `contract_activity` (task 0586)
+- contract invocations — folded into `contract_activity` (task 0586)
 
 Derived explorer entities:
 
@@ -275,19 +271,17 @@ ledgers
        ├─ transaction_operations (partitioned)   # operation identities by tx position (0372)
        ├─ transaction_participants (partitioned)
        ├─ operation_asset_appearances (partitioned)
-       ├─ contract_activity (partitioned)         # presence + invocation caller, replaces the two below (0586)
-       ├─ contract_transactions (partitioned)     # (contract, tx position) presence (0541)
+       ├─ contract_activity (partitioned)         # (contract, tx position) + invocation caller (0541, 0586)
        ├─ pool_operation_amounts (partitioned)   # per-(op, pool, asset) amounts (0279, 0372)
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
-       ├─ soroban_events_appearances (partitioned)
-       └─ soroban_invocations_appearances (partitioned)
+       └─ soroban_events_appearances (partitioned)
 
 soroban_contracts                           # contracts OBSERVED being deployed (0548)
   ├─ wasm_interface_metadata
   ├─ contract_executable_refs               # (owner, tag) -> wasm_hash, CAP-85 (0548)
   ├─ soroban_events_appearances
-  ├─ soroban_invocations_appearances
+  ├─ contract_activity
   ├─ assets
   └─ nfts ─ nft_ownership (partitioned)
 
@@ -777,55 +771,26 @@ PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, application_order);
 ```
 
-### 4.5.6 Contract Transactions (task 0541)
+### 4.5.6 Contract Activity (tasks 0541, 0586)
 
 ClickHouse-only. The **contract-dimension twin of `transaction_participants`** — a
-per-(contract, transaction) presence index, so the contract-filtered transaction
-list is a key seek. Before it, that list merged three tables none of which could
-answer "the next N transactions of this contract": `soroban_events` holds one row
-per _event_ (hundreds per transaction for a busy contract),
-`soroban_invocations_appearances` covers invocations only, and
-`operations_appearances` has no `contract_id` in its key. The read guessed how many
-rows made a page and retried wider — a mechanism with a density cliff, where a
-page could end before the list did.
-
-```sql
-CREATE TABLE contract_transactions (
-    contract_id        Int64,
-    ledger_sequence    Int64,
-    application_order  Int16   -- the transaction's position (ADR 0059)
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (contract_id, ledger_sequence, application_order);
-```
-
-Purpose / design notes:
-
-- **Sources:** an operation event the transaction emits, an invocation, an
-  operation naming the contract — the same three the list read before.
-- **Fee events do not count.** Every transaction pays a fee, and the fee is an
-  event on the native SAC; counting it would make that contract's list every
-  transaction on the network. A fee event is recognised by its rpc id, which
-  carries a sentinel (`transaction_index` 0 or 1048575, or `operation_index`
-  4095): only an operation event has `transaction_index = application_order`.
-- **Keyed by position**, not by the `transactions.id` hash surrogate its siblings
-  carry — the shape task 0538 moves the whole family to. The three columns cost
-  ~0.96 B/row in this sort order (measured on the rekeyed `soroban_events`).
-- **Pure presence**, deduped per transaction at write; duplicates left by
-  re-ingest collapse in the RMT and on read (`LIMIT 1 BY`).
-- **Backfill** is in-DB from the three sources — no XDR re-parse; the per-slice
-  statement is referenced from `docs/backfills.md`, "Canonical event location
-  fill".
-
-**Task 0586** replaces it — together with `soroban_invocations_appearances`,
-whose pairs are a subset of it — with `contract_activity`:
+per-(contract, transaction) index, so the contract-filtered transaction list is a
+key seek — carrying the caller and call count when the contract was invoked.
+Before task 0541, that list merged three tables none of which could answer "the
+next N transactions of this contract": `soroban_events` holds one row per _event_
+(hundreds per transaction for a busy contract), the invocations table covered
+invocations only, and the operations table had no `contract_id` in its key. The
+read guessed how many rows made a page and retried wider — a mechanism with a
+density cliff, where a page could end before the list did. Task 0541 added the
+presence index `contract_transactions`; task 0586 folded the invocations table
+(`soroban_invocations_appearances`, keyed by the `transaction_id` surrogate) into
+it as `contract_activity` and dropped both.
 
 ```sql
 CREATE TABLE contract_activity (
     contract_id        Int64,
     ledger_sequence    Int64,
-    application_order  Int16,             -- the transaction's position
+    application_order  Int16,             -- the transaction's position (ADR 0059)
     caller_id          Nullable(Int64),   -- invoked by an account
     caller_contract_id Nullable(Int64),   -- invoked by a contract
     invocation_count   Int32              -- calls in the transaction; 0 = touched only
@@ -835,22 +800,33 @@ PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, application_order);
 ```
 
-- **Invoked = a caller is present.** An invoked row carries exactly one of the
-  two callers (the first invocation's); a row touched only by an operation
-  event or an operation naming the contract carries neither. No invocation
-  in the old table lacks a caller (0 of 1.13 bn, 2026-09-25).
-- **`invocation_count`** is the invocations table's fold count under a clear
-  name: how many times the transaction called the contract (the execution
-  trace's `fn_call`s merged with the auth tree), 0 on a touched-only row.
-  Nothing reads it yet, but no other table holds it — diagnostic events are
-  not stored — so it is kept rather than lost with the old table.
-- **Not carried:** the invocations table's `transaction_id` surrogate
-  (8.45 GiB at ratio 1.0).
+Purpose / design notes:
+
+- **Sources:** an operation event the transaction emits, an invocation, an
+  operation naming the contract.
+- **Fee events do not count.** Every transaction pays a fee, and the fee is an
+  event on the native SAC; counting it would make that contract's list every
+  transaction on the network. A fee event is recognised by its rpc id, which
+  carries a sentinel (`transaction_index` 0 or 1048575, or `operation_index`
+  4095): only an operation event has `transaction_index = application_order`.
+- **Keyed by position**, not by the `transactions.id` hash surrogate — the shape
+  task 0538 moves the whole family to. The invocations table's surrogate
+  (8.45 GiB at ratio 1.0) is not carried.
+- **Invoked = `invocation_count > 0`**, which is also the row with a caller: an
+  invoked row carries exactly one of the two callers (the first invocation's);
+  a row touched only by an operation event or an operation naming the contract
+  carries neither. No invocation in the old table lacked a caller (0 of
+  1.13 bn, 2026-09-25).
+- **`invocation_count`** is the ADR 0034 fold count under a clear name: how
+  many times the transaction called the contract (the execution trace's
+  `fn_call`s merged with the auth tree). Nothing reads it yet, but no other
+  table holds it — diagnostic events are not stored.
+- Duplicates left by re-ingest collapse in the RMT and on read (`FINAL` /
+  `LIMIT 1 BY`).
 - **No codecs** (decided in task 0586): the key columns would shrink by ~4 GiB
   (_estimate_), not worth it here.
-- Written beside both old tables until the readers move, then both are
-  dropped (a parallel change, `docs/deployment.md`); history filled in
-  ClickHouse (`docs/backfills.md`).
+- **Backfill** is in-DB — no XDR re-parse; the per-slice statements are
+  referenced from `docs/backfills.md`.
 
 ### 4.6 Soroban Contracts
 

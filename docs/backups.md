@@ -196,7 +196,7 @@ you need it.
 **A backup older than a schema swap restores the old shape.** `_schema.sql` is the
 schema on the day of the backup. A table rebuilt and swapped since, or added since,
 comes back as it was — for example `soroban_events` before its rekey, without
-`contract_transactions`. The deployed code then fails on it: the indexer's inserts
+`contract_activity`. The deployed code then fails on it: the indexer's inserts
 are refused and the readers query columns that are not there. Redo the change on
 the restored database before resuming ingest — the rekey is filled inside
 ClickHouse from the restored tables, no archive read
