@@ -209,3 +209,13 @@ pool on every run; its stale reserves stay visible.
 - [ ] Pools: the code-change verdict is written at ingest (table + history backfill), the read half renders "no longer an active pool since …" from it, and `CAZ6W4WH…` renders accordingly
 - [ ] The transition scan exists as a runnable check (runbook or harness) and is part of the release routine
 - [ ] Every table holding a code-derived identity is listed with how it follows the current code (pools, `soroban_contracts.contract_type`, NFT tables, soroban `assets`)
+
+## 2026-09-28 — the protocol label follows the same rule
+
+PR #532 names a soroban pool's protocol from its registering deployment. Pool
+`CAZ6W4WH…` was registered by the Phoenix factory, so it reads "Phoenix"
+although its code stopped being a pool at 54,515,539 and Phoenix's own
+`query_pools()` no longer lists it (13 listed vs 14 ours, 2026-09-28). Its
+reserves are already withheld (`soroban_reserves::NOT_A_POOL`, 0374). When
+this task stores the "no longer a pool" verdict, the label and `NOT_A_POOL`
+both read it, and the hand-kept list goes.
