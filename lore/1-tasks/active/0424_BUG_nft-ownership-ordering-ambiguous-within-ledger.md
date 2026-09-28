@@ -257,6 +257,23 @@ application_order)` — `TxKey.transaction_id` and the account page's
   answers 400. `api_reader` reads only `nft_ownership_changes` after the
   deploy, 0 query exceptions. The SPA chunk `NftDetailPage` carries the new
   fields.
+- **Step 3 (stop the old writes, #533) deployed** (2026-09-28): indexer and
+  API 18:21:37 UTC, SPA 18:22:05 UTC (from `develop` `e7736c58`). Last write
+  to `nft_ownership` 18:18:25 UTC (head ledger 64,666,744); from 18:22:24 the
+  indexer writes `nft_ownership_changes` alone; 0 write or read exceptions.
+- **Proof before the drops** (read-only, 18:50 UTC, `FINAL`, multisets with
+  `EXCEPT ALL` so a NULL owner compares equal):
+  - hot 23,583 old vs 23,587 new, pending 521 vs 521 — on (contract, token,
+    ledger, owner, type): 0 only old; 4 only new, all past the old head
+    (ledgers 64,666,792–64,666,821, written after the switch);
+  - with the transaction: every old `transaction_id` resolves in
+    `transactions` (0 of 24,104 missing), and (contract, token, ledger,
+    `application_order`, owner, type) through it equals the new rows: 0 / 0
+    — the change of index is the only change;
+  - every one of the 24,108 new locations is a contract event in
+    `soroban_events` for that contract (0 without).
+  - prices-api: no `prices_*` read of either table in 14 days;
+    `api_reader` last 13:13 UTC, before the readers deploy.
 
 ## Implementation
 
