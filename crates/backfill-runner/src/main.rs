@@ -11,6 +11,7 @@ mod contract_type_rebuild;
 mod dashboard;
 mod error;
 mod ingest;
+mod nft_ownership_fill;
 mod nft_reclassify;
 mod partition;
 mod repair_tier1;
@@ -254,6 +255,16 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Fill `nft_ownership_changes{,_pending}` history from `soroban_events`
+    /// through the indexer's own NFT extraction — no S3 (task 0424). Reads
+    /// the collections of the old ownership tables; re-running is a no-op.
+    /// Temporary: removed with the old tables in task 0424's PR 4.
+    NftOwnershipFill {
+        /// Extract and count only; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -390,6 +401,21 @@ async fn main() {
                 stats.dropped_pending_ownership,
                 stats.dropped_legacy_nfts,
                 stats.dropped_legacy_ownership,
+            );
+        }
+        Command::NftOwnershipFill { dry_run } => {
+            let stats = nft_ownership_fill::execute(&sink, dry_run)
+                .await
+                .expect("nft_ownership_fill failed");
+            println!(
+                "nft_ownership_fill completed (dry_run={}): events={} hot={} pending={} dropped={} only_old={} only_new={}",
+                stats.dry_run,
+                stats.events,
+                stats.hot,
+                stats.pending,
+                stats.dropped,
+                stats.only_old,
+                stats.only_new,
             );
         }
     }
