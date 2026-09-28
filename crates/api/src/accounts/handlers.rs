@@ -277,17 +277,6 @@ pub async fn list_account_transactions(
         Err(err) => return err.into_response(),
     };
 
-    // Reject a cursor that anchors another keyset — a surrogate cursor minted
-    // before task 0575 moved this list to the transaction position. Per ADR
-    // 0008 fail with `invalid_cursor` instead of silently mis-paginating. A
-    // legacy/untagged cursor already fails decode upstream in the extractor;
-    // this guards the decodes-but-wrong-intent case.
-    if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(cursor)
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
-
     let header = match fetch_account_for_source(&state, &account_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found(format!("account '{account_id}' not found")),
@@ -422,10 +411,4 @@ fn account_tx_cursor_for(r: &AccountTxRow) -> TxListCursor {
         ledger_sequence: r.ledger_sequence,
         application_order: r.application_order,
     }
-}
-
-/// True when the cursor anchors this list's keyset, the position. A surrogate
-/// cursor is refused (ADR 0008 fail-clean).
-fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::ChPosition { .. })
 }

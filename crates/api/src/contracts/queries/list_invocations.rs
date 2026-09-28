@@ -61,7 +61,6 @@ pub async fn fetch_invocation_appearances(
     // 0.15 bound-parameter path returns an empty result when `None` is bound
     // into a tuple keyset comparison (the same defect that forced transactions
     // B/C to inline). Integers only, no injection surface.
-    // The handler has already refused a cursor of another keyset.
     let keyset = match cursor {
         Some(TxListCursor::ChPosition {
             ledger_sequence,
@@ -69,7 +68,7 @@ pub async fn fetch_invocation_appearances(
         }) => format!(
             " AND (ledger_sequence, application_order) {op} ({ledger_sequence}, {application_order})"
         ),
-        _ => String::new(),
+        None => String::new(),
     };
 
     // Step 1: contract-scoped driver seek. `contract_id` is the leading PK of

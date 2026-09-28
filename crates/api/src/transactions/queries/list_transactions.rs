@@ -235,16 +235,14 @@ pub async fn fetch_list(
 
     let (op, order) = keyset_sql_desc(direction);
     // Cursor keyset is the position `(ledger_sequence, application_order)`
-    // (canonical SQL 02) for every statement; `list_transactions` has already
-    // rejected a surrogate-keyed one. Both parts are present together or absent
-    // together, so the keyset tuple never binds a NULL.
-    let cursor: Option<(i64, i16)> = match params.cursor.as_ref() {
-        Some(TxListCursor::ChPosition {
-            ledger_sequence,
-            application_order,
-        }) => Some((*ledger_sequence, *application_order)),
-        _ => None,
-    };
+    // (canonical SQL 02) for every statement. Both parts are present together
+    // or absent together, so the keyset tuple never binds a NULL.
+    let cursor: Option<(i64, i16)> = params.cursor.as_ref().map(
+        |TxListCursor::ChPosition {
+             ledger_sequence,
+             application_order,
+         }| (*ledger_sequence, *application_order),
+    );
     let cursor_ledger = cursor.map(|(l, _)| l);
     let cursor_tiebreak = cursor.map(|(_, a)| i64::from(a));
 
