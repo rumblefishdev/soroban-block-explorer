@@ -2610,3 +2610,27 @@ null`. No database read: the surrogate is `ids::contract_id(address)`, pinned
 by a test against the production ids. Local API against production: 355 / 214
 / 14 / 192 null of 775, exactly the measured split. The list row and the pool
 header show the name as a second chip beside "Soroban".
+
+### Soroban participants from share-token holders (2026-09-28)
+
+Branch `feat/0374-soroban-participants`. Issue #405's remaining sections were
+chart, participants and activity; participants needed no indexing, only a
+read. A soroban pool's providers are the holders of its share token in
+`balances`. Measured on production, per family: the holders' sum equals the
+stored `total_shares` for 296/296 constant, 46/46 stable, 1/1 elastic and
+230/232 pair pools; config pools (18 with holders) store no total. All 4,088
+positions resolve to an account (3,777) or a contract (311). Concentrated
+pools (49) have no share token.
+
+- API: a `C…` pool lists the holders, scaled by the token's decimals,
+  percentage over the holders' sum, `first_deposit_ledger = null`; no share
+  token → 400 `not_indexed`. Detail `participant_count` counts the same
+  holders (the list's column stays null — one more `balances` scan per page).
+- Verified through the local API on production: two top holders equal the
+  chain's `balance()` to the unit (Aquarius PYUSD/USDC, Phoenix XLM/USDC);
+  a full walk of the busiest pool (638 holders, 7 pages) returns 638 unique
+  rows, percentages sum to 99.99997, back-paging returns the same page;
+  ~110–150 ms per page, detail count 59 / 638 / null (concentrated).
+- CH-gated test `soroban_participants_are_share_token_holders`.
+
+Still "not indexed" for soroban pools: chart and activity.
