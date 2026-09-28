@@ -16,7 +16,7 @@
 //! Other tables stay on natural / composite primary keys (`assets`,
 //! `nfts`, `liquidity_pools`, `lp_positions`, `liquidity_pool_snapshots`,
 //! `transaction_operations`, `transaction_participants`,
-//! `nft_ownership`) — for them composite (StrKey-or-hash, …) works
+//! `nft_ownership_changes`) — for them composite (StrKey-or-hash, …) works
 //! cheaply without a hash layer.
 //!
 //! ## Determinism is load-bearing
@@ -75,7 +75,7 @@ fn hash64(bytes: &[u8]) -> i64 {
 /// `account_balances_current.account_id`,
 /// `lp_positions.account_id`,
 /// `nfts.current_owner_id`,
-/// `nft_ownership.owner_id`,
+/// `nft_ownership_changes.owner_id`,
 /// `soroban_contracts.deployer_id`,
 /// `assets.issuer_id`,
 /// `liquidity_pools.asset_{a,b}_issuer_id`,
@@ -89,7 +89,7 @@ pub fn account_id(strkey: &str) -> i64 {
 /// contract `Int64` FK: `transaction_operations.contract_id`,
 /// `assets.contract_id`,
 /// `nfts.contract_id`,
-/// `nft_ownership.contract_id`,
+/// `nft_ownership_changes.contract_id`,
 /// `soroban_events.contract_id`,
 /// `contract_activity.{contract,caller_contract}_id`.
 #[inline]
@@ -117,9 +117,9 @@ pub fn address_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
 }
 
-/// `transactions.id` from the 32-byte tx hash bytes. Same helper feeds
-/// every transaction `Int64` FK: `transaction_participants.transaction_id`,
-/// `nft_ownership.transaction_id`.
+/// `transactions.id` from the 32-byte tx hash bytes. No other table
+/// references it: each locates a transaction by `(ledger_sequence,
+/// application_order)` (ADR 0059, task 0538).
 #[inline]
 pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
     hash64(hash_bytes)

@@ -14,9 +14,9 @@
 //!   * `Fungible`-verdict contract → events/rows DROPPED (neither hot nor
 //!     pending),
 //!   * `Nft`-verdict contract → events/rows land HOT (`nfts` /
-//!     `nft_ownership`),
+//!     `nft_ownership_changes`),
 //!   * unclassified contract (no verdict row) → quarantine (`nfts_pending` /
-//!     `nft_ownership_pending`) — the fail-open path must stay intact.
+//!     `nft_ownership_changes_pending`) — the fail-open path must stay intact.
 //!
 //! Gated on `CLICKHOUSE_URL` (skips cleanly when unset — same pattern as
 //! `persist_e2e.rs`). Run locally:
@@ -163,8 +163,6 @@ async fn cleanup(cl: &clickhouse::Client, contracts: &[&str]) {
             format!("ALTER TABLE soroban_contracts DELETE WHERE contract_id = '{c}'"),
             format!("ALTER TABLE nfts DELETE WHERE contract_id = {id}"),
             format!("ALTER TABLE nfts_pending DELETE WHERE contract_id = {id}"),
-            format!("ALTER TABLE nft_ownership DELETE WHERE contract_id = {id}"),
-            format!("ALTER TABLE nft_ownership_pending DELETE WHERE contract_id = {id}"),
             format!("ALTER TABLE nft_ownership_changes DELETE WHERE contract_id = {id}"),
             format!("ALTER TABLE nft_ownership_changes_pending DELETE WHERE contract_id = {id}"),
         ] {
@@ -282,8 +280,6 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
     for table in [
         "nfts",
         "nfts_pending",
-        "nft_ownership",
-        "nft_ownership_pending",
         "nft_ownership_changes",
         "nft_ownership_changes_pending",
     ] {
@@ -294,15 +290,9 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
         );
     }
 
-    // Nft verdict → HOT: rows in `nfts` + `nft_ownership`, nothing pending.
+    // Nft verdict → HOT: rows in `nfts` + `nft_ownership_changes`, nothing pending.
     assert_eq!(count(&cl, "nfts", &nft).await, 1, "nft row lands hot");
-    assert_eq!(
-        count(&cl, "nft_ownership", &nft).await,
-        1,
-        "ownership event lands hot"
-    );
     assert_eq!(count(&cl, "nfts_pending", &nft).await, 0);
-    assert_eq!(count(&cl, "nft_ownership_pending", &nft).await, 0);
 
     // No verdict → PENDING: quarantine intact for the genuinely-unknown.
     assert_eq!(
@@ -310,13 +300,15 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
         1,
         "unclassified contract quarantines"
     );
-    assert_eq!(count(&cl, "nft_ownership_pending", &unknown).await, 1);
     assert_eq!(count(&cl, "nfts", &unknown).await, 0);
-    assert_eq!(count(&cl, "nft_ownership", &unknown).await, 0);
 
-    // Task 0424: the located twins route the same way, and the event's
+    // Task 0424: the ownership changes route the same way, and the event's
     // location crosses the wire.
-    assert_eq!(count(&cl, "nft_ownership_changes", &nft).await, 1);
+    assert_eq!(
+        count(&cl, "nft_ownership_changes", &nft).await,
+        1,
+        "ownership event lands hot"
+    );
     assert_eq!(count(&cl, "nft_ownership_changes_pending", &nft).await, 0);
     assert_eq!(
         count(&cl, "nft_ownership_changes_pending", &unknown).await,

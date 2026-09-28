@@ -12,7 +12,7 @@
 //!
 //! Other tables (`assets`, `nfts`, `liquidity_pools`,
 //! `liquidity_pool_snapshots`, `transaction_operations`,
-//! `transaction_participants`, `nft_ownership`, `lp_positions`,
+//! `transaction_participants`, `nft_ownership_changes`, `lp_positions`,
 //! `account_balances_current`) keep natural / composite primary
 //! keys where they're already cheap.
 //!
@@ -255,13 +255,11 @@ pub struct StagedLedger {
     /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
     pub asset_sac_rows: Vec<AssetSacRow>,
     pub nft_rows: Vec<NftRow>,
-    pub nft_ownership_rows: Vec<NftOwnershipRow>,
     /// Task 0217 / 0220 — quarantine for NFT rows whose contract is still
     /// `Other` / NULL-classified at staging (per-contract verdict, as for
     /// `nft_rows`); promoted only by the post-backfill drain runbook.
     pub nft_pending_rows: Vec<NftPendingRow>,
-    pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
-    /// `nft_ownership_*_rows` by the event's location (task 0424) → `nft_ownership_changes{,_pending}`.
+    /// Ownership changes located by their event (task 0424) → `nft_ownership_changes{,_pending}`.
     pub nft_ownership_change_rows: Vec<NftOwnershipChangeRow>,
     pub nft_ownership_change_pending_rows: Vec<NftOwnershipChangeRow>,
     /// Unified `balances` rows for ALL asset types (task 0331 Option A). Type-3
@@ -1030,17 +1028,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // from `contract_deployments` (site above).
 
     // ---- transactions + transaction_hash_prefix_index ----
-    // `(surrogate id, application_order)` per hash: the surrogate keys joins,
-    // the application order is the ledger's own temporal position — the ONLY
+    // `application_order` per hash, the ledger's own temporal position — the ONLY
     // valid intra-ledger ordering (a hash surrogate sorts randomly; the task
     // 0374 e2e caught pool state picking an intermediate write as "last" on
     // 127 of 1,410 real pairs when ordered by tx_id).
-    let mut tx_id_by_hash: HashMap<String, i64> = HashMap::with_capacity(transactions.len());
     let mut app_order_by_hash: HashMap<String, i16> = HashMap::with_capacity(transactions.len());
     for (idx, tx) in transactions.iter().enumerate() {
         let hash = decode_hash(&tx.hash, "tx.hash")?;
         let tx_id = ids::transaction_id(&hash);
-        tx_id_by_hash.insert(tx.hash.clone(), tx_id);
 
         let inner_tx_hash = match tx.inner_tx_hash.as_deref() {
             Some(h) => Some(decode_hash(h, "inner_tx_hash")?),
@@ -1965,7 +1960,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         nfts,
         nft_events,
         prior_contract_verdicts,
-        &tx_id_by_hash,
         &app_order_by_hash,
     )?;
 

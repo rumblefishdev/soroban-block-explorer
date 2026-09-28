@@ -389,41 +389,6 @@ fn column_order_soroban_events() {
     );
 }
 
-#[test]
-fn column_order_nft_ownership() {
-    assert_columns::<NftOwnershipRow>(
-        "nft_ownership",
-        &[
-            "contract_id",
-            "token_id",
-            "ledger_sequence",
-            "event_order",
-            "transaction_id",
-            "owner_id",
-            "event_type",
-        ],
-    );
-}
-
-/// Task 0217 / 0220 — quarantine companion to [`NftOwnershipRow`].
-/// Column order must stay byte-for-byte in sync with `init.sql`
-/// `nft_ownership_pending` because RowBinary is positional.
-#[test]
-fn column_order_nft_ownership_pending() {
-    assert_columns::<NftOwnershipPendingRow>(
-        "nft_ownership_pending",
-        &[
-            "contract_id",
-            "token_id",
-            "ledger_sequence",
-            "event_order",
-            "transaction_id",
-            "owner_id",
-            "event_type",
-        ],
-    );
-}
-
 /// One struct writes both `nft_ownership_changes` and its `_pending` twin.
 #[test]
 fn column_order_nft_ownership_changes() {
@@ -1915,9 +1880,7 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
         0,
         "Nft-classified contract: nothing in pending"
     );
-    assert_eq!(staged.nft_ownership_rows.len(), 1);
-    assert_eq!(staged.nft_ownership_pending_rows.len(), 0);
-    // Task 0424: the same change, located by its event.
+    // Task 0424: the change, located by its event.
     assert_eq!(
         staged.nft_ownership_change_rows,
         vec![NftOwnershipChangeRow {
@@ -2436,8 +2399,6 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
         staged.nft_pending_rows.is_empty(),
         "Fungible verdict: NFT row must drop, not route to pending"
     );
-    assert!(staged.nft_ownership_rows.is_empty());
-    assert!(staged.nft_ownership_pending_rows.is_empty());
     assert!(staged.nft_ownership_change_rows.is_empty());
     assert!(staged.nft_ownership_change_pending_rows.is_empty());
 }
@@ -2482,9 +2443,7 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
         1,
         "Unclassified contract: row in pending bucket"
     );
-    assert_eq!(staged.nft_ownership_rows.len(), 0);
-    assert_eq!(staged.nft_ownership_pending_rows.len(), 1);
-    // Task 0424: the located twin routes the same way.
+    // Task 0424: the change routes the same way.
     assert!(staged.nft_ownership_change_rows.is_empty());
     assert_eq!(staged.nft_ownership_change_pending_rows.len(), 1);
 }
