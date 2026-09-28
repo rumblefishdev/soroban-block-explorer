@@ -82,9 +82,10 @@ Options 1 and 2 together also stop the cookieless pings that Consent Mode's
 - [x] After "Accept All", `analytics_storage` is granted and a `page_view` is
       sent. After "Decline All", it stays denied.
 - [x] A consent choice stored on an earlier visit is applied on load, without
-      a flash of granted state. Stored accept: `default denied` → `update
-    granted`, one `page_view` with `gcs=G111` (`wait_for_update` held it).
-      Stored decline: `update denied`, `page_view` with `G100`, no `_ga`.
+      a flash of granted state. Stored accept: the default is denied, then
+      `update granted`, one `page_view` with `gcs=G111` (`wait_for_update`
+      held it). Stored decline: `update denied`, `page_view` with `G100`, no
+      `_ga`.
 - [ ] The Prices API portal (`/api/*`, stellar-prices-api 0316) repeats the
       same change. It lives in the other repo; tracked there.
 - [x] **Docs updated.** N/A: `docs/architecture/**` does not describe the
