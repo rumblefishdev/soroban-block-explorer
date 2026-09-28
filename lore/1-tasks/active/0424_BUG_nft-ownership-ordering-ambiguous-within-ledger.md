@@ -141,6 +141,18 @@ write, fill, readers, stop the old writes, drop.
   [#521](https://github.com/rumblefishdev/soroban-block-explorer/pull/521),
   `refactor/0424-move-nft-parsing` — `nft.rs` 1,203 → 425, `state.rs`
   1,344 → 1,191; 926 lines moved, glue only; `xdr-parser` 501 tests pass.
+- **PR 1 (write both)** — branch `feat/0424-nft-ownership-changes-dual-write`,
+  local, stacked on #521: `50ea9de1` — `NftEvent` / `ExtractedNftEvent` keep
+  the source `event_id`; `nft_ownership_changes{,_pending}` (DDL, one row
+  struct for both, staging beside the old pair, writer); staging refuses a
+  change without an event id; `nft-reclassify` moves both pairs; merge
+  scripts list the new tables; `stage.rs` 2,949 → 2,948. `eca010a1` — schema
+  overview §4.13.2, pipeline, deployment step 1. Checks: workspace clippy
+  clean; parser test that a `consecutive_mint`'s tokens share one id and a
+  transfer keeps its own; staging tests (hot / pending / dropped routing of
+  the new rows, refusal without an id); `db-clickhouse` all tests pass on a
+  local ClickHouse 26.3 (the G9 e2e writes and reads the location);
+  `xdr-parser`, `backfill-runner`, `indexer`, `api` 1,294 tests pass.
 
 ## Implementation
 
