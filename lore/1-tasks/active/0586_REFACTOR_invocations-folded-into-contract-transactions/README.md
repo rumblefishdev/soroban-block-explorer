@@ -177,6 +177,14 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   `fetch_invocation_appearances` / `InvocationAppearanceRow` describe the
   retired table.
 
+- **#513 merged** (2026-09-28, 07:17 UTC) before the review fixes were
+  pushed; they follow in
+  [#515](https://github.com/rumblefishdev/soroban-block-explorer/pull/515)
+  with the `ChSurrogate` variant removed (thread 273 B): a surrogate cursor
+  now fails to decode (400 `invalid_cursor` from the extractor) and the four
+  per-list guards go. The rename of the "appearances" names rides its own
+  PR before task 0487 (thread 274 A).
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared
