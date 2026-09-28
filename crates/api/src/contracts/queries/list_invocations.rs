@@ -11,7 +11,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
 #[derive(Debug)]
-pub struct InvocationAppearanceRow {
+pub struct ContractInvocationRow {
     /// The transaction's position in its ledger — the cursor's tie-break.
     pub application_order: i16,
     pub transaction_hash: String,
@@ -48,13 +48,13 @@ struct TxMetaChRow {
 /// are fetched by `(ledger_sequence, application_order) IN (keys)` and merged.
 /// The cursor is the transaction's position (task 0586), so a page lists the
 /// contract's invocations in execution order.
-pub async fn fetch_invocation_appearances(
+pub async fn fetch_contract_invocations(
     client: &clickhouse::Client,
     contract_surrogate_id: i64,
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
+) -> Result<Vec<ContractInvocationRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
     // Inline the cursor bound rather than `.bind()`-ing it: the clickhouse
@@ -159,7 +159,7 @@ pub async fn fetch_invocation_appearances(
         let Some(tx) = tx_by_position.get(&(key.ledger_sequence, key.application_order)) else {
             continue;
         };
-        out.push(InvocationAppearanceRow {
+        out.push(ContractInvocationRow {
             application_order: key.application_order,
             transaction_hash: tx.hash.clone(),
             ledger_sequence: key.ledger_sequence,

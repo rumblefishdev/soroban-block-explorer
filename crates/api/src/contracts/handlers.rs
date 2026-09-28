@@ -24,7 +24,7 @@ use super::dto::{
     EventCursor, EventItem, InterfaceResponse, InvocationItem,
 };
 use super::queries::{
-    self, ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
+    self, ContractInvocationRow, ContractListRow, ContractRow, InterfaceRow,
     ResolvedContractsListParams,
 };
 
@@ -296,7 +296,7 @@ pub async fn list_invocations(
 
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
-    let mut rows: Vec<InvocationAppearanceRow> = match fetch_invocations_for_source(
+    let mut rows: Vec<ContractInvocationRow> = match fetch_invocations_for_source(
         &state,
         contract.id,
         pagination.fetch_limit(),
@@ -453,8 +453,8 @@ async fn fetch_invocations_for_source(
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_invocation_appearances(
+) -> Result<Vec<ContractInvocationRow>, clickhouse::error::Error> {
+    queries::fetch_contract_invocations(
         &state.ch(),
         contract_surrogate_id,
         limit,
@@ -466,7 +466,7 @@ async fn fetch_invocations_for_source(
 
 /// Build the opaque invocations cursor for a boundary row: the transaction's
 /// position, the `contract_activity` keyset (task 0586).
-fn invocation_cursor_for(r: &InvocationAppearanceRow) -> TxListCursor {
+fn invocation_cursor_for(r: &ContractInvocationRow) -> TxListCursor {
     TxListCursor::ChPosition {
         ledger_sequence: r.ledger_sequence,
         application_order: r.application_order,
