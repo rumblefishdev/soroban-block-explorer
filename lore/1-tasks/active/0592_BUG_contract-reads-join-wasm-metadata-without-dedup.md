@@ -46,9 +46,12 @@ would then come back duplicated or with an arbitrary copy of the metadata.
 - [x] A ClickHouse-gated test inserts the same `wasm_hash` twice (two parts,
       no merge) and asserts one contract row with the latest metadata; it
       fails on the pre-fix SQL (under `enable_analyzer=0` — see Issues)
-- [ ] Both queries run against the local docker ClickHouse (`CH_URL` set) and
+- [x] Both queries run against the local docker ClickHouse (`CH_URL` set) and
       read-only against production (`chq`, same SQL with a real contract id)
-      — local done (CH 26.3.21.7); production read-only run pending
+      — local done (CH 26.3.21.7). Production, 2026-09-28: old and new SQL of
+      both queries on 5 contracts (3 random, 2 with `upgradeable` metadata),
+      output identical byte for byte in 10 of 10 runs, no exception; cost
+      identical (30 069 rows / 30.26 and 29.63 MiB read per call, old and new)
 - [x] **Docs updated** — N/A: no change to the system's shape
 - [x] **API types regenerated** — N/A: only SQL strings and comments inside
       function bodies changed, no DTO or doc comment
