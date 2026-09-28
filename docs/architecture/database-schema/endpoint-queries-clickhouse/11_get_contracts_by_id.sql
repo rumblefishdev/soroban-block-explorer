@@ -90,7 +90,9 @@ LIMIT 1;
 -- join, so duplicate `ledgers` rows cannot fan the count out (lore-0420).
 SELECT
     count()                            AS recent_invocations,
-    uniqExact(ca.caller_id)            AS recent_unique_callers,
+    -- accounts and contracts both count (task 0487); the pair, not
+    -- coalesce(): the two surrogate id spaces can collide
+    uniqExact(tuple(ca.caller_id, ca.caller_contract_id)) AS recent_unique_callers,
     toInt32($2)                        AS stats_window_days
 FROM contract_activity ca FINAL
 WHERE ca.contract_id = $1

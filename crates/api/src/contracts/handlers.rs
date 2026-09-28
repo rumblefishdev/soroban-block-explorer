@@ -329,6 +329,7 @@ pub async fn list_invocations(
             transaction_hash: row.transaction_hash,
             ledger_sequence: row.ledger_sequence,
             caller_account: row.caller_account,
+            caller_contract: row.caller_contract,
             created_at: row.created_at,
             successful: row.successful,
         })

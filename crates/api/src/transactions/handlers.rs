@@ -294,6 +294,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             .map(|r| InvocationAppearanceItem {
                 contract_id: r.contract_id,
                 caller_account: r.caller_account,
+                caller_contract: r.caller_contract,
                 ledger_sequence: r.ledger_sequence,
                 created_at: r.created_at,
             })
