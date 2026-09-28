@@ -3,26 +3,32 @@
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::resolve_accounts;
+use crate::common::ch::{resolve_accounts, resolve_contracts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use crate::liquidity_pools::dto::SharesCursor;
+
+use super::soroban_reserves::scale_raw;
 
 /// One current LP participant (a positive-shares position). Handler strips the
 /// surrogate before building the API response.
 #[derive(Debug)]
 pub struct ParticipantRow {
-    /// G-StrKey resolved via JOIN on `accounts`.
+    /// `G…` account, or `C…` contract for a soroban pool's share-token holder.
     pub account: String,
-    /// `accounts.id` BIGINT — used only to encode the next cursor; not
-    /// exposed in the response DTO.
+    /// Holder surrogate — used only to encode the next cursor; not exposed in
+    /// the response DTO.
     pub account_id_surrogate: i64,
     /// Numeric carried as text to preserve `NUMERIC(28,7)` precision.
     pub shares: String,
+    /// The value the keyset compares, carried in the cursor: `shares` for a
+    /// classic pool, the raw share-token amount for a soroban one.
+    pub cursor_shares: String,
     /// `100 * shares / total_pool_shares` over the pool's latest snapshot,
     /// NULL when it has none or its total is 0. Already a decimal string.
     pub share_percentage: Option<String>,
-    pub first_deposit_ledger: i64,
+    /// `None` for a soroban pool: `balances` keeps no first-deposit ledger.
+    pub first_deposit_ledger: Option<i64>,
     pub last_updated_ledger: i64,
 }
 
@@ -182,13 +188,183 @@ pub async fn fetch_participants(
             Some(ParticipantRow {
                 account,
                 account_id_surrogate: r.account_id_surrogate,
+                cursor_shares: r.shares.clone(),
                 shares: r.shares,
                 share_percentage: r.share_percentage,
-                first_deposit_ledger: r.first_deposit_ledger,
+                first_deposit_ledger: Some(r.first_deposit_ledger),
                 last_updated_ledger: r.last_updated_ledger,
             })
         })
         .collect())
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct SorobanParticipantChRow {
+    holder_id: i64,
+    raw_shares: String,
+    /// Never NULL: every row holds a positive balance, so the total is too.
+    share_percentage: String,
+    last_updated_ledger: i64,
+    decimals: Option<u32>,
+}
+
+/// A soroban pool's providers: the holders of its share token in `balances`,
+/// ordered like the classic list. `None` when the pool has no share token (a
+/// concentrated pool keeps positions, not shares) or the token publishes no
+/// decimals — the endpoint then says "not indexed" rather than listing
+/// nobody.
+///
+/// The denominator is the sum of the holders' balances: it equals the pool's
+/// stored total shares for 573 of 575 pools holding one (production,
+/// 2026-09-28), and it is the only total a config-factory pool has. The
+/// window runs before the keyset so every page divides by the whole.
+///
+/// `balances` is sorted by `(holder_id, asset_id)`, so the `asset_id` filter
+/// scans the table (~120M rows); the pool pages see a few dozen requests a
+/// day.
+pub async fn fetch_soroban_participants(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+    cursor: Option<&SharesCursor>,
+    limit: i64,
+    direction: Direction,
+) -> Result<Option<Vec<ParticipantRow>>, clickhouse::error::Error> {
+    let (op, order) = keyset_sql_desc(direction);
+    // The raw amount is an integer; anything else is a tampered or classic
+    // cursor and degrades to the first page, as on the classic list.
+    let keyset = match cursor {
+        Some(c) if !c.shares.is_empty() && c.shares.bytes().all(|b| b.is_ascii_digit()) => {
+            format!(
+                "AND (amt {op} toInt128('{s}') \
+                      OR (amt = toInt128('{s}') AND holder_id {op} {a}))",
+                s = c.shares,
+                a = c.account_id,
+            )
+        }
+        _ => String::new(),
+    };
+    let sql = format!(
+        "WITH (SELECT argMax(share_token_id, derived_at_ledger) FROM pool_instance_state \
+               WHERE pool_id = unhex(?)) AS token_id \
+         SELECT holder_id, \
+                toString(amt) AS raw_shares, \
+                toString(toDecimal128(amt * 100 / total, 7)) AS share_percentage, \
+                lul AS last_updated_ledger, \
+                (SELECT argMax(tuple(m.decimals), m.version).1 \
+                   FROM soroban_contract_metadata m \
+                  WHERE m.contract_id = (SELECT contract_id FROM soroban_contracts \
+                                         WHERE id = token_id LIMIT 1)) AS decimals \
+         FROM ( \
+             SELECT holder_id, amt, lul, sum(amt) OVER () AS total \
+             FROM ( \
+                 SELECT holder_id, \
+                        argMax(amount, last_updated_ledger) AS amt, \
+                        max(last_updated_ledger) AS lul \
+                 FROM balances WHERE asset_id = token_id AND token_id != 0 \
+                 GROUP BY holder_id \
+             ) WHERE amt > 0 \
+         ) \
+         WHERE 1 {keyset} \
+         ORDER BY amt {order}, holder_id {order} \
+         LIMIT ?"
+    );
+    let rows = client
+        .query(&sql)
+        .bind(pool_id_hex)
+        .bind(limit)
+        .fetch_all::<SorobanParticipantChRow>()
+        .await?;
+    if rows.is_empty() {
+        return Ok(pool_has_share_token(client, pool_id_hex)
+            .await?
+            .then(Vec::new));
+    }
+    let Some(decimals) = rows[0].decimals else {
+        return Ok(None);
+    };
+
+    // A holder is an account or a contract (a gauge, a vault); each
+    // surrogate lives in exactly one of the two tables (4,088 of 4,088
+    // positions, production 2026-09-28).
+    let ids: Vec<i64> = rows.iter().map(|r| r.holder_id).collect();
+    let (accounts, contracts) = tokio::try_join!(
+        resolve_accounts(client, ids.clone()),
+        resolve_contracts(client, ids),
+    )?;
+    Ok(Some(
+        rows.into_iter()
+            .filter_map(|r| {
+                let Some(account) = accounts
+                    .get(&r.holder_id)
+                    .or_else(|| contracts.get(&r.holder_id))
+                    .cloned()
+                else {
+                    tracing::error!(
+                        holder_id = r.holder_id,
+                        pool_id = pool_id_hex,
+                        "share-token holder resolves to no account or contract: \
+                         participant dropped"
+                    );
+                    return None;
+                };
+                Some(ParticipantRow {
+                    account,
+                    account_id_surrogate: r.holder_id,
+                    shares: scale_raw(&r.raw_shares, decimals)?,
+                    cursor_shares: r.raw_shares,
+                    share_percentage: Some(r.share_percentage),
+                    first_deposit_ledger: None,
+                    last_updated_ledger: r.last_updated_ledger,
+                })
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct HolderCountRow {
+    token_id: i64,
+    n: u64,
+}
+
+/// How many providers the soroban participants list holds — the detail
+/// KPI. `None` when the pool has no share token (not indexed). Same
+/// `balances` scan as the list.
+pub async fn count_soroban_participants(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+) -> Result<Option<i64>, clickhouse::error::Error> {
+    let row = client
+        .query(
+            "WITH (SELECT argMax(share_token_id, derived_at_ledger) FROM pool_instance_state \
+                   WHERE pool_id = unhex(?)) AS token \
+             SELECT ifNull(token, 0) AS token_id, countIf(amt > 0) AS n \
+             FROM ( \
+                 SELECT argMax(amount, last_updated_ledger) AS amt FROM balances \
+                 WHERE asset_id = token AND token != 0 GROUP BY holder_id \
+             )",
+        )
+        .bind(pool_id_hex)
+        .fetch_one::<HolderCountRow>()
+        .await?;
+    Ok((row.token_id != 0).then_some(row.n as i64))
+}
+
+/// `true` when the pool declares a share token — an empty holder list is then
+/// a real "no providers", not a pool whose providers are unreadable.
+async fn pool_has_share_token(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+) -> Result<bool, clickhouse::error::Error> {
+    let row = client
+        .query(
+            "SELECT count() AS n FROM pool_instance_state \
+             WHERE pool_id = unhex(?) AND share_token_id != 0",
+        )
+        .bind(pool_id_hex)
+        .fetch_one::<CountRow>()
+        .await?;
+    Ok(row.n > 0)
 }
 
 #[cfg(test)]

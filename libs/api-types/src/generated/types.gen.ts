@@ -1777,13 +1777,15 @@ export type PaginatedNftTransferItem = {
 export type PaginatedParticipantItem = {
   data: Array<{
     /**
-     * Participant account StrKey (G...).
+     * Provider StrKey: a `G…` account, or for a soroban pool also a `C…`
+     * contract holding the share token (a gauge, a vault).
      */
     account: string;
     /**
-     * Ledger of the first deposit by this account into this pool.
+     * Ledger of the first deposit by this account into this pool. `null` for
+     * a soroban pool, whose share-token balances record no first deposit.
      */
-    first_deposit_ledger: number;
+    first_deposit_ledger?: number | null;
     /**
      * Ledger of the most recent change to this position.
      */
@@ -2018,13 +2020,15 @@ export type PaginatedTransactionListItem = {
  */
 export type ParticipantItem = {
   /**
-   * Participant account StrKey (G...).
+   * Provider StrKey: a `G…` account, or for a soroban pool also a `C…`
+   * contract holding the share token (a gauge, a vault).
    */
   account: string;
   /**
-   * Ledger of the first deposit by this account into this pool.
+   * Ledger of the first deposit by this account into this pool. `null` for
+   * a soroban pool, whose share-token balances record no first deposit.
    */
-  first_deposit_ledger: number;
+  first_deposit_ledger?: number | null;
   /**
    * Ledger of the most recent change to this position.
    */

@@ -4268,21 +4268,16 @@
             "items": {
               "type": "object",
               "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
-              "required": [
-                "account",
-                "shares",
-                "first_deposit_ledger",
-                "last_updated_ledger"
-              ],
+              "required": ["account", "shares", "last_updated_ledger"],
               "properties": {
                 "account": {
                   "type": "string",
-                  "description": "Participant account StrKey (G...)."
+                  "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
                 },
                 "first_deposit_ledger": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool."
+                  "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
                 },
                 "last_updated_ledger": {
                   "type": "integer",
@@ -4544,21 +4539,16 @@
       "ParticipantItem": {
         "type": "object",
         "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
-        "required": [
-          "account",
-          "shares",
-          "first_deposit_ledger",
-          "last_updated_ledger"
-        ],
+        "required": ["account", "shares", "last_updated_ledger"],
         "properties": {
           "account": {
             "type": "string",
-            "description": "Participant account StrKey (G...)."
+            "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
           },
           "first_deposit_ledger": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool."
+            "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
           },
           "last_updated_ledger": {
             "type": "integer",

@@ -80,3 +80,110 @@ async fn quiet_pool_participants_keep_their_share() {
         .await
         .expect("drop throwaway db");
 }
+
+const SOROBAN_DB: &str = "api_test_0374_soroban_participants";
+const SOROBAN_POOL: &str = "d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3";
+const NO_TOKEN_POOL: &str = "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4";
+const SHARE_TOKEN: &str = "CDMH535JSD224YXPET3B4SJOLXTQQ24GRSCWACGYBKSH2DKFJYWI7SUW";
+const GAUGE: &str = "CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB";
+
+/// A soroban pool's providers are its share token's holders — accounts and
+/// contracts — scaled by the token's decimals, each page dividing by the
+/// whole. A pool with no share token is "not indexed" (`None`), never an
+/// empty list.
+#[tokio::test]
+async fn soroban_participants_are_share_token_holders() {
+    let Some(base) = crate::common::ch::test_client_from_env() else {
+        eprintln!("CH_URL unset — skipping soroban participants check");
+        return;
+    };
+    base.query(&format!("DROP DATABASE IF EXISTS {SOROBAN_DB}"))
+        .execute()
+        .await
+        .expect("drop leftover throwaway db");
+    base.query(&format!("CREATE DATABASE {SOROBAN_DB}"))
+        .execute()
+        .await
+        .expect("create throwaway db");
+    let ch = base.clone().with_database(SOROBAN_DB);
+    db_clickhouse::apply_init_sql(&ch)
+        .await
+        .expect("apply init.sql");
+
+    // Token 77 held by account 42 (300, then an older 999 version) and
+    // contract 43 (100); a zero balance (44) is not a provider.
+    for sql in [
+        format!(
+            "INSERT INTO pool_instance_state (pool_id, plane_id, share_token_id, total_shares, derived_at_ledger) VALUES \
+             (unhex('{SOROBAN_POOL}'), 1, 77, 400, 10), (unhex('{NO_TOKEN_POOL}'), 1, 0, 0, 10)"
+        ),
+        "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) VALUES \
+             (42, 77, 9990000000, 5), (42, 77, 3000000000, 20), (43, 77, 1000000000, 30), (44, 77, 0, 40)"
+            .to_string(),
+        format!(
+            "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
+             (77, '{SHARE_TOKEN}', false), (43, '{GAUGE}', false)"
+        ),
+        format!(
+            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES ('{SHARE_TOKEN}', 7, 1)"
+        ),
+        format!(
+            "INSERT INTO accounts (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number) VALUES \
+             (42, '{ACCOUNT}', 1, 1, 1)"
+        ),
+    ] {
+        ch.query(&sql).execute().await.expect("seed rows");
+    }
+
+    let first = fetch_soroban_participants(&ch, SOROBAN_POOL, None, 1, Direction::Next)
+        .await
+        .expect("participants query runs")
+        .expect("a pool with a share token is indexed");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].account, ACCOUNT);
+    assert_eq!(
+        first[0].shares, "300",
+        "newest balance, scaled by 7 decimals"
+    );
+    assert_eq!(first[0].share_percentage.as_deref(), Some("75"));
+    assert_eq!(first[0].first_deposit_ledger, None);
+
+    // The next page keys on the raw amount and still divides by the whole.
+    let cursor = SharesCursor {
+        shares: first[0].cursor_shares.clone(),
+        account_id: first[0].account_id_surrogate,
+    };
+    let second = fetch_soroban_participants(&ch, SOROBAN_POOL, Some(&cursor), 10, Direction::Next)
+        .await
+        .expect("participants query runs")
+        .expect("indexed");
+    assert_eq!(second.len(), 1, "the zero balance is not a provider");
+    assert_eq!(second[0].account, GAUGE, "a contract holder resolves");
+    assert_eq!(second[0].share_percentage.as_deref(), Some("25"));
+
+    assert!(
+        fetch_soroban_participants(&ch, NO_TOKEN_POOL, None, 10, Direction::Next)
+            .await
+            .expect("participants query runs")
+            .is_none(),
+        "a pool without a share token is not indexed"
+    );
+    assert_eq!(
+        count_soroban_participants(&ch, SOROBAN_POOL)
+            .await
+            .expect("count runs"),
+        Some(2),
+        "the detail count matches the list"
+    );
+    assert_eq!(
+        count_soroban_participants(&ch, NO_TOKEN_POOL)
+            .await
+            .expect("count runs"),
+        None
+    );
+
+    base.query(&format!("DROP DATABASE IF EXISTS {SOROBAN_DB}"))
+        .execute()
+        .await
+        .expect("drop throwaway db");
+}

@@ -609,7 +609,12 @@ with their share size, share percentage of the pool, first deposit ledger, and l
 update ledger. Powers the "Pool participants" table on the LP detail page
 (frontend §6.14). Backed by `lp_positions` (ADR 0037 §16). Added during task 0167
 to close a doc-drift gap between the frontend page and the original endpoint
-inventory.
+inventory. A soroban pool (`C…` id) lists the holders of its share token
+(`pool_instance_state.share_token_id`) from `balances` instead — accounts and
+contracts, scaled by the token's decimals, percentages over the holders' sum,
+`first_deposit_ledger = null`. A pool with no share token (concentrated) answers
+400 `not_indexed`; the detail endpoint's `participant_count` counts the same
+holders.
 
 These endpoints combine factual current-state reads with historical aggregate reads, so the
 backend should keep raw pool state and chart-series generation concerns clearly separated.

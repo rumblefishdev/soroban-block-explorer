@@ -30,7 +30,8 @@ pub struct SharesCursor {
 /// (`queries::list_participants`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ParticipantItem {
-    /// Participant account StrKey (G...).
+    /// Provider StrKey: a `G…` account, or for a soroban pool also a `C…`
+    /// contract holding the share token (a gauge, a vault).
     pub account: String,
     /// Pool-share balance carried as a decimal string preserving the
     /// underlying `NUMERIC(28,7)` precision (no f64 round-trip).
@@ -41,8 +42,9 @@ pub struct ParticipantItem {
     /// pool has no snapshot or its total is 0; the frontend renders "—".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
-    /// Ledger of the first deposit by this account into this pool.
-    pub first_deposit_ledger: i64,
+    /// Ledger of the first deposit by this account into this pool. `null` for
+    /// a soroban pool, whose share-token balances record no first deposit.
+    pub first_deposit_ledger: Option<i64>,
     /// Ledger of the most recent change to this position.
     pub last_updated_ledger: i64,
 }
