@@ -2482,3 +2482,11 @@ Local API against production: 575 positive, 133 `0`, 66 `null` — the
 measured split exactly; classic unchanged. CH-gated test
 `soroban_total_shares_follow_the_measured_rule`: green, red with the value
 taken from the snapshot as before.
+
+**Where total shares show (2026-09-28, decisions 77 A, 78 B).** A count of
+LP tokens in the pool's own unit says nothing on its own and compares with
+nothing across pools, yet it headlined the detail page's KPI strip and had a
+column in the list — while the detail page showed no TVL figure at all. The
+KPI strip's first cell is now TVL (the detail endpoint already returned it);
+the list's Total shares column is gone; the Summary card keeps the value.
+Shipped inside #514, which makes the value appear for soroban pools.
