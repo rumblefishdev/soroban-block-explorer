@@ -1795,7 +1795,8 @@ export type PaginatedParticipantItem = {
      * (`100 * shares / total`). Classic: over the pool's latest snapshot
      * however old — a classic pool snapshots every change — and `None` when
      * the pool has no snapshot or its total is 0; the frontend renders "—".
-     * Soroban: over the sum of the share token's holders, always present.
+     * Soroban: over the pool's own stored total as on chain (the holders'
+     * sum where it keeps none), always present.
      */
     share_percentage?: string | null;
     /**
@@ -2040,7 +2041,8 @@ export type ParticipantItem = {
    * (`100 * shares / total`). Classic: over the pool's latest snapshot
    * however old — a classic pool snapshots every change — and `None` when
    * the pool has no snapshot or its total is 0; the frontend renders "—".
-   * Soroban: over the sum of the share token's holders, always present.
+   * Soroban: over the pool's own stored total as on chain (the holders'
+   * sum where it keeps none), always present.
    */
   share_percentage?: string | null;
   /**
@@ -3551,7 +3553,7 @@ export type ListParticipantsData = {
 
 export type ListParticipantsErrors = {
   /**
-   * Invalid pool_id, limit, or cursor; or `not_indexed`: a soroban pool whose providers are not readable (no share token — a concentrated pool — or holders the index does not hold)
+   * Invalid pool_id, limit, or cursor; or `not_indexed`: a soroban pool whose providers are not readable (no share token — a concentrated pool — or a token that publishes no decimals)
    */
   400: ErrorEnvelope;
   /**

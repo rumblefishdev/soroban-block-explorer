@@ -32,8 +32,7 @@ interface PoolKpiStripProps {
  * a classic pool writes a snapshot on every change, so an old snapshot is a
  * quiet pool's current state, and a soroban pool has no snapshot at all.
  * `participant_count` is `null` where the providers are not read: a soroban
- * pool on the list, and on the detail a soroban pool with no share token or
- * holders that do not add up to its total.
+ * pool on the list, and on the detail a soroban pool with no share token.
  */
 function assetSubtitle(leg: PoolAssetLeg, code: string): ReactNode {
   const href = legHref(leg);

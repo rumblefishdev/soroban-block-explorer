@@ -92,9 +92,8 @@ const GAUGE: &str = "CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB";
 
 /// A soroban pool's providers are its share token's holders — accounts and
 /// contracts — scaled by the token's decimals, each page dividing by the
-/// whole. A pool with no share token, or whose stored total is positive
-/// while no holder is indexed, is "not indexed" (`None`); a pool storing a
-/// total of 0 with no holder is a real empty list.
+/// whole, the pool's own stored total where it keeps one. A pool with no
+/// share token is "not indexed" (`None`), never an empty list.
 #[tokio::test]
 async fn soroban_participants_are_share_token_holders() {
     let Some(base) = crate::common::ch::test_client_from_env() else {
@@ -182,33 +181,39 @@ async fn soroban_participants_are_share_token_holders() {
         Some(0),
         "a pool storing 0 total shares truly has no providers"
     );
-    assert!(
+    // The chain is the source of truth even where it disagrees with itself:
+    // a pool whose stored total no holder backs lists nobody, and one whose
+    // holders fall short of it divides by the pool's own total.
+    assert_eq!(
         fetch_soroban_participants(&ch, UNREAD_POOL, None, 10, Direction::Next)
             .await
             .expect("participants query runs")
-            .is_none(),
-        "a positive stored total with no indexed holder is unreadable, not empty"
+            .map(|rows| rows.len()),
+        Some(0)
     );
     assert_eq!(
         count_soroban_participants(&ch, UNREAD_POOL)
             .await
             .expect("count runs"),
-        None
+        Some(0)
     );
-    // Same token, a stored total the holders do not reach: a partial list
-    // would look complete, so it is not served.
-    assert!(
-        fetch_soroban_participants(&ch, PARTIAL_POOL, None, 10, Direction::Next)
-            .await
-            .expect("participants query runs")
-            .is_none(),
-        "holders short of the stored total are not a complete list"
+    let short = fetch_soroban_participants(&ch, PARTIAL_POOL, None, 10, Direction::Next)
+        .await
+        .expect("participants query runs")
+        .expect("indexed");
+    assert_eq!(
+        short
+            .iter()
+            .map(|r| r.share_percentage.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("33.3333333"), Some("11.1111111")],
+        "300 and 100 of the 900 shares the pool stores"
     );
     assert_eq!(
         count_soroban_participants(&ch, PARTIAL_POOL)
             .await
             .expect("count runs"),
-        None
+        Some(2)
     );
     assert_eq!(
         count_soroban_participants(&ch, SOROBAN_POOL)

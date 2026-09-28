@@ -1504,7 +1504,7 @@
             }
           },
           "400": {
-            "description": "Invalid pool_id, limit, or cursor; or `not_indexed`: a soroban pool whose providers are not readable (no share token — a concentrated pool — or holders the index does not hold)",
+            "description": "Invalid pool_id, limit, or cursor; or `not_indexed`: a soroban pool whose providers are not readable (no share token — a concentrated pool — or a token that publishes no decimals)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4286,7 +4286,7 @@
                 },
                 "share_percentage": {
                   "type": ["string", "null"],
-                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total`). Classic: over the pool's latest snapshot\nhowever old — a classic pool snapshots every change — and `None` when\nthe pool has no snapshot or its total is 0; the frontend renders \"—\".\nSoroban: over the sum of the share token's holders, always present."
+                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total`). Classic: over the pool's latest snapshot\nhowever old — a classic pool snapshots every change — and `None` when\nthe pool has no snapshot or its total is 0; the frontend renders \"—\".\nSoroban: over the pool's own stored total as on chain (the holders'\nsum where it keeps none), always present."
                 },
                 "shares": {
                   "type": "string",
@@ -4557,7 +4557,7 @@
           },
           "share_percentage": {
             "type": ["string", "null"],
-            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total`). Classic: over the pool's latest snapshot\nhowever old — a classic pool snapshots every change — and `None` when\nthe pool has no snapshot or its total is 0; the frontend renders \"—\".\nSoroban: over the sum of the share token's holders, always present."
+            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total`). Classic: over the pool's latest snapshot\nhowever old — a classic pool snapshots every change — and `None` when\nthe pool has no snapshot or its total is 0; the frontend renders \"—\".\nSoroban: over the pool's own stored total as on chain (the holders'\nsum where it keeps none), always present."
           },
           "shares": {
             "type": "string",

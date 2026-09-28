@@ -44,7 +44,7 @@ use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
          body = Paginated<ParticipantItem>),
         (status = 400, description = "Invalid pool_id, limit, or cursor; or `not_indexed`: \
          a soroban pool whose providers are not readable (no share token — a concentrated \
-         pool — or holders the index does not hold)", body = ErrorEnvelope),
+         pool — or a token that publishes no decimals)", body = ErrorEnvelope),
         (status = 404, description = "Pool not found",  body = ErrorEnvelope),
         (status = 500, description = "Database error",  body = ErrorEnvelope),
     )
@@ -115,8 +115,8 @@ pub async fn list_participants(
             return errors::bad_request(
                 errors::NOT_INDEXED,
                 "this pool's providers are not indexed: it has no share token \
-                 (a concentrated pool keeps positions), or its holders or their \
-                 decimals are not in the index",
+                 (a concentrated pool keeps positions), or the token publishes no \
+                 decimals",
             );
         }
         Err(e) => {

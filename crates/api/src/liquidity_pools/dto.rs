@@ -41,7 +41,8 @@ pub struct ParticipantItem {
     /// (`100 * shares / total`). Classic: over the pool's latest snapshot
     /// however old — a classic pool snapshots every change — and `None` when
     /// the pool has no snapshot or its total is 0; the frontend renders "—".
-    /// Soroban: over the sum of the share token's holders, always present.
+    /// Soroban: over the pool's own stored total as on chain (the holders'
+    /// sum where it keeps none), always present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
     /// Ledger of the first deposit by this account into this pool. `null` for
