@@ -248,6 +248,15 @@ application_order)` — `TxKey.transaction_id` and the account page's
   The WARN lines (`no known arg shape parsed`) are contracts
   `CBMKSLJL…`, `CD7ZVM24…`, `CAK7EUVA…`, `CBBVYBTC…`: the same shapes the
   live indexer drops, so the old tables lack them too.
+- **Step 2 (readers, #527) deployed** (2026-09-28): API 14:53:48 UTC, SPA
+  14:54:14 UTC (from `develop` `2c762bc0`). Deployed API through the dev
+  proxy: token 18 of `CCIP47L5…` (two changes in one operation) lists
+  event 1 `mint` then event 0 `transfer` — the chain's own order, checked
+  against the stored events (the contract emits `transfer` from itself, then
+  `mint`); cursor paging walks both rows; an old `event_order` cursor
+  answers 400. `api_reader` reads only `nft_ownership_changes` after the
+  deploy, 0 query exceptions. The SPA chunk `NftDetailPage` carries the new
+  fields.
 
 ## Implementation
 
