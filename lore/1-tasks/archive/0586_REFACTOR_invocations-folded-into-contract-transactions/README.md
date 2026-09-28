@@ -2,8 +2,8 @@
 id: '0586'
 title: 'REFACTOR: soroban_invocations_appearances folded into contract_transactions — the last surrogate-keyed contract table'
 type: REFACTOR
-status: active
-related_adr: ['0059']
+status: completed
+related_adr: ['0059', '0060']
 related_tasks: ['0538', '0541', '0372', '0487', '0575']
 tags: [clickhouse, storage, effort-medium, priority-high]
 links:
@@ -18,6 +18,14 @@ history:
       Step 5 of epic 0538 for the invocations table (decided 2026-09-23: fold
       into contract_transactions). Chosen next (thread 246 A) as the smallest
       of the three tables still blocking the drop of transactions.id.
+  - date: '2026-09-28'
+    status: completed
+    who: karolkow
+    note: >
+      Shipped in 3 steps (PRs #506/#507, #512/#513/#515/#516, #519; task 0487
+      as #517). Deployed 2026-09-28 14:26 UTC; whole-row comparison 0 / 0 over
+      50,450,000–64,663,963; both old tables dropped, +23.40 GiB free disk.
+      contract_activity 15.41 GiB, 3.0 bn rows.
 ---
 
 # Invocations folded into `contract_transactions`
@@ -218,14 +226,69 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   ledgers from 64,659,000 to that deploy are compared the same way right after
   it, before the drops.
 
+- **Steps 2 and 3 deployed** (2026-09-28): Compute from `develop` `f1e53c45`
+  (#513, #515, #516, #517, #519), indexer and API Lambdas 14:26:33 UTC, SPA
+  14:29:16 UTC. The old writer's last insert into both old tables was
+  14:26:34 UTC; their head stays at ledger **64,663,962**. After the deploy:
+  0 query exceptions, the three DLQs empty, `api_reader` ran 498 queries and
+  none read either old table (last reads 08:46 UTC and 2026-09-25).
+  KALE SAC detail stats from the deployed API: 70 unique callers = 70 by the
+  new formula in ClickHouse (62 by the old, `caller_id` only); the Invocations
+  tab lists the contract caller `CDL74RF5…`.
+- **Tail comparison** (read-only, `check_fill_matches_live.sql` on
+  64,659,000–64,663,963): **0 / 0** on 1,414,449 rows each side; 0
+  `contract_transactions` rows past 64,663,962.
+- **prices-api check before the drops** (2026-09-28 14:35 UTC,
+  `system.query_log`, 14 days): no `prices_*` user read either table. Sizes:
+  `soroban_invocations_appearances` 14.87 GiB, `contract_transactions`
+  9.36 GiB (drop saving 24.23 GiB); `contract_activity` 15.41 GiB.
+- **Both old tables dropped** by the operator (2026-09-28, ~14:36 UTC);
+  `system.tables` 0, ingest kept pace (0 write or read exceptions). The
+  server removes the files 480 s after the drop
+  (`database_atomic_delay_before_drop_table_sec`): free disk 822.08 GiB
+  before, 845.48 GiB at 14:44:58 UTC — **+23.40 GiB** (other tables grow
+  meanwhile; the parts measured 24.23 GiB).
+
 ## Acceptance Criteria
 
-- [ ] New table filled and gated in every partition; whole rows compared
-      before each drop
-- [ ] API reads only the new table (`query_log`)
-- [ ] `soroban_invocations_appearances` and the old `contract_transactions`
-      dropped; saving measured
-- [ ] `schema_conventions` allowlist without `soroban_invocations_appearances`
-- [ ] prices-api check recorded before each drop
-- [ ] **Docs updated** — schema overview, canonical SQL (contracts,
-      transaction page, `/transactions` contract filter), deployment, backfills
+- [x] New table filled and gated in every partition; whole rows compared
+      before each drop (1,421 slices + the tail, 0 / 0)
+- [x] API reads only the new table (`query_log`: 0 `api_reader` reads of
+      either old table after the 2026-09-28 deploy)
+- [x] `soroban_invocations_appearances` and the old `contract_transactions`
+      dropped; saving measured (+23.40 GiB free disk)
+- [x] `schema_conventions` allowlist without `soroban_invocations_appearances`
+      (#519)
+- [x] prices-api check recorded before each drop
+- [x] **Docs updated** — schema overview, pilot, pipeline, deployment,
+      backfills, runbooks (#513, #519). Canonical SQL: N/A — the set was
+      retired by ADR 0060 / task 0588 before the readers merged.
+
+## Design Decisions
+
+### From Plan
+
+1. **Parallel change, new table name `contract_activity`** (threads 247 A,
+   248 A): no swap window, every step an ordinary deploy.
+2. **No codecs this time**; ~4 GiB (_estimate_) not worth the extra step.
+3. **Task 0487 in its own PR after the readers** (249 A), so the reader PR
+   stayed comparable to the old API.
+
+### Emerged
+
+4. **Fold count kept as `invocation_count`** (thread 255): nothing reads it,
+   but no other table holds it and only an S3 re-parse could restore it.
+5. **Surrogate cursor removed, not tolerated** (273 B): an old
+   `ch_surrogate` cursor fails to decode (400) instead of being refused per
+   list, which removed four guards.
+6. **Invocations tab driver puts `LIMIT` in a subquery**: `LIMIT 1 BY`
+   beside `LIMIT` disables the read-in-order early stop (21.7 M rows vs
+   0.59 M).
+
+## Issues Encountered
+
+- **#513 merged before its review fixes were pushed** — they followed in
+  #515. Not a regression.
+- **Fill SELECT over 50k ledgers exceeded the 3.73 GiB cap** — slices of
+  10k.
+- **Drop saving shows only after 480 s** (`database_atomic_delay_before_drop_table_sec`).
