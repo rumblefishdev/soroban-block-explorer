@@ -2391,7 +2391,7 @@ the activity column (0581) stay where they are.
 **Outside the pools** (same sweep): guessed 7 decimals in account balances,
 balance changes and asset supply show wrong numbers today (USST 10^11 too
 large); task 0473 covers only the parser, not the rendering — decision 119
-pending. Merged accounts shown open: 0321. `resolves_on_asset_page`: 0542.
+moved to task 0584 (2026-09-28, decision 92 B). Merged accounts shown open: 0321. `resolves_on_asset_page`: 0542.
 Smaller defaults that render a plausible wrong value: task 0584 (127 A).
 The read-only user's refused `join_use_nulls`, behind most `nullIf` /
 `toNullable` tricks, is an infra setting left to the operator.
