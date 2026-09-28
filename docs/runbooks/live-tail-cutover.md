@@ -677,7 +677,7 @@ UNION ALL SELECT 'transaction_participants',        count() FROM transaction_par
 UNION ALL SELECT 'transaction_operations',          count() FROM transaction_operations          WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'soroban_events',                  count() FROM soroban_events                  WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'contract_activity',               count() FROM contract_activity               WHERE ledger_sequence > {cut:Int64}
-UNION ALL SELECT 'nft_ownership',                   count() FROM nft_ownership                   WHERE ledger_sequence > {cut:Int64}
+UNION ALL SELECT 'nft_ownership_changes',           count() FROM nft_ownership_changes           WHERE ledger_sequence > {cut:Int64}
 UNION ALL SELECT 'liquidity_pool_snapshots',        count() FROM liquidity_pool_snapshots        WHERE ledger_sequence > {cut:Int64}
 ORDER BY tbl FORMAT PrettyCompact
 \""
@@ -721,7 +721,7 @@ FORMAT PrettyCompact
   enrichment stub. Sustained `0` across thousands of post-cutover ledgers
   points at a specific broken/unported persist branch, not a generic write
   failure → investigate that slice.
-- `nft_ownership`, `nfts`, `liquidity_pools`, `liquidity_pool_snapshots`,
+- `nft_ownership_changes`, `nfts`, `liquidity_pools`, `liquidity_pool_snapshots`,
   `lp_positions` — activity-dependent; may legitimately be low/0 in a short
   window. Cross-check against a known-active ledger range before concluding
   a regression.

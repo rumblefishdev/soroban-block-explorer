@@ -194,9 +194,8 @@ Derived explorer entities:
   and classic pool reserves for ALL asset types (Option A — no per-token `TotalSupply` key read). The
   `balances` family is ClickHouse-only (see `clickhouse-pilot.md §4f`); there is no
   `soroban_token_balances` / `soroban_asset_aggregates` (superseded by the unified model on the pivot)
-- `nfts`, `nft_ownership` — NFT registry plus partitioned ownership history;
-  `nft_ownership_changes` is the same history located by each change's event
-  and replaces `nft_ownership` (task 0424, §4.13.2)
+- `nfts`, `nft_ownership_changes` — NFT registry plus partitioned ownership
+  history, each change located by its event (task 0424, §4.13)
 - `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions` — classic LP state +
   time-series snapshots + per-account share positions
 - `liquidity_pools` is also the dimension for **Soroban AMM pools** (ADR 0058,
@@ -285,7 +284,7 @@ soroban_contracts                           # contracts OBSERVED being deployed 
   ├─ soroban_events_appearances
   ├─ contract_activity
   ├─ assets
-  └─ nfts ─ nft_ownership (partitioned)
+  └─ nfts ─ nft_ownership_changes (partitioned)
 
 liquidity_pools                       # classic (pool_kind=0) + soroban AMM (pool_kind=1)
   ├─ liquidity_pool_snapshots (partitioned)   # classic only
@@ -330,7 +329,7 @@ All closed-domain enum columns are `SMALLINT` backed by a Rust `#[repr(i16)]` en
 `crates/domain/src/enums/`, with a `CHECK` range constraint and a `<name>_name(ty)` SQL
 helper function for psql/BI debugging. Columns: `operations_appearances.type`,
 `assets.asset_type`, `account_balances_current.asset_type`,
-`nft_ownership.event_type`,
+`nft_ownership_changes.event_type`,
 `liquidity_pools.asset_a_type`, `liquidity_pools.asset_b_type`,
 `soroban_contracts.contract_type`. Parser code binds integers directly; API serializers
 render the canonical string.
@@ -1296,7 +1295,7 @@ Design notes:
   `operations_appearances.destination_id`, `operations_appearances.asset_issuer_id`,
   `soroban_contracts.deployer_id`,
   `soroban_invocations_appearances.caller_id`, `assets.issuer_id`, `nfts.current_owner_id`,
-  `nft_ownership.owner_id`, `transaction_participants.account_id`,
+  `nft_ownership_changes.owner_id`, `transaction_participants.account_id`,
   `account_balances_current.account_id`,
   `liquidity_pools.asset_a_issuer_id`, `liquidity_pools.asset_b_issuer_id`,
   `lp_positions.account_id`
@@ -1345,7 +1344,7 @@ CREATE TABLE nfts (
     -- (`metadata JSONB` dropped per ADR 0043 / task 0195 §2d — detail-only,
     --  served at request time via `runtime_enrichment::nft_token_uri`)
     -- (`minted_at_ledger` dropped per task 0497 — the mint is the
-    --  `nft_ownership` row with event_type = 0; a copy here drifted)
+    --  `nft_ownership_changes` row with event_type = 0; a copy here drifted)
     current_owner_id     BIGINT       REFERENCES accounts(id),                    -- ADR 0026
     current_owner_ledger BIGINT,
     UNIQUE (contract_id, token_id)
@@ -1370,47 +1369,15 @@ Design notes:
 - `current_owner_id` is the `accounts.id` surrogate (ADR 0026); the displayed
   `G...` StrKey is obtained via JOIN back to `accounts.account_id`
 - `metadata` and `media_url` remain optional because NFT contract conventions vary
-  heavily; full transfer history lives in `nft_ownership` (§4.13)
+  heavily; full transfer history lives in `nft_ownership_changes` (§4.13)
 
-### 4.13 NFT Ownership
+### 4.13 NFT Ownership — `nft_ownership_changes` (task 0424)
 
-```sql
-CREATE TABLE nft_ownership (
-    nft_id          INTEGER      NOT NULL REFERENCES nfts(id) ON DELETE CASCADE,
-    transaction_id  BIGINT       NOT NULL,
-    owner_id        BIGINT       REFERENCES accounts(id),              -- ADR 0026
-    event_type      SMALLINT     NOT NULL,                             -- ADR 0031 NftEventType
-    ledger_sequence BIGINT       NOT NULL,
-    event_order     SMALLINT     NOT NULL,
-    created_at      TIMESTAMPTZ  NOT NULL,
-    PRIMARY KEY (nft_id, created_at, ledger_sequence, event_order),
-    FOREIGN KEY (transaction_id, created_at)
-        REFERENCES transactions (id, created_at) ON DELETE CASCADE,
-    CONSTRAINT ck_nft_own_event_type_range CHECK (event_type BETWEEN 0 AND 15)
-) PARTITION BY RANGE (created_at);
-```
-
-Purpose:
-
-- record every mint/transfer/burn event per NFT instance for the NFT detail page's
-  history tab
-- support owner-centric NFT feeds (account → NFTs currently held + history)
-
-Design notes:
-
-- `event_type` is `SMALLINT` Rust `NftEventType` enum (`0=mint`, `1=transfer`,
-  `2=burn`) per [ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md);
-  helper `nft_event_type_name(ty)` for psql/BI
-- `owner_id` is the recipient's surrogate account FK (ADR 0026); NULL for burns
-- partitioned on `created_at` mirroring `transactions`; cascade via composite FK to
-  `transactions` and a direct FK to `nfts`
-
-### 4.13.2 NFT Ownership by Event Location (task 0424)
-
-ClickHouse-only. `nft_ownership_changes` (and its `_pending` quarantine, same
-shape) holds one row per change of owner of one token — mint, transfer, burn —
-located by its source event's stellar-rpc id (ADR 0059), and replaces
-`nft_ownership` / `nft_ownership_pending` (a parallel change, epic 0538 step 4):
+`nft_ownership_changes` (and its `_pending` quarantine, same shape) holds one
+row per change of owner of one token — mint, transfer, burn — located by its
+source event's stellar-rpc id (ADR 0059). It replaced `nft_ownership` /
+`nft_ownership_pending`, dropped in task 0424 (a parallel change, epic 0538
+step 4):
 
 ```sql
 CREATE TABLE nft_ownership_changes (
@@ -1428,21 +1395,28 @@ PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index);
 ```
 
-- **Why:** `nft_ownership.event_order` is our own counter per (collection,
-  token, ledger) that restarts at 0, so same-ledger changes of different tokens
-  share values and the order inside a ledger is unknown (task 0424). The event
-  location is chain-derived, gives a total order, and is the same key
-  `soroban_events` and `asset_transfers` carry — no `transaction_id`.
+- **Why:** the old `nft_ownership.event_order` was our own counter per
+  (collection, token, ledger) that restarted at 0, so same-ledger changes of
+  different tokens shared values and the order inside a ledger was unknown
+  (task 0424). The event location is chain-derived, gives a total order, and
+  is the same key `soroban_events` and `asset_transfers` carry — no
+  `transaction_id`.
+- `event_type` is the Rust `NftEventType` enum (`0=mint`, `1=transfer`,
+  `2=burn`) per [ADR 0031](../../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md);
+  `owner_id` is the recipient's account surrogate, NULL for a burn.
 - **`token_id` stays in the key:** one `consecutive_mint` event mints many
   tokens under a single event id.
 - **Staging refuses a change without an event id**, as `soroban_events` does;
   NFT events are per-operation contract events, which always carry one.
 - The API reads it alone: the NFT transfers tab (keyset on the location),
   the mint ledger, and the pieces an account's balance change names (by
-  transaction position). Still written beside the old pair until the old
-  write stops; promotion from `_pending` (`nft-reclassify`) moves both pairs.
+  transaction position). Promotion from `_pending` is `nft-reclassify`.
 
-### 4.13.1 NFT Quarantine — `nfts_pending` + `nft_ownership_pending` (task 0217)
+### 4.13.1 NFT Quarantine — `nfts_pending` + `nft_ownership_changes_pending` (task 0217)
+
+The ClickHouse quarantine for ownership changes is
+`nft_ownership_changes_pending`, the same shape as `nft_ownership_changes`
+(§4.13). The Postgres DDL below is the original design of task 0217.
 
 ```sql
 CREATE TABLE nfts_pending (
@@ -1476,17 +1450,17 @@ Purpose:
 
 - isolate NFT-candidate rows whose contract has not yet been definitively
   classified (verdict `Other` or NULL — no usable WASM observed in any indexed
-  ledger so far). The API-facing hot tables (`nfts` / `nft_ownership`) stay
-  clean by design.
+  ledger so far). The API-facing hot tables (`nfts` / `nft_ownership_changes`)
+  stay clean by design.
 
 Persist routing (task 0217 Phase B, see
 [`crates/indexer/src/handler/persist/write.rs`](../../../crates/indexer/src/handler/persist/write.rs)):
 
-| Classifier verdict   | Target tables                            |
-| -------------------- | ---------------------------------------- |
-| `Nft` (=2)           | `nfts` + `nft_ownership` (hot)           |
-| `Fungible` / `Token` | _none_ (filtered out)                    |
-| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_pending` |
+| Classifier verdict   | Target tables                                    |
+| -------------------- | ------------------------------------------------ |
+| `Nft` (=2)           | `nfts` + `nft_ownership_changes` (hot)           |
+| `Fungible` / `Token` | _none_ (filtered out)                            |
+| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_changes_pending` |
 
 Promotion is wired through the existing `reclassify_contracts_from_wasm`
 UPDATE path (originally task 0118 Phase 2). When a contract's verdict flips

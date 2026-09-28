@@ -341,22 +341,21 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- nft_ownership (append-only fact) — composite PK, no `nft_id` -----
+    // ----- nft_ownership_changes (append-only fact) — located by its event -----
     client
         .query(
-            "INSERT INTO nft_ownership (contract_id, token_id, ledger_sequence, event_order, transaction_id, owner_id, event_type) \
-             VALUES (?, 'tok-1', ?, 0, ?, ?, 0)",
+            "INSERT INTO nft_ownership_changes (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index, owner_id, event_type) \
+             VALUES (?, 'tok-1', ?, 1, 0, 0, ?, 0)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
         .await
-        .expect("insert nft_ownership");
+        .expect("insert nft_ownership_changes");
     assert_count(
         &client,
-        "nft_ownership",
+        "nft_ownership_changes",
         &format!("ledger_sequence = {SMOKE_LEDGER}"),
         1,
     )
@@ -599,7 +598,7 @@ async fn cleanup(client: &clickhouse::Client) {
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE contract_activity DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE nfts DELETE WHERE contract_id = {l} AND token_id = 'tok-1'"),
-        format!("ALTER TABLE nft_ownership DELETE WHERE ledger_sequence = {l}"),
+        format!("ALTER TABLE nft_ownership_changes DELETE WHERE ledger_sequence = {l}"),
         "ALTER TABLE liquidity_pools DELETE WHERE hex(pool_id) = '00000000000000000000000000000000000000000000000000000000000000BB'".into(),
         format!("ALTER TABLE liquidity_pool_snapshots DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE lp_positions DELETE WHERE account_id = {l}"),

@@ -509,7 +509,7 @@ Caching operates at two levels:
 │  │ accounts · transaction_participants · tx_hash_index  │                     │
 │  │ soroban_contracts · wasm_interface_metadata · assets │                     │
 │  │ soroban_events_appearances · soroban_invocations_…   │                     │
-│  │ nfts · nft_ownership · liquidity_pools · lp_…        │                     │
+│  │ nfts · nft_ownership_changes · liquidity_pools · lp_…│                     │
 │  │ account_balances_current (ADR 0035: history dropped) │                     │
 │  └──────────────────────────┬───────────────────────────┘                     │
 │                             │                                                 │
@@ -752,7 +752,7 @@ Stellar Network (mainnet peers)
 │     accounts, account_balances_current                  │
 │ 10. Detect SEP-41 token contracts, NFT contracts,       │
 │     classic LPs → assets, nfts, liquidity_pools,        │
-│     nft_ownership, lp_positions                         │
+│     nft_ownership_changes, lp_positions                 │
 │ 11. Flush the `ledgers` row LAST, after every other      │
 │     insert has ack'd — it is the commit marker           │
 └─────────────────────────────────────────────────────────┘
@@ -936,7 +936,7 @@ XDR parsing happens in two places, each with a different scope:
   persisted; E14 re-expands it from the archive via
   `xdr_parser::extract_events`
 - Known SEP-41 / NFT transfer patterns also drive derived-state upserts on
-  `assets`, `nfts`, and `nft_ownership`. Per-account Soroban token holdings
+  `assets`, `nfts`, and `nft_ownership_changes`. Per-account Soroban token holdings
   are explicitly out of scope: `account_balances_current` (§4.17 of the
   schema overview) carries only classic balances (native XLM + trustlines)
   per ADR 0035; Soroban `ContractData` `Balance(address)` entries are not
@@ -1032,7 +1032,7 @@ Cross-cutting schema disciplines applied to every table:
   API layer.
 - **SMALLINT enums** ([ADR 0031](../../lore/2-adrs/0031_enum-columns-smallint-with-rust-enum.md)):
   every closed-domain "type" column (`operations_appearances.type`, `assets.asset_type`,
-  `soroban_contracts.contract_type`, `nft_ownership.event_type`, etc.) is `SMALLINT`
+  `soroban_contracts.contract_type`, `nft_ownership_changes.event_type`, etc.) is `SMALLINT`
   backed by a Rust `#[repr(i16)]` enum with a `CHECK` range constraint and a
   `<name>_name(ty)` SQL helper for psql/BI.
 - **Range partitioning on ledger sequence** for high-volume child tables
@@ -1241,7 +1241,7 @@ CREATE TABLE nfts (
     current_owner_ledger BIGINT,
     UNIQUE (contract_id, token_id)
 );
--- companion table nft_ownership (partitioned) records mint/transfer/burn history
+-- companion table nft_ownership_changes (partitioned) records mint/transfer/burn history
 -- with event_type SMALLINT (NftEventType) per ADR 0031.
 ```
 
@@ -1315,7 +1315,7 @@ user carries no `<grants>` block in `users.d/services.xml` — unlike
 Partitioned (`PARTITION BY RANGE (created_at)`, monthly):
 `transactions`, `operations_appearances`, `transaction_participants`,
 `soroban_events_appearances`, `soroban_invocations_appearances`,
-`liquidity_pool_snapshots`, `nft_ownership`.
+`liquidity_pool_snapshots`, `nft_ownership_changes`.
 
 Unpartitioned anchors and registries:
 `ledgers`, `transaction_hash_index`, `accounts`, `soroban_contracts`,

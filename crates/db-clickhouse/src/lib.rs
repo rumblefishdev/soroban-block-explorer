@@ -211,10 +211,12 @@ mod tests {
         // `contract_activity`. 41 → 39.
         // task 0424: added `nft_ownership_changes` + `_pending` — the
         // ownership rows located by their event. 39 → 41.
+        // task 0424: dropped `nft_ownership` + `_pending` — every reader moved
+        // to `nft_ownership_changes`. 41 → 39.
         assert_eq!(
             stmts.len(),
-            41,
-            "expected 38 tables + 3 materialized views, got {}",
+            39,
+            "expected 36 tables + 3 materialized views, got {}",
             stmts.len()
         );
     }

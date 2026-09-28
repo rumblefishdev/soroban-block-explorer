@@ -104,7 +104,7 @@ already cheap. PG snapshot the pilot was sized against:
 | `liquidity_pool_snapshots`                             | `liquidity_pool_snapshots`      | append-only fact | PK = `(pool_id, ledger_sequence)`; no surrogate id                                                                                                                                                                                                                                                                                                                                         |
 | `lp_positions`                                         | `lp_positions`                  | state            | PK = `(pool_id, account_id)`; version = `last_updated_ledger`; `closed_at_ledger` marks a departed participant (ADR 0055)                                                                                                                                                                                                                                                                  |
 | `nfts`                                                 | `nfts`                          | state            | PK = `(contract_id, token_id)`; drops `metadata`                                                                                                                                                                                                                                                                                                                                           |
-| `nft_ownership`                                        | `nft_ownership`                 | append-only fact | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                                                                                                                                                                                                                                                                                                               |
+| `nft_ownership`                                        | `nft_ownership_changes`         | append-only fact | PK = `(contract_id, token_id, ledger_sequence, application_order, operation_index, event_index)` — each change located by its event (task 0424)                                                                                                                                                                                                                                            |
 | `operations_appearances`                               | `transaction_operations`        | append-only fact | PK = `(ledger_sequence, application_order, operation_index)` — the transaction's position (task 0372); FK Int64; `pool_ids` Array (0261/0268)                                                                                                                                                                                                                                              |
 | `soroban_contracts`                                    | `soroban_contracts`             | state            | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`                                                                                                                                                                                                                                                                                                          |
 | `soroban_events_appearances` (folded ADR 0033 design)  | `soroban_events` **(NEW)**      | append-only fact | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                                                                                                                                                                                                                                                                                                                   |
@@ -160,7 +160,7 @@ history.
 
 CH partitions by `ledger_sequence`, not by wall-clock time. The
 denormalized `created_at` column on `transactions`,
-`transaction_operations`, `transaction_participants`, `nft_ownership`,
+`transaction_operations`, `transaction_participants`, `nft_ownership_changes`,
 `liquidity_pool_snapshots`, `soroban_events`,
 `contract_activity`, and `transaction_hash_index` is omitted
 on the CH side. Wall-clock time is recovered via JOIN to
@@ -172,7 +172,7 @@ denormalization at full Stellar scale.
 The JSONB metadata blob is not carried in the CH copy of `nfts`. PG keeps
 it unchanged.
 
-### 4c-bis. `nfts_pending` + `nft_ownership_pending` quarantine (task 0217 + 0220)
+### 4c-bis. `nfts_pending` + `nft_ownership_changes_pending` quarantine (task 0217 + 0220)
 
 CH carries the same `_pending` quarantine pair as PG so the routing
 semantics defined in
@@ -201,11 +201,11 @@ land symmetrically on both writers.
 Verdict-based routing (verdict source: `soroban_contracts.contract_type`,
 which is `Nullable(Int16)` and tracks the `domain::ContractType` enum):
 
-| Classifier verdict   | Target tables                            |
-| -------------------- | ---------------------------------------- |
-| `Nft` (=2)           | `nfts` + `nft_ownership` (hot)           |
-| `Fungible` / `Token` | _none_ (filtered out)                    |
-| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_pending` |
+| Classifier verdict   | Target tables                                    |
+| -------------------- | ------------------------------------------------ |
+| `Nft` (=2)           | `nfts` + `nft_ownership_changes` (hot)           |
+| `Fungible` / `Token` | _none_ (filtered out)                            |
+| `Other` (=1) / NULL  | `nfts_pending` + `nft_ownership_changes_pending` |
 
 CH-side schema (see [`init.sql`](../../../crates/db-clickhouse/schema/init.sql)):
 
@@ -222,28 +222,31 @@ CREATE TABLE IF NOT EXISTS nfts_pending (
 ENGINE = ReplacingMergeTree(current_owner_ledger)
 ORDER BY (contract_id, token_id);
 
-CREATE TABLE IF NOT EXISTS nft_ownership_pending (
-    contract_id      Int64,
-    token_id         String,
-    ledger_sequence  Int64,
-    event_order      Int16,
-    transaction_id   Int64,
-    owner_id         Nullable(Int64),
-    event_type       Int16
+CREATE TABLE IF NOT EXISTS nft_ownership_changes_pending (
+    contract_id        Int64,
+    token_id           String,
+    ledger_sequence    Int64,
+    application_order  Int16,
+    operation_index    UInt16,
+    event_index        UInt32,
+    owner_id           Nullable(Int64),
+    event_type         Int16
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (contract_id, token_id, ledger_sequence, event_order);
+ORDER BY (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index);
 ```
 
 Notes:
 
-- The shape is identical to `nfts` / `nft_ownership`; promotion is a
-  column-projection `INSERT INTO nfts SELECT … FROM nfts_pending`. The
-  partition layout on `nft_ownership_pending` matches `nft_ownership`
-  so promotion can move whole parts cleanly under a future part-level
-  optimization (not done in the pilot — promotion currently uses a
-  row-level INSERT/DELETE pair).
+- The shape is identical to `nfts` / `nft_ownership_changes`; promotion
+  (`backfill-runner nft-reclassify`) is `INSERT INTO … SELECT *` from the
+  pending table. The partition layout on `nft_ownership_changes_pending`
+  matches `nft_ownership_changes` so promotion can move whole parts
+  cleanly under a future part-level optimization (not done — promotion
+  uses a row-level INSERT/DELETE pair).
+- Task 0424 replaced `nft_ownership{,_pending}` (keyed by a per-token
+  `event_order` counter and the `transaction_id` surrogate) with this pair.
 - API endpoints never read the `_pending` tables.
 - Operational lifecycle (initial migration + post-backfill drain) is
   documented in
@@ -626,23 +629,23 @@ production schema settled on a **hybrid**: surrogate `id Int64` on
 the three central FK hubs, natural / composite primary keys on the
 other 12 tables.
 
-| Table                           | ORDER BY                                                                          | Surrogate `id`? |
-| ------------------------------- | --------------------------------------------------------------------------------- | --------------- |
-| `accounts`                      | `account_id` (StrKey G…)                                                          | **yes — Int64** |
-| `soroban_contracts`             | `contract_id` (StrKey C…)                                                         | **yes — Int64** |
-| `transactions`                  | `(ledger_sequence, application_order)`                                            | **yes — Int64** |
-| `assets`                        | `(asset_type, asset_code, issuer_id, contract_id)`                                | no              |
-| `account_balances_current`      | `(account_id, asset_type, asset_code, issuer_id)`                                 | no              |
-| `nfts`                          | `(contract_id, token_id)`                                                         | no              |
-| `liquidity_pools`               | `pool_id` (FixedString(32) hash)                                                  | no              |
-| `lp_positions`                  | `(pool_id, account_id)`                                                           | no              |
-| `transaction_hash_prefix_index` | `(hash_prefix, ledger_sequence)` (8-byte hash prefix, task 0580)                  | no              |
-| `transaction_operations`        | `(ledger_sequence, application_order, operation_index)`                           | no              |
-| `transaction_participants`      | `(account_id, ledger_sequence, application_order)`                                | no              |
-| `soroban_events`                | `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)` | no              |
-| `contract_activity`             | `(contract_id, ledger_sequence, application_order)`                               | no              |
-| `nft_ownership`                 | `(contract_id, token_id, ledger_sequence, event_order)`                           | no              |
-| `liquidity_pool_snapshots`      | `(pool_id, ledger_sequence)`                                                      | no              |
+| Table                           | ORDER BY                                                                                    | Surrogate `id`? |
+| ------------------------------- | ------------------------------------------------------------------------------------------- | --------------- |
+| `accounts`                      | `account_id` (StrKey G…)                                                                    | **yes — Int64** |
+| `soroban_contracts`             | `contract_id` (StrKey C…)                                                                   | **yes — Int64** |
+| `transactions`                  | `(ledger_sequence, application_order)`                                                      | **yes — Int64** |
+| `assets`                        | `(asset_type, asset_code, issuer_id, contract_id)`                                          | no              |
+| `account_balances_current`      | `(account_id, asset_type, asset_code, issuer_id)`                                           | no              |
+| `nfts`                          | `(contract_id, token_id)`                                                                   | no              |
+| `liquidity_pools`               | `pool_id` (FixedString(32) hash)                                                            | no              |
+| `lp_positions`                  | `(pool_id, account_id)`                                                                     | no              |
+| `transaction_hash_prefix_index` | `(hash_prefix, ledger_sequence)` (8-byte hash prefix, task 0580)                            | no              |
+| `transaction_operations`        | `(ledger_sequence, application_order, operation_index)`                                     | no              |
+| `transaction_participants`      | `(account_id, ledger_sequence, application_order)`                                          | no              |
+| `soroban_events`                | `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)`           | no              |
+| `contract_activity`             | `(contract_id, ledger_sequence, application_order)`                                         | no              |
+| `nft_ownership_changes`         | `(contract_id, token_id, ledger_sequence, application_order, operation_index, event_index)` | no              |
+| `liquidity_pool_snapshots`      | `(pool_id, ledger_sequence)`                                                                | no              |
 
 The three surrogate `id` values are deterministic
 `cityhash64(natural_key)` (lower 64 bits of CityHash 1.0.2 128-bit).

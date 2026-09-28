@@ -89,7 +89,7 @@ pub struct BalanceChange {
     /// move becomes one `BalanceChange` per piece, each naming its own, so
     /// every NFT is listed and linked separately. `None` when the pieces
     /// cannot be named: a fungible asset, a collection quarantined in
-    /// `nft_ownership_pending` (the API never reads that table), or a set
+    /// `nft_ownership_changes_pending` (the API never reads that table), or a set
     /// whose size contradicts the movement count.
     pub token_id: Option<String>,
 }

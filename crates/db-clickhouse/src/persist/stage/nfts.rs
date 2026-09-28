@@ -1,7 +1,7 @@
 //! NFT rows staged per ledger: the per-contract routing verdict and the
-//! `nfts` / `nfts_pending` and `nft_ownership` / `nft_ownership_pending` rows
-//! it routes (task 0217 / 0220), plus the same ownership changes located by
-//! their event → `nft_ownership_changes{,_pending}` (task 0424).
+//! `nfts` / `nfts_pending` rows and the ownership changes it routes (task
+//! 0217 / 0220), each change located by its event →
+//! `nft_ownership_changes{,_pending}` (task 0424).
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
@@ -13,16 +13,13 @@ use xdr_parser::types::{ExtractedNft, ExtractedNftEvent};
 use super::{StagedLedger, staging_err};
 use crate::SchemaError;
 use crate::persist::ids;
-use crate::persist::rows::{
-    NftOwnershipChangeRow, NftOwnershipPendingRow, NftOwnershipRow, NftPendingRow, NftRow,
-};
+use crate::persist::rows::{NftOwnershipChangeRow, NftPendingRow, NftRow};
 
 pub(super) fn nft_rows(
     out: &mut StagedLedger,
     nfts: &[ExtractedNft],
     nft_events: &[ExtractedNftEvent],
     prior_contract_verdicts: &HashMap<String, ContractType>,
-    tx_id_by_hash: &HashMap<String, i64>,
     app_order_by_hash: &HashMap<String, i16>,
 ) -> Result<(), SchemaError> {
     // ---- NFT routing verdict map (task 0217 / 0220) -------------------
@@ -155,26 +152,17 @@ pub(super) fn nft_rows(
         }
     }
 
-    // ---- nft_ownership / nft_ownership_pending ----
+    // ---- nft_ownership_changes / nft_ownership_changes_pending ----
     for ev in nft_events {
         let route = route_for(ev.contract_id.as_str());
         if matches!(route, NftRoute::Drop) {
             continue;
         }
-        let (Some(&tx_id), Some(&application_order)) = (
-            tx_id_by_hash.get(&ev.transaction_hash),
-            app_order_by_hash.get(&ev.transaction_hash),
-        ) else {
+        let Some(&application_order) = app_order_by_hash.get(&ev.transaction_hash) else {
             continue;
         };
-        let event_order =
-            i16::try_from(ev.event_order).map_err(|_| staging_err("nft event_order overflow"))?;
-        let contract_id = ids::contract_id(&ev.contract_id);
-        let ledger_sequence = i64::from(ev.ledger_sequence);
-        let owner_id = ev.owner_account.as_deref().map(ids::account_id);
-        let event_type = ev.event_type as i16;
 
-        // Task 0424: the same change located as `soroban_events` locates its
+        // Task 0424: the change located as `soroban_events` locates its
         // event — the transaction's position from the ledger's own order, the
         // operation and the event from the rpc id. An NFT event is a
         // per-operation contract event, which always has an id;
@@ -183,40 +171,18 @@ pub(super) fn nft_rows(
             .event_id
             .ok_or_else(|| staging_err("nft event without an event id"))?;
         let change = NftOwnershipChangeRow {
-            contract_id,
+            contract_id: ids::contract_id(&ev.contract_id),
             token_id: ev.token_id.clone(),
-            ledger_sequence,
+            ledger_sequence: i64::from(ev.ledger_sequence),
             application_order,
             operation_index: id.operation_index,
             event_index: id.event_index,
-            owner_id,
-            event_type,
+            owner_id: ev.owner_account.as_deref().map(ids::account_id),
+            event_type: ev.event_type as i16,
         };
         match route {
             NftRoute::Hot => out.nft_ownership_change_rows.push(change),
             NftRoute::Pending => out.nft_ownership_change_pending_rows.push(change),
-            NftRoute::Drop => unreachable!("filtered above"),
-        }
-
-        match route {
-            NftRoute::Hot => out.nft_ownership_rows.push(NftOwnershipRow {
-                contract_id,
-                token_id: ev.token_id.clone(),
-                ledger_sequence,
-                event_order,
-                transaction_id: tx_id,
-                owner_id,
-                event_type,
-            }),
-            NftRoute::Pending => out.nft_ownership_pending_rows.push(NftOwnershipPendingRow {
-                contract_id,
-                token_id: ev.token_id.clone(),
-                ledger_sequence,
-                event_order,
-                transaction_id: tx_id,
-                owner_id,
-                event_type,
-            }),
             NftRoute::Drop => unreachable!("filtered above"),
         }
     }

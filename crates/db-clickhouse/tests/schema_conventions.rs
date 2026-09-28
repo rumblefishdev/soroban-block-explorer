@@ -7,9 +7,10 @@
 
 use db_clickhouse::INIT_SQL;
 
-/// Tables that still carry the surrogate. The 0538 programme removes one
-/// entry per table it migrates; nothing is ever added here.
-const TRANSACTION_ID_ALLOWLIST: &[&str] = &["nft_ownership", "nft_ownership_pending"];
+/// Tables that still carry the surrogate. The 0538 programme removed one
+/// entry per table it migrated, the last with task 0424; nothing is ever
+/// added here.
+const TRANSACTION_ID_ALLOWLIST: &[&str] = &[];
 
 /// `(table, column names)` for every `CREATE TABLE` in `init.sql`.
 fn tables() -> Vec<(String, Vec<String>)> {

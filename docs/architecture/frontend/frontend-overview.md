@@ -565,7 +565,7 @@ measured.
 An `amount` of `null` inside an entry is also not zero: it is a NON-FUNGIBLE
 movement, where no amount exists by nature. The cell renders the signed count of
 pieces and, when the API could name the single piece that moved, its id
-(`+1 NFT #44`) — resolved from `nft_ownership`, which is where a token id lives;
+(`+1 NFT #44`) — resolved from `nft_ownership_changes`, which is where a token id lives;
 the edge table deliberately does not carry one.
 
 **Where the asset code links, most specific first:** the PIECE

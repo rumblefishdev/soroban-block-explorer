@@ -274,7 +274,7 @@ smaller on-disk than 56-byte StrKey FK columns.
 
 **Other tables (`assets`, `nfts`, `liquidity_pools`, `lp_positions`,
 `liquidity_pool_snapshots`, `transaction_operations`,
-`transaction_participants`, `nft_ownership`)** stay on natural /
+`transaction_participants`, `nft_ownership_changes`)** stay on natural /
 composite primary keys — for them, composite ORDER BYs over already-
 cheap-shape columns (FixedString(32) hashes, low-cardinality codes,
 Int64 FK references) work without a hash layer.
