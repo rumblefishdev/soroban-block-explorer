@@ -69,7 +69,14 @@ async fn soroban_pool_reads_serve_leg_reserves() {
         ),
         format!(
             "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
-             ('{TOKEN_18}', 18, 1)"
+             ('{TOKEN_18}', 18, 1), ('{TOKEN_UNPUBLISHED}', 7, 1)"
+        ),
+        // A later version that carries no decimals, inserted on its own so the
+        // older row survives as a separate part (one block would collapse
+        // them on write).
+        format!(
+            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
+             ('{TOKEN_UNPUBLISHED}', NULL, 2)"
         ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
@@ -79,7 +86,7 @@ async fn soroban_pool_reads_serve_leg_reserves() {
         Some("3107287.9007206".to_string()), // XLM, newest row, scaled by 7
         Some("12.5".to_string()),            // classic USDC, scaled by 7
         Some("1282501.540990846914271528".to_string()), // token, its 18 decimals
-        None,                                // token publishing no decimals
+        None,                                // newest metadata row has no decimals
     ];
 
     let detail = fetch_pool_by_id(&ch, POOL)

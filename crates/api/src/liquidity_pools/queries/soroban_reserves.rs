@@ -46,7 +46,9 @@ pub(super) fn soroban_token_contracts<'a>(
 }
 
 /// Published `decimals` per token contract. A token with no metadata row, or
-/// whose newest row carries no `decimals`, is absent from the map.
+/// whose newest row carries no `decimals`, is absent from the map. The value is
+/// wrapped in a tuple because `argMax` skips a `NULL` argument and would
+/// return an older version's decimals instead.
 pub(super) async fn fetch_token_decimals(
     client: &clickhouse::Client,
     contracts: &[&str],
@@ -71,7 +73,7 @@ pub(super) async fn fetch_token_decimals(
         .join(",");
     let rows = client
         .query(&format!(
-            "SELECT contract_id, argMax(decimals, version) AS decimals \
+            "SELECT contract_id, argMax(tuple(decimals), version).1 AS decimals \
              FROM soroban_contract_metadata \
              WHERE contract_id IN ({in_list}) \
              GROUP BY contract_id"
