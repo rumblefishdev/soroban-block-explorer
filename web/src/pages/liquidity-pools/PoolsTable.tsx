@@ -28,8 +28,6 @@ import { PoolLegIcons } from '../pool-shared/PoolLegIcons.js';
 
 import { POOL_KIND_META } from './poolKind.js';
 
-export const POOL_COLUMN_COUNT = 6;
-
 /** Render leg code text — wrapped in RouterLink when legHref resolves
  *  (native, classic credit, contract-id fallback); plain text otherwise (schema
  *  drift). Matches the precedence used by PoolSummary + PoolKpiStrip. */

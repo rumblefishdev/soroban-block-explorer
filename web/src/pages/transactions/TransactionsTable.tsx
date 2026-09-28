@@ -62,9 +62,6 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
   },
 ];
 
-/** Number of columns — used to size the loading skeleton consistently. */
-export const TRANSACTION_COLUMN_COUNT = columns.length;
-
 /**
  * The Transactions list table — hash, ledger, source account, operation,
  * status, net settled, fee and time columns, per the Figma design.
