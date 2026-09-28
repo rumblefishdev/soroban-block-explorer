@@ -4,7 +4,7 @@ title: 'OPS: api_reader and ingestion_writer have no <grants> — ClickHouse giv
 type: OPS
 status: active
 related_adr: ['0032']
-related_tasks: ['0240', '0314', '0567', '0568', '0569']
+related_tasks: ['0240', '0314', '0396', '0567', '0568', '0569']
 tags: [clickhouse, security, infra-hetzner, priority-high, effort-small]
 links:
   - crates/db-clickhouse/users.d/services.xml
@@ -112,9 +112,9 @@ is not notified.
       is written here
 - [ ] Deployed to production in place, verified with `SHOW GRANTS` and the
       negative probes; API and ingestion healthy afterwards
-- [ ] `galexie`, `dev_read`, `dict_reader`: measured, and scoped here or moved
+- [x] `galexie`, `dev_read`, `dict_reader`: measured, and scoped here or moved
       to a follow-up task (`galexie` and `dev_read` scoped here; `dict_reader`
-      needs a follow-up, not filed yet)
+      is removed by 0396's pending rollout)
 - [x] **Docs updated** — `docs/architecture/security/clickhouse-rbac.md`: the
       matrix matches the box, and the tenancy paragraph says what BE users can
       reach in `prices.*` after this change (ADR 0032)
@@ -201,4 +201,20 @@ CH 26.3 with the new `users.d/` mounted:
    loopback-only and unused, yet it holds `ALL` on `default` plus `URL`,
    `REMOTE`, `FILE` and `S3` globally. Removing it changes the compose
    mounts and recreates the container, so it cannot be an in-place users.d
-   sync.
+   sync. Task 0396 already removes it, so no follow-up was filed.
+   - 0396's code is merged (`8c130eb4`), and its rollout step 1 has run: the
+     box has 0 dictionaries.
+   - Its step 2 (`--tags app`) is still pending. As of 2026-09-28 `dict.xml`
+     is still on the box and still mounted.
+
+## Deploy note
+
+Deploy `services.xml` alone, in place, the way 0561 did: an
+`ssh … 'cat > /srv/app/crates/db-clickhouse/users.d/services.xml'`. The
+inode is kept and ClickHouse hot-reloads the file. The `cat >` must be the
+only command reading stdin.
+
+Do not use `--tags app`. Its users.d rsync runs with `delete: true`, so
+once 0396 is on the checkout it deletes `dict.xml`. The compose sync then
+drops the mount, and the container is recreated: not in place, and it
+couples this deploy to 0396's rollout.
