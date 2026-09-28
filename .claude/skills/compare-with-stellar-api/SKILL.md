@@ -210,11 +210,11 @@ Hard rules:
 
 Dispatch with these source-specific instructions:
 
-| Source         | Base / URL pattern                                                                                                                                             | Scope                                                                                                                                      |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Horizon API    | `https://horizon.stellar.org`; `/transactions/<hash>`, `/accounts/<id>`, `/ledgers/<seq>`, `/assets?asset_code=<c>&asset_issuer=<i>`, `/liquidity_pools/<hex>` | Horizon does not cover Soroban contracts, events, invocations, or NFTs; mark those fields `NOT_APPLICABLE`.                                |
-| stellar.expert | `https://stellar.expert/explorer/public`; `/tx/<hash>`, `/account/<id>`, `/asset/<code>-<issuer>`, `/contract/<id>`, `/liquidity-pool/<hex>`                   | Mark unavailable or JS-only fields `UNVERIFIABLE`.                                                                                         |
-| Raw XDR        | Fetch Horizon transaction XDR with `curl`, then decode independently                                                                                           | Applies to transactions and per-transaction facts only. Accounts, aggregate assets, ledgers, NFTs, and pool reserves are `NOT_APPLICABLE`. |
+| Source         | Base / URL pattern                                                                                                                                             | Scope                                                                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Horizon API    | `https://horizon.stellar.org`; `/transactions/<hash>`, `/accounts/<id>`, `/ledgers/<seq>`, `/assets?asset_code=<c>&asset_issuer=<i>`, `/liquidity_pools/<hex>` | **Informational only** (legacy API). Horizon does not cover Soroban contracts, events, invocations, or NFTs; mark those fields `NOT_APPLICABLE`. |
+| stellar.expert | `https://stellar.expert/explorer/public`; `/tx/<hash>`, `/account/<id>`, `/asset/<code>-<issuer>`, `/contract/<id>`, `/liquidity-pool/<hex>`                   | Mark unavailable or JS-only fields `UNVERIFIABLE`.                                                                                               |
+| Raw XDR        | Fetch Horizon transaction XDR with `curl`, then decode independently                                                                                           | Applies to transactions and per-transaction facts only. Accounts, aggregate assets, ledgers, NFTs, and pool reserves are `NOT_APPLICABLE`.       |
 
 ### Raw XDR verifier requirements
 
@@ -239,6 +239,12 @@ Dispatch with these source-specific instructions:
 Raw XDR has highest authority. If it agrees with ClickHouse and explorers
 disagree, treat the explorer as the likely faulty display layer.
 
+Horizon is informational: it is a legacy API and never decides a finding. A
+Horizon `MISMATCH` that Raw XDR does not confirm is listed as an informational
+disagreement, not a mismatch. Where Raw XDR is `NOT_APPLICABLE` (accounts,
+ledgers, aggregate assets, pool reserves), a Horizon-only disagreement stays
+informational and the report says the field is unarbitrated.
+
 ## Step 6 — Frontend contract check
 
 Search `docs/architecture/frontend/frontend-overview.md` for the endpoint or
@@ -254,7 +260,8 @@ Present:
    when read, whether the `system.query_log` text matched it;
 2. sampled rows and why each was selected;
 3. a compact source matrix per row;
-4. pure mismatches, prioritizing those confirmed by Raw XDR;
+4. pure mismatches, prioritizing those confirmed by Raw XDR; Horizon-only
+   disagreements in a separate informational list;
 5. all-sources-missing rows;
 6. frontend-contract result; and
 7. caveats such as partial local CH data, rate limits, or unavailable XDR.
