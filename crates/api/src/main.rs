@@ -42,9 +42,11 @@ use crate::state::AppState;
 fn app(config: &AppConfig, state: AppState) -> Router {
     // Shared `openapi::register_routes` builds the same chain that the
     // `extract_openapi` build-time binary uses, so the codegen spec and
-    // the live router cannot advertise different endpoints. We then stamp
-    // the runtime `servers` block (resolved from AppConfig.base_url) onto
-    // the registered spec.
+    // the live router cannot advertise different endpoints — with one
+    // exception: `/auth/session` is in the spec through `ApiDoc` `paths(...)`
+    // and mounted below only when the auth layer is armed (task 0510). We
+    // then stamp the runtime `servers` block (resolved from
+    // AppConfig.base_url) onto the registered spec.
     let (router, mut spec) = openapi::register_routes()
         .with_state(state)
         .split_for_parts();

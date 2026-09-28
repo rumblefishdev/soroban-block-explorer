@@ -87,9 +87,9 @@ import type {
   ListTransactionsData,
   ListTransactionsErrors,
   ListTransactionsResponses,
-  SessionData,
-  SessionErrors,
-  SessionResponses,
+  MintSessionData,
+  MintSessionErrors,
+  MintSessionResponses,
 } from './types.gen.js';
 
 export type Options<
@@ -113,12 +113,12 @@ export type Options<
 /**
  * Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.
  */
-export const session = <ThrowOnError extends boolean = false>(
-  options: Options<SessionData, ThrowOnError>
+export const mintSession = <ThrowOnError extends boolean = false>(
+  options: Options<MintSessionData, ThrowOnError>
 ) =>
   (options.client ?? client).post<
-    SessionResponses,
-    SessionErrors,
+    MintSessionResponses,
+    MintSessionErrors,
     ThrowOnError
   >({
     url: '/auth/session',

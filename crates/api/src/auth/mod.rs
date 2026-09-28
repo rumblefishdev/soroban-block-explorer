@@ -108,6 +108,9 @@ pub struct SessionResponse {
     post,
     path = "/auth/session",
     tag = "auth",
+    // Without it the operation is named `session`, which collides with the
+    // `SessionResponse` schema in the generated TS (`SessionResponse2`).
+    operation_id = "mint_session",
     // Exempt from the gate (see `is_exempt`) — called to OBTAIN a session.
     security(()),
     request_body = SessionRequest,

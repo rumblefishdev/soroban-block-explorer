@@ -111,7 +111,15 @@ describe('createSession', () => {
     });
 
     expect(await session.ensureToken()).toBeNull(); // solve throws
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(await session.ensureToken()).toBeNull(); // server 403
+    expect(solve).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // A failure is not cached: the next call tries again and succeeds.
+    fetchMock.mockResolvedValueOnce(okResponse('jwt-after-failure'));
+    expect(await session.ensureToken()).toBe('jwt-after-failure');
+    expect(solve).toHaveBeenCalledTimes(3);
   });
 
   it('keeps state per instance', async () => {

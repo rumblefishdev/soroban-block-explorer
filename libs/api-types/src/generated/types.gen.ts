@@ -2540,14 +2540,14 @@ export type XdrOperationDto = {
   result_code?: string | null;
 };
 
-export type SessionData = {
+export type MintSessionData = {
   body: SessionRequest;
   path?: never;
   query?: never;
   url: '/auth/session';
 };
 
-export type SessionErrors = {
+export type MintSessionErrors = {
   /**
    * Turnstile verification failed
    */
@@ -2562,16 +2562,17 @@ export type SessionErrors = {
   503: string;
 };
 
-export type SessionError = SessionErrors[keyof SessionErrors];
+export type MintSessionError = MintSessionErrors[keyof MintSessionErrors];
 
-export type SessionResponses = {
+export type MintSessionResponses = {
   /**
    * Session JWT minted
    */
   200: SessionResponse;
 };
 
-export type SessionResponse2 = SessionResponses[keyof SessionResponses];
+export type MintSessionResponse =
+  MintSessionResponses[keyof MintSessionResponses];
 
 export type HealthData = {
   body?: never;

@@ -37,8 +37,8 @@ import {
   listPoolActivity,
   listPools,
   listTransactions,
+  mintSession,
   type Options,
-  session,
 } from '../sdk.gen.js';
 import type {
   GetAccountData,
@@ -120,24 +120,28 @@ import type {
   ListTransactionsData,
   ListTransactionsError,
   ListTransactionsResponse,
-  SessionData,
-  SessionError,
-  SessionResponse2,
+  MintSessionData,
+  MintSessionError,
+  MintSessionResponse,
 } from '../types.gen.js';
 
 /**
  * Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.
  */
-export const sessionMutation = (
-  options?: Partial<Options<SessionData>>
-): UseMutationOptions<SessionResponse2, SessionError, Options<SessionData>> => {
+export const mintSessionMutation = (
+  options?: Partial<Options<MintSessionData>>
+): UseMutationOptions<
+  MintSessionResponse,
+  MintSessionError,
+  Options<MintSessionData>
+> => {
   const mutationOptions: UseMutationOptions<
-    SessionResponse2,
-    SessionError,
-    Options<SessionData>
+    MintSessionResponse,
+    MintSessionError,
+    Options<MintSessionData>
   > = {
     mutationFn: async (fnOptions) => {
-      const { data } = await session({
+      const { data } = await mintSession({
         ...options,
         ...fnOptions,
         throwOnError: true,

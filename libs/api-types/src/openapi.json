@@ -17,7 +17,7 @@
       "post": {
         "tags": ["auth"],
         "summary": "Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.",
-        "operationId": "session",
+        "operationId": "mint_session",
         "requestBody": {
           "content": {
             "application/json": {
