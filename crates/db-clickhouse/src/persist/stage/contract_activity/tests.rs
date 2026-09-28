@@ -5,7 +5,7 @@ use xdr_parser::types::ExtractedInvocation;
 
 use super::rows;
 use crate::persist::ids;
-use crate::persist::rows::{ContractActivityRow, TransactionOperationRow, TransactionRow};
+use crate::persist::rows::{ContractActivityRow, TransactionOperationRow};
 use crate::persist::stage::StagedLedger;
 
 #[test]
@@ -31,7 +31,6 @@ fn column_order_contract_activity() {
 #[test]
 fn contract_activity_is_the_presence_plus_the_invocation_caller() {
     let hash = "ab".repeat(32);
-    let tx_id = 111;
     let account = "G".to_string() + &"A".repeat(55);
     let caller_contract = "C".to_string() + &"B".repeat(55);
     let (by_account, by_contract, named_by_op, by_event) = (
@@ -42,19 +41,6 @@ fn contract_activity_is_the_presence_plus_the_invocation_caller() {
     );
 
     let mut out = StagedLedger {
-        transaction_rows: vec![TransactionRow {
-            id: tx_id,
-            hash: [0xab; 32],
-            ledger_sequence: 10,
-            application_order: 2,
-            source_id: 0,
-            fee_charged: 0,
-            inner_tx_hash: None,
-            successful: true,
-            operation_count: 1,
-            has_soroban: true,
-            parse_error: false,
-        }],
         tx_operation_rows: vec![TransactionOperationRow {
             ledger_sequence: 10,
             application_order: 2,
@@ -92,11 +78,12 @@ fn contract_activity_is_the_presence_plus_the_invocation_caller() {
             invocation(&by_account, &caller_contract),
         ],
     )];
-    let tx_id_by_hash = HashMap::from([(hash.clone(), tx_id)]);
+    // The invoking transaction sits at position 2 of its ledger.
+    let app_order_by_hash = HashMap::from([(hash.clone(), 2)]);
     // An operation event of another transaction, position 1.
     let from_events = BTreeSet::from([(by_event, 1)]);
 
-    rows(&mut out, &invocations, &tx_id_by_hash, from_events, 10).expect("stage");
+    rows(&mut out, &invocations, &app_order_by_hash, from_events, 10);
 
     let row = |contract_id, application_order, caller_id, caller_contract_id, invocation_count| {
         ContractActivityRow {
@@ -128,17 +115,4 @@ fn contract_activity_is_the_presence_plus_the_invocation_caller() {
     ];
     expected.sort();
     assert_eq!(out.contract_activity_rows, expected);
-
-    // Same keys as the presence index it replaces.
-    let keys: Vec<_> = out
-        .contract_tx_rows
-        .iter()
-        .map(|r| (r.contract_id, r.application_order))
-        .collect();
-    let activity_keys: Vec<_> = out
-        .contract_activity_rows
-        .iter()
-        .map(|r| (r.contract_id, r.application_order))
-        .collect();
-    assert_eq!(keys, activity_keys);
 }

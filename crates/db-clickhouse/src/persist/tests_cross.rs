@@ -390,29 +390,6 @@ fn column_order_soroban_events() {
 }
 
 #[test]
-fn column_order_soroban_invocations_appearances() {
-    assert_columns::<SorobanInvocationAppearanceRow>(
-        "soroban_invocations_appearances",
-        &[
-            "contract_id",
-            "transaction_id",
-            "ledger_sequence",
-            "caller_id",
-            "caller_contract_id",
-            "amount",
-        ],
-    );
-}
-
-#[test]
-fn column_order_contract_transactions() {
-    assert_columns::<ContractTransactionRow>(
-        "contract_transactions",
-        &["contract_id", "ledger_sequence", "application_order"],
-    );
-}
-
-#[test]
 fn column_order_nft_ownership() {
     assert_columns::<NftOwnershipRow>(
         "nft_ownership",
@@ -866,17 +843,20 @@ fn staged_events_carry_the_rpc_id_and_their_transaction() {
     // The contract index takes the operation event only. Paying a fee is not
     // using the SAC: tx2, which only paid one, is not in the contract's list.
     assert_eq!(
-        staged.contract_tx_rows,
-        vec![ContractTransactionRow {
+        staged.contract_activity_rows,
+        vec![ContractActivityRow {
             contract_id: ids::contract_id(&sac),
             ledger_sequence: 10,
             application_order: 1,
+            caller_id: None,
+            caller_contract_id: None,
+            invocation_count: 0,
         }]
     );
 }
 
 #[test]
-fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
+fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
     let ledger = synthetic_ledger();
     let tx1 = synthetic_tx(0x71);
     let tx2 = synthetic_tx(0x72);
@@ -971,18 +951,21 @@ fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
     )
     .expect("prepare");
 
-    let row = |contract: &str, application_order| ContractTransactionRow {
+    let row = |contract: &str, application_order, invocation_count| ContractActivityRow {
         contract_id: ids::contract_id(contract),
         ledger_sequence: 10,
         application_order,
+        caller_id: None,
+        caller_contract_id: None,
+        invocation_count,
     };
     let mut expected = vec![
-        row(&c1, 2), // tx2's event, invocation and operation: one row
-        row(&c2, 1), // tx1's event
-        row(&c2, 2), // tx2's invocation
+        row(&c1, 2, 1), // tx2's event, invocation and operation: one row
+        row(&c2, 1, 0), // tx1's event: touched, not invoked
+        row(&c2, 2, 1), // tx2's invocation
     ];
     expected.sort();
-    assert_eq!(staged.contract_tx_rows, expected);
+    assert_eq!(staged.contract_activity_rows, expected);
 }
 
 #[test]

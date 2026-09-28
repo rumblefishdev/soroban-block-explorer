@@ -17,7 +17,7 @@
 //!    reliably present in our ingest. Walked by
 //!    [`extract_invocations_from_diagnostics`] and merged into the flat
 //!    `ExtractedInvocation` rows that feed the
-//!    `soroban_invocations_appearances` appearance index. Closes the
+//!    `contract_activity` index. Closes the
 //!    auth-tree coverage gap (~53 % of Soroban tx had zero rows on a local
 //!    100-ledger sample — task 0183).
 //!
@@ -35,7 +35,7 @@ use crate::types::ExtractedInvocation;
 /// Result of invocation tree extraction.
 pub struct InvocationResult {
     /// Flat invocation rows aggregated at indexer staging into
-    /// `soroban_invocations_appearances` (ADR 0034).
+    /// `contract_activity` (ADR 0034).
     pub invocations: Vec<ExtractedInvocation>,
     /// Nested JSON hierarchy for `transactions.operation_tree`.
     /// `None` if the transaction has no Soroban auth entries.

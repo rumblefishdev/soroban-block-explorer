@@ -198,7 +198,7 @@ pub struct ExtractedEvent {
 }
 
 /// Extracted Soroban invocation data, aggregated at indexer staging into
-/// `soroban_invocations_appearances` rows (ADR 0034). At read time the API
+/// `contract_activity` rows (ADR 0034). At read time the API
 /// re-extracts this structure from the public archive's XDR to render E13
 /// per-node detail (function name, caller, success, args, return value).
 ///

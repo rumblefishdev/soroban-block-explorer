@@ -8,7 +8,7 @@
 //! is a pure index queried directly by the API without a domain mirror type.
 //! Invocation per-node detail (function name, args, return value, successful,
 //! depth) lives on the public archive per ADR 0034;
-//! `soroban_invocations_appearances` is queried directly by the API without a
+//! `contract_activity` is queried directly by the API without a
 //! domain mirror type (same pattern as events).
 
 use serde::{Deserialize, Serialize};

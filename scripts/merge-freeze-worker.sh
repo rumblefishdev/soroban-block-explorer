@@ -90,7 +90,7 @@ PARTITIONED_TABLES=(
   transaction_participants
   transaction_operations
   soroban_events
-  soroban_invocations_appearances
+  contract_activity
   liquidity_pool_snapshots
   nft_ownership
   nft_ownership_pending

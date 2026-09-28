@@ -247,11 +247,9 @@ pub struct StagedLedger {
     /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
-    pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
-    /// Per-(contract, tx) presence rows (task 0541) → `contract_transactions`,
-    /// the contract-dimension twin of `participant_rows`.
-    pub contract_tx_rows: Vec<ContractTransactionRow>,
-    /// `contract_tx_rows` plus the invocation's caller (task 0586) → `contract_activity`.
+    /// Per-(contract, tx) presence plus the invocation's caller and call count
+    /// (tasks 0541, 0586) → `contract_activity`, the contract-dimension twin of
+    /// `participant_rows`.
     pub contract_activity_rows: Vec<ContractActivityRow>,
     pub asset_rows: Vec<AssetRow>,
     /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
@@ -1705,7 +1703,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let mut diagnostic_dropped: usize = 0;
     let mut contract_orphan_dropped: usize = 0;
     // (contract, transaction) of every operation event, for
-    // `contract_transactions` below: the parser says where an event came from,
+    // `contract_activity` below: the parser says where an event came from,
     // so a fee event is left out by its source, not inferred from its id.
     let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
     for (tx_hash, evs) in events {
@@ -1765,10 +1763,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     contract_activity::rows(
         &mut out,
         invocations,
-        &tx_id_by_hash,
+        &app_order_by_hash,
         contract_txs,
         ledger_sequence_i64,
-    )?;
+    );
 
     // ---- assets identity rows (dedup by 4-tuple) + asset_sac facet rows ----
     //
