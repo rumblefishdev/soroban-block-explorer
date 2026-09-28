@@ -34,6 +34,8 @@ use clickhouse::Row;
 use domain::AssetFamily;
 use serde::Deserialize;
 
+use crate::common::contract_metadata::CONTRACT_METADATA;
+
 #[derive(Debug, Row, Deserialize)]
 pub(crate) struct AssetIdentityChRow {
     pub(crate) id: i64,
@@ -218,11 +220,7 @@ async fn fetch_identity_rows(
                     WHERE id IN ({in_list}) LIMIT 1 BY id) a ON a.id = ids.id \
          LEFT JOIN (SELECT id, contract_id FROM soroban_contracts \
                     WHERE id IN ({in_list}) LIMIT 1 BY id) sc ON sc.id = ids.id \
-         LEFT JOIN (SELECT contract_id, \
-                           argMax(symbol, version)   AS symbol, \
-                           argMax(tuple(decimals), version).1 AS decimals \
-                    FROM soroban_contract_metadata GROUP BY contract_id) m \
-                ON m.contract_id = sc.contract_id"
+         LEFT JOIN {CONTRACT_METADATA} m ON m.contract_id = sc.contract_id"
     );
 
     client.query(&sql).fetch_all::<AssetIdentityChRow>().await

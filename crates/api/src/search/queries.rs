@@ -62,6 +62,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::asset_identity::{ResolvedAsset, leg_label, resolve_asset_identities};
+use crate::common::contract_metadata::CONTRACT_METADATA;
 use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
 use crate::common::strkey::{decode_pool_kind, pool_id_hex_to_strkey};
 
@@ -514,16 +515,15 @@ async fn search_contracts(
         // `IN (...)` is a key-seek over only the matched ids. The user-derived
         // StrKeys are `.bind()`-ed as an array.
         let placeholders = vec!["?"; ids.len()].join(",");
-        // `ifNull(argMax(...), '')`: `soroban_contract_metadata.name` is
-        // `Nullable(String)`, so `argMax` projects a Nullable column. The wire
+        // `ifNull(name, '')`: `soroban_contract_metadata.name` is
+        // `Nullable(String)`, so the read projects a Nullable column. The wire
         // type MUST be non-nullable to decode into `ContractNameRow.name: String`
         // — without `ifNull` a contract whose latest metadata name is NULL makes
         // the RowBinary decoder mismatch (500). Empty string ⇒ "no name".
         let name_sql = format!(
-            "SELECT contract_id AS contract_id, ifNull(argMax(name, version), '') AS name \
-             FROM soroban_contract_metadata \
-             WHERE contract_id IN ({placeholders}) \
-             GROUP BY contract_id"
+            "SELECT contract_id AS contract_id, ifNull(name, '') AS name \
+             FROM {CONTRACT_METADATA} \
+             WHERE contract_id IN ({placeholders})"
         );
         let mut name_q = client.query(&name_sql);
         for id in &ids {
@@ -543,16 +543,13 @@ async fn search_contracts(
             })
             .collect()
     } else if classified.hash_bytes.is_none() {
-        // Plain-text name search over the on-chain metadata. Subquery (not
-        // HAVING) so the `argMax` name is computed once and filtered. The outer
+        // Plain-text name search over the on-chain metadata. The
         // `ifNull(..., '')` keeps the projected column non-nullable so it decodes
         // into `ContractNameRow.name: String` (the WHERE filter alone does not
         // change the column's Nullable wire type).
         let sql = format!(
-            "SELECT contract_id AS contract_id, ifNull(name, '') AS name FROM ( \
-                 SELECT contract_id, argMax(name, version) AS name \
-                 FROM soroban_contract_metadata GROUP BY contract_id \
-             ) \
+            "SELECT contract_id AS contract_id, ifNull(name, '') AS name \
+             FROM {CONTRACT_METADATA} \
              WHERE positionCaseInsensitive(ifNull(name, ''), ?) > 0 \
              LIMIT {per_group_limit}"
         );
@@ -848,10 +845,8 @@ async fn search_nfts(
              WHERE id IN (SELECT contract_surrogate FROM page) GROUP BY id \
          ), \
          scm AS ( \
-             SELECT contract_id, argMax(name, version) AS name \
-             FROM soroban_contract_metadata \
+             SELECT contract_id, name FROM {CONTRACT_METADATA} \
              WHERE contract_id IN (SELECT contract_id FROM sc) \
-             GROUP BY contract_id \
          ) \
          SELECT \
              ifNull(p.e_name, '')            AS identifier, \

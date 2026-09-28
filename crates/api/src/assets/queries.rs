@@ -53,6 +53,7 @@ use chrono::{DateTime, Utc};
 
 use crate::common::asset_identity::known_decimals;
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
+use crate::common::contract_metadata::CONTRACT_METADATA;
 use crate::common::cursor::{Direction, SortOrder, keyset_sql, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
@@ -627,8 +628,8 @@ fn id_in_list(it: &BTreeSet<i64>) -> String {
 /// Resolve `soroban_contracts` context by surrogate `id` (task 0364 2c) — one
 /// bloom seek (`idx_sc_id`) that replaces the pre-2c pair of inlined joins (the
 /// asset's own contract AND its SAC-wrapper both read `soroban_contracts`). The
-/// `soroban_contract_metadata FINAL` (name/symbol/decimals) is folded in via a
-/// LEFT JOIN on the bounded `contract_id`, so no extra round-trip. Version-
+/// contract's metadata ([`CONTRACT_METADATA`]) is folded in via a LEFT JOIN on
+/// the bounded `contract_id`, so no extra round-trip. Version-
 /// correct dedup with `argMax(_, wasm_uploaded_at_ledger)` skips the low-version
 /// NULL stub rows (see [`hydrate_sql`] history); `id` is not the sort key, so the
 /// read is a bloom seek (~1 granule/id), not a whole-table scan.
@@ -649,10 +650,7 @@ async fn resolve_soroban_contracts(
                     any(m.symbol)   AS symbol, \
                     any(m.decimals) AS decimals \
              FROM soroban_contracts sc \
-             LEFT JOIN ( \
-                 SELECT contract_id, name, symbol, decimals \
-                 FROM soroban_contract_metadata FINAL \
-             ) m ON m.contract_id = sc.contract_id \
+             LEFT JOIN {CONTRACT_METADATA} m ON m.contract_id = sc.contract_id \
              WHERE sc.id IN ({in_list}) \
              GROUP BY sc.id"
         ))
@@ -747,9 +745,10 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
     // below is the test that fails if this copy drifts from them.
     let (search_join, code_clause) = if params.asset_code.is_some() {
         (
-            " LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
-              LEFT JOIN (SELECT contract_id, name, symbol FROM soroban_contract_metadata FINAL) m \
-                  ON m.contract_id = sc.contract_id",
+            format!(
+                " LEFT JOIN soroban_contracts sc ON sc.id = a.contract_id \
+                  LEFT JOIN {CONTRACT_METADATA} m ON m.contract_id = sc.contract_id"
+            ),
             format!(
                 " AND (position({shown}, lower(?)) > 0 \
                    OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
@@ -758,7 +757,7 @@ fn build_list_seek_sql(params: &ResolvedListParams, direction: Direction) -> Str
             ),
         )
     } else {
-        ("", String::new())
+        (String::new(), String::new())
     };
     // NO relevance ranking here, deliberately (task 0485). A tier order would
     // have to be carried IN THE CURSOR — a keyset must resume in the order it

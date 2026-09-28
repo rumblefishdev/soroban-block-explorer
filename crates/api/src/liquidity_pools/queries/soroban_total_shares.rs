@@ -19,6 +19,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use super::soroban_reserves::scale_raw;
+use crate::common::contract_metadata::CONTRACT_METADATA;
 
 #[derive(Debug, Row, Deserialize)]
 struct TotalSharesChRow {
@@ -74,10 +75,7 @@ pub(super) async fn fetch_total_shares(
                               WHERE pool_id IN ({in_list}) GROUP BY pool_id) \
                  LIMIT 1 BY id \
              ) sc ON sc.id = i.token_id \
-             LEFT JOIN ( \
-                 SELECT contract_id, argMax(decimals, version) AS decimals \
-                 FROM soroban_contract_metadata GROUP BY contract_id \
-             ) m ON m.contract_id = sc.contract_id"
+             LEFT JOIN {CONTRACT_METADATA} m ON m.contract_id = sc.contract_id"
         ))
         .fetch_all::<TotalSharesChRow>()
         .await?;

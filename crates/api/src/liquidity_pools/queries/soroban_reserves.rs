@@ -22,6 +22,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::asset_identity::ResolvedAsset;
+use crate::common::contract_metadata::CONTRACT_METADATA;
 
 #[derive(Debug, Row, Deserialize)]
 struct TokenDecimalsChRow {
@@ -73,10 +74,8 @@ pub(super) async fn fetch_token_decimals(
         .join(",");
     let rows = client
         .query(&format!(
-            "SELECT contract_id, argMax(tuple(decimals), version).1 AS decimals \
-             FROM soroban_contract_metadata \
-             WHERE contract_id IN ({in_list}) \
-             GROUP BY contract_id"
+            "SELECT contract_id, decimals FROM {CONTRACT_METADATA} \
+             WHERE contract_id IN ({in_list})"
         ))
         .fetch_all::<TokenDecimalsChRow>()
         .await?;
