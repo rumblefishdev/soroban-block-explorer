@@ -14,7 +14,7 @@ use super::soroban_reserves::{
     STATE_RESERVES_JOIN, fetch_token_decimals, leg_reserves, served_raw_reserves,
     soroban_token_contracts,
 };
-use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
+use super::soroban_total_shares::{STORED_SHARES_JOIN, StoredTotalShares, served_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
@@ -73,6 +73,10 @@ struct PoolListChRow {
     /// A soroban pool's newest raw reserves, one per leg ([`STATE_RESERVES_JOIN`]);
     /// empty for a classic pool.
     state_reserves: Vec<String>,
+    /// A soroban pool's stored total shares ([`STORED_SHARES_JOIN`]); `""`
+    /// for a pool with no instance row.
+    stored_shares: String,
+    share_decimals: Option<u32>,
 }
 
 /// The ordering value the list pages on: the pool's LAST ACTIVITY.
@@ -276,7 +280,9 @@ pub async fn fetch_pool_list(
              toString(s.reserve_b)                           AS reserve_b, \
              toString(s.total_shares)                        AS total_shares, \
              nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms, \
-             ps.reserves                                     AS state_reserves \
+             ps.reserves                                     AS state_reserves, \
+             sh.stored_shares                                AS stored_shares, \
+             sh.share_decimals                               AS share_decimals \
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
@@ -293,6 +299,7 @@ pub async fn fetch_pool_list(
             band — a quiet soroban pool's newest row can sit months back, and the \
             page's pools are a key seek (2.4M rows / 57 ms for the busiest 20). */ \
          LEFT JOIN ({ps}) ps ON ps.pool_id = lp.pool_id \
+         LEFT JOIN ({sh}) sh ON sh.pool_id = lp.pool_id \
          LEFT JOIN ( \
              SELECT pool_id, toNullable(min(ledger_sequence)) AS created_at_ledger \
              FROM liquidity_pool_snapshots \
@@ -328,6 +335,7 @@ pub async fn fetch_pool_list(
          ORDER BY lp.activity_ledger {order}, lp.pool_id {order}",
         act = ACTIVITY_LEDGER,
         ps = STATE_RESERVES_JOIN.replace("{pools}", "pool_id IN (SELECT pool_id FROM page)"),
+        sh = STORED_SHARES_JOIN.replace("{pools}", "pool_id IN (SELECT pool_id FROM page)"),
         filters = filters,
         keyset = keyset,
         order = order,
@@ -346,12 +354,6 @@ pub async fn fetch_pool_list(
     let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
-    let soroban_ids: Vec<&str> = rows
-        .iter()
-        .filter(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind) == domain::PoolKind::Soroban)
-        .map(|r| r.pool_id_hex.as_str())
-        .collect();
-    let soroban_shares = fetch_total_shares(client, &soroban_ids).await?;
     let soroban_legs = rows
         .iter()
         .filter(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind) == domain::PoolKind::Soroban)
@@ -406,7 +408,11 @@ pub async fn fetch_pool_list(
                 ),
                 domain::PoolKind::Soroban => (
                     leg_reserves(&r.legs, &identities, &token_decimals, raw),
-                    served_total_shares(soroban_shares.get(&r.pool_id_hex), raw),
+                    served_total_shares(
+                        StoredTotalShares::from_join(r.stored_shares.clone(), r.share_decimals)
+                            .as_ref(),
+                        raw,
+                    ),
                 ),
             };
             let reserve_strs: Vec<Option<&str>> = (0..legs.len())

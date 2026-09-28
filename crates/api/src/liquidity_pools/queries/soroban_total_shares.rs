@@ -13,19 +13,39 @@
 //! `get_total_shares()` / `total_supply()`. Every share token has published
 //! decimals (7, all 726); a token without them reads `null`, never a guess.
 
-use std::collections::HashMap;
-
-use clickhouse::Row;
-use serde::Deserialize;
-
 use super::soroban_reserves::scale_raw;
 
-#[derive(Debug, Row, Deserialize)]
-struct TotalSharesChRow {
-    pool_id_hex: String,
-    total_shares: String,
-    decimals: Option<u32>,
-}
+/// The subquery the list and detail reads LEFT JOIN on `pool_id` for a
+/// soroban pool's stored total shares (`stored_shares`, as text) and its share
+/// token's decimals (`share_decimals`); `{pools}` is the caller's pool-id
+/// predicate. A classic pool has no row: the join miss reads `''` and NULL,
+/// which [`StoredTotalShares::from_join`] turns into "no stored value".
+///
+/// `decimals` is `Nullable(UInt32)`, so a pool whose share token or its
+/// metadata row is missing reads NULL through both LEFT JOINs — not a default
+/// `0` that would scale the total by 10^0.
+pub(super) const STORED_SHARES_JOIN: &str = "SELECT i.pool_id AS pool_id, \
+        toString(i.ts) AS stored_shares, \
+        m.decimals     AS share_decimals \
+     FROM ( \
+         SELECT pool_id, \
+                argMax(total_shares, derived_at_ledger)   AS ts, \
+                argMax(share_token_id, derived_at_ledger) AS token_id \
+         FROM pool_instance_state \
+         WHERE {pools} \
+         GROUP BY pool_id \
+     ) i \
+     LEFT JOIN ( \
+         SELECT id, contract_id FROM soroban_contracts \
+         WHERE id IN (SELECT argMax(share_token_id, derived_at_ledger) \
+                      FROM pool_instance_state \
+                      WHERE {pools} GROUP BY pool_id) \
+         LIMIT 1 BY id \
+     ) sc ON sc.id = i.token_id \
+     LEFT JOIN ( \
+         SELECT contract_id, argMax(decimals, version) AS decimals \
+         FROM soroban_contract_metadata GROUP BY contract_id \
+     ) m ON m.contract_id = sc.contract_id";
 
 /// The stored total and the share token's decimals, per pool.
 pub(super) struct StoredTotalShares {
@@ -33,66 +53,12 @@ pub(super) struct StoredTotalShares {
     decimals: Option<u32>,
 }
 
-/// Newest stored total shares per pool, keyed by lowercase pool-id hex.
-pub(super) async fn fetch_total_shares(
-    client: &clickhouse::Client,
-    pool_ids_hex: &[&str],
-) -> Result<HashMap<String, StoredTotalShares>, clickhouse::error::Error> {
-    let ids: Vec<&str> = pool_ids_hex
-        .iter()
-        .copied()
-        .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-        .collect();
-    if ids.is_empty() {
-        return Ok(HashMap::new());
+impl StoredTotalShares {
+    /// The pool's [`STORED_SHARES_JOIN`] columns, or `None` for a join miss
+    /// (a pool with no `pool_instance_state` row reads an empty string).
+    pub(super) fn from_join(raw: String, decimals: Option<u32>) -> Option<Self> {
+        (!raw.is_empty()).then_some(Self { raw, decimals })
     }
-    let in_list = ids
-        .iter()
-        .map(|h| format!("unhex('{h}')"))
-        .collect::<Vec<_>>()
-        .join(",");
-    // `decimals` is `Nullable(UInt32)`, so a pool whose share token or its
-    // metadata row is missing reads NULL through both LEFT JOINs — not a
-    // default `0` that would scale the total by 10^0.
-    let rows = client
-        .query(&format!(
-            "SELECT lower(hex(i.pool_id))   AS pool_id_hex, \
-                    toString(i.ts)          AS total_shares, \
-                    m.decimals              AS decimals \
-             FROM ( \
-                 SELECT pool_id, \
-                        argMax(total_shares, derived_at_ledger)   AS ts, \
-                        argMax(share_token_id, derived_at_ledger) AS token_id \
-                 FROM pool_instance_state \
-                 WHERE pool_id IN ({in_list}) \
-                 GROUP BY pool_id \
-             ) i \
-             LEFT JOIN ( \
-                 SELECT id, contract_id FROM soroban_contracts \
-                 WHERE id IN (SELECT argMax(share_token_id, derived_at_ledger) \
-                              FROM pool_instance_state \
-                              WHERE pool_id IN ({in_list}) GROUP BY pool_id) \
-                 LIMIT 1 BY id \
-             ) sc ON sc.id = i.token_id \
-             LEFT JOIN ( \
-                 SELECT contract_id, argMax(decimals, version) AS decimals \
-                 FROM soroban_contract_metadata GROUP BY contract_id \
-             ) m ON m.contract_id = sc.contract_id"
-        ))
-        .fetch_all::<TotalSharesChRow>()
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            (
-                r.pool_id_hex,
-                StoredTotalShares {
-                    raw: r.total_shares,
-                    decimals: r.decimals,
-                },
-            )
-        })
-        .collect())
 }
 
 /// The total shares to serve: the stored value scaled by the share token's

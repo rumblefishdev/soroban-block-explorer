@@ -12,7 +12,7 @@ use super::soroban_reserves::{
     STATE_RESERVES_JOIN, fetch_token_decimals, leg_reserves, served_raw_reserves,
     soroban_token_contracts,
 };
-use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
+use super::soroban_total_shares::{STORED_SHARES_JOIN, StoredTotalShares, served_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -32,6 +32,10 @@ struct PoolDetailChRow {
     /// A soroban pool's newest raw reserves, one per leg ([`STATE_RESERVES_JOIN`]);
     /// empty for a classic pool.
     state_reserves: Vec<String>,
+    /// A soroban pool's stored total shares ([`STORED_SHARES_JOIN`]); `""`
+    /// for a pool with no instance row.
+    stored_shares: String,
+    share_decimals: Option<u32>,
 }
 
 /// `GET /v1/liquidity-pools/:id` — single-pool detail. Mirrors the PG
@@ -42,9 +46,10 @@ pub async fn fetch_pool_by_id(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
-    // `unhex(?)` appears 6×: the created_at-ledger subquery, the
+    // `unhex(?)` appears 8×: the created_at-ledger subquery, the
     // participant-count subquery, the latest-snapshot subquery, the soroban
-    // state-row subquery, the `ledgers` seek, and the outer WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
+    // state-row subquery, the soroban stored-shares subquery (twice), the
+    // `ledgers` seek, and the outer WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
     // detail is single-pool and CH dislikes correlated subqueries. Each `?`
     // consumes one positional bind; all are the same value, so order is moot.
     //
@@ -98,7 +103,9 @@ pub async fn fetch_pool_by_id(
                 toString(s.reserve_b)                AS reserve_b, \
                 toString(s.total_shares)             AS total_shares, \
                 nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms, \
-                ps.reserves                          AS state_reserves \
+                ps.reserves                          AS state_reserves, \
+                sh.stored_shares                     AS stored_shares, \
+                sh.share_decimals                    AS share_decimals \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN ( \
                  SELECT pool_id, \
@@ -112,6 +119,7 @@ pub async fn fetch_pool_by_id(
                  LIMIT 1 \
              ) s ON s.pool_id = lp.pool_id \
              LEFT JOIN ({ps}) ps ON ps.pool_id = lp.pool_id \
+             LEFT JOIN ({sh}) sh ON sh.pool_id = lp.pool_id \
              LEFT JOIN ( \
                  SELECT sequence, closed_at FROM ledgers \
                  WHERE sequence = (SELECT max(ledger_sequence) FROM liquidity_pool_snapshots \
@@ -120,7 +128,10 @@ pub async fn fetch_pool_by_id(
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
             ps = STATE_RESERVES_JOIN.replace("{pools}", "pool_id = unhex(?)"),
+            sh = STORED_SHARES_JOIN.replace("{pools}", "pool_id = unhex(?)"),
         ))
+        .bind(pool_id_hex)
+        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
@@ -143,16 +154,16 @@ pub async fn fetch_pool_by_id(
             r.total_shares.clone(),
         ),
         domain::PoolKind::Soroban => {
-            let ids = [r.pool_id_hex.as_str()];
             let tokens = soroban_token_contracts(&r.legs, &identities);
-            let (shares, token_decimals) = futures::try_join!(
-                fetch_total_shares(client, &ids),
-                fetch_token_decimals(client, &tokens),
-            )?;
+            let token_decimals = fetch_token_decimals(client, &tokens).await?;
             let raw = served_raw_reserves(&r.pool_id_hex, &r.state_reserves);
             (
                 leg_reserves(&r.legs, &identities, &token_decimals, raw),
-                served_total_shares(shares.get(&r.pool_id_hex), raw),
+                served_total_shares(
+                    StoredTotalShares::from_join(r.stored_shares.clone(), r.share_decimals)
+                        .as_ref(),
+                    raw,
+                ),
             )
         }
     };

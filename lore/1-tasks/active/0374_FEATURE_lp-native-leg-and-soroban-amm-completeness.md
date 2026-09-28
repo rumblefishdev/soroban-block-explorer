@@ -2510,3 +2510,10 @@ instead of a second round trip; `NOT_A_POOL` moved to the Rust side
 soroban pools and the first 300 of the default list identical, keyed by pool
 id; a soroban page takes 0.72 s on both. CH-gated tests green; red with the
 joined reserves dropped (`left: [None, None, None, None]`).
+The stored total shares followed (decision 67 A): `pool_instance_state` plus
+the share token's decimals join the same query
+(`soroban_total_shares::STORED_SHARES_JOIN`). Only the soroban token decimals
+stay a second read — they need the legs' identities, resolved after the main
+query. Old vs new against production: identical again (775 soroban pools, 300
+default rows); total shares 575 positive, 133 `0`, 67 `null` (the 66 measured
+plus the `NOT_A_POOL` pool). Red with the joined value dropped: `left: None`.
