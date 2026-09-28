@@ -2634,3 +2634,13 @@ pools (49) have no share token.
 - CH-gated test `soroban_participants_are_share_token_holders`.
 
 Still "not indexed" for soroban pools: chart and activity.
+
+**Coverage guard (review, 2026-09-28).** Providers are served only when the
+indexed holders add up to the pool's stored `total_shares` (a stored `0`
+cannot be checked: config family, emptied pools); otherwise list and detail
+count read "not indexed". Two pair pools fail it on production, and in both
+the chain's `total_supply` equals the stored total, so the gap is in our
+share-token balances: `CDIXSYDR…` — holders known for 26,752,186 of
+447,027,308,775 (0.006%); `CDLMAKG5…` — holders sum 92,024,604,911 against
+87,628,791,895 (a stale, too-large balance; two top holders match the chain
+exactly, so the excess sits elsewhere). Cause not yet traced.
