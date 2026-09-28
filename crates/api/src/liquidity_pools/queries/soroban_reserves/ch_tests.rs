@@ -16,6 +16,8 @@ use crate::liquidity_pools::queries::{ResolvedPoolListParams, fetch_pool_by_id, 
 const DB: &str = "api_test_0374_soroban_reserves";
 
 const POOL: &str = "5454545454545454545454545454545454545454545454545454545454545454";
+/// A pool whose code was replaced (`NOT_A_POOL`): its stale row must not be served.
+const REPLACED: &str = "33eb72c7a9a01352389d1cb151ce3dbd5818007c9e21ff5520f2c085f8f9f9b0";
 const ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 const TOKEN_18: &str = "CAUP7NFABXE5TJRL3FKTPMWRLC7IAXYDCTHQRFSCLR5TMGKHOOQO772J";
 const TOKEN_UNPUBLISHED: &str = "CBIJBDNZNF4X35BJ4FFZWCDBSCKOP5NB4PLG4SNENRMLAPYG4P5FM6VN";
@@ -52,12 +54,14 @@ async fn soroban_pool_reads_serve_leg_reserves() {
         ),
         format!(
             "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs) VALUES \
-             (unhex('{POOL}'), 10, 100, 1, [101, 102, 103, 104])"
+             (unhex('{POOL}'), 10, 100, 1, [101, 102, 103, 104]), \
+             (unhex('{REPLACED}'), 30, 100, 1, [101, 102])"
         ),
         format!(
             "INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id) VALUES \
              (unhex('{POOL}'), 150, [1, 2, 3, 4], 9), \
-             (unhex('{POOL}'), 200, [31072879007206, 125000000, 1282501540990846914271528, 999], 9)"
+             (unhex('{POOL}'), 200, [31072879007206, 125000000, 1282501540990846914271528, 999], 9), \
+             (unhex('{REPLACED}'), 200, [263512715771, 131948815702], 9)"
         ),
         format!(
             "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
@@ -85,6 +89,14 @@ async fn soroban_pool_reads_serve_leg_reserves() {
     let detail_reserves: Vec<Option<String>> =
         detail.legs.iter().map(|l| l.reserve.clone()).collect();
     assert_eq!(detail_reserves, expected, "detail legs");
+
+    let replaced = fetch_pool_by_id(&ch, REPLACED)
+        .await
+        .expect("detail query runs")
+        .expect("replaced pool still exists");
+    let replaced_reserves: Vec<Option<String>> =
+        replaced.legs.iter().map(|l| l.reserve.clone()).collect();
+    assert_eq!(replaced_reserves, vec![None, None], "replaced pool legs");
 
     let params = ResolvedPoolListParams {
         limit: 10,
