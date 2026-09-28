@@ -9,24 +9,29 @@ type Row = { id: string };
 
 const ROWS: Row[] = [{ id: 'row-a' }, { id: 'row-b' }];
 
-function baseProps() {
+function baseProps(rows: Row[] = ROWS) {
   return {
-    columnCount: 3,
-    isLoading: false,
-    isError: false,
-    rows: ROWS,
-    renderTable: (rows: readonly Row[]) => (
+    query: {
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    },
+    pager: {
+      rows,
+      canPrev: false,
+      canNext: true,
+      handlePrev: vi.fn(),
+      handleNext: vi.fn(),
+    },
+    renderTable: (visible: readonly Row[]) => (
       <ul>
-        {rows.map((row) => (
+        {visible.map((row) => (
           <li key={row.id}>{row.id}</li>
         ))}
       </ul>
     ),
-    emptyNoun: 'transactions',
-    canPrev: false,
-    canNext: true,
-    onPrev: vi.fn(),
-    onNext: vi.fn(),
   };
 }
 
@@ -49,32 +54,29 @@ describe('DataListCard', () => {
     expect(card).toContainElement(screen.getByText('row-a'));
     expect(card).toContainElement(screen.getByText('Latest results'));
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    expect(props.onNext).toHaveBeenCalledTimes(1);
+    expect(props.pager.handleNext).toHaveBeenCalledTimes(1);
   });
 
   it('forwards the empty and error props to DataList', () => {
     const { unmount } = renderWithProviders(
       <DataListCard<Row>
-        {...baseProps()}
-        rows={[]}
+        {...baseProps([])}
         renderEmpty={() => <div>custom empty</div>}
       />
     );
     expect(screen.getByText('custom empty')).toBeInTheDocument();
     unmount();
 
-    const onRetry = vi.fn();
+    const props = baseProps();
     renderWithProviders(
       <DataListCard<Row>
-        {...baseProps()}
+        {...props}
+        query={{ ...props.query, isError: true, error: new Error('boom') }}
         emptyKind="transactions"
-        isError
-        error={new Error('boom')}
-        onRetry={onRetry}
       />
     );
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(props.query.refetch).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the exclusive emptyKind / renderEmpty union', () => {

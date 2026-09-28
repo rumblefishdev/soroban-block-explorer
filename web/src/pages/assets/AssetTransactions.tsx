@@ -73,51 +73,27 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
     resetKey: assetId,
   });
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useAssetTransactions(assetId, cursor);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = useAssetTransactions(assetId, cursor);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
     <SectionCard title="Latest transactions">
       <DataList
-        columnCount={columns.length}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
+        query={query}
+        pager={pager}
         errorPy={6}
-        rows={rows}
-        renderSkeleton={() => (
+        renderTable={(rows, { loading }) => (
           <ExplorerTable
             columns={columns}
-            rows={[]}
+            rows={rows}
             rowKey={(row) => row.hash}
-            loading
+            loading={loading}
             skeletonRows={20}
-            rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-          />
-        )}
-        renderTable={(pageRows) => (
-          <ExplorerTable
-            columns={columns}
-            rows={pageRows}
-            rowKey={(row) => row.hash}
             rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
           />
         )}
         emptyKind="transactions"
         emptyPy={6}
-        emptyNoun="transactions"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </SectionCard>
   );

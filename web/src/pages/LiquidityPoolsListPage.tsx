@@ -8,7 +8,7 @@ import { PAGE_SIZE, usePoolsList, usePagedRows } from '../api/index.js';
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 import { PoolsFilterBar } from './liquidity-pools/PoolsFilterBar.js';
-import { POOL_COLUMN_COUNT, PoolsTable } from './liquidity-pools/PoolsTable.js';
+import { PoolsTable } from './liquidity-pools/PoolsTable.js';
 
 type Filters = NonNullable<ListPoolsData['query']>;
 
@@ -37,14 +37,8 @@ export default function LiquidityPoolsListPage() {
     return filters;
   }, [asset, kind, minTvl]);
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    usePoolsList(cursor, queryFilters);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = usePoolsList(cursor, queryFilters);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   const handleAssetChange = useCallback(
     (value: string) => setFilter('asset', value || null),
@@ -76,25 +70,15 @@ export default function LiquidityPoolsListPage() {
             onMinTvlChange={handleMinTvlChange}
           />
         }
-        columnCount={POOL_COLUMN_COUNT}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
-        rows={rows}
-        renderTable={(visibleRows) => <PoolsTable rows={visibleRows} />}
-        renderSkeleton={() => (
-          <PoolsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
+          <PoolsTable rows={rows} loading={loading} skeletonRows={PAGE_SIZE} />
         )}
         hasActiveFilters={hasFilters}
         emptyKind="pools"
         emptyNoun="pools"
         onClearFilters={clearFilters}
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </Stack>
   );
