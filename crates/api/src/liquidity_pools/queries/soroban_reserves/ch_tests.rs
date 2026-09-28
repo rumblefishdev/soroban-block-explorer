@@ -40,6 +40,13 @@ async fn soroban_pool_reads_serve_leg_reserves() {
     db_clickhouse::apply_init_sql(&ch)
         .await
         .expect("apply init.sql");
+    // The metadata case below needs its two versions in separate parts: a
+    // background merge would keep only the newer row and hide the older value
+    // a NULL-skipping `argMax` falls back to.
+    ch.query("SYSTEM STOP MERGES soroban_contract_metadata")
+        .execute()
+        .await
+        .expect("stop metadata merges");
 
     // Four legs, in the pool's token order: native XLM (101), a classic USDC
     // (102), a soroban token publishing 18 decimals (103) and one publishing

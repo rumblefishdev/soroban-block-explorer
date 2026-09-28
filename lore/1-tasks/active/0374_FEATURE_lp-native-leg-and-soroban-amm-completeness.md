@@ -2594,3 +2594,14 @@ against production: 775 of 775 soroban pools identical, default list
 identical on the 293 rows both walks held, three details identical; soroban
 page 0.76 s → 0.69 s. The CH test now seeds share tokens as `assets` rows
 with real contract addresses; red with the share decimals dropped.
+
+**Token decimals from the newest metadata row (2026-09-28, decision 87 A,
+merged in #518).** `argMax(decimals, version)` skips a `NULL` argument, so a
+newest metadata version without `decimals` fell back to an older version's
+value instead of reading as unpublished; `fetch_token_decimals` now reads
+`argMax(tuple(decimals), version).1`. No token on production differs today.
+The CH test that pins it stops merges on `soroban_contract_metadata` first:
+a background merge would leave only the newer row and let the old query pass
+(found by `/code-review` of #518). Red with plain `argMax`: the unpublished
+leg reads `Some("0.0000999")`. The shared resolver's twin of this read and
+its `coalesce(decimals, 7)` are task 0584's.
