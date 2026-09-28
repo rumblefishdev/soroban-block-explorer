@@ -53,6 +53,16 @@ history:
       Review fixes: frameless `DataList` split out of `DataListCard`
       (composition replaces `renderContainer`), `emptyPy` added, tests
       tightened. Identity harness still 40/40.
+  - date: 2026-09-28
+    status: active
+    who: karolkow
+    note: >
+      Follow-up after merge of #510: narrow the DataList interface, decision
+      W32 A. `query` + `pager` objects replace 9 copied props, one
+      `renderTable(rows, { loading })` replaces the renderSkeleton /
+      renderTable pair, the unused TableSkeleton fallback and `columnCount`
+      are gone, `emptyNoun` is required only with filters. 12 call sites +
+      DataList: 1597 → 1361 lines. Identity harness 108/108 + 30 click checks.
 ---
 
 # REFACTOR: migrate detail tables onto DataListCard
@@ -138,10 +148,9 @@ Current file names (2026-09-25; `PoolTransactions` was renamed
   - `errorPy` — error-state padding, default 8 (list pages). The four
     detail tables that used `QueryErrorState`'s default pass 6; NFT keeps 8.
   - `renderContainer` existed in the first revision and was removed.
-- `columnCount` / `emptyNoun` stay required; detail pages pass
-  `columns.length` and a real noun. Both are unused there (they use
-  `renderSkeleton` and have no filters) but keep the list-page contract
-  unchanged.
+- ~~`columnCount` / `emptyNoun` stay required~~ — superseded by the
+  2026-09-28 follow-up below: `columnCount` is gone, `emptyNoun` is required
+  only with `hasActiveFilters`.
 - **Line counts** (`wc -l`, `origin/develop` → branch): AccountTransactions
   144 → 142, AssetTransactions 127 → 124, NftTransfers 145 → 139,
   ContractInvocations 129 → 123, ContractEvents 224 → 221 — the five pages
@@ -177,6 +186,79 @@ Current file names (2026-09-25; `PoolTransactions` was renamed
   empty case. The harness was not committed (it imports `.orig` copies); it
   is in the main checkout's `.trash/0366-identity-harness/`. The 2026-09-25
   live look predates the split; the harness re-proved the DOM after it.
+
+### Follow-up 2026-09-28 — narrower DataList interface (W32 A)
+
+After #510 every call site still passed 13–14 props, most copied 1:1, and
+production lines went 898 → 920. The follow-up narrows the interface:
+
+- **Removed props:** `isLoading`, `isReloading`, `isError`, `error`,
+  `onRetry` (→ `query`); `rows`, `canPrev`, `canNext`, `onPrev`, `onNext`
+  (→ `pager`); `renderSkeleton` (→ `renderTable`'s `loading` flag);
+  `columnCount`, `skeletonRows` (the generic `TableSkeleton` fallback,
+  which no caller reached).
+- **Added props:** `query: DataListQuery` (structural: `isLoading`,
+  `isPlaceholderData`, `isError`, `error`, `refetch` — a `useQuery` result
+  fits as is) and `pager: DataListPager<T>` (structural: `rows`, `canPrev`,
+  `canNext`, `handlePrev`, `handleNext` — a `usePagedRows` result fits as
+  is). `renderTable(rows, { loading })` is called with `[]` and
+  `loading: true` on first load and while reloading.
+- **Changed:** `emptyNoun` is required only together with
+  `hasActiveFilters` (a union, like `emptyKind` / `renderEmpty`); Ledgers and
+  the five detail sections no longer pass one.
+- All 12 callers already used `usePagedRows` and a React Query `useQuery`
+  hook, so no adapter was needed anywhere.
+- The 7 `*_COLUMN_COUNT` exports (`AccountsTable`, `AssetsTable`,
+  `ContractsTable`, `LedgersTable`, `PoolsTable`, `NftsTable`,
+  `TransactionsTable`) existed only for `columnCount` and were deleted.
+  `ListPageSkeleton`'s comments, which pointed at DataListCard's
+  `skeletonRows` default and its `TableSkeleton`, were corrected.
+- **Line counts** (`wc -l`, `origin/develop` → branch):
+
+  | File                   | Before | After |
+  | ---------------------- | -----: | ----: |
+  | AccountsListPage       |     99 |    80 |
+  | AssetsListPage         |    118 |   102 |
+  | ContractsListPage      |     89 |    74 |
+  | LedgersListPage        |     69 |    53 |
+  | LiquidityPoolsListPage |    101 |    85 |
+  | NftsListPage           |     84 |    68 |
+  | TransactionsListPage   |    104 |    89 |
+  | AccountTransactions    |    142 |   119 |
+  | AssetTransactions      |    124 |   100 |
+  | NftTransfers           |    139 |   115 |
+  | ContractInvocations    |    136 |   112 |
+  | ContractEvents         |    221 |   197 |
+  | DataList               |    156 |   152 |
+  | DataListCard           |     15 |    15 |
+  | **Total**              |   1597 |  1361 |
+
+  −236 lines, plus −19 from the deleted `*_COLUMN_COUNT` exports.
+
+- **Identity harness** (same method as #510, extended to all 12 call
+  sites; `.orig` copies of the 12 pages + old `DataList` / `DataListCard`
+  from `origin/develop`, hook mocked per state, `innerHTML` compared,
+  style-less `div.MuiBox-root.css-0` unwrapped, React ids normalised):
+  108/108 identical — 12 pages × 8 states (loading, reloading, 503, generic
+  error, 429, empty, first page, middle page), 6 filtered-empty states (the
+  list pages with filters), 6 `?dir=asc` states (loading + filled for the 3
+  sortable tables). Each state also asserts what it rendered (skeleton = 21
+  `<tr>`, filled = 2, error = "Try again", empty = 0). Plus 30 behaviour
+  checks, old vs new: Next then Previous produce the same hook-call cursors
+  (12), Try again calls `refetch()` bare (12), header sort clicks while
+  loading (3) and when filled (3) produce the same calls.
+  Mutations caught: rendering AccountTransactions' skeleton with the sort
+  props failed 4 cases (loading, reloading, loading asc, header click while
+  loading); NftsListPage `skeletonRows` 20 → 19 failed loading + reloading.
+  Harness not committed; it is in the main checkout's
+  `.trash/0366-identity-harness-2/`.
+- `DataList.test.tsx` / `DataListCard.test.tsx` rewritten for the new props
+  (not a behaviour change): the generic `TableSkeleton` fallback test is
+  gone with the fallback; new asserts: loading calls `renderTable` with no
+  rows, retry calls `refetch()` with no arguments, and a
+  `@ts-expect-error` for `hasActiveFilters` without `emptyNoun`. The
+  `errorPy` reference render now includes a retry button, because DataList
+  always wires `refetch`.
 
 ## Design Decisions
 
@@ -220,6 +302,34 @@ Current file names (2026-09-25; `PoolTransactions` was renamed
   the error switch.
 - **Kept the body `<Box>` wrapper** so list pages stay byte-identical; it
   has no styles.
+- **Structural `query` / `pager` types, not React Query's own
+  (follow-up, 2026-09-28).** `DataListQuery` lists only the five fields
+  DataList reads, so a non-React-Query caller can build one; a `useQuery`
+  result and a `usePagedRows` result both fit without mapping. All fields
+  are required — every caller has them, and a required `refetch` means the
+  error state always offers a retry, as all 12 callers already did.
+- **`pager` carries `rows` too.** `usePagedRows` returns rows and the pager
+  together, so passing its result whole removes the `rows` prop as well as
+  the four pager props.
+- **Deleted the `TableSkeleton` fallback, `columnCount` and
+  `skeletonRows`** instead of making `columnCount` conditional: all 12
+  callers passed `renderSkeleton`, so the fallback was unreachable. The
+  `*_COLUMN_COUNT` exports it fed were deleted with it.
+- **`emptyNoun` as a union with `hasActiveFilters`, not optional with a
+  default.** A default ("results") would compile but let a filtered list
+  silently lose its noun; the union costs a few type lines and makes the
+  compiler demand the noun exactly where it is shown.
+- **The skeleton's header still ignores the sort.** Before, the three
+  sortable tables (Accounts, Ledgers, AccountTransactions) rendered their
+  skeleton without `sortDir` / `onSortChange` (and without `sortBy` in
+  AccountTransactions): the header showed the default sort and a click did
+  nothing. With one `renderTable`, passing the sort props unconditionally
+  would change that (the harness caught it), so those three pages spread
+  them only when `!loading`. Showing the current sort in the skeleton is
+  arguably better, but it is a UI change, not this refactor.
+- **Retry calls `refetch()` with no arguments** (`() => void
+query.refetch()`), never `onRetry={query.refetch}`, so the click event can
+  never reach React Query as refetch options.
 
 ## Issues Encountered
 
