@@ -2,7 +2,7 @@
 id: '0584'
 title: 'BUG: API renders defaults (1970 dates, empty ids, Classic kind) where a lookup missed'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0374']
 tags: [layer-api, priority-low, effort-small]
@@ -22,6 +22,13 @@ history:
       Widened (0374 decision 92 B): the guessed 7 decimals for a soroban token
       that publishes none, on account balances, balance changes and asset
       supply, moves here from 0374 decision 119.
+  - date: '2026-09-28'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Widened (decision 3 A): the API reads
+      soroban_contract_metadata 13 times in 7 files with three dedup styles;
+      one shared definition of the newest metadata row replaces them.
 ---
 
 # BUG: API renders defaults where a lookup missed
