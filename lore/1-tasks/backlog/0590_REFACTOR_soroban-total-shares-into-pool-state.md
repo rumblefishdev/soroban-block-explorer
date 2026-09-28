@@ -99,3 +99,13 @@ Nullable(Int128) DEFAULT NULL`. `NULL` = the pool keeps no such key.
 - [ ] The soroban read is plain: one state-row join carrying reserves and total, no SQL templated by string replacement, no soroban-only special cases on the classic row (the rewiring alone was tried in PR #526 and withdrawn — it moved the complexity instead of removing it)
 - [ ] `pool_instance_state.total_shares` dropped (struct, `init.sql`, production)
 - [ ] Docs: database-schema, indexing-pipeline, backend overview, ADR 0058 amended
+
+## 2026-09-28 — one more reason from the 0584 review
+
+The share-token scale read in `soroban_total_shares.rs` takes
+`argMax(decimals, version)`, which skips a `NULL` argument: a newest
+metadata row without decimals falls back to an older value. The token-leg read
+(#518) and the shared resolver (0584) already read the newest row with
+`argMax(tuple(decimals), version).1`. When this task moves the total to the
+state row and takes the share token's scale through the resolver
+(acceptance: no `soroban_contracts` scan), this read goes with it.
