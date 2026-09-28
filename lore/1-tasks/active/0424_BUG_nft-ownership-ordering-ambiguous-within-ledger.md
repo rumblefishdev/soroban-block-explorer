@@ -227,6 +227,27 @@ application_order)` — `TxKey.transaction_id` and the account page's
   with it; `NftTransfers.tsx` took `develop`'s new `DataList` with the
   location row key). Checks after the merge: `api` 679 tests, web 396, clippy,
   typecheck, lint clean.
+- **Fill tool on `develop`** as
+  [#528](https://github.com/rumblefishdev/soroban-block-explorer/pull/528)
+  (merged 2026-09-28). Merge order: #528 first, #527 only after the fill —
+  every Compute deploy ships all of `develop`, so readers merged earlier would
+  go out with an empty history.
+- **Step 1 deployed** (2026-09-28): both tables created by the operator and
+  checked against `init.sql` in `system.columns` (columns, types, sort key);
+  Compute from `develop` `f1e53c45`, indexer 14:26:33 UTC. No NFT change
+  reached the indexer in the first minutes (last one at 64,663,865, before
+  the deploy), so the live write is still to be seen.
+- **History filled** (2026-09-28). Dry run (read-only) 14:37 UTC: 31,118
+  events → 23,550 hot + 521 pending, 0 dropped, `only_old=0 only_new=0`.
+  Real run by the operator 14:44 UTC with a write identity, same numbers.
+  The command writes only the two new tables (`INSERT`, append-only; no
+  `ALTER` / `DELETE` / `OPTIMIZE` in its path — the `ALTER` in `sink.rs` is
+  test-only). After: `nft_ownership_changes` 23,552, `_pending` 521 (`FINAL`)
+  = the old tables' 24,073; the two extra hot rows are the live indexer's,
+  head at ledger 64,664,182 — the step-1 writer works on production.
+  The WARN lines (`no known arg shape parsed`) are contracts
+  `CBMKSLJL…`, `CD7ZVM24…`, `CAK7EUVA…`, `CBBVYBTC…`: the same shapes the
+  live indexer drops, so the old tables lack them too.
 
 ## Implementation
 
