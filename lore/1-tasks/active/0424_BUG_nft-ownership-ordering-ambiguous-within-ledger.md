@@ -274,6 +274,13 @@ application_order)` — `TxKey.transaction_id` and the account page's
     `soroban_events` for that contract (0 without).
   - prices-api: no `prices_*` read of either table in 14 days;
     `api_reader` last 13:13 UTC, before the readers deploy.
+- **Both old tables dropped** by the operator (2026-09-28, ~18:55 UTC):
+  `system.tables` 0; ingest at the network head, 0 write or read exceptions;
+  `nft_ownership_changes` 23,588 + `_pending` 521. No column named
+  `transaction_id` remains on production (`system.columns`: 0) — only
+  `transactions.id` itself, which epic 0538 retires next. Parallel change
+  done; still open here: the `nfts` current-owner tie (296 A / W306), the
+  CAP-67 stage subtask and the state-table audit.
 
 ## Implementation
 
