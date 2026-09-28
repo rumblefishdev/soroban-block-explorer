@@ -281,6 +281,19 @@ application_order)` — `TxKey.transaction_id` and the account page's
   `transactions.id` itself, which epic 0538 retires next. Parallel change
   done; still open here: the `nfts` current-owner tie (296 A / W306), the
   CAP-67 stage subtask and the state-table audit.
+- **`nfts` current owner measured against the located history** (2026-09-28,
+  read-only, `FINAL`): 14,187 tokens in both, 0 only in one. The owner of
+  each token's last change by `(ledger, application_order, operation_index,
+event_index)` equals `nfts.current_owner_id` for **all 14,187** (and the
+  ledger for all). 70 tokens have several changes in their last ledger (88
+  token-ledgers overall): all 70 match the chain's last. No token has
+  unmerged `nfts` rows tied on the version with different owners (14,188
+  rows, 4 parts). Why: staging folds a ledger's changes last-wins in list
+  order (`watermark >=`, `stage/nfts.rs`), and the list is the ledger's event
+  order, so one write per ledger is already chain-correct; the RMT tie only
+  arises between two writes of one ledger, which carry the same rows.
+  Measurement trap: `argMax(owner_id, …)` skips a NULL owner (burn) and
+  reported 828 false mismatches — use `argMax(tuple(owner_id), …).1`.
 
 ## Implementation
 
