@@ -38,10 +38,10 @@
 --     transfer / burn arriving in a later ingest batch carries no mint ledger
 --     and replaces the WHOLE row, erasing it (621/13 915 tokens on prod when
 --     0528 was filed, growing ~30/day). The served value comes from the
---     append-only `nft_ownership`:
+--     append-only `nft_ownership_changes`:
 --         mint AS (SELECT contract_id, token_id,
 --                         min(ledger_sequence) AS minted_at_ledger
---                    FROM nft_ownership WHERE event_type = 0
+--                    FROM nft_ownership_changes WHERE event_type = 0
 --                   GROUP BY contract_id, token_id)
 --     LEFT JOIN'd on (contract_id, token_id). The `event_type = 0` filter is
 --     load-bearing — "earliest ownership row" would return a transfer ledger
@@ -86,7 +86,7 @@ JOIN      soroban_contracts sc  FINAL ON sc.id  = n.contract_id
 LEFT JOIN accounts          own FINAL ON own.id = n.current_owner_id AND n.current_owner_id IS NOT NULL
 LEFT JOIN (
     SELECT contract_id, token_id, min(ledger_sequence) AS minted_at_ledger
-      FROM nft_ownership
+      FROM nft_ownership_changes
      WHERE event_type = 0
      GROUP BY contract_id, token_id
 ) mint ON mint.contract_id = n.contract_id AND mint.token_id = n.token_id

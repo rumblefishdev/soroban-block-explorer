@@ -1436,8 +1436,10 @@ ORDER BY (contract_id, token_id, ledger_sequence, application_order, operation_i
   tokens under a single event id.
 - **Staging refuses a change without an event id**, as `soroban_events` does;
   NFT events are per-operation contract events, which always carry one.
-- Written beside the old pair until the readers move; promotion from
-  `_pending` (`nft-reclassify`) moves both pairs together.
+- The API reads it alone: the NFT transfers tab (keyset on the location),
+  the mint ledger, and the pieces an account's balance change names (by
+  transaction position). Still written beside the old pair until the old
+  write stops; promotion from `_pending` (`nft-reclassify`) moves both pairs.
 
 ### 4.13.1 NFT Quarantine — `nfts_pending` + `nft_ownership_pending` (task 0217)
 

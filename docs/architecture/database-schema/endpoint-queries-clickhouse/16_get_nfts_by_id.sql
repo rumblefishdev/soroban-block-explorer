@@ -28,15 +28,15 @@
 --     frontend uses synthetic cityHash64 surrogate from E15 as routing
 --     key and the API decomposes.
 --   • Burned NFT: `current_owner_id IS NULL` → LEFT JOIN yields NULL. Note
---     the mint ledger comes from `nft_ownership` — see the next bullet.
---   • **`minted_at_ledger` is DERIVED from `nft_ownership` (task 0528); `nfts`
+--     the mint ledger comes from `nft_ownership_changes` — see the next bullet.
+--   • **`minted_at_ledger` is DERIVED from `nft_ownership_changes` (task 0528); `nfts`
 --     stores no mint ledger (task 0497).** `nfts` is
 --     Replacing(current_owner_ledger) with one row per token, so any stored
 --     copy was replaced by the next transfer or burn. Detail scopes
 --     the derivation to the resolved contract:
 --         LEFT JOIN (SELECT contract_id, token_id,
 --                           min(ledger_sequence) AS minted_at_ledger
---                      FROM nft_ownership
+--                      FROM nft_ownership_changes
 --                     WHERE contract_id IN (SELECT id FROM cid)
 --                       AND event_type = 0
 --                     GROUP BY contract_id, token_id) mi
@@ -67,7 +67,7 @@ JOIN      soroban_contracts sc  FINAL ON sc.id  = n.contract_id
 LEFT JOIN accounts          own FINAL ON own.id = n.current_owner_id AND n.current_owner_id IS NOT NULL
 LEFT JOIN (
     SELECT contract_id, token_id, min(ledger_sequence) AS minted_at_ledger
-      FROM nft_ownership
+      FROM nft_ownership_changes
      WHERE event_type = 0
      GROUP BY contract_id, token_id
 ) mi ON mi.contract_id = n.contract_id AND mi.token_id = n.token_id
