@@ -9,13 +9,11 @@
 //! - **No `transactions.created_at` on CH.** The API timestamp is the
 //!   parent ledger `closed_at`, joined in from `ledgers` (ADR 0044 §5.2).
 //! - **`transactions.id` is a deterministic hash surrogate**, not a
-//!   `BIGSERIAL`. It is a stable, unique tie-break for the global list
-//!   keyset `(ledger_sequence, id)` (canonical SQL 02), but it is NOT
-//!   apply-order within a ledger — callers that need on-chain order use
-//!   `application_order`.
+//!   `BIGSERIAL`, and it is NOT apply-order within a ledger. Every list keys
+//!   on the position `(ledger_sequence, application_order)` (ADR 0059).
 //! - **`transaction_operations` has no `id` surrogate** (PR #175). The
 //!   per-op `appearance_id` is the operation's 1-based position,
-//!   `operation_index + 1` (canonical SQL 03 statement C).
+//!   `operation_index + 1` (ADR 0059).
 //! - **`soroban_events` is the full-payload table** (one row per event). The
 //!   archive-unavailable fallback groups per (contract, ledger) to emit one
 //!   appearance row per contract — the same wire shape as the PG appearance
@@ -54,7 +52,6 @@ pub struct TxListRow {
 
 #[derive(Debug)]
 pub struct TxDetailRow {
-    pub id: i64,
     pub hash: String,
     pub ledger_sequence: i64,
     pub application_order: i16,
@@ -101,9 +98,11 @@ pub struct EventAppearanceRow {
 }
 
 #[derive(Debug)]
-pub struct InvocationAppearanceRow {
+pub struct TransactionInvocationRow {
     pub contract_id: String,
     pub caller_account: Option<String>,
+    /// Set instead of `caller_account` when a contract made the call (task 0487).
+    pub caller_contract: Option<String>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
@@ -128,7 +127,6 @@ struct SurrogateIdRow {
 
 #[derive(Debug, Row, Deserialize)]
 struct TxDetailRawRow {
-    id: i64,
     hash: String,
     ledger_sequence: i64,
     application_order: i16,
@@ -167,6 +165,7 @@ struct EventAppearanceRawRow {
 struct InvocationAppearanceRawRow {
     contract_surrogate: i64,
     caller_id: Option<i64>,
+    caller_contract_id: Option<i64>,
     ledger_sequence: i64,
     created_at: i64,
 }
@@ -179,7 +178,6 @@ pub async fn fetch_detail(
     let raw = client
         .query(
             "SELECT \
-                t.id AS id, \
                 lower(hex(t.hash)) AS hash, \
                 t.ledger_sequence, \
                 t.application_order, \
@@ -206,7 +204,6 @@ pub async fn fetch_detail(
     };
     let source = fetch_source_account(client, raw.source_id).await?;
     Ok(Some(TxDetailRow {
-        id: raw.id,
         hash: raw.hash,
         ledger_sequence: raw.ledger_sequence,
         application_order: raw.application_order,
@@ -422,42 +419,54 @@ pub async fn fetch_event_appearances(
     Ok(out)
 }
 
-pub async fn fetch_invocation_appearances(
+/// The contracts the transaction invoked, located by its position (task
+/// 0586). `contract_activity` leads with `contract_id`, so this reads the
+/// ledger's granules of the partition, as the invocations table's lookup by
+/// surrogate did (measured on the same key shape: 2.1 M rows / 32 ms against
+/// 1.0 M / 25 ms).
+pub async fn fetch_transaction_invocations(
     client: &clickhouse::Client,
-    transaction_id: i64,
     ledger_sequence: i64,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
+    application_order: i16,
+) -> Result<Vec<TransactionInvocationRow>, clickhouse::error::Error> {
     let raw = client
         .query(
             "SELECT \
-                sia.contract_id AS contract_surrogate, \
-                sia.caller_id, \
-                sia.ledger_sequence, \
+                ca.contract_id AS contract_surrogate, \
+                ca.caller_id, \
+                ca.caller_contract_id, \
+                ca.ledger_sequence, \
                 l.closed_at AS created_at \
-             FROM soroban_invocations_appearances sia FINAL \
+             FROM contract_activity ca FINAL \
              /* ledgers l FINAL: defensive dedup — see fetch_operations. Was \
-                correct only via `sia FINAL` propagating into the join; made \
-                explicit. Single-sequence pin, so cheap. lore-0420 */ \
-             INNER JOIN ledgers l FINAL ON l.sequence = sia.ledger_sequence \
-             WHERE sia.transaction_id = ? \
-               AND sia.ledger_sequence = ? \
-               AND intDiv(sia.ledger_sequence, 500000) = intDiv(?, 500000)",
+                correct only via the driver's FINAL propagating into the join; \
+                made explicit. Single-sequence pin, so cheap. lore-0420 */ \
+             INNER JOIN ledgers l FINAL ON l.sequence = ca.ledger_sequence \
+             WHERE ca.ledger_sequence = ? \
+               AND ca.application_order = ? \
+               AND ca.invocation_count > 0 \
+               AND intDiv(ca.ledger_sequence, 500000) = intDiv(?, 500000)",
         )
-        .bind(transaction_id)
         .bind(ledger_sequence)
+        .bind(application_order)
         .bind(ledger_sequence)
         .fetch_all::<InvocationAppearanceRawRow>()
         .await?;
-    // Both resolve off `raw` alone — one wave, not two (task 0446).
+    // Both resolve off `raw` alone — one wave, not two (task 0446). A contract
+    // caller resolves in the same read as the invoked contract.
+    let contract_ids = raw
+        .iter()
+        .flat_map(|r| std::iter::once(r.contract_surrogate).chain(r.caller_contract_id))
+        .collect();
     let (contracts, accounts) = tokio::join!(
-        resolve_contracts(client, raw.iter().map(|r| r.contract_surrogate).collect()),
+        resolve_contracts(client, contract_ids),
         resolve_accounts(client, raw.iter().filter_map(|r| r.caller_id).collect()),
     );
     let contracts = contracts?;
     let accounts = accounts?;
-    let mut out: Vec<InvocationAppearanceRow> = raw
+    let mut out: Vec<TransactionInvocationRow> = raw
         .into_iter()
-        .map(|r| InvocationAppearanceRow {
+        .map(|r| TransactionInvocationRow {
             contract_id: contracts
                 .get(&r.contract_surrogate)
                 .cloned()
@@ -466,11 +475,15 @@ pub async fn fetch_invocation_appearances(
                 .caller_id
                 .and_then(|id| accounts.get(&id).cloned())
                 .filter(|s| !s.is_empty()),
+            caller_contract: r
+                .caller_contract_id
+                .and_then(|id| contracts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
             ledger_sequence: r.ledger_sequence,
             created_at: millis_to_utc(r.created_at),
         })
         .collect();
-    // Matches the old `ORDER BY sia.ledger_sequence, sc.contract_id` (resolved StrKey).
+    // Ordered by ledger, then the resolved contract StrKey.
     out.sort_by(|a, b| {
         (a.ledger_sequence, &a.contract_id).cmp(&(b.ledger_sequence, &b.contract_id))
     });

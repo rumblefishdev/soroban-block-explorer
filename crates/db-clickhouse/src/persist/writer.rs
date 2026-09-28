@@ -101,8 +101,7 @@ struct TableInserts {
     lp_positions: Option<Insert<LpPositionRow>>,
     tx_operations: Option<Insert<TransactionOperationRow>>,
     events: Option<Insert<SorobanEventRow>>,
-    invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
-    contract_txs: Option<Insert<ContractTransactionRow>>,
+    contract_activity: Option<Insert<ContractActivityRow>>,
     assets: Option<Insert<AssetRow>>,
     asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
@@ -114,6 +113,9 @@ struct TableInserts {
     /// HTTP request, keeping the part economy unchanged from PR #180.
     nfts_pending: Option<Insert<NftPendingRow>>,
     nft_ownership_pending: Option<Insert<NftOwnershipPendingRow>>,
+    /// Task 0424 — written beside `nft_ownership{,_pending}` until the readers move.
+    nft_ownership_changes: Option<Insert<NftOwnershipChangeRow>>,
+    nft_ownership_changes_pending: Option<Insert<NftOwnershipChangeRow>>,
     /// Unified per-holder balances — ALL asset types (task 0331 Option A). The
     /// legacy `account_balances_current` insert was removed (single-write).
     unified_balances: Option<Insert<BalanceRow>>,
@@ -277,14 +279,15 @@ impl PartitionWriter {
             op_asset_rows,
             pool_amount_rows,
             event_rows,
-            invocation_rows,
-            contract_tx_rows,
+            contract_activity_rows,
             asset_rows,
             asset_sac_rows,
             nft_rows,
             nft_ownership_rows,
             nft_pending_rows,
             nft_ownership_pending_rows,
+            nft_ownership_change_rows,
+            nft_ownership_change_pending_rows,
             unified_balance_rows,
             claimable_balance_rows,
             asset_transfer_rows,
@@ -419,16 +422,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.invocations,
-            "soroban_invocations_appearances",
-            &invocation_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.contract_txs,
-            "contract_transactions",
-            &contract_tx_rows,
+            &mut self.inserts.contract_activity,
+            "contract_activity",
+            &contract_activity_rows,
         )
         .await?;
 
@@ -470,6 +466,20 @@ impl PartitionWriter {
             &mut self.inserts.nft_ownership_pending,
             "nft_ownership_pending",
             &nft_ownership_pending_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.nft_ownership_changes,
+            "nft_ownership_changes",
+            &nft_ownership_change_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.nft_ownership_changes_pending,
+            "nft_ownership_changes_pending",
+            &nft_ownership_change_pending_rows,
         )
         .await?;
         write_rows(
@@ -518,7 +528,7 @@ impl PartitionWriter {
         // Step 1: drain every non-ledger insert. Order roughly mirrors
         // PG's write order (accounts → wasm → contracts → tx → hash
         // index → participants → pools/snapshots/positions → ops →
-        // events → invocations → assets → nfts/ownership → balances).
+        // events → contract activity → assets → nfts/ownership → balances).
         //
         // EXHAUSTIVE destructure, deliberately no `..`: an insert that is
         // written but never ended buffers its rows and drops them SILENTLY
@@ -549,14 +559,15 @@ impl PartitionWriter {
             lp_positions,
             tx_operations,
             events,
-            invocations,
-            contract_txs,
+            contract_activity,
             assets,
             asset_sac,
             nfts,
             nft_ownership,
             nfts_pending,
             nft_ownership_pending,
+            nft_ownership_changes,
+            nft_ownership_changes_pending,
             unified_balances,
             claimable_balance_holdings,
             asset_transfers,
@@ -580,8 +591,7 @@ impl PartitionWriter {
         end(lp_positions).await?;
         end(tx_operations).await?;
         end(events).await?;
-        end(invocations).await?;
-        end(contract_txs).await?;
+        end(contract_activity).await?;
         end(assets).await?;
         end(asset_sac).await?;
         end(nfts).await?;
@@ -594,6 +604,8 @@ impl PartitionWriter {
         // dedupes the orphan rows on the next merge.
         end(nfts_pending).await?;
         end(nft_ownership_pending).await?;
+        end(nft_ownership_changes).await?;
+        end(nft_ownership_changes_pending).await?;
         end(unified_balances).await?;
         end(claimable_balance_holdings).await?;
         end(asset_transfers).await?;

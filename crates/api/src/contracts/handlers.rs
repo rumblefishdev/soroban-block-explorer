@@ -24,7 +24,7 @@ use super::dto::{
     EventCursor, EventItem, InterfaceResponse, InvocationItem,
 };
 use super::queries::{
-    self, ContractListRow, ContractRow, InterfaceRow, InvocationAppearanceRow,
+    self, ContractInvocationRow, ContractListRow, ContractRow, InterfaceRow,
     ResolvedContractsListParams,
 };
 
@@ -285,14 +285,6 @@ pub async fn list_invocations(
         return resp;
     }
 
-    // Reject a stale cursor minted under the retired PG backend (ADR 0008
-    // fail-clean).
-    if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(cursor)
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
-
     let contract = match fetch_contract_for_source(&state, &contract_id).await {
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
@@ -304,7 +296,7 @@ pub async fn list_invocations(
 
     let direction = pagination.direction;
     let has_predecessor = pagination.has_predecessor();
-    let mut rows: Vec<InvocationAppearanceRow> = match fetch_invocations_for_source(
+    let mut rows: Vec<ContractInvocationRow> = match fetch_invocations_for_source(
         &state,
         contract.id,
         pagination.fetch_limit(),
@@ -337,6 +329,7 @@ pub async fn list_invocations(
             transaction_hash: row.transaction_hash,
             ledger_sequence: row.ledger_sequence,
             caller_account: row.caller_account,
+            caller_contract: row.caller_contract,
             created_at: row.created_at,
             successful: row.successful,
         })
@@ -461,8 +454,8 @@ async fn fetch_invocations_for_source(
     limit: i64,
     cursor: Option<&TxListCursor>,
     direction: Direction,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_invocation_appearances(
+) -> Result<Vec<ContractInvocationRow>, clickhouse::error::Error> {
+    queries::fetch_contract_invocations(
         &state.ch(),
         contract_surrogate_id,
         limit,
@@ -472,19 +465,13 @@ async fn fetch_invocations_for_source(
     .await
 }
 
-/// Build the opaque invocations cursor for a boundary row. CH keys on
-/// `(ledger_sequence, id)` (the `soroban_invocations_appearances` keyset).
-fn invocation_cursor_for(r: &InvocationAppearanceRow) -> TxListCursor {
-    TxListCursor::ChSurrogate {
+/// Build the opaque invocations cursor for a boundary row: the transaction's
+/// position, the `contract_activity` keyset (task 0586).
+fn invocation_cursor_for(r: &ContractInvocationRow) -> TxListCursor {
+    TxListCursor::ChPosition {
         ledger_sequence: r.ledger_sequence,
-        transaction_id: r.transaction_id,
+        application_order: r.application_order,
     }
-}
-
-/// True when the cursor anchors this list's keyset, the id surrogate. A
-/// position cursor from `/transactions` is refused (ADR 0008 fail-clean).
-fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::ChSurrogate { .. })
 }
 
 // ---------------------------------------------------------------------------

@@ -4,10 +4,10 @@
 //!
 //! ### List pagination + the partition-prune / read-in-order guard
 //!
-//! Canonical SQL 02 (PR #175 amendment) bounds every page to a single
-//! `intDiv(ledger_sequence, 500000)` partition. Statements A and C reproduce
-//! that — first page prunes to the latest partition (`intDiv(max(sequence),
-//! 500000)`), subsequent pages prune to the cursor's partition. The known cost
+//! Statements A and C bound every page to a single
+//! `intDiv(ledger_sequence, 500000)` partition (PR #175): the first page
+//! prunes to the latest partition (`intDiv(max(sequence), 500000)`),
+//! subsequent pages prune to the cursor's partition. The known cost
 //! is that pagination across a 500k-ledger partition boundary stops early —
 //! and for a rare `op_type` the first page is already short or empty (task
 //! 0381). Statement B seeks an index keyed by contract and is not bounded.
@@ -25,7 +25,7 @@
 //! the belt-and-braces. The cursor keys on `application_order` for this path
 //! (also the correct in-ledger order — the old `id`-hash tie-break did not
 //! preserve it). Statement B (contract filter) keys on the same position, by a
-//! seek on the `contract_transactions` presence index (task 0541), and
+//! seek on the `contract_activity` presence index (tasks 0541, 0586), and
 //! statement C (operation type) by a scan of `transaction_operations`, keyed
 //! by the position too (task 0372).
 //!
@@ -235,16 +235,14 @@ pub async fn fetch_list(
 
     let (op, order) = keyset_sql_desc(direction);
     // Cursor keyset is the position `(ledger_sequence, application_order)`
-    // (canonical SQL 02) for every statement; `list_transactions` has already
-    // rejected a surrogate-keyed one. Both parts are present together or absent
-    // together, so the keyset tuple never binds a NULL.
-    let cursor: Option<(i64, i16)> = match params.cursor.as_ref() {
-        Some(TxListCursor::ChPosition {
-            ledger_sequence,
-            application_order,
-        }) => Some((*ledger_sequence, *application_order)),
-        _ => None,
-    };
+    // for every statement. Both parts are present together
+    // or absent together, so the keyset tuple never binds a NULL.
+    let cursor: Option<(i64, i16)> = params.cursor.as_ref().map(
+        |TxListCursor::ChPosition {
+             ledger_sequence,
+             application_order,
+         }| (*ledger_sequence, *application_order),
+    );
     let cursor_ledger = cursor.map(|(l, _)| l);
     let cursor_tiebreak = cursor.map(|(_, a)| i64::from(a));
 
@@ -284,7 +282,7 @@ pub async fn fetch_list(
         // --- Statement B: contract filter (optionally + op_type) -----------
         (Some(cid), op_type_opt) => {
             // Step 1: up to `lim_over` positions of transactions touching the
-            // contract, by a seek on the `contract_transactions` presence index
+            // contract, by a seek on the `contract_activity` presence index
             // — the shape `transaction_participants` gives the account list
             // (task 0541). Not bounded to a partition: the index is keyed by
             // contract, so the seek crosses them cheaply (task 0381).
@@ -313,9 +311,10 @@ pub async fn fetch_list(
         (None, Some(op_type)) => {
             // Step 1: up to `lim_over` positions of transactions carrying the
             // operation type, from `transaction_operations` pinned to one
-            // partition (canonical SQL 02). `type` is not a key prefix, so this
-            // scans the partition in key order until the limit (~8e7 rows at
-            // worst, for a rare type; user-initiated, not polled).
+            // partition. `type` is not a key prefix, so this scans the
+            // partition in key order until the limit — measured 2026-09-25 on
+            // partition 115 (286M rows), LIMIT 80: 63–147M rows read for types
+            // 1, 19 and 24. User-initiated, not polled.
             let positions: Vec<(i64, i16)> = client
                 .query(&op_type_positions_sql(
                     op_type,
@@ -448,7 +447,7 @@ struct PositionRow {
 
 /// Statement B's driver: the positions of the transactions touching the
 /// contract, past the cursor, in page order — one seek on the
-/// `contract_transactions` key, the way the account list seeks
+/// `contract_activity` key (every pair, invoked or not), the way the account list seeks
 /// `transaction_participants`. No partition bound: pinned to the head's
 /// partition, a contract without transactions there listed as empty (93.3% of
 /// the contracts in `soroban_contracts`, 2026-09-22). Across every partition
@@ -469,7 +468,7 @@ fn contract_positions_sql(
         format!(" AND (ledger_sequence, application_order) {op} ({l}, {a})")
     });
     format!(
-        "SELECT ledger_sequence, application_order FROM contract_transactions \
+        "SELECT ledger_sequence, application_order FROM contract_activity \
          WHERE contract_id = {contract_id} \
            AND ledger_sequence <= {head_max}{cursor} \
          ORDER BY ledger_sequence {order}, application_order {order} \
@@ -479,9 +478,9 @@ fn contract_positions_sql(
 }
 
 /// Statement C's driver: the positions of the transactions carrying an
-/// operation of `op_type`, past the cursor, in page order, inside one partition
-/// (canonical SQL 02). `LIMIT 1 BY` folds a transaction's several operations
-/// of the type — and rows the RMT has not merged yet — into one position.
+/// operation of `op_type`, past the cursor, in page order, inside one partition. `LIMIT 1 BY` folds a
+/// transaction's several operations of the type — and rows the RMT has not
+/// merged yet — into one position.
 /// Every value is an integer literal (see `fetch_list`).
 fn op_type_positions_sql(
     op_type: i16,

@@ -7,15 +7,13 @@ import {
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
   IdentifierDisplay,
-  PaginationControls,
-  QueryErrorState,
   TableSectionHeader,
   useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
 
 import { useNftTransfers, usePagedRows } from '../../api/index.js';
+import { DataList } from '../detail/DataList.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 import { NftEventBadge } from './NftEventBadge.js';
@@ -84,61 +82,33 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
     resetKey: `${contractId}/${tokenId}`,
   });
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useNftTransfers(contractId, tokenId, cursor);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
-
-  let body: ReactNode;
-  if (isLoading || isPlaceholderData) {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={[]}
-        rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
-        loading
-        skeletonRows={20}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  } else if (isError) {
-    body = (
-      <QueryErrorState error={error} onRetry={() => void refetch()} py={8} />
-    );
-  } else if (rows.length === 0) {
-    body = (
-      <EmptyState
-        icon={<SwapHorizIcon />}
-        title="No transfer history"
-        description="This NFT has no recorded mint, transfer or burn events."
-        py={8}
-      />
-    );
-  } else {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={rows}
-        rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  }
+  const query = useNftTransfers(contractId, tokenId, cursor);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
     <Card>
       <TableSectionHeader title="Transfer history" />
-      {body}
-      <PaginationControls
-        caption="Latest results"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
+      <DataList
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
+          <ExplorerTable
+            columns={columns}
+            rows={rows}
+            rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
+            loading={loading}
+            skeletonRows={20}
+            rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+          />
+        )}
+        renderEmpty={() => (
+          <EmptyState
+            icon={<SwapHorizIcon />}
+            title="No transfer history"
+            description="This NFT has no recorded mint, transfer or burn events."
+            py={8}
+          />
+        )}
       />
     </Card>
   );

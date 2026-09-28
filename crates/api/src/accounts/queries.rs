@@ -276,7 +276,7 @@ pub async fn fetch_list(
 }
 
 // ---------------------------------------------------------------------------
-// Detail header — canonical 06 Statement A
+// Detail header
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
@@ -381,7 +381,7 @@ pub async fn fetch_deleted_status(
 }
 
 // ---------------------------------------------------------------------------
-// Detail balances — canonical 06 Statement B
+// Detail balances
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
@@ -587,7 +587,7 @@ pub async fn fetch_balances(
 }
 
 // ---------------------------------------------------------------------------
-// Transactions — canonical 07 (two-step, multi-partition-safe)
+// Transactions (two-step, multi-partition-safe)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
@@ -628,7 +628,7 @@ pub async fn fetch_transactions(
             ledger_sequence,
             application_order,
         }) => (Some(*ledger_sequence), Some(*application_order)),
-        _ => (None, None),
+        None => (None, None),
     };
     let (op, order) = keyset_sql(sort, direction);
 

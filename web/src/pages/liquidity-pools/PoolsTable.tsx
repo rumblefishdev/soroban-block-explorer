@@ -28,8 +28,6 @@ import { PoolLegIcons } from '../pool-shared/PoolLegIcons.js';
 
 import { POOL_KIND_META } from './poolKind.js';
 
-export const POOL_COLUMN_COUNT = 6;
-
 /** Render leg code text — wrapped in RouterLink when legHref resolves
  *  (native, classic credit, contract-id fallback); plain text otherwise (schema
  *  drift). Matches the precedence used by PoolSummary + PoolKpiStrip. */
@@ -154,36 +152,6 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
     },
   },
   {
-    id: 'total_shares',
-    // Figma reuses the "Reserves" header for this column too. Use a
-    // distinct label so screen readers (and column-mapping helpers)
-    // don't see two identical headers — visually it still reads as a
-    // "reserves" sibling because of the right-aligned amount + "shares"
-    // unit label below.
-    header: 'Total shares',
-    align: 'right',
-    width: 150,
-    cell: (row) => {
-      if (row.total_shares == null) return <Dash />;
-      return (
-        <Stack spacing={0.25} alignItems="flex-end">
-          <Typography
-            variant="bodySmMedium"
-            sx={(theme) => ({ color: theme.palette.text.primary })}
-          >
-            {formatCompactAmount(row.total_shares)}
-          </Typography>
-          <Typography
-            variant="bodyXsRegular"
-            sx={(theme) => ({ color: theme.palette.text.secondary })}
-          >
-            shares
-          </Typography>
-        </Stack>
-      );
-    },
-  },
-  {
     id: 'participants',
     header: 'Participants',
     align: 'right',
@@ -209,10 +177,11 @@ interface PoolsTableProps {
  * Table for the liquidity-pools list page. Columns mirror the Figma node
  * `266:36052` design: Pool (stacked color-coded asset avatars + pair +
  * truncated id) / Reserves (per-leg) / TVL (USD, task 0199 Phase A2 —
- * issue #367's ask; em-dash when a leg is unpriceable) / Total shares
- * (right-aligned, unit label) / Participants. Fee column dropped (task
- * 0348 F9): every classic pool is protocol-fixed at 0.30%
- * (`LIQUIDITY_POOL_FEE_V18`), so a per-row Fee column carried no
+ * issue #367's ask; em-dash when a leg is unpriceable) / Participants.
+ * No Total shares column: a count of LP tokens in each pool's own unit
+ * compares with nothing across rows; the pool's detail page carries it.
+ * Fee column dropped (task 0348 F9): every classic pool is protocol-fixed
+ * at 0.30% (`LIQUIDITY_POOL_FEE_V18`), so a per-row Fee column carried no
  * comparative signal.
  */
 export function PoolsTable({ rows, loading, skeletonRows }: PoolsTableProps) {

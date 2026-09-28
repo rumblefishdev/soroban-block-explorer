@@ -31,7 +31,7 @@ pub(super) struct ChartChRow {
 ///   Monday-start week, matching PG's ISO `date_trunc('week', …)` — the
 ///   contract the endpoint launched with. CH's other spellings both miss
 ///   it (box-verified 2026-08-05): `toStartOfWeek` defaults to SUNDAY
-///   (mode 0, one day off ISO), and the reference SQL's epoch-aligned
+///   (mode 0, one day off ISO), and an earlier draft's epoch-aligned
 ///   `toStartOfInterval(…, INTERVAL 604800 SECOND)` buckets on THURSDAYS —
 ///   1970-01-01 was a Thursday, so 7-day blocks from epoch all are
 ///   (2026-08-04 → bucket 2026-07-30, toDayOfWeek = 4). An earlier version
@@ -39,7 +39,7 @@ pub(super) struct ChartChRow {
 /// - **No `created_at` on CH snapshots** — the window is filtered on the
 ///   joined `ledgers.closed_at` (bijection with `ledger_sequence`), so the
 ///   `from`/`to` API contract (RFC3339 timestamps) is preserved unchanged
-///   rather than switched to the ledger-bound form the reference SQL used.
+///   rather than switched to a ledger-bound form.
 /// - **`pool_id = unhex(?)`** is a leading-PK seek on
 ///   `liquidity_pool_snapshots` (`ORDER BY (pool_id, ledger_sequence)`), so
 ///   the scan is bounded to this pool's snapshots — box-measured 14.5 M rows

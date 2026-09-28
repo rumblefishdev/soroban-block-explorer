@@ -13,10 +13,7 @@ import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 import { normalizeOperationType } from './transactions/operationTypes.js';
 import { TransactionFilters } from './transactions/TransactionFilters.js';
-import {
-  TRANSACTION_COLUMN_COUNT,
-  TransactionsTable,
-} from './transactions/TransactionsTable.js';
+import { TransactionsTable } from './transactions/TransactionsTable.js';
 
 type Filters = NonNullable<ListTransactionsData['query']>;
 
@@ -45,14 +42,8 @@ export default function TransactionsListPage() {
     return filters;
   }, [q, op]);
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useTransactionsList(cursor, queryFilters);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = useTransactionsList(cursor, queryFilters);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   const handleSearchChange = useCallback(
     (value: string) => setFilter('q', value || null),
@@ -78,26 +69,20 @@ export default function TransactionsListPage() {
             onOperationTypeChange={handleOperationTypeChange}
           />
         }
-        columnCount={TRANSACTION_COLUMN_COUNT}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
-        rows={rows}
-        renderTable={(visibleRows) => <TransactionsTable rows={visibleRows} />}
-        renderSkeleton={() => (
-          <TransactionsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
+          <TransactionsTable
+            rows={rows}
+            loading={loading}
+            skeletonRows={PAGE_SIZE}
+          />
         )}
         hasActiveFilters={hasFilters}
         emptyKind="transactions"
         emptyNoun="transactions"
         onClearFilters={clearFilters}
         paginationCaption="All results"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </Stack>
   );

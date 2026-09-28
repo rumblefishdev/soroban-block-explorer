@@ -6,18 +6,17 @@ import {
   DEFAULT_TRUNCATION,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
-  PaginationControls,
-  QueryErrorState,
   TableEmptyState,
   truncateMiddle,
   useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useMemo, type ReactNode } from 'react';
+import { useMemo } from 'react';
 
 import { useContractEvents, usePagedRows } from '../../api/index.js';
 import { capitalize } from '../../utils/text.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
+import { DataList } from '../detail/DataList.js';
 import { ledgerColumn } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
@@ -166,59 +165,33 @@ export function ContractEvents({ contractId }: { contractId: string }) {
     resetKey: contractId,
   });
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useContractEvents(contractId, cursor);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
-
-  let body: ReactNode;
-  if (isLoading || isPlaceholderData) {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={[]}
-        rowKey={(row) => row.id}
-        loading
-        skeletonRows={20}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  } else if (isError) {
-    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
-  } else if (rows.length === 0) {
-    body = (
-      <TableEmptyState
-        kind="transactions"
-        title="No events"
-        description="This contract has not emitted any events yet."
-        py={6}
-      />
-    );
-  } else {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={rows}
-        rowKey={(row) => row.id}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  }
+  const query = useContractEvents(contractId, cursor);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
-    <Box>
-      {body}
-      <PaginationControls
-        caption="Latest results"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
-      />
-    </Box>
+    // Bare, inside the contract page's tab card — no frame of its own.
+    <DataList
+      query={query}
+      pager={pager}
+      errorPy={6}
+      renderTable={(rows, { loading }) => (
+        <ExplorerTable
+          columns={columns}
+          rows={rows}
+          rowKey={(row) => row.id}
+          loading={loading}
+          skeletonRows={20}
+          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+        />
+      )}
+      renderEmpty={() => (
+        <TableEmptyState
+          kind="transactions"
+          title="No events"
+          description="This contract has not emitted any events yet."
+          py={6}
+        />
+      )}
+    />
   );
 }

@@ -5,7 +5,7 @@
 //! Every endpoint that returns `TransactionListItem`-shaped rows
 //! (`/transactions`, ledger detail's embedded transactions, and the
 //! upcoming accounts / assets / liquidity-pool transaction lists) needs the
-//! per-transaction `operation_types` array. The canonical reference SQL
+//! per-transaction `operation_types` array. The first draft of these queries
 //! computed it with a **correlated scalar subquery** in the SELECT projection
 //! (`SELECT groupUniqArray(oa.type) … WHERE oa.transaction_id = t.id`).
 //! ClickHouse 26.3 rejects that with `Code: 48 NOT_IMPLEMENTED: can't find

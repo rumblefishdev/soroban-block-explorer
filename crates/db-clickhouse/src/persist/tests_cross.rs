@@ -390,29 +390,6 @@ fn column_order_soroban_events() {
 }
 
 #[test]
-fn column_order_soroban_invocations_appearances() {
-    assert_columns::<SorobanInvocationAppearanceRow>(
-        "soroban_invocations_appearances",
-        &[
-            "contract_id",
-            "transaction_id",
-            "ledger_sequence",
-            "caller_id",
-            "caller_contract_id",
-            "amount",
-        ],
-    );
-}
-
-#[test]
-fn column_order_contract_transactions() {
-    assert_columns::<ContractTransactionRow>(
-        "contract_transactions",
-        &["contract_id", "ledger_sequence", "application_order"],
-    );
-}
-
-#[test]
 fn column_order_nft_ownership() {
     assert_columns::<NftOwnershipRow>(
         "nft_ownership",
@@ -445,6 +422,26 @@ fn column_order_nft_ownership_pending() {
             "event_type",
         ],
     );
+}
+
+/// One struct writes both `nft_ownership_changes` and its `_pending` twin.
+#[test]
+fn column_order_nft_ownership_changes() {
+    for table in ["nft_ownership_changes", "nft_ownership_changes_pending"] {
+        assert_columns::<NftOwnershipChangeRow>(
+            table,
+            &[
+                "contract_id",
+                "token_id",
+                "ledger_sequence",
+                "application_order",
+                "operation_index",
+                "event_index",
+                "owner_id",
+                "event_type",
+            ],
+        );
+    }
 }
 
 #[test]
@@ -866,17 +863,20 @@ fn staged_events_carry_the_rpc_id_and_their_transaction() {
     // The contract index takes the operation event only. Paying a fee is not
     // using the SAC: tx2, which only paid one, is not in the contract's list.
     assert_eq!(
-        staged.contract_tx_rows,
-        vec![ContractTransactionRow {
+        staged.contract_activity_rows,
+        vec![ContractActivityRow {
             contract_id: ids::contract_id(&sac),
             ledger_sequence: 10,
             application_order: 1,
+            caller_id: None,
+            caller_contract_id: None,
+            invocation_count: 0,
         }]
     );
 }
 
 #[test]
-fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
+fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
     let ledger = synthetic_ledger();
     let tx1 = synthetic_tx(0x71);
     let tx2 = synthetic_tx(0x72);
@@ -971,18 +971,21 @@ fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
     )
     .expect("prepare");
 
-    let row = |contract: &str, application_order| ContractTransactionRow {
+    let row = |contract: &str, application_order, invocation_count| ContractActivityRow {
         contract_id: ids::contract_id(contract),
         ledger_sequence: 10,
         application_order,
+        caller_id: None,
+        caller_contract_id: None,
+        invocation_count,
     };
     let mut expected = vec![
-        row(&c1, 2), // tx2's event, invocation and operation: one row
-        row(&c2, 1), // tx1's event
-        row(&c2, 2), // tx2's invocation
+        row(&c1, 2, 1), // tx2's event, invocation and operation: one row
+        row(&c2, 1, 0), // tx1's event: touched, not invoked
+        row(&c2, 2, 1), // tx2's invocation
     ];
     expected.sort();
-    assert_eq!(staged.contract_tx_rows, expected);
+    assert_eq!(staged.contract_activity_rows, expected);
 }
 
 #[test]
@@ -1815,6 +1818,16 @@ fn synthetic_nft_event(
         event_order,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
+        // Operation 2's event `event_order`. `transaction_index` deliberately
+        // differs from the transaction's position (1, its only transaction)
+        // so the routing tests pin that `application_order` comes from the
+        // ledger's transaction order, as for `soroban_events`, not from the id.
+        event_id: Some(xdr_parser::EventId {
+            ledger_sequence: 10,
+            transaction_index: 7,
+            operation_index: 2,
+            event_index: u32::from(event_order),
+        }),
     }
 }
 
@@ -1904,6 +1917,21 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
     );
     assert_eq!(staged.nft_ownership_rows.len(), 1);
     assert_eq!(staged.nft_ownership_pending_rows.len(), 0);
+    // Task 0424: the same change, located by its event.
+    assert_eq!(
+        staged.nft_ownership_change_rows,
+        vec![NftOwnershipChangeRow {
+            contract_id: ids::contract_id(&contract),
+            token_id: "tk1".into(),
+            ledger_sequence: 10,
+            application_order: 1,
+            operation_index: 2,
+            event_index: 0,
+            owner_id: None,
+            event_type: NftEventType::Mint as i16,
+        }]
+    );
+    assert!(staged.nft_ownership_change_pending_rows.is_empty());
 
     // Classifier override visible on the contract row.
     let contract_row = &staged.contract_rows[0];
@@ -2410,6 +2438,8 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
     );
     assert!(staged.nft_ownership_rows.is_empty());
     assert!(staged.nft_ownership_pending_rows.is_empty());
+    assert!(staged.nft_ownership_change_rows.is_empty());
+    assert!(staged.nft_ownership_change_pending_rows.is_empty());
 }
 
 /// NFT row whose contract is NOT deployed in the same ledger (no
@@ -2454,6 +2484,40 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
     );
     assert_eq!(staged.nft_ownership_rows.len(), 0);
     assert_eq!(staged.nft_ownership_pending_rows.len(), 1);
+    // Task 0424: the located twin routes the same way.
+    assert!(staged.nft_ownership_change_rows.is_empty());
+    assert_eq!(staged.nft_ownership_change_pending_rows.len(), 1);
+}
+
+/// Task 0424: an NFT change without an event id is refused, as
+/// `soroban_events` refuses one — a row with no location cannot be keyed.
+#[test]
+fn prepare_refuses_an_nft_change_without_an_event_id() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x93);
+    let contract = "C".to_string() + &"C".repeat(55);
+    let nft = synthetic_nft(&contract, "tk1");
+    let mut ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
+    ev.event_id = None;
+
+    let err = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        std::slice::from_ref(&nft),
+        std::slice::from_ref(&ev),
+        &[],
+    )
+    .expect_err("an NFT change needs its event id");
+    assert!(err.to_string().contains("event id"), "{err}");
 }
 
 // ---------------------------------------------------------------------------

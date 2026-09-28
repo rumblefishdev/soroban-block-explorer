@@ -93,27 +93,27 @@ primary keys on the other 12 tables where StrKey-hash composites are
 already cheap. PG snapshot the pilot was sized against:
 [`sources/db-schema-snapshot.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/sources/db-schema-snapshot.md).
 
-| Postgres counterpart                                   | ClickHouse copy                   | Category         | Notes                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------ | --------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `accounts`                                             | `accounts`                        | state            | surrogate `id Int64`; ORDER BY `account_id`; version = `last_seen_ledger`                                                                                                                                                                                                                                                                                                                  |
-| — (POST-PIVOT, no PG counterpart; not in the 17 below) | `account_entry_state`             | state            | PK = `account_id`; version = `last_updated_ledger`; FULL signer set as parallel arrays (atomic whole-set replace, ghosts impossible) + master weight + low/med/high thresholds + flags. Side table, not columns on `accounts`, because `accounts` takes whole-row writes from multiple paths (task 0463 / issue #377). Master is NOT in the arrays — raw-XDR truth; Horizon synthesizes it |
-| `assets`                                               | `assets`                          | state            | PK = `(asset_type, asset_code, issuer_id, contract_id)` w/ Int64=0 sentinel                                                                                                                                                                                                                                                                                                                |
-| `account_balances_current`                             | `account_balances_current`        | state            | PK = `(account_id, asset_type, asset_code, issuer_id)` w/ Int64=0 sentinel                                                                                                                                                                                                                                                                                                                 |
-| `ledgers`                                              | `ledgers`                         | immutable lookup | only CH table that retains a wall-clock column (`closed_at`)                                                                                                                                                                                                                                                                                                                               |
-| `liquidity_pools`                                      | `liquidity_pools`                 | state            | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)                                                                                                                                                                                                                                                                                                                   |
-| `liquidity_pool_snapshots`                             | `liquidity_pool_snapshots`        | append-only fact | PK = `(pool_id, ledger_sequence)`; no surrogate id                                                                                                                                                                                                                                                                                                                                         |
-| `lp_positions`                                         | `lp_positions`                    | state            | PK = `(pool_id, account_id)`; version = `last_updated_ledger`; `closed_at_ledger` marks a departed participant (ADR 0055)                                                                                                                                                                                                                                                                  |
-| `nfts`                                                 | `nfts`                            | state            | PK = `(contract_id, token_id)`; drops `metadata`                                                                                                                                                                                                                                                                                                                                           |
-| `nft_ownership`                                        | `nft_ownership`                   | append-only fact | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                                                                                                                                                                                                                                                                                                               |
-| `operations_appearances`                               | `transaction_operations`          | append-only fact | PK = `(ledger_sequence, application_order, operation_index)` — the transaction's position (task 0372); FK Int64; `pool_ids` Array (0261/0268)                                                                                                                                                                                                                                              |
-| `soroban_contracts`                                    | `soroban_contracts`               | state            | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`                                                                                                                                                                                                                                                                                                          |
-| `soroban_events_appearances` (folded ADR 0033 design)  | `soroban_events` **(NEW)**        | append-only fact | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                                                                                                                                                                                                                                                                                                                   |
-| `soroban_invocations_appearances`                      | `soroban_invocations_appearances` | append-only fact | PK = `(contract_id, ledger_sequence, transaction_id)`                                                                                                                                                                                                                                                                                                                                      |
-| `transactions`                                         | `transactions`                    | append-only fact | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash`                                                                                                                                                                                                                                                                                              |
-| `transaction_hash_index`                               | `transaction_hash_prefix_index`   | append-only fact | keyed by an 8-byte hash prefix (task 0580); the Dictionary was removed (task 0396)                                                                                                                                                                                                                                                                                                         |
-| `transaction_participants`                             | `transaction_participants`        | append-only fact | PK = `(account_id, ledger_sequence, application_order)` (task 0575)                                                                                                                                                                                                                                                                                                                        |
-| `wasm_interface_metadata`                              | `wasm_interface_metadata`         | immutable lookup | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                                                                                                                                                                                                                                                                                                                          |
-| `_sqlx_migrations`                                     | **NOT MIRRORED**                  | —                | replaced by idempotent `init.sql`                                                                                                                                                                                                                                                                                                                                                          |
+| Postgres counterpart                                   | ClickHouse copy                 | Category         | Notes                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------ | ------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `accounts`                                             | `accounts`                      | state            | surrogate `id Int64`; ORDER BY `account_id`; version = `last_seen_ledger`                                                                                                                                                                                                                                                                                                                  |
+| — (POST-PIVOT, no PG counterpart; not in the 17 below) | `account_entry_state`           | state            | PK = `account_id`; version = `last_updated_ledger`; FULL signer set as parallel arrays (atomic whole-set replace, ghosts impossible) + master weight + low/med/high thresholds + flags. Side table, not columns on `accounts`, because `accounts` takes whole-row writes from multiple paths (task 0463 / issue #377). Master is NOT in the arrays — raw-XDR truth; Horizon synthesizes it |
+| `assets`                                               | `assets`                        | state            | PK = `(asset_type, asset_code, issuer_id, contract_id)` w/ Int64=0 sentinel                                                                                                                                                                                                                                                                                                                |
+| `account_balances_current`                             | `account_balances_current`      | state            | PK = `(account_id, asset_type, asset_code, issuer_id)` w/ Int64=0 sentinel                                                                                                                                                                                                                                                                                                                 |
+| `ledgers`                                              | `ledgers`                       | immutable lookup | only CH table that retains a wall-clock column (`closed_at`)                                                                                                                                                                                                                                                                                                                               |
+| `liquidity_pools`                                      | `liquidity_pools`               | state            | PK = `pool_id`; version = `last_updated_ledger` (was immutable in pilot)                                                                                                                                                                                                                                                                                                                   |
+| `liquidity_pool_snapshots`                             | `liquidity_pool_snapshots`      | append-only fact | PK = `(pool_id, ledger_sequence)`; no surrogate id                                                                                                                                                                                                                                                                                                                                         |
+| `lp_positions`                                         | `lp_positions`                  | state            | PK = `(pool_id, account_id)`; version = `last_updated_ledger`; `closed_at_ledger` marks a departed participant (ADR 0055)                                                                                                                                                                                                                                                                  |
+| `nfts`                                                 | `nfts`                          | state            | PK = `(contract_id, token_id)`; drops `metadata`                                                                                                                                                                                                                                                                                                                                           |
+| `nft_ownership`                                        | `nft_ownership`                 | append-only fact | PK = `(contract_id, token_id, ledger_sequence, event_order)`                                                                                                                                                                                                                                                                                                                               |
+| `operations_appearances`                               | `transaction_operations`        | append-only fact | PK = `(ledger_sequence, application_order, operation_index)` — the transaction's position (task 0372); FK Int64; `pool_ids` Array (0261/0268)                                                                                                                                                                                                                                              |
+| `soroban_contracts`                                    | `soroban_contracts`             | state            | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`                                                                                                                                                                                                                                                                                                          |
+| `soroban_events_appearances` (folded ADR 0033 design)  | `soroban_events` **(NEW)**      | append-only fact | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                                                                                                                                                                                                                                                                                                                   |
+| `soroban_invocations_appearances`                      | `contract_activity`             | append-only fact | PK = `(contract_id, ledger_sequence, application_order)` — the transaction position plus the caller (task 0586; replaced `contract_transactions` too)                                                                                                                                                                                                                                      |
+| `transactions`                                         | `transactions`                  | append-only fact | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash`                                                                                                                                                                                                                                                                                              |
+| `transaction_hash_index`                               | `transaction_hash_prefix_index` | append-only fact | keyed by an 8-byte hash prefix (task 0580); the Dictionary was removed (task 0396)                                                                                                                                                                                                                                                                                                         |
+| `transaction_participants`                             | `transaction_participants`      | append-only fact | PK = `(account_id, ledger_sequence, application_order)` (task 0575)                                                                                                                                                                                                                                                                                                                        |
+| `wasm_interface_metadata`                              | `wasm_interface_metadata`       | immutable lookup | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                                                                                                                                                                                                                                                                                                                          |
+| `_sqlx_migrations`                                     | **NOT MIRRORED**                | —                | replaced by idempotent `init.sql`                                                                                                                                                                                                                                                                                                                                                          |
 
 CH net schema at the pivot: **17 tables + 1 `Dictionary`** (PG had 18;
 `_sqlx_migrations` dropped). The table above is the PG→CH mirror as of the
@@ -162,7 +162,7 @@ CH partitions by `ledger_sequence`, not by wall-clock time. The
 denormalized `created_at` column on `transactions`,
 `transaction_operations`, `transaction_participants`, `nft_ownership`,
 `liquidity_pool_snapshots`, `soroban_events`,
-`soroban_invocations_appearances`, and `transaction_hash_index` is omitted
+`contract_activity`, and `transaction_hash_index` is omitted
 on the CH side. Wall-clock time is recovered via JOIN to
 `ledgers.closed_at`. This eliminates ~50–100 GB of redundant
 denormalization at full Stellar scale.
@@ -626,23 +626,23 @@ production schema settled on a **hybrid**: surrogate `id Int64` on
 the three central FK hubs, natural / composite primary keys on the
 other 12 tables.
 
-| Table                             | ORDER BY                                                                          | Surrogate `id`? |
-| --------------------------------- | --------------------------------------------------------------------------------- | --------------- |
-| `accounts`                        | `account_id` (StrKey G…)                                                          | **yes — Int64** |
-| `soroban_contracts`               | `contract_id` (StrKey C…)                                                         | **yes — Int64** |
-| `transactions`                    | `(ledger_sequence, application_order)`                                            | **yes — Int64** |
-| `assets`                          | `(asset_type, asset_code, issuer_id, contract_id)`                                | no              |
-| `account_balances_current`        | `(account_id, asset_type, asset_code, issuer_id)`                                 | no              |
-| `nfts`                            | `(contract_id, token_id)`                                                         | no              |
-| `liquidity_pools`                 | `pool_id` (FixedString(32) hash)                                                  | no              |
-| `lp_positions`                    | `(pool_id, account_id)`                                                           | no              |
-| `transaction_hash_prefix_index`   | `(hash_prefix, ledger_sequence)` (8-byte hash prefix, task 0580)                  | no              |
-| `transaction_operations`          | `(ledger_sequence, application_order, operation_index)`                           | no              |
-| `transaction_participants`        | `(account_id, ledger_sequence, application_order)`                                | no              |
-| `soroban_events`                  | `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)` | no              |
-| `soroban_invocations_appearances` | `(contract_id, ledger_sequence, transaction_id)`                                  | no              |
-| `nft_ownership`                   | `(contract_id, token_id, ledger_sequence, event_order)`                           | no              |
-| `liquidity_pool_snapshots`        | `(pool_id, ledger_sequence)`                                                      | no              |
+| Table                           | ORDER BY                                                                          | Surrogate `id`? |
+| ------------------------------- | --------------------------------------------------------------------------------- | --------------- |
+| `accounts`                      | `account_id` (StrKey G…)                                                          | **yes — Int64** |
+| `soroban_contracts`             | `contract_id` (StrKey C…)                                                         | **yes — Int64** |
+| `transactions`                  | `(ledger_sequence, application_order)`                                            | **yes — Int64** |
+| `assets`                        | `(asset_type, asset_code, issuer_id, contract_id)`                                | no              |
+| `account_balances_current`      | `(account_id, asset_type, asset_code, issuer_id)`                                 | no              |
+| `nfts`                          | `(contract_id, token_id)`                                                         | no              |
+| `liquidity_pools`               | `pool_id` (FixedString(32) hash)                                                  | no              |
+| `lp_positions`                  | `(pool_id, account_id)`                                                           | no              |
+| `transaction_hash_prefix_index` | `(hash_prefix, ledger_sequence)` (8-byte hash prefix, task 0580)                  | no              |
+| `transaction_operations`        | `(ledger_sequence, application_order, operation_index)`                           | no              |
+| `transaction_participants`      | `(account_id, ledger_sequence, application_order)`                                | no              |
+| `soroban_events`                | `(contract_id, ledger_sequence, transaction_index, operation_index, event_index)` | no              |
+| `contract_activity`             | `(contract_id, ledger_sequence, application_order)`                               | no              |
+| `nft_ownership`                 | `(contract_id, token_id, ledger_sequence, event_order)`                           | no              |
+| `liquidity_pool_snapshots`      | `(pool_id, ledger_sequence)`                                                      | no              |
 
 The three surrogate `id` values are deterministic
 `cityhash64(natural_key)` (lower 64 bits of CityHash 1.0.2 128-bit).
@@ -765,17 +765,17 @@ The indexer Lambda is unchanged — no ClickHouse dual-write yet.
 
 ### Read queries (reference set)
 
-[`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/README.md) is
-the canonical reference set of read queries for the 23 public REST
-endpoints (the retired PostgreSQL reference set was removed with the PG backend,
-task 0244). Each query targets the ADR 0044 schema (`init.sql`), uses
-`FINAL` on `ReplacingMergeTree` reads, partition-prunes via
-`intDiv(ledger_sequence, 500000)`, and resolves `closed_at` via JOIN to
-`ledgers` per §5.2. Driving task: [0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
+The read queries of the public REST endpoints are the Rust query functions in
+`crates/api/src/<module>/queries…`, checked by their ClickHouse-backed tests
+([ADR 0060](../../../lore/2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md)).
+The pilot started from a hand-kept SQL reference set under `docs/`
+(task [0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md)),
+one file per endpoint; it drifted from the Rust and was retired in task 0588. The
+notes below record what the live read path learned from it.
 
-> **CH 26.3 gotcha — no correlated subqueries (task 0243).** The reference
-> set was authored as a spec and never executed against a live cluster; the
-> transaction-list queries (`02`, `05`, `07`, `10`, `20`) compute
+> **CH 26.3 gotcha — no correlated subqueries (task 0243).** The retired reference
+> set was authored as a spec and never executed against a live cluster; its
+> transaction-list queries computed
 > `operation_types` / `contract_ids` with **correlated** scalar subqueries in
 > the SELECT projection (`… WHERE oa.transaction_id = t.id`). ClickHouse
 > 26.3.10.60 rejects that at runtime — `Code: 48 NOT_IMPLEMENTED: can't find
@@ -786,9 +786,8 @@ correlated column …`. The live read path instead fetches the page of tx
 > The shared
 > implementation is
 > [`crates/api/src/common/ch.rs::fetch_tx_list_aggregates`](../../../crates/api/src/common/ch.rs);
-> reuse it for any new transaction-list module rather than the inline
-> correlated projection the reference SQL still shows (those files carry a
-> correction banner).
+> reuse it for any new transaction-list module rather than an inline
+> correlated projection.
 
 > **`contract_ids` REMOVED from the API (task 0386).** The per-row
 > `contract_ids` array is no longer returned by any transaction-list endpoint —
@@ -797,7 +796,7 @@ correlated column …`. The live read path instead fetches the page of tx
 > carries `operation_types` only. The ops-only note below is kept for history.
 >
 > **CH read-cost correction — `contract_ids` was ops-only (task 0243).** The
-> reference SQL builds `contract_ids` from a 3-source UNION
+> retired reference SQL built `contract_ids` from a 3-source UNION
 > (`operations_appearances` + `soroban_invocations_appearances` +
 > `soroban_events`) for full PG parity. Both `soroban_*` tables are
 > `ORDER BY (contract_id, …)`, so the per-page
@@ -832,7 +831,7 @@ correlated column …`. The live read path instead fetches the page of tx
 >   pruned to the driver's partition and streamed, the driver is the hash side
 >   (~2e8 rows/page, validated). Since tasks 0541 and 0372 neither filtered
 >   statement joins: its driver returns the page's positions — a seek on
->   `contract_transactions`, or a scan of one `transaction_operations`
+>   `contract_activity`, or a scan of one `transaction_operations`
 >   partition by `type` (not a key prefix) — and `transactions` is sought by
 >   `(ledger_sequence, application_order) IN (…)`.
 > - **ledgers list** + **network stats** are ORDER BY `sequence`, not
@@ -856,5 +855,5 @@ correlated column …`. The live read path instead fetches the page of tx
 - [Task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md) — implementation task
 - [Task 0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md) — CH endpoint queries reference set
 - [`crates/db-clickhouse/README.md`](../../../crates/db-clickhouse/README.md) — crate-level README with translation table and dev workflow
-- [`endpoint-queries-clickhouse/README.md`](./endpoint-queries-clickhouse/README.md) — 23 CH-side endpoint queries + FINAL/Dict/§5 conventions
+- [ADR 0060](../../../lore/2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md) — the Rust queries are the endpoint SQL reference; the SQL set is retired
 - [`notes/G-clickhouse-schema-er.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/notes/G-clickhouse-schema-er.md) — full ER diagram + ENGINE/PARTITION BY/ORDER BY matrix

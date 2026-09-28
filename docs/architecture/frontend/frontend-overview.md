@@ -725,13 +725,14 @@ Contract details and interface.
 - Contract interface - list of public functions with parameter names and types, allowing
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state
-- Invocations tab - recent invocations table (transaction hash, caller account, status,
+- Invocations tab - recent invocations table (transaction hash, caller — an account or a
+  contract, each linked (task 0487) — status,
   ledger, timestamp). The appearance index carries no per-call function name — call
   detail is XDR-only (ADR 0034), so the transaction hash links to the full detail
 - Events tab - recent events table (event type, topics, data, ledger). Only `contract`
   and `system` events are returned; the diagnostic-events container is dropped
   server-side (task 0182)
-- Stats - recent invocations and unique callers over a rolling window (`stats_window`,
+- Stats - recent invocations and unique callers (accounts and contracts together, task 0487) over a rolling window (`stats_window`,
   e.g. last 7 days) — the API exposes windowed counts, not full-history totals
 
 Expanded behavior:

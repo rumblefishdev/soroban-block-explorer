@@ -198,7 +198,7 @@ pub struct ExtractedEvent {
 }
 
 /// Extracted Soroban invocation data, aggregated at indexer staging into
-/// `soroban_invocations_appearances` rows (ADR 0034). At read time the API
+/// `contract_activity` rows (ADR 0034). At read time the API
 /// re-extracts this structure from the public archive's XDR to render E13
 /// per-node detail (function name, caller, success, args, return value).
 ///
@@ -292,6 +292,9 @@ pub struct NftEvent {
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time.
     pub created_at: i64,
+    /// The source event's stellar-rpc id (ADR 0059) — its canonical location.
+    /// Every token a `consecutive_mint` expands to shares it.
+    pub event_id: Option<crate::event::EventId>,
 }
 
 /// Extracted ledger entry change from `TransactionMeta` V3/V4.
@@ -550,6 +553,9 @@ pub struct ExtractedNftEvent {
     pub ledger_sequence: u32,
     /// Unix seconds. Matches parent transaction partitioning key.
     pub created_at: i64,
+    /// The source event's stellar-rpc id (ADR 0059): the row's location in
+    /// `nft_ownership_changes` (task 0424).
+    pub event_id: Option<crate::event::EventId>,
 }
 
 /// LP position change carried from the parser into `lp_positions`.

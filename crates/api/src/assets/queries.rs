@@ -35,7 +35,7 @@
 //!   always real). The free-text `asset_code` filter and the cursor values are
 //!   `.bind()`-ed (user-controlled); `asset_type` is interpolated (typed `i16`).
 //!
-//! `/transactions` (canonical 10) keys on the datasource-tagged `TxListCursor`
+//! `/transactions` keys on the datasource-tagged `TxListCursor`
 //! (`ChPosition { ledger_sequence, application_order }`), mirroring the accounts sub-resource. It
 //! seeks the `operation_asset_appearances` fan-out on its `asset_id`-leading PK
 //! (task 0359) — a bounded PK-prefix range read behind the `max(sequence)` commit
@@ -664,7 +664,7 @@ async fn resolve_soroban_contracts(
 }
 
 // ---------------------------------------------------------------------------
-// List — GET /v1/assets (canonical 08)
+// List — GET /v1/assets
 // ---------------------------------------------------------------------------
 
 /// Over-fetch factor for the phase-1 seek: read `limit * OVERFETCH` raw versions
@@ -898,7 +898,7 @@ async fn resolve_page_issuers(
 }
 
 // ---------------------------------------------------------------------------
-// Detail — GET /v1/assets/:id (canonical 09), three resolution forms
+// Detail — GET /v1/assets/:id, three resolution forms
 // ---------------------------------------------------------------------------
 
 /// Resolve by contract StrKey (`C…`) — a bespoke `soroban` token, where the
@@ -1011,7 +1011,7 @@ pub async fn fetch_native(
 }
 
 // ---------------------------------------------------------------------------
-// Transactions — GET /v1/assets/:id/transactions (canonical 10, two-step)
+// Transactions — GET /v1/assets/:id/transactions (two-step)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
@@ -1066,7 +1066,6 @@ pub async fn fetch_transactions(
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // Position cursor only (the handler's guard rejects a surrogate cursor).
     // Inlined integers — no injection surface; omitted on the first page so no
     // NULL is bound.
     let cursor_clause = match cursor {
@@ -1076,7 +1075,7 @@ pub async fn fetch_transactions(
         }) => format!(
             " AND (ledger_sequence, application_order) {op} ({ledger_sequence}, {application_order})"
         ),
-        _ => String::new(),
+        None => String::new(),
     };
 
     // Step 1 — leading-PK range on `asset_id` behind the `max(sequence)` fence;

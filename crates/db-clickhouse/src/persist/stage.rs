@@ -247,24 +247,23 @@ pub struct StagedLedger {
     /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
-    pub invocation_rows: Vec<SorobanInvocationAppearanceRow>,
-    /// Per-(contract, tx) presence rows (task 0541) → `contract_transactions`,
-    /// the contract-dimension twin of `participant_rows`.
-    pub contract_tx_rows: Vec<ContractTransactionRow>,
+    /// Per-(contract, tx) presence plus the invocation's caller and call count
+    /// (tasks 0541, 0586) → `contract_activity`, the contract-dimension twin of
+    /// `participant_rows`.
+    pub contract_activity_rows: Vec<ContractActivityRow>,
     pub asset_rows: Vec<AssetRow>,
     /// SAC facet rows (ADR 0051) → `asset_sac` AggregatingMergeTree side table.
     pub asset_sac_rows: Vec<AssetSacRow>,
     pub nft_rows: Vec<NftRow>,
     pub nft_ownership_rows: Vec<NftOwnershipRow>,
-    /// Task 0217 / 0220 — quarantine bucket for NFT rows whose
-    /// contract is still `Other` / NULL-classified at staging time.
-    /// Routed alongside `nft_rows` via the per-contract verdict
-    /// computed from observed WASM interfaces in this ledger plus the
-    /// parser-emitted `contract_type` on each deployment. CH has no
-    /// per-row UPDATE, so promotion happens only via the post-backfill
-    /// drain runbook.
+    /// Task 0217 / 0220 — quarantine for NFT rows whose contract is still
+    /// `Other` / NULL-classified at staging (per-contract verdict, as for
+    /// `nft_rows`); promoted only by the post-backfill drain runbook.
     pub nft_pending_rows: Vec<NftPendingRow>,
     pub nft_ownership_pending_rows: Vec<NftOwnershipPendingRow>,
+    /// `nft_ownership_*_rows` by the event's location (task 0424) → `nft_ownership_changes{,_pending}`.
+    pub nft_ownership_change_rows: Vec<NftOwnershipChangeRow>,
+    pub nft_ownership_change_pending_rows: Vec<NftOwnershipChangeRow>,
     /// Unified `balances` rows for ALL asset types (task 0331 Option A). Type-3
     /// tokens are built in [`prepare_with_sac_overrides`] via [`build_balance_rows`]
     /// from `StageInputs.soroban_token_balances`; classic + native per-account
@@ -1703,7 +1702,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let mut diagnostic_dropped: usize = 0;
     let mut contract_orphan_dropped: usize = 0;
     // (contract, transaction) of every operation event, for
-    // `contract_transactions` below: the parser says where an event came from,
+    // `contract_activity` below: the parser says where an event came from,
     // so a fee event is left out by its source, not inferred from its id.
     let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
     for (tx_hash, evs) in events {
@@ -1760,13 +1759,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         );
     }
 
-    contract_activity::contract_rows(
+    contract_activity::rows(
         &mut out,
         invocations,
-        &tx_id_by_hash,
+        &app_order_by_hash,
         contract_txs,
         ledger_sequence_i64,
-    )?;
+    );
 
     // ---- assets identity rows (dedup by 4-tuple) + asset_sac facet rows ----
     //
@@ -1967,6 +1966,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         nft_events,
         prior_contract_verdicts,
         &tx_id_by_hash,
+        &app_order_by_hash,
     )?;
 
     // ---- unified `balances` — classic + native per-account balances (lore-0331

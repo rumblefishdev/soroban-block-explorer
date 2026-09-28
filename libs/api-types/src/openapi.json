@@ -113,7 +113,7 @@
     "/v1/accounts/{account_id}": {
       "get": {
         "tags": ["accounts"],
-        "summary": "Account detail — header from `accounts` + balances from\n`account_balances_current` (canonical 06 statements A + B).",
+        "summary": "Account detail — header from `accounts` + balances from\n`balances` (`queries::fetch_account` + `queries::fetch_balances`).",
         "operationId": "get_account",
         "parameters": [
           {
@@ -1480,7 +1480,7 @@
       "get": {
         "tags": ["network"],
         "summary": "Get top-level chain overview stats.",
-        "description": "Reads the canonical single-statement network-stats query (latest\nledger row + `ledgers` 60s aggregate for TPS + planner row-count\nestimates for accounts / contracts) and caches the assembled\nresponse **keyed on the chain head** (`latest_ledger_sequence`) in\nprocess memory — see `network/cache.rs`. See the task 0045 spec and\n`docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`\nfor the full data-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
+        "description": "Reads the single-statement network-stats query (latest ledger row +\n`ledgers` 60s aggregate for TPS + deduped counts of accounts /\ncontracts) and caches the assembled response **keyed on the chain head**\n(`latest_ledger_sequence`) in process memory — see `network/cache.rs`.\nSee the task 0045 spec and `network::queries::fetch_stats` for the full\ndata-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
         "operationId": "get_network_stats",
         "responses": {
           "200": {
@@ -1758,7 +1758,7 @@
       "get": {
         "tags": ["search"],
         "summary": "Unified search across all entity types.",
-        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `route_token`\n  (asset routing token or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL:\n`docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`.",
+        "description": "`?q=` is required. `?type=` (CSV) restricts the result to specific\nentity types — values must be in the closed allowlist\n(`transaction`, `contract`, `asset`, `account`, `nft`, `pool`).\n`?limit=` caps each entity bucket independently (default 10,\nceiling 50).\n\nBehaviour (task 0271):\n* One SQL path: broad search across the six entity-typed CTEs.\n* Response is `{ \"groups\": {…} }` with up to `limit` rows per\n  entity bucket. Rows carry the same columns regardless of\n  bucket: `entity_type`, `identifier`, `label`, `route_token`\n  (asset routing token or `null`), plus optional enrichment\n  (`successful`, `last_activity_at`) and composite routing\n  (`contract_id`, `token_id`) fields.\n* FE decides \"singleton → direct navigation\" by inspecting the\n  response: total row count == 1 and `routeForHit(singleton)`\n  resolves ⇒ navigate; else show the dropdown / list.\n\nAuthoritative SQL: `search::queries`.",
         "operationId": "get_search",
         "parameters": [
           {
@@ -2289,7 +2289,7 @@
         "allOf": [
           {
             "type": "object",
-            "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+            "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
             "required": ["id", "asset_type", "decimals"],
             "properties": {
               "asset_code": {
@@ -2375,7 +2375,7 @@
       },
       "AssetItem": {
         "type": "object",
-        "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+        "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
         "required": ["id", "asset_type", "decimals"],
         "properties": {
           "asset_code": {
@@ -2442,7 +2442,7 @@
       },
       "AssetTransactionItem": {
         "type": "object",
-        "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors\ncanonical SQL `10_get_assets_transactions.sql`.",
+        "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; filled by\n`queries::fetch_transactions`.",
         "required": [
           "hash",
           "ledger_sequence",
@@ -3135,6 +3135,10 @@
             "type": ["string", "null"],
             "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
           },
+          "caller_contract": {
+            "type": ["string", "null"],
+            "description": "Root caller C-StrKey when a contract made the call; exactly one of the\ntwo callers is set."
+          },
           "contract_id": {
             "type": "string"
           },
@@ -3158,7 +3162,12 @@
         ],
         "properties": {
           "caller_account": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Caller G-StrKey when an account made the call."
+          },
+          "caller_contract": {
+            "type": ["string", "null"],
+            "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
           },
           "created_at": {
             "type": "string",
@@ -3324,7 +3333,7 @@
         "allOf": [
           {
             "type": "object",
-            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+            "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`).\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
             "required": ["contract_id", "token_id"],
             "properties": {
               "collection_name": {
@@ -3369,11 +3378,11 @@
             }
           }
         ],
-        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row, see\n`15_get_nfts_list.sql` for the on-the-wire columns), plus a\n`metadata` field fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSON blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). `metadata` is always present\nin the response, set to `null` when the fetch fails or the contract\nreturns a non-JSON `image/*` URI (fail-soft per ADR 0043)."
+        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row), plus a\n`metadata` field fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSON blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). `metadata` is always present\nin the response, set to `null` when the fetch fails or the contract\nreturns a non-JSON `image/*` URI (fail-soft per ADR 0043)."
       },
       "NftItem": {
         "type": "object",
-        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+        "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`).\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
         "required": ["contract_id", "token_id"],
         "properties": {
           "collection_name": {
@@ -3409,7 +3418,7 @@
       },
       "NftTransferItem": {
         "type": "object",
-        "description": "One row of NFT transfer history. Shape pinned to canonical SQL\n`17_get_nfts_transfers.sql`.",
+        "description": "One row of NFT transfer history (`queries::fetch_transfers`).",
         "required": [
           "transaction_hash",
           "ledger_sequence",
@@ -3701,7 +3710,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT — canonical SQL `08_get_assets_list.sql` projection.",
+              "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
               "required": ["id", "asset_type", "decimals"],
               "properties": {
                 "asset_code": {
@@ -3781,7 +3790,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors\ncanonical SQL `10_get_assets_transactions.sql`.",
+              "description": "Transaction row for `/assets/:id/transactions`. Pure-DB; filled by\n`queries::fetch_transactions`.",
               "required": [
                 "hash",
                 "ledger_sequence",
@@ -3971,7 +3980,12 @@
               ],
               "properties": {
                 "caller_account": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Caller G-StrKey when an account made the call."
+                },
+                "caller_contract": {
+                  "type": ["string", "null"],
+                  "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
                 },
                 "created_at": {
                   "type": "string",
@@ -4060,7 +4074,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned\nto canonical SQL `15_get_nfts_list.sql` for the column projection.\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
+              "description": "One NFT row. Same shape on `GET /v1/nfts` list rows and as the\nflattened core of `GET /v1/nfts/:id` (which adds `metadata`).\n\nThe numeric surrogate `id` was dropped (task 0243 NFT slice): the\nexternal NFT identity is the composite `(contract_id, token_id)` per\ntask 0264 Phase 8a, and ClickHouse — the production datastore — has no\nsurrogate on `nfts` at all (`ORDER BY (contract_id, token_id)`). This\nmirrors the assets `:id`-surrogate drop (PR #175).",
               "required": ["contract_id", "token_id"],
               "properties": {
                 "collection_name": {
@@ -4109,7 +4123,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row of NFT transfer history. Shape pinned to canonical SQL\n`17_get_nfts_transfers.sql`.",
+              "description": "One row of NFT transfer history (`queries::fetch_transfers`).",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
@@ -4167,7 +4181,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
+              "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
               "required": [
                 "account",
                 "shares",
@@ -4285,7 +4299,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
+              "description": "One pool row returned by the list endpoint (`queries::list_pools`).\nPools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
               "required": [
                 "pool_id",
                 "pool_kind",
@@ -4439,7 +4453,7 @@
       },
       "ParticipantItem": {
         "type": "object",
-        "description": "One participant row returned by the participants list. Shape pinned to\n`docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.",
+        "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
         "required": [
           "account",
           "shares",
@@ -4568,7 +4582,7 @@
       },
       "PoolItem": {
         "type": "object",
-        "description": "One pool row returned by the list endpoint. Shape pinned to canonical\nSQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
+        "description": "One pool row returned by the list endpoint (`queries::list_pools`).\nPools without a fresh snapshot\nin the freshness window come back with `null` for every dynamic field\n(each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,\n`latest_snapshot_*`); frontend renders these as \"stale\".",
         "required": [
           "pool_id",
           "pool_kind",

@@ -301,22 +301,21 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- soroban_invocations_appearances (append-only fact) -----
+    // ----- contract_activity (append-only fact) -----
     client
         .query(
-            "INSERT INTO soroban_invocations_appearances (contract_id, transaction_id, ledger_sequence, caller_id, caller_contract_id, amount) \
-             VALUES (?, ?, ?, ?, NULL, 1)",
+            "INSERT INTO contract_activity (contract_id, ledger_sequence, application_order, caller_id, caller_contract_id, invocation_count) \
+             VALUES (?, ?, 1, ?, NULL, 1)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
         .await
-        .expect("insert soroban_invocations_appearances");
+        .expect("insert contract_activity");
     assert_count(
         &client,
-        "soroban_invocations_appearances",
+        "contract_activity",
         &format!("ledger_sequence = {SMOKE_LEDGER}"),
         1,
     )
@@ -598,7 +597,7 @@ async fn cleanup(client: &clickhouse::Client) {
         format!("ALTER TABLE pool_operation_amounts DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {l}"),
-        format!("ALTER TABLE soroban_invocations_appearances DELETE WHERE ledger_sequence = {l}"),
+        format!("ALTER TABLE contract_activity DELETE WHERE ledger_sequence = {l}"),
         format!("ALTER TABLE nfts DELETE WHERE contract_id = {l} AND token_id = 'tok-1'"),
         format!("ALTER TABLE nft_ownership DELETE WHERE ledger_sequence = {l}"),
         "ALTER TABLE liquidity_pools DELETE WHERE hex(pool_id) = '00000000000000000000000000000000000000000000000000000000000000BB'".into(),

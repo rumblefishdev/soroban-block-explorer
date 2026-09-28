@@ -1,4 +1,3 @@
-import { Box } from '@mui/material';
 import type { PaginatedInvocationItem } from '@rumblefish/api-types';
 import {
   Dash,
@@ -6,20 +5,39 @@ import {
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
-  PaginationControls,
-  QueryErrorState,
   TableEmptyState,
   useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
 
 import { useContractInvocations, usePagedRows } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
+import { DataList } from '../detail/DataList.js';
 import { ledgerColumn, statusColumn } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
 type InvocationRow = PaginatedInvocationItem['data'][number];
+
+const rowKey = (row: InvocationRow, index: number) =>
+  `${row.transaction_hash}-${row.ledger_sequence}-${index}`;
+
+/**
+ * The invocation's caller: an account or a contract (task 0487 — a contract
+ * caller used to render as a dash). The dash is left for a row with neither.
+ */
+export function CallerCell({
+  row,
+}: {
+  row: Pick<InvocationRow, 'caller_account' | 'caller_contract'>;
+}) {
+  if (row.caller_account) {
+    return <IdentifierDisplay value={row.caller_account} type="account" />;
+  }
+  if (row.caller_contract) {
+    return <IdentifierDisplay value={row.caller_contract} type="contract" />;
+  }
+  return <Dash />;
+}
 
 // Figma shows a "Function" column, but the invocations appearance index
 // carries no per-call function name (ADR 0034 — call detail is XDR-only).
@@ -37,12 +55,7 @@ const columns: ExplorerTableColumn<InvocationRow>[] = [
     id: 'caller',
     header: 'Caller',
     width: 160,
-    cell: (row) =>
-      row.caller_account ? (
-        <IdentifierDisplay value={row.caller_account} type="account" />
-      ) : (
-        <Dash />
-      ),
+    cell: (row) => <CallerCell row={row} />,
   },
   statusColumn<InvocationRow>(),
   ledgerColumn<InvocationRow>(),
@@ -68,62 +81,32 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
     resetKey: contractId,
   });
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useContractInvocations(contractId, cursor);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
-
-  let body: ReactNode;
-  if (isLoading || isPlaceholderData) {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={[]}
-        rowKey={(row, index) =>
-          `${row.transaction_hash}-${row.ledger_sequence}-${index}`
-        }
-        loading
-        skeletonRows={20}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  } else if (isError) {
-    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
-  } else if (rows.length === 0) {
-    body = (
-      <TableEmptyState
-        kind="transactions"
-        title="No invocations"
-        description="This contract has not been invoked yet."
-      />
-    );
-  } else {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={rows}
-        rowKey={(row, index) =>
-          `${row.transaction_hash}-${row.ledger_sequence}-${index}`
-        }
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  }
+  const query = useContractInvocations(contractId, cursor);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
-    <Box>
-      {body}
-      <PaginationControls
-        caption="Latest results"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
-      />
-    </Box>
+    // Bare, inside the contract page's tab card — no frame of its own.
+    <DataList
+      query={query}
+      pager={pager}
+      errorPy={6}
+      renderTable={(rows, { loading }) => (
+        <ExplorerTable
+          columns={columns}
+          rows={rows}
+          rowKey={rowKey}
+          loading={loading}
+          skeletonRows={20}
+          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+        />
+      )}
+      renderEmpty={() => (
+        <TableEmptyState
+          kind="transactions"
+          title="No invocations"
+          description="This contract has not been invoked yet."
+        />
+      )}
+    />
   );
 }

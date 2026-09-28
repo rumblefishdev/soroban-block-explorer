@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn contract_positions_are_one_seek_on_the_presence_index() {
     let sql = contract_positions_sql(42, "64000009", None, Direction::Next, 80);
-    assert!(sql.contains("FROM contract_transactions WHERE contract_id = 42"));
+    assert!(sql.contains("FROM contract_activity WHERE contract_id = 42"));
     // Not pinned to a partition: a contract quiet in the head's partition
     // would list as empty.
     assert!(!sql.contains("intDiv"));
@@ -30,7 +30,7 @@ fn op_type_positions_scan_one_partition_of_transaction_operations() {
     let head = "intDiv(64000009, 500000)";
     let sql = op_type_positions_sql(22, head, "64000009", None, Direction::Next, 80);
     assert!(sql.contains("FROM transaction_operations WHERE type = 22"));
-    // The first page is pinned to the head's partition (canonical SQL 02).
+    // The first page is pinned to the head's partition.
     assert!(sql.contains("intDiv(ledger_sequence, 500000) = intDiv(64000009, 500000)"));
     assert!(sql.contains("ledger_sequence <= 64000009"));
     assert!(sql.contains("ORDER BY ledger_sequence DESC, application_order DESC"));

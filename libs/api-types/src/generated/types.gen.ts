@@ -368,7 +368,7 @@ export type AssetDetailResponse = {
 /**
  * Asset row returned by list and detail. Surfaces both the decoded
  * `asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`
- * SMALLINT — canonical SQL `08_get_assets_list.sql` projection.
+ * SMALLINT.
  */
 export type AssetItem = {
   asset_code?: string | null;
@@ -454,8 +454,8 @@ export type AssetItem = {
 };
 
 /**
- * Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors
- * canonical SQL `10_get_assets_transactions.sql`.
+ * Transaction row for `/assets/:id/transactions`. Pure-DB; filled by
+ * `queries::fetch_transactions`.
  */
 export type AssetTransactionItem = {
   created_at: string;
@@ -947,13 +947,26 @@ export type InvocationAppearanceItem = {
    * Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
    */
   caller_account?: string | null;
+  /**
+   * Root caller C-StrKey when a contract made the call; exactly one of the
+   * two callers is set.
+   */
+  caller_contract?: string | null;
   contract_id: string;
   created_at: string;
   ledger_sequence: number;
 };
 
 export type InvocationItem = {
+  /**
+   * Caller G-StrKey when an account made the call.
+   */
   caller_account?: string | null;
+  /**
+   * Caller C-StrKey when a contract made the call; exactly one of the two
+   * is set on an invocation.
+   */
+  caller_contract?: string | null;
   created_at: string;
   ledger_sequence: number;
   successful: boolean;
@@ -1090,8 +1103,7 @@ export type NetworkStats = {
 
 /**
  * Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are
- * flattened in (same shape as the list-endpoint row, see
- * `15_get_nfts_list.sql` for the on-the-wire columns), plus a
+ * flattened in (same shape as the list-endpoint row), plus a
  * `metadata` field fetched at request time via
  * `runtime_enrichment::nft_token_uri` — full JSON blob from the
  * per-token `token_uri()` IPFS / HTTP URL (attributes, traits,
@@ -1131,8 +1143,7 @@ export type NftDetailResponse = {
 
 /**
  * One NFT row. Same shape on `GET /v1/nfts` list rows and as the
- * flattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned
- * to canonical SQL `15_get_nfts_list.sql` for the column projection.
+ * flattened core of `GET /v1/nfts/:id` (which adds `metadata`).
  *
  * The numeric surrogate `id` was dropped (task 0243 NFT slice): the
  * external NFT identity is the composite `(contract_id, token_id)` per
@@ -1162,8 +1173,7 @@ export type NftItem = {
 };
 
 /**
- * One row of NFT transfer history. Shape pinned to canonical SQL
- * `17_get_nfts_transfers.sql`.
+ * One row of NFT transfer history (`queries::fetch_transfers`).
  */
 export type NftTransferItem = {
   created_at: string;
@@ -1613,7 +1623,15 @@ export type PaginatedEventItem = {
  */
 export type PaginatedInvocationItem = {
   data: Array<{
+    /**
+     * Caller G-StrKey when an account made the call.
+     */
     caller_account?: string | null;
+    /**
+     * Caller C-StrKey when a contract made the call; exactly one of the two
+     * is set on an invocation.
+     */
+    caller_contract?: string | null;
     created_at: string;
     ledger_sequence: number;
     successful: boolean;
@@ -1973,8 +1991,8 @@ export type PaginatedTransactionListItem = {
 };
 
 /**
- * One participant row returned by the participants list. Shape pinned to
- * `docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.
+ * One participant row returned by the participants list
+ * (`queries::list_participants`).
  */
 export type ParticipantItem = {
   /**
@@ -2166,8 +2184,8 @@ export type PoolAssetLeg = {
 export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 
 /**
- * One pool row returned by the list endpoint. Shape pinned to canonical
- * SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
+ * One pool row returned by the list endpoint (`queries::list_pools`).
+ * Pools without a fresh snapshot
  * in the freshness window come back with `null` for every dynamic field
  * (each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,
  * `latest_snapshot_*`); frontend renders these as "stale".
