@@ -14,9 +14,10 @@ history:
     note: >
       Decided on review of 0478's PR, which built a CI gate to keep the set
       parseable. The set is a hand-kept copy of the Rust queries; the gate
-      could only prove the copies plan, never that they match the Rust, while
-      the Rust queries already run against the canonical schema in CI. 0478's
-      PR closed unmerged; 0478 and 0587 superseded by this task.
+      could only prove the copies plan, never that they match the Rust. 0478's
+      PR closed unmerged; 0478 and 0587 superseded by this task. (Corrected
+      2026-09-28: this entry first said the Rust queries already run against
+      the schema in CI — they do not; see Context and task 0480.)
 ---
 
 # REFACTOR: retire the endpoint-query SQL reference set
@@ -37,11 +38,15 @@ notes worth keeping next to the Rust queries they explain.
 - **Drift anyway.** Before 0478, seven files did not even parse. After it, `06`
   and `23` were still stale: `23` documents the `JOIN accounts FINAL` that
   0354 removed from the Rust.
-- **The real check already exists.** Every API module (accounts, assets,
-  contracts, ledgers, liquidity_pools, network, nfts, search, transactions)
-  has ClickHouse-gated tests (`decode_smoke` / `ch_tests`). CI runs them in
-  the "ClickHouse e2e" step against the canonical schema. They check the
-  queries the API actually runs; a gate on the copies checks only the copies.
+- **The real check exists, but not in CI.** Every API module (accounts,
+  assets, contracts, ledgers, liquidity_pools, network, nfts, search,
+  transactions) has ClickHouse-gated tests (`decode_smoke` / `ch_tests`) that
+  check the queries the API actually runs. They need `CH_URL`, which no
+  workflow sets, so CI skips them: the "ClickHouse e2e" step tests only
+  `db-clickhouse`, `backfill-runner` and the enrichment crates (task 0480
+  tracks the gap). Retiring the set removes no CI check either way — the
+  copies never checked the Rust, and the gate on them was not merged.
+  (Corrected 2026-09-28; the first version of this bullet said CI runs them.)
 - **Exact executed SQL** is recorded in production `system.query_log`
   (`chq`), with no maintenance.
 - **Readers.** Code comments of the form "wire shapes mirror canonical SQL"
