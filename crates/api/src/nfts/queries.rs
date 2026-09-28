@@ -15,14 +15,15 @@
 //!   — NOT a `FINAL` join — so an un-merged RMT duplicate can never multiply
 //!   the base rows (same idiom as `asset_enrichment`). **Without this join CH
 //!   NFTs read NULL names despite the enrichment table being populated.**
-//! - **`minted_at_ledger` is DERIVED from `nft_ownership`** (task 0528);
+//! - **`minted_at_ledger` is DERIVED from `nft_ownership_changes`** (task
+//!   0528; `nft_ownership` until task 0424 located the history by event);
 //!   `nfts` stores no mint ledger at all since task 0497. `nfts` is
 //!   `Replacing(current_owner_ledger)` with one row per token, so a transfer or
 //!   burn arriving in a later ingest batch — carrying no mint ledger, because
 //!   the indexer only sees its own batch — replaces the WHOLE row and erases
 //!   the value. Measured on prod: 621 / 13 915 tokens (4.5%) read NULL that
 //!   way, growing ~30/day. `min(ledger_sequence) … WHERE event_type = 0` over
-//!   the append-only `nft_ownership` cannot be clobbered. The `event_type`
+//!   the append-only `nft_ownership_changes` cannot be clobbered. The `event_type`
 //!   filter is load-bearing: "earliest ownership row" would return a transfer
 //!   ledger for a token whose transfer replayed ahead of its mint (same
 //!   reasoning as `repair_tier1::rebuild_nfts`, which computes this exact
@@ -55,10 +56,9 @@
 //!   `SETTINGS join_use_nulls = 1` — `api_reader` runs `readonly = 1` and
 //!   rejects per-query setting overrides.
 //! - **No `created_at` column on CH.** Transfers recover it via a JOIN to
-//!   `ledgers.closed_at` (`millis_to_utc`), and the cursor keys on
-//!   `(ledger_sequence, event_order)` — NOT the lossy `closed_at` (fix
-//!   c03c098c). `created_at` stays in the cursor payload for wire byte-parity
-//!   with the PG cursor; the CH `WHERE` ignores it.
+//!   `ledgers.closed_at` (`millis_to_utc`), and the cursor keys on the
+//!   change's location `(ledger_sequence, application_order, operation_index,
+//!   event_index)` — NOT the lossy `closed_at` (fix c03c098c; task 0424).
 //! - **`nft_event_type_name()` is a PG SQL function** with no CH equivalent —
 //!   mapped in Rust ([`nft_event_type_name`]).
 //! - **Positional `clickhouse::Row` decode:** every `SELECT` column order MUST
@@ -66,7 +66,7 @@
 //!   wrong field. The `CH_URL`-gated `decode_smoke` test is the only guard.
 //!
 //! ponytail: the list does a full `nft_enrichment` collapse, a full
-//! `nft_ownership` mint collapse and a non-PK `minted_at_ledger` sort, i.e. a
+//! `nft_ownership_changes` mint collapse and a non-PK `minted_at_ledger` sort, i.e. a
 //! full `nfts` scan per page. Fine at the current hot-set (~13.9k NFTs /
 //! ~23.1k ownership rows, of which exactly one Mint row per token). If the NFT
 //! count grows ~100x, page-scope both collapses (or add a denormalized
@@ -110,7 +110,7 @@ pub struct NftRow {
     pub contract_surrogate: i64,
 }
 
-/// `nft_ownership.event_type` SMALLINT → canonical label, matching the PG
+/// `nft_ownership_changes.event_type` SMALLINT → canonical label, matching the PG
 /// `nft_event_type_name` function. Discriminants confirmed from
 /// `domain::NftEventType` (Mint=0, Transfer=1, Burn=2) and the PG SQL `CASE`
 /// (no `ELSE` → NULL). `None` for an out-of-range code preserves the PG-NULL
@@ -221,7 +221,7 @@ pub async fn fetch_list(
          ), \
          mint AS ( \
              SELECT contract_id, token_id, min(ledger_sequence) AS minted_at_ledger \
-             FROM nft_ownership \
+             FROM nft_ownership_changes \
              WHERE event_type = 0 \
              GROUP BY contract_id, token_id \
          ), \
@@ -359,7 +359,7 @@ pub async fn fetch_by_composite(
                ) ne ON ne.contract_id = n.contract_id AND ne.token_id = n.token_id \
                LEFT JOIN ( \
                    SELECT contract_id, token_id, min(ledger_sequence) AS minted_at_ledger \
-                   FROM nft_ownership \
+                   FROM nft_ownership_changes \
                    WHERE contract_id IN (SELECT id FROM cid) \
                      AND event_type = 0 \
                    GROUP BY contract_id, token_id \
@@ -437,7 +437,9 @@ struct NftTransferChRow {
     to_account: Option<String>,
     from_account: Option<String>,
     created_at_ms: i64,
-    event_order: i16,
+    application_order: i16,
+    operation_index: u16,
+    event_index: u32,
 }
 
 fn map_transfer_row(r: NftTransferChRow) -> NftTransferItem {
@@ -449,22 +451,25 @@ fn map_transfer_row(r: NftTransferChRow) -> NftTransferItem {
         from_account: r.from_account,
         to_account: r.to_account,
         created_at: millis_to_utc(r.created_at_ms),
-        event_order: r.event_order,
+        application_order: r.application_order,
+        operation_index: r.operation_index,
+        event_index: r.event_index,
     }
 }
 
 /// `GET /v1/nfts/{contract_id}/{token_id}/transfers` — paginated ownership
 /// history, newest first.
 ///
-/// `nft_ownership` is `ORDER BY (contract_id, token_id, ledger_sequence,
-/// event_order)`, so the `(contract_id, token_id)` predicate is the leading PK
-/// prefix → one granule-pruned seek per page. `LIMIT 1 BY (ledger_sequence,
-/// event_order)` collapses re-ingest duplicates (plain RMT, no version column)
-/// BEFORE the `LEAD` window reconstructs `from_account` — a duplicate would
-/// otherwise corrupt the window. The `txs` join is a `(ledger_sequence, id)`
-/// tuple seek (transactions is keyed on `ledger_sequence`; a bare `id IN`
-/// can't prune) and is `GROUP BY id`-deduped so it stays provably 1:1 (panel
-/// review: both fixes guard the `LEAD` window).
+/// `nft_ownership_changes` is `ORDER BY (contract_id, token_id,
+/// ledger_sequence, application_order, operation_index, event_index)` — each
+/// change located by its event (task 0424) — so the `(contract_id, token_id)`
+/// predicate is the leading PK prefix → one granule-pruned seek per page, and
+/// the rest of the key is the chain's own order. `LIMIT 1 BY` on that location
+/// collapses re-ingest duplicates (plain RMT, no version column) BEFORE the
+/// `LEAD` window reconstructs `from_account` — a duplicate would otherwise
+/// corrupt the window. The `txs` join is a `(ledger_sequence,
+/// application_order)` tuple seek on the `transactions` key, deduped per
+/// position so it stays provably 1:1 (both guard the `LEAD` window).
 pub async fn fetch_transfers(
     client: &clickhouse::Client,
     contract_id: &str,
@@ -475,10 +480,13 @@ pub async fn fetch_transfers(
 ) -> Result<Vec<NftTransferItem>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // Keyset keys on (ledger_sequence, event_order) — NOT the lossy closed_at.
-    // Present only on continuation pages (page 1 binds no NULL into the tuple).
+    // Keyset keys on the change's location — NOT the lossy closed_at. Present
+    // only on continuation pages (page 1 binds no NULL into the tuple).
     let cursor_clause = if cursor.is_some() {
-        format!(" AND (no.ledger_sequence, no.event_order) {op} (?, ?)")
+        format!(
+            " AND (no.ledger_sequence, no.application_order, no.operation_index, no.event_index) \
+             {op} (?, ?, ?, ?)"
+        )
     } else {
         String::new()
     };
@@ -498,16 +506,18 @@ pub async fn fetch_transfers(
     let sql = format!(
         "WITH \
          page AS ( \
-             SELECT no.ledger_sequence AS ledger_sequence, \
-                    no.event_order     AS event_order, \
-                    no.event_type      AS event_type, \
-                    no.owner_id        AS owner_id, \
-                    no.transaction_id  AS transaction_id \
-             FROM nft_ownership no \
+             SELECT no.ledger_sequence   AS ledger_sequence, \
+                    no.application_order AS application_order, \
+                    no.operation_index   AS operation_index, \
+                    no.event_index       AS event_index, \
+                    no.event_type        AS event_type, \
+                    no.owner_id          AS owner_id \
+             FROM nft_ownership_changes no \
              WHERE no.contract_id = (SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1) \
                AND no.token_id = ?{cursor_clause} \
-             ORDER BY no.ledger_sequence {order}, no.event_order {order} \
-             LIMIT 1 BY no.ledger_sequence, no.event_order \
+             ORDER BY no.ledger_sequence {order}, no.application_order {order}, \
+                      no.operation_index {order}, no.event_index {order} \
+             LIMIT 1 BY no.ledger_sequence, no.application_order, no.operation_index, no.event_index \
              LIMIT ? \
          ), \
          owners AS ( \
@@ -517,11 +527,11 @@ pub async fn fetch_transfers(
              GROUP BY id \
          ), \
          txs AS ( \
-             SELECT id, any(lower(hex(hash))) AS hash \
+             SELECT ledger_sequence, application_order, any(lower(hex(hash))) AS hash \
              FROM transactions \
-             WHERE (ledger_sequence, id) IN (SELECT ledger_sequence, transaction_id FROM page) \
+             WHERE (ledger_sequence, application_order) IN (SELECT ledger_sequence, application_order FROM page) \
                AND intDiv(ledger_sequence, 500000) IN (SELECT DISTINCT intDiv(ledger_sequence, 500000) FROM page) \
-             GROUP BY id \
+             GROUP BY ledger_sequence, application_order \
          ), \
          led AS ( \
              SELECT sequence, any(closed_at) AS closed_at \
@@ -535,21 +545,30 @@ pub async fn fetch_transfers(
              p.event_type           AS event_type, \
              nullIf(own.account_id, '') AS to_account, \
              leadInFrame(nullIf(own.account_id, '')) OVER ( \
-                 ORDER BY p.ledger_sequence DESC, p.event_order DESC \
+                 ORDER BY p.ledger_sequence DESC, p.application_order DESC, \
+                          p.operation_index DESC, p.event_index DESC \
                  ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING \
              )                      AS from_account, \
              led.closed_at          AS created_at_ms, \
-             p.event_order          AS event_order \
+             p.application_order    AS application_order, \
+             p.operation_index      AS operation_index, \
+             p.event_index          AS event_index \
          FROM page p \
          LEFT JOIN owners own ON own.id = p.owner_id \
-         LEFT JOIN txs        ON txs.id = p.transaction_id \
+         LEFT JOIN txs ON txs.ledger_sequence = p.ledger_sequence \
+                      AND txs.application_order = p.application_order \
          INNER JOIN led       ON led.sequence = p.ledger_sequence \
-         ORDER BY p.ledger_sequence {order}, p.event_order {order}"
+         ORDER BY p.ledger_sequence {order}, p.application_order {order}, \
+                  p.operation_index {order}, p.event_index {order}"
     );
 
     let mut query = client.query(&sql).bind(contract_id).bind(token_id);
     if let Some(c) = cursor {
-        query = query.bind(c.ledger_sequence).bind(c.event_order);
+        query = query
+            .bind(c.ledger_sequence)
+            .bind(c.application_order)
+            .bind(c.operation_index)
+            .bind(c.event_index);
     }
     let rows = query.bind(limit).fetch_all::<NftTransferChRow>().await?;
     Ok(rows.into_iter().map(map_transfer_row).collect())

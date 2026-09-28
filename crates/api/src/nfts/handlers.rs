@@ -282,7 +282,7 @@ pub async fn list_nft_transfers(
     let direction = pagination.direction;
 
     // Existence gate (404-vs-empty disambiguation) alongside the page. CH keys
-    // `nft_ownership` on `(contract_id, token_id)` directly, so no surrogate
+    // `nft_ownership_changes` on `(contract_id, token_id)` directly, so no surrogate
     // indirection — the page never consumes the existence answer and both
     // derive from the path, so they go out together (task 0446). Existence
     // still decides: `Ok(None)` = the NFT does not exist → 404, and a missing
@@ -326,9 +326,10 @@ pub async fn list_nft_transfers(
         |dir, last| {
             cursor::encode(
                 &NftTransferCursor {
-                    created_at: last.created_at,
                     ledger_sequence: last.ledger_sequence,
-                    event_order: last.event_order,
+                    application_order: last.application_order,
+                    operation_index: last.operation_index,
+                    event_index: last.event_index,
                 },
                 dir,
             )

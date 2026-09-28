@@ -598,7 +598,6 @@ struct ParticipantKeyRow {
 
 #[derive(Debug, Row, Deserialize)]
 struct AccountTxPageChRow {
-    id: i64,
     hash: String,
     ledger_sequence: i64,
     application_order: i16,
@@ -693,7 +692,6 @@ pub async fn fetch_transactions(
         .join(",");
     let page_sql = format!(
         "SELECT \
-            t.id AS id, \
             lower(hex(t.hash)) AS hash, \
             t.ledger_sequence, \
             t.application_order, \
@@ -722,7 +720,6 @@ pub async fn fetch_transactions(
         .map(|r| TxKey {
             ledger_sequence: r.ledger_sequence,
             application_order: r.application_order,
-            transaction_id: r.id,
         })
         .collect();
 

@@ -25,6 +25,10 @@ interface NftTransfersProps {
   tokenId: string;
 }
 
+/** A change of one token is unique by its event's location (task 0424). */
+const transferKey = (row: NftTransferItem) =>
+  `${row.ledger_sequence}-${row.application_order}-${row.operation_index}-${row.event_index}`;
+
 const columns: ExplorerTableColumn<NftTransferItem>[] = [
   {
     id: 'event',
@@ -106,7 +110,7 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
           <ExplorerTable
             columns={columns}
             rows={[]}
-            rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
+            rowKey={transferKey}
             loading
             skeletonRows={20}
             rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
@@ -116,7 +120,7 @@ export function NftTransfers({ contractId, tokenId }: NftTransfersProps) {
           <ExplorerTable
             columns={columns}
             rows={pageRows}
-            rowKey={(row) => `${row.transaction_hash}-${row.event_order}`}
+            rowKey={transferKey}
             rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
           />
         )}

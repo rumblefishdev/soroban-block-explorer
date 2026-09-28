@@ -2047,7 +2047,7 @@
         "properties": {
           "amount": {
             "type": ["string", "null"],
-            "description": "SIGNED raw amount as an `Int128` string: positive received, negative\nspent. Scale by `decimals`.\n\n**`null` is not zero.** It means a NON-FUNGIBLE movement, where no\namount exists by nature — the event carries a token id, not a value.\nThe piece changed hands; rendering `0` would say it did not. See\n`nft_delta`, and `nfts` / `nft_ownership` for which piece it was (this\nfield's source does not carry the token id)."
+            "description": "SIGNED raw amount as an `Int128` string: positive received, negative\nspent. Scale by `decimals`.\n\n**`null` is not zero.** It means a NON-FUNGIBLE movement, where no\namount exists by nature — the event carries a token id, not a value.\nThe piece changed hands; rendering `0` would say it did not. See\n`nft_delta`, and `nfts` / `nft_ownership_changes` for which piece it was (this\nfield's source does not carry the token id)."
           },
           "asset": {
             "type": "string",
@@ -3424,16 +3424,24 @@
           "ledger_sequence",
           "event_type",
           "created_at",
-          "event_order"
+          "application_order",
+          "operation_index",
+          "event_index"
         ],
         "properties": {
+          "application_order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Where the change happened — its source event's location (task 0424,\nADR 0059): the transaction's position in the ledger, the operation\nwithin it, the event within the operation."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
           },
-          "event_order": {
+          "event_index": {
             "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "minimum": 0
           },
           "event_type": {
             "type": "integer",
@@ -3451,6 +3459,11 @@
           "ledger_sequence": {
             "type": "integer",
             "format": "int64"
+          },
+          "operation_index": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           },
           "to_account": {
             "type": ["string", "null"],
@@ -4129,16 +4142,24 @@
                 "ledger_sequence",
                 "event_type",
                 "created_at",
-                "event_order"
+                "application_order",
+                "operation_index",
+                "event_index"
               ],
               "properties": {
+                "application_order": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Where the change happened — its source event's location (task 0424,\nADR 0059): the transaction's position in the ledger, the operation\nwithin it, the event within the operation."
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
                 },
-                "event_order": {
+                "event_index": {
                   "type": "integer",
-                  "format": "int32"
+                  "format": "int32",
+                  "minimum": 0
                 },
                 "event_type": {
                   "type": "integer",
@@ -4156,6 +4177,11 @@
                 "ledger_sequence": {
                   "type": "integer",
                   "format": "int64"
+                },
+                "operation_index": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
                 },
                 "to_account": {
                   "type": ["string", "null"],

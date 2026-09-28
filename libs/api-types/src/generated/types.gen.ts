@@ -83,7 +83,7 @@ export type AccountBalanceChange = {
    * **`null` is not zero.** It means a NON-FUNGIBLE movement, where no
    * amount exists by nature — the event carries a token id, not a value.
    * The piece changed hands; rendering `0` would say it did not. See
-   * `nft_delta`, and `nfts` / `nft_ownership` for which piece it was (this
+   * `nft_delta`, and `nfts` / `nft_ownership_changes` for which piece it was (this
    * field's source does not carry the token id).
    */
   amount?: string | null;
@@ -1179,8 +1179,14 @@ export type NftItem = {
  * `17_get_nfts_transfers.sql`.
  */
 export type NftTransferItem = {
+  /**
+   * Where the change happened — its source event's location (task 0424,
+   * ADR 0059): the transaction's position in the ledger, the operation
+   * within it, the event within the operation.
+   */
+  application_order: number;
   created_at: string;
-  event_order: number;
+  event_index: number;
   /**
    * Raw NftEventType discriminant (ADR 0031).
    */
@@ -1201,6 +1207,7 @@ export type NftTransferItem = {
    */
   from_account?: string | null;
   ledger_sequence: number;
+  operation_index: number;
   /**
    * New owner G-StrKey. `null` on burn.
    */
@@ -1723,8 +1730,14 @@ export type PaginatedNftItem = {
  */
 export type PaginatedNftTransferItem = {
   data: Array<{
+    /**
+     * Where the change happened — its source event's location (task 0424,
+     * ADR 0059): the transaction's position in the ledger, the operation
+     * within it, the event within the operation.
+     */
+    application_order: number;
     created_at: string;
-    event_order: number;
+    event_index: number;
     /**
      * Raw NftEventType discriminant (ADR 0031).
      */
@@ -1745,6 +1758,7 @@ export type PaginatedNftTransferItem = {
      */
     from_account?: string | null;
     ledger_sequence: number;
+    operation_index: number;
     /**
      * New owner G-StrKey. `null` on burn.
      */

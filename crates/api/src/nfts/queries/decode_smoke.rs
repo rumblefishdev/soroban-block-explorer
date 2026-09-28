@@ -70,12 +70,12 @@ async fn nft_ch_rows_decode() {
 }
 
 /// Task 0528 regression — a token with a transfer or burn AFTER its mint must
-/// still SERVE its mint ledger, derived from the append-only `nft_ownership`.
+/// still SERVE its mint ledger, derived from the append-only `nft_ownership_changes`.
 ///
 /// That later event is what used to clobber the stored copy: it replaced the
 /// whole `nfts` row with one carrying no mint ledger (621 / 13 915 tokens read
 /// `None` on prod when 0528 was filed). `nfts` stores no mint ledger since
-/// task 0497, so the subject is picked from `nft_ownership` alone.
+/// task 0497, so the subject is picked from `nft_ownership_changes` alone.
 ///
 /// Skips cleanly when the CH under test has no such token — a freshly seeded
 /// CH where nothing has moved since its mint is a legitimate empty case.
@@ -98,7 +98,7 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
              INNER JOIN ( \
                  SELECT contract_id, token_id, \
                         minIf(ledger_sequence, event_type = 0) AS minted_at_ledger \
-                 FROM nft_ownership \
+                 FROM nft_ownership_changes \
                  GROUP BY contract_id, token_id \
                  HAVING countIf(event_type = 0) > 0 \
                     AND maxIf(ledger_sequence, event_type != 0) > minted_at_ledger \
@@ -124,7 +124,7 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
         item.minted_at_ledger,
         Some(expected),
         "detail served the clobbered stored column instead of deriving the \
-         mint ledger from nft_ownership (contract {contract_id}, token {token_id})"
+         mint ledger from nft_ownership_changes (contract {contract_id}, token {token_id})"
     );
 }
 
@@ -223,4 +223,65 @@ async fn keyset_pagination_is_total_over_derived_mint_ledger() {
         "pagination skipped tokens: walked {} of {total}",
         seen.len()
     );
+}
+
+/// Task 0424 — a token that changed owner more than once inside one ledger is
+/// listed in the chain's order, and each change's `from_account` is the owner
+/// the previous change left. Before the changes were located by their event,
+/// the order inside a ledger was our own per-token counter.
+///
+/// Skips cleanly when the CH under test has no such token.
+#[tokio::test]
+async fn same_ledger_changes_come_in_chain_order() {
+    let Some(ch) = client() else {
+        eprintln!("CH_URL unset — skipping 0424 same-ledger order check");
+        return;
+    };
+    #[derive(Debug, clickhouse::Row, serde::Deserialize)]
+    struct Subject {
+        contract: String,
+        token_id: String,
+    }
+    let subject = ch
+        .query(
+            "SELECT c.contract_id AS contract, x.token_id AS token_id \
+             FROM ( \
+                 SELECT contract_id, token_id FROM nft_ownership_changes \
+                 GROUP BY contract_id, token_id, ledger_sequence HAVING count() > 1 \
+                 LIMIT 1 \
+             ) x \
+             INNER JOIN soroban_contracts c ON c.id = x.contract_id \
+             LIMIT 1",
+        )
+        .fetch_optional::<Subject>()
+        .await
+        .expect("subject query runs");
+    let Some(s) = subject else {
+        eprintln!("no token with two changes in one ledger on this CH — skipping");
+        return;
+    };
+
+    let rows = fetch_transfers(&ch, &s.contract, &s.token_id, None, 50, Direction::Next)
+        .await
+        .expect("transfers decode");
+    assert!(rows.len() >= 2, "the subject has two changes: {rows:?}");
+    let location = |r: &NftTransferItem| {
+        (
+            r.ledger_sequence,
+            r.application_order,
+            r.operation_index,
+            r.event_index,
+        )
+    };
+    for pair in rows.windows(2) {
+        let (newer, older) = (&pair[0], &pair[1]);
+        assert!(
+            location(newer) > location(older),
+            "newest first, by location: {newer:?} then {older:?}"
+        );
+        assert_eq!(
+            newer.from_account, older.to_account,
+            "a change starts from the owner the previous change left"
+        );
+    }
 }
