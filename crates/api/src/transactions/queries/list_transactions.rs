@@ -311,9 +311,10 @@ pub async fn fetch_list(
         (None, Some(op_type)) => {
             // Step 1: up to `lim_over` positions of transactions carrying the
             // operation type, from `transaction_operations` pinned to one
-            // partition (canonical SQL 02). `type` is not a key prefix, so this
-            // scans the partition in key order until the limit (~8e7 rows at
-            // worst, for a rare type; user-initiated, not polled).
+            // partition. `type` is not a key prefix, so this scans the
+            // partition in key order until the limit — measured 2026-09-25 on
+            // partition 115 (286M rows), LIMIT 80: 63–147M rows read for types
+            // 1, 19 and 24. User-initiated, not polled.
             let positions: Vec<(i64, i16)> = client
                 .query(&op_type_positions_sql(
                     op_type,
