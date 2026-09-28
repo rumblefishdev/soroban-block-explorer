@@ -1066,7 +1066,6 @@ pub async fn fetch_transactions(
 ) -> Result<Vec<AssetTxRow>, clickhouse::error::Error> {
     let (op, order) = keyset_sql_desc(direction);
 
-    // Position cursor only (the handler's guard rejects a surrogate cursor).
     // Inlined integers — no injection surface; omitted on the first page so no
     // NULL is bound.
     let cursor_clause = match cursor {
@@ -1076,7 +1075,7 @@ pub async fn fetch_transactions(
         }) => format!(
             " AND (ledger_sequence, application_order) {op} ({ledger_sequence}, {application_order})"
         ),
-        _ => String::new(),
+        None => String::new(),
     };
 
     // Step 1 — leading-PK range on `asset_id` behind the `max(sequence)` fence;

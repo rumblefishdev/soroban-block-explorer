@@ -472,7 +472,7 @@ pub async fn fetch_invocation_appearances(
             created_at: millis_to_utc(r.created_at),
         })
         .collect();
-    // Matches the old `ORDER BY sia.ledger_sequence, sc.contract_id` (resolved StrKey).
+    // Ordered by ledger, then the resolved contract StrKey.
     out.sort_by(|a, b| {
         (a.ledger_sequence, &a.contract_id).cmp(&(b.ledger_sequence, &b.contract_id))
     });

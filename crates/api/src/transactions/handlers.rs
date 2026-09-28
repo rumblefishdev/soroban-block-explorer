@@ -88,19 +88,6 @@ pub async fn list_transactions(
         return resp;
     }
 
-    // Reject a cursor whose keyset is not this list's: every statement pages
-    // on the transaction position, so a surrogate-keyed cursor (the
-    // contract-invocation list's, or one minted by the operation-type filter
-    // before task 0372) is refused. Per ADR 0008 we fail with `invalid_cursor`
-    // instead of silently mis-paginating. A legacy/untagged cursor already
-    // fails to decode upstream in the extractor; this guards the
-    // decodes-but-wrong-intent case.
-    if let Some(cursor) = &pagination.cursor
-        && !cursor.fits_transaction_list()
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
-
     // Conditional GET on the LIVE first page only (task 0292): the list is
     // always newest-first, so with no cursor its content is a pure function of
     // the chain head → the head is a valid `ETag`. Filtered first pages are

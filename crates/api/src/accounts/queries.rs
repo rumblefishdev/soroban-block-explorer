@@ -628,7 +628,7 @@ pub async fn fetch_transactions(
             ledger_sequence,
             application_order,
         }) => (Some(*ledger_sequence), Some(*application_order)),
-        _ => (None, None),
+        None => (None, None),
     };
     let (op, order) = keyset_sql(sort, direction);
 

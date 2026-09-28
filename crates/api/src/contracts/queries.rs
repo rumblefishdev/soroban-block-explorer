@@ -331,20 +331,14 @@ pub async fn fetch_contract_list(
     // Step 2: invocation counts in the STATS_WINDOW for the page's ids.
     //
     // The window is ONE `ledger_sequence >= (first sequence in the window)`
-    // bound, resolved from the data (lore-0420). That single expression does
-    // three jobs the earlier shapes needed three constructs for:
-    //   * it is exact — no constant guessing how many ledgers fit in a day;
-    //   * it keeps the seek on the `(contract_id, ledger_sequence)` PK prefix;
-    //   * it cannot fan out. `ledgers` is a ReplacingMergeTree with unmerged
-    //     duplicate rows, and JOINing it multiplied every appearance row per
-    //     duplicate copy (measured ~1.6× inflation). `min()` is immune to
-    //     duplicates, so the dedup problem does not arise rather than being
-    //     worked around.
-    // `closed_at` carries a minmax index, so resolving the bound is cheap; the
-    // LP chart resolves its window the same way. `FINAL` on the rows matches
-    // the detail stat so re-ingest duplicates collapse identically;
-    // `invocation_count > 0` keeps the pairs where the contract was invoked
-    // (task 0586 — `contract_activity` also holds touched-only pairs).
+    // bound, resolved from the data (lore-0420): exact (no guess how many
+    // ledgers fit in a day), on the `(contract_id, ledger_sequence)` PK prefix,
+    // and immune to the unmerged duplicate `ledgers` rows a JOIN fanned out
+    // (measured ~1.6×), since `min()` ignores duplicates. `closed_at` carries a
+    // minmax index, so the bound is cheap; the LP chart resolves its window the
+    // same way. `FINAL` matches the detail stat, so re-ingest duplicates
+    // collapse identically; `invocation_count > 0` drops touched-only pairs
+    // (task 0586).
     let ids = list_rows
         .iter()
         .map(|r| r.id.to_string())

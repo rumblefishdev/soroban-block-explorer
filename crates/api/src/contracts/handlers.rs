@@ -285,14 +285,6 @@ pub async fn list_invocations(
         return resp;
     }
 
-    // Reject a cursor of another keyset — one minted before task 0586 keyed
-    // this list on the transaction surrogate (ADR 0008 fail-clean).
-    if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(cursor)
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
-
     let contract = match fetch_contract_for_source(&state, &contract_id).await {
         Ok(Some(c)) => c,
         Ok(None) => return errors::not_found("contract not found"),
@@ -479,12 +471,6 @@ fn invocation_cursor_for(r: &InvocationAppearanceRow) -> TxListCursor {
         ledger_sequence: r.ledger_sequence,
         application_order: r.application_order,
     }
-}
-
-/// True when the cursor anchors this list's keyset, the position. A surrogate
-/// cursor minted before task 0586 is refused (ADR 0008 fail-clean).
-fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::ChPosition { .. })
 }
 
 // ---------------------------------------------------------------------------

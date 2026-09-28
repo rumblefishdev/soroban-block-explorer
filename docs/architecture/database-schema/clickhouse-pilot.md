@@ -832,7 +832,7 @@ correlated column …`. The live read path instead fetches the page of tx
 >   pruned to the driver's partition and streamed, the driver is the hash side
 >   (~2e8 rows/page, validated). Since tasks 0541 and 0372 neither filtered
 >   statement joins: its driver returns the page's positions — a seek on
->   `contract_transactions`, or a scan of one `transaction_operations`
+>   `contract_activity`, or a scan of one `transaction_operations`
 >   partition by `type` (not a key prefix) — and `transactions` is sought by
 >   `(ledger_sequence, application_order) IN (…)`.
 > - **ledgers list** + **network stats** are ORDER BY `sequence`, not
