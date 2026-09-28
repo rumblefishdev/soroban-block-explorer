@@ -2,9 +2,9 @@
 id: '0487'
 title: 'BUG: contract callers count only accounts — "Unique callers 0" on 97% of contract pages, "—" on 27% of invocation rows'
 type: BUG
-status: backlog
+status: active
 related_adr: []
-related_tasks: ['0300', '0331', '0345', '0420']
+related_tasks: ['0300', '0331', '0345', '0420', '0586']
 tags:
   [backend, api, frontend, clickhouse, contracts, priority-high, effort-small]
 links: []
@@ -17,6 +17,13 @@ history:
       4,593,403 invocations in the window reported 0 unique callers. Root
       cause and blast radius measured against production ClickHouse before
       filing; every number below is measured, not estimated.
+  - date: '2026-09-28'
+    status: active
+    who: karolkow
+    note: >
+      Activated after task 0586 moved every reader onto `contract_activity`
+      (#513), which carries both caller columns. Decided (thread 282 A): one
+      number — "Unique callers" counts accounts and contracts together.
 ---
 
 # BUG: a caller that is a contract is not a caller
@@ -112,6 +119,16 @@ wrong value is worse than an admitted gap.
    invocation list — read from the same shape; fix them together or the same
    dash survives on the other page.
 4. Regenerate `libs/api-types` (CI gate `API types freshness`).
+
+## Decided
+
+- **One number** (thread 282 A, karolkow, 2026-09-28): the tile keeps its
+  label and counts account and contract callers together, as
+  `uniqExact(tuple(caller_id, caller_contract_id))`. No split tile.
+- **After task 0586** (thread 249 A): the reads are on `contract_activity`
+  now (`contracts/queries.rs` stats, `contracts/queries/list_invocations.rs`
+  tab, `transactions/queries.rs` transaction page), with the query names
+  from #516 (`fetch_contract_invocations`, `fetch_transaction_invocations`).
 
 ## Watch out
 
