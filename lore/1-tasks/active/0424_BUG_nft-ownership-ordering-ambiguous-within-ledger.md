@@ -215,6 +215,18 @@ application_order)` — `TxKey.transaction_id` and the account page's
   typecheck, lint clean. Not exercised: `resolve_moved_pieces` against data
   (runs only on a page with an NFT movement) — the new tables do not exist
   on production yet.
+- **#523 merged** (2026-09-28, 12:49 UTC) — PR 1 is on `develop`. **#525
+  merged 13:19 UTC into #523's branch after #523 had merged**, so the fill
+  tool is NOT on `develop`: it is recovered on
+  `feat/0424-nft-ownership-fill-to-develop` (the stranded commits merged onto
+  `develop`, plus `0b8f5c93` marking it temporary — thread 314 A: PR 4
+  deletes it with the old tables). Needs its own PR.
+- **PR 3 opened** as [#527](https://github.com/rumblefishdev/soroban-block-explorer/pull/527),
+  draft, base `develop` (`develop` merged in: the canonical SQL set was
+  retired by ADR 0060 / task 0588, so this branch's edits to SQL 15–17 went
+  with it; `NftTransfers.tsx` took `develop`'s new `DataList` with the
+  location row key). Checks after the merge: `api` 679 tests, web 396, clippy,
+  typecheck, lint clean.
 
 ## Implementation
 
