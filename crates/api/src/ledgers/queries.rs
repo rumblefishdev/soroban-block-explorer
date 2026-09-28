@@ -443,6 +443,11 @@ pub async fn fetch_by_sequence(
     // aggregate's answer is thrown away.
     // Bound to a `let` because the builder is a temporary: inlined into
     // `join!` it would be dropped while the future still borrows it (E0716).
+    //
+    // prev/next bind the requested `sequence` instead of referencing the outer
+    // `l.sequence`: ClickHouse rejects a correlated subquery with ORDER BY /
+    // LIMIT that reads the outer row (`NOT_IMPLEMENTED`). The outer WHERE pins
+    // the same value, so the result is identical.
     let header_query = client
         .query(
             "SELECT \

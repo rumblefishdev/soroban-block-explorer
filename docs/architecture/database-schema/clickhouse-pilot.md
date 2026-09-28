@@ -765,17 +765,17 @@ The indexer Lambda is unchanged — no ClickHouse dual-write yet.
 
 ### Read queries (reference set)
 
-[`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/README.md) is
-the canonical reference set of read queries for the 23 public REST
-endpoints (the retired PostgreSQL reference set was removed with the PG backend,
-task 0244). Each query targets the ADR 0044 schema (`init.sql`), uses
-`FINAL` on `ReplacingMergeTree` reads, partition-prunes via
-`intDiv(ledger_sequence, 500000)`, and resolves `closed_at` via JOIN to
-`ledgers` per §5.2. Driving task: [0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md).
+The read queries of the public REST endpoints are the Rust query functions in
+`crates/api/src/<module>/queries…`, checked by their ClickHouse-backed tests
+([ADR 0060](../../../lore/2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md)).
+The pilot started from a hand-kept SQL reference set under `docs/`
+(task [0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md)),
+one file per endpoint; it drifted from the Rust and was retired in task 0588. The
+notes below record what the live read path learned from it.
 
-> **CH 26.3 gotcha — no correlated subqueries (task 0243).** The reference
-> set was authored as a spec and never executed against a live cluster; the
-> transaction-list queries (`02`, `05`, `07`, `10`, `20`) compute
+> **CH 26.3 gotcha — no correlated subqueries (task 0243).** The retired reference
+> set was authored as a spec and never executed against a live cluster; its
+> transaction-list queries computed
 > `operation_types` / `contract_ids` with **correlated** scalar subqueries in
 > the SELECT projection (`… WHERE oa.transaction_id = t.id`). ClickHouse
 > 26.3.10.60 rejects that at runtime — `Code: 48 NOT_IMPLEMENTED: can't find
@@ -786,9 +786,8 @@ correlated column …`. The live read path instead fetches the page of tx
 > The shared
 > implementation is
 > [`crates/api/src/common/ch.rs::fetch_tx_list_aggregates`](../../../crates/api/src/common/ch.rs);
-> reuse it for any new transaction-list module rather than the inline
-> correlated projection the reference SQL still shows (those files carry a
-> correction banner).
+> reuse it for any new transaction-list module rather than an inline
+> correlated projection.
 
 > **`contract_ids` REMOVED from the API (task 0386).** The per-row
 > `contract_ids` array is no longer returned by any transaction-list endpoint —
@@ -797,7 +796,7 @@ correlated column …`. The live read path instead fetches the page of tx
 > carries `operation_types` only. The ops-only note below is kept for history.
 >
 > **CH read-cost correction — `contract_ids` was ops-only (task 0243).** The
-> reference SQL builds `contract_ids` from a 3-source UNION
+> retired reference SQL built `contract_ids` from a 3-source UNION
 > (`operations_appearances` + `soroban_invocations_appearances` +
 > `soroban_events`) for full PG parity. Both `soroban_*` tables are
 > `ORDER BY (contract_id, …)`, so the per-page
@@ -856,5 +855,5 @@ correlated column …`. The live read path instead fetches the page of tx
 - [Task 0204](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/README.md) — implementation task
 - [Task 0207](../../../lore/1-tasks/archive/0207_FEATURE_clickhouse-endpoint-queries-reference-set.md) — CH endpoint queries reference set
 - [`crates/db-clickhouse/README.md`](../../../crates/db-clickhouse/README.md) — crate-level README with translation table and dev workflow
-- [`endpoint-queries-clickhouse/README.md`](./endpoint-queries-clickhouse/README.md) — 23 CH-side endpoint queries + FINAL/Dict/§5 conventions
+- [ADR 0060](../../../lore/2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md) — the Rust queries are the endpoint SQL reference; the SQL set is retired
 - [`notes/G-clickhouse-schema-er.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/notes/G-clickhouse-schema-er.md) — full ER diagram + ENGINE/PARTITION BY/ORDER BY matrix

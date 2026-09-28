@@ -309,7 +309,7 @@ export const getAccountQueryKey = (options: Options<GetAccountData>) =>
 
 /**
  * Account detail — header from `accounts` + balances from
- * `account_balances_current` (canonical 06 statements A + B).
+ * `balances` (`queries::fetch_account` + `queries::fetch_balances`).
  */
 export const getAccountOptions = (options: Options<GetAccountData>) =>
   queryOptions<
@@ -1332,13 +1332,12 @@ export const getNetworkStatsQueryKey = (
 /**
  * Get top-level chain overview stats.
  *
- * Reads the canonical single-statement network-stats query (latest
- * ledger row + `ledgers` 60s aggregate for TPS + planner row-count
- * estimates for accounts / contracts) and caches the assembled
- * response **keyed on the chain head** (`latest_ledger_sequence`) in
- * process memory — see `network/cache.rs`. See the task 0045 spec and
- * `docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`
- * for the full data-source mapping.
+ * Reads the single-statement network-stats query (latest ledger row +
+ * `ledgers` 60s aggregate for TPS + deduped counts of accounts /
+ * contracts) and caches the assembled response **keyed on the chain head**
+ * (`latest_ledger_sequence`) in process memory — see `network/cache.rs`.
+ * See the task 0045 spec and `network::queries::fetch_stats` for the full
+ * data-source mapping.
  *
  * Per request we first read the head cheaply (`crate::common::head` —
  * `SELECT max(sequence)`, a primary-key probe) and look up the cache
@@ -1557,8 +1556,7 @@ export const getSearchQueryKey = (options: Options<GetSearchData>) =>
  * response: total row count == 1 and `routeForHit(singleton)`
  * resolves ⇒ navigate; else show the dropdown / list.
  *
- * Authoritative SQL:
- * `docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`.
+ * Authoritative SQL: `search::queries`.
  */
 export const getSearchOptions = (options: Options<GetSearchData>) =>
   queryOptions<

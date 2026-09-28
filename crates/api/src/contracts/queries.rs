@@ -5,7 +5,7 @@
 //! natural C-StrKey throughout (no numeric surrogate on the wire), so there is
 //! no asset-style id-mapping problem.
 //!
-//! `events` (canonical 14) reads CH `soroban_events` directly — the full-content
+//! `events` reads CH `soroban_events` directly — the full-content
 //! per-event table (ADR 0044 §4a). `topics_xdr` / `data_xdr` are a misnomer: the
 //! indexer already ScVal-decodes them to JSON at ingest (`persist::stage`), and
 //! also drops diagnostic-source events there, so the CH read path just
@@ -413,7 +413,7 @@ pub async fn fetch_contract_list(
 }
 
 // ---------------------------------------------------------------------------
-// Detail header — canonical 11 Statement A
+// Detail header
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
@@ -563,7 +563,7 @@ fn map_upgradeable(has_wasm: bool, is_sac: bool, code: i8) -> Option<bool> {
 }
 
 // ---------------------------------------------------------------------------
-// Bounded-window stats — canonical 11 Statement B
+// Bounded-window stats
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
@@ -669,7 +669,7 @@ fn contract_stats_sql(days: i64) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Interface — canonical 12
+// Interface
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
@@ -683,7 +683,7 @@ struct InterfaceChRow {
 
 /// `Ok(None)` only when the contract row itself is missing; SAC / pre-upload /
 /// stub contracts return `Ok(Some(_))` with `interface_metadata = None`. The
-/// "has a `functions` key" stub filter (canonical 12 / PG `metadata ?
+/// "has a `functions` key" stub filter (PG `metadata ?
 /// 'functions'`) is applied in Rust on the decoded JSON.
 pub async fn fetch_wasm_interface(
     client: &clickhouse::Client,
@@ -728,7 +728,7 @@ pub async fn fetch_wasm_interface(
 }
 
 // ---------------------------------------------------------------------------
-// Events — GET /v1/contracts/:id/events (canonical 14, full-content CH read)
+// Events — GET /v1/contracts/:id/events (full-content CH read)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]

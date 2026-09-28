@@ -80,6 +80,12 @@ struct PoolListChRow {
 /// activity is NEWER than the column, by 250 days on average and 801 at worst,
 /// and no soroban pool reached the first 5,000 rows of the list.
 ///
+/// A precomputed MV rather than `max()` over `pool_state_changes` per request:
+/// ClickHouse re-evaluates a `WITH` subquery at every reference, and the list
+/// query references its `page` CTE six times, so the per-request max was paid
+/// at each reference — 37–45M rows per page against 8–10M with the MV
+/// (measured 2026-09-24).
+///
 /// `greatest` rather than a per-kind branch: a classic pool has no
 /// `pool_activity` row, so the join misses and the column wins — read live, it
 /// never lags the MV's refresh; a soroban pool's column is its registration,

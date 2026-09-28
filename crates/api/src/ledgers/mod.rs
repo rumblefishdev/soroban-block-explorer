@@ -7,9 +7,7 @@
 //! ledger. Memo / other heavy fields are exposed only by the
 //! transaction detail endpoint; list rows stay slim.
 //!
-//! Canonical SQL refs:
-//!   - `docs/architecture/database-schema/endpoint-queries-clickhouse/04_get_ledgers_list.sql`
-//!   - `docs/architecture/database-schema/endpoint-queries-clickhouse/05_get_ledgers_by_sequence.sql`
+//! The SQL behind both is in `queries`.
 
 pub mod dto;
 mod handlers;

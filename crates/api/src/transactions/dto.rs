@@ -26,9 +26,8 @@ pub struct ListParams {
 /// transaction lists (encoded via [`common::cursor`](crate::common::cursor)).
 ///
 /// Every list pages on the transaction position
-/// `(ledger_sequence, application_order)` inside one partition (canonical
-/// SQL 02) — `application_order` is also the execution order: `/transactions`
-/// under every filter (tasks 0541, 0372), the account and asset lists (task
+/// `(ledger_sequence, application_order)` — `application_order` is also the
+/// execution order: `/transactions` under every filter (tasks 0541, 0372), the account and asset lists (task
 /// 0575) and the contract's invocations (task 0586).
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
@@ -81,7 +80,7 @@ pub struct TransactionListItem {
 // already pays for the archive XDR fetch for the full transaction view.
 // Adding memo here would require an archive fetch per ledger touched by
 // the page, which is wasteful for the list use case and inconsistent
-// with the DB-only contract advertised by canonical SQL 02.
+// with the list's DB-only contract.
 
 /// DB-sourced light slice for the transaction detail endpoint.
 ///

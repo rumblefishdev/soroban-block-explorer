@@ -25,7 +25,7 @@
 //! never contain a 64-hex / 56-char needle (provably empty), and a contract /
 //! NFT *named* after a full transaction hash is not a real search intent.
 //!
-//! # CH-vs-PG / CH-vs-canonical-SQL divergences (all verified against
+//! # CH-vs-PG divergences (all verified against
 //! `crates/db-clickhouse/schema/init.sql` and the live CH read modules)
 //!
 //! - **Transaction lookup** takes the candidate ledgers off
@@ -36,8 +36,8 @@
 //!   `ledgers` PK join — both single-row, so the cost is two point-seeks.
 //! - **NFT name** lives in `nft_enrichment`, NOT `nfts.name` (vestigial NULL on
 //!   CH — the live indexer rewrites whole `nfts` rows on every ownership change
-//!   with metadata NULL; task 0231). The canonical SQL's `nfts.name` predicate
-//!   would silently match nothing. We collapse the enrichment with
+//!   with metadata NULL; task 0231). A `nfts.name` predicate would
+//!   silently match nothing. We collapse the enrichment with
 //!   `argMax(_, version)` (never `FINAL`) exactly like [`crate::nfts::queries`].
 //! - **Contract name** lives in `soroban_contract_metadata` (on-chain METADATA
 //!   struct), NOT the dead `soroban_contracts.name` (no writer since task 0297).
@@ -47,7 +47,7 @@
 //!   join: the issuer surrogate → G-StrKey is a bloom-pruned
 //!   `accounts WHERE id IN (page ids)` key-seek (`idx_acc_id`), never
 //!   `LEFT JOIN accounts` (the ~23M-row hash-side build that OOMs — CH Code 241,
-//!   the 0317 trap the canonical asset CTE would have hit). `soroban_contracts`
+//!   the 0317 trap). `soroban_contracts`
 //!   (smaller) is joined in-statement, same as the live `/assets` list.
 //! - **`nullIf(...)`** maps a sentinel / JOIN miss to `None`. We do NOT use
 //!   `SETTINGS join_use_nulls = 1` — `api_reader` runs `readonly = 1` (RBAC

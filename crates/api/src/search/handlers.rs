@@ -16,8 +16,7 @@ use super::classifier;
 use super::dto::{EntityType, SearchGroups, SearchHit, SearchResults};
 use super::queries::{self, IncludeFlags};
 
-/// Default per-group cap when caller omits `?limit=` (matches
-/// `22_get_search.sql` recommendation).
+/// Default per-group cap when caller omits `?limit=`.
 const DEFAULT_LIMIT: u32 = 10;
 
 /// Hard ceiling on per-group cap. Kept low — broad search runs six
@@ -65,8 +64,7 @@ pub struct SearchParams {
 ///   response: total row count == 1 and `routeForHit(singleton)`
 ///   resolves ⇒ navigate; else show the dropdown / list.
 ///
-/// Authoritative SQL:
-/// `docs/architecture/database-schema/endpoint-queries-clickhouse/22_get_search.sql`.
+/// Authoritative SQL: `search::queries`.
 #[utoipa::path(
     get,
     path = "/search",

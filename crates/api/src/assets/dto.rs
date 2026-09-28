@@ -29,7 +29,7 @@ pub struct ListParams {
 
 /// Asset row returned by list and detail. Surfaces both the decoded
 /// `asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`
-/// SMALLINT — canonical SQL `08_get_assets_list.sql` projection.
+/// SMALLINT.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetItem {
     /// Canonical identifier — the single token usable as `/assets/{id}`:
@@ -111,8 +111,8 @@ pub struct AssetDetailResponse {
     pub home_page: Option<String>,
 }
 
-/// Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors
-/// canonical SQL `10_get_assets_transactions.sql`.
+/// Transaction row for `/assets/:id/transactions`. Pure-DB; filled by
+/// `queries::fetch_transactions`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetTransactionItem {
     pub hash: String,

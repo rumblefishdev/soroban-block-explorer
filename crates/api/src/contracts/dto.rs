@@ -1,5 +1,5 @@
 //! Request and response DTOs for the contracts endpoints.
-//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{11..14}_*.sql`.
+//! The SQL behind these shapes is in `contracts::queries`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

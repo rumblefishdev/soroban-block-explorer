@@ -5,51 +5,73 @@ description: Verify ClickHouse query output against Horizon, stellar.expert, and
 
 # /compare-with-stellar-api — Verify a ClickHouse query against Stellar APIs + raw XDR
 
-Take a path to a ClickHouse SQL query, execute it against the **local Docker
-ClickHouse**, select representative rows, and verify the same rows in parallel
-against Horizon, stellar.expert, and independently decoded raw XDR.
+Take an API endpoint's ClickHouse query (or an ad-hoc ClickHouse SQL file),
+execute it against the **local Docker ClickHouse**, select representative rows,
+and verify the same rows in parallel against Horizon, stellar.expert, and
+independently decoded raw XDR.
 
 The result is an evidence report, not an implementation task. Aggregate the
 findings and **STOP**; do not edit code, commit, or create a lore task.
 
 ## Scope and safety
 
-- This is **ClickHouse-only**. Use only
-  `docs/architecture/database-schema/endpoint-queries-clickhouse/` and the
-  ClickHouse client workflow defined below.
-- Default target is the local `clickhouse` Docker Compose service. Never query
-  production ClickHouse unless the user explicitly supplies and authorizes a
-  production connection.
-- Canonical query files live in
-  `docs/architecture/database-schema/endpoint-queries-clickhouse/` and the
-  project runner is `run_endpoint_ch.sh` in that directory.
-- A reference SQL file can lag the live Rust query. Before asserting that an
-  endpoint implementation is correct, compare its shape to the corresponding
-  `crates/api/src/**/queries_ch.rs` path. In particular, transaction list
-  aggregation in the live code is a non-correlated two-step query; do not
-  validate a stale correlated-subquery reference as if it were production.
+- This is **ClickHouse-only**. The endpoint SQL reference is the Rust query
+  function that runs it, in `crates/api/src/<module>/queries…`
+  ([ADR 0060](../../../lore/2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md)).
+  There is no separate SQL copy to read.
+- Queries execute against the local `clickhouse` Docker Compose service. Never
+  run a query against production ClickHouse unless the user explicitly
+  authorizes it.
+- The one production read this skill may propose is `chq` on
+  `system.query_log`, to see the exact SQL text the API executed (Step 1). It
+  reads query metadata, not table data; still ask before running it, and skip
+  it when the Rust query is enough.
 
 ## Argument
 
-`/compare-with-stellar-api <path-to-clickhouse-sql-file>` is required. If the
-argument is empty, an endpoint name, a table name, or a SQL path outside the
-ClickHouse endpoint-query directory,
-**STOP** and ask for a path.
+`/compare-with-stellar-api <target>` is required. `<target>` is one of:
 
-## Step 1 — Read the SQL and select a statement
+- an endpoint, e.g. `GET /v1/assets/:id/transactions`;
+- a Rust query location, e.g. `crates/api/src/assets/queries.rs::fetch_transactions`;
+- a path to an ad-hoc ClickHouse `.sql` file (Mode B).
 
-1. Read the file and verify it is ClickHouse SQL.
-2. Count `-- @@ split @@` separators.
-   - No separator: `selected_statement = 1`.
-   - One or more: enumerate each statement as A, B, C, … using its leading
-     comment or SQL keyword, then **STOP** and ask the user which statement to
-     verify. Do not select one automatically.
-3. Carry `selected_statement` into every later step.
-4. For canonical endpoint files, read the matching endpoint section in
-   `endpoint-queries-clickhouse/README.md` and inspect the equivalent live
-   Rust CH query before sampling. Report `reference query matches live path`,
-   `reference-only`, or `diverges`; a divergent reference may still be
-   syntax-checked, but cannot certify the live implementation.
+If the argument is empty, a bare table name, or does not resolve to one of
+these, **STOP** and ask.
+
+## Step 1 — Find the query and select a statement
+
+1. **Endpoint or Rust location (Mode A).** Find the handler in
+   `crates/api/src/<module>/handlers.rs` (the `#[utoipa::path]` names the
+   route) and follow it to the query function it calls in
+   `crates/api/src/<module>/queries.rs` or `queries/<name>.rs`.
+2. Enumerate the statements the path issues: every `client.query(…)` call
+   reached for this request is one statement. Label them A, B, C, … by what
+   they read (driver seek, page fetch, aggregate, StrKey resolve).
+   - One statement: `selected_statement = A`.
+   - More than one: list them, then **STOP** and ask the user which to verify.
+     Do not select one automatically.
+3. Read the comments beside the selected statement: they state the index
+   choice, the dedup rule (`FINAL` / `LIMIT 1 BY` / aggregate) and known
+   traps. Carry them into the report.
+4. Build the executable SQL:
+
+   - Copy the SQL string. Replace each `?` with its `.bind(…)` value in order,
+     and each `format!` placeholder (`{order}`, `{limit}`, key lists,
+     keysets) with the value the code would build for the chosen inputs.
+   - **Optional, exact text:** with the user's go, read the SQL the API
+     actually executed from production:
+
+     ```bash
+     chq "SELECT event_time, read_rows, query FROM system.query_log
+          WHERE event_date = today() AND type = 'QueryFinish'
+            AND user = 'api_reader' AND query LIKE '%<distinctive fragment>%'
+          ORDER BY event_time DESC LIMIT 3 FORMAT Vertical"
+     ```
+
+     Pick a fragment unique to the statement (a table plus a predicate).
+     `chq` exits 0 even on a server error — check the output for
+     `DB::Exception`. The text carries production literals (surrogate ids,
+     head sequence); replace them with values discovered locally in Step 2.
 
 ## Step 2 — Execute against local Docker ClickHouse
 
@@ -75,23 +97,16 @@ export SBE_CH_DB=default
 Every selected statement must ultimately produce **one JSON object per row**:
 `FORMAT JSONEachRow`. Do not use TSV output as the sampling input.
 
-### Mode A — canonical endpoint-query file
+### Mode A — an endpoint's Rust query
 
-Path matches
-`docs/architecture/database-schema/endpoint-queries-clickhouse/<NN>_*.sql`.
-
-1. Run the supplied runner to discover real values and validate the endpoint
-   orchestration:
-
-   ```bash
-   docs/architecture/database-schema/endpoint-queries-clickhouse/run_endpoint_ch.sh <NN>
-   ```
-
-2. Reuse the concrete values printed by the runner, extract only
-   `selected_statement`, substitute its `$1`, `$2`, … placeholders exactly as
-   the runner did, remove its trailing semicolon, and append
-   `FORMAT JSONEachRow`.
-3. Run the resulting query through the local service:
+1. Discover real input values from local ClickHouse with small queries that
+   follow the query's own lookups (e.g. a StrKey → surrogate id via the same
+   table the Rust resolves it from, a head sequence via `max(sequence)` from
+   `ledgers`).
+2. For a statement that consumes an earlier one's output (a page fetch keyed
+   by a driver's positions), run the earlier statement first and reuse its
+   values; do not invent a second sample.
+3. Append `FORMAT JSONEachRow` to the substituted statement and run it:
 
    ```bash
    docker compose exec -T "$SBE_CH_SERVICE" clickhouse-client \
@@ -99,12 +114,14 @@ Path matches
      --query='<selected statement with concrete literals> FORMAT JSONEachRow'
    ```
 
-For statements whose inputs depend on an upstream statement, preserve the
-upstream value chosen by `run_endpoint_ch.sh`; do not invent a second sample.
+The module's ClickHouse tests (`decode_smoke.rs` / `ch_tests.rs`, gated on
+`CH_URL`) show how the code itself bootstraps inputs; reuse their discovery
+queries where they fit.
 
 ### Mode B — ad-hoc ClickHouse query
 
-1. Extract `selected_statement` by splitting on `-- @@ split @@`.
+1. Extract `selected_statement` by splitting on `-- @@ split @@`; with more than
+   one statement, list them and **STOP** for a choice, as in Step 1.
 2. Parse the `Inputs:` header for `$N` placeholders. Use its ClickHouse type
    and semantics to write small local discovery queries. Use literal `NULL`
    only where the query expects a nullable parameter; use CH-native literals
@@ -140,13 +157,14 @@ For each selected row, write a one-line explanation of what it demonstrates.
 Determine one entity type: `transaction`, `account`, `contract`, `asset`,
 `ledger`, `nft`, or `liquidity_pool`.
 
-For canonical files, use the output fields of `selected_statement` plus the
-endpoint response-shape documentation. Include only fields physically supplied
-by ClickHouse. Exclude API-only fields from Soroban RPC, S3, archive/XDR
-overlays, cursors, positions, and other synthesized values. For ad-hoc files,
-use projected column names only.
+For Mode A, use the output fields of `selected_statement` plus the endpoint's
+response DTO (`crates/api/src/<module>/dto.rs`). Include only fields physically
+supplied by ClickHouse. Exclude API-only fields from Soroban RPC, S3,
+archive/XDR overlays, cursors, positions, and other synthesized values. For
+Mode B, use projected column names only.
 
-Record any reference-vs-live-Rust divergence found in Step 1 before dispatch.
+Record any difference found in Step 1 between the Rust query and the executed
+text from `system.query_log` before dispatch.
 
 ## Step 5 — Dispatch three parallel verifiers
 
@@ -232,7 +250,8 @@ absent, report: `Frontend contract check skipped — no matching route section`.
 
 Present:
 
-1. the reference-vs-live-Rust status;
+1. the query verified (Rust function + statement label, or file path) and,
+   when read, whether the `system.query_log` text matched it;
 2. sampled rows and why each was selected;
 3. a compact source matrix per row;
 4. pure mismatches, prioritizing those confirmed by Raw XDR;
@@ -245,9 +264,10 @@ Then **STOP** and wait for the user's next instruction.
 ## Anti-patterns
 
 - Querying a non-ClickHouse database or treating its result as ClickHouse evidence.
-- Querying production ClickHouse without explicit authorization.
+- Querying production ClickHouse without explicit authorization (the
+  `system.query_log` read in Step 1 included).
 - Using `FORMAT TabSeparated` instead of JSONEachRow for sample selection.
-- Treating the reference SQL as the live Rust implementation without checking.
+- Verifying a hand-copied query instead of the Rust function the API runs.
 - Allowing verifier agents to pick their own rows.
 - Passing non-ClickHouse/API-synthesized fields to verifiers.
 - Confusing `SOURCE_MISSING` with `MISMATCH`.

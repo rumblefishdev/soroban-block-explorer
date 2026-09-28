@@ -24,7 +24,7 @@ pub struct ContractInvocationRow {
 }
 
 // ---------------------------------------------------------------------------
-// Invocations — canonical 13 (two-step, multi-partition-safe)
+// Invocations (two-step, multi-partition-safe)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
