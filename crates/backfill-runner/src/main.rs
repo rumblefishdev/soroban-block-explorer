@@ -259,6 +259,7 @@ enum Command {
     /// Fill `nft_ownership_changes{,_pending}` history from `soroban_events`
     /// through the indexer's own NFT extraction — no S3 (task 0424). Reads
     /// the collections of the old ownership tables; re-running is a no-op.
+    /// Temporary: removed with the old tables in task 0424's PR 4.
     NftOwnershipFill {
         /// Extract and count only; write nothing.
         #[arg(long)]

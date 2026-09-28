@@ -1,6 +1,9 @@
 //! Task 0424 — fill the history of `nft_ownership_changes{,_pending}` from what
 //! ClickHouse already holds, no S3.
 //!
+//! **Temporary** (thread 314 A): it reads the old ownership tables, so it
+//! cannot run after their drop; task 0424's PR 4 deletes it with them.
+//!
 //! The contract events of every collection in the old ownership tables are
 //! read back from `soroban_events` — topics and data are stored as the
 //! parser's own JSON — and run through the indexer's own NFT extraction

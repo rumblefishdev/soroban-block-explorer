@@ -1225,9 +1225,10 @@ follows each contract's current verdict, as `nft-reclassify` does.
   `--dry-run`. One pass, seconds; re-running is a no-op (deterministic rows,
   ReplacingMergeTree), and ledgers the indexer already wrote collapse the same
   way.
-- **Runs only while the old tables exist** — they name the collections to read
-  and are the gate. After their drop (step 4), a lost range comes back by
-  re-parsing from S3 like any other table.
+- **Temporary: runs only while the old tables exist** — they name the
+  collections to read and are the gate. Task 0424's PR 4 deletes the command
+  with them; after that a lost range comes back by re-parsing from S3 like any
+  other table.
 
 ```bash
 cargo run -p backfill-runner -- --clickhouse-url https://<CH_DOMAIN> \
