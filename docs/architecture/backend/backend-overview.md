@@ -555,8 +555,10 @@ read the snapshot's two reserve columns in order; a Soroban pool's legs read
 its newest `pool_state_changes` row, in the pool's own token order (the order
 `legs` stores), scaled by the leg's known decimals: 7 for native and classic
 legs, the `decimals` a Soroban token publishes in its contract metadata
-otherwise; a token that publishes none keeps its leg `null`. The list does the
-same for the page's Soroban pools in batched reads. TVL sums every leg's reserve × price
+otherwise; a token that publishes none keeps its leg `null`. Both endpoints
+read that row in the same query as the classic snapshot, one join beside the
+other. A registered pool whose code is no longer a pool is served no reserve
+(task 0325 records that verdict at the code change). TVL sums every leg's reserve × price
 and is `null` unless every leg has both. A classic pool's reserves and total
 shares come from its latest snapshot row; clients that care about freshness
 read `latest_snapshot_at` in the response. A Soroban pool's total shares come

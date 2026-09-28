@@ -2499,3 +2499,14 @@ reserve, 770/775 soroban pools a reserve on every leg (was 705). TVL is
 unchanged for pools with a token leg: the list's pricing knows native and
 classic legs only. CH-gated reserves test extended (18-decimal token and an
 unpublished one): green, red with token legs unscaled.
+
+**One query for both kinds' reserves (2026-09-28, decision 65 A).** A soroban
+pool's newest `pool_state_changes` row is the same read as a classic pool's
+newest snapshot; only the value differs (raw `Int128` per leg against two
+`Decimal128(7)` columns). The list and detail now LEFT JOIN it in their main
+query beside the snapshot join (`soroban_reserves::STATE_RESERVES_JOIN`)
+instead of a second round trip; `NOT_A_POOL` moved to the Rust side
+(`served_raw_reserves`). Local API against production, old vs new: 775 of 775
+soroban pools and the first 300 of the default list identical, keyed by pool
+id; a soroban page takes 0.72 s on both. CH-gated tests green; red with the
+joined reserves dropped (`left: [None, None, None, None]`).

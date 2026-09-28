@@ -9,7 +9,8 @@ use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
 use super::soroban_reserves::{
-    fetch_raw_reserves, fetch_token_decimals, leg_reserves, soroban_token_contracts,
+    STATE_RESERVES_JOIN, fetch_token_decimals, leg_reserves, served_raw_reserves,
+    soroban_token_contracts,
 };
 use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
@@ -28,6 +29,9 @@ struct PoolDetailChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
+    /// A soroban pool's newest raw reserves, one per leg ([`STATE_RESERVES_JOIN`]);
+    /// empty for a classic pool.
+    state_reserves: Vec<String>,
 }
 
 /// `GET /v1/liquidity-pools/:id` — single-pool detail. Mirrors the PG
@@ -38,9 +42,9 @@ pub async fn fetch_pool_by_id(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
-    // `unhex(?)` appears 5×: the `legs` CTE, the created_at-ledger subquery, the
-    // participant-count subquery, the latest-snapshot subquery, and the outer
-    // WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
+    // `unhex(?)` appears 6×: the created_at-ledger subquery, the
+    // participant-count subquery, the latest-snapshot subquery, the soroban
+    // state-row subquery, the `ledgers` seek, and the outer WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
     // detail is single-pool and CH dislikes correlated subqueries. Each `?`
     // consumes one positional bind; all are the same value, so order is moot.
     //
@@ -76,7 +80,7 @@ pub async fn fetch_pool_by_id(
     // condition is only supported by `join_algorithm = 'hash'`, so the old form
     // 500'd (Code 48) the moment the server profile carried anything else.
     let row = client
-        .query(
+        .query(&format!(
             "SELECT \
                 lower(hex(lp.pool_id))               AS pool_id_hex, \
                 toInt16(lp.pool_kind)                AS pool_kind, \
@@ -93,7 +97,8 @@ pub async fn fetch_pool_by_id(
                 toString(s.reserve_a)                AS reserve_a, \
                 toString(s.reserve_b)                AS reserve_b, \
                 toString(s.total_shares)             AS total_shares, \
-                nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms \
+                nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms, \
+                ps.reserves                          AS state_reserves \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN ( \
                  SELECT pool_id, \
@@ -106,6 +111,7 @@ pub async fn fetch_pool_by_id(
                  ORDER BY ledger_sequence DESC \
                  LIMIT 1 \
              ) s ON s.pool_id = lp.pool_id \
+             LEFT JOIN ({ps}) ps ON ps.pool_id = lp.pool_id \
              LEFT JOIN ( \
                  SELECT sequence, closed_at FROM ledgers \
                  WHERE sequence = (SELECT max(ledger_sequence) FROM liquidity_pool_snapshots \
@@ -113,7 +119,9 @@ pub async fn fetch_pool_by_id(
              ) l ON l.sequence = s.ledger_sequence \
              WHERE lp.pool_id = unhex(?) \
              LIMIT 1",
-        )
+            ps = STATE_RESERVES_JOIN.replace("{pools}", "pool_id = unhex(?)"),
+        ))
+        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
@@ -127,7 +135,7 @@ pub async fn fetch_pool_by_id(
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
     // A classic pool's legs are its two snapshot columns in order; a soroban
-    // pool has no snapshot row, so its reserves come from its state rows.
+    // pool's are its state row, one raw value per leg.
     let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
     let (reserves, total_shares) = match pool_kind {
         domain::PoolKind::Classic => (
@@ -137,12 +145,11 @@ pub async fn fetch_pool_by_id(
         domain::PoolKind::Soroban => {
             let ids = [r.pool_id_hex.as_str()];
             let tokens = soroban_token_contracts(&r.legs, &identities);
-            let (raw, shares, token_decimals) = futures::try_join!(
-                fetch_raw_reserves(client, &ids),
+            let (shares, token_decimals) = futures::try_join!(
                 fetch_total_shares(client, &ids),
                 fetch_token_decimals(client, &tokens),
             )?;
-            let raw = raw.get(&r.pool_id_hex).map_or(&[][..], Vec::as_slice);
+            let raw = served_raw_reserves(&r.pool_id_hex, &r.state_reserves);
             (
                 leg_reserves(&r.legs, &identities, &token_decimals, raw),
                 served_total_shares(shares.get(&r.pool_id_hex), raw),

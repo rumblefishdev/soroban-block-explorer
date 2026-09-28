@@ -11,7 +11,8 @@ use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
 use super::soroban_reserves::{
-    fetch_raw_reserves, fetch_token_decimals, leg_reserves, soroban_token_contracts,
+    STATE_RESERVES_JOIN, fetch_token_decimals, leg_reserves, served_raw_reserves,
+    soroban_token_contracts,
 };
 use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
@@ -69,6 +70,9 @@ struct PoolListChRow {
     reserve_b: Option<String>,
     total_shares: Option<String>,
     latest_snapshot_at_ms: Option<i64>,
+    /// A soroban pool's newest raw reserves, one per leg ([`STATE_RESERVES_JOIN`]);
+    /// empty for a classic pool.
+    state_reserves: Vec<String>,
 }
 
 /// The ordering value the list pages on: the pool's LAST ACTIVITY.
@@ -271,7 +275,8 @@ pub async fn fetch_pool_list(
              toString(s.reserve_a)                           AS reserve_a, \
              toString(s.reserve_b)                           AS reserve_b, \
              toString(s.total_shares)                        AS total_shares, \
-             nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms \
+             nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms, \
+             ps.reserves                                     AS state_reserves \
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
@@ -284,6 +289,10 @@ pub async fn fetch_pool_list(
                AND ledger_sequence BETWEEN (SELECT lo FROM band) AND (SELECT hi FROM band) \
              GROUP BY pool_id \
          ) s ON s.pool_id = lp.pool_id \
+         /* A soroban pool's snapshot: its newest `pool_state_changes` row. No \
+            band — a quiet soroban pool's newest row can sit months back, and the \
+            page's pools are a key seek (2.4M rows / 57 ms for the busiest 20). */ \
+         LEFT JOIN ({ps}) ps ON ps.pool_id = lp.pool_id \
          LEFT JOIN ( \
              SELECT pool_id, toNullable(min(ledger_sequence)) AS created_at_ledger \
              FROM liquidity_pool_snapshots \
@@ -318,6 +327,7 @@ pub async fn fetch_pool_list(
             from the wrong last row — pages then overlap. */ \
          ORDER BY lp.activity_ledger {order}, lp.pool_id {order}",
         act = ACTIVITY_LEDGER,
+        ps = STATE_RESERVES_JOIN.replace("{pools}", "pool_id IN (SELECT pool_id FROM page)"),
         filters = filters,
         keyset = keyset,
         order = order,
@@ -336,14 +346,11 @@ pub async fn fetch_pool_list(
     let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
-    // A soroban pool writes no snapshot; its reserves are its newest
-    // `pool_state_changes` row, read for the page's soroban pools only.
     let soroban_ids: Vec<&str> = rows
         .iter()
         .filter(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind) == domain::PoolKind::Soroban)
         .map(|r| r.pool_id_hex.as_str())
         .collect();
-    let soroban_raw = fetch_raw_reserves(client, &soroban_ids).await?;
     let soroban_shares = fetch_total_shares(client, &soroban_ids).await?;
     let soroban_legs = rows
         .iter()
@@ -388,12 +395,10 @@ pub async fn fetch_pool_list(
         .zip(page_legs)
         .map(|(r, legs)| {
             // A classic pool's snapshot columns are its two legs, in order; a
-            // soroban pool's reserves come from its state rows (see
+            // soroban pool's are its state row, one raw value per leg (see
             // `soroban_reserves` for which legs carry a value).
             let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
-            let raw = soroban_raw
-                .get(&r.pool_id_hex)
-                .map_or(&[][..], Vec::as_slice);
+            let raw = served_raw_reserves(&r.pool_id_hex, &r.state_reserves);
             let (reserves, total_shares) = match pool_kind {
                 domain::PoolKind::Classic => (
                     vec![r.reserve_a.clone(), r.reserve_b.clone()],

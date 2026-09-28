@@ -84,11 +84,23 @@ pub(super) async fn fetch_token_decimals(
         .collect())
 }
 
-#[derive(Debug, Row, Deserialize)]
-struct ReservesChRow {
-    pool_id_hex: String,
-    reserves: Vec<String>,
-}
+/// The subquery the list and detail reads LEFT JOIN on `pool_id` for a pool's
+/// newest raw reserves, one string per leg; `{pools}` is the caller's pool-id
+/// predicate. It sits beside the classic snapshot join because it is the same
+/// read: the newest state row per pool. Only the value differs — raw `Int128`
+/// per leg, scaled in Rust by [`leg_reserves`], against the classic
+/// `Decimal128(7)` columns. A classic pool has no row here, and the join miss
+/// is an empty array, which serves no reserve.
+///
+/// No plane filter: every row is decoded from the pool's own instance and
+/// keyed on the entry's owner (decision C′), and production holds no row off
+/// the pool's declared plane. Unmerged duplicates of one `(pool, plane,
+/// ledger)` key carry identical values, so `argMax` is exact over them.
+pub(super) const STATE_RESERVES_JOIN: &str = "SELECT pool_id, \
+        arrayMap(x -> toString(x), argMax(reserves, ledger_sequence)) AS reserves \
+     FROM pool_state_changes \
+     WHERE {pools} \
+     GROUP BY pool_id";
 
 /// Registered pools whose contract code is no longer a pool, as lowercase
 /// pool-id hex. Their newest state row is the last one the pool code wrote,
@@ -102,47 +114,14 @@ struct ReservesChRow {
 // written when a contract's code changes.
 const NOT_A_POOL: &[&str] = &["33eb72c7a9a01352389d1cb151ce3dbd5818007c9e21ff5520f2c085f8f9f9b0"];
 
-/// Newest raw reserves per pool, keyed by lowercase pool-id hex. A pool in
-/// [`NOT_A_POOL`] gets no entry.
-///
-/// No plane filter: every row is decoded from the pool's own instance and
-/// keyed on the entry's owner (decision C′), and production holds no row off
-/// the pool's declared plane. Unmerged duplicates of one `(pool, plane,
-/// ledger)` key carry identical values, so `argMax` is exact over them.
-pub(super) async fn fetch_raw_reserves(
-    client: &clickhouse::Client,
-    pool_ids_hex: &[&str],
-) -> Result<HashMap<String, Vec<String>>, clickhouse::error::Error> {
-    // The ids come from our own `lower(hex(pool_id))` projection; the filter
-    // keeps the inlined literal safe even if a caller ever passes user input.
-    let ids: Vec<&str> = pool_ids_hex
-        .iter()
-        .copied()
-        .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-        .filter(|h| !NOT_A_POOL.contains(h))
-        .collect();
-    if ids.is_empty() {
-        return Ok(HashMap::new());
+/// The raw reserves a pool may be served: its newest state row, or nothing
+/// for a pool in [`NOT_A_POOL`].
+pub(super) fn served_raw_reserves<'a>(pool_id_hex: &str, raw: &'a [String]) -> &'a [String] {
+    if NOT_A_POOL.contains(&pool_id_hex) {
+        &[]
+    } else {
+        raw
     }
-    let in_list = ids
-        .iter()
-        .map(|h| format!("unhex('{h}')"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let rows = client
-        .query(&format!(
-            "SELECT lower(hex(pool_id)) AS pool_id_hex, \
-                    arrayMap(x -> toString(x), argMax(reserves, ledger_sequence)) AS reserves \
-             FROM pool_state_changes \
-             WHERE pool_id IN ({in_list}) \
-             GROUP BY pool_id"
-        ))
-        .fetch_all::<ReservesChRow>()
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.pool_id_hex, r.reserves))
-        .collect())
 }
 
 /// One reserve per leg, scaled by the leg's known decimals; `None` for a leg
