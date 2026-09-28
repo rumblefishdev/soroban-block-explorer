@@ -642,13 +642,13 @@ pub async fn fetch_contract_stats(
 /// row per duplicate copy and inflated `count()`. `min()` is immune to
 /// duplicates, so this shape removes the fan-out instead of compensating for it —
 /// and drops the hardcoded ledgers-per-day floor at the same time.
-/// `uniqExact(caller_id)` was already fan-out-safe (a distinct set); only the raw
+/// The unique-caller `uniqExact` was already fan-out-safe (a distinct set); only the raw
 /// `count()`s were affected.
 fn contract_stats_sql(days: i64) -> String {
     format!(
         "SELECT \
             toUInt64(count())                       AS recent_invocations, \
-            toUInt64(uniqExact(ca.caller_id))       AS recent_unique_callers, \
+            toUInt64(uniqExact(tuple(ca.caller_id, ca.caller_contract_id))) AS recent_unique_callers, \
             ifNull(( \
                 SELECT toUInt64(count()) \
                 FROM soroban_events se \

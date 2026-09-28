@@ -103,6 +103,8 @@ pub struct EventAppearanceRow {
 pub struct TransactionInvocationRow {
     pub contract_id: String,
     pub caller_account: Option<String>,
+    /// Set instead of `caller_account` when a contract made the call (task 0487).
+    pub caller_contract: Option<String>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
@@ -165,6 +167,7 @@ struct EventAppearanceRawRow {
 struct InvocationAppearanceRawRow {
     contract_surrogate: i64,
     caller_id: Option<i64>,
+    caller_contract_id: Option<i64>,
     ledger_sequence: i64,
     created_at: i64,
 }
@@ -433,6 +436,7 @@ pub async fn fetch_transaction_invocations(
             "SELECT \
                 ca.contract_id AS contract_surrogate, \
                 ca.caller_id, \
+                ca.caller_contract_id, \
                 ca.ledger_sequence, \
                 l.closed_at AS created_at \
              FROM contract_activity ca FINAL \
@@ -450,9 +454,14 @@ pub async fn fetch_transaction_invocations(
         .bind(ledger_sequence)
         .fetch_all::<InvocationAppearanceRawRow>()
         .await?;
-    // Both resolve off `raw` alone — one wave, not two (task 0446).
+    // Both resolve off `raw` alone — one wave, not two (task 0446). A contract
+    // caller resolves in the same read as the invoked contract.
+    let contract_ids = raw
+        .iter()
+        .flat_map(|r| std::iter::once(r.contract_surrogate).chain(r.caller_contract_id))
+        .collect();
     let (contracts, accounts) = tokio::join!(
-        resolve_contracts(client, raw.iter().map(|r| r.contract_surrogate).collect()),
+        resolve_contracts(client, contract_ids),
         resolve_accounts(client, raw.iter().filter_map(|r| r.caller_id).collect()),
     );
     let contracts = contracts?;
@@ -467,6 +476,10 @@ pub async fn fetch_transaction_invocations(
             caller_account: r
                 .caller_id
                 .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            caller_contract: r
+                .caller_contract_id
+                .and_then(|id| contracts.get(&id).cloned())
                 .filter(|s| !s.is_empty()),
             ledger_sequence: r.ledger_sequence,
             created_at: millis_to_utc(r.created_at),

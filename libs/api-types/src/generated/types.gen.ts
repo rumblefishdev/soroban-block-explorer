@@ -947,13 +947,26 @@ export type InvocationAppearanceItem = {
    * Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
    */
   caller_account?: string | null;
+  /**
+   * Root caller C-StrKey when a contract made the call; exactly one of the
+   * two callers is set.
+   */
+  caller_contract?: string | null;
   contract_id: string;
   created_at: string;
   ledger_sequence: number;
 };
 
 export type InvocationItem = {
+  /**
+   * Caller G-StrKey when an account made the call.
+   */
   caller_account?: string | null;
+  /**
+   * Caller C-StrKey when a contract made the call; exactly one of the two
+   * is set on an invocation.
+   */
+  caller_contract?: string | null;
   created_at: string;
   ledger_sequence: number;
   successful: boolean;
@@ -1613,7 +1626,15 @@ export type PaginatedEventItem = {
  */
 export type PaginatedInvocationItem = {
   data: Array<{
+    /**
+     * Caller G-StrKey when an account made the call.
+     */
     caller_account?: string | null;
+    /**
+     * Caller C-StrKey when a contract made the call; exactly one of the two
+     * is set on an invocation.
+     */
+    caller_contract?: string | null;
     created_at: string;
     ledger_sequence: number;
     successful: boolean;
@@ -2127,12 +2148,14 @@ export type PoolAssetLeg = {
   icon_url?: string | null;
   issuer?: string | null;
   /**
-   * What the pool holds of this leg: raw units as a decimal string (a JSON
-   * number is a browser double and a big reserve would lose digits). On the
-   * leg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to
-   * four legs. `null` when no source knows it — never `0`. Read from the
-   * latest classic snapshot; a soroban pool has none, so its legs are
-   * `null` until its own state is read.
+   * What the pool holds of this leg, in the asset's own units, as a decimal
+   * string (a JSON number is a browser double and a big reserve would lose
+   * digits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a
+   * pool has two to four legs. `null` when no source knows it — never `0`.
+   * A classic pool reads its latest snapshot. A soroban pool reads its
+   * newest `pool_state_changes` row, served for a native or classic leg
+   * (7 decimals by protocol); a soroban-token leg stays `null` until its
+   * scale is read from the token's metadata.
    */
   reserve?: string | null;
   /**

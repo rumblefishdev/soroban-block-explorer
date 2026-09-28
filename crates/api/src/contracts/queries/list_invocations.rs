@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::{millis_to_utc, resolve_accounts};
+use crate::common::ch::{millis_to_utc, resolve_accounts, resolve_contracts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::transactions::dto::TxListCursor;
 
@@ -18,6 +18,8 @@ pub struct ContractInvocationRow {
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
     pub caller_account: Option<String>,
+    /// Set instead of `caller_account` when a contract made the call (task 0487).
+    pub caller_contract: Option<String>,
     pub successful: bool,
 }
 
@@ -30,6 +32,7 @@ struct InvocationKeyRow {
     ledger_sequence: i64,
     application_order: i16,
     caller_id: Option<i64>,
+    caller_contract_id: Option<i64>,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -83,9 +86,10 @@ pub async fn fetch_contract_invocations(
     let driver_sql = format!(
         "SELECT m.ledger_sequence AS ledger_sequence, \
                 m.application_order AS application_order, \
-                m.caller_id AS caller_id \
+                m.caller_id AS caller_id, \
+                m.caller_contract_id AS caller_contract_id \
          FROM ( \
-            SELECT ledger_sequence, application_order, caller_id \
+            SELECT ledger_sequence, application_order, caller_id, caller_contract_id \
             FROM contract_activity \
             WHERE contract_id = ? \
               AND invocation_count > 0 \
@@ -134,16 +138,24 @@ pub async fn fetch_contract_invocations(
     );
     // Caller StrKeys resolve by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … ON caller.id = m.caller_id` (task 0345).
-    // Both reads key off `key_rows` alone, so they go out together (task 0446).
-    let (tx_rows, accounts) = tokio::join!(
+    // All reads key off `key_rows` alone, so they go out together (task 0446).
+    let (tx_rows, accounts, contracts) = tokio::join!(
         client.query(&page_sql).fetch_all::<TxMetaChRow>(),
         resolve_accounts(
             client,
             key_rows.iter().filter_map(|r| r.caller_id).collect()
         ),
+        resolve_contracts(
+            client,
+            key_rows
+                .iter()
+                .filter_map(|r| r.caller_contract_id)
+                .collect()
+        ),
     );
     let tx_rows = tx_rows?;
     let accounts = accounts?;
+    let contracts = contracts?;
 
     let mut tx_by_position: HashMap<(i64, i16), TxMetaChRow> =
         HashMap::with_capacity(tx_rows.len());
@@ -167,6 +179,10 @@ pub async fn fetch_contract_invocations(
             caller_account: key
                 .caller_id
                 .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            caller_contract: key
+                .caller_contract_id
+                .and_then(|id| contracts.get(&id).cloned())
                 .filter(|s| !s.is_empty()),
             successful: tx.successful,
         });

@@ -3135,6 +3135,10 @@
             "type": ["string", "null"],
             "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
           },
+          "caller_contract": {
+            "type": ["string", "null"],
+            "description": "Root caller C-StrKey when a contract made the call; exactly one of the\ntwo callers is set."
+          },
           "contract_id": {
             "type": "string"
           },
@@ -3158,7 +3162,12 @@
         ],
         "properties": {
           "caller_account": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Caller G-StrKey when an account made the call."
+          },
+          "caller_contract": {
+            "type": ["string", "null"],
+            "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
           },
           "created_at": {
             "type": "string",
@@ -3971,7 +3980,12 @@
               ],
               "properties": {
                 "caller_account": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Caller G-StrKey when an account made the call."
+                },
+                "caller_contract": {
+                  "type": ["string", "null"],
+                  "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
                 },
                 "created_at": {
                   "type": "string",
@@ -4552,7 +4566,7 @@
           },
           "reserve": {
             "type": ["string", "null"],
-            "description": "What the pool holds of this leg: raw units as a decimal string (a JSON\nnumber is a browser double and a big reserve would lose digits). On the\nleg, not as a `reserve_a` / `reserve_b` pair, because a pool has two to\nfour legs. `null` when no source knows it — never `0`. Read from the\nlatest classic snapshot; a soroban pool has none, so its legs are\n`null` until its own state is read."
+            "description": "What the pool holds of this leg, in the asset's own units, as a decimal\nstring (a JSON number is a browser double and a big reserve would lose\ndigits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a\npool has two to four legs. `null` when no source knows it — never `0`.\nA classic pool reads its latest snapshot. A soroban pool reads its\nnewest `pool_state_changes` row, served for a native or classic leg\n(7 decimals by protocol); a soroban-token leg stays `null` until its\nscale is read from the token's metadata."
           },
           "symbol": {
             "type": ["string", "null"],

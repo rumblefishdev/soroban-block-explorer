@@ -154,6 +154,10 @@ ca.caller_contract_id))`; both invocation lists return `caller_contract`
   fallback and was not exercised live.
 - **Frontend:** the transaction page does not render the invocation caller
   at all, so nothing there to fix; the field is on the wire for it.
+- **Merged** as [#517](https://github.com/rumblefishdev/soroban-block-explorer/pull/517)
+  (2026-09-28, 08:06 UTC), after a merge of `develop` resolved the conflict
+  with task 0366's `DataList` in `ContractInvocations.tsx` (both kept). Open:
+  deploy, then the example contract's tile on production.
 
 ## Watch out
 

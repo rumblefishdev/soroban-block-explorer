@@ -203,10 +203,10 @@ Contract details and interface.
   ledger (link), WASM hash, SAC badge if applicable
 - Contract interface — list of public functions with parameter names and types, allowing
   users to understand the contract's API without reading source code
-- Invocations tab — recent invocations table (function name, caller account, status,
-  ledger, timestamp)
+- Invocations tab — recent invocations table (function name, caller account or
+  contract, status, ledger, timestamp)
 - Events tab — recent events table (event type, topics, data, ledger)
-- Stats — total invocations count, unique callers
+- Stats — total invocations count, unique callers (accounts and contracts)
 
 #### NFTs (`/nfts`)
 
