@@ -2557,3 +2557,21 @@ ledger band would cut quiet soroban pools). **72 A** — W1 writes soroban
 pool operations into `pool_operation_amounts`, not a new
 `soroban_pool_trades`; the `amount Int64` width is decided when W1 starts
 (widening 990M rows is an operator mutation).
+
+**Total shares sit in the wrong soroban table (2026-09-28).** A classic
+snapshot row carries reserves and total shares together — both fields of one
+`LiquidityPoolEntry`. A soroban pool keeps reserves as history in
+`pool_state_changes` but total shares only as the current value in
+`pool_instance_state`, a one-row-per-pool table meant for the pool's
+relations (plane, share token). Yet for the pair and router families both
+come from the same instance write: newest state row and newest instance row
+share their ledger for 235 of 235 pair pools, 244 of 383 constant, 66 of 85
+stable, 40 of 49 concentrated, 3 of 3 elastic (the rest: instance rewrites
+that leave the reserves alone). Consequences: every read joins two tables;
+soroban total shares have no history; and the non-nullable column stores `0`
+for "no such key", which is why `served_total_shares` has to infer from the
+reserves (decision 110). The root fix is W2 reshaped: `total_shares
+Nullable(Int128)` on `pool_state_changes`, staged in the same pass as the
+reserves, history re-parsed, then dropped from `pool_instance_state`. After
+it the classic and soroban state rows have the same logical shape (pool,
+ledger, reserves, total shares), which is what a shared view or table needs.
