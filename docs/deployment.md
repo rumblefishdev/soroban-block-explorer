@@ -451,6 +451,20 @@ Frontend **content** is separate: `deploy-production-web`
   A drop before this deploy stops ingest on the next ledger: the earlier writer
   still inserts into both.
 
+- **NFT ownership by event location (task 0424), step 1 of that pattern.**
+  The indexer writes `nft_ownership_changes` and `nft_ownership_changes_pending`
+  beside `nft_ownership` and `nft_ownership_pending`. Create both on production
+  **before** the Compute deploy — without them the client refuses the insert on
+  every ledger that stages an NFT change. The command prints the statements;
+  run them through `chw`:
+
+  ```bash
+  awk '/CREATE TABLE IF NOT EXISTS nft_ownership_changes(_pending)? \(/,/^ORDER BY/' crates/db-clickhouse/schema/init.sql
+  ```
+
+  Then deploy Compute; then fill the history (task 0424's fill from
+  `soroban_events`). No pause; the readers still use the old tables.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and
