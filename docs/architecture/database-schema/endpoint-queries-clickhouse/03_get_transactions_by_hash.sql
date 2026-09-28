@@ -226,7 +226,8 @@ ORDER BY se.ledger_sequence, sc.contract_id, se.transaction_index, se.operation_
 --    with `contract_id`, so this reads the ledger's granules of the partition,
 --    as the old surrogate lookup did (2.1 M rows / 32 ms against 1.0 M /
 --    25 ms, measured on the same key shape). The API resolves the surrogates
---    to StrKeys by key seeks, not joins, and reads `caller_id` only.
+--    to StrKeys by key seeks, not joins; a contract caller resolves in the
+--    same `soroban_contracts` seek as the invoked contract (task 0487).
 SELECT
     ca.contract_id                          AS contract_surrogate,
     ca.caller_id,

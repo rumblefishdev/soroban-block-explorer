@@ -26,14 +26,14 @@
 --               `(ledger_sequence, application_order) IN (…)`. Never a join
 --               of the driver to an unpruned `transactions FINAL` (the
 --               read_rows-quota trap, CH Code: 201). Caller StrKeys resolve by
---               `accounts.id` bloom seek in the API.
+--               `accounts.id` / `soroban_contracts.id` seek in the API.
 -- Notes:
 --   • `invocation_count > 0` keeps the invoked pairs: `contract_activity`
 --     also holds pairs a transaction only touched (an operation event, an
 --     operation naming the contract), which count 0.
 --   • The caller is split across `caller_id` (an account) and
---     `caller_contract_id` (a contract), exactly one set on an invoked row.
---     The API reads `caller_id` only (task 0487 fixes that).
+--     `caller_contract_id` (a contract), exactly one set on an invoked row;
+--     the API returns either (`caller_account` / `caller_contract`, task 0487).
 --   • Before task 0586 this read `soroban_invocations_appearances`, keyed by
 --     the `transaction_id` surrogate — so a ledger's invocations came in hash
 --     order.
@@ -42,9 +42,9 @@
 -- key order; `LIMIT 1 BY` beside the LIMIT disables that (a SAC with 10 M
 -- weekly invocations: 22.3 M rows read flat, 4.4 M nested, 2026-09-25 —
 -- 199 freshly filled parts; the invocations table read 0.6 M over 57).
-SELECT m.ledger_sequence, m.application_order, m.caller_id
+SELECT m.ledger_sequence, m.application_order, m.caller_id, m.caller_contract_id
 FROM (
-    SELECT ledger_sequence, application_order, caller_id
+    SELECT ledger_sequence, application_order, caller_id, caller_contract_id
     FROM contract_activity
     WHERE contract_id = $1
       AND invocation_count > 0
