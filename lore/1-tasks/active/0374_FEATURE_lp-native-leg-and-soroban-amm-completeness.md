@@ -2507,3 +2507,84 @@ reserve, 770/775 soroban pools a reserve on every leg (was 705). TVL is
 unchanged for pools with a token leg: the list's pricing knows native and
 classic legs only. CH-gated reserves test extended (18-decimal token and an
 unpublished one): green, red with token legs unscaled.
+
+### Can classic and soroban pools share more tables? (2026-09-28)
+
+Owner asked whether plain views, or merging tables, could remove the per-kind
+split. Inventory on production:
+
+| Fact             | Classic                                                                                                   | Soroban                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| registry         | `liquidity_pools` (shared, 74k rows)                                                                      | same                                                                   |
+| state per ledger | `liquidity_pool_snapshots` (333M rows, 7.0 GiB; `Decimal(38,7)` pair + `total_shares` + `gross_volume_a`) | `pool_state_changes` (5.1M rows, 90 MiB; `Array(Int128)` + `plane_id`) |
+| current instance | —                                                                                                         | `pool_instance_state` (822 rows: plane, share token, total shares)     |
+| operations       | `pool_operation_amounts` (990M rows; net amount per op per asset, `Int64`)                                | none (W1)                                                              |
+| holders          | `lp_positions` (114k rows)                                                                                | share-token rows in `balances`                                         |
+
+- **A plain view over both state tables works.** `EXPLAIN ESTIMATE` of an
+  `argMax` over `liquidity_pool_snapshots UNION ALL pool_state_changes`
+  (classic pair turned into a raw `Int128` array) filtered on one pool reads
+  exactly the sum of the two direct seeks — 532,581 + 49,445 rows for a busy
+  classic pool, 321,304 + 123,099 for a busy soroban pool. The pool filter
+  reaches both branches, so nothing is scanned whole.
+- **A physical merge of the state tables is not worth it now.** It is a
+  333M-row rebuild, a classic writer change, and two columns without a soroban
+  counterpart (`gross_volume_a` belongs to operations; soroban total shares
+  have no history), for readers that the view already unifies.
+- **Operations can share a table.** W1 fits `pool_operation_amounts`'s key
+  (pool, ledger, application order, operation, asset) and its net-per-op
+  meaning; the blocker is `amount Int64`. 0 of 843,058 soroban trades since
+  ledger 64,000,000 overflow it, but an 18-decimal leg can (a reserve of
+  1.28e24 is live).
+- **Not mergeable:** `pool_instance_state` into `liquidity_pools` (different
+  writer and clock; a whole-row RMT would clobber the registry — decided
+  2026-08-27).
+
+Decisions (owner, 2026-09-28): **71 B** — no `pool_state` view (it would save
+a few lines and cost a production DDL, plus a per-branch band condition,
+since the classic ±10k ledger band would cut quiet soroban pools). **72 A** — W1 writes soroban
+pool operations into `pool_operation_amounts`, not a new
+`soroban_pool_trades`; the `amount Int64` width is decided when W1 starts
+(widening 990M rows is an operator mutation).
+
+**Total shares sit in the wrong soroban table (2026-09-28).** A classic
+snapshot row carries reserves and total shares together — both fields of one
+`LiquidityPoolEntry`. A soroban pool keeps reserves as history in
+`pool_state_changes` but total shares only as the current value in
+`pool_instance_state`, a one-row-per-pool table meant for the pool's
+relations (plane, share token). Yet for the pair and router families both
+come from the same instance write: newest state row and newest instance row
+share their ledger for 235 of 235 pair pools, 244 of 383 constant, 66 of 85
+stable, 40 of 49 concentrated, 3 of 3 elastic (the rest: instance rewrites
+that leave the reserves alone). Consequences: every read joins two tables;
+soroban total shares have no history; and the non-nullable column stores `0`
+for "no such key", which is why `served_total_shares` has to infer from the
+reserves (decision 110). The root fix is W2 reshaped: `total_shares
+Nullable(Int128)` on `pool_state_changes`, staged in the same pass as the
+reserves, history re-parsed, then dropped from `pool_instance_state`. After
+it the classic and soroban state rows have the same logical shape (pool,
+ledger, reserves, total shares), which is what a shared view or table needs.
+
+**One query for both kinds' reads — built and withdrawn (2026-09-28,
+decisions 65, 67, 86 → 96 A).** PR #526 moved the soroban reserves and stored
+total shares into the list and detail queries as LEFT JOINs beside the
+classic snapshot, and took the share token's scale through the shared token
+resolver instead of a join through `soroban_contracts` (a whole-table scan
+per request: 152,397 of 154,364 rows, filter on `id`, sort key
+`contract_id`). Responses were identical against production (775 of 775
+soroban pools). It was closed unmerged: the code did not get simpler (+176
+−154) — SQL fragments templated with `.replace` inside `format!`,
+soroban-only fields on every pool row, and five hops to scale one number.
+The complexity is the data model's (total shares apart from the reserves,
+`0` for a missing key: task 0590; guessed decimals in the resolver: task
+0584); the reads simplify once those land. Branch
+`refactor/0374-soroban-reserves-one-query` keeps the attempt.
+
+**Token decimals from the newest metadata row (2026-09-28, decision 87 A,
+#518).** `argMax(decimals, version)` skips a `NULL` argument, so a newest
+metadata version without `decimals` fell back to an older version's value
+instead of reading as unpublished; `fetch_token_decimals` reads
+`argMax(tuple(decimals), version).1`. No token on production differs today.
+The CH test that pins it stops merges on `soroban_contract_metadata` (#530):
+a background merge would leave only the newer row and let the old query
+pass. Red with plain `argMax`: the unpublished leg reads `Some("0.0000999")`.

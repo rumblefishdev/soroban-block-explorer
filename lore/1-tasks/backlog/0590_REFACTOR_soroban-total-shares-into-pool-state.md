@@ -96,5 +96,6 @@ Nullable(Int128) DEFAULT NULL`. `NULL` = the pool keeps no such key.
 - [ ] History re-parsed; coverage measured per family
 - [ ] Chain check: newest total equals `get_total_shares()` / `total_supply()` on a sample of every family, concentrated included
 - [ ] API reads the total from the state row; `served_total_shares` has no reserve inference; no `soroban_contracts` scan
+- [ ] The soroban read is plain: one state-row join carrying reserves and total, no SQL templated by string replacement, no soroban-only special cases on the classic row (the rewiring alone was tried in PR #526 and withdrawn — it moved the complexity instead of removing it)
 - [ ] `pool_instance_state.total_shares` dropped (struct, `init.sql`, production)
 - [ ] Docs: database-schema, indexing-pipeline, backend overview, ADR 0058 amended
