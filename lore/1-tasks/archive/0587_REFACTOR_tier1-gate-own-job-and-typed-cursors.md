@@ -2,7 +2,7 @@
 id: '0587'
 title: 'REFACTOR: Tier-1 endpoint-query gate in its own CI job, with typed cursor checks'
 type: REFACTOR
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0478', '0480']
 tags: [ci, clickhouse, docs, effort-small, priority-low]
@@ -15,6 +15,12 @@ history:
       Spawned from the review of 0478's PR. Two points were deferred there
       because they change CI structure and add checks, a separate review
       sitting from the SQL repair.
+  - date: '2026-09-28'
+    status: completed
+    who: karolkow
+    note: >
+      Superseded by 0588, not implemented: the gate it extends was not merged,
+      because the SQL reference set is being retired.
 ---
 
 # REFACTOR: Tier-1 endpoint-query gate in its own CI job, with typed cursor checks
