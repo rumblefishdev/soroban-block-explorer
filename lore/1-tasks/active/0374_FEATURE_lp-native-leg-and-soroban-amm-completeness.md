@@ -2379,7 +2379,7 @@ sections say "Not indexed yet" instead of their empty states.
 | --- | -------------------------------------------------------------------------------------------------- | ---------- |
 | 5   | Soroban participants = share-token holders from `balances`; drop the 7-day window                  | read       |
 | W1  | Stage Soroban pool operations (swap, deposit, withdraw) with amounts + backfill; per-ledger volume | write      |
-| W2  | `total_shares` nullable, concentrated pools' shares key, stored `pool_family`, instance backfill   | write      |
+| W2  | moved to task 0590 (2026-09-28): `total_shares` into `pool_state_changes` as nullable history      | write      |
 | 4d  | Soroban chart: reserves + W1 volume; volume rule moves into `PoolPriceContext` (109 A)             | read       |
 | 7   | Soroban activity from W1                                                                           | read       |
 | 6   | Drop the pair columns (deployment window)                                                          | write      |
@@ -2391,7 +2391,7 @@ the activity column (0581) stay where they are.
 **Outside the pools** (same sweep): guessed 7 decimals in account balances,
 balance changes and asset supply show wrong numbers today (USST 10^11 too
 large); task 0473 covers only the parser, not the rendering — decision 119
-pending. Merged accounts shown open: 0321. `resolves_on_asset_page`: 0542.
+moved to task 0584 (2026-09-28, decision 92 B). Merged accounts shown open: 0321. `resolves_on_asset_page`: 0542.
 Smaller defaults that render a plausible wrong value: task 0584 (127 A).
 The read-only user's refused `join_use_nulls`, behind most `nullIf` /
 `toNullable` tricks, is an infra setting left to the operator.
@@ -2490,3 +2490,20 @@ column in the list — while the detail page showed no TVL figure at all. The
 KPI strip's first cell is now TVL (the detail endpoint already returned it);
 the list's Total shares column is gone; the Summary card keeps the value.
 Shipped inside #514, which makes the value appear for soroban pools.
+
+### 26b — soroban-token legs scaled by their published decimals (2026-09-28)
+
+Branch `feat/0374-soroban-token-leg-reserves`, stacked on 26c (PR held until
+#511 merges — the stack is at its two-PR limit). Measured first: 100
+soroban-token legs in 68 pools (40 tokens); 96 publish `decimals` in
+`soroban_contract_metadata` (6, 7, 8, 9, 18), 4 publish none. Chain, 12
+pools with such legs across constant, stable, concentrated and pair: token
+order 12/12 equal to our legs; reserves 10/12 equal (2 traded after our
+row); published decimals 13/13 equal to the token's `decimals()`. The one
+sampled token without metadata answers `decimals() = 7` on chain — a
+metadata gap on our side, not a missing scale; its leg stays `null` rather
+than assume. Local API against production: 96/100 token legs carry a
+reserve, 770/775 soroban pools a reserve on every leg (was 705). TVL is
+unchanged for pools with a token leg: the list's pricing knows native and
+classic legs only. CH-gated reserves test extended (18-decimal token and an
+unpublished one): green, red with token legs unscaled.

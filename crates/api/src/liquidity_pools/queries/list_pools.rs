@@ -10,7 +10,9 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
-use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
+use super::soroban_reserves::{
+    fetch_raw_reserves, fetch_token_decimals, leg_reserves, soroban_token_contracts,
+};
 use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolRow, fee_percent_str, leg_rows};
@@ -79,6 +81,12 @@ struct PoolListChRow {
 /// Measured on production 2026-09-24: for 699 of 770 soroban pools the real
 /// activity is NEWER than the column, by 250 days on average and 801 at worst,
 /// and no soroban pool reached the first 5,000 rows of the list.
+///
+/// A precomputed MV rather than `max()` over `pool_state_changes` per request:
+/// ClickHouse re-evaluates a `WITH` subquery at every reference, and the list
+/// query references its `page` CTE six times, so the per-request max was paid
+/// at each reference — 37–45M rows per page against 8–10M with the MV
+/// (measured 2026-09-24).
 ///
 /// `greatest` rather than a per-kind branch: a classic pool has no
 /// `pool_activity` row, so the join misses and the column wins — read live, it
@@ -343,6 +351,12 @@ pub async fn fetch_pool_list(
         .collect();
     let soroban_raw = fetch_raw_reserves(client, &soroban_ids).await?;
     let soroban_shares = fetch_total_shares(client, &soroban_ids).await?;
+    let soroban_legs = rows
+        .iter()
+        .filter(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind) == domain::PoolKind::Soroban)
+        .flat_map(|r| r.legs.iter());
+    let token_decimals =
+        fetch_token_decimals(client, &soroban_token_contracts(soroban_legs, &identities)).await?;
 
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
     // endpoint (latest reserves × last 1h close per leg; both legs required)
@@ -392,7 +406,7 @@ pub async fn fetch_pool_list(
                     r.total_shares.clone(),
                 ),
                 domain::PoolKind::Soroban => (
-                    leg_reserves(&r.legs, &identities, raw),
+                    leg_reserves(&r.legs, &identities, &token_decimals, raw),
                     served_total_shares(soroban_shares.get(&r.pool_id_hex), raw),
                 ),
             };

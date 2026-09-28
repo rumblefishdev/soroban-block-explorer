@@ -1911,25 +1911,27 @@ The schema should continue to prioritize those explorer patterns over generic an
 
 #### Canonical query references
 
-Each `/v1/*` list / detail endpoint has a canonical SQL projection committed
-in this repo:
+The SQL of each `/v1/*` list / detail endpoint is the Rust query function
+that runs it, in `crates/api/src/<module>/queries…`
+([`crates/api/`](../../../crates/api)), checked against the canonical schema
+by that module's ClickHouse-backed tests (`decode_smoke` / `ch_tests`; gated on
+`CH_URL`, not yet run in CI — task 0480). The exact executed text is in
+`system.query_log`.
 
-- [`endpoint-queries-clickhouse/`](./endpoint-queries-clickhouse/) — **ClickHouse**
-  canonical source of truth for the live API handlers in
-  [`crates/api/`](../../../crates/api)
-  ([ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md),
-  tasks 0204 / 0206 / 0207). Every endpoint enumerated in
+- Per [ADR 0060](../../../lore/2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md)
+  there is no separate copy of that SQL: the hand-kept ClickHouse reference set
+  (task 0207) drifted from the Rust and was retired in task 0588. Every endpoint
+  enumerated in
   [`backend-overview.md §6.2 Endpoint Inventory`](../backend/backend-overview.md#62-endpoint-inventory)
-  maps 1:1 to a `NN_*.sql` file here.
+  has its query in the matching module.
   Field-allocation per [ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule-list-vs-detail.md);
   list-endpoint completeness verified by audit task 0197
   (see [`docs/audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md`](../../audits/2026-05-13-0197-step0/2026-05-13-list-endpoint-completeness.md)).
 
-The retired PostgreSQL reference set (`endpoint-queries/`) was removed with the
-PG backend (task 0244).
+The retired PostgreSQL reference set was removed with the PG backend (task 0244).
 
-When editing a `/v1/*` endpoint behaviour, update the CH canonical SQL in the
-same PR.
+When editing a `/v1/*` endpoint behaviour, keep the notes beside its Rust query
+true in the same PR.
 
 ### 7.3 Raw vs Derived Storage
 

@@ -1,4 +1,4 @@
-//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{06,07}_*.sql`.
+//! Wire shapes for the accounts endpoints; the SQL behind them is in `accounts::queries`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

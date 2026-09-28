@@ -116,7 +116,7 @@ fn map_item(r: AccountListRow) -> AccountListItem {
 // ---------------------------------------------------------------------------
 
 /// Account detail — header from `accounts` + balances from
-/// `account_balances_current` (canonical 06 statements A + B).
+/// `balances` (`queries::fetch_account` + `queries::fetch_balances`).
 #[utoipa::path(
     get,
     path = "/accounts/{account_id}",

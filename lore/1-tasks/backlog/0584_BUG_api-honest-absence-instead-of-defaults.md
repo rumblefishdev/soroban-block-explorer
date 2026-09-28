@@ -15,6 +15,13 @@ history:
       Spawned from 0374 (decision 127 A): the band-aid sweep of the API found
       small read-side defaults that turn a missed lookup into a plausible
       value. None is frequent; each is wrong when it fires.
+  - date: '2026-09-28'
+    status: backlog
+    who: karolkow
+    note: >
+      Widened (0374 decision 92 B): the guessed 7 decimals for a soroban token
+      that publishes none, on account balances, balance changes and asset
+      supply, moves here from 0374 decision 119.
 ---
 
 # BUG: API renders defaults where a lookup missed
@@ -43,13 +50,28 @@ production):
   is written once (`stage.rs`, config arm), while the contract can change it.
   Measure first whether any live fee differs from the stored one; only then
   decide between a versioned fee and nothing.
+- **Guessed 7 decimals for a soroban token that publishes none** —
+  `accounts/queries.rs` (`coalesce(m.decimals, 7)`, ~line 488), and the same
+  default behind balance changes and asset supply. The amount is served raw
+  with `decimals`, so a token with a different scale renders off by a power of
+  ten (0374 notes a USST amount 10^11 too large). 82 tokens have no `decimals`
+  in their newest metadata row (production, 2026-09-28). The pool reads
+  already serve `null` for such a leg (`soroban_reserves::leg_reserves`, PR
+  #518); these surfaces should do the same: `decimals: null`, amount shown as
+  "—" or unscaled with a marker, never scaled by 7. Check task 0473 first — its
+  patch for a third metadata layout may shrink the 82. The shared resolver
+  (`common/asset_identity.rs`, ~lines 190–199) also reads
+  `argMax(decimals, version)`, which skips a `NULL` argument and so returns an
+  older version's decimals when the newest row has none; the pool read fixed
+  the same thing with `argMax(tuple(decimals), version).1` (PR #518).
 
 Out of scope: `join_use_nulls` for the API's read-only user (an operator
-setting), the guessed 7 decimals (0374 decision 119), merged accounts (0321).
+setting), merged accounts (0321).
 
 ## Acceptance Criteria
 
 - [ ] Each read above returns `null`/`None` on a miss; the frontend shows "—"
 - [ ] `decode_pool_kind` errors on an unknown kind instead of guessing Classic
 - [ ] Config-factory fee drift measured on production; outcome recorded here
+- [ ] No read scales a soroban token amount by an assumed 7; `decimals` is `null` where the token publishes none, and the frontend does not scale it
 - [ ] API types regenerated; docs updated where a field became nullable

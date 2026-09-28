@@ -126,7 +126,7 @@ fn nft_event_type_name(event_type: i16) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// List — GET /v1/nfts (canonical 15)
+// List — GET /v1/nfts
 // ---------------------------------------------------------------------------
 
 /// SELECT column order MUST match the projection in [`fetch_list`] (positional
@@ -300,7 +300,7 @@ pub async fn fetch_list(
 }
 
 // ---------------------------------------------------------------------------
-// Detail — GET /v1/nfts/{contract_id}/{token_id} (canonical 16)
+// Detail — GET /v1/nfts/{contract_id}/{token_id}
 // ---------------------------------------------------------------------------
 
 /// SELECT column order MUST match [`fetch_by_composite`] (positional decode).
@@ -423,7 +423,7 @@ pub async fn nft_exists(
 }
 
 // ---------------------------------------------------------------------------
-// Transfers — GET /v1/nfts/{contract_id}/{token_id}/transfers (canonical 17)
+// Transfers — GET /v1/nfts/{contract_id}/{token_id}/transfers
 // ---------------------------------------------------------------------------
 
 /// SELECT column order MUST match [`fetch_transfers`] (positional decode).
@@ -495,7 +495,7 @@ pub async fn fetch_transfers(
     // (the previous owner is the older event = the FOLLOWING row in DESC
     // order); only the page ORDER BY + cursor comparator swap on Prev, and
     // `finalize_page` reverses Prev rows for presentation — same contract as
-    // the PG query (`17_get_nfts_transfers.sql`).
+    // the retired PG query.
     //
     // CH has NO SQL-standard `LEAD()` — it is `leadInFrame()`, and its DEFAULT
     // frame (`RANGE … CURRENT ROW`) excludes the following row, so it would

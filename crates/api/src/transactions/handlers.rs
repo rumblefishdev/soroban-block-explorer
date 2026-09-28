@@ -141,8 +141,7 @@ pub async fn list_transactions(
     // Pure DB-only mapping — no archive XDR fetch. Memo / heavy fields
     // belong on the transaction detail endpoint (E3) inside the E3 heavy
     // block, not in the list response. Keeping the list path archive-free
-    // matches canonical SQL 02's `Data sources: DB-only` contract and
-    // avoids an N-fan-out fetch per page.
+    // keeps it DB-only and avoids an N-fan-out fetch per page.
     let data: Vec<TransactionListItem> = rows
         .into_iter()
         .map(|row| TransactionListItem {

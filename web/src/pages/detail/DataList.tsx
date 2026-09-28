@@ -6,9 +6,32 @@ import {
   QueryErrorState,
   TableEmptyState,
   type TableEmptyKind,
-  TableSkeleton,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
+
+/** The fields of the page's query DataList reads — a `useQuery` result fits. */
+export interface DataListQuery {
+  isLoading: boolean;
+  /**
+   * `true` while a page change or filter change is fetching new data.
+   * `keepPreviousData` keeps the old rows + cursors around, but we replace the
+   * body with the skeleton so the user sees the table is reloading. Not the
+   * same as `isLoading` (first load, no data yet).
+   */
+  isPlaceholderData: boolean;
+  isError: boolean;
+  error: unknown;
+  refetch: () => unknown;
+}
+
+/** The current page's rows and its pager — a `usePagedRows` result fits. */
+export interface DataListPager<T> {
+  rows: readonly T[];
+  canPrev: boolean;
+  canNext: boolean;
+  handlePrev: () => void;
+  handleNext: () => void;
+}
 
 /**
  * The unfiltered empty state — exactly one of: the standard `TableEmptyState`
@@ -23,45 +46,35 @@ type EmptyStateProps =
       renderEmpty: () => ReactNode;
     };
 
-export type DataListProps<T> = EmptyStateProps & {
-  filters?: ReactNode;
-  columnCount: number;
-  isLoading: boolean;
-  /**
-   * `true` while a page change or filter change is fetching new data (React
-   * Query `isPlaceholderData`). `keepPreviousData` keeps the old rows + cursors
-   * around, but we replace the body with the skeleton so the user sees the
-   * table is reloading. Not the same as `isLoading` (first load, no data yet).
-   */
-  isReloading?: boolean;
-  isError: boolean;
-  error?: unknown;
-  onRetry?: () => void;
-  /** Vertical padding of the error state. */
-  errorPy?: number;
-  rows: readonly T[];
+/** Filtered lists name what they list, for "No {emptyNoun} match your filters". */
+type FilterStateProps =
+  | {
+      hasActiveFilters?: undefined;
+      emptyNoun?: undefined;
+      onClearFilters?: undefined;
+    }
+  | {
+      hasActiveFilters: boolean;
+      emptyNoun: string;
+      onClearFilters?: () => void;
+    };
 
-  renderTable: (rows: readonly T[]) => ReactNode;
-
-  /**
-   * Render the loading skeleton using the REAL table in its `loading` mode
-   * (`<XxxTable loading />`) — same headers, same column layout, same row
-   * height — so the skeleton is the same height as the populated table at every
-   * viewport (responsive, no jump). Falls back to the generic `TableSkeleton`
-   * when not provided.
-   */
-  renderSkeleton?: () => ReactNode;
-
-  hasActiveFilters?: boolean;
-  emptyNoun: string;
-  onClearFilters?: () => void;
-  paginationCaption?: string;
-  canPrev: boolean;
-  canNext: boolean;
-  onPrev: () => void;
-  onNext: () => void;
-  skeletonRows?: number;
-};
+export type DataListProps<T> = EmptyStateProps &
+  FilterStateProps & {
+    filters?: ReactNode;
+    query: DataListQuery;
+    pager: DataListPager<T>;
+    /** Vertical padding of the error state. */
+    errorPy?: number;
+    /**
+     * Render the table. On first load and while reloading it is called with no
+     * rows and `loading: true`: the REAL table in its `loading` mode — same
+     * headers, same column layout, same row height — so the skeleton is the
+     * same height as the populated table at every viewport (no jump).
+     */
+    renderTable: (rows: readonly T[], state: { loading: boolean }) => ReactNode;
+    paginationCaption?: string;
+  };
 
 /**
  * A paginated list without a frame: filters, then exactly one of skeleton /
@@ -71,16 +84,10 @@ export type DataListProps<T> = EmptyStateProps & {
  */
 export function DataList<T>({
   filters,
-  columnCount,
-  isLoading,
-  isReloading = false,
-  isError,
-  error,
-  onRetry,
+  query,
+  pager,
   errorPy = 8,
-  rows,
   renderTable,
-  renderSkeleton,
   hasActiveFilters = false,
   emptyKind,
   emptyPy,
@@ -88,33 +95,22 @@ export function DataList<T>({
   emptyNoun,
   onClearFilters,
   paginationCaption = 'Latest results',
-  canPrev,
-  canNext,
-  onPrev,
-  onNext,
-  // Default to a full list page (all list pages use `PAGE_SIZE = 20`) so the
-  // skeleton matches the populated table's height — no jump on the data ↔
-  // skeleton swap during pagination / filter changes. A page with a different
-  // size passes `skeletonRows` explicitly.
-  skeletonRows = 20,
 }: DataListProps<T>) {
   let body: ReactNode;
-  if (isLoading || isReloading) {
-    // Skeleton on first load (`isLoading`) AND while a page/filter change is
-    // fetching (`isReloading` = `isPlaceholderData`), so the user sees the
-    // table is reloading rather than the old rows sitting silently.
-    // Prefer `renderSkeleton` (the real table in `loading` mode) — it matches
-    // the populated table's height at every viewport. The generic
-    // `TableSkeleton` fallback is height-matched on wide screens but can drift
-    // when headers wrap on narrow ones.
-    body = renderSkeleton ? (
-      renderSkeleton()
-    ) : (
-      <TableSkeleton rows={skeletonRows} columns={columnCount} />
+  if (query.isLoading || query.isPlaceholderData) {
+    // Skeleton on first load AND while a page/filter change is fetching, so
+    // the user sees the table is reloading rather than the old rows sitting
+    // silently.
+    body = renderTable([], { loading: true });
+  } else if (query.isError) {
+    body = (
+      <QueryErrorState
+        error={query.error}
+        onRetry={() => void query.refetch()}
+        py={errorPy}
+      />
     );
-  } else if (isError) {
-    body = <QueryErrorState error={error} onRetry={onRetry} py={errorPy} />;
-  } else if (rows.length === 0) {
+  } else if (pager.rows.length === 0) {
     if (hasActiveFilters) {
       body = (
         <EmptyState
@@ -137,7 +133,7 @@ export function DataList<T>({
       body = <TableEmptyState kind={emptyKind} py={emptyPy} />;
     }
   } else {
-    body = renderTable(rows);
+    body = renderTable(pager.rows, { loading: false });
   }
 
   return (
@@ -146,10 +142,10 @@ export function DataList<T>({
       <Box>{body}</Box>
       <PaginationControls
         caption={paginationCaption}
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={onPrev}
-        onNext={onNext}
+        canPrev={pager.canPrev}
+        canNext={pager.canNext}
+        onPrev={pager.handlePrev}
+        onNext={pager.handleNext}
       />
     </>
   );

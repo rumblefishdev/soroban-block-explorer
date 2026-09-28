@@ -8,7 +8,9 @@ use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
-use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
+use super::soroban_reserves::{
+    fetch_raw_reserves, fetch_token_decimals, leg_reserves, soroban_token_contracts,
+};
 use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
@@ -134,13 +136,15 @@ pub async fn fetch_pool_by_id(
         ),
         domain::PoolKind::Soroban => {
             let ids = [r.pool_id_hex.as_str()];
-            let (raw, shares) = futures::try_join!(
+            let tokens = soroban_token_contracts(&r.legs, &identities);
+            let (raw, shares, token_decimals) = futures::try_join!(
                 fetch_raw_reserves(client, &ids),
                 fetch_total_shares(client, &ids),
+                fetch_token_decimals(client, &tokens),
             )?;
             let raw = raw.get(&r.pool_id_hex).map_or(&[][..], Vec::as_slice);
             (
-                leg_reserves(&r.legs, &identities, raw),
+                leg_reserves(&r.legs, &identities, &token_decimals, raw),
                 served_total_shares(shares.get(&r.pool_id_hex), raw),
             )
         }

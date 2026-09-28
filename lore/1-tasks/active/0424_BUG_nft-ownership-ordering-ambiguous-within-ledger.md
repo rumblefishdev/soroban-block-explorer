@@ -99,9 +99,10 @@ contracts, from ledger 51,827,994. No storage gain — the step is what lets
   in every protocol (only transaction-level events without a stage lack one).
 - `consecutive_mint` expands one event into many rows with one id — the key
   keeps `token_id`.
-- Readers: the transfers tab keys `(ledger_sequence, event_order)` and its
-  `LIMIT 1 BY` collapses distinct same-ledger rows (every token counts from
-  0); `accounts/balance_changes.rs` joins on `transaction_id` and infers the
+- Readers: the transfers tab keys `(ledger_sequence, event_order)` —
+  **corrected 2026-09-28:** it reads ONE token, whose counter is distinct
+  within a ledger, so its `LIMIT 1 BY` does not collapse distinct rows (the
+  first map said it did); `accounts/balance_changes.rs` joins on `transaction_id` and infers the
   moved pieces from the owner timeline; `event_order` is on the wire
   (`NftTransferItem`) and in the frontend row key.
 - Promotion `_pending` → live is `INSERT … SELECT *`
@@ -153,6 +154,67 @@ write, fill, readers, stop the old writes, drop.
   the new rows, refusal without an id); `db-clickhouse` all tests pass on a
   local ClickHouse 26.3 (the G9 e2e writes and reads the location);
   `xdr-parser`, `backfill-runner`, `indexer`, `api` 1,294 tests pass.
+- **#521 merged; PR 1 opened** (2026-09-28) as
+  [#523](https://github.com/rumblefishdev/soroban-block-explorer/pull/523),
+  base `develop`, no `/code-review` (thread 300 B).
+
+**NFT task sweep** (2026-09-28, read-only; 18 tasks) — what rides with this
+work:
+
+- **0497's mint ledger moves in PR 3** (not optional): `/nfts` derives
+  `minted_at_ledger` from `nft_ownership`; the PR 4 drop would break it.
+- **0542's admin-as-owner fix stays in 0542** (thread 301 B): a
+  `[mint, admin, to]` mint stores the admin as owner (`nft.rs` `extract_args`,
+  `>=` then the first address) — 46 events over 5 of our collections. The
+  PR 2 fill copies today's behaviour; 0542's fix then re-derives it.
+- **0376's contract owners** — its own small PR right after PR 3 (thread
+  303 A): 31% of NFT owners are contracts and the list resolves owners
+  through `accounts` only (0376's figure, 2026-09-08).
+- Unblocked by this task, later: 0558 (token id on `asset_transfers`),
+  0415's re-check of the 88 same-ledger tokens.
+- Housekeeping (304 A): 0529 and 0531 (already `completed`) and 0259
+  (closed, its check passed) moved to archive.
+
+- **PR 1 review fix** (2026-09-28, `38040973`, pushed to #523): the change's
+  `application_order` now comes from the ledger's transaction order
+  (`app_order_by_hash`), as `soroban_events` stages its rows — not from the
+  rpc id's `transaction_index` through an `i16` conversion (ADR 0059 keeps the
+  two apart). The routing test gives the id a `transaction_index` that differs
+  from the position, pinning the source.
+- **PR 2 (fill)** — branch `feat/0424-nft-ownership-changes-fill`, local,
+  stacked on #523: `a31bfc80` — `backfill-runner nft-ownership-fill`: the
+  collections' contract events read back from `soroban_events`, run through
+  `detect_nft_events` → `extract_nft_ownership_events`, located as the live
+  writer does, routed by today's verdict; `--dry-run` is the gate (multiset
+  against the old tables on contract, token, ledger, owner, type). `b572c4ed`
+  — `backfills.md`. **Dry run on production (read-only, 2026-09-28): 31,093
+  events → 23,540 hot + 521 pending = the old tables' 23,540 + 521,
+  `only_old=0 only_new=0`.** Every located key is distinct (a shared key would
+  have collapsed and shown in `only_old`). Tests: routing by verdict, position
+  from the row, one `consecutive_mint` under one id, bad stored JSON is an
+  error, the multiset difference.
+- **PR 2 opened** (2026-09-28):
+  [#525](https://github.com/rumblefishdev/soroban-block-explorer/pull/525),
+  draft, stacked on #523.
+- **PR 3 (readers)** — branch `feat/0424-nft-ownership-changes-readers`,
+  local, stacked on #523: `87d8f1ce` — transfers tab on
+  `nft_ownership_changes` (keyset and `LIMIT 1 BY` on the location,
+  `transactions` joined on the position); `NftTransferItem` carries
+  `application_order` / `operation_index` / `event_index` in place of
+  `event_order` (294 A), the cursor the same (an old cursor fails to decode →
+  400); mint ledger on `/nfts` and the detail from the new table (0497's
+  reader); `balance_changes` names pieces by `(ledger_sequence,
+application_order)` — `TxKey.transaction_id` and the account page's
+  `t.id` read are gone; the SPA keys transfer rows by the location; API types
+  regenerated. New smoke `same_ledger_changes_come_in_chain_order` (newest
+  first by location, each `from_account` the previous change's owner).
+  `041b2d2f` — canonical SQL 15–17, FINAL table, deployment step 2 (after the
+  fill's gate, with the SPA). Checks: clippy clean; `api` 675 tests pass;
+  NFT smokes on a local ClickHouse seeded with one token changed twice in one
+  ledger (they skip on an empty one): 5 pass, the new one ran; web 397 tests,
+  typecheck, lint clean. Not exercised: `resolve_moved_pieces` against data
+  (runs only on a page with an NFT movement) — the new tables do not exist
+  on production yet.
 
 ## Implementation
 

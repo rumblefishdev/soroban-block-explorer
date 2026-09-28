@@ -9,13 +9,11 @@
 //! - **No `transactions.created_at` on CH.** The API timestamp is the
 //!   parent ledger `closed_at`, joined in from `ledgers` (ADR 0044 §5.2).
 //! - **`transactions.id` is a deterministic hash surrogate**, not a
-//!   `BIGSERIAL`. It is a stable, unique tie-break for the global list
-//!   keyset `(ledger_sequence, id)` (canonical SQL 02), but it is NOT
-//!   apply-order within a ledger — callers that need on-chain order use
-//!   `application_order`.
+//!   `BIGSERIAL`, and it is NOT apply-order within a ledger. Every list keys
+//!   on the position `(ledger_sequence, application_order)` (ADR 0059).
 //! - **`transaction_operations` has no `id` surrogate** (PR #175). The
 //!   per-op `appearance_id` is the operation's 1-based position,
-//!   `operation_index + 1` (canonical SQL 03 statement C).
+//!   `operation_index + 1` (ADR 0059).
 //! - **`soroban_events` is the full-payload table** (one row per event). The
 //!   archive-unavailable fallback groups per (contract, ledger) to emit one
 //!   appearance row per contract — the same wire shape as the PG appearance

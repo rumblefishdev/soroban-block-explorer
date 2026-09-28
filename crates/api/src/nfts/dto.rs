@@ -1,5 +1,5 @@
 //! Request and response DTOs for the NFT endpoints.
-//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{15,16,17}_*.sql`.
+//! The SQL behind these shapes is in `nfts::queries`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,8 +26,7 @@ pub struct ListParams {
 }
 
 /// One NFT row. Same shape on `GET /v1/nfts` list rows and as the
-/// flattened core of `GET /v1/nfts/:id` (which adds `metadata`). Pinned
-/// to canonical SQL `15_get_nfts_list.sql` for the column projection.
+/// flattened core of `GET /v1/nfts/:id` (which adds `metadata`).
 ///
 /// The numeric surrogate `id` was dropped (task 0243 NFT slice): the
 /// external NFT identity is the composite `(contract_id, token_id)` per
@@ -51,8 +50,7 @@ pub struct NftItem {
 }
 
 /// Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are
-/// flattened in (same shape as the list-endpoint row, see
-/// `15_get_nfts_list.sql` for the on-the-wire columns), plus a
+/// flattened in (same shape as the list-endpoint row), plus a
 /// `metadata` field fetched at request time via
 /// `runtime_enrichment::nft_token_uri` — full JSON blob from the
 /// per-token `token_uri()` IPFS / HTTP URL (attributes, traits,
@@ -71,8 +69,7 @@ pub struct NftDetailResponse {
     pub metadata: Option<serde_json::Value>,
 }
 
-/// One row of NFT transfer history. Shape pinned to canonical SQL
-/// `17_get_nfts_transfers.sql`.
+/// One row of NFT transfer history (`queries::fetch_transfers`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NftTransferItem {
     pub transaction_hash: String,

@@ -1,8 +1,8 @@
 //! Request and response DTOs for the liquidity-pool endpoints.
 //!
 //! Participants endpoint (task 0126) and the list/detail/transactions/chart
-//! endpoints (tasks 0052) share this module. Wire shapes mirror canonical
-//! SQL `endpoint-queries-clickhouse/{18,19,20,21,23}_*.sql`.
+//! endpoints (tasks 0052) share this module. The SQL behind each shape is in
+//! `liquidity_pools::queries`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,8 +26,8 @@ pub struct SharesCursor {
     pub account_id: i64,
 }
 
-/// One participant row returned by the participants list. Shape pinned to
-/// `docs/architecture/database-schema/endpoint-queries-clickhouse/23_get_liquidity_pools_participants.sql`.
+/// One participant row returned by the participants list
+/// (`queries::list_participants`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ParticipantItem {
     /// Participant account StrKey (G...).
@@ -176,14 +176,14 @@ pub struct PoolAssetLeg {
     /// digits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a
     /// pool has two to four legs. `null` when no source knows it — never `0`.
     /// A classic pool reads its latest snapshot. A soroban pool reads its
-    /// newest `pool_state_changes` row, served for a native or classic leg
-    /// (7 decimals by protocol); a soroban-token leg stays `null` until its
-    /// scale is read from the token's metadata.
+    /// newest `pool_state_changes` row, scaled by 7 for a native or classic
+    /// leg and by the `decimals` a soroban token publishes in its metadata; a
+    /// token that publishes none keeps its leg `null`.
     pub reserve: Option<String>,
 }
 
-/// One pool row returned by the list endpoint. Shape pinned to canonical
-/// SQL `18_get_liquidity_pools_list.sql`. Pools without a fresh snapshot
+/// One pool row returned by the list endpoint (`queries::list_pools`).
+/// Pools without a fresh snapshot
 /// in the freshness window come back with `null` for every dynamic field
 /// (each leg's `reserve`, `total_shares`, `tvl`, `volume`, `fee_revenue`,
 /// `latest_snapshot_*`); frontend renders these as "stale".

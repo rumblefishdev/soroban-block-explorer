@@ -81,41 +81,22 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
     resetKey: contractId,
   });
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useContractInvocations(contractId, cursor);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = useContractInvocations(contractId, cursor);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
     // Bare, inside the contract page's tab card — no frame of its own.
     <DataList
-      columnCount={columns.length}
-      isLoading={isLoading}
-      isReloading={isPlaceholderData}
-      isError={isError}
-      error={error}
-      onRetry={() => void refetch()}
+      query={query}
+      pager={pager}
       errorPy={6}
-      rows={rows}
-      renderSkeleton={() => (
+      renderTable={(rows, { loading }) => (
         <ExplorerTable
           columns={columns}
-          rows={[]}
+          rows={rows}
           rowKey={rowKey}
-          loading
+          loading={loading}
           skeletonRows={20}
-          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-        />
-      )}
-      renderTable={(pageRows) => (
-        <ExplorerTable
-          columns={columns}
-          rows={pageRows}
-          rowKey={rowKey}
           rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
         />
       )}
@@ -126,11 +107,6 @@ export function ContractInvocations({ contractId }: { contractId: string }) {
           description="This contract has not been invoked yet."
         />
       )}
-      emptyNoun="invocations"
-      canPrev={canPrev}
-      canNext={canNext}
-      onPrev={handlePrev}
-      onNext={handleNext}
     />
   );
 }
