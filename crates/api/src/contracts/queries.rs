@@ -443,17 +443,29 @@ pub async fn fetch_contract(
     client: &clickhouse::Client,
     contract_id: &str,
 ) -> Result<Option<ContractRow>, clickhouse::error::Error> {
-    // Two FINAL/aliasing pitfalls, both 500'd every contract detail (regression
-    // from task 0327):
-    //   1. `wasm_interface_metadata` is a plain `MergeTree`, so it must NOT carry
-    //      `FINAL` — CH rejects `FINAL` on a non-replacing engine with
-    //      `Code: 181 (ILLEGAL_FINAL)`. Only `soroban_contracts` (Replacing)
-    //      takes `FINAL`. (The events stats query below already joins `wim`
-    //      FINAL-free.)
+    // Three pitfalls in this query; each one broke it once:
+    //   1. (task 0592) `wasm_interface_metadata` is a `ReplacingMergeTree
+    //      ORDER BY wasm_hash` with no version column. One hash written twice
+    //      (the 0327 `upgradeable-backfill` re-writes existing hashes with an
+    //      extra `upgradeable` key) sits in two parts until a merge, and a plain
+    //      join matches both, so `LIMIT 1` returns either copy. The join reads
+    //      it through `(SELECT … FROM wasm_interface_metadata FINAL)`, which
+    //      keeps the last inserted row, as the merge will. A subquery rather
+    //      than `wim FINAL`: the old analyzer ignores FINAL on a joined table,
+    //      and the new one already carries `sc FINAL` over to a joined
+    //      Replacing table, so the join form would not make the dedup
+    //      explicit. Same bytes read either way (measured on CH 26.3).
+    //      Task 0327 once saw `ILLEGAL_FINAL` (Code 181) on `wim FINAL`; that
+    //      came from a ClickHouse whose table predated the 2026-06 engine swap
+    //      (`CREATE TABLE IF NOT EXISTS` never changes an existing engine), not
+    //      from the schema.
     //   2. `sc.id` MUST be aliased `AS id`: `id` is ambiguous across the joined
     //      tables (`soroban_contracts`, `accounts`), so CH names the result
     //      column `sc.id`, which the `clickhouse` row deserialiser can't match
     //      to the `ContractHeaderChRow.id` field → "schema mismatch".
+    //      `sc.contract_id` carries its alias for the same reason: the old
+    //      analyzer names it `sc.contract_id` in a join (task 0592 runs this
+    //      query under both analyzers).
     //   3. (task 0548) `contract_executable_refs` joins through a subquery whose
     //      hash is `toNullable(argMax(...))`. A LEFT JOIN miss fills each column
     //      with its TYPE's default, and only a Nullable type defaults to NULL —
@@ -461,12 +473,12 @@ pub async fn fetch_contract(
     //      looks like a hash. And no `max(ledger) AS ledger` beside it: that alias
     //      shadows the column inside `argMax` and ClickHouse rejects the whole
     //      query (Code 184). The first draft did exactly that and never ran;
-    //      `queries_ch_tests.rs` now executes this SQL against the real schema.
+    //      `queries/ch_tests.rs` now executes this SQL against the real schema.
     let row = client
         .query(
             "SELECT \
                 sc.id                                  AS id, \
-                sc.contract_id, \
+                sc.contract_id                         AS contract_id, \
                 lower(hex(sc.wasm_hash))               AS wasm_hash, \
                 nullIf(sc.wasm_uploaded_at_ledger, 0)  AS wasm_uploaded_at_ledger, \
                 sc.deployer_id                         AS deployer_id, \
@@ -479,7 +491,9 @@ pub async fn fetch_contract(
                 sc.executable_tag                      AS executable_tag, \
                 lower(hex(ref.wasm_hash)) AS referenced_wasm_hash \
              FROM soroban_contracts sc FINAL \
-             LEFT JOIN wasm_interface_metadata wim ON wim.wasm_hash = sc.wasm_hash \
+             LEFT JOIN ( \
+                SELECT wasm_hash, metadata FROM wasm_interface_metadata FINAL \
+             ) wim ON wim.wasm_hash = sc.wasm_hash \
              LEFT JOIN ( \
                 SELECT owner_id, tag, toNullable(argMax(wasm_hash, ledger)) AS wasm_hash \
                 FROM contract_executable_refs GROUP BY owner_id, tag \
@@ -697,8 +711,11 @@ pub async fn fetch_wasm_interface(
             // contract has no code, when it has code owned by someone else.
             // The interface metadata follows the same resolved hash: a fleet
             // member's ABI is the ABI of the code it actually runs.
+            // Task 0592 — `wim` is deduplicated in a FINAL subquery, and
+            // `contract_id` carries an alias, for the reasons given in
+            // `fetch_contract`, pitfalls 1 and 2.
             "SELECT \
-                sc.contract_id, \
+                sc.contract_id                  AS contract_id, \
                 lower(hex(coalesce(sc.wasm_hash, ref.wasm_hash))) AS wasm_hash, \
                 ifNull(wim.metadata, '')        AS metadata \
              FROM soroban_contracts sc FINAL \
@@ -706,8 +723,9 @@ pub async fn fetch_wasm_interface(
                 SELECT owner_id, tag, toNullable(argMax(wasm_hash, ledger)) AS wasm_hash \
                 FROM contract_executable_refs GROUP BY owner_id, tag \
              ) ref ON ref.owner_id = sc.executable_owner_id AND ref.tag = sc.executable_tag \
-             LEFT JOIN wasm_interface_metadata wim \
-                ON wim.wasm_hash = coalesce(sc.wasm_hash, ref.wasm_hash) \
+             LEFT JOIN ( \
+                SELECT wasm_hash, metadata FROM wasm_interface_metadata FINAL \
+             ) wim ON wim.wasm_hash = coalesce(sc.wasm_hash, ref.wasm_hash) \
              WHERE sc.contract_id = ? \
              LIMIT 1",
         )
