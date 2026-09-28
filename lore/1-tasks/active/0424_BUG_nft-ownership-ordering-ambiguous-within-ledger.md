@@ -174,6 +174,25 @@ work:
 - Housekeeping (304 A): 0529 and 0531 (already `completed`) and 0259
   (closed, its check passed) moved to archive.
 
+- **PR 1 review fix** (2026-09-28, `38040973`, pushed to #523): the change's
+  `application_order` now comes from the ledger's transaction order
+  (`app_order_by_hash`), as `soroban_events` stages its rows — not from the
+  rpc id's `transaction_index` through an `i16` conversion (ADR 0059 keeps the
+  two apart). The routing test gives the id a `transaction_index` that differs
+  from the position, pinning the source.
+- **PR 2 (fill)** — branch `feat/0424-nft-ownership-changes-fill`, local,
+  stacked on #523: `a31bfc80` — `backfill-runner nft-ownership-fill`: the
+  collections' contract events read back from `soroban_events`, run through
+  `detect_nft_events` → `extract_nft_ownership_events`, located as the live
+  writer does, routed by today's verdict; `--dry-run` is the gate (multiset
+  against the old tables on contract, token, ledger, owner, type). `b572c4ed`
+  — `backfills.md`. **Dry run on production (read-only, 2026-09-28): 31,093
+  events → 23,540 hot + 521 pending = the old tables' 23,540 + 521,
+  `only_old=0 only_new=0`.** Every located key is distinct (a shared key would
+  have collapsed and shown in `only_old`). Tests: routing by verdict, position
+  from the row, one `consecutive_mint` under one id, bad stored JSON is an
+  error, the multiset difference.
+
 ## Implementation
 
 - Thread the transaction's **application order** (and the event's index within the
