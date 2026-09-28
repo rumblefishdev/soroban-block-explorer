@@ -299,6 +299,9 @@ galexie-production:galexie
 > are no longer mapped. The enrichment producer is stubbed pending its CH
 > rewrite, so `lambda-enrichment-*` stays unmapped (it would 403 if it
 > connected).
+> Since then the enrichment worker has moved to CH: production maps
+> `lambda-enrichment-production:ingestion_writer` (checked on the box
+> 2026-09-28, task 0591).
 
 Then replay ansible with the narrow `caddy_reload` tag — re-renders the
 CN map snippet and reloads Caddy without touching the rest of the

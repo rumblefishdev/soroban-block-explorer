@@ -69,9 +69,10 @@ Caddy does not know the password to forge Basic Auth.
 | ------------------ | ------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `default`          | `default`          | `default`      | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)                                                                                                                                                                                                                  | `db-clickhouse-init` sidecar + backup script + SSH ops                                                   |
 | `dev_shared`       | `admin`            | `unlimited`    | Everything (admin, `<no_password/>` + loopback/bridge networks)                                                                                                                                                                                                              | Dev laptops (one shared cert-gated user)                                                                 |
-| `galexie`          | `write_no_ddl`     | `high_write`   | INSERT only on ingestion tables                                                                                                                                                                                                                                              | Galexie ECS task                                                                                         |
-| `api_reader`       | `read_only`        | `api_throttle` | SELECT on `default.*`                                                                                                                                                                                                                                                        | Lambda API (read-heavy)                                                                                  |
-| `ingestion_writer` | `write_no_ddl`     | `high_write`   | INSERT on tables Galexie does not touch                                                                                                                                                                                                                                      | Lambda Ingestion                                                                                         |
+| `galexie`          | `write_no_ddl`     | `high_write`   | Nothing (empty `<grants/>`, task 0591): Galexie writes to S3 only and never queries ClickHouse                                                                                                                                                                               | Galexie ECS task                                                                                         |
+| `api_reader`       | `read_only`        | `unlimited`    | SELECT on `default.*` and `prices.*` (inline `<grants>`, task 0591)                                                                                                                                                                                                          | Lambda API (read-heavy)                                                                                  |
+| `ingestion_writer` | `write_no_ddl`     | `high_write`   | SELECT, INSERT on `default.*` (inline `<grants>`, task 0591)                                                                                                                                                                                                                 | Lambda Ingestion and the enrichment worker Lambda                                                        |
+| `dev_read`         | `read_only`        | `dev_read`     | SELECT on `default.*`, `prices.*`, `system.*` (inline `<grants>`, task 0591)                                                                                                                                                                                                 | Teammate read-only mTLS cert                                                                             |
 | `prices_writer`    | `write_no_ddl`     | `prices_write` | SELECT, INSERT, OPTIMIZE + ALTER DELETE on `prices.*`; SELECT on `system.parts` / `system.mutations` / `system.view_refreshes` ; SELECT on `default.soroban_events` / `default.soroban_contracts` only (inline `<grants>`; 0314 + 0477 self-monitoring, 0569 coverage sweep) | prices-api ingestion (separate service, task 0063)                                                       |
 | `prices_reader`    | `read_only`        | `prices_read`  | SELECT on `prices.*` only (inline `<grants>`)                                                                                                                                                                                                                                | prices-api / BE LP-analytics `price_usd_series` JOIN                                                     |
 | `prices_admin`     | `prices_write_ddl` | `prices_write` | SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE on `prices.*`; SELECT on `default.*`, `system.parts`, `system.mutations`, `system.columns`, `system.disks` (inline `<grants>`; tasks 0567 + 0568)                                                                  | prices-api operator campaigns (history re-ingest, partition repair) — operator-held cert, never a Lambda |
@@ -86,20 +87,24 @@ Caddy does not know the password to forge Basic Auth.
 `prices_writer` / `prices_reader` were added (task 0314) for **prices-api**, a
 separate service that lands per-source OHLCV candles into a dedicated `prices`
 database in this same cluster (their task 0063, their ADR 0007). This is the
-second tenant alongside BE's `default` data. Two properties differ from the
-other service users:
+second tenant alongside BE's `default` data.
 
-- **First inline `<grants>`.** BE's own service users are unscoped (implicit
-  all-database access — correct while `default` is the only DB). The prices
-  users carry an inline `<grants>` block (`GRANT … ON prices.*`), which both
-  scopes them to `prices.*` and flips them into explicit-grant mode, so
-  `prices_writer` is denied `default.*` — bar SELECT on `soroban_events` / `soroban_contracts` (task 0569) — and cannot run DDL. Inline user-XML
-  grants apply at startup (CH ≥ 21.4).
-- **Tenant boundary is one-directional.** The prices certs are confined to
-  `prices.*` and cannot touch `default.*`. The reverse is **not** enforced:
-  BE's own unscoped service users (`ingestion_writer`, etc.) can still reach
-  `prices.*`. That is inside BE's trust boundary and expected — the isolation
-  that matters is confining the externally-issued prices certs.
+- **Inline `<grants>`.** The prices users were the first to carry an inline
+  `<grants>` block (`GRANT … ON prices.*`), which both scopes them to
+  `prices.*` and flips them into explicit-grant mode, so `prices_writer` is
+  denied `default.*` — bar SELECT on `soroban_events` / `soroban_contracts`
+  (task 0569) — and cannot run DDL. Inline user-XML grants apply at startup
+  (CH ≥ 21.4); SQL `GRANT` is refused for XML-defined users
+  (`ACCESS_STORAGE_READONLY`), so every grant lives in the file. A user with
+  no `<grants>` block holds `ALL ON *.*`, limited only by its profile. Since
+  task 0591 every service user carries one; `dev_shared` (admin) is the only
+  unscoped proxy-trust user left.
+- **What BE users reach in `prices.*`.** The prices certs are confined to
+  `prices.*`, bar the `default.*` reads in the matrix. In the other
+  direction, since task 0591: `api_reader` and `dev_read` read `prices.*`
+  (the API's LP USD analytics and chart read `prices.price_usd_series` and
+  `prices.price_usd_series_1h`); `ingestion_writer` and `galexie` cannot
+  reach it; only `dev_shared` and `default` can write to it.
 
 The `prices` database and its schema are created and owned by prices-api over
 loopback admin (`db-clickhouse-init` on their side), **not** in this repo. This
@@ -111,15 +116,16 @@ The map is rendered by Ansible from the `CLICKHOUSE_CN_USER_MAP`
 env var. Each entry is `<cn>:<ch_user>`; the operator maintains
 the full list. Convention:
 
-| Caddy CN (verified by mTLS)      | Mapped CH user     |
-| -------------------------------- | ------------------ |
-| `galexie-<environment>`          | `galexie`          |
-| `lambda-api-<environment>`       | `api_reader`       |
-| `lambda-ingestion-<environment>` | `ingestion_writer` |
-| `prices-ingestion`               | `prices_writer`    |
-| `prices-api`                     | `prices_reader`    |
-| `prices-admin-<environment>`     | `prices_admin`     |
-| `<firstname>-laptop`             | `dev_shared`       |
+| Caddy CN (verified by mTLS)       | Mapped CH user     |
+| --------------------------------- | ------------------ |
+| `galexie-<environment>`           | `galexie`          |
+| `lambda-api-<environment>`        | `api_reader`       |
+| `lambda-ingestion-<environment>`  | `ingestion_writer` |
+| `lambda-enrichment-<environment>` | `ingestion_writer` |
+| `prices-ingestion`                | `prices_writer`    |
+| `prices-api`                      | `prices_reader`    |
+| `prices-admin-<environment>`      | `prices_admin`     |
+| `<firstname>-laptop`              | `dev_shared`       |
 
 > `lambda-partition-<env>` and `lambda-migration-<env>` were retired in task
 > 0241: the partition + migration Lambdas were removed, and their CH users
@@ -220,8 +226,9 @@ rotation.
 3. `ansible-playbook ... --tags caddy_reload` to render and reload.
 
 If the chosen `<ch_user>` doesn't exist yet (new service class),
-also add it to `crates/db-clickhouse/users.d/services.xml`,
-`--tags app` to sync the file and restart CH.
+also add it to `crates/db-clickhouse/users.d/services.xml` with a `<grants>`
+block (without one it gets `ALL ON *.*`), `--tags app` to sync the file and
+restart CH.
 
 ## Audit trail
 

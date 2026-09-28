@@ -137,10 +137,9 @@ async fn lp_ch_rows_decode() {
     // fail, so the documented local-replica run still validates every
     // explorer-owned decode above. Against prod (or any CH with the
     // prices tenant) the probe passes and both are exercised — which also
-    // proves the API user can read that database. No grant is needed
-    // there: `api_reader` carries no `<grants>` block in
-    // `users.d/services.xml` (unlike `prices_writer`/`prices_reader`,
-    // where grants NARROW access), verified on the box 2026-08-04.
+    // proves the API user can read that database, through the
+    // `GRANT SELECT ON prices.*` in `api_reader`'s `<grants>` block in
+    // `users.d/services.xml` (task 0591).
     if ch
         .query("SELECT 1 FROM prices.price_usd_series_1h LIMIT 1")
         .fetch_all::<u8>()
