@@ -2,7 +2,7 @@
 id: '0478'
 title: 'REFACTOR: repair the four failing Tier-1 query docs and make the gate run in CI'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0032', '0044']
 related_tasks: ['0331', '0445']
 tags: [docs, clickhouse, ci, tooling, priority-medium, effort-medium]
@@ -46,6 +46,16 @@ history:
       liquidity_pools/queries.rs; only its 01 + runner parts are reusable, and
       its ci.yml / ch.rs changes belong to 0480. CI already starts ClickHouse
       (ci.yml, task 0406), so the gate is one extra step.
+  - date: '2026-09-28'
+    status: completed
+    who: karolkow
+    note: >
+      Superseded by 0588, not merged. The repair and the CI gate were built
+      and reviewed on branch refactor/0478_tier1-gate-ci (68 of 68 checks
+      green; the gate caught one real drift from 0586). On review the premise
+      failed: the set is a hand-kept copy of the Rust queries, and the Rust
+      queries already run against the canonical schema in CI. The set is
+      retired in 0588 instead of gated. The branch keeps the full notes.
 ---
 
 # REFACTOR: repair the Tier-1 query docs and gate them in CI

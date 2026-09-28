@@ -29,7 +29,7 @@ use super::dto::{
     TransactionDetailLight, TransactionListItem, TxListCursor,
 };
 use super::queries::{
-    self, EventAppearanceRow, InvocationAppearanceRow, OpRow, ResolvedListParams, TxDetailRow,
+    self, EventAppearanceRow, OpRow, ResolvedListParams, TransactionInvocationRow, TxDetailRow,
     TxListRow,
 };
 
@@ -86,19 +86,6 @@ pub async fn list_transactions(
     if let Err(resp) = filters::strkey_opt(params.filter_contract_id.as_deref(), 'C', "contract_id")
     {
         return resp;
-    }
-
-    // Reject a cursor whose keyset is not this list's: every statement pages
-    // on the transaction position, so a surrogate-keyed cursor (the
-    // contract-invocation list's, or one minted by the operation-type filter
-    // before task 0372) is refused. Per ADR 0008 we fail with `invalid_cursor`
-    // instead of silently mis-paginating. A legacy/untagged cursor already
-    // fails to decode upstream in the extractor; this guards the
-    // decodes-but-wrong-intent case.
-    if let Some(cursor) = &pagination.cursor
-        && !cursor.fits_transaction_list()
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
     }
 
     // Conditional GET on the LIVE first page only (task 0292): the list is
@@ -197,7 +184,7 @@ pub async fn list_transactions(
 /// Build the opaque list cursor for a boundary row: the transaction position
 /// `(ledger_sequence, application_order)`, the keyset of every statement —
 /// A reads `transactions` in primary-key order, B seeks the
-/// `contract_transactions` index (task 0541), C scans
+/// `contract_activity` index (tasks 0541, 0586), C scans
 /// `transaction_operations` (task 0372).
 fn list_cursor_for(r: &TxListRow) -> TxListCursor {
     TxListCursor::ChPosition {
@@ -300,13 +287,14 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             .collect();
         let invocations = i_res
             .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "DB fallback: fetch_invocation_appearances failed");
+                tracing::warn!(error = %e, "DB fallback: fetch_transaction_invocations failed");
                 Vec::new()
             })
             .into_iter()
             .map(|r| InvocationAppearanceItem {
                 contract_id: r.contract_id,
                 caller_account: r.caller_account,
+                caller_contract: r.caller_contract,
                 ledger_sequence: r.ledger_sequence,
                 created_at: r.created_at,
             })
@@ -489,8 +477,9 @@ async fn fetch_events_for_source(
 async fn fetch_invocations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_invocation_appearances(&state.ch(), tx.id, tx.ledger_sequence).await
+) -> Result<Vec<TransactionInvocationRow>, clickhouse::error::Error> {
+    queries::fetch_transaction_invocations(&state.ch(), tx.ledger_sequence, tx.application_order)
+        .await
 }
 
 #[cfg(test)]

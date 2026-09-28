@@ -25,43 +25,26 @@ pub struct ListParams {
 /// Opaque pagination payload for `GET /v1/transactions` and the other
 /// transaction lists (encoded via [`common::cursor`](crate::common::cursor)).
 ///
-/// Every list pages on `(ledger_sequence, <within-ledger key>)` inside one
-/// partition (canonical SQL 02); the variant names the within-ledger key, so a
-/// cursor carries its own keyset and a list refuses any other:
-///
-/// - `ChPosition` — the transaction's `application_order`, which is also its
-///   execution order. `/transactions` under every filter (tasks 0541, 0372);
-///   the account and asset lists (task 0575).
-/// - `ChSurrogate` — the `transactions.id` hash surrogate. The
-///   contract-invocation list, until task 0538 moves it to the position.
+/// Every list pages on the transaction position
+/// `(ledger_sequence, application_order)` inside one partition (canonical
+/// SQL 02) — `application_order` is also the execution order: `/transactions`
+/// under every filter (tasks 0541, 0372), the account and asset lists (task
+/// 0575) and the contract's invocations (task 0586).
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
 /// format is opaque to clients, so the backend may change the encoding
-/// freely; the flip side is that a cursor which decodes but anchors another
-/// list's keyset MUST be rejected with `invalid_cursor` rather than silently
-/// mis-paginating. A legacy/untagged cursor (pre-0243, no `src`) fails to
-/// decode at all. Both fields are non-optional, so a keyset never binds a
-/// NULL tuple element.
+/// freely; the flip side is that a cursor of a retired keyset MUST fail with
+/// `invalid_cursor` rather than silently mis-paginate. It does so by failing
+/// to decode: the `ch_surrogate` cursor (the `transactions.id` hash surrogate,
+/// retired by task 0586) and a legacy/untagged one (pre-0243, no `src`). Both
+/// fields are non-optional, so a keyset never binds a NULL tuple element.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum TxListCursor {
-    ChSurrogate {
-        ledger_sequence: i64,
-        transaction_id: i64,
-    },
     ChPosition {
         ledger_sequence: i64,
         application_order: i16,
     },
-}
-
-impl TxListCursor {
-    /// Does this cursor anchor the keyset of `/transactions`? Every statement
-    /// keys on the position since task 0372; a surrogate cursor minted by the
-    /// operation-type filter before it answers `invalid_cursor` once.
-    pub fn fits_transaction_list(&self) -> bool {
-        matches!(self, TxListCursor::ChPosition { .. })
-    }
 }
 
 /// Slim transaction row returned in the list endpoint.
@@ -155,6 +138,9 @@ pub struct InvocationAppearanceItem {
     pub contract_id: String,
     /// Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
     pub caller_account: Option<String>,
+    /// Root caller C-StrKey when a contract made the call; exactly one of the
+    /// two callers is set.
+    pub caller_contract: Option<String>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }

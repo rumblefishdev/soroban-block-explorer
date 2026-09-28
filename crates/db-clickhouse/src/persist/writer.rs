@@ -101,8 +101,7 @@ struct TableInserts {
     lp_positions: Option<Insert<LpPositionRow>>,
     tx_operations: Option<Insert<TransactionOperationRow>>,
     events: Option<Insert<SorobanEventRow>>,
-    invocations: Option<Insert<SorobanInvocationAppearanceRow>>,
-    contract_txs: Option<Insert<ContractTransactionRow>>,
+    contract_activity: Option<Insert<ContractActivityRow>>,
     assets: Option<Insert<AssetRow>>,
     asset_sac: Option<Insert<AssetSacRow>>,
     nfts: Option<Insert<NftRow>>,
@@ -277,8 +276,7 @@ impl PartitionWriter {
             op_asset_rows,
             pool_amount_rows,
             event_rows,
-            invocation_rows,
-            contract_tx_rows,
+            contract_activity_rows,
             asset_rows,
             asset_sac_rows,
             nft_rows,
@@ -419,16 +417,9 @@ impl PartitionWriter {
         .await?;
         write_rows(
             &self.client,
-            &mut self.inserts.invocations,
-            "soroban_invocations_appearances",
-            &invocation_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.contract_txs,
-            "contract_transactions",
-            &contract_tx_rows,
+            &mut self.inserts.contract_activity,
+            "contract_activity",
+            &contract_activity_rows,
         )
         .await?;
 
@@ -518,7 +509,7 @@ impl PartitionWriter {
         // Step 1: drain every non-ledger insert. Order roughly mirrors
         // PG's write order (accounts → wasm → contracts → tx → hash
         // index → participants → pools/snapshots/positions → ops →
-        // events → invocations → assets → nfts/ownership → balances).
+        // events → contract activity → assets → nfts/ownership → balances).
         //
         // EXHAUSTIVE destructure, deliberately no `..`: an insert that is
         // written but never ended buffers its rows and drops them SILENTLY
@@ -549,8 +540,7 @@ impl PartitionWriter {
             lp_positions,
             tx_operations,
             events,
-            invocations,
-            contract_txs,
+            contract_activity,
             assets,
             asset_sac,
             nfts,
@@ -580,8 +570,7 @@ impl PartitionWriter {
         end(lp_positions).await?;
         end(tx_operations).await?;
         end(events).await?;
-        end(invocations).await?;
-        end(contract_txs).await?;
+        end(contract_activity).await?;
         end(assets).await?;
         end(asset_sac).await?;
         end(nfts).await?;

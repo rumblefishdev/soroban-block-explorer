@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn contract_positions_are_one_seek_on_the_presence_index() {
     let sql = contract_positions_sql(42, "64000009", None, Direction::Next, 80);
-    assert!(sql.contains("FROM contract_transactions WHERE contract_id = 42"));
+    assert!(sql.contains("FROM contract_activity WHERE contract_id = 42"));
     // Not pinned to a partition: a contract quiet in the head's partition
     // would list as empty.
     assert!(!sql.contains("intDiv"));

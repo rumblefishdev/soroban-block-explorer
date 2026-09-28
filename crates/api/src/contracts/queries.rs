@@ -18,12 +18,12 @@
 //! storage detail and is not surfaced on the wire.
 //!
 //! Read-cost notes (lessons from the global tx-list firefight):
-//! - `soroban_contracts` is ORDER BY `(contract_id)`; `soroban_invocations_appearances`
-//!   is ORDER BY `(contract_id, ledger_sequence, transaction_id)`. So every
+//! - `soroban_contracts` is ORDER BY `(contract_id)`; `contract_activity`
+//!   is ORDER BY `(contract_id, ledger_sequence, application_order)`. So every
 //!   filter by `contract_id` is a LEADING-primary-key seek, never a scan.
 //! - A contract's invocations span MANY ledger partitions, so (like account
 //!   transactions) the page is driven off the seek, then the ≤limit transaction
-//!   rows are fetched by `(ledger_sequence, id) IN (keys)` and merged in Rust —
+//!   rows are fetched by `(ledger_sequence, application_order) IN (keys)` and merged in Rust —
 //!   never an unpruned `transactions FINAL` join (the read_rows-quota trap).
 
 use std::collections::{BTreeSet, HashMap};
@@ -35,12 +35,12 @@ use domain::ContractEventType;
 
 use crate::common::ch::{millis_to_utc, resolve_accounts, resolve_contracts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
-use crate::transactions::dto::TxListCursor;
-
-use chrono::{DateTime, Utc};
 
 use super::dto::ContractIdCursor;
 use super::dto::{ContractStats, EventCursor, EventItem, SacAsset};
+
+mod list_invocations;
+pub use list_invocations::{ContractInvocationRow, fetch_contract_invocations};
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler
@@ -114,16 +114,6 @@ pub struct InterfaceRow {
     pub wasm_hash: Option<String>,
     /// `None` for SAC / pre-upload / stub rows.
     pub interface_metadata: Option<serde_json::Value>,
-}
-
-#[derive(Debug)]
-pub struct InvocationAppearanceRow {
-    pub transaction_id: i64,
-    pub transaction_hash: String,
-    pub ledger_sequence: i64,
-    pub created_at: DateTime<Utc>,
-    pub caller_account: Option<String>,
-    pub successful: bool,
 }
 
 /// `contract_type` SMALLINT → label, matching the PG `contract_type_name`
@@ -341,18 +331,14 @@ pub async fn fetch_contract_list(
     // Step 2: invocation counts in the STATS_WINDOW for the page's ids.
     //
     // The window is ONE `ledger_sequence >= (first sequence in the window)`
-    // bound, resolved from the data (lore-0420). That single expression does
-    // three jobs the earlier shapes needed three constructs for:
-    //   * it is exact — no constant guessing how many ledgers fit in a day;
-    //   * it keeps the seek on the `(contract_id, ledger_sequence)` PK prefix;
-    //   * it cannot fan out. `ledgers` is a ReplacingMergeTree with unmerged
-    //     duplicate rows, and JOINing it multiplied every appearance row per
-    //     duplicate copy (measured ~1.6× inflation). `min()` is immune to
-    //     duplicates, so the dedup problem does not arise rather than being
-    //     worked around.
-    // `closed_at` carries a minmax index, so resolving the bound is cheap; the
-    // LP chart resolves its window the same way. `FINAL` on the appearances
-    // matches the detail stat so re-ingest duplicates collapse identically.
+    // bound, resolved from the data (lore-0420): exact (no guess how many
+    // ledgers fit in a day), on the `(contract_id, ledger_sequence)` PK prefix,
+    // and immune to the unmerged duplicate `ledgers` rows a JOIN fanned out
+    // (measured ~1.6×), since `min()` ignores duplicates. `closed_at` carries a
+    // minmax index, so the bound is cheap; the LP chart resolves its window the
+    // same way. `FINAL` matches the detail stat, so re-ingest duplicates
+    // collapse identically; `invocation_count > 0` drops touched-only pairs
+    // (task 0586).
     let ids = list_rows
         .iter()
         .map(|r| r.id.to_string())
@@ -363,15 +349,16 @@ pub async fn fetch_contract_list(
     let days = STATS_WINDOW_DAYS;
     let count_sql = format!(
         "SELECT \
-            sia.contract_id                  AS contract_id, \
+            ca.contract_id                   AS contract_id, \
             toUInt64(count())                AS recent_invocations \
-         FROM soroban_invocations_appearances sia FINAL \
-         WHERE sia.contract_id IN ({ids}) \
-           AND sia.ledger_sequence >= ( \
+         FROM contract_activity ca FINAL \
+         WHERE ca.contract_id IN ({ids}) \
+           AND ca.invocation_count > 0 \
+           AND ca.ledger_sequence >= ( \
                SELECT min(sequence) FROM ledgers \
                WHERE closed_at >= now64() - INTERVAL {days} DAY \
            ) \
-         GROUP BY sia.contract_id"
+         GROUP BY ca.contract_id"
     );
     // Resolve the page's deployer surrogates → StrKeys by a bloom-pruned
     // key-seek (`accounts.idx_acc_id`), replacing the full-table `accounts`
@@ -587,7 +574,7 @@ struct StatsChRow {
 }
 
 /// `window` is the echoed label (e.g. `"7 days"`); its leading integer is the
-/// day count. CH `soroban_invocations_appearances` has no `created_at`, so the
+/// day count. CH `contract_activity` has no `created_at`, so the
 /// window is applied via a JOIN to `ledgers.closed_at`, bounded first by a
 /// `ledger_sequence` floor so the seek stays on the primary-key prefix.
 ///
@@ -655,13 +642,13 @@ pub async fn fetch_contract_stats(
 /// row per duplicate copy and inflated `count()`. `min()` is immune to
 /// duplicates, so this shape removes the fan-out instead of compensating for it —
 /// and drops the hardcoded ledgers-per-day floor at the same time.
-/// `uniqExact(caller_id)` was already fan-out-safe (a distinct set); only the raw
+/// The unique-caller `uniqExact` was already fan-out-safe (a distinct set); only the raw
 /// `count()`s were affected.
 fn contract_stats_sql(days: i64) -> String {
     format!(
         "SELECT \
             toUInt64(count())                       AS recent_invocations, \
-            toUInt64(uniqExact(sia.caller_id))      AS recent_unique_callers, \
+            toUInt64(uniqExact(tuple(ca.caller_id, ca.caller_contract_id))) AS recent_unique_callers, \
             ifNull(( \
                 SELECT toUInt64(count()) \
                 FROM soroban_events se \
@@ -671,9 +658,10 @@ fn contract_stats_sql(days: i64) -> String {
                       WHERE closed_at >= now64() - INTERVAL {days} DAY \
                   ) \
             ), 0)                                   AS recent_events \
-         FROM soroban_invocations_appearances sia FINAL \
-         WHERE sia.contract_id = ? \
-           AND sia.ledger_sequence >= ( \
+         FROM contract_activity ca FINAL \
+         WHERE ca.contract_id = ? \
+           AND ca.invocation_count > 0 \
+           AND ca.ledger_sequence >= ( \
                SELECT min(sequence) FROM ledgers \
                WHERE closed_at >= now64() - INTERVAL {days} DAY \
            )"
@@ -737,166 +725,6 @@ pub async fn fetch_wasm_interface(
             interface_metadata,
         }
     }))
-}
-
-// ---------------------------------------------------------------------------
-// Invocations — canonical 13 (two-step, multi-partition-safe)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Row, Deserialize)]
-struct InvocationKeyRow {
-    ledger_sequence: i64,
-    transaction_id: i64,
-    caller_id: Option<i64>,
-}
-
-#[derive(Debug, Row, Deserialize)]
-struct TxMetaChRow {
-    transaction_id: i64,
-    hash: String,
-    successful: bool,
-    created_at: i64,
-}
-
-/// `contract_surrogate_id` is from [`fetch_contract`]; caller passes
-/// `limit + 1`. Driven off `soroban_invocations_appearances` (leading-PK seek
-/// on `contract_id`), then the page's transaction header columns
-/// (`hash` / `successful` / `closed_at`) are fetched by
-/// `(ledger_sequence, id) IN (keys)` and merged. The CH cursor keys on
-/// `(ledger_sequence, transaction_id)`.
-pub async fn fetch_invocation_appearances(
-    client: &clickhouse::Client,
-    contract_surrogate_id: i64,
-    limit: i64,
-    cursor: Option<&TxListCursor>,
-    direction: Direction,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    let (cursor_ledger, cursor_tiebreak): (Option<i64>, Option<i64>) = match cursor {
-        Some(TxListCursor::ChSurrogate {
-            ledger_sequence,
-            transaction_id,
-        }) => (Some(*ledger_sequence), Some(*transaction_id)),
-        _ => (None, None),
-    };
-    let (op, order) = keyset_sql_desc(direction);
-
-    // Inline the cursor bounds rather than `.bind()`-ing them: the clickhouse
-    // 0.15 bound-parameter path returns an empty result when `None` is bound
-    // into a tuple keyset comparison (the same defect that forced transactions
-    // B/C to inline). Values are i64 / None→NULL, no injection surface.
-    let cl = cursor_ledger.map_or_else(|| "NULL".to_string(), |v| v.to_string());
-    let ct = cursor_tiebreak.map_or_else(|| "NULL".to_string(), |v| v.to_string());
-
-    // Step 1: contract-scoped driver seek. `contract_id` is the leading PK of
-    // `soroban_invocations_appearances`, so the inner subquery reads only this
-    // contract's rows.
-    //
-    // The page LIMIT is applied INSIDE the subquery, BEFORE the `accounts caller`
-    // join. That join has no FINAL (a 16M-row accounts FINAL would be ruinous),
-    // and a hot contract has millions of invocations; joining accounts to ALL of
-    // them before the limit OOMs the JoiningTransform (measured: 14.9M
-    // invocations → 300M join rows → 5.6 GiB limit hit). With the limit inside,
-    // the join sees only ≤limit rows. FINAL is dropped on the seek too — with it
-    // CH merges the contract's rows across every part (~38× read amplification,
-    // measured 574M vs 18.6M rows); the outer `LIMIT 1 BY (ledger_sequence,
-    // transaction_id)` collapses both the caller-account fan-out and any rare
-    // re-ingest duplicate, so FINAL is not needed for correctness here.
-    let driver_sql = format!(
-        "SELECT \
-            m.ledger_sequence AS ledger_sequence, \
-            m.transaction_id AS transaction_id, \
-            m.caller_id AS caller_id \
-         FROM ( \
-            SELECT ledger_sequence, transaction_id, caller_id \
-            FROM soroban_invocations_appearances \
-            WHERE contract_id = ? \
-              AND ledger_sequence <= (SELECT max(sequence) FROM ledgers) \
-              AND ({cl} IS NULL OR (ledger_sequence, transaction_id) {op} ({cl}, {ct})) \
-            ORDER BY ledger_sequence {order}, transaction_id {order} \
-            LIMIT ? \
-         ) m \
-         LIMIT 1 BY m.ledger_sequence, m.transaction_id"
-    );
-    let key_rows = client
-        .query(&driver_sql)
-        .bind(contract_surrogate_id)
-        .bind(limit)
-        .fetch_all::<InvocationKeyRow>()
-        .await?;
-
-    if key_rows.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let keys: Vec<(i64, i64)> = key_rows
-        .iter()
-        .map(|r| (r.ledger_sequence, r.transaction_id))
-        .collect();
-
-    // Step 2: fetch the transaction header columns for the page's keys.
-    let in_tuples = keys
-        .iter()
-        .map(|(ledger, tx)| format!("({ledger},{tx})"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let partitions = keys
-        .iter()
-        .map(|(ledger, _)| ledger / 500_000)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    let page_sql = format!(
-        "SELECT \
-            t.id AS transaction_id, \
-            lower(hex(t.hash)) AS hash, \
-            t.successful, \
-            l.closed_at AS created_at \
-         FROM transactions t \
-         INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
-         WHERE (t.ledger_sequence, t.id) IN ({in_tuples}) \
-           AND intDiv(t.ledger_sequence, 500000) IN ({partitions})"
-    );
-    // Caller StrKeys resolve by surrogate id (bloom seek) instead of a
-    // whole-`accounts` `LEFT JOIN … ON caller.id = m.caller_id` (task 0345).
-    // Both reads key off `key_rows` alone, so they go out together (task 0446).
-    let (tx_rows, accounts) = tokio::join!(
-        client.query(&page_sql).fetch_all::<TxMetaChRow>(),
-        resolve_accounts(
-            client,
-            key_rows.iter().filter_map(|r| r.caller_id).collect()
-        ),
-    );
-    let tx_rows = tx_rows?;
-    let accounts = accounts?;
-
-    let mut tx_by_id: HashMap<i64, TxMetaChRow> = HashMap::with_capacity(tx_rows.len());
-    for row in tx_rows {
-        tx_by_id.insert(row.transaction_id, row);
-    }
-
-    // Emit in driver keyset order, merging the transaction header columns. A
-    // key whose transaction row is somehow absent is skipped (should not occur
-    // — an invocation appearance always has its parent transaction).
-    let mut out = Vec::with_capacity(key_rows.len());
-    for key in &key_rows {
-        let Some(tx) = tx_by_id.get(&key.transaction_id) else {
-            continue;
-        };
-        out.push(InvocationAppearanceRow {
-            transaction_id: key.transaction_id,
-            transaction_hash: tx.hash.clone(),
-            ledger_sequence: key.ledger_sequence,
-            created_at: millis_to_utc(tx.created_at),
-            caller_account: key
-                .caller_id
-                .and_then(|id| accounts.get(&id).cloned())
-                .filter(|s| !s.is_empty()),
-            successful: tx.successful,
-        });
-    }
-    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

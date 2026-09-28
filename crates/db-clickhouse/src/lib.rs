@@ -204,10 +204,15 @@ mod tests {
         // task 0372: dropped `operations_appearances` and
         // `lp_operation_amounts` — every reader moved to the tables above.
         // 42 → 40.
+        // task 0586: added `contract_activity` — `contract_transactions` and
+        // the invocations' callers in one position-keyed table. 40 → 41.
+        // task 0586: dropped `contract_transactions` and
+        // `soroban_invocations_appearances` — every reader moved to
+        // `contract_activity`. 41 → 39.
         assert_eq!(
             stmts.len(),
-            40,
-            "expected 37 tables + 3 materialized views, got {}",
+            39,
+            "expected 36 tables + 3 materialized views, got {}",
             stmts.len()
         );
     }

@@ -3135,6 +3135,10 @@
             "type": ["string", "null"],
             "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
           },
+          "caller_contract": {
+            "type": ["string", "null"],
+            "description": "Root caller C-StrKey when a contract made the call; exactly one of the\ntwo callers is set."
+          },
           "contract_id": {
             "type": "string"
           },
@@ -3158,7 +3162,12 @@
         ],
         "properties": {
           "caller_account": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Caller G-StrKey when an account made the call."
+          },
+          "caller_contract": {
+            "type": ["string", "null"],
+            "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
           },
           "created_at": {
             "type": "string",
@@ -3971,7 +3980,12 @@
               ],
               "properties": {
                 "caller_account": {
-                  "type": ["string", "null"]
+                  "type": ["string", "null"],
+                  "description": "Caller G-StrKey when an account made the call."
+                },
+                "caller_contract": {
+                  "type": ["string", "null"],
+                  "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
                 },
                 "created_at": {
                   "type": "string",

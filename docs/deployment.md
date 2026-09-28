@@ -414,6 +414,43 @@ Frontend **content** is separate: `deploy-production-web`
   A drop before this deploy stops ingest on the next ledger: the earlier writer
   still inserts into both.
 
+- **Contract activity (task 0586), step 1 of that pattern.** The indexer
+  writes `contract_activity` beside `contract_transactions` and
+  `soroban_invocations_appearances`. Create the table on production **before**
+  the Compute deploy — without it the client refuses the insert on every
+  ledger. The command prints the statement; run it through `chw`:
+
+  ```bash
+  awk '/CREATE TABLE IF NOT EXISTS contract_activity \(/,/^ORDER BY/' crates/db-clickhouse/schema/init.sql
+  ```
+
+  Then deploy Compute; then fill the history ([backfills.md](./backfills.md),
+  "Contract activity"). No pause; the readers still use the old tables.
+
+- **Contract activity (task 0586), step 2: the readers.** The API reads
+  `contract_activity` only: the contract invocation stats, the Invocations
+  tab, the transaction page's invocations and the `/transactions` contract
+  filter. Deploy Compute **after the history fill has passed its gates in
+  every partition**, head included: a range the fill has not reached would
+  show no invocations and drop out of the contract filter. No operator step.
+  The Invocations tab now pages on the transaction's position, so a cursor
+  minted before the deploy answers 400 `invalid_cursor` once.
+
+- **Contract activity (task 0586), step 3: stop the old writes.** The indexer
+  writes `contract_activity` only; `contract_transactions` and
+  `soroban_invocations_appearances` leave `init.sql`. Deploy Compute after
+  step 2's deploy (the running API must no longer read the old tables — check
+  `system.query_log`), then drop both. Before each drop, record the prices-api
+  check in task 0586. Both are under the 50 GB drop guard:
+
+  ```sql
+  DROP TABLE soroban_invocations_appearances;
+  DROP TABLE contract_transactions;
+  ```
+
+  A drop before this deploy stops ingest on the next ledger: the earlier writer
+  still inserts into both.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and

@@ -487,18 +487,28 @@ pub struct OperationAssetAppearanceRow {
     pub application_order: i16,
 }
 
-/// `contract_transactions` — fact, the per-(contract, transaction) presence
-/// index (task 0541): the contract-dimension twin of `transaction_participants`,
-/// so a per-contract transaction list is a key seek instead of a merge over
-/// three tables. Keyed by the transaction's position (ADR 0059), not its hash
-/// surrogate. A transaction touches a contract through an operation event, an
-/// invocation or an operation naming it — never through a fee event. Pure
-/// presence; duplicate rows collapse in the RMT.
+/// `contract_activity` — fact, one row per (contract, transaction) the
+/// transaction touched, located by its position (tasks 0541, 0586, ADR 0059):
+/// the contract-dimension twin of `transaction_participants`, so a
+/// per-contract transaction list is a key seek. A transaction touches a
+/// contract through an operation event, an invocation or an operation naming
+/// it — never through a fee event. If the contract was invoked, the row adds
+/// the caller of its first invocation and how many times the transaction
+/// called it. Exactly one of the two callers is set on an invoked row and
+/// neither on a touched-only one, whose `invocation_count` is 0. Duplicate
+/// rows collapse in the RMT. Column order matches `init.sql`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
-pub struct ContractTransactionRow {
+pub struct ContractActivityRow {
     pub contract_id: i64,
     pub ledger_sequence: i64,
     pub application_order: i16,
+    pub caller_id: Option<i64>,
+    pub caller_contract_id: Option<i64>,
+    /// Calls of the contract in the transaction — the execution trace's
+    /// `fn_call`s merged with the auth tree (the ADR 0034 fold count);
+    /// 0 = touched, not invoked. Not recoverable from other tables:
+    /// diagnostic events are not stored.
+    pub invocation_count: i32,
 }
 
 /// `pool_operation_amounts` — fact, what one operation moved through one pool
@@ -579,17 +589,6 @@ pub struct SorobanEventRow {
     pub signature: Option<String>,
     pub topics_xdr: String,
     pub data_xdr: String,
-}
-
-/// `soroban_invocations_appearances` — fact (ADR 0034 fold).
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct SorobanInvocationAppearanceRow {
-    pub contract_id: i64,
-    pub transaction_id: i64,
-    pub ledger_sequence: i64,
-    pub caller_id: Option<i64>,
-    pub caller_contract_id: Option<i64>,
-    pub amount: i32,
 }
 
 /// `nft_ownership` — fact, no surrogate. ORDER BY

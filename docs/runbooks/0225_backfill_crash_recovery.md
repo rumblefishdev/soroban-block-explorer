@@ -23,7 +23,7 @@ CH state post-crash, per `db_clickhouse::persist::writer.rs:40-48`
 
 - **18 streaming tables** (`transactions`, `transaction_operations`,
   `soroban_events`, `transaction_participants`, `transaction_hash_prefix_index`,
-  `soroban_invocations_appearances`, `assets`, `nfts`, `nft_ownership`,
+  `contract_activity`, `assets`, `nfts`, `nft_ownership`,
   `nfts_pending`, `nft_ownership_pending`, `account_balances_current`,
   `accounts`, `soroban_contracts`, `wasm_interface_metadata`,
   `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions`) —
@@ -96,7 +96,7 @@ ALTER TABLE transactions                       DELETE WHERE ledger_sequence > <l
 ALTER TABLE transaction_operations             DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE pool_operation_amounts             DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE soroban_events                     DELETE WHERE ledger_sequence > <last_complete_ledger>;
-ALTER TABLE soroban_invocations_appearances    DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE contract_activity                  DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE transaction_participants           DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE transaction_hash_prefix_index      DELETE WHERE ledger_sequence > <last_complete_ledger>;
 -- accounts / soroban_contracts / assets / nfts / nft_ownership rows
@@ -124,7 +124,7 @@ These `ALTER … DELETE` mutations are **async on CH**. Monitor:
 SELECT command, is_done, latest_fail_reason, create_time
   FROM system.mutations
  WHERE table IN ('transactions','transaction_operations','pool_operation_amounts','soroban_events',
-                 'soroban_invocations_appearances','transaction_participants',
+                 'contract_activity','transaction_participants',
                  'transaction_hash_prefix_index','accounts','soroban_contracts',
                  'account_balances_current','nfts','nft_ownership',
                  'nfts_pending','nft_ownership_pending','lp_positions',

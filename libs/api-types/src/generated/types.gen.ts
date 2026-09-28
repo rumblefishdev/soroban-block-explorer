@@ -947,13 +947,26 @@ export type InvocationAppearanceItem = {
    * Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
    */
   caller_account?: string | null;
+  /**
+   * Root caller C-StrKey when a contract made the call; exactly one of the
+   * two callers is set.
+   */
+  caller_contract?: string | null;
   contract_id: string;
   created_at: string;
   ledger_sequence: number;
 };
 
 export type InvocationItem = {
+  /**
+   * Caller G-StrKey when an account made the call.
+   */
   caller_account?: string | null;
+  /**
+   * Caller C-StrKey when a contract made the call; exactly one of the two
+   * is set on an invocation.
+   */
+  caller_contract?: string | null;
   created_at: string;
   ledger_sequence: number;
   successful: boolean;
@@ -1613,7 +1626,15 @@ export type PaginatedEventItem = {
  */
 export type PaginatedInvocationItem = {
   data: Array<{
+    /**
+     * Caller G-StrKey when an account made the call.
+     */
     caller_account?: string | null;
+    /**
+     * Caller C-StrKey when a contract made the call; exactly one of the two
+     * is set on an invocation.
+     */
+    caller_contract?: string | null;
     created_at: string;
     ledger_sequence: number;
     successful: boolean;

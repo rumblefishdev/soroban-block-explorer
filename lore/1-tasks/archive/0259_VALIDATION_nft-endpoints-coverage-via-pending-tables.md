@@ -2,7 +2,7 @@
 id: '0259'
 title: 'VALIDATION: NFT endpoints (E15/E16/E17) coverage via `nfts_pending` / `nft_ownership_pending`'
 type: VALIDATION
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0252', '0228']
 tags: [priority-low, effort-small, layer-validation, nft]
@@ -44,6 +44,15 @@ history:
       quarantine" but simply "do E15/E16/E17 return rows now" — which is a
       five-minute check, not the task as written. Re-scope or close after that
       check; do not implement the pending-table workaround it describes.
+  - date: '2026-09-28'
+    status: completed
+    who: karolkow
+    note: >
+      Closed without the workaround (thread 304 A). The five-minute check,
+      against the deployed API: E15 `/v1/nfts` returns rows; E16
+      `/v1/nfts/CARTUL5A…/1090` returns the token; E17 its `/transfers`
+      returns 2 (mint, burn). Canonical tables hold 14,147 `nfts` and 23,504
+      `nft_ownership` rows against 277 / 521 in the quarantine.
 ---
 
 # VALIDATION: NFT endpoints coverage via pending tables

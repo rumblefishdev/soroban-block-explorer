@@ -892,7 +892,7 @@ ORDER BY (pool_id, account_id);
 ----------------------------------------------------------------------
 
 -- transactions: surrogate `id Int64` for cheap FK joins from
--- soroban_invocations_appearances, nft_ownership (`soroban_events`,
+-- nft_ownership (`soroban_events`, `contract_activity`,
 -- `transaction_participants`, `operation_asset_appearances`,
 -- `transaction_operations`, `pool_operation_amounts` join by
 -- `(ledger_sequence, application_order)`). Legacy: new tables join on the
@@ -1229,46 +1229,33 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (ledger_sequence, application_order);
 
--- `amount` is a **fold count of invocation-tree nodes** aggregated into
--- this (contract, transaction, ledger) trio (per ADR 0034 PG-side
--- convention; CH inherits same semantic). Multiple invocations of the
--- same contract within the same tx's call graph collapse into one row
--- with `amount` = how many call-graph nodes were folded. NOT a token
--- amount. Real per-invocation `function_name` / `args` / `return_value`
--- live in the Archive XDR (ADR 0029/0034).
-CREATE TABLE IF NOT EXISTS soroban_invocations_appearances (
-    contract_id          Int64,
-    transaction_id       Int64,
-    ledger_sequence      Int64,
-    caller_id            Nullable(Int64),
-    caller_contract_id   Nullable(Int64),
-    amount               Int32   -- fold count, see header comment
-)
-ENGINE = ReplacingMergeTree
-PARTITION BY intDiv(ledger_sequence, 500000)
-ORDER BY (contract_id, ledger_sequence, transaction_id);
-
--- contract_transactions: one row per (contract, transaction) the transaction
+-- contract_activity: one row per (contract, transaction) the transaction
 -- touched — the contract-dimension twin of `transaction_participants`, so the
--- contract-filtered transaction list is a key seek (task 0541). Before it, that
--- list merged `soroban_events` (one row per EVENT, up to hundreds per
--- transaction), `soroban_invocations_appearances` and `operations_appearances`
--- (no `contract_id` in its key) and had to guess how many rows made a page.
+-- contract-filtered transaction list is a key seek (task 0541) — plus the
+-- caller when the contract was invoked (task 0586; it replaced
+-- `contract_transactions` and `soroban_invocations_appearances`).
 --
 -- Sources: an operation event the transaction emits, an invocation, an
 -- operation naming the contract. Fee events do not count — every transaction
 -- pays one to the native SAC, which would make that contract's list every
--- transaction on the network. Keyed by the transaction's position (ADR 0059),
--- not the hash surrogate its siblings carry.
+-- transaction on the network. No surrogate: the transaction is its position
+-- (ADR 0059).
 --
--- PROD: created by hand BEFORE the indexer that writes it deploys — the driver
--- validates the row struct against `DESCRIBE`, and a missing table fails every
--- insert client-side (task 0310). History is filled in-DB: docs/backfills.md,
--- "Canonical event location fill".
-CREATE TABLE IF NOT EXISTS contract_transactions (
+-- `caller_id` for an account, `caller_contract_id` for a contract, exactly one
+-- of the two on an invoked row, neither on a row touched only by an operation
+-- event or an operation naming the contract. The caller is the first
+-- invocation's. `invocation_count` is how many times the transaction called
+-- the contract (the ADR 0034 fold: `fn_call`s of the execution trace merged
+-- with the auth tree), 0 on a touched-only row — no other table holds it,
+-- diagnostic events are not stored. Per-call `function_name` / `args` /
+-- `return_value` live in the archive XDR (ADR 0029/0034).
+CREATE TABLE IF NOT EXISTS contract_activity (
     contract_id        Int64,
     ledger_sequence    Int64,
-    application_order  Int16
+    application_order  Int16,
+    caller_id          Nullable(Int64),
+    caller_contract_id Nullable(Int64),
+    invocation_count   Int32
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
