@@ -100,7 +100,7 @@ pub struct EventAppearanceRow {
 }
 
 #[derive(Debug)]
-pub struct InvocationAppearanceRow {
+pub struct TransactionInvocationRow {
     pub contract_id: String,
     pub caller_account: Option<String>,
     pub ledger_sequence: i64,
@@ -423,11 +423,11 @@ pub async fn fetch_event_appearances(
 /// ledger's granules of the partition, as the invocations table's lookup by
 /// surrogate did (measured on the same key shape: 2.1 M rows / 32 ms against
 /// 1.0 M / 25 ms).
-pub async fn fetch_invocation_appearances(
+pub async fn fetch_transaction_invocations(
     client: &clickhouse::Client,
     ledger_sequence: i64,
     application_order: i16,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
+) -> Result<Vec<TransactionInvocationRow>, clickhouse::error::Error> {
     let raw = client
         .query(
             "SELECT \
@@ -457,9 +457,9 @@ pub async fn fetch_invocation_appearances(
     );
     let contracts = contracts?;
     let accounts = accounts?;
-    let mut out: Vec<InvocationAppearanceRow> = raw
+    let mut out: Vec<TransactionInvocationRow> = raw
         .into_iter()
-        .map(|r| InvocationAppearanceRow {
+        .map(|r| TransactionInvocationRow {
             contract_id: contracts
                 .get(&r.contract_surrogate)
                 .cloned()

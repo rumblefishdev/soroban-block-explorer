@@ -40,7 +40,7 @@ use super::dto::ContractIdCursor;
 use super::dto::{ContractStats, EventCursor, EventItem, SacAsset};
 
 mod list_invocations;
-pub use list_invocations::{InvocationAppearanceRow, fetch_invocation_appearances};
+pub use list_invocations::{ContractInvocationRow, fetch_contract_invocations};
 
 // ---------------------------------------------------------------------------
 // Internal query-result rows + resolved params (not serialized; the handler

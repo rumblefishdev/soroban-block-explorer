@@ -29,7 +29,7 @@ use super::dto::{
     TransactionDetailLight, TransactionListItem, TxListCursor,
 };
 use super::queries::{
-    self, EventAppearanceRow, InvocationAppearanceRow, OpRow, ResolvedListParams, TxDetailRow,
+    self, EventAppearanceRow, OpRow, ResolvedListParams, TransactionInvocationRow, TxDetailRow,
     TxListRow,
 };
 
@@ -287,7 +287,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             .collect();
         let invocations = i_res
             .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "DB fallback: fetch_invocation_appearances failed");
+                tracing::warn!(error = %e, "DB fallback: fetch_transaction_invocations failed");
                 Vec::new()
             })
             .into_iter()
@@ -476,8 +476,8 @@ async fn fetch_events_for_source(
 async fn fetch_invocations_for_source(
     state: &AppState,
     tx: &TxDetailRow,
-) -> Result<Vec<InvocationAppearanceRow>, clickhouse::error::Error> {
-    queries::fetch_invocation_appearances(&state.ch(), tx.ledger_sequence, tx.application_order)
+) -> Result<Vec<TransactionInvocationRow>, clickhouse::error::Error> {
+    queries::fetch_transaction_invocations(&state.ch(), tx.ledger_sequence, tx.application_order)
         .await
 }
 
