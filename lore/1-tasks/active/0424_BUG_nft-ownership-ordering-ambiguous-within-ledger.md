@@ -123,6 +123,57 @@ ones (key `(contract_id, token_id, ledger_sequence, application_order,
 operation_index, event_index)`, no `transaction_id`, no `event_order`), dual
 write, fill, readers, stop the old writes, drop.
 
+- **Names** (295 A): `nft_ownership_changes`, `nft_ownership_changes_pending`
+  — a row is any change of owner (mint, transfer, burn).
+- **`nfts` current owner** (296 A): its same-ledger tie is fixed in its own
+  PR after the readers — another table, another step.
+- **PRs** (297 A):
+
+| PR  | What                                                                                         | Deploy                 | Operator           |
+| --- | -------------------------------------------------------------------------------------------- | ---------------------- | ------------------ |
+| 0   | move: `nft.rs` tests → `nft/tests.rs`, NFT state → `state/nfts.rs`                           | no                     | —                  |
+| 1   | parser carries the event position; new tables beside the old; promotion moves both           | yes                    | `CREATE` ×2 before |
+| 2   | fill tool from `soroban_events` + gate against the old tables                                | no (run from a laptop) | —                  |
+| 3   | readers: transfers tab by position, new wire fields + frontend; `balance_changes` exact join | yes                    | —                  |
+| 4   | old tables no longer written; allowlist empty                                                | yes                    | `DROP` ×2 after    |
+
+- **PR 0 opened** (2026-09-28):
+  [#521](https://github.com/rumblefishdev/soroban-block-explorer/pull/521),
+  `refactor/0424-move-nft-parsing` — `nft.rs` 1,203 → 425, `state.rs`
+  1,344 → 1,191; 926 lines moved, glue only; `xdr-parser` 501 tests pass.
+- **PR 1 (write both)** — branch `feat/0424-nft-ownership-changes-dual-write`,
+  local, stacked on #521: `50ea9de1` — `NftEvent` / `ExtractedNftEvent` keep
+  the source `event_id`; `nft_ownership_changes{,_pending}` (DDL, one row
+  struct for both, staging beside the old pair, writer); staging refuses a
+  change without an event id; `nft-reclassify` moves both pairs; merge
+  scripts list the new tables; `stage.rs` 2,949 → 2,948. `eca010a1` — schema
+  overview §4.13.2, pipeline, deployment step 1. Checks: workspace clippy
+  clean; parser test that a `consecutive_mint`'s tokens share one id and a
+  transfer keeps its own; staging tests (hot / pending / dropped routing of
+  the new rows, refusal without an id); `db-clickhouse` all tests pass on a
+  local ClickHouse 26.3 (the G9 e2e writes and reads the location);
+  `xdr-parser`, `backfill-runner`, `indexer`, `api` 1,294 tests pass.
+- **#521 merged; PR 1 opened** (2026-09-28) as
+  [#523](https://github.com/rumblefishdev/soroban-block-explorer/pull/523),
+  base `develop`, no `/code-review` (thread 300 B).
+
+**NFT task sweep** (2026-09-28, read-only; 18 tasks) — what rides with this
+work:
+
+- **0497's mint ledger moves in PR 3** (not optional): `/nfts` derives
+  `minted_at_ledger` from `nft_ownership`; the PR 4 drop would break it.
+- **0542's admin-as-owner fix stays in 0542** (thread 301 B): a
+  `[mint, admin, to]` mint stores the admin as owner (`nft.rs` `extract_args`,
+  `>=` then the first address) — 46 events over 5 of our collections. The
+  PR 2 fill copies today's behaviour; 0542's fix then re-derives it.
+- **0376's contract owners** — its own small PR right after PR 3 (thread
+  303 A): 31% of NFT owners are contracts and the list resolves owners
+  through `accounts` only (0376's figure, 2026-09-08).
+- Unblocked by this task, later: 0558 (token id on `asset_transfers`),
+  0415's re-check of the 88 same-ledger tokens.
+- Housekeeping (304 A): 0529 and 0531 (already `completed`) and 0259
+  (closed, its check passed) moved to archive.
+
 ## Implementation
 
 - Thread the transaction's **application order** (and the event's index within the

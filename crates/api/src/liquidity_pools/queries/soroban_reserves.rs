@@ -26,7 +26,20 @@ struct ReservesChRow {
     reserves: Vec<String>,
 }
 
-/// Newest raw reserves per pool, keyed by lowercase pool-id hex.
+/// Registered pools whose contract code is no longer a pool, as lowercase
+/// pool-id hex. Their newest state row is the last one the pool code wrote,
+/// not what the contract holds now, so no reserve is served for them.
+///
+/// `CAZ6W4WH…`: code replaced at ledger 54,515,539 (2024-11-22) and its
+/// balances moved out at 63,767,534 (2026-08-02); our newest row, from
+/// 54,514,504, still reads 26,351 PHO and 13,194 USDC.
+// ponytail: a hand-kept list, one entry, measured 2026-09-28 (774 of 775
+// pools equal their own storage). Task 0325 replaces it with a verdict
+// written when a contract's code changes.
+const NOT_A_POOL: &[&str] = &["33eb72c7a9a01352389d1cb151ce3dbd5818007c9e21ff5520f2c085f8f9f9b0"];
+
+/// Newest raw reserves per pool, keyed by lowercase pool-id hex. A pool in
+/// [`NOT_A_POOL`] gets no entry.
 ///
 /// No plane filter: every row is decoded from the pool's own instance and
 /// keyed on the entry's owner (decision C′), and production holds no row off
@@ -42,6 +55,7 @@ pub(super) async fn fetch_raw_reserves(
         .iter()
         .copied()
         .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        .filter(|h| !NOT_A_POOL.contains(h))
         .collect();
     if ids.is_empty() {
         return Ok(HashMap::new());
@@ -91,19 +105,25 @@ pub(super) fn leg_reserves(
         .collect()
 }
 
-/// A raw integer amount in stroops as a decimal string, trailing zeros
-/// trimmed — the shape ClickHouse gives a classic reserve (`Decimal128(7)`),
-/// so both kinds of pool read the same on the wire.
+/// A raw integer amount in stroops as a decimal string — see [`scale_raw`].
 fn scale_by_7(raw: &str) -> Option<String> {
+    scale_raw(raw, 7)
+}
+
+/// A raw integer amount scaled by `decimals`, as a decimal string with
+/// trailing zeros trimmed — the shape ClickHouse gives a classic reserve
+/// (`Decimal128(7)`), so both kinds of pool read the same on the wire.
+pub(super) fn scale_raw(raw: &str, decimals: u32) -> Option<String> {
     let v: i128 = raw.trim().parse().ok()?;
     let sign = if v < 0 { "-" } else { "" };
     let abs = v.unsigned_abs();
-    let whole = abs / 10_000_000;
-    let frac = abs % 10_000_000;
+    let unit = 10u128.checked_pow(decimals)?;
+    let whole = abs / unit;
+    let frac = abs % unit;
     if frac == 0 {
         return Some(format!("{sign}{whole}"));
     }
-    let frac = format!("{frac:07}");
+    let frac = format!("{frac:0width$}", width = decimals as usize);
     Some(format!("{sign}{whole}.{}", frac.trim_end_matches('0')))
 }
 

@@ -1911,6 +1911,13 @@ export type PaginatedPoolItem = {
      * an error.
      */
     pool_kind: PoolKind;
+    /**
+     * Pool shares outstanding, as a decimal string. Classic: the latest
+     * snapshot. Soroban: the pool's own instance storage, scaled by its share
+     * token's published decimals; `null` when the pool keeps no total there
+     * (concentrated and config-factory pools) or the scale is unknown — a
+     * `0` is served only for a pool whose every reserve is `0`.
+     */
     total_shares?: string | null;
     /**
      * USD, decimal string rounded to cents (task 0199 compute-at-read).
@@ -2230,6 +2237,13 @@ export type PoolItem = {
    * an error.
    */
   pool_kind: PoolKind;
+  /**
+   * Pool shares outstanding, as a decimal string. Classic: the latest
+   * snapshot. Soroban: the pool's own instance storage, scaled by its share
+   * token's published decimals; `null` when the pool keeps no total there
+   * (concentrated and config-factory pools) or the scale is unknown — a
+   * `0` is served only for a pool whose every reserve is `0`.
+   */
   total_shares?: string | null;
   /**
    * USD, decimal string rounded to cents (task 0199 compute-at-read).

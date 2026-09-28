@@ -11,7 +11,7 @@ import { PAGE_SIZE, useNftsList, usePagedRows } from '../api/index.js';
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 import { NftFilters } from './nfts/NftFilters.js';
-import { NFT_COLUMN_COUNT, NftsTable } from './nfts/NftsTable.js';
+import { NftsTable } from './nfts/NftsTable.js';
 
 type Filters = NonNullable<ListNftsData['query']>;
 
@@ -35,14 +35,8 @@ export default function NftsListPage() {
     return filters;
   }, [collection, contract]);
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useNftsList(cursor, queryFilters);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = useNftsList(cursor, queryFilters);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
     <Stack spacing={3}>
@@ -59,25 +53,15 @@ export default function NftsListPage() {
             onContractIdChange={(v) => setFilter('contract', v || null)}
           />
         }
-        columnCount={NFT_COLUMN_COUNT}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
-        rows={rows}
-        renderTable={(visibleRows) => <NftsTable rows={visibleRows} />}
-        renderSkeleton={() => (
-          <NftsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
+          <NftsTable rows={rows} loading={loading} skeletonRows={PAGE_SIZE} />
         )}
         hasActiveFilters={hasFilters}
         emptyKind="nft"
         emptyNoun="NFTs"
         onClearFilters={clearFilters}
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </Stack>
   );

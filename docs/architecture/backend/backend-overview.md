@@ -556,9 +556,13 @@ its newest `pool_state_changes` row, in the pool's own token order (the order
 `legs` stores), scaled for native and classic legs only — a Soroban-token leg
 is `null` until its decimals are read. The list does the same for the page's
 Soroban pools in one batched read. TVL sums every leg's reserve × price
-and is `null` unless every leg has both. Reserves / total shares come from
-the latest snapshot row; clients that care about freshness read
-`latest_snapshot_at` in the response. `participant_count` is independent of
+and is `null` unless every leg has both. A classic pool's reserves and total
+shares come from its latest snapshot row; clients that care about freshness
+read `latest_snapshot_at` in the response. A Soroban pool's total shares come
+from its own instance storage (`pool_instance_state.total_shares`), scaled by
+the share token's published decimals; the stored `0` also means "no
+`TotalShares` key" (concentrated and config-factory pools), so `0` is served
+only for a pool whose every reserve is `0`, and `null` otherwise. `participant_count` is independent of
 snapshot freshness — populated even on stale pools. The money fields
 (`tvl`, `volume`, `fee_revenue`) do NOT come from the snapshot row: they are
 computed at read from the in-cluster `prices.*` views (task 0199,

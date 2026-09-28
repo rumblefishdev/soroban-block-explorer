@@ -84,9 +84,6 @@ function makeColumns(sortable: boolean): ExplorerTableColumn<LedgerListItem>[] {
   ];
 }
 
-/** Column count — used to size the loading skeleton consistently. */
-export const LEDGER_COLUMN_COUNT = makeColumns(false).length;
-
 /**
  * The Ledgers list table — sequence, hash, closed-at, protocol and
  * transaction-count columns, per the Figma design.

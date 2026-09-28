@@ -2379,7 +2379,7 @@ sections say "Not indexed yet" instead of their empty states.
 | --- | -------------------------------------------------------------------------------------------------- | ---------- |
 | 5   | Soroban participants = share-token holders from `balances`; drop the 7-day window                  | read       |
 | W1  | Stage Soroban pool operations (swap, deposit, withdraw) with amounts + backfill; per-ledger volume | write      |
-| W2  | `total_shares` nullable, concentrated pools' shares key, stored `pool_family`, instance backfill   | write      |
+| W2  | moved to task 0590 (2026-09-28): `total_shares` into `pool_state_changes` as nullable history      | write      |
 | 4d  | Soroban chart: reserves + W1 volume; volume rule moves into `PoolPriceContext` (109 A)             | read       |
 | 7   | Soroban activity from W1                                                                           | read       |
 | 6   | Drop the pair columns (deployment window)                                                          | write      |
@@ -2454,3 +2454,39 @@ dimension does not know into "native". The same default-on-miss trap as the
 The KPI strip's "no recent snapshot" caption is gone with `isPoolStale`: an
 old classic snapshot is a quiet pool's current state (item 30) and a soroban
 pool has none, so every newly served soroban reserve would have carried it.
+
+**Review of 26a (2026-09-28).** Adversarial pass against production: 0 of
+775 pools whose newest reserve vector differs in length from `legs`, 0 with
+no state row, 0 with more than one plane; `pool_reserves_reconciliation` at
+ledger 64,659,134: 774 of 775 equal their own storage. The one failure is
+`CAZ6W4WH…`, whose code stopped being a pool at 54,515,539 and whose
+balances left at 63,767,534 — 26a would have turned its "—" into 26,351 PHO,
+13,194 USDC and a TVL. A rule "code replaced after the newest state row"
+was measured and rejected: it hits 155 pools, 154 of them correct. Decision
+60 C: `soroban_reserves::NOT_A_POOL` lists that one pool and serves it no
+reserve, until task 0325 writes the verdict at the code change. CH-gated
+test: green; red without the filter (left `26351.2715771`, `13194.8815702`).
+
+### 26c — soroban total shares served (2026-09-25)
+
+Branch `feat/0374-soroban-total-shares`, stacked on 26a. List and detail read
+`pool_instance_state.total_shares`, scaled by the share token's published
+decimals. Measured first on production, per family: constant 296 positive /
+86 empty 0 / 1 holding 0 (old code, no key); pair 232 / 3 / 0; stable 46 / 39
+/ 0; elastic 1 / 2 / 0; concentrated 0 / 0 / 48 (no share token); config
+0 / 3 / 17 (supply on the share token). Share-token decimals: 726/726
+published, all 7. Chain: 15/15 sampled values (positive and zero, four
+families) equal `get_total_shares` / `total_supply`. Rule: a positive total is
+scaled; `0` only for a pool whose every reserve is `0`; otherwise `null`.
+Local API against production: 575 positive, 133 `0`, 66 `null` — the
+measured split exactly; classic unchanged. CH-gated test
+`soroban_total_shares_follow_the_measured_rule`: green, red with the value
+taken from the snapshot as before.
+
+**Where total shares show (2026-09-28, decisions 77 A, 78 B).** A count of
+LP tokens in the pool's own unit says nothing on its own and compares with
+nothing across pools, yet it headlined the detail page's KPI strip and had a
+column in the list — while the detail page showed no TVL figure at all. The
+KPI strip's first cell is now TVL (the detail endpoint already returned it);
+the list's Total shares column is gone; the Summary card keeps the value.
+Shipped inside #514, which makes the value appear for soroban pools.

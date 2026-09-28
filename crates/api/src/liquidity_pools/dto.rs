@@ -219,6 +219,11 @@ pub struct PoolItem {
     /// an empty pool rather than an unread one.
     pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
+    /// Pool shares outstanding, as a decimal string. Classic: the latest
+    /// snapshot. Soroban: the pool's own instance storage, scaled by its share
+    /// token's published decimals; `null` when the pool keeps no total there
+    /// (concentrated and config-factory pools) or the scale is unknown — a
+    /// `0` is served only for a pool whose every reserve is `0`.
     pub total_shares: Option<String>,
     /// USD, decimal string rounded to cents (task 0199 compute-at-read).
     /// Populated on **both** the list (Phase A2, one batched price lookup

@@ -6,8 +6,8 @@ import { TableSkeleton } from '@rumblefish/soroban-block-explorer-ui';
  * ledgers, accounts, assets, nfts, liquidity-pools). Mirrors the shared
  * list shell — `PageHeader` + `DataListCard` (filters + table +
  * pagination) — so the lazy-chunk fallback (phase A) matches the mounted
- * page's own loading state (phase B), where `DataListCard` renders the same
- * `TableSkeleton`. Kills the card→table layout flicker the generic
+ * page's own loading state (phase B), where `DataListCard` renders the table
+ * in its loading mode. Kills the card→table layout flicker the generic
  * `DetailSkeleton` fallback caused (F-W6-LOADSKEL-2).
  *
  * Eager + self-contained (only libs/ui primitives, no lazy-page imports) so
@@ -68,9 +68,9 @@ export function ListPageSkeleton({
           </Box>
         )}
 
-        {/* Table body — same flush TableSkeleton DataListCard renders in phase B
-            (row count == DataListCard's `skeletonRows` default = a full
-            PAGE_SIZE page, so phase A → phase B has no height jump). */}
+        {/* Table body — 20 rows, the same full PAGE_SIZE page the list pages'
+            table skeletons render in phase B, so phase A → phase B has no
+            height jump. */}
         <TableSkeleton rows={20} columns={columns} rowHeight={rowHeight} />
 
         {/* Pagination placeholder */}

@@ -2,6 +2,7 @@ import { Stack } from '@mui/material';
 import type { PoolAssetLeg, PoolItem } from '@rumblefish/api-types';
 import {
   formatCompactAmount,
+  formatCompactUsd,
   formatInteger,
   IdentifierDisplay,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -20,8 +21,10 @@ interface PoolKpiStripProps {
 }
 
 /**
- * KPI strip above the Summary card on the LP detail page — total shares, one
- * cell per leg reserve, and participant count. Reserves render with compact
+ * KPI strip above the Summary card on the LP detail page — TVL, one cell per
+ * leg reserve, and participant count. Total shares live in the Summary card:
+ * a count of LP tokens in the pool's own unit reads as nothing on its own and
+ * compares with nothing across pools, so it does not headline the page. Reserves render with compact
  * notation (`1.2M`, `480K`); the subtitle carries the asset code so the value
  * reads cleanly without units stacked on top.
  *
@@ -58,9 +61,9 @@ export function PoolKpiStrip({ pool }: PoolKpiStripProps) {
       sx={{ width: '100%', rowGap: { xs: 2, sm: 3 } }}
     >
       <KpiCell
-        label="Total shares"
-        value={formatCompactAmount(pool.total_shares)}
-        caption="shares outstanding"
+        label="TVL"
+        value={pool.tvl == null ? '—' : formatCompactUsd(pool.tvl)}
+        caption="total value locked"
       />
       {pool.legs.map((leg, i) => {
         const code = assetLegLabel(leg);
