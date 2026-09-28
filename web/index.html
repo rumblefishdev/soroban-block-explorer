@@ -2,6 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Google Consent Mode: everything denied until the HubSpot banner says
+         otherwise. Must run before GTM; the listener after the HubSpot loader
+         sends the update. -->
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        dataLayer.push(arguments);
+      }
+      gtag('consent', 'default', {
+        analytics_storage: 'denied',
+        ad_storage: 'denied',
+        ad_user_data: 'denied',
+        ad_personalization: 'denied',
+        wait_for_update: 500,
+      });
+    </script>
     <!-- Google Tag Manager -->
     <script>
       (function (w, d, s, l, i) {
@@ -45,5 +61,24 @@
       src="//js.hs-scripts.com/8102665.js"
     ></script>
     <!-- End of HubSpot Embed Code -->
+    <!-- Forward the banner choice to Google Consent Mode. HubSpot calls this on
+         load with a stored choice and on every change (footer Cookie Settings
+         included). Blocked HubSpot = never called = stays denied. -->
+    <script>
+      var _hsp = (window._hsp = window._hsp || []);
+      _hsp.push([
+        'addPrivacyConsentListener',
+        function (consent) {
+          var analytics = consent.categories.analytics ? 'granted' : 'denied';
+          var ads = consent.categories.advertisement ? 'granted' : 'denied';
+          gtag('consent', 'update', {
+            analytics_storage: analytics,
+            ad_storage: ads,
+            ad_user_data: ads,
+            ad_personalization: ads,
+          });
+        },
+      ]);
+    </script>
   </body>
 </html>
