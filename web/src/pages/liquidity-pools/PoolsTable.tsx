@@ -101,6 +101,11 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
                   and the filter above can select between them — so the row has
                   to say which one it is. Same badge the assets list wears. */}
               <Chip size="sm" color={kind.color} label={kind.label} />
+              {/* The protocol, when its own publications claim the pool's
+                  router or factory; absent rather than guessed otherwise. */}
+              {row.protocol && (
+                <Chip size="sm" color="neutral" label={row.protocol} />
+              )}
             </Stack>
           </Stack>
         </Stack>

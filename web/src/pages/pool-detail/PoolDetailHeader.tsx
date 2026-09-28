@@ -46,6 +46,9 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
                 label={POOL_KIND_META[pool.pool_kind].label}
               />
             )}
+            {pool?.protocol && (
+              <Chip size="sm" color="neutral" label={pool.protocol} />
+            )}
           </Stack>
         </Stack>
       </Stack>

@@ -55,6 +55,7 @@ fn is_hex_pool_id(s: &str) -> bool {
 struct PoolListChRow {
     pool_id_hex: String,
     pool_kind: i16,
+    deployment_id: i64,
     /// Leg ASSET surrogates in registration order. Resolved to identities in
     /// Rust rather than joined here: the dimensions key on `assets.id`, and the
     /// shared resolver already carries the shapes those joins have to get right.
@@ -252,6 +253,7 @@ pub async fn fetch_pool_list(
         "WITH \
          page AS ( \
              SELECT lp.pool_id AS pool_id, lp.pool_kind AS pool_kind, \
+                    lp.deployment_id AS deployment_id, \
                     lp.legs AS legs, lp.fee_bps AS fee_bps, \
                     lp.last_updated_ledger AS last_updated_ledger, \
                     {act} AS activity_ledger \
@@ -268,6 +270,7 @@ pub async fn fetch_pool_list(
          SELECT \
              lower(hex(lp.pool_id))                          AS pool_id_hex, \
              toInt16(lp.pool_kind)                           AS pool_kind, \
+             lp.deployment_id                                AS deployment_id, \
              lp.legs                                         AS legs, \
              lp.fee_bps                                      AS fee_bps, \
              ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
@@ -416,6 +419,7 @@ pub async fn fetch_pool_list(
             let tvl = tvl_usd(&reserve_strs, &legs, &closes).map(usd_str);
             PoolRow {
                 pool_kind,
+                deployment_id: r.deployment_id,
                 pool_id_hex: r.pool_id_hex,
                 legs: leg_rows(&r.legs, &identities, &icons, &reserves),
                 fee_bps: r.fee_bps,

@@ -2588,3 +2588,25 @@ instead of reading as unpublished; `fetch_token_decimals` reads
 The CH test that pins it stops merges on `soroban_contract_metadata` (#530):
 a background merge would leave only the newer row and let the old query
 pass. Red with plain `argMax`: the unpublished leg reads `Some("0.0000999")`.
+
+### Protocol name on a soroban pool (2026-09-28)
+
+Branch `feat/0374-soroban-pool-protocol-label`. Issue #405 names Aquarius and
+Soroswap, yet a soroban pool showed only a "Soroban" chip. `PoolItem.protocol`
+now names the protocol from the pool's `deployment_id` — the router or
+factory that registered it — only when the protocol's own publications claim
+that contract (the evidence rule of the earlier `protocol_labels.rs`,
+1e5b959b7, revived as `liquidity_pools/protocol_labels.rs`):
+
+| Protocol | Deployment              | Evidence (checked 2026-09-28)                    | Pools |
+| -------- | ----------------------- | ------------------------------------------------ | ----: |
+| Aquarius | router `CBQDHNBF…6QUK`  | docs.aqua.network, "prerequisites and basics"    |   355 |
+| Soroswap | factory `CA4HEQTL…7AW2` | `soroswap/core` `public/mainnet.contracts.json`  |   214 |
+| Phoenix  | factory `CB4SVAWJ…CKMI` | `phoenix-contracts` `scripts/upgrade_mainnet.sh` |    14 |
+
+The other 192 soroban pools (the second router that runs Aquarius's code with
+different admins, and eight dead routers and factories) read `protocol:
+null`. No database read: the surrogate is `ids::contract_id(address)`, pinned
+by a test against the production ids. Local API against production: 355 / 214
+/ 14 / 192 null of 775, exactly the measured split. The list row and the pool
+header show the name as a second chip beside "Soroban".

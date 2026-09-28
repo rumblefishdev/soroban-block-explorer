@@ -29,6 +29,7 @@ fn base_row() -> PoolRow {
     PoolRow {
         pool_id_hex: "0".repeat(64),
         pool_kind: domain::PoolKind::Classic,
+        deployment_id: 0,
         legs: vec![native_leg(), usdc_leg()],
         fee_bps: 30,
         fee_percent: "0.30".into(),
@@ -138,4 +139,26 @@ fn participant_count_is_null_for_a_soroban_pool() {
     assert_eq!(map_pool_item(row.clone()).participant_count, Some(7));
     row.pool_kind = domain::PoolKind::Soroban;
     assert_eq!(map_pool_item(row).participant_count, None);
+}
+
+/// The protocol name follows the pool's registering deployment: named for a
+/// claimed one, absent for a classic pool and for an unclaimed deployment.
+#[test]
+fn a_pool_names_its_protocol_only_from_a_claimed_deployment() {
+    assert_eq!(map_pool_item(base_row()).protocol, None);
+
+    let mut aquarius = base_row();
+    aquarius.pool_kind = domain::PoolKind::Soroban;
+    aquarius.deployment_id = db_clickhouse::persist::ids::contract_id(
+        "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK",
+    );
+    assert_eq!(
+        map_pool_item(aquarius).protocol.as_deref(),
+        Some("Aquarius")
+    );
+
+    let mut unclaimed = base_row();
+    unclaimed.pool_kind = domain::PoolKind::Soroban;
+    unclaimed.deployment_id = 7;
+    assert_eq!(map_pool_item(unclaimed).protocol, None);
 }
