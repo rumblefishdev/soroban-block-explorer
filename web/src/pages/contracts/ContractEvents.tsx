@@ -16,7 +16,7 @@ import { useMemo } from 'react';
 import { useContractEvents, usePagedRows } from '../../api/index.js';
 import { capitalize } from '../../utils/text.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
-import { DataListCard } from '../detail/DataListCard.js';
+import { DataList } from '../detail/DataList.js';
 import { ledgerColumn } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
@@ -175,9 +175,8 @@ export function ContractEvents({ contractId }: { contractId: string }) {
   );
 
   return (
-    <DataListCard
-      // Bare, inside the contract page's tab card — no card of its own.
-      renderContainer={(content) => <Box>{content}</Box>}
+    // Bare, inside the contract page's tab card — no frame of its own.
+    <DataList
       columnCount={columns.length}
       isLoading={isLoading}
       isReloading={isPlaceholderData}

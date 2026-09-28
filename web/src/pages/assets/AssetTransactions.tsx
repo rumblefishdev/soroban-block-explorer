@@ -6,13 +6,12 @@ import {
   IdentifierDisplay,
   IdentifierWithCopy,
   StatusChip,
-  TableEmptyState,
   useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { useAssetTransactions, usePagedRows } from '../../api/index.js';
-import { DataListCard } from '../detail/DataListCard.js';
+import { DataList } from '../detail/DataList.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { OperationCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
@@ -84,42 +83,42 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
   );
 
   return (
-    <DataListCard
-      renderContainer={(content) => (
-        <SectionCard title="Latest transactions">{content}</SectionCard>
-      )}
-      columnCount={columns.length}
-      isLoading={isLoading}
-      isReloading={isPlaceholderData}
-      isError={isError}
-      error={error}
-      onRetry={() => void refetch()}
-      errorPy={6}
-      rows={rows}
-      renderSkeleton={() => (
-        <ExplorerTable
-          columns={columns}
-          rows={[]}
-          rowKey={(row) => row.hash}
-          loading
-          skeletonRows={20}
-          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-        />
-      )}
-      renderTable={(pageRows) => (
-        <ExplorerTable
-          columns={columns}
-          rows={pageRows}
-          rowKey={(row) => row.hash}
-          rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-        />
-      )}
-      renderEmpty={() => <TableEmptyState kind="transactions" py={6} />}
-      emptyNoun="transactions"
-      canPrev={canPrev}
-      canNext={canNext}
-      onPrev={handlePrev}
-      onNext={handleNext}
-    />
+    <SectionCard title="Latest transactions">
+      <DataList
+        columnCount={columns.length}
+        isLoading={isLoading}
+        isReloading={isPlaceholderData}
+        isError={isError}
+        error={error}
+        onRetry={() => void refetch()}
+        errorPy={6}
+        rows={rows}
+        renderSkeleton={() => (
+          <ExplorerTable
+            columns={columns}
+            rows={[]}
+            rowKey={(row) => row.hash}
+            loading
+            skeletonRows={20}
+            rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+          />
+        )}
+        renderTable={(pageRows) => (
+          <ExplorerTable
+            columns={columns}
+            rows={pageRows}
+            rowKey={(row) => row.hash}
+            rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+          />
+        )}
+        emptyKind="transactions"
+        emptyPy={6}
+        emptyNoun="transactions"
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={handlePrev}
+        onNext={handleNext}
+      />
+    </SectionCard>
   );
 }
