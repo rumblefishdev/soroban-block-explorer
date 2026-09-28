@@ -164,6 +164,19 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   4.37 M rows / 78 ms vs 0.54 M / 32 ms, the rest from 199 unmerged parts
   after the fill (6.6 per partition vs 1.9), left to background merges.
 
+- **Review of PR 2** (standards + spec, 2026-09-28): #512 merged, #513
+  retargeted to `develop`. No defect in the readers: every API read moved,
+  `invocation_count > 0` on the four invocation readers and not on the
+  `/transactions` filter, dedup kept, unique callers still `caller_id` only
+  (249 A). Fixed: `contracts/queries.rs` had grown 995 → 999 (now 993),
+  a comment pointed at deleted SQL, the schema overview / pilot / pipeline
+  docs still named the old readers. Behaviour change to state in the PR:
+  within one ledger the Invocations tab now lists by execution order, not by
+  the hash surrogate. Open: `TxListCursor::ChSurrogate` still decodes only
+  to be refused — dropping it makes the three list guards dead; names
+  `fetch_invocation_appearances` / `InvocationAppearanceRow` describe the
+  retired table.
+
 ## Acceptance Criteria
 
 - [ ] New table filled and gated in every partition; whole rows compared
