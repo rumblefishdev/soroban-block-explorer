@@ -130,6 +130,31 @@ wrong value is worse than an admitted gap.
   tab, `transactions/queries.rs` transaction page), with the query names
   from #516 (`fetch_contract_invocations`, `fetch_transaction_invocations`).
 
+## Progress
+
+- **Branch `fix/0487-contract-callers`** (2026-09-28, local, stacked on
+  #516): `f44214a2` — the stats count `uniqExact(tuple(ca.caller_id,
+ca.caller_contract_id))`; both invocation lists return `caller_contract`
+  (C-StrKey) beside `caller_account`; the tab's `CallerCell` links an account,
+  else a contract, else a dash. The transaction page resolves a contract
+  caller in the same `soroban_contracts` seek as the invoked contract (no new
+  read); the tab adds one arm to its top-level join (3, pool of 8).
+  `86a7514f` — canonical SQL 03 / 11 / 13, frontend and technical overviews.
+- **Checks:** clippy clean; `cargo test -p api` 660 (+1: the stats SQL counts
+  both columns); web 388 tests (+3: account, contract, neither); typecheck
+  and lint clean (4 old warnings elsewhere); API types regenerated.
+- **Production, read-only:** KALE SAC, 7 days — `uniqExact(caller_id)` 62,
+  the pair 73, both 2,107,694 rows read (21 vs 17 MiB). Local API on
+  production ClickHouse: stats 73; the tab's latest 100 rows all have a
+  contract caller, `CDL74RF5…`. Checked against the chain: RPC
+  `getTransaction` of `47f07469…`, diagnostic `fn_call` events decoded with
+  the official `stellar xdr` CLI — `CDL74RF5…` calls `mint` on KALE SAC
+  (root: an account calls `harvest` on `CBGSBKYM…`). The transaction page
+  reads invocations from the archive; its DB path is the archive-down
+  fallback and was not exercised live.
+- **Frontend:** the transaction page does not render the invocation caller
+  at all, so nothing there to fix; the field is on the wire for it.
+
 ## Watch out
 
 - The tile label says "Unique callers". Once contracts count, decide whether
