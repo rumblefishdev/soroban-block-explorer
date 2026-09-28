@@ -2549,3 +2549,11 @@ split. Inventory on production:
 - **Not mergeable:** `pool_instance_state` into `liquidity_pools` (different
   writer and clock; a whole-row RMT would clobber the registry — decided
   2026-08-27).
+
+Decisions (owner, 2026-09-28): **71 B** — no `pool_state` view; the two
+joins in the main query stay (a view would save ~6 lines and cost a
+production DDL, plus a per-branch band condition, since the classic ±10k
+ledger band would cut quiet soroban pools). **72 A** — W1 writes soroban
+pool operations into `pool_operation_amounts`, not a new
+`soroban_pool_trades`; the `amount Int64` width is decided when W1 starts
+(widening 990M rows is an operator mutation).
