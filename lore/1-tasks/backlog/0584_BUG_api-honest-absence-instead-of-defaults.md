@@ -59,7 +59,11 @@ production):
   already serve `null` for such a leg (`soroban_reserves::leg_reserves`, PR
   #518); these surfaces should do the same: `decimals: null`, amount shown as
   "—" or unscaled with a marker, never scaled by 7. Check task 0473 first — its
-  patch for a third metadata layout may shrink the 82.
+  patch for a third metadata layout may shrink the 82. The shared resolver
+  (`common/asset_identity.rs`, ~lines 190–199) also reads
+  `argMax(decimals, version)`, which skips a `NULL` argument and so returns an
+  older version's decimals when the newest row has none; the pool read fixed
+  the same thing with `argMax(tuple(decimals), version).1` (PR #518).
 
 Out of scope: `join_use_nulls` for the API's read-only user (an operator
 setting), merged accounts (0321).
