@@ -14,7 +14,9 @@ use super::soroban_reserves::{
     STATE_RESERVES_JOIN, fetch_token_decimals, leg_reserves, served_raw_reserves,
     soroban_token_contracts,
 };
-use super::soroban_total_shares::{STORED_SHARES_JOIN, StoredTotalShares, served_total_shares};
+use super::soroban_total_shares::{
+    STORED_SHARES_JOIN, StoredTotalShares, served_total_shares, share_token_decimals,
+};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolRow, fee_percent_str, leg_rows};
 use crate::liquidity_pools::dto::PoolListCursor;
@@ -76,7 +78,9 @@ struct PoolListChRow {
     /// A soroban pool's stored total shares ([`STORED_SHARES_JOIN`]); `""`
     /// for a pool with no instance row.
     stored_shares: String,
-    share_decimals: Option<u32>,
+    /// The pool's share token (`0` for none or a classic pool); resolved with
+    /// the legs for its decimals.
+    share_token_id: i64,
 }
 
 /// The ordering value the list pages on: the pool's LAST ACTIVITY.
@@ -282,7 +286,7 @@ pub async fn fetch_pool_list(
              nullIf(toUnixTimestamp64Milli(l_snap.closed_at), 0) AS latest_snapshot_at_ms, \
              ps.reserves                                     AS state_reserves, \
              sh.stored_shares                                AS stored_shares, \
-             sh.share_decimals                               AS share_decimals \
+             sh.share_token_id                               AS share_token_id \
          FROM page lp \
          LEFT JOIN ( \
              SELECT pool_id, \
@@ -351,13 +355,19 @@ pub async fn fetch_pool_list(
     // One batched identity resolution for every leg on the page, with the
     // icons read alongside it. Both key on `assets.id`, which is exactly what
     // `legs` stores.
-    let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|r| r.legs.iter().copied()).collect();
+    // A soroban pool's share token resolves with the legs: its decimals scale
+    // the pool's total shares.
+    let leg_ids: BTreeSet<i64> = rows
+        .iter()
+        .flat_map(|r| r.legs.iter().copied().chain([r.share_token_id]))
+        .filter(|id| *id != 0)
+        .collect();
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
     let soroban_legs = rows
         .iter()
         .filter(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind) == domain::PoolKind::Soroban)
-        .flat_map(|r| r.legs.iter());
+        .flat_map(|r| r.legs.iter().chain([&r.share_token_id]));
     let token_decimals =
         fetch_token_decimals(client, &soroban_token_contracts(soroban_legs, &identities)).await?;
 
@@ -409,8 +419,11 @@ pub async fn fetch_pool_list(
                 domain::PoolKind::Soroban => (
                     leg_reserves(&r.legs, &identities, &token_decimals, raw),
                     served_total_shares(
-                        StoredTotalShares::from_join(r.stored_shares.clone(), r.share_decimals)
-                            .as_ref(),
+                        StoredTotalShares::from_join(
+                            r.stored_shares.clone(),
+                            share_token_decimals(r.share_token_id, &identities, &token_decimals),
+                        )
+                        .as_ref(),
                         raw,
                     ),
                 ),

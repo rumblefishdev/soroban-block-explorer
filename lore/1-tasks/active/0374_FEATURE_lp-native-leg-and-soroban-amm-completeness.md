@@ -2575,3 +2575,14 @@ Nullable(Int128)` on `pool_state_changes`, staged in the same pass as the
 reserves, history re-parsed, then dropped from `pool_instance_state`. After
 it the classic and soroban state rows have the same logical shape (pool,
 ledger, reserves, total shares), which is what a shared view or table needs.
+
+**Share-token scale through the resolver (2026-09-28, decision 86 A).** The
+stored-shares join no longer walks `soroban_contracts` (a whole-table scan
+per request: 152,397 of 154,364 rows, the filter is on `id`, the sort key is
+`contract_id`) and `soroban_contract_metadata`. The share token resolves with
+the page's legs — 730 of 730 share tokens are in `assets` — and its decimals
+come from the same `fetch_token_decimals` batch as the legs'. Old vs new
+against production: 775 of 775 soroban pools identical, default list
+identical on the 293 rows both walks held, three details identical; soroban
+page 0.76 s → 0.69 s. The CH test now seeds share tokens as `assets` rows
+with real contract addresses; red with the share decimals dropped.

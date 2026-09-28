@@ -13,39 +13,43 @@
 //! `get_total_shares()` / `total_supply()`. Every share token has published
 //! decimals (7, all 726); a token without them reads `null`, never a guess.
 
+use std::collections::HashMap;
+
+use crate::common::asset_identity::ResolvedAsset;
+
 use super::soroban_reserves::scale_raw;
 
 /// The subquery the list and detail reads LEFT JOIN on `pool_id` for a
 /// soroban pool's stored total shares (`stored_shares`, as text) and its share
-/// token's decimals (`share_decimals`); `{pools}` is the caller's pool-id
-/// predicate. A classic pool has no row: the join miss reads `''` and NULL,
-/// which [`StoredTotalShares::from_join`] turns into "no stored value".
+/// token (`share_token_id`); `{pools}` is the caller's pool-id predicate. A
+/// classic pool has no row: the join miss reads `''` and `0`, which
+/// [`StoredTotalShares::from_join`] turns into "no stored value".
 ///
-/// `decimals` is `Nullable(UInt32)`, so a pool whose share token or its
-/// metadata row is missing reads NULL through both LEFT JOINs — not a default
-/// `0` that would scale the total by 10^0.
-pub(super) const STORED_SHARES_JOIN: &str = "SELECT i.pool_id AS pool_id, \
-        toString(i.ts) AS stored_shares, \
-        m.decimals     AS share_decimals \
-     FROM ( \
-         SELECT pool_id, \
-                argMax(total_shares, derived_at_ledger)   AS ts, \
-                argMax(share_token_id, derived_at_ledger) AS token_id \
-         FROM pool_instance_state \
-         WHERE {pools} \
-         GROUP BY pool_id \
-     ) i \
-     LEFT JOIN ( \
-         SELECT id, contract_id FROM soroban_contracts \
-         WHERE id IN (SELECT argMax(share_token_id, derived_at_ledger) \
-                      FROM pool_instance_state \
-                      WHERE {pools} GROUP BY pool_id) \
-         LIMIT 1 BY id \
-     ) sc ON sc.id = i.token_id \
-     LEFT JOIN ( \
-         SELECT contract_id, argMax(decimals, version) AS decimals \
-         FROM soroban_contract_metadata GROUP BY contract_id \
-     ) m ON m.contract_id = sc.contract_id";
+/// The share token's scale is not joined here: the token is an asset like any
+/// leg (730 of 730 share tokens are in `assets`), so the caller resolves it
+/// with the legs and reads its decimals with theirs — see
+/// [`share_token_decimals`].
+pub(super) const STORED_SHARES_JOIN: &str = "SELECT pool_id, \
+        toString(argMax(total_shares, derived_at_ledger)) AS stored_shares, \
+        argMax(share_token_id, derived_at_ledger)         AS share_token_id \
+     FROM pool_instance_state \
+     WHERE {pools} \
+     GROUP BY pool_id";
+
+/// A share token's published decimals, from the identities and the token
+/// decimals the caller resolved for the page; `None` for no share token (`0`,
+/// a concentrated pool) or one that publishes none.
+pub(super) fn share_token_decimals(
+    share_token_id: i64,
+    identities: &HashMap<i64, ResolvedAsset>,
+    token_decimals: &HashMap<String, u32>,
+) -> Option<u32> {
+    let contract = identities
+        .get(&share_token_id)?
+        .contract_strkey
+        .as_deref()?;
+    token_decimals.get(contract).copied()
+}
 
 /// The stored total and the share token's decimals, per pool.
 pub(super) struct StoredTotalShares {

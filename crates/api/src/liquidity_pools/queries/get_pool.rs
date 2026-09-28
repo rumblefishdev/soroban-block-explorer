@@ -12,7 +12,9 @@ use super::soroban_reserves::{
     STATE_RESERVES_JOIN, fetch_token_decimals, leg_reserves, served_raw_reserves,
     soroban_token_contracts,
 };
-use super::soroban_total_shares::{STORED_SHARES_JOIN, StoredTotalShares, served_total_shares};
+use super::soroban_total_shares::{
+    STORED_SHARES_JOIN, StoredTotalShares, served_total_shares, share_token_decimals,
+};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -35,7 +37,9 @@ struct PoolDetailChRow {
     /// A soroban pool's stored total shares ([`STORED_SHARES_JOIN`]); `""`
     /// for a pool with no instance row.
     stored_shares: String,
-    share_decimals: Option<u32>,
+    /// The pool's share token (`0` for none or a classic pool); resolved with
+    /// the legs for its decimals.
+    share_token_id: i64,
 }
 
 /// `GET /v1/liquidity-pools/:id` — single-pool detail. Mirrors the PG
@@ -46,10 +50,10 @@ pub async fn fetch_pool_by_id(
     client: &clickhouse::Client,
     pool_id_hex: &str,
 ) -> Result<Option<PoolRow>, clickhouse::error::Error> {
-    // `unhex(?)` appears 8×: the created_at-ledger subquery, the
+    // `unhex(?)` appears 7×: the created_at-ledger subquery, the
     // participant-count subquery, the latest-snapshot subquery, the soroban
-    // state-row subquery, the soroban stored-shares subquery (twice), the
-    // `ledgers` seek, and the outer WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
+    // state-row subquery, the soroban stored-shares subquery, the `ledgers`
+    // seek, and the outer WHERE. All scoped to the literal pool id (NOT correlated to `lp`) since
     // detail is single-pool and CH dislikes correlated subqueries. Each `?`
     // consumes one positional bind; all are the same value, so order is moot.
     //
@@ -105,7 +109,7 @@ pub async fn fetch_pool_by_id(
                 nullIf(toUnixTimestamp64Milli(l.closed_at), 0) AS latest_snapshot_at_ms, \
                 ps.reserves                          AS state_reserves, \
                 sh.stored_shares                     AS stored_shares, \
-                sh.share_decimals                    AS share_decimals \
+                sh.share_token_id                    AS share_token_id \
              FROM liquidity_pools lp FINAL \
              LEFT JOIN ( \
                  SELECT pool_id, \
@@ -137,12 +141,18 @@ pub async fn fetch_pool_by_id(
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
-        .bind(pool_id_hex)
         .fetch_optional::<PoolDetailChRow>()
         .await?;
 
     let Some(r) = row else { return Ok(None) };
-    let leg_ids: BTreeSet<i64> = r.legs.iter().copied().collect();
+    // The share token resolves with the legs: its decimals scale the total.
+    let leg_ids: BTreeSet<i64> = r
+        .legs
+        .iter()
+        .copied()
+        .chain([r.share_token_id])
+        .filter(|id| *id != 0)
+        .collect();
     let (identities, icons) = resolve_identities_and_icons(client, &leg_ids).await?;
 
     // A classic pool's legs are its two snapshot columns in order; a soroban
@@ -154,14 +164,18 @@ pub async fn fetch_pool_by_id(
             r.total_shares.clone(),
         ),
         domain::PoolKind::Soroban => {
-            let tokens = soroban_token_contracts(&r.legs, &identities);
+            let tokens =
+                soroban_token_contracts(r.legs.iter().chain([&r.share_token_id]), &identities);
             let token_decimals = fetch_token_decimals(client, &tokens).await?;
             let raw = served_raw_reserves(&r.pool_id_hex, &r.state_reserves);
             (
                 leg_reserves(&r.legs, &identities, &token_decimals, raw),
                 served_total_shares(
-                    StoredTotalShares::from_join(r.stored_shares.clone(), r.share_decimals)
-                        .as_ref(),
+                    StoredTotalShares::from_join(
+                        r.stored_shares.clone(),
+                        share_token_decimals(r.share_token_id, &identities, &token_decimals),
+                    )
+                    .as_ref(),
                     raw,
                 ),
             )

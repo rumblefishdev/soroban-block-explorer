@@ -16,6 +16,11 @@ const EMPTY: &str = "62626262626262626262626262626262626262626262626262626262626
 const NO_KEY: &str = "6363636363636363636363636363636363636363636363636363636363636363";
 const NO_SCALE: &str = "6464646464646464646464646464646464646464646464646464646464646464";
 
+// Share tokens, resolved like any soroban leg: an `assets` row, a contract
+// address, and (for 901 only) published decimals.
+const SHARE_901: &str = "CAUP7NFABXE5TJRL3FKTPMWRLC7IAXYDCTHQRFSCLR5TMGKHOOQO772J";
+const SHARE_904: &str = "CBIJBDNZNF4X35BJ4FFZWCDBSCKOP5NB4PLG4SNENRMLAPYG4P5FM6VN";
+
 #[tokio::test]
 async fn soroban_total_shares_follow_the_measured_rule() {
     let Some(base) = crate::common::ch::test_client_from_env() else {
@@ -60,12 +65,17 @@ async fn soroban_total_shares_follow_the_measured_rule() {
              (unhex('{NO_KEY}'), 1, 0, 0, 200), \
              (unhex('{NO_SCALE}'), 1, 904, 4622, 200)"
         ),
-        "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
-         (901, 'CSHARETOKEN901', false), (904, 'CSHARETOKEN904', false)"
+        "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, id) VALUES \
+         (3, '', 0, 901, 901), (3, '', 0, 904, 904)"
             .to_string(),
-        "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
-         ('CSHARETOKEN901', 7, 1)"
-            .to_string(),
+        format!(
+            "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
+             (901, '{SHARE_901}', false), (904, '{SHARE_904}', false)"
+        ),
+        format!(
+            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
+             ('{SHARE_901}', 7, 1)"
+        ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
     }
