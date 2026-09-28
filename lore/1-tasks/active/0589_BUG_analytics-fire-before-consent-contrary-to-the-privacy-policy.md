@@ -2,7 +2,7 @@
 id: '0589'
 title: 'BUG: GA fires and sets _ga before consent, while the privacy policy says analytics wait for consent'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0437', '0451', '0577']
 tags: [frontend, privacy, analytics, priority-high, effort-small]
@@ -17,6 +17,12 @@ history:
       Measured while adding the same GTM container to the Prices API portal
       (stellar-prices-api task 0316). The portal copies whatever this repo
       does, so the fix is made here first and then repeated there.
+  - date: '2026-09-28'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started. Option 1 (Consent Mode default + HubSpot listener in
+      web/index.html) is the fix in this repo.
 ---
 
 # BUG: GA fires and sets \_ga before consent, while the privacy policy says analytics wait for consent
@@ -39,9 +45,9 @@ visible and untouched:
 - The `dataLayer` holds no `consent default` entry, and `gcd=13l3l3l2l1l1`
   means Google's Consent Mode receives no signal at all.
 
-**Why it is so.** [[0451]] decision 7 recorded that gating GTM on consent
-was "raised, costed and declined by the owner as out of scope". At that
-point the footer linked the corporate policy.
+**Why it is so.** [[0451]] (decision 7) left GTM ungated on consent. At
+that point the footer linked the corporate policy, so the site made no
+promise of its own about analytics.
 
 **Why it is now a defect.** [[0577]] published the site's own policy.
 `PrivacyPolicyPage.tsx` §3 says that where the law requires it, "analytics
