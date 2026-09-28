@@ -153,6 +153,26 @@ write, fill, readers, stop the old writes, drop.
   the new rows, refusal without an id); `db-clickhouse` all tests pass on a
   local ClickHouse 26.3 (the G9 e2e writes and reads the location);
   `xdr-parser`, `backfill-runner`, `indexer`, `api` 1,294 tests pass.
+- **#521 merged; PR 1 opened** (2026-09-28) as
+  [#523](https://github.com/rumblefishdev/soroban-block-explorer/pull/523),
+  base `develop`, no `/code-review` (thread 300 B).
+
+**NFT task sweep** (2026-09-28, read-only; 18 tasks) — what rides with this
+work:
+
+- **0497's mint ledger moves in PR 3** (not optional): `/nfts` derives
+  `minted_at_ledger` from `nft_ownership`; the PR 4 drop would break it.
+- **0542's admin-as-owner fix stays in 0542** (thread 301 B): a
+  `[mint, admin, to]` mint stores the admin as owner (`nft.rs` `extract_args`,
+  `>=` then the first address) — 46 events over 5 of our collections. The
+  PR 2 fill copies today's behaviour; 0542's fix then re-derives it.
+- **0376's contract owners** — its own small PR right after PR 3 (thread
+  303 A): 31% of NFT owners are contracts and the list resolves owners
+  through `accounts` only (0376's figure, 2026-09-08).
+- Unblocked by this task, later: 0558 (token id on `asset_transfers`),
+  0415's re-check of the 88 same-ledger tokens.
+- Housekeeping (304 A): 0529 and 0531 (already `completed`) and 0259
+  (closed, its check passed) moved to archive.
 
 ## Implementation
 
