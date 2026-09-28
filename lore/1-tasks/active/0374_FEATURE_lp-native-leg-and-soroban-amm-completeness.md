@@ -2644,3 +2644,18 @@ share-token balances: `CDIXSYDR…` — holders known for 26,752,186 of
 447,027,308,775 (0.006%); `CDLMAKG5…` — holders sum 92,024,604,911 against
 87,628,791,895 (a stale, too-large balance; two top holders match the chain
 exactly, so the excess sits elsewhere). Cause not yet traced.
+
+**Correction (same day) — the two gaps are on chain, not in our index.**
+Traced with raw ledger meta from the public archive: every holder's balance
+entry (`getLedgerEntries`) equals our newest `balances` row in both pools,
+and mints minus burns in their events equal our holders' sum. What diverges
+is the pool's own instance: after protocol 23 each instance was `restored`
+from a stale copy — `CDIXSYDR…` at 58,774,376 came back with the
+`TotalSupply` and reserves it had before a 99.99% withdrawal at 58,241,372;
+`CDLMAKG5…` at 58,779,518 came back without one later mint (4,395,813,016).
+Chain `total_supply()` still returns the stale figure, and the pools' token
+balances equal their (restored) reserves today. We mirror the chain
+faithfully; the chain is inconsistent with itself. Attributing it to the
+protocol-23 state-restore defect is inference from the `restored` change
+type and timing, not checked against a network disclosure. So the coverage
+guard above hides two correct holder lists; see decision 115 in the session.
