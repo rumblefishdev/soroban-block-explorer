@@ -114,18 +114,22 @@ Backbone timeline:
   `/assets/:id/transactions` (task 0359; the asset-dimension twin of
   `transaction_participants`, keyed asset-first; native XLM is a first-class
   surrogate, not absence)
-- `contract_transactions` — per-(contract, transaction) presence index powering
-  `/transactions?filter[contract_id]=` (task 0541; the contract-dimension twin of
+- `contract_transactions` — per-(contract, transaction) presence index that
+  powered `/transactions?filter[contract_id]=` (task 0541; the contract-dimension twin of
   `transaction_participants`, keyed contract-first and by the transaction's
   **position** `(ledger_sequence, application_order)`, not the hash surrogate).
   A transaction touches a contract through an operation event, an invocation or
   an operation naming it; fee events do not count, or the native SAC's list
   would be every transaction on the network ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md)).
-  Being replaced by `contract_activity`, with the invocations table (task 0586)
+  Still written, no longer read: replaced by `contract_activity` (task 0586)
 - `contract_activity` — the same pairs plus the invocation's caller
   (`caller_id` / `caller_contract_id`, set only on an invoked row) and call
-  count (`invocation_count`, 0 when not invoked); replaces
-  `contract_transactions` and `soroban_invocations_appearances` (task 0586)
+  count (`invocation_count`, 0 when not invoked; an invoked row is
+  `invocation_count > 0`, which is also the row with a caller); replaces
+  `contract_transactions` and `soroban_invocations_appearances` (task 0586).
+  Powers `/transactions?filter[contract_id]=` (every pair) and, over the
+  invoked rows, the contract stats, the contract's Invocations tab and the
+  transaction page's invocations
 - `pool_operation_amounts` — per-(operation, pool, asset) amounts, the driver of
   pool activity (task 0279 / issue #371, 0491), keyed pool-first and by the
   transaction position (replaced `lp_operation_amounts`, task 0372). `amount` is raw stroops in a
@@ -140,7 +144,8 @@ Stellar archive, not stored in the DB):
 - `soroban_contracts` — deployed contracts (`BIGSERIAL id` + `VARCHAR(56)` natural `contract_id`)
 - `wasm_interface_metadata` — WASM ABI keyed by `wasm_hash`
 - `soroban_events_appearances` — contract-event appearance index (partitioned)
-- `soroban_invocations_appearances` — contract-invocation appearance index (partitioned)
+- `soroban_invocations_appearances` — contract-invocation appearance index (partitioned);
+  still written, no longer read: replaced by `contract_activity` (task 0586)
 
 Derived explorer entities:
 

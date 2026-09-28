@@ -377,7 +377,8 @@ surrogate; staging maps it to the position through the ledger's own
 `contract_activity` (task 0586) is the same set of pairs with the invocation's
 caller attached, staged in the same pass (`persist/stage/contract_activity.rs`)
 and written beside `contract_transactions` and
-`soroban_invocations_appearances` until the readers move.
+`soroban_invocations_appearances`, which no reader uses any more, until task
+0586 stops writing them.
 
 `operation_asset_appearances` is pure presence. The `net_settled` value column
 (task 0393) was REMOVED on 2026-09-04 — the per-(tx, asset) aggregate carried no
