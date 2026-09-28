@@ -2422,3 +2422,14 @@ the K4-6 coverage gap); the snapshot is still the right denominator. On a
 real quiet pool (`93D002B5…`) the old query reads `null`, the new one 100%.
 CH-gated test `quiet_pool_participants_keep_their_share`: green, red with the
 window restored.
+
+### Soroban detail: two wire zeros removed (2026-09-25)
+
+Branch `fix/0374-soroban-detail-zeros`. `created_at_ledger` read `0` for every
+soroban pool — `min` over zero snapshot rows is `0`, so `ifNull` never fell
+back to the pool's row; `minOrNull` fixes it (production: `0` → 64,607,060 on
+a soroban pool, a classic pool unchanged at 50,457,493). `volume` /
+`fee_revenue` read `"0.00"` on a priceable soroban pool; they stay `null`
+until something records soroban trades (W1). Neither field is rendered by the
+page today. CH-gated test `detail_created_at_falls_back_without_a_snapshot`:
+green; red with plain `min` (left 0, right 60,059,011).

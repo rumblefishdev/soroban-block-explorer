@@ -357,12 +357,6 @@ fn asset_tx_cursor_for(r: &AssetTxRow) -> TxListCursor {
     }
 }
 
-/// True when the cursor anchors this list's keyset, the position. A surrogate
-/// cursor is refused (ADR 0008 fail-clean).
-fn cursor_matches_source(cursor: &TxListCursor) -> bool {
-    matches!(cursor, TxListCursor::ChPosition { .. })
-}
-
 #[utoipa::path(
     get,
     path = "/assets/{id}/transactions",
@@ -401,16 +395,6 @@ pub async fn list_asset_transactions(
             );
         }
     };
-
-    // Reject a stale cursor minted under the retired PG backend — its keyset is
-    // meaningless under CH (ADR 0008 fail-clean). A legacy/untagged cursor
-    // already fails decode upstream; this guards the decodes-but-wrong-intent
-    // case.
-    if let Some(cursor) = &pagination.cursor
-        && !cursor_matches_source(cursor)
-    {
-        return errors::bad_request(errors::INVALID_CURSOR, "cursor is malformed or expired");
-    }
 
     let row = match fetch_asset_row_for_source(&state, parsed).await {
         Ok(Some(r)) => r,

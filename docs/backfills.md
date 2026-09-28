@@ -1175,6 +1175,30 @@ both collapse in the ReplacingMergeTrees.
   re-parsed from S3 like any other table (`--only pool_operation_amounts` for
   the amounts).
 
+## Contract activity (task 0586) — in-DB, per 10k-ledger slice
+
+`contract_activity` holds the pairs of `contract_transactions` with the
+caller of `soroban_invocations_appearances` attached, located by the
+transaction position. Once the indexer writes it (the step in
+[deployment.md](./deployment.md)), the history is copied from the two old
+tables, the invocations joined to `transactions` on `(ledger_sequence, id)`
+inside each ledger slice — no S3. The indexer keeps running; ledgers it
+already wrote collapse in the ReplacingMergeTree.
+
+- **Statements, gate, loop:**
+  [`fill_contract_activity.sql`](../lore/1-tasks/active/0586_REFACTOR_invocations-folded-into-contract-transactions/notes/fill_contract_activity.sql),
+  [`gate_contract_activity.sql`](../lore/1-tasks/active/0586_REFACTOR_invocations-folded-into-contract-transactions/notes/gate_contract_activity.sql),
+  [`fill_contract_activity.zsh`](../lore/1-tasks/active/0586_REFACTOR_invocations-folded-into-contract-transactions/notes/fill_contract_activity.zsh);
+  before the fill, a whole-row comparison on the first dual-written slice:
+  [`check_fill_matches_live.sql`](../lore/1-tasks/active/0586_REFACTOR_invocations-folded-into-contract-transactions/notes/check_fill_matches_live.sql).
+- **Gate per slice:** distinct pairs of `contract_transactions` = of
+  `contract_activity`, and distinct invocations = pairs with a caller.
+- **Slices of 10,000 ledgers:** the fill SELECT over 50,000 exceeded the
+  3.73 GiB memory cap; over 10,000 (64,000,000–64,010,000) it read 17.4 M
+  rows in 0.74 s with 1.1 GiB.
+- **Order:** whole partitions from the floor up, then the head's partition as
+  an `A-B` range up to the first dual-written ledger.
+
 ## Hash prefix index (task 0580) — rebuilt from `transactions`
 
 `transaction_hash_prefix_index` is derived from `transactions` alone: one row

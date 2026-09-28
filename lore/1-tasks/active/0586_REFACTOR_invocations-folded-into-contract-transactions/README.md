@@ -65,10 +65,17 @@ Decided (karolkow, 2026-09-25):
   `DROP`.
 - **Task 0487 rides a separate PR** right after the readers (thread 249 A),
   so the reader PR stays behaviour-preserving and comparable to the old API.
-- **No invoked flag, no fold count:** every invocation row names exactly one
-  caller (0 rows without one in the whole table, 0 with both on
-  64,000,000–64,050,000), so "invoked" = a caller is present; nothing reads
-  the fold count (`amount`) — the stats count rows.
+- **No invoked flag:** every invocation row names exactly one caller (0 rows
+  without one in the whole table, 0 with both on 64,000,000–64,050,000), so
+  "invoked" = a caller is present.
+- **The fold count stays, as `invocation_count`** (thread 255, karolkow):
+  how many times the transaction called the contract — the execution trace's
+  `fn_call`s merged with the auth tree, not the operation count; 0 on a
+  touched-only row. Nothing reads it yet, but no other table holds it
+  (diagnostic events are not stored), and after the drop it would come back
+  only from an S3 re-parse. 64,000,000–64,010,000: 294,841 of 1,978,709
+  invoked pairs were called more than once; the fill's counts sum to
+  3,835,802 = `sum(amount)` of the invocations table.
 
 Target shape:
 
@@ -78,17 +85,18 @@ CREATE TABLE contract_activity (
     ledger_sequence    Int64,
     application_order  Int16,             -- transaction position
     caller_id          Nullable(Int64),   -- invoked by an account
-    caller_contract_id Nullable(Int64)    -- invoked by a contract
+    caller_contract_id Nullable(Int64),   -- invoked by a contract
+    invocation_count   Int32              -- calls in the transaction; 0 = touched only
 ) ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (contract_id, ledger_sequence, application_order);
 ```
 
-| PR                                                                                                                  | Attention  | Deploy | Operator                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
-| 1. New table (position key, codecs, caller columns, fold count); the indexer writes it beside both old ones         | write path | yes    | before: `CREATE`; after: fill per 50k-ledger slice from `contract_transactions` ⟕ invocations ⋈ `transactions`, gated |
-| 2. Readers on the new table; Invocations tab cursor on the position (old cursors 400; `ChSurrogate` leaves the API) | read path  | yes    | —                                                                                                                     |
-| 3. Old tables no longer written                                                                                     | small      | yes    | after: `DROP` ×2                                                                                                      |
+| PR                                                                                                                    | Attention  | Deploy | Operator                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
+| 1. New table (position key, two caller columns; no codecs, no fold count); the indexer writes it beside both old ones | write path | yes    | before: `CREATE`; after: fill per 10k-ledger slice from `contract_transactions` ⟕ invocations ⋈ `transactions`, gated |
+| 2. Readers on the new table; Invocations tab cursor on the position (old cursors 400; `ChSurrogate` leaves the API)   | read path  | yes    | —                                                                                                                     |
+| 3. Old tables no longer written                                                                                       | small      | yes    | after: `DROP` ×2                                                                                                      |
 
 ## Progress
 
@@ -109,6 +117,73 @@ ORDER BY (contract_id, ledger_sequence, application_order);
   = `contract_transactions` keys; 1,978,709 with a caller = invocation keys;
   0 with both callers; 17.4 M rows read, 0.74 s, 1.1 GiB. Loop dry-run with
   stubbed `chw` / `chq`: pass, gate mismatch, bad resume point, low disk.
+
+- **Review of PR 1** (standards + spec, 2026-09-25): no struct / DDL
+  mismatch, the move is pure, fill = live writer for the same ledgers.
+  Fixed: the fill takes the caller pair with one `any()` (two unmerged copies
+  with different callers could otherwise combine into a row with both set),
+  the gate checks that no row has both callers, the e2e now writes a
+  contract caller too, a test pins that a second invocation's caller does not
+  replace the first, `contract_rows` → `rows`. For the PR that stops the old
+  writes: `scripts/merge-*.sh` list neither contract table — add
+  `contract_activity` there, as 0372 did.
+
+- **PRs opened** (2026-09-25): the move alone in
+  [#506](https://github.com/rumblefishdev/soroban-block-explorer/pull/506)
+  (`refactor/0586-move-contract-staging`, 95 lines moved, 34 of glue), the
+  table and dual write in
+  [#507](https://github.com/rumblefishdev/soroban-block-explorer/pull/507),
+  stacked on it (draft; retargets to `develop` after #506 merges). Split
+  because a PR that moves code and changes logic reads all green in GitHub's
+  diff (global rule, `move-split-guard`).
+
+- **PR 1 deployed** (2026-09-25): `contract_activity` created by hand, then
+  Compute (indexer and API Lambdas 16:06:03 UTC). The indexer writes it from
+  ledger **64,613,318**; 0 writer or API errors. Whole-row check of the fill
+  SELECT against the live rows on 64,613,318–64,613,348 (`check_fill_matches_live.sql`):
+  0 / 0; gate: 4,943 = 4,943 pairs, 2,607 = 2,607 invoked, 0 both, 0 count
+  mismatches (768 pairs called more than once, 7,788 calls). The same deploy
+  shipped task 0497's writer (the `minted_at_ledger` defaults were already
+  on production).
+
+- **Fill complete** (2026-09-25, 16:10–16:50 UTC): every slice gated;
+  coverage over all 30 partitions — 2,997,455,423 pairs = the
+  `contract_transactions` keys, 1,109,006,747 invoked = the invocation keys.
+
+- **PR 2 (readers) opened** (2026-09-25): the move alone in
+  [#512](https://github.com/rumblefishdev/soroban-block-explorer/pull/512)
+  (`fetch_invocation_appearances` into `contracts/queries/list_invocations.rs`,
+  `contracts/queries.rs` 1165 → 995 lines, 172 moved), the readers in
+  [#513](https://github.com/rumblefishdev/soroban-block-explorer/pull/513),
+  stacked (draft). Local API on production ClickHouse against the deployed
+  API: detail stats same for 6 contracts, list counts 50/50, Invocations tab
+  same rows for 4 contracts over whole ledgers, old cursor 400, transaction
+  page 18/18, `/transactions` contract filter same for 6. The tab's first
+  driver put `LIMIT 1 BY` beside `LIMIT`, which disables the read-in-order
+  early stop (21.7 M rows vs 0.59 M); `LIMIT` moved into a subquery →
+  4.37 M rows / 78 ms vs 0.54 M / 32 ms, the rest from 199 unmerged parts
+  after the fill (6.6 per partition vs 1.9), left to background merges.
+
+- **Review of PR 2** (standards + spec, 2026-09-28): #512 merged, #513
+  retargeted to `develop`. No defect in the readers: every API read moved,
+  `invocation_count > 0` on the four invocation readers and not on the
+  `/transactions` filter, dedup kept, unique callers still `caller_id` only
+  (249 A). Fixed: `contracts/queries.rs` had grown 995 → 999 (now 993),
+  a comment pointed at deleted SQL, the schema overview / pilot / pipeline
+  docs still named the old readers. Behaviour change to state in the PR:
+  within one ledger the Invocations tab now lists by execution order, not by
+  the hash surrogate. Open: `TxListCursor::ChSurrogate` still decodes only
+  to be refused — dropping it makes the three list guards dead; names
+  `fetch_invocation_appearances` / `InvocationAppearanceRow` describe the
+  retired table.
+
+- **#513 merged** (2026-09-28, 07:17 UTC) before the review fixes were
+  pushed; they follow in
+  [#515](https://github.com/rumblefishdev/soroban-block-explorer/pull/515)
+  with the `ChSurrogate` variant removed (thread 273 B): a surrogate cursor
+  now fails to decode (400 `invalid_cursor` from the extractor) and the four
+  per-list guards go. The rename of the "appearances" names rides its own
+  PR before task 0487 (thread 274 A).
 
 ## Acceptance Criteria
 
