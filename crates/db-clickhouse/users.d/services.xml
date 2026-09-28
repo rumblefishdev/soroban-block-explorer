@@ -65,8 +65,16 @@
       <profile>write_no_ddl</profile>
       <quota>high_write</quota>
       <access_management>0</access_management>
+      <!-- task 0591: Galexie writes to S3 only and never queries
+               ClickHouse. A user entry without <grants> holds ALL ON *.*,
+               so an empty block denies everything. -->
+      <grants/>
     </galexie>
 
+    <!-- task 0591: every service user carries <grants>. Without one,
+             ClickHouse gives the user ALL ON *.*, and the profile alone
+             stops only DDL. The grants are per database, not per table, so
+             a new table needs no change here. -->
     <api_reader>
       <no_password/>
       <networks>
@@ -77,8 +85,16 @@
       <profile>read_only</profile>
       <quota>unlimited</quota>
       <access_management>0</access_management>
+      <grants>
+        <query>GRANT SELECT ON default.*</query>
+        <!-- LP USD analytics + chart read prices.price_usd_series(_1h);
+             prices.* covers the tables under those views. -->
+        <query>GRANT SELECT ON prices.*</query>
+      </grants>
     </api_reader>
 
+    <!-- Lambda Ingestion and the enrichment worker Lambda both run as
+             this user. -->
     <ingestion_writer>
       <no_password/>
       <networks>
@@ -89,6 +105,9 @@
       <profile>write_no_ddl</profile>
       <quota>high_write</quota>
       <access_management>0</access_management>
+      <grants>
+        <query>GRANT SELECT, INSERT ON default.*</query>
+      </grants>
     </ingestion_writer>
 
     <!-- Read-only human access for a teammate's mTLS cert.
@@ -111,6 +130,11 @@
       <profile>read_only</profile>
       <quota>dev_read</quota>
       <access_management>0</access_management>
+      <grants>
+        <query>GRANT SELECT ON default.*</query>
+        <query>GRANT SELECT ON prices.*</query>
+        <query>GRANT SELECT ON system.*</query>
+      </grants>
     </dev_read>
 
     <!-- prices tenant (prices-api task 0063, BE task 0314). Additive;
