@@ -2,9 +2,9 @@
 id: '0424'
 title: 'BUG: NFT ownership order is ambiguous within a ledger — current owner can be nondeterministic'
 type: BUG
-status: backlog
-related_adr: []
-related_tasks: ['0415']
+status: active
+related_adr: ['0059']
+related_tasks: ['0415', '0538', '0586']
 tags:
   [
     'xdr-parser',
@@ -26,6 +26,15 @@ history:
       Found while auditing log-sourced facts (0415). Independent of the
       events-vs-ledger debate — this is our own ordering bug and must be fixed
       whichever source NFT ownership ends up reading.
+  - date: '2026-09-28'
+    status: active
+    who: karolkow
+    note: >
+      Activated as epic 0538 step 4 (thread 292 A): the ownership rows move to
+      the canonical event location, which removes the last two tables carrying
+      `transaction_id`. Decided: history filled from `soroban_events` through
+      the same Rust extraction (293 B2); `event_order` leaves the API for the
+      position (294 A).
 ---
 
 # BUG: NFT ownership order is ambiguous within a ledger
@@ -73,6 +82,46 @@ SELECT count() FROM (
   FROM nft_ownership GROUP BY contract_id, token_id, ledger_sequence
   HAVING ev > 1);
 ```
+
+## Epic 0538 step 4 — the canonical location (2026-09-28)
+
+**Measured (read-only):** `nft_ownership` 23,504 rows (398 KiB),
+`nft_ownership_pending` 521; 24,025 rows over 11,454 ledgers and 139
+contracts, from ledger 51,827,994. No storage gain — the step is what lets
+`transactions.id` (31.6 GiB) go, and it fixes this task's order.
+
+**Found in the code** (read-only map, 2026-09-28):
+
+- The position exists upstream and is dropped: `ExtractedEvent.event_id`
+  (`EventId {ledger, transaction_index, operation_index, event_index}`) is
+  not copied by the `NftEvent` constructors (`xdr-parser/src/nft.rs`).
+- NFT events are per-operation contract events, so every one has an rpc id
+  in every protocol (only transaction-level events without a stage lack one).
+- `consecutive_mint` expands one event into many rows with one id — the key
+  keeps `token_id`.
+- Readers: the transfers tab keys `(ledger_sequence, event_order)` and its
+  `LIMIT 1 BY` collapses distinct same-ledger rows (every token counts from
+  0); `accounts/balance_changes.rs` joins on `transaction_id` and infers the
+  moved pieces from the owner timeline; `event_order` is on the wire
+  (`NftTransferItem`) and in the frontend row key.
+- Promotion `_pending` → live is `INSERT … SELECT *`
+  (`backfill-runner/src/nft_reclassify.rs`): both tables change together.
+
+**Decided (karolkow):**
+
+- Work tracked here, not in a new task (292 A).
+- History filled from `soroban_events`: the rows' contract events are read
+  back (topics / data are the parser's own JSON, stored verbatim) and run
+  through the same `detect_nft_events` → `extract_nft_ownership_events` as
+  the indexer — no S3 (293 B2). Gate: whole rows against the old tables,
+  position aside.
+- `event_order` leaves the API; a transfer carries `application_order`,
+  `operation_index`, `event_index` like the other lists (294 A).
+
+**Plan — parallel change, as tasks 0372 / 0586:** new tables beside the old
+ones (key `(contract_id, token_id, ledger_sequence, application_order,
+operation_index, event_index)`, no `transaction_id`, no `event_order`), dual
+write, fill, readers, stop the old writes, drop.
 
 ## Implementation
 
