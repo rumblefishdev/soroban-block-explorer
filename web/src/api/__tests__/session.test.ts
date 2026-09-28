@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSession } from '../session.js';
+import { createSession, isSessionMint } from '../session.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00.000Z');
 
@@ -141,5 +141,16 @@ describe('createSession', () => {
     expect(await b.ensureToken()).toBe('jwt-b');
     a.invalidate();
     expect(await b.ensureToken()).toBe('jwt-b');
+  });
+});
+
+describe('isSessionMint', () => {
+  it('matches the mint path under any base URL, and nothing else', () => {
+    expect(isSessionMint('https://api.example/auth/session')).toBe(true);
+    expect(isSessionMint('https://api.example/prefix/auth/session')).toBe(true);
+    expect(isSessionMint('https://api.example/v1/accounts')).toBe(false);
+    expect(isSessionMint('https://api.example/v1/search?q=/auth/session')).toBe(
+      false
+    );
   });
 });

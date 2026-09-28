@@ -26,6 +26,14 @@ history:
       the generated TYPE only (calling the generated SDK from session.ts would
       deadlock on its own interceptor), and the handler is mounted only when
       the JWT secret is set, so the spec registration must not mount it.
+  - date: '2026-09-28'
+    status: active
+    who: karolkow
+    note: >
+      Review follow-up (/devils-advocate on the PR, all five points taken):
+      operation named mint_session, five comments corrected, failure test
+      strengthened, a test that the armed app serves the advertised path, and
+      the request interceptor skips the mint itself.
 ---
 
 # REFACTOR: the auth path is absent from the API schema
@@ -153,6 +161,28 @@ Verification (2026-09-25):
 - **Five page tests timed out** when `test`, `lint` and `typecheck` ran in
   parallel alongside two other builds; each passes alone and the full `test`
   target passes on its own run. Load, not a regression.
+
+## Review follow-up (2026-09-28)
+
+A /devils-advocate pass on the PR raised five points; all were applied.
+
+7. **`operation_id = "mint_session"`.** Without it the generator named the
+   operation `session`, which collided with the `SessionResponse` schema and
+   produced `SessionResponse2`. The exports are now `mintSession` /
+   `MintSession*`, and `SessionResponse` is unchanged.
+8. **Five comments corrected** (`main.rs`, `bin/extract_openapi.rs`,
+   `openapi/mod.rs` ×3). They said the spec lists exactly the mounted routes,
+   which `/auth/session` now deliberately breaks.
+9. **Failure test.** It now checks the call counts and that a failure is not
+   cached: the next call re-solves and succeeds.
+10. **`armed_app_serves_the_advertised_session_path`** (`main.rs` tests). With
+    the auth layer armed and no Turnstile secret, `/api-docs-json` lists
+    `POST /auth/session` and the route answers 503. Mutation-checked:
+    mounting it at `/auth/sessionX` fails with 404 ≠ 503. This is the one tie
+    between the spec entry and the hand-mounted route.
+11. **`isSessionMint(url)`**, used by the request interceptor in `client.ts`,
+    so the mint request never waits for a session. Before this, only a
+    comment prevented the deadlock. Tested in `session.test.ts`.
 
 ## Future Work
 

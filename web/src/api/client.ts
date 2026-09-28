@@ -1,7 +1,7 @@
 import { client } from '@rumblefish/api-types';
 
 import { apiBaseUrl, turnstileSiteKey } from './config.js';
-import { createSession } from './session.js';
+import { createSession, isSessionMint } from './session.js';
 
 client.setConfig({ baseUrl: apiBaseUrl });
 
@@ -11,6 +11,7 @@ const session = createSession({ siteKey: turnstileSiteKey, apiBaseUrl });
 // No-op until `VITE_TURNSTILE_SITE_KEY` is set — `session.ensureToken()` returns
 // `null` and the request goes out unchanged (the backend gate is also dark).
 client.interceptors.request.use(async (request) => {
+  if (isSessionMint(request.url)) return request;
   const token = await session.ensureToken();
   if (token) {
     request.headers.set('Authorization', `Bearer ${token}`);

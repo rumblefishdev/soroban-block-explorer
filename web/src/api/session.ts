@@ -39,6 +39,14 @@ export interface Session {
   invalidate(): void;
 }
 
+/**
+ * True for the session-mint request itself. The request interceptor must not
+ * attach a session to it: minting would wait on its own in-flight promise.
+ */
+export function isSessionMint(url: string): boolean {
+  return new URL(url).pathname.endsWith('/auth/session');
+}
+
 export function createSession({
   siteKey,
   apiBaseUrl,

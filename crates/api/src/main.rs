@@ -238,6 +238,10 @@ mod tests {
     /// Build a test app. The CH client is unconnected — these spec / health
     /// tests never issue a query.
     fn test_app() -> Router {
+        test_app_with(&test_config())
+    }
+
+    fn test_app_with(config: &AppConfig) -> Router {
         let ch = clickhouse::Client::default();
         let runtime_enrichment = RuntimeEnrichment {
             stellar_archive: StellarArchiveFetcher::new(
@@ -252,7 +256,52 @@ mod tests {
             wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()
                 .expect("build wasm_code fetcher"),
         };
-        app(&test_config(), AppState::for_tests(ch, runtime_enrichment))
+        app(config, AppState::for_tests(ch, runtime_enrichment))
+    }
+
+    /// `/auth/session` is advertised by `ApiDoc` `paths(...)` but mounted by
+    /// hand when armed, so nothing ties the two together except this test
+    /// (task 0510). Armed with no Turnstile secret, the route answers 503 —
+    /// a 404 would mean the spec advertises a path the app does not serve.
+    #[tokio::test]
+    async fn armed_app_serves_the_advertised_session_path() {
+        let config = AppConfig {
+            jwt_secret: Some("test-secret".to_string()),
+            ..test_config()
+        };
+        let app = test_app_with(&config);
+
+        let spec_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api-docs-json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = body::to_bytes(spec_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let spec: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            spec["paths"]["/auth/session"]["post"].is_object(),
+            "spec missing POST /auth/session: {spec}"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auth/session")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"token":"t"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
