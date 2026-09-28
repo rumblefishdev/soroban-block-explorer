@@ -275,9 +275,12 @@ pub async fn fetch_soroban_participants(
         .fetch_all::<SorobanParticipantChRow>()
         .await?;
     if rows.is_empty() {
-        return Ok(pool_has_share_token(client, pool_id_hex)
-            .await?
-            .then(Vec::new));
+        // Past the last page an empty page is just the end of the list.
+        if cursor.is_some() {
+            return Ok(Some(Vec::new()));
+        }
+        let count = count_soroban_participants(client, pool_id_hex).await?;
+        return Ok(count.map(|_| Vec::new()));
     }
     let Some(decimals) = rows[0].decimals else {
         return Ok(None);
@@ -324,12 +327,18 @@ pub async fn fetch_soroban_participants(
 #[derive(Debug, Row, Deserialize)]
 struct HolderCountRow {
     token_id: i64,
+    total_shares: String,
     n: u64,
 }
 
 /// How many providers the soroban participants list holds — the detail
-/// KPI. `None` when the pool has no share token (not indexed). Same
-/// `balances` scan as the list.
+/// KPI. Same `balances` scan as the list.
+///
+/// `None` (not indexed) when the pool has no share token, or when no holder
+/// is indexed yet the pool stores a positive total — then the holders are
+/// unreadable, not absent. Production, 2026-09-28: 133 pools hold a token
+/// and no holder; every one stores a total of 0, and the only one still
+/// holding reserves (`CALL3ZZS…`) has no holder on chain either.
 pub async fn count_soroban_participants(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -338,33 +347,22 @@ pub async fn count_soroban_participants(
         .query(
             "WITH (SELECT argMax(share_token_id, derived_at_ledger) FROM pool_instance_state \
                    WHERE pool_id = unhex(?)) AS token \
-             SELECT ifNull(token, 0) AS token_id, countIf(amt > 0) AS n \
+             SELECT ifNull(token, 0) AS token_id, \
+                    toString(ifNull((SELECT argMax(total_shares, derived_at_ledger) \
+                                     FROM pool_instance_state WHERE pool_id = unhex(?)), 0)) \
+                        AS total_shares, \
+                    countIf(amt > 0) AS n \
              FROM ( \
                  SELECT argMax(amount, last_updated_ledger) AS amt FROM balances \
                  WHERE asset_id = token AND token != 0 GROUP BY holder_id \
              )",
         )
         .bind(pool_id_hex)
+        .bind(pool_id_hex)
         .fetch_one::<HolderCountRow>()
         .await?;
-    Ok((row.token_id != 0).then_some(row.n as i64))
-}
-
-/// `true` when the pool declares a share token — an empty holder list is then
-/// a real "no providers", not a pool whose providers are unreadable.
-async fn pool_has_share_token(
-    client: &clickhouse::Client,
-    pool_id_hex: &str,
-) -> Result<bool, clickhouse::error::Error> {
-    let row = client
-        .query(
-            "SELECT count() AS n FROM pool_instance_state \
-             WHERE pool_id = unhex(?) AND share_token_id != 0",
-        )
-        .bind(pool_id_hex)
-        .fetch_one::<CountRow>()
-        .await?;
-    Ok(row.n > 0)
+    let unreadable = row.n == 0 && row.total_shares != "0";
+    Ok((row.token_id != 0 && !unreadable).then_some(row.n as i64))
 }
 
 #[cfg(test)]
