@@ -142,7 +142,8 @@ accounts**.
 >
 > - `nfts.minted_at_ledger` — 643 of 13 932 tokens were wrong, growing **~30 per
 >   day**. Served correctly since task 0528, which reads the value from the
->   append-only `nft_ownership` instead of the stored column, and the column
+>   append-only ownership history (`nft_ownership_changes` since task 0424)
+>   instead of the stored column, and the column
 >   itself is gone from `nfts` and `nfts_pending`, so `repair-tier1` no longer
 >   rebuilds it.
 > - `accounts.first_seen_ledger` — **14 of 400 sampled rows diverge (3.5%)**, all
@@ -1203,37 +1204,14 @@ already wrote collapse in the ReplacingMergeTree.
   `contract_activity` is re-parsed from S3 like any other table — the
   invocation count is only in the XDR (diagnostic events are not stored).
 
-## NFT ownership changes (task 0424) — from `soroban_events`, no S3
+## NFT ownership changes (task 0424) — re-parse only
 
 `nft_ownership_changes{,_pending}` is the ownership history located by each
-change's event. Once the indexer writes it (step 1 in
-[deployment.md](./deployment.md)), the history comes from what ClickHouse
-already holds: `backfill-runner nft-ownership-fill` reads back the contract
-events of every collection in the old ownership tables from `soroban_events`
-(topics and data are the parser's own JSON, stored verbatim) and runs them
-through the indexer's own `detect_nft_events` → `extract_nft_ownership_events`.
-Each change is located as the live writer locates it: the transaction position
-from the event row, the operation and the event from its rpc id. Routing
-follows each contract's current verdict, as `nft-reclassify` does.
-
-- **Dry run first — it is the gate:** `--dry-run` writes nothing and compares
-  the result with the old tables on (contract, token, ledger, owner, type),
-  hot and pending together; `only_old` and `only_new` must both be 0.
-  Read-only on production, 2026-09-28: 31,093 events → 23,540 hot + 521
-  pending changes = the old tables' 23,540 + 521, `only_old=0 only_new=0`.
-- **Then the real run**, with a user allowed to insert: same command without
-  `--dry-run`. One pass, seconds; re-running is a no-op (deterministic rows,
-  ReplacingMergeTree), and ledgers the indexer already wrote collapse the same
-  way.
-- **Temporary: runs only while the old tables exist** — they name the
-  collections to read and are the gate. Task 0424's PR 4 deletes the command
-  with them; after that a lost range comes back by re-parsing from S3 like any
-  other table.
-
-```bash
-cargo run -p backfill-runner -- --clickhouse-url https://<CH_DOMAIN> \
-  --ch-cert <cert> --ch-key <key> --ch-ca <ca> nft-ownership-fill --dry-run
-```
+change's event. Its history was filled once, on 2026-09-28, by a one-off
+`backfill-runner nft-ownership-fill` that re-ran the indexer's NFT extraction
+over `soroban_events` and was gated against the old `nft_ownership` tables;
+both the command and those tables are gone. A lost range now comes back by
+re-parsing from S3 like any other table.
 
 ## Hash prefix index (task 0580) — rebuilt from `transactions`
 

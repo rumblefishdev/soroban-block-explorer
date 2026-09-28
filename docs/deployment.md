@@ -462,20 +462,36 @@ Frontend **content** is separate: `deploy-production-web`
   awk '/CREATE TABLE IF NOT EXISTS nft_ownership_changes(_pending)? \(/,/^ORDER BY/' crates/db-clickhouse/schema/init.sql
   ```
 
-  Then deploy Compute; then fill the history (task 0424's fill from
-  `soroban_events`). No pause; the readers still use the old tables.
+  Then deploy Compute; then fill the history (task 0424's one-off fill from
+  `soroban_events`, removed in step 3). No pause; the readers still use the
+  old tables.
 
 - **NFT ownership by event location (task 0424), step 2: the readers.** The
   API reads `nft_ownership_changes` only: the NFT transfers tab, the mint
   ledger on `/nfts` and `/nfts/{contract}/{token}`, and the pieces an
   account's balance change names. Deploy Compute and the SPA **after the fill
-  has passed its gate** (`nft-ownership-fill --dry-run`: `only_old=0
-only_new=0`, [backfills.md](./backfills.md)): an unfilled range would show
-  no transfers and no mint ledger. The transfers tab pages on the change's
-  location, so a cursor minted before the deploy answers 400 `invalid_cursor`
-  once; its rows carry `application_order` / `operation_index` /
-  `event_index` in place of `event_order`, and the SPA keys rows by them —
-  ship the SPA with this Compute deploy. No operator step.
+  has passed its gate** (the new tables hold the same changes as the old
+  ones): an unfilled range would show no transfers and no mint ledger. The
+  transfers tab pages on the change's location, so a cursor minted before the
+  deploy answers 400 `invalid_cursor` once; its rows carry `application_order`
+  / `operation_index` / `event_index` in place of `event_order`, and the SPA
+  keys rows by them — ship the SPA with this Compute deploy. No operator step.
+
+- **NFT ownership by event location (task 0424), step 3: stop the old
+  writes.** The indexer writes `nft_ownership_changes{,_pending}` only;
+  `nft_ownership` and `nft_ownership_pending` leave `init.sql`, and with them
+  the last `transaction_id` column outside `transactions`. Deploy Compute after
+  step 2's deploy (the running API must no longer read the old tables — check
+  `system.query_log`), then drop both. Before each drop, record the prices-api
+  check in task 0424:
+
+  ```sql
+  DROP TABLE nft_ownership;
+  DROP TABLE nft_ownership_pending;
+  ```
+
+  A drop before this deploy stops ingest on the next ledger with an NFT change:
+  the earlier writer still inserts into both.
 
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
