@@ -2,7 +2,7 @@
 id: '0592'
 title: 'BUG: contract reads join wasm_interface_metadata without deduplication — the comment calls it a plain MergeTree'
 type: BUG
-status: active
+status: done
 related_adr: []
 related_tasks: ['0327', '0588']
 tags: [api, clickhouse, contracts, effort-small, priority-low]
@@ -15,6 +15,15 @@ history:
       Found while retiring the endpoint SQL set (0588): the retired SQL joined
       wasm_interface_metadata with FINAL, the Rust does not, and its comment
       says the table is a plain MergeTree. Production says otherwise.
+  - date: '2026-09-28'
+    status: done
+    who: karolkow
+    note: >
+      Closed in the release sweep of production-2026.09.28-1: every lore-0592
+      commit is an ancestor of the tag; the tag's contracts/queries.rs reads
+      wasm_interface_metadata through the FINAL subquery. Production
+      equivalence was measured before the merge (old vs new SQL identical in
+      10 of 10 runs, 2026-09-28).
 ---
 
 # BUG: contract reads join `wasm_interface_metadata` without deduplication
