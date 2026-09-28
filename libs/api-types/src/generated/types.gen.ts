@@ -2359,6 +2359,24 @@ export type SearchResults = {
   groups: SearchGroups;
 };
 
+export type SessionRequest = {
+  /**
+   * Turnstile token produced by the SPA widget.
+   */
+  token: string;
+};
+
+export type SessionResponse = {
+  /**
+   * Seconds until `token` expires.
+   */
+  expires_in: number;
+  /**
+   * Free-tier session JWT, sent back as `Authorization: Bearer <token>`.
+   */
+  token: string;
+};
+
 /**
  * Single signature on a transaction envelope.
  */
@@ -2555,6 +2573,40 @@ export type XdrOperationDto = {
    */
   result_code?: string | null;
 };
+
+export type MintSessionData = {
+  body: SessionRequest;
+  path?: never;
+  query?: never;
+  url: '/auth/session';
+};
+
+export type MintSessionErrors = {
+  /**
+   * Turnstile verification failed
+   */
+  403: string;
+  /**
+   * Token issue failed
+   */
+  500: string;
+  /**
+   * Turnstile not configured
+   */
+  503: string;
+};
+
+export type MintSessionError = MintSessionErrors[keyof MintSessionErrors];
+
+export type MintSessionResponses = {
+  /**
+   * Session JWT minted
+   */
+  200: SessionResponse;
+};
+
+export type MintSessionResponse =
+  MintSessionResponses[keyof MintSessionResponses];
 
 export type HealthData = {
   body?: never;

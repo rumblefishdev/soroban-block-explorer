@@ -127,7 +127,10 @@ The backend implementation direction implied by the current design is:
   schemes (task 0277/0287) — `api_key` (`x-api-key` header, paid tier) and
   `bearer_jwt` (free-tier session JWT) — as a global OR requirement, so Swagger
   UI renders an "Authorize" dialog and "Try it out" can reach the gated `/v1`
-  surface; `/health` opts out with an empty per-path requirement.
+  surface; `/health` and `POST /auth/session` opt out with an empty per-path
+  requirement. `/auth/session` is listed in `ApiDoc`'s `paths(...)` rather than
+  `register_routes`, because it is mounted only when the auth layer is armed and
+  the spec must describe it either way (task 0510).
 - **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)
 - **API Gateway** for public HTTP ingress, throttling, request validation, and response
   caching

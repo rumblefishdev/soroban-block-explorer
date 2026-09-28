@@ -5,6 +5,7 @@ import {
   type InfiniteData,
   infiniteQueryOptions,
   queryOptions,
+  type UseMutationOptions,
 } from '@tanstack/react-query';
 
 import { client } from '../client.gen.js';
@@ -36,6 +37,7 @@ import {
   listPoolActivity,
   listPools,
   listTransactions,
+  mintSession,
   type Options,
 } from '../sdk.gen.js';
 import type {
@@ -118,7 +120,37 @@ import type {
   ListTransactionsData,
   ListTransactionsError,
   ListTransactionsResponse,
+  MintSessionData,
+  MintSessionError,
+  MintSessionResponse,
 } from '../types.gen.js';
+
+/**
+ * Verify a Turnstile token with Cloudflare, then mint a free-tier session JWT.
+ */
+export const mintSessionMutation = (
+  options?: Partial<Options<MintSessionData>>
+): UseMutationOptions<
+  MintSessionResponse,
+  MintSessionError,
+  Options<MintSessionData>
+> => {
+  const mutationOptions: UseMutationOptions<
+    MintSessionResponse,
+    MintSessionError,
+    Options<MintSessionData>
+  > = {
+    mutationFn: async (fnOptions) => {
+      const { data } = await mintSession({
+        ...options,
+        ...fnOptions,
+        throwOnError: true,
+      });
+      return data;
+    },
+  };
+  return mutationOptions;
+};
 
 export type QueryKey<TOptions extends Options> = [
   Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {

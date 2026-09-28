@@ -28,6 +28,7 @@ export {
   listPoolActivity,
   listPools,
   listTransactions,
+  mintSession,
   type Options,
 } from './sdk.gen.js';
 export type {
@@ -196,6 +197,11 @@ export type {
   ListTransactionsErrors,
   ListTransactionsResponse,
   ListTransactionsResponses,
+  MintSessionData,
+  MintSessionError,
+  MintSessionErrors,
+  MintSessionResponse,
+  MintSessionResponses,
   NetworkStats,
   NftDetailResponse,
   NftItem,
@@ -227,6 +233,8 @@ export type {
   SearchGroups,
   SearchHit,
   SearchResults,
+  SessionRequest,
+  SessionResponse,
   SignatureDto,
   TransactionDetailLight,
   TransactionListItem,
