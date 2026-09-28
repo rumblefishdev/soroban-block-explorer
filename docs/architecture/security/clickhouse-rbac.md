@@ -116,15 +116,16 @@ The map is rendered by Ansible from the `CLICKHOUSE_CN_USER_MAP`
 env var. Each entry is `<cn>:<ch_user>`; the operator maintains
 the full list. Convention:
 
-| Caddy CN (verified by mTLS)      | Mapped CH user     |
-| -------------------------------- | ------------------ |
-| `galexie-<environment>`          | `galexie`          |
-| `lambda-api-<environment>`       | `api_reader`       |
-| `lambda-ingestion-<environment>` | `ingestion_writer` |
-| `prices-ingestion`               | `prices_writer`    |
-| `prices-api`                     | `prices_reader`    |
-| `prices-admin-<environment>`     | `prices_admin`     |
-| `<firstname>-laptop`             | `dev_shared`       |
+| Caddy CN (verified by mTLS)       | Mapped CH user     |
+| --------------------------------- | ------------------ |
+| `galexie-<environment>`           | `galexie`          |
+| `lambda-api-<environment>`        | `api_reader`       |
+| `lambda-ingestion-<environment>`  | `ingestion_writer` |
+| `lambda-enrichment-<environment>` | `ingestion_writer` |
+| `prices-ingestion`                | `prices_writer`    |
+| `prices-api`                      | `prices_reader`    |
+| `prices-admin-<environment>`      | `prices_admin`     |
+| `<firstname>-laptop`              | `dev_shared`       |
 
 > `lambda-partition-<env>` and `lambda-migration-<env>` were retired in task
 > 0241: the partition + migration Lambdas were removed, and their CH users

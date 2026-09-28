@@ -130,6 +130,9 @@
       <profile>read_only</profile>
       <quota>dev_read</quota>
       <access_management>0</access_management>
+      <!-- No REMOTE on purpose: clusterAllReplicas(default, system.x) is
+               refused, and on this single-node box system.x reads the same
+               rows. -->
       <grants>
         <query>GRANT SELECT ON default.*</query>
         <query>GRANT SELECT ON prices.*</query>
