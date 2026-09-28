@@ -199,12 +199,11 @@ pub struct PoolItem {
     /// rendering one as the other yields a well-formed WRONG key rather than
     /// an error.
     pub pool_kind: domain::PoolKind,
-    /// The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),
-    /// named only when the protocol's own publications claim the router or
-    /// factory that registered the pool. `null` for a classic pool and for a
-    /// soroban pool registered by a deployment no protocol claims — never a
-    /// guess from matching code.
-    pub protocol: Option<String>,
+    /// The protocol running a soroban pool, named only when the protocol's own
+    /// publications claim the router or factory that registered it. `null`
+    /// for a classic pool and for a soroban pool registered by a deployment no
+    /// protocol claims — never a guess from matching code.
+    pub protocol: Option<PoolProtocol>,
     /// The pool's legs in registration order — two for a classic pool, two to
     /// four for a soroban one. Replaces the `asset_a` / `asset_b` pair, which
     /// could not express a three-leg pool and forced a soroban row to write
@@ -261,6 +260,17 @@ pub struct PoolItem {
 /// `filter[event]` predicate: two classifiers would eventually disagree, and
 /// the one the user sees must be the one the filter used. This deliberately
 /// reverses the client-side policy the retired `/transactions` shape carried.
+/// The protocol behind a soroban pool — see `PoolItem.protocol`. A closed set:
+/// a new protocol is a reviewed addition in `protocol_labels.rs`, and clients
+/// display it by their own name for each value, as they do `pool_kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolProtocol {
+    Aquarius,
+    Soroswap,
+    Phoenix,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PoolEvent {

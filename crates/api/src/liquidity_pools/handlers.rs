@@ -166,7 +166,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         // than an error — so the encoding follows the kind.
         pool_id: pool_id_hex_to_strkey(&row.pool_id_hex, row.pool_kind),
         pool_kind: row.pool_kind,
-        protocol: super::protocol_labels::protocol_of(row.deployment_id).map(str::to_string),
+        protocol: super::protocol_labels::protocol_of(row.deployment_id),
         legs: row.legs.into_iter().map(map_leg).collect(),
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,

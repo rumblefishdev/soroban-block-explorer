@@ -1911,14 +1911,7 @@ export type PaginatedPoolItem = {
      * an error.
      */
     pool_kind: PoolKind;
-    /**
-     * The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),
-     * named only when the protocol's own publications claim the router or
-     * factory that registered the pool. `null` for a classic pool and for a
-     * soroban pool registered by a deployment no protocol claims — never a
-     * guess from matching code.
-     */
-    protocol?: string | null;
+    protocol?: null | PoolProtocol;
     /**
      * Pool shares outstanding, as a decimal string. Classic: the latest
      * snapshot. Soroban: the pool's own instance storage, scaled by its share
@@ -2178,17 +2171,6 @@ export type PoolAssetLeg = {
   symbol?: string | null;
 };
 
-/**
- * What an operation did to the pool, named by the SIGN PAIR of its two legs
- * and nothing else — `pool_operation_amounts.amount` is signed from the pool's
- * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
- * There is no operation-type column to read and no join to `operations`.
- *
- * Classified in SQL rather than here, because the same expression is the
- * `filter[event]` predicate: two classifiers would eventually disagree, and
- * the one the user sees must be the one the filter used. This deliberately
- * reverses the client-side policy the retired `/transactions` shape carried.
- */
 export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 
 /**
@@ -2245,14 +2227,7 @@ export type PoolItem = {
    * an error.
    */
   pool_kind: PoolKind;
-  /**
-   * The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),
-   * named only when the protocol's own publications claim the router or
-   * factory that registered the pool. `null` for a classic pool and for a
-   * soroban pool registered by a deployment no protocol claims — never a
-   * guess from matching code.
-   */
-  protocol?: string | null;
+  protocol?: null | PoolProtocol;
   /**
    * Pool shares outstanding, as a decimal string. Classic: the latest
    * snapshot. Soroban: the pool's own instance storage, scaled by its share
@@ -2279,6 +2254,22 @@ export type PoolItem = {
 };
 
 export type PoolKind = 'classic' | 'soroban';
+
+/**
+ * What an operation did to the pool, named by the SIGN PAIR of its two legs
+ * and nothing else — `pool_operation_amounts.amount` is signed from the pool's
+ * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
+ * There is no operation-type column to read and no join to `operations`.
+ *
+ * Classified in SQL rather than here, because the same expression is the
+ * `filter[event]` predicate: two classifiers would eventually disagree, and
+ * the one the user sees must be the one the filter used. This deliberately
+ * reverses the client-side policy the retired `/transactions` shape carried.
+ * The protocol behind a soroban pool — see `PoolItem.protocol`. A closed set:
+ * a new protocol is a reviewed addition in `protocol_labels.rs`, and clients
+ * display it by their own name for each value, as they do `pool_kind`.
+ */
+export type PoolProtocol = 'aquarius' | 'soroswap' | 'phoenix';
 
 /**
  * The classic asset a SAC contract is the contract-side facet of (ADR 0051,

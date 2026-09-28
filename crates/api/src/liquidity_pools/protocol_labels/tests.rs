@@ -1,4 +1,5 @@
 use super::protocol_of;
+use crate::liquidity_pools::dto::PoolProtocol;
 
 /// `soroban_contracts.id` of each listed deployment on production
 /// (2026-09-28) — the value `liquidity_pools.deployment_id` carries. Pins
@@ -6,9 +7,18 @@ use super::protocol_of;
 /// fails here rather than silently leaving its pools unlabelled.
 #[test]
 fn listed_deployments_match_their_production_ids() {
-    assert_eq!(protocol_of(5_490_683_486_378_605_019), Some("Aquarius"));
-    assert_eq!(protocol_of(-8_559_314_389_216_369_730), Some("Soroswap"));
-    assert_eq!(protocol_of(2_808_977_402_438_572_953), Some("Phoenix"));
+    assert_eq!(
+        protocol_of(5_490_683_486_378_605_019),
+        Some(PoolProtocol::Aquarius)
+    );
+    assert_eq!(
+        protocol_of(-8_559_314_389_216_369_730),
+        Some(PoolProtocol::Soroswap)
+    );
+    assert_eq!(
+        protocol_of(2_808_977_402_438_572_953),
+        Some(PoolProtocol::Phoenix)
+    );
 }
 
 #[test]

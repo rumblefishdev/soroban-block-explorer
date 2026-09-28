@@ -1,4 +1,4 @@
-import type { PoolKind } from '@rumblefish/api-types';
+import type { PoolKind, PoolProtocol } from '@rumblefish/api-types';
 import type { ChipProps } from '@rumblefish/soroban-block-explorer-ui';
 
 export interface PoolKindMeta {
@@ -18,6 +18,16 @@ export interface PoolKindMeta {
 export const POOL_KIND_META: Record<PoolKind, PoolKindMeta> = {
   classic: { label: 'Classic', color: 'neutral' },
   soroban: { label: 'Soroban', color: 'emerald' },
+};
+
+/**
+ * Display name per API `protocol`. Keyed by the API's union, so a protocol the
+ * API adds without a name here is a type error, not a raw slug on screen.
+ */
+export const POOL_PROTOCOL_LABEL: Record<PoolProtocol, string> = {
+  aquarius: 'Aquarius',
+  soroswap: 'Soroswap',
+  phoenix: 'Phoenix',
 };
 
 /**

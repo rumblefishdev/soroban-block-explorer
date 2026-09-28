@@ -4414,8 +4414,15 @@
                   "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
                 },
                 "protocol": {
-                  "type": ["string", "null"],
-                  "description": "The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),\nnamed only when the protocol's own publications claim the router or\nfactory that registered the pool. `null` for a classic pool and for a\nsoroban pool registered by a deployment no protocol claims — never a\nguess from matching code."
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PoolProtocol",
+                      "description": "The protocol running a soroban pool, named only when the protocol's own\npublications claim the router or factory that registered it. `null`\nfor a classic pool and for a soroban pool registered by a deployment no\nprotocol claims — never a guess from matching code."
+                    }
+                  ]
                 },
                 "total_shares": {
                   "type": ["string", "null"],
@@ -4641,7 +4648,6 @@
       },
       "PoolEvent": {
         "type": "string",
-        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `pool_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
         "enum": ["trade", "deposit", "withdrawal"]
       },
       "PoolItem": {
@@ -4701,8 +4707,15 @@
             "description": "`classic` | `soroban` ([`domain::PoolKind`]). Load-bearing, not\ndecoration: the same 32 bytes render as a SEP-23 `L…` strkey for a\nclassic pool and a `C…` contract address for a soroban one, and\nrendering one as the other yields a well-formed WRONG key rather than\nan error."
           },
           "protocol": {
-            "type": ["string", "null"],
-            "description": "The protocol running a soroban pool (`Aquarius`, `Soroswap`, `Phoenix`),\nnamed only when the protocol's own publications claim the router or\nfactory that registered the pool. `null` for a classic pool and for a\nsoroban pool registered by a deployment no protocol claims — never a\nguess from matching code."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PoolProtocol",
+                "description": "The protocol running a soroban pool, named only when the protocol's own\npublications claim the router or factory that registered it. `null`\nfor a classic pool and for a soroban pool registered by a deployment no\nprotocol claims — never a guess from matching code."
+              }
+            ]
           },
           "total_shares": {
             "type": ["string", "null"],
@@ -4721,6 +4734,11 @@
       "PoolKind": {
         "type": "string",
         "enum": ["classic", "soroban"]
+      },
+      "PoolProtocol": {
+        "type": "string",
+        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `pool_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.\nThe protocol behind a soroban pool — see `PoolItem.protocol`. A closed set:\na new protocol is a reviewed addition in `protocol_labels.rs`, and clients\ndisplay it by their own name for each value, as they do `pool_kind`.",
+        "enum": ["aquarius", "soroswap", "phoenix"]
       },
       "SacAsset": {
         "type": "object",

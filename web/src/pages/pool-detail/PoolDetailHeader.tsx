@@ -7,7 +7,10 @@ import { PageBreadcrumb } from '../detail/PageBreadcrumb.js';
 import { PoolLegIcons } from '../pool-shared/PoolLegIcons.js';
 
 import { poolLabel } from '../pool-shared/helpers.js';
-import { POOL_KIND_META } from '../liquidity-pools/poolKind.js';
+import {
+  POOL_KIND_META,
+  POOL_PROTOCOL_LABEL,
+} from '../liquidity-pools/poolKind.js';
 
 interface PoolDetailHeaderProps {
   poolId: string;
@@ -47,7 +50,11 @@ export function PoolDetailHeader({ poolId, pool }: PoolDetailHeaderProps) {
               />
             )}
             {pool?.protocol && (
-              <Chip size="sm" color="neutral" label={pool.protocol} />
+              <Chip
+                size="sm"
+                color="neutral"
+                label={POOL_PROTOCOL_LABEL[pool.protocol]}
+              />
             )}
           </Stack>
         </Stack>

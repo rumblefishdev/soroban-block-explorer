@@ -2610,3 +2610,17 @@ null`. No database read: the surrogate is `ids::contract_id(address)`, pinned
 by a test against the production ids. Local API against production: 355 / 214
 / 14 / 192 null of 775, exactly the measured split. The list row and the pool
 header show the name as a second chip beside "Soroban".
+
+Review of the label PR (2026-09-28, decisions 99 A, 100 A, 101). The second
+router `CA7RQDMM…` (81 pools) stays unlabelled: StellarExpert's public
+directory and `lumenloop/stellar-ecosystem-db` call it "Aquarius Router",
+but the vendor's docs and pools API do not include it and its admin roles
+differ from the documented router's. `protocol` is a closed enum
+(`aquarius | soroswap | phoenix`); the frontend maps it to a display name.
+Pool sets cross-checked against each protocol's own enumeration, no
+credentials needed: Aquarius API 354 vs ours 355 (ours alone `CA27UTMX…`, a
+stable pool idle since 62,128,655 the vendor no longer lists); Soroswap
+`all_pairs` 214 = 214; Phoenix `query_pools` 13 vs ours 14 (ours alone
+`CAZ6W4WH…`, code replaced — it will read "Phoenix" until task 0325 records
+the verdict). Nothing any protocol lists is missing from ours. The check is
+left as a TODO in `pool_reserves_reconciliation.rs` for the next release.

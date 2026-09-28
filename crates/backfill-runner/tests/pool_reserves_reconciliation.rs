@@ -39,6 +39,20 @@
 //!
 //! Optional: `POOL_CH_DOMAIN` (default `ch.sorobanscan.rumblefish.dev`),
 //! `POOL_RPC_URL` (default a public mainnet Soroban RPC).
+//!
+//! TODO(0374): also check the protocol labels (`api` `protocol_labels.rs`)
+//! against each protocol's own list, so a new router or factory does not leave
+//! its pools unlabelled unnoticed. Per claimed deployment, compare our pools
+//! with the protocol's enumeration — no credentials needed for any of them:
+//! Aquarius, the vendor's public API
+//! (`https://amm-api.aqua.network/api/external/v1/pools/`, paginate; paging is
+//! unstable, so take the union of a few passes); Soroswap, the factory's
+//! `all_pairs_length()` and `all_pairs(n)`; Phoenix, the factory's
+//! `query_pools()` (both simulated over RPC). Measured 2026-09-28: Aquarius
+//! 354 listed vs 355 ours (ours alone: `CA27UTMX…`, a stable pool idle since
+//! ledger 62,128,655 that the vendor no longer lists); Soroswap 214 = 214;
+//! Phoenix 13 listed vs 14 ours (ours alone: `CAZ6W4WH…`, whose code was
+//! replaced — task 0325). Nothing the protocols list is missing from ours.
 
 use std::collections::HashMap;
 use std::str::FromStr;

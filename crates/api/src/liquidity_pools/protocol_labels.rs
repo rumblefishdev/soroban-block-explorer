@@ -14,6 +14,8 @@
 
 use db_clickhouse::persist::ids;
 
+use super::dto::PoolProtocol;
+
 /// Deployment contract → protocol name, with the publication that names it.
 ///
 /// - Aquarius router — the vendor's developer docs give it as "the contract ID
@@ -30,29 +32,29 @@ use db_clickhouse::persist::ids;
 ///
 /// Pool counts from production, 2026-09-28: 583 of 775 soroban pools. The rest
 /// come from routers and factories no protocol claims in its publications.
-const DEPLOYMENTS: &[(&str, &str)] = &[
+const DEPLOYMENTS: &[(&str, PoolProtocol)] = &[
     (
         "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK",
-        "Aquarius",
+        PoolProtocol::Aquarius,
     ),
     (
         "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2",
-        "Soroswap",
+        PoolProtocol::Soroswap,
     ),
     (
         "CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI",
-        "Phoenix",
+        PoolProtocol::Phoenix,
     ),
 ];
 
 /// The protocol that runs the pool registered by `deployment_id` (the
 /// contract surrogate), or `None` when no protocol claims that deployment.
-pub(super) fn protocol_of(deployment_id: i64) -> Option<&'static str> {
+pub(super) fn protocol_of(deployment_id: i64) -> Option<PoolProtocol> {
     // ponytail: three hashes per call; a static map when the list grows.
     DEPLOYMENTS
         .iter()
         .find(|(contract, _)| ids::contract_id(contract) == deployment_id)
-        .map(|(_, name)| *name)
+        .map(|(_, protocol)| *protocol)
 }
 
 #[cfg(test)]

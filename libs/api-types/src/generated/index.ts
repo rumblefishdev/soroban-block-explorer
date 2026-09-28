@@ -229,6 +229,7 @@ export type {
   PoolEvent,
   PoolItem,
   PoolKind,
+  PoolProtocol,
   SacAsset,
   SearchGroups,
   SearchHit,

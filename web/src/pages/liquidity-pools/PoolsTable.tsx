@@ -26,7 +26,7 @@ import {
 
 import { PoolLegIcons } from '../pool-shared/PoolLegIcons.js';
 
-import { POOL_KIND_META } from './poolKind.js';
+import { POOL_KIND_META, POOL_PROTOCOL_LABEL } from './poolKind.js';
 
 /** Render leg code text — wrapped in RouterLink when legHref resolves
  *  (native, classic credit, contract-id fallback); plain text otherwise (schema
@@ -104,7 +104,11 @@ const columns: ExplorerTableColumn<PoolItem>[] = [
               {/* The protocol, when its own publications claim the pool's
                   router or factory; absent rather than guessed otherwise. */}
               {row.protocol && (
-                <Chip size="sm" color="neutral" label={row.protocol} />
+                <Chip
+                  size="sm"
+                  color="neutral"
+                  label={POOL_PROTOCOL_LABEL[row.protocol]}
+                />
               )}
             </Stack>
           </Stack>

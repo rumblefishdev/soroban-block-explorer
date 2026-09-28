@@ -563,7 +563,7 @@ same for the page's Soroban pools in batched reads. TVL sums every leg's reserve
 and is `null` unless every leg has both. A classic pool's reserves and total
 shares come from its latest snapshot row; clients that care about freshness
 read `latest_snapshot_at` in the response. `protocol` names who runs a Soroban
-pool (`Aquarius`, `Soroswap`, `Phoenix`) from the router or factory that
+pool (`aquarius`, `soroswap`, `phoenix`; the client maps each to its display name) from the router or factory that
 registered it (`deployment_id`), and only for a deployment the protocol's own
 publications claim (`liquidity_pools/protocol_labels.rs`); it is `null` for a
 classic pool and for any other deployment. A Soroban pool's total shares come

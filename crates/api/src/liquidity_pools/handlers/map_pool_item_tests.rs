@@ -153,8 +153,8 @@ fn a_pool_names_its_protocol_only_from_a_claimed_deployment() {
         "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK",
     );
     assert_eq!(
-        map_pool_item(aquarius).protocol.as_deref(),
-        Some("Aquarius")
+        map_pool_item(aquarius).protocol,
+        Some(crate::liquidity_pools::dto::PoolProtocol::Aquarius)
     );
 
     let mut unclaimed = base_row();
