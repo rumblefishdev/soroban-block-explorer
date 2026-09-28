@@ -553,9 +553,10 @@ shares, TVL, plus `participant_count` (task 0246). Each reserve sits on its
 leg (`legs[i].reserve`), not in an `a` / `b` pair; a classic pool's two legs
 read the snapshot's two reserve columns in order; a Soroban pool's legs read
 its newest `pool_state_changes` row, in the pool's own token order (the order
-`legs` stores), scaled for native and classic legs only — a Soroban-token leg
-is `null` until its decimals are read. The list does the same for the page's
-Soroban pools in one batched read. TVL sums every leg's reserve × price
+`legs` stores), scaled by the leg's known decimals: 7 for native and classic
+legs, the `decimals` a Soroban token publishes in its contract metadata
+otherwise; a token that publishes none keeps its leg `null`. The list does the
+same for the page's Soroban pools in batched reads. TVL sums every leg's reserve × price
 and is `null` unless every leg has both. A classic pool's reserves and total
 shares come from its latest snapshot row; clients that care about freshness
 read `latest_snapshot_at` in the response. A Soroban pool's total shares come

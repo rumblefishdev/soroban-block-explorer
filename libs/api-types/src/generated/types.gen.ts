@@ -2157,9 +2157,9 @@ export type PoolAssetLeg = {
    * digits). On the leg, not as a `reserve_a` / `reserve_b` pair, because a
    * pool has two to four legs. `null` when no source knows it — never `0`.
    * A classic pool reads its latest snapshot. A soroban pool reads its
-   * newest `pool_state_changes` row, served for a native or classic leg
-   * (7 decimals by protocol); a soroban-token leg stays `null` until its
-   * scale is read from the token's metadata.
+   * newest `pool_state_changes` row, scaled by 7 for a native or classic
+   * leg and by the `decimals` a soroban token publishes in its metadata; a
+   * token that publishes none keeps its leg `null`.
    */
   reserve?: string | null;
   /**

@@ -19,6 +19,8 @@ const POOL: &str = "545454545454545454545454545454545454545454545454545454545454
 /// A pool whose code was replaced (`NOT_A_POOL`): its stale row must not be served.
 const REPLACED: &str = "33eb72c7a9a01352389d1cb151ce3dbd5818007c9e21ff5520f2c085f8f9f9b0";
 const ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+const TOKEN_18: &str = "CAUP7NFABXE5TJRL3FKTPMWRLC7IAXYDCTHQRFSCLR5TMGKHOOQO772J";
+const TOKEN_UNPUBLISHED: &str = "CBIJBDNZNF4X35BJ4FFZWCDBSCKOP5NB4PLG4SNENRMLAPYG4P5FM6VN";
 
 #[tokio::test]
 async fn soroban_pool_reads_serve_leg_reserves() {
@@ -39,11 +41,12 @@ async fn soroban_pool_reads_serve_leg_reserves() {
         .await
         .expect("apply init.sql");
 
-    // Three legs, in the pool's token order: native XLM (101), a classic USDC
-    // (102) and a soroban token (103). Two state rows; the newer one wins.
+    // Four legs, in the pool's token order: native XLM (101), a classic USDC
+    // (102), a soroban token publishing 18 decimals (103) and one publishing
+    // none (104). Two state rows; the newer one wins.
     for sql in [
         "INSERT INTO assets (asset_type, asset_code, issuer_id, contract_id, id) VALUES \
-         (0, '', 0, 0, 101), (1, 'USDC', 7, 0, 102), (3, '', 0, 103, 103)"
+         (0, '', 0, 0, 101), (1, 'USDC', 7, 0, 102), (3, '', 0, 103, 103), (3, '', 0, 104, 104)"
             .to_string(),
         format!(
             "INSERT INTO accounts (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number) VALUES \
@@ -51,14 +54,29 @@ async fn soroban_pool_reads_serve_leg_reserves() {
         ),
         format!(
             "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs) VALUES \
-             (unhex('{POOL}'), 10, 100, 1, [101, 102, 103]), \
+             (unhex('{POOL}'), 10, 100, 1, [101, 102, 103, 104]), \
              (unhex('{REPLACED}'), 30, 100, 1, [101, 102])"
         ),
         format!(
             "INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id) VALUES \
-             (unhex('{POOL}'), 150, [1, 2, 3], 9), \
-             (unhex('{POOL}'), 200, [31072879007206, 125000000, 999], 9), \
+             (unhex('{POOL}'), 150, [1, 2, 3, 4], 9), \
+             (unhex('{POOL}'), 200, [31072879007206, 125000000, 1282501540990846914271528, 999], 9), \
              (unhex('{REPLACED}'), 200, [263512715771, 131948815702], 9)"
+        ),
+        format!(
+            "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
+             (103, '{TOKEN_18}', false), (104, '{TOKEN_UNPUBLISHED}', false)"
+        ),
+        format!(
+            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
+             ('{TOKEN_18}', 18, 1), ('{TOKEN_UNPUBLISHED}', 7, 1)"
+        ),
+        // A later version that carries no decimals, inserted on its own so the
+        // older row survives as a separate part (one block would collapse
+        // them on write).
+        format!(
+            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
+             ('{TOKEN_UNPUBLISHED}', NULL, 2)"
         ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
@@ -67,7 +85,8 @@ async fn soroban_pool_reads_serve_leg_reserves() {
     let expected = vec![
         Some("3107287.9007206".to_string()), // XLM, newest row, scaled by 7
         Some("12.5".to_string()),            // classic USDC, scaled by 7
-        None,                                // soroban token: scale not read here
+        Some("1282501.540990846914271528".to_string()), // token, its 18 decimals
+        None,                                // newest metadata row has no decimals
     ];
 
     let detail = fetch_pool_by_id(&ch, POOL)
