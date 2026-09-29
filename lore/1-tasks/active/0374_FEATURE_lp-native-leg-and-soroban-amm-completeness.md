@@ -2668,3 +2668,33 @@ keeping none (config family) or emptied divides by the holders' sum. The two
 stale-restored pools list their holders; their percentages sum to 0.006% and
 105%. Verified through the local API on production: 99.9999992% and
 99.9999975% on two ordinary pools, `not_indexed` on a concentrated one.
+
+### W1 — soroban pool event amounts (2026-09-29)
+
+Branches `refactor/0374-soroban-pools-stage-move` (two pure moves: the soroban
+pool staging helpers out of `stage.rs`, 2,943 → 2,715 lines; db-clickhouse lib
+tests into their own file) and `feat/0374-soroban-pool-operations` on top.
+
+- New table `soroban_pool_event_amounts`: one row per (event, leg), keyed
+  `(pool_id, ledger, application_order, operation_index, event_index,
+asset_id)`, `amount Int128` signed from the pool's side — the twin of
+  `pool_operation_amounts`. One decoder over the staged `soroban_events`
+  rows for all three families (router `trade`/`deposit_liquidity`/
+  `withdraw_liquidity`; pair `swap`/`deposit`/`withdraw`; config per-field
+  and map-form `swap`/`provide_liquidity`/`withdraw_liquidity`, the
+  per-field group keyed by its `sender` event).
+- **Deviation from approved assumption 4 (flagged):** rows are written only
+  for REGISTERED pools, not for every shape-matching event. The pair family
+  names its amounts by leg position (`amount_0`/`amount_1`, no token
+  addresses), so the pool's legs are needed at write time. The writer reads
+  the registry (~800 rows) per ledger alongside the SAC map; pools
+  registered in the same ledger join it first.
+- Backfill: `backfill-runner soroban-pool-amounts` streams each registered
+  pool's events from `soroban_events` through the same decoder — no archive
+  re-parse, idempotent.
+- Verified on production (read-only, 200k ledgers to 64,677,449): decoded
+  events equal the SQL shape counts for every family and kind (router
+  trades 361,145; pair 20,084; config 851); pair reserve steps exact
+  11,559 of 11,559; router and config within 1% except 392 of 253,656
+  steps (concentrated 187, constant 110, stable 95 — fee outflows and
+  mixed intervals, not investigated per step).
