@@ -26,7 +26,7 @@ use tracing::instrument;
 use self::key::build_s3_key;
 
 /// Public Stellar data archive bucket. No credentials required.
-pub const PUBLIC_ARCHIVE_BUCKET: &str = "aws-public-blockchain";
+pub const PUBLIC_ARCHIVE_BUCKET: &str = xdr_parser::public_archive::PUBLIC_BUCKET;
 
 /// Default per-request budget for public-archive S3 GETs. Chosen so that an
 /// end-to-end E3/E14 request completes well under API Gateway's 29s limit

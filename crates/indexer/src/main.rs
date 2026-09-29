@@ -73,17 +73,6 @@ async fn main() -> Result<(), Error> {
     info!("mTLS ClickHouse client ready");
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    // The ledger bucket may live in another region than the Lambda: testnet
-    // reads the public data lake (`us-east-2`) instead of its own Galexie
-    // bucket (lore-0553). Unset = the Lambda's region, as on mainnet.
-    let s3_client = match std::env::var("LEDGER_BUCKET_REGION") {
-        Ok(region) if !region.is_empty() => S3Client::from_conf(
-            aws_sdk_s3::config::Builder::from(&aws_config)
-                .region(aws_sdk_s3::config::Region::new(region))
-                .build(),
-        ),
-        _ => S3Client::new(&aws_config),
-    };
     let cw_client = CloudWatchClient::new(&aws_config);
     let sqs_client = SqsClient::new(&aws_config);
 
@@ -98,13 +87,24 @@ async fn main() -> Result<(), Error> {
         return Err("BUCKET_NAME env var is missing or empty".into());
     }
 
-    // Reading the public data lake (testnet): its folder must be this
-    // network's, or every transaction hashes wrong without an error.
-    let key_prefix = handler::key_prefix_from_env();
-    if !key_prefix.is_empty() {
-        let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_default();
-        xdr_parser::public_archive::check_archive_network(&key_prefix, passphrase.trim())?;
-    }
+    // Mainnet reads its own Galexie bucket at the root. Testnet names the
+    // public data lake instead (lore-0553): unsigned, in its own region, under
+    // this network's folder — which must match the passphrase, or every
+    // transaction would hash wrong without an error.
+    xdr_parser::public_archive::check_configured_archive()?;
+    let (s3_client, key_prefix) = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
+        let public = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .no_credentials()
+            .region(aws_sdk_s3::config::Region::new(
+                xdr_parser::public_archive::PUBLIC_BUCKET_REGION,
+            ))
+            .load()
+            .await;
+        let prefix = format!("{}/", xdr_parser::public_archive::public_archive_prefix());
+        (S3Client::new(&public), prefix)
+    } else {
+        (S3Client::new(&aws_config), String::new())
+    };
 
     let state = handler::HandlerState {
         s3_client,

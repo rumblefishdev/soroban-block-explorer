@@ -31,11 +31,20 @@ use db_clickhouse::persist::TargetedTables;
 /// A ledger folder of another network parses cleanly and hashes every
 /// transaction wrong, so `run` refuses to start on a mismatch (lore-0553).
 fn refuse_foreign_ledger_folder() {
-    let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE")
-        .expect("run requires STELLAR_NETWORK_PASSPHRASE");
-    let prefix = xdr_parser::public_archive::public_archive_prefix();
-    if let Err(e) = xdr_parser::public_archive::check_archive_network(&prefix, passphrase.trim()) {
+    if let Err(e) = xdr_parser::public_archive::check_configured_archive() {
         panic!("refusing to run: {e}");
+    }
+}
+
+/// The checkpoint seed reads the MAINNET history archive and writes what it
+/// finds, so it refuses a process configured for another network (lore-0553).
+fn refuse_non_pubnet_seed() {
+    let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_default();
+    let prefix = xdr_parser::public_archive::public_archive_prefix();
+    let foreign_passphrase =
+        !passphrase.trim().is_empty() && passphrase.trim() != xdr_parser::MAINNET_PASSPHRASE;
+    if foreign_passphrase || prefix != xdr_parser::public_archive::PUBNET_PREFIX {
+        panic!("refusing to seed: snapshot-seed reads the mainnet history archive only");
     }
 }
 
@@ -371,6 +380,7 @@ async fn main() {
             );
         }
         Command::SnapshotSeed { artifacts, execute } => {
+            refuse_non_pubnet_seed();
             snapshot::seed::seed_command(&sink, &artifacts, execute)
                 .await
                 .expect("snapshot seed failed");

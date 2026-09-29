@@ -113,9 +113,9 @@ pub struct HandlerState {
     /// The doorbell handler derives object keys from ledger numbers and
     /// HEAD/GETs them against this bucket — it does not read the S3 event.
     pub bucket: String,
-    /// Key prefix inside [`Self::bucket`] (`LEDGER_KEY_PREFIX`, normalised to
-    /// end in `/`). Empty on mainnet, whose Galexie writes at the bucket root;
-    /// the testnet genesis folder of the public data lake on testnet.
+    /// Key prefix inside [`Self::bucket`], ending in `/`. Empty on mainnet,
+    /// whose Galexie writes at the bucket root; the network's folder when the
+    /// bucket is the public data lake (testnet).
     pub key_prefix: String,
     pub cw_client: CloudWatchClient,
     /// ClickHouse client (mTLS to Hetzner via Caddy). Construction lives
@@ -289,20 +289,6 @@ fn ledger_s3_key(prefix: &str, ledger: i64) -> String {
     format!(
         "{prefix}{part_prefix:08X}--{part_start}-{part_end}/{file_prefix:08X}--{ledger}.xdr.zst"
     )
-}
-
-/// `LEDGER_KEY_PREFIX` for [`HandlerState::key_prefix`]; unset = bucket root.
-pub fn key_prefix_from_env() -> String {
-    normalize_key_prefix(&std::env::var("LEDGER_KEY_PREFIX").unwrap_or_default())
-}
-
-fn normalize_key_prefix(raw: &str) -> String {
-    let trimmed = raw.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        String::new()
-    } else {
-        format!("{trimmed}/")
-    }
 }
 
 /// HEAD the object: `true` if it exists, `false` on `NotFound`. Any other

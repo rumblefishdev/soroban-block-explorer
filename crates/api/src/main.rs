@@ -185,7 +185,9 @@ async fn main() {
     let ch_fut = db_clickhouse::mtls::client_from_lambda_env(&database);
     let aws_config_fut = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()
-        .region(aws_sdk_s3::config::Region::new("us-east-2"))
+        .region(aws_sdk_s3::config::Region::new(
+            xdr_parser::public_archive::PUBLIC_BUCKET_REGION,
+        ))
         .timeout_config(runtime_enrichment::stellar_archive::default_timeout_config())
         .load();
     let (ch, aws_config) = tokio::join!(ch_fut, aws_config_fut);
@@ -211,12 +213,7 @@ async fn main() {
     });
     // Heavy fields come from the public data lake; a folder of the other
     // network would decode fine and match nothing (lore-0553).
-    if let Err(e) = xdr_parser::public_archive::check_archive_network(
-        &xdr_parser::public_archive::public_archive_prefix(),
-        passphrase.trim(),
-    ) {
-        panic!("{e}");
-    }
+    xdr_parser::public_archive::check_configured_archive().unwrap_or_else(|e| panic!("{e}"));
     let network_id = xdr_parser::network_id(&passphrase);
     let state = AppState::new(ch, runtime_enrichment, network_id);
     let app = app(&config, state);

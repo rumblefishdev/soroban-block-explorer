@@ -8,7 +8,12 @@
 
 use crate::{MAINNET_PASSPHRASE, TESTNET_PASSPHRASE};
 
-/// Mainnet's folder inside `aws-public-blockchain`.
+/// The public ledger dataset. World-readable: read it unsigned — a request
+/// signed by a role that holds no grant on it is refused.
+pub const PUBLIC_BUCKET: &str = "aws-public-blockchain";
+pub const PUBLIC_BUCKET_REGION: &str = "us-east-2";
+
+/// Mainnet's folder inside [`PUBLIC_BUCKET`].
 pub const PUBNET_PREFIX: &str = "v1.1/stellar/ledgers/pubnet";
 
 /// The configured folder: `PUBLIC_ARCHIVE_PREFIX`, else [`PUBNET_PREFIX`].
@@ -39,6 +44,15 @@ pub fn check_archive_network(prefix: &str, passphrase: &str) -> Result<(), Strin
             "ledger folder `{prefix}` names no known network (pubnet / testnet)"
         )),
     }
+}
+
+/// [`check_archive_network`] on this process's configuration
+/// (`PUBLIC_ARCHIVE_PREFIX`, `STELLAR_NETWORK_PASSPHRASE`) — the start-up
+/// guard of every reader of the data lake.
+pub fn check_configured_archive() -> Result<(), String> {
+    let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE")
+        .map_err(|_| "STELLAR_NETWORK_PASSPHRASE is not set".to_string())?;
+    check_archive_network(&public_archive_prefix(), passphrase.trim())
 }
 
 #[cfg(test)]

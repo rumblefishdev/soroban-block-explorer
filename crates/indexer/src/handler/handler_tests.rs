@@ -41,20 +41,6 @@ fn ledger_s3_key_under_the_public_data_lake_prefix() {
     );
 }
 
-#[test]
-fn key_prefix_ends_in_exactly_one_slash_or_is_empty() {
-    assert_eq!(normalize_key_prefix(""), "");
-    assert_eq!(normalize_key_prefix("  "), "");
-    assert_eq!(
-        normalize_key_prefix("v1.1/stellar/ledgers/testnet/2025-12-18"),
-        "v1.1/stellar/ledgers/testnet/2025-12-18/"
-    );
-    assert_eq!(
-        normalize_key_prefix("v1.1/stellar/ledgers/testnet/2025-12-18/"),
-        "v1.1/stellar/ledgers/testnet/2025-12-18/"
-    );
-}
-
 // -------------------------------------------------------------------
 // retry_with_backoff — generic loop control
 // -------------------------------------------------------------------

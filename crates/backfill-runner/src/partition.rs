@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub const BUCKET: &str = "aws-public-blockchain";
+pub const BUCKET: &str = xdr_parser::public_archive::PUBLIC_BUCKET;
 pub const PARTITION_SIZE: u32 = 64_000;
 
 /// S3 partition folder covering a given ledger sequence.
