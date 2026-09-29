@@ -2,7 +2,7 @@
 id: '0424'
 title: 'BUG: NFT ownership order is ambiguous within a ledger — current owner can be nondeterministic'
 type: BUG
-status: active
+status: done
 related_adr: ['0059']
 related_tasks: ['0415', '0538', '0586']
 tags:
@@ -35,6 +35,18 @@ history:
       `transaction_id`. Decided: history filled from `soroban_events` through
       the same Rust extraction (293 B2); `event_order` leaves the API for the
       position (294 A).
+  - date: '2026-09-29'
+    status: done
+    who: karolkow
+    note: >
+      Ownership changes carry the chain position `(ledger, application_order,
+      operation_index, event_index)` in `nft_ownership_changes{,_pending}`
+      (PRs #523, #528, #527, #533); history filled from `soroban_events`
+      (31,118 events, only_old = only_new = 0); old tables dropped, the last
+      `transaction_id` columns. `nfts` owner measured correct for 14,187 of
+      14,187 tokens; tie fix skipped (328). State tables: 0 version ties,
+      convention written down (327 A). CAP-67 order already fixed by 0541.
+      Spawned 0596.
 ---
 
 # BUG: NFT ownership order is ambiguous within a ledger
@@ -312,19 +324,6 @@ event_index)` equals `nfts.current_owner_id` for **all 14,187** (and the
   tokens show a transfer before the mint across ledgers. Not a data defect.
   Side count: 23 tokens have transfers but no mint in the table (not
   examined here).
-
-## Implementation
-
-- Thread the transaction's **application order** (and the event's index within the
-  transaction) into `NftEvent` / `ExtractedNftEvent`, so a total order exists:
-  `(ledger_sequence, application_order, event_index)`.
-- Use that tuple for `event_order` (or add columns) and for the `nfts` RMT
-  **version**, so the same-ledger tie is resolved by data, not by the merge.
-- Backfill/re-ingest the affected range; verify the 88 at-risk tokens resolve
-  deterministically afterwards.
-- Add a regression test: two ownership events for one token in one ledger, in both
-  emission orders, must yield the later one as current owner.
-
 - **Version ties measured on every versioned state table** (2026-09-29,
   read-only; thread 327). For each key: its unmerged rows at the highest
   version, counted as distinct full rows (`uniqExact(cityHash64(*))`) — more
@@ -340,6 +339,25 @@ event_index)` equals `nfts.current_owner_id` for **all 14,187** (and the
   tie a merge already settled leaves no trace, so this shows the tie is not
   occurring now, not that it never did. Slicing trap: `account_id % 8` drops
   negative keys (`%` keeps the sign) — use `positiveModulo`.
+- **CAP-67 display order verified live** (2026-09-29, deployed API through the
+  dev proxy): tx `55dc5473…ab515`, ledger 64,680,250 — 27 events in the order
+  fee charge (`before_all_txs`) → 25 operation events → fee refund
+  (`after_all_txs`). Fixed by task 0541: the rpc id carries the stage in its
+  `transaction_index` sentinel and the transaction page sorts by the id
+  (`runtime_enrichment/stellar_archive/extractors.rs`); the contract events
+  tab orders by the same position. The subtask needs no change of its own.
+
+## Implementation
+
+- Thread the transaction's **application order** (and the event's index within the
+  transaction) into `NftEvent` / `ExtractedNftEvent`, so a total order exists:
+  `(ledger_sequence, application_order, event_index)`.
+- Use that tuple for `event_order` (or add columns) and for the `nfts` RMT
+  **version**, so the same-ledger tie is resolved by data, not by the merge.
+- Backfill/re-ingest the affected range; verify the 88 at-risk tokens resolve
+  deterministically afterwards.
+- Add a regression test: two ownership events for one token in one ledger, in both
+  emission orders, must yield the later one as current owner.
 
 ## Subtask: event display order ignores the CAP-67 stage
 
@@ -424,3 +442,51 @@ if so, promote it as the convention instead of spreading in-process dedup.
 - [x] A single convention chosen and written down (composite version column vs
       in-process last-wins), so new state tables do not reintroduce the tie —
       in-process last-wins per ledger, `clickhouse-pilot.md` §engines
+
+## Implementation Notes
+
+- PR 1 #523: new tables `nft_ownership_changes{,_pending}` keyed by the chain
+  position, dual write beside the old pair.
+- PR 2 #528 (re-opened from #525): one-off `backfill-runner nft-ownership-fill`
+  from `soroban_events`, gated on `only_old = only_new = 0`.
+- PR 3 #527: readers (NFT transfers tab, mint ledger, balance-change pieces)
+  on the new tables; cursor by position; SPA keys rows by position.
+- PR 4 #533: old writes stopped, old tables and the fill command removed;
+  `schema_conventions` allowlist empty.
+- Production: fill 2026-09-28; drops after a row-by-row proof (0 rows only in
+  the old tables; the 4 only in the new ones all after the old head).
+
+## Issues Encountered
+
+- **Stacked PR merged into its base branch**: the fill PR #525 landed in PR 1's
+  branch and was re-opened as #528 (same class hit #542 in epic 0538; rule
+  since: a stacked PR is a draft until retargeted).
+- **`argMax` skips NULL**: comparing owners with `argMax(owner_id, …)` ignored
+  burns and reported 828 false mismatches; `argMax(tuple(owner_id), …).1` fixed it.
+- **`NOT IN` on a Nullable tuple** produced false diffs; `EXCEPT ALL` compares
+  multisets with NULL as equal.
+- **Negative keys in slices**: `% n` keeps the sign; `positiveModulo`.
+
+## Design Decisions
+
+### From Plan
+
+1. **Canonical position instead of a counter** (292 A): the rpc event location,
+   the same key `soroban_events` uses (ADR 0059).
+2. **History from `soroban_events` through the Rust extraction** (293 B2).
+3. **`event_order` leaves the API** for the position (294 A).
+
+### Emerged
+
+4. **`nfts` tie fix skipped** (328): measured 14,187 / 14,187 owners correct;
+   staging already folds a ledger last-wins in chain order.
+5. **Convention for state tables** (327 A): one row per key per ledger folded
+   in execution order before insert; the version stays ledger-only
+   (`clickhouse-pilot.md`).
+6. **The fill command and the Postgres-era `domain::nft` removed** with the
+   old tables in PR 4.
+
+## Future Work
+
+- 0596 — remove the parser's `event_order` counter and its 32,767-per-token
+  skip, now dead.
