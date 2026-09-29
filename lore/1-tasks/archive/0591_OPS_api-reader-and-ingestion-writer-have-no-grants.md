@@ -194,6 +194,13 @@ CH 26.3 with the new `users.d/` mounted:
   (`MEMORY_LIMIT_EXCEEDED`), not 497. `SELECT * … LIMIT 1` over a whole
   series goes over the profile's memory cap, and the access check passes
   before execution starts. `EXPLAIN` is the probe to use for these views.
+- **The RBAC doc's "Adding a new service" step was wrong after this task.**
+  This task had it say `--tags app` and a CH restart for a new user,
+  which contradicts the in-place deploy used here. It was corrected on
+  2026-09-29, after archiving. The same commit fixed
+  `infra-hetzner/ca/README.md`: it named the secret `soroban/<CN>-mtls`
+  and said CDK creates it, while the code reads
+  `soroban/<env>/mtls/<CN>` and no stack creates it.
 
 ## Design Decisions
 
