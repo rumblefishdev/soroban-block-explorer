@@ -52,7 +52,7 @@ async fn main() -> Result<(), Error> {
     // CH_DOMAIN → Secrets extension → rustls client). Writes land in the
     // enrichment side tables (ADR 0050); the indexer-owned tables are
     // never touched by this worker.
-    let client = db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE)
+    let client = db_clickhouse::mtls::client_from_lambda_env(&db_clickhouse::database_from_env())
         .await
         .map_err(|e| format!("failed to build mTLS ClickHouse client: {e}"))?;
     let sep1 = Sep1Fetcher::new()?;
