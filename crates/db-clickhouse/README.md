@@ -467,7 +467,7 @@ it; both `include_str!` the same file:
 | `CLICKHOUSE_URL`         | `http://localhost:8123` | Rust CLI + smoke test     |
 | `CLICKHOUSE_USER`        | `default`               | Rust CLI + smoke test     |
 | `CLICKHOUSE_PASSWORD`    | `clickhouse`            | Rust CLI + smoke test     |
-| `CLICKHOUSE_DATABASE`    | `default`               | Rust CLI + smoke test     |
+| `CLICKHOUSE_DATABASE`    | `default`               | Rust CLI + smoke test + Lambdas (`database_from_env`; testnet sets `testnet`) |
 
 Defaults live in `.env.example` at the repo root and are exercised by the
 Quick start above.

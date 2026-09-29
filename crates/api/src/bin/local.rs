@@ -63,8 +63,12 @@ async fn main() {
         key_pem: read(format!("{mtls_dir}/{user}.key")),
         ca_pem: read(format!("{mtls_dir}/ca.crt")),
     };
-    let ch = db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
-        .expect("failed to build mTLS ClickHouse client");
+    let ch = db_clickhouse::mtls::client_with_mtls(
+        &domain,
+        &bundle,
+        &db_clickhouse::database_from_env(),
+    )
+    .expect("failed to build mTLS ClickHouse client");
 
     let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()
