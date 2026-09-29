@@ -83,6 +83,12 @@ siblings and moved the share-token oracle out of `pool_router.rs` into
   refuses a commit growing a file already over the limit, or creating a new
   one over it; the existing stock stays unblocked, matching the ratchet.
   Estimate ~1 h.
+- **Next up: `stage.rs` (decided 2026-09-29, karolkow).** The next task that
+  changes the schema splits `crates/db-clickhouse/src/persist/stage.rs` first,
+  in its own `refactor(...)` PR merged before the schema change. Measured over
+  the 90 days to 2026-09-29: 82 commits and 5,944 changed lines, the most
+  edited file in the repo; it changes together with `init.sql`, `rows.rs`
+  and `writer.rs` in 14–20 PRs each, so every new column pays for its size.
 
 ## 2026-09-16 (karolkow) — test files leave the code's directory
 
