@@ -280,7 +280,8 @@ function PoolChartsContent({
    * can fix a missing price.
    *
    * `tvl` is the discriminator because it is unambiguous — reserves exist
-   * on every snapshot, so a null `tvl` can only mean a leg has no price. A
+   * on every snapshot, so a null `tvl` can only mean a leg has no price — or,
+   * for a Soroban pool, a leg whose token publishes no decimals. A
    * null `volume` is ambiguous by design (it also means "no swaps in this
    * bucket"), which is why the check does not use the selected metric.
    *
@@ -372,7 +373,11 @@ function PoolChartsContent({
               ) : unpriceable ? (
                 <ChartEmptyState
                   title="USD values unavailable"
-                  hint="We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
+                  hint={
+                    volumeIndexed
+                      ? "We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
+                      : "We have no price data or no token scale for one of this pool's assets in this period, so its value can't be shown in USD."
+                  }
                 />
               ) : (
                 <ChartEmptyState
