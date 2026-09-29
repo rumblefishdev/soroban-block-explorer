@@ -2,7 +2,7 @@
 id: '0589'
 title: 'BUG: GA fires and sets _ga before consent, while the privacy policy says analytics wait for consent'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0437', '0451', '0577']
 tags: [frontend, privacy, analytics, priority-high, effort-small]
@@ -23,6 +23,16 @@ history:
     note: >
       Started. Option 1 (Consent Mode default + HubSpot listener in
       web/index.html) is the fix in this repo.
+  - date: '2026-09-29'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Merged in #529 (2026-09-28 14:05 UTC) and live: the production
+      index.html (Last-Modified 2026-09-28 18:58 UTC) carries the denied
+      default and the listener. 3 files, +2 tests (409 in web). The same
+      scripts and test were added to the portal in stellar-prices-api #362
+      (task 0316). #529 also carried a fix for develop's web lint, broken by a
+      0510 test.
 ---
 
 # BUG: GA fires and sets \_ga before consent, while the privacy policy says analytics wait for consent
@@ -86,8 +96,10 @@ Options 1 and 2 together also stop the cookieless pings that Consent Mode's
       `update granted`, one `page_view` with `gcs=G111` (`wait_for_update`
       held it). Stored decline: `update denied`, `page_view` with `G100`, no
       `_ga`.
-- [ ] The Prices API portal (`/api/*`, stellar-prices-api 0316) repeats the
-      same change. It lives in the other repo; tracked there.
+- [x] The Prices API portal (`/api/*`, stellar-prices-api 0316) repeats the
+      same change. Done in stellar-prices-api #362, with the same test and a
+      browser check on a portal build. It ships with 0316, which waits for
+      the new policy text. Until then the live portal loads no GTM at all.
 - [x] **Docs updated.** N/A: `docs/architecture/**` does not describe the
       third-party tags.
 - [x] **API types regenerated.** N/A: nothing under `crates/api/**`,
@@ -146,3 +158,18 @@ Options 1 and 2 together also stop the cookieless pings that Consent Mode's
 - **Cookies are shared across `localhost` ports.** A test on `:4201` leaked
   its consent into `:4202`. Cookies were cleared from a script-free page
   (`/favicon-32.png`) before the fresh-visitor run.
+- **CI lint on `web` was red on develop, not because of this change.**
+  2cb2fa63 (0510) added `import('@rumblefish/api-types')` in
+  `web/src/api/__tests__/client.test.ts`. Nx then treats the lib as
+  lazy-loaded, and `enforce-module-boundaries` fails on its 27 static imports
+  (29 errors). Local lint stayed green on a stale Nx graph until `nx reset`
+  with `NX_DAEMON=false`. Fixed in #529 with `vi.importActual`.
+- **The first CI run failed `format:check` on this file.** An inline code
+  span wrapped across lines, and prettier re-indented it on every pass.
+  Reworded so the span stays on one line.
+
+## Future Work
+
+- Option 2, the GTM-side "require `analytics_storage`" on the GA tag, would
+  also stop the cookieless `G100` pings. It is optional under the criteria
+  above and needs access to the GTM account.

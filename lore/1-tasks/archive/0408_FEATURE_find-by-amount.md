@@ -2,7 +2,7 @@
 id: '0408'
 title: 'FEATURE: find-by-amount — sort/filter transactions by net-settled value moved'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0393']
 tags:
@@ -36,6 +36,12 @@ history:
       Renumbered from 0400 (collision): 0400 was already taken on develop by
       0400_OPS_prod-schema-drift-init-sql-and-stale-architecture-docs. This
       lore-0393 follow-up moved to 0408. No content change.
+  - date: 2026-09-29
+    status: superseded
+    who: karolkow
+    note: >-
+      Superseded: built on net_settled, which 0540 removed (a2f8c5a7b). A new take would sit on asset_transfers.
+      Backlog review of 2026-09-29.
 ---
 
 # FEATURE: find-by-amount — sort/filter transactions by value moved

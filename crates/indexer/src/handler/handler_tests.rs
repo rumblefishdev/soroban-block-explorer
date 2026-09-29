@@ -10,7 +10,7 @@ use std::cell::RefCell;
 fn ledger_s3_key_matches_galexie_scheme() {
     // Verified against a live key observed in the cutover S3 bucket.
     assert_eq!(
-        ledger_s3_key(62_528_059),
+        ledger_s3_key("", 62_528_059),
         "FC45E5FF--62528000-62591999/FC45E5C4--62528059.xdr.zst"
     );
 }
@@ -19,16 +19,26 @@ fn ledger_s3_key_matches_galexie_scheme() {
 fn ledger_s3_key_partition_boundaries() {
     // First ledger of a partition: partition start == ledger.
     assert_eq!(
-        ledger_s3_key(62_528_000),
+        ledger_s3_key("", 62_528_000),
         "FC45E5FF--62528000-62591999/FC45E5FF--62528000.xdr.zst"
     );
     // Last ledger of the same 64000-wide partition (62528000 + 63999).
     assert_eq!(
-        ledger_s3_key(62_591_999),
+        ledger_s3_key("", 62_591_999),
         "FC45E5FF--62528000-62591999/FC44EC00--62591999.xdr.zst"
     );
     // First ledger of the next partition rolls the partition prefix.
-    assert!(ledger_s3_key(62_592_000).starts_with("FC44EBFF--62592000-62655999/"));
+    assert!(ledger_s3_key("", 62_592_000).starts_with("FC44EBFF--62592000-62655999/"));
+}
+
+#[test]
+fn ledger_s3_key_under_the_public_data_lake_prefix() {
+    // A key listed in the public testnet data lake on 2026-09-28 (lore-0553):
+    // the same Galexie scheme, one folder per network and genesis.
+    assert_eq!(
+        ledger_s3_key("v1.1/stellar/ledgers/testnet/2025-12-18/", 4_921_419),
+        "v1.1/stellar/ledgers/testnet/2025-12-18/FFB5C7FF--4864000-4927999/FFB4E7B4--4921419.xdr.zst"
+    );
 }
 
 // -------------------------------------------------------------------

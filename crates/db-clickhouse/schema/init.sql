@@ -3,20 +3,19 @@
 -- ## Design — hybrid: surrogate Int64 for high-cardinality join hubs,
 -- natural keys everywhere else
 --
--- Three tables get surrogate `id Int64` columns (deterministic
+-- Two tables get surrogate `id Int64` columns (deterministic
 -- `cityhash64(natural_key)` derivation in
 -- `crates/db-clickhouse/src/persist/ids.rs`):
 --
 --   - `accounts.id`            ← cityhash64(account_id StrKey)
 --   - `soroban_contracts.id`   ← cityhash64(contract_id StrKey)
---   - `transactions.id`        ← cityhash64(hash bytes)
 --
--- **Transactions are the exception — do not add `transaction_id` to a new
+-- **Transactions have no surrogate — do not add `transaction_id` to a new
 -- table.** Locate a transaction by its position `(ledger_sequence,
 -- application_order)`, an operation by `operation_index`, an event by its
--- stellar-rpc id (ADR 0059). `transactions.id` is being retired (task 0538):
+-- stellar-rpc id (ADR 0059). Task 0538 removed the hash surrogate:
 -- a hash never compresses (ratio 1.0, 8.03 B/row, ~220 GiB across the
--- tables that still carry it, 2026-09-23), while the position costs
+-- tables that carried it, measured 2026-09-23), while the position costs
 -- 0.07–1.3 B/row and sorts in execution order. Lookups by hash go through
 -- `transaction_hash_prefix_index`. `tests/schema_conventions.rs` fails on a new
 -- `transaction_id` column.
@@ -941,12 +940,10 @@ ORDER BY (pool_id, account_id);
 -- Append-only fact tables (ReplacingMergeTree, partitioned)
 ----------------------------------------------------------------------
 
--- transactions: surrogate `id Int64`, legacy — no table references it since
--- task 0424 retired `nft_ownership`, the last one; every table joins by
--- `(ledger_sequence, application_order)` (ADR 0059, task 0538). ORDER BY
--- (ledger_sequence, application_order) for time-series scans.
+-- transactions: located by `(ledger_sequence, application_order)`, the key
+-- every other table joins on (ADR 0059). The hash surrogate `id` was dropped
+-- by task 0538 once no table referenced it.
 CREATE TABLE IF NOT EXISTS transactions (
-    id                Int64,
     hash              FixedString(32),
     ledger_sequence   Int64,
     application_order Int16,

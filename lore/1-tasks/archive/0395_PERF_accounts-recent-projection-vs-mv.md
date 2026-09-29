@@ -2,7 +2,7 @@
 id: '0395'
 title: 'PERF: re-evaluate accounts_recent — native projection vs refreshable-MV table (0353 projection-rejection was a flippable default, not a hard limit)'
 type: PERF
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0385', '0353', '0397']
 tags: [perf, clickhouse, read-path, tech-debt, effort-small, priority-low]
@@ -31,6 +31,12 @@ history:
       disappear entirely and there is nothing left to alert on. Building
       monitoring for machinery that may be deleted is the wrong order, so 0395
       gates 0428.
+  - date: 2026-09-29
+    status: superseded
+    who: karolkow
+    note: >-
+      Merged into 0447: the same accounts_recent_mv refresh cost, one task.
+      Backlog review of 2026-09-29.
 ---
 
 # PERF: accounts_recent — projection vs refreshable-MV table

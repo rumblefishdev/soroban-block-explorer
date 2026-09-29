@@ -2,7 +2,7 @@
 id: '0429'
 title: 'RESEARCH: how should the indexer learn state it never observed changing? (retire balance-seed)'
 type: RESEARCH
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0425', '0421', '0331', '0214']
 tags: [research, clickhouse, indexer, balances, effort-medium, priority-low]
@@ -19,6 +19,12 @@ history:
       `bootstrap` was measured into the mop category instead. The options for it are
       genuinely open and range from "do nothing" to "re-architect ingest around a
       state snapshot", which is too wide a spread to settle inside a cleanup task.
+  - date: 2026-09-29
+    status: superseded
+    who: karolkow
+    note: >-
+      Merged into 0503: seeding state the ingest never observed is part of the completeness audit against network state.
+      Backlog review of 2026-09-29.
 ---
 
 # RESEARCH: seeding state the indexer never observed changing

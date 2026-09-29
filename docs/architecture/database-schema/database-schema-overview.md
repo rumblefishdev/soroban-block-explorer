@@ -413,7 +413,10 @@ Purpose:
 Design notes:
 
 - `id` provides an internal `BIGSERIAL` surrogate key referenced by child tables;
-  the composite `(id, created_at)` PK lets child tables cascade via the partitioning key
+  the composite `(id, created_at)` PK lets child tables cascade via the partitioning key.
+  ClickHouse has no `id`: every table locates a transaction by
+  `(ledger_sequence, application_order)`, and task 0538 dropped the hash surrogate
+  ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md))
 - `hash` is the main public lookup key for transaction detail routes; binary storage
   per [ADR 0024](../../../lore/2-adrs/0024_hashes-bytea-binary-storage.md)
 - `source_id` is the `accounts.id` surrogate
@@ -918,7 +921,8 @@ CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern
 > table `soroban_contract_metadata(contract_id, name, symbol, decimals, version)`
 > — `ReplacingMergeTree(version)`, key `contract_id` — written by the indexer
 > (`created` + `updated`, SACs skipped) and composed at read (`LEFT JOIN`;
-> `decimals` defaults to 7 for classic/SAC). It is a separate table, not columns
+> `decimals` is 7 for native and classic/SAC, `null` for a Soroban token that
+> publishes none — never a guessed 7). It is a separate table, not columns
 > on `soroban_contracts`: RMT whole-row replace + that table's multiple writers
 > would clobber in-row metadata, and identity vs metadata update on different
 > clocks. The API exposes `name`/`symbol`/`decimals` on the contract-detail and

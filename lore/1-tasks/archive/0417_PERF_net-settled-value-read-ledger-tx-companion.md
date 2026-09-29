@@ -2,7 +2,7 @@
 id: '0417'
 title: 'PERF: (ledger,tx)-leading companion for the net-settled value read — turn the scan into a seek (0393 E release-gate)'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0393', '0411', '0365', '0357']
 tags:
@@ -20,6 +20,12 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0393. The value read (fetch_tx_list_aggregates) SCANS the asset_id-leading operation_asset_appearances (~26M rows/page); the global tx list is polled and this endpoint family blew the read quota before (0243/0386). This is the mitigation named in the 0393 E release-gate — build the (ledger,tx)-leading companion so the read is a prefix seek. (0393 F — the tx-value-query relocation out of common/ch.rs — is owned by 0411; do it wherever the read is restructured first.)'
+  - date: 2026-09-29
+    status: superseded
+    who: karolkow
+    note: >-
+      Superseded: the read it would speed up was deleted (ab8b14de6, a2f8c5a7b); the asset_transfers read that replaced it is already a (ledger, order) seek.
+      Backlog review of 2026-09-29.
 ---
 
 # PERF: (ledger,tx)-leading companion for the net-settled value read

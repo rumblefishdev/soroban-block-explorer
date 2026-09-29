@@ -285,7 +285,6 @@ fn column_order_transactions() {
     assert_columns::<TransactionRow>(
         "transactions",
         &[
-            "id",
             "hash",
             "ledger_sequence",
             "application_order",
@@ -544,9 +543,6 @@ fn prepare_surrogate_id_fk_consistency() {
     // The participant locates its transaction by position (ADR 0059).
     assert_eq!(part_row.ledger_sequence, tx_row.ledger_sequence);
     assert_eq!(part_row.application_order, tx_row.application_order);
-
-    // tx surrogate id derived from same hash bytes as `hash` column.
-    assert_eq!(tx_row.id, ids::transaction_id(&tx_row.hash));
 }
 
 /// Fee-bump: both the outer and the inner tx hash are indexed to the same
@@ -1609,7 +1605,6 @@ fn prepare_is_deterministic_across_runs() {
     )
     .expect("second run");
 
-    assert_eq!(a.transaction_rows[0].id, b.transaction_rows[0].id);
     assert_eq!(a.account_rows[0].id, b.account_rows[0].id);
     assert_eq!(a.ledger_rows[0].sequence, b.ledger_rows[0].sequence);
 }

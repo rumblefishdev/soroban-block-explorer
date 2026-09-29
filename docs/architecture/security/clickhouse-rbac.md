@@ -219,16 +219,25 @@ rotation.
 
 ### Adding a new service / dev cert
 
-1. Issue the cert with `infra-hetzner/ca/issue-client-cert.sh
-<cn>`.
-2. Append `<cn>:<ch_user>` to `CLICKHOUSE_CN_USER_MAP` in
+1. If the chosen `<ch_user>` does not exist yet (a new service class), add
+   it to `crates/db-clickhouse/users.d/services.xml` first, so the map never
+   points at a missing user. Give it a `<grants>` block: without one it gets
+   `ALL ON *.*`. Deploy that file alone, in place:
+   `git show origin/develop:crates/db-clickhouse/users.d/services.xml | ssh <box> 'cat > /srv/app/crates/db-clickhouse/users.d/services.xml'`.
+   The `cat >` must be the only command reading stdin. ClickHouse reloads
+   `users.d` by itself, with no restart. Check the result with
+   `SHOW GRANTS FOR <ch_user>`.
+2. Issue the cert with `infra-hetzner/ca/issue-client-cert.sh <cn>`. For an
+   AWS service, upload it to Secrets Manager as
+   `infra-hetzner/ca/README.md` describes.
+3. Append `<cn>:<ch_user>` to `CLICKHOUSE_CN_USER_MAP` in
    `~/.config/soroban-prod.env`.
-3. `ansible-playbook ... --tags caddy_reload` to render and reload.
+4. `ansible-playbook ... --tags caddy_reload` to render and reload.
 
-If the chosen `<ch_user>` doesn't exist yet (new service class),
-also add it to `crates/db-clickhouse/users.d/services.xml` with a `<grants>`
-block (without one it gets `ALL ON *.*`), `--tags app` to sync the file and
-restart CH.
+Do not ship a `users.d` change with `--tags app`. It runs the whole app
+role: it re-renders `.env` from the operator's environment, and any
+difference restarts the compose stack. Its `users.d` sync also deletes
+every file on the box that the repo does not have.
 
 ## Audit trail
 

@@ -2,7 +2,7 @@
 id: '0349'
 title: 'BUG: account "deleted" detection wrong — redesign to last-lifecycle (merge vs create), not last_seen anchor'
 type: BUG
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0324', '0321', '0295']
 tags:
@@ -26,6 +26,12 @@ history:
       in the 0324 detection query, verified against stellar-core XDR + live
       mainnet + prod ClickHouse (devil's-advocate pass). Fix is a query
       REDESIGN, not a patch. Analysis-only; no code changed.
+  - date: 2026-09-29
+    status: completed
+    who: karolkow
+    note: >-
+      Done by 0463 (a40b9f81), by a different fix: `deleted` reads the native-holding lifecycle column (accounts/queries.rs).
+      Backlog review of 2026-09-29.
 ---
 
 # BUG: account "deleted" detection is wrong — redesign to last-lifecycle rule

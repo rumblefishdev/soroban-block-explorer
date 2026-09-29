@@ -27,6 +27,11 @@ history:
       Raising the interval was rejected on review; a projection on `accounts`
       is the candidate direction, not decided. Deferred. See "Re-measured
       2026-09-25".
+  - date: 2026-09-29
+    status: backlog
+    who: karolkow
+    note: >-
+      Absorbed 0395 (accounts_recent projection vs refreshable MV): same refresh cost, now one task. Read 0395 in archive/ for its projection option.
 ---
 
 # accounts_recent_mv rewrites the whole table every 2 minutes

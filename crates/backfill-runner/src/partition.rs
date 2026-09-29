@@ -1,14 +1,14 @@
 //! Stellar public-archive S3 partition math.
 //!
-//! Layout: `v1.1/stellar/ledgers/pubnet/{HEX}--{start}-{end}/{HEX}--{seq}.xdr.zst`
-//! where `HEX = uppercase_hex(u32::MAX - seq_or_start)` zero-padded to 8 chars,
+//! Layout: `{prefix}/{HEX}--{start}-{end}/{HEX}--{seq}.xdr.zst`, where
+//! `prefix` is the network's folder (`v1.1/stellar/ledgers/pubnet` unless
+//! `PUBLIC_ARCHIVE_PREFIX` says otherwise — see `xdr_parser::public_archive`),
+//! `HEX = uppercase_hex(u32::MAX - seq_or_start)` zero-padded to 8 chars,
 //! and each partition folder holds exactly `PARTITION_SIZE` ledgers.
 
 use std::path::{Path, PathBuf};
 
-/// Root prefix inside `aws-public-blockchain`.
-pub const BUCKET: &str = "aws-public-blockchain";
-pub const ROOT_PREFIX: &str = "v1.1/stellar/ledgers/pubnet";
+pub const BUCKET: &str = xdr_parser::public_archive::PUBLIC_BUCKET;
 pub const PARTITION_SIZE: u32 = 64_000;
 
 /// S3 partition folder covering a given ledger sequence.
@@ -30,7 +30,13 @@ impl Partition {
     /// S3 key prefix (no bucket, no scheme, no trailing slash):
     /// `v1.1/stellar/ledgers/pubnet/FC4DB5FF--62016000-62079999`.
     pub fn folder_key(&self) -> String {
-        format!("{ROOT_PREFIX}/{}--{}-{}", self.hex, self.start, self.end)
+        format!(
+            "{}/{}--{}-{}",
+            xdr_parser::public_archive::public_archive_prefix(),
+            self.hex,
+            self.start,
+            self.end
+        )
     }
 
     /// Full `s3://` URL for the partition folder, suitable as the source

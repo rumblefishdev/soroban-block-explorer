@@ -2,7 +2,7 @@
 id: '0347'
 title: 'BUG: classify TLS certificate-verification failures as permanent (sentinel) in enrichment, not transient'
 type: BUG
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0335', '0282', '0311']
 tags:
@@ -61,6 +61,12 @@ history:
       the worker is live (ESM Enabled, batch 10), so the DLQ is the only symptom
       surface — and a `--retry-sentinels`-style re-drain will NOT help until the
       classifier changes, because every retry reproduces the same cert error.
+  - date: 2026-09-29
+    status: completed
+    who: karolkow
+    note: >-
+      Done by 0455 (79712b6f): http_transient.rs classifies connect-level failures, TLS handshake included, as permanent.
+      Backlog review of 2026-09-29.
 ---
 
 # BUG: TLS certificate-verification failure → permanent (sentinel), not transient

@@ -19,7 +19,7 @@ fn asset_row(
         contract_id: contract_id.map(String::from),
         name: None,
         symbol: None,
-        decimals: 7,
+        decimals: Some(7),
         total_supply: None,
         holder_count: None,
         icon_url: None,

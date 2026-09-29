@@ -1,6 +1,7 @@
-//! backfill-runner — production-grade Stellar pubnet backfill to ClickHouse.
+//! backfill-runner — production-grade Stellar ledger backfill to ClickHouse.
 //!
-//! Source: `aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` (unsigned).
+//! Source: `aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` (unsigned), or
+//! the network folder named by `PUBLIC_ARCHIVE_PREFIX` (lore-0553).
 //! Sink:   ClickHouse (ADR 0044), via the `db_clickhouse::persist`
 //!         partition-writer lifecycle.
 
@@ -26,6 +27,26 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use db_clickhouse::persist::TargetedTables;
+
+/// A ledger folder of another network parses cleanly and hashes every
+/// transaction wrong, so `run` refuses to start on a mismatch (lore-0553).
+fn refuse_foreign_ledger_folder() {
+    if let Err(e) = xdr_parser::public_archive::check_configured_archive() {
+        panic!("refusing to run: {e}");
+    }
+}
+
+/// The checkpoint seed reads the MAINNET history archive and writes what it
+/// finds, so it refuses a process configured for another network (lore-0553).
+fn refuse_non_pubnet_seed() {
+    let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_default();
+    let prefix = xdr_parser::public_archive::public_archive_prefix();
+    let foreign_passphrase =
+        !passphrase.trim().is_empty() && passphrase.trim() != xdr_parser::MAINNET_PASSPHRASE;
+    if foreign_passphrase || prefix != xdr_parser::public_archive::PUBNET_PREFIX {
+        panic!("refusing to seed: snapshot-seed reads the mainnet history archive only");
+    }
+}
 
 /// Default local scratch dir. CLI `--temp-dir` or `BACKFILL_TEMP_DIR`
 /// overrides. Single source of truth — `run` and `status` both receive
@@ -297,18 +318,21 @@ async fn main() {
             start,
             end,
             reindex,
-        } => run::execute(
-            &sink,
-            &cli.temp_dir,
-            start,
-            end,
-            cli.keep_partitions,
-            cli.soroban_rpc_url.as_deref(),
-            reindex,
-            &mp,
-        )
-        .await
-        .expect("backfill run failed"),
+        } => {
+            refuse_foreign_ledger_folder();
+            run::execute(
+                &sink,
+                &cli.temp_dir,
+                start,
+                end,
+                cli.keep_partitions,
+                cli.soroban_rpc_url.as_deref(),
+                reindex,
+                &mp,
+            )
+            .await
+            .expect("backfill run failed")
+        }
         Command::Status { start, end } => status::execute(&sink, start, end)
             .await
             .expect("status failed"),
@@ -356,6 +380,7 @@ async fn main() {
             );
         }
         Command::SnapshotSeed { artifacts, execute } => {
+            refuse_non_pubnet_seed();
             snapshot::seed::seed_command(&sink, &artifacts, execute)
                 .await
                 .expect("snapshot seed failed");

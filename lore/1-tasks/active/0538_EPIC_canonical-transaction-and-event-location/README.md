@@ -147,7 +147,7 @@ never two copies of two tables at once. Every struct change ships with
 
 - [ ] ADR adopted; `application_order` means one thing
 - [ ] Partition-level measurement and join benchmark recorded before step 4
-- [ ] No table carries `transaction_id`; `transactions.id` dropped
+- [x] No table carries `transaction_id`; `transactions.id` dropped (2026-09-29)
 - [x] No new table can add `transaction_id`: `crates/db-clickhouse/tests/schema_conventions.rs`
       (allowlist of the 8 tables that still carry it; each migrated table
       removes its entry — the test fails on a stale one) — 2026-09-23
@@ -418,3 +418,45 @@ classic payments and trades since protocol 23).
 pin `ledger_sequence` first, and one ledger fits one granule. The detail read
 matches `hash OR inner_tx_hash`, which is how an inner hash found through
 `transaction_hash_index` resolves.
+
+## Step 7 — `transactions.id` (2026-09-29)
+
+**Measured (read-only, production):** `transactions.id` 31.78 GiB of 221.84
+GiB, 4.25 B rows; not in the sort, primary or partition key (`ORDER BY
+(ledger_sequence, application_order)`), so a `DROP COLUMN` needs no rebuild.
+No table carries `transaction_id` since task 0424. `system.query_log`, 14
+days, reads of `transactions.id`: `api_reader` last 2026-09-28 14:45 UTC,
+before the 0424 readers deploy, none since; `dev_shared` only the one-off
+fills of 0575 / 0586 (last 2026-09-25); no `prices_*` user. In code, only the
+writer names it (`TransactionRow.id` ← `ids::transaction_id`).
+
+**Deploy order, tested on the local ClickHouse:** `MODIFY COLUMN id Int64
+DEFAULT 0` is metadata only (0 mutations, parts unchanged). With it, the new
+build (no `id`) inserts cleanly while the old one still writes `id`; without
+it the new build fails `SchemaMismatch` ("non-default columns are missing: id")
+— reproduced by the CH-gated tests on a stale local table. After `DROP COLUMN
+id` all `db-clickhouse` tests pass and the rows stay. Procedure in
+`docs/deployment.md`.
+
+Branch `feat/0538-drop-transactions-id` (on `refactor/0538-ids-tests-file`,
+the two pure test moves the touched files required).
+
+**Challenged before the drop (2026-09-29, read-only).** `id` is the writer's
+`cityhash_102_128(hash)` lower 64 bits for 11,983 of 11,983 sampled rows
+(every one of the 30 partitions, 3,424 fee-bumps: the outer hash); the formula
+never changed since the first CH writer (b9db35487). SQL `cityHash64(hash)`
+gives a different value, so a recompute needs the Rust helper. Nothing depends
+on the column: no view, MV, dictionary, skip index or projection on
+`transactions`; no column in `default` or `prices` names a transaction
+surrogate; `query_log` since 2026-09-01 shows reads only by `dev_read`,
+`dev_shared` (0575 / 0586 fills), `api_reader` (last 2026-09-28 14:45 UTC) and
+one operator query; `prices_*` never read `transactions`. Gaps closed in docs:
+a restore of an older backup and a local ClickHouse keep `id`.
+
+**Step 7 done (2026-09-29, UTC).** Operator: `MODIFY COLUMN id Int64 DEFAULT 0`
+11:14 (0 mutations); Compute deployed (#541), the new build's first write
+without `id` 11:34:31, the old build's last 11:34:23; rows from ledger
+64,679,177 on carry the default. `DROP COLUMN id` done (mutation `is_done` 1,
+`system.columns` 0). `transactions` 221.85 → 190.07 GiB, rows kept
+(4,247,615,868 and growing); ingest continuous (180 of 180 ledgers in 15 min,
+0 writer exceptions). Production has no transaction surrogate left.

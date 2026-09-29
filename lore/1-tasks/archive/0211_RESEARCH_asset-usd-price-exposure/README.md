@@ -2,7 +2,7 @@
 id: '0211'
 title: 'RESEARCH: Asset USD price exposure — design (Oskar price API consumer)'
 type: RESEARCH
-status: backlog
+status: superseded
 related_adr: ['0029', '0043']
 related_tasks: ['0188', '0191', '0194', '0195', '0199']
 tags:
@@ -47,6 +47,12 @@ history:
       `prices.assets` on `(asset_code, issuer_address)` — 249 distinct asset_ids
       share the code 'XLM' and 153 rows carry an empty code, so native legs get
       priced as an arbitrary asset, silently.
+  - date: 2026-09-29
+    status: superseded
+    who: karolkow
+    note: >-
+      Superseded: the prices database is live, ADR 0053 answers the design and usd_analytics.rs reads prices at query time.
+      Backlog review of 2026-09-29.
 ---
 
 # RESEARCH: Asset USD price exposure — design (Oskar price API consumer)

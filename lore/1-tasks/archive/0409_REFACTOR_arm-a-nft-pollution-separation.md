@@ -2,7 +2,7 @@
 id: '0409'
 title: 'REFACTOR: arm-A NFT pollution — root cause + fungible/NFT separation in operation_asset_appearances'
 type: REFACTOR
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0393', '0383', '0359', '0309']
 tags:
@@ -37,6 +37,12 @@ history:
       Renumbered from 0401 (collision): 0401 was already taken on develop by
       0401_PERF_lplist-stored-created-at-ledger. This lore-0393 follow-up (itself
       already moved 0399 -> 0401 in 743de1f5) moved again to 0409. No content change.
+  - date: 2026-09-29
+    status: superseded
+    who: karolkow
+    note: >-
+      Superseded: absorbed by 0542.
+      Backlog review of 2026-09-29.
 ---
 
 # REFACTOR: arm-A NFT pollution — fungible/NFT separation

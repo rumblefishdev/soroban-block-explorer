@@ -2,7 +2,7 @@
 id: '0232'
 title: 'FEATURE: ClickHouse live-mode drift mitigation for all 6 Stage 1 Tier-1 columns'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: ['0044']
 related_tasks: ['0118', '0194', '0228', '0421', '0425', '0497']
 blocked_by: []
@@ -65,6 +65,12 @@ history:
       decision (move MIN copies off RMT, retire repair-tier1) supersedes this
       task's premise of mitigating drift column by column. Close or narrow
       when either is picked up; never work both.
+  - date: 2026-09-29
+    status: superseded
+    who: karolkow
+    note: >-
+      Superseded by 0497 (retire repair-tier1), which has the same goal; 0497 already records the deferral.
+      Backlog review of 2026-09-29.
 ---
 
 # FEATURE: ClickHouse live-mode drift mitigation for all 6 Stage 1 Tier-1 columns

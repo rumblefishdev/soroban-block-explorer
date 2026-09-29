@@ -8,9 +8,8 @@
 //!
 //! - **No `transactions.created_at` on CH.** The API timestamp is the
 //!   parent ledger `closed_at`, joined in from `ledgers` (ADR 0044 §5.2).
-//! - **`transactions.id` is a deterministic hash surrogate**, not a
-//!   `BIGSERIAL`, and it is NOT apply-order within a ledger. Every list keys
-//!   on the position `(ledger_sequence, application_order)` (ADR 0059).
+//! - **CH `transactions` has no `id`.** Every list keys on the position
+//!   `(ledger_sequence, application_order)` (ADR 0059).
 //! - **`transaction_operations` has no `id` surrogate** (PR #175). The
 //!   per-op `appearance_id` is the operation's 1-based position,
 //!   `operation_index + 1` (ADR 0059).
