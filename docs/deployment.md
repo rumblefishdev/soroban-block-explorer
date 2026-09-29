@@ -515,7 +515,10 @@ Frontend **content** is separate: `deploy-production-web`
   still inserts `id`. Deploying before the `DEFAULT` does the same. After the
   drop, `backfill-runner` and the parallel-backfill workers (whose parts the
   merge scripts attach) must be built from this change or later: an older
-  build still writes `id`, which `query_log` cannot show until it runs.
+  build still writes `id`, which `query_log` cannot show until it runs. A local
+  ClickHouse keeps the column too (`init.sql` never alters an existing table),
+  so the CH-gated tests fail with `SchemaMismatch … missing: id` until the same
+  `DROP COLUMN` runs there.
 
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`

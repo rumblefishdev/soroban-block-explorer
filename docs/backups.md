@@ -201,7 +201,10 @@ are refused and the readers query columns that are not there. Redo the change on
 the restored database before resuming ingest — the rekey is filled inside
 ClickHouse from the restored tables, no archive read
 ([`docs/backfills.md` § Canonical event location fill](backfills.md#canonical-event-location-fill-task-0541--in-db-per-5k-ledger-slice))
-— then re-ingest the gap below.
+— then re-ingest the gap below. A dropped column comes back the same way: a
+backup taken before task 0538 dropped `transactions.id` restores it without a
+`DEFAULT`, and the indexer refuses every insert until
+`ALTER TABLE transactions DROP COLUMN id` is run on the restored database.
 
 ---
 
