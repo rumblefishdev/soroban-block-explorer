@@ -749,3 +749,6 @@ mod normalize_asset_code_tests;
 
 #[cfg(test)]
 mod map_pool_item_tests;
+
+#[cfg(test)]
+mod participants_tests;
