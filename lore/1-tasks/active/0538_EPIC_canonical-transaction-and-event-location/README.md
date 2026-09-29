@@ -147,7 +147,7 @@ never two copies of two tables at once. Every struct change ships with
 
 - [ ] ADR adopted; `application_order` means one thing
 - [ ] Partition-level measurement and join benchmark recorded before step 4
-- [ ] No table carries `transaction_id`; `transactions.id` dropped
+- [x] No table carries `transaction_id`; `transactions.id` dropped (2026-09-29)
 - [x] No new table can add `transaction_id`: `crates/db-clickhouse/tests/schema_conventions.rs`
       (allowlist of the 8 tables that still carry it; each migrated table
       removes its entry — the test fails on a stale one) — 2026-09-23
@@ -452,3 +452,11 @@ surrogate; `query_log` since 2026-09-01 shows reads only by `dev_read`,
 `dev_shared` (0575 / 0586 fills), `api_reader` (last 2026-09-28 14:45 UTC) and
 one operator query; `prices_*` never read `transactions`. Gaps closed in docs:
 a restore of an older backup and a local ClickHouse keep `id`.
+
+**Step 7 done (2026-09-29, UTC).** Operator: `MODIFY COLUMN id Int64 DEFAULT 0`
+11:14 (0 mutations); Compute deployed (#541), the new build's first write
+without `id` 11:34:31, the old build's last 11:34:23; rows from ledger
+64,679,177 on carry the default. `DROP COLUMN id` done (mutation `is_done` 1,
+`system.columns` 0). `transactions` 221.85 → 190.07 GiB, rows kept
+(4,247,615,868 and growing); ingest continuous (180 of 180 ledgers in 15 min,
+0 writer exceptions). Production has no transaction surrogate left.
