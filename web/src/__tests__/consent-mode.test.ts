@@ -15,16 +15,15 @@ const inline = [
 type Consent = Record<string, string>;
 type Listener = (c: { categories: Record<string, boolean> }) => void;
 const w = window as unknown as {
-  dataLayer: IArguments[];
+  // `gtag()` pushes `arguments`; the blocklist is a plain object.
+  dataLayer: (IArguments | Record<string, unknown>)[];
   _hsp: [string, Listener][];
 };
 
 const consentCalls = () =>
-  w.dataLayer.map((a) => [...a]).filter((a) => a[0] === 'consent') as [
-    string,
-    string,
-    Consent
-  ][];
+  w.dataLayer
+    .map((a) => Array.from(a as ArrayLike<unknown>))
+    .filter((a) => a[0] === 'consent') as [string, string, Consent][];
 
 describe('Google Consent Mode wiring in index.html', () => {
   beforeAll(() => {
@@ -44,6 +43,14 @@ describe('Google Consent Mode wiring in index.html', () => {
       analytics_storage: 'denied',
       ad_storage: 'denied',
     });
+  });
+
+  it('blocks Custom HTML and Custom JS tags before GTM loads (lore-0593)', () => {
+    const blockAt = inline.findIndex((s) => s.includes('gtm.blocklist'));
+    const gtmAt = inline.findIndex((s) => s.includes('googletagmanager'));
+    expect(blockAt).toBeGreaterThanOrEqual(0);
+    expect(blockAt).toBeLessThan(gtmAt);
+    expect(w.dataLayer).toContainEqual({ 'gtm.blocklist': ['customScripts'] });
   });
 
   it('forwards the banner categories as a consent update', () => {
