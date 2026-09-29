@@ -52,9 +52,11 @@ pub struct PoolRow {
     /// The wire `PoolListCursor.created_at_ledger` slot stays opaque (ADR
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
-    /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
-    /// Task 0246 — see DTO doc for surfacing rules.
-    pub participant_count: i64,
+    /// Providers: a classic pool's `lp_positions` with shares > 0 (task 0246);
+    /// a soroban pool's share-token holders (`pool_holders` on the list, a
+    /// live count on the detail). `None` where they are not read — a pool
+    /// with no share token.
+    pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
     pub total_shares: Option<String>,
     pub tvl: Option<String>,

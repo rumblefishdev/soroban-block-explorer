@@ -213,10 +213,12 @@ mod tests {
         // ownership rows located by their event. 39 → 41.
         // task 0424: dropped `nft_ownership` + `_pending` — every reader moved
         // to `nft_ownership_changes`. 41 → 39.
+        // task 0374: added `pool_holders` + its refreshable MV — the soroban
+        // pool list's participant count. 39 → 41.
         assert_eq!(
             stmts.len(),
-            39,
-            "expected 36 tables + 3 materialized views, got {}",
+            41,
+            "expected 37 tables + 4 materialized views, got {}",
             stmts.len()
         );
     }

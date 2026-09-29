@@ -1,4 +1,5 @@
-//! ClickHouse-backed check of the list's activity order (task 0374).
+//! ClickHouse-backed check of the list's activity order and participant
+//! counts (task 0374).
 //!
 //! The order key comes from `pool_activity`, which a refreshable MV fills from
 //! `pool_state_changes`. That MV keeps only rows of the plane the pool itself
@@ -31,12 +32,18 @@ async fn seed(ch: &clickhouse::Client) {
              (unhex('{SOROBAN_SPOOFED}'), 30, 100, 1), \
              (unhex('{SOROBAN_ACTIVE}'), 30, 110, 1)"
         ),
-        // Each soroban pool declares its plane: 7 and 8.
+        // Each soroban pool declares its plane: 7 and 8. The active pool has a
+        // share token (77); the spoofed one has none (a concentrated pool).
         format!(
             "INSERT INTO pool_instance_state (pool_id, plane_id, share_token_id, total_shares, derived_at_ledger) VALUES \
              (unhex('{SOROBAN_SPOOFED}'), 7, 0, 0, 100), \
-             (unhex('{SOROBAN_ACTIVE}'), 8, 0, 0, 110)"
+             (unhex('{SOROBAN_ACTIVE}'), 8, 77, 30, 110)"
         ),
+        // Token 77: two holders, one emptied (not a provider), one whose
+        // older version was non-zero and newest is zero.
+        "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) VALUES \
+             (1, 77, 10, 5), (2, 77, 20, 5), (3, 77, 0, 5), (4, 77, 9, 5), (4, 77, 0, 6)"
+            .to_string(),
         // The spoofed pool's own plane last moved at 150; a FOREIGN plane (666)
         // publishes rows under its id at 900. The active pool moved at 300.
         format!(
@@ -70,15 +77,14 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
         .expect("apply init.sql");
     seed(&ch).await;
 
-    // Run the MV now instead of waiting for its schedule.
-    for sql in [
-        format!("SYSTEM REFRESH VIEW {DB}.pool_activity_mv"),
-        format!("SYSTEM WAIT VIEW {DB}.pool_activity_mv"),
-    ] {
-        ch.query(&sql)
-            .execute()
-            .await
-            .expect("refresh pool_activity_mv");
+    // Run the MVs now instead of waiting for their schedules.
+    for view in ["pool_activity_mv", "pool_holders_mv"] {
+        for sql in [
+            format!("SYSTEM REFRESH VIEW {DB}.{view}"),
+            format!("SYSTEM WAIT VIEW {DB}.{view}"),
+        ] {
+            ch.query(&sql).execute().await.expect("refresh view");
+        }
     }
 
     let params = ResolvedPoolListParams {
@@ -106,6 +112,22 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
             (SOROBAN_SPOOFED, 150)
         ],
         "list must order by last activity, counting only the declared plane"
+    );
+
+    // Providers: the classic pool's `lp_positions` (none here → 0), the
+    // active soroban pool's two current holders, and "not read" for the pool
+    // with no share token — never a 0 that would read as "no providers".
+    let counts: Vec<(&str, Option<i64>)> = rows
+        .iter()
+        .map(|r| (r.pool_id_hex.as_str(), r.participant_count))
+        .collect();
+    assert_eq!(
+        counts,
+        vec![
+            (SOROBAN_ACTIVE, Some(2)),
+            (CLASSIC, Some(0)),
+            (SOROBAN_SPOOFED, None)
+        ]
     );
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))

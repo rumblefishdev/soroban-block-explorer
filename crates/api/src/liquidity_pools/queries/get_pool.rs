@@ -162,7 +162,9 @@ pub async fn fetch_pool_by_id(
         created_at_ledger: r.created_at_ledger,
         // Detail does not paginate; the field is set for struct completeness.
         cursor_ledger: r.created_at_ledger,
-        participant_count: r.participant_count,
+        // A soroban pool's count is its share-token holders, read by the
+        // handler; `lp_positions` holds classic providers only.
+        participant_count: (pool_kind == domain::PoolKind::Classic).then_some(r.participant_count),
         latest_snapshot_ledger: r.latest_snapshot_ledger,
         total_shares,
         // Filled by the handler from `fetch_pool_usd_analytics` (0199

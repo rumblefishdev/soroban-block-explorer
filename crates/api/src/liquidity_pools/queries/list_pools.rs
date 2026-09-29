@@ -64,7 +64,7 @@ struct PoolListChRow {
     created_at_ledger: i64,
     /// [`ACTIVITY_LEDGER`] — the list sort/cursor key.
     cursor_ledger: i64,
-    participant_count: i64,
+    participant_count: Option<i64>,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
     reserve_b: Option<String>,
@@ -275,7 +275,12 @@ pub async fn fetch_pool_list(
              lp.fee_bps                                      AS fee_bps, \
              ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
              lp.activity_ledger                              AS cursor_ledger, \
-             toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
+             /* classic: its `lp_positions`; soroban: its share-token holders, \
+                absent (NULL) for a pool with no share token. The LEFT JOIN miss \
+                reads defaults, not NULL, so the match is tested on the key. */ \
+             if(lp.pool_kind = 0, toNullable(toInt64(ifNull(pc.participant_count, 0))), \
+                if(ph.pool_id = lp.pool_id, toNullable(toInt64(ph.holders)), NULL)) \
+                                                             AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
              toString(s.reserve_a)                           AS reserve_a, \
              toString(s.reserve_b)                           AS reserve_b, \
@@ -304,6 +309,10 @@ pub async fn fetch_pool_list(
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
              GROUP BY pool_id \
          ) pc ON pc.pool_id = lp.pool_id \
+         LEFT JOIN ( \
+             SELECT pool_id, holders FROM pool_holders \
+             WHERE pool_id IN (SELECT pool_id FROM page) \
+         ) ph ON ph.pool_id = lp.pool_id \
          /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
             duplicate rows): without it this LEFT JOIN doubled every page row \
             whose latest snapshot ledger falls in the duplicated range, doubling \

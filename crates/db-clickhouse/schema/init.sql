@@ -875,6 +875,44 @@ INNER JOIN (
 ) AS d ON d.pool_id = s.pool_id AND d.plane_id = s.plane_id
 GROUP BY s.pool_id;
 
+-- pool_holders (task 0374): how many accounts and contracts hold each soroban
+-- pool's share token — the pool list's participant count. A soroban pool's
+-- providers are its share token's holders in `balances`, which is sorted by
+-- holder, so counting them per list page would scan the whole table (~105M
+-- rows) on every request. A refreshable MV keeps the per-pool count here,
+-- the `pool_activity` pattern: full recompute + atomic EXCHANGE, no backfill.
+-- Measured 2026-09-29: one recompute of every pool reads 105M rows / 3 GiB in
+-- ~250 ms. Every 5 minutes: holders change slowly, and the pool page's own
+-- count and list are read live.
+-- A pool without a share token (concentrated) is absent: its providers are
+-- positions, not holders, and the list shows "—" rather than 0.
+CREATE TABLE IF NOT EXISTS pool_holders (
+    pool_id FixedString(32),
+    holders UInt64
+)
+ENGINE = MergeTree
+ORDER BY pool_id;
+
+-- Sources (`pool_instance_state`, `balances`) are defined above and MUST exist
+-- before this CREATE.
+CREATE MATERIALIZED VIEW IF NOT EXISTS pool_holders_mv
+REFRESH EVERY 5 MINUTE
+TO pool_holders AS
+SELECT i.pool_id AS pool_id, countIf(h.amt > 0) AS holders
+FROM (
+    SELECT pool_id, argMax(share_token_id, derived_at_ledger) AS token
+    FROM pool_instance_state
+    GROUP BY pool_id
+    HAVING token != 0
+) AS i
+LEFT JOIN (
+    SELECT asset_id, holder_id, argMax(amount, last_updated_ledger) AS amt
+    FROM balances
+    WHERE asset_id IN (SELECT share_token_id FROM pool_instance_state WHERE share_token_id != 0)
+    GROUP BY asset_id, holder_id
+) AS h ON h.asset_id = i.token
+GROUP BY i.pool_id;
+
 -- `closed_at_ledger`: same lifecycle semantics as `balances` (ADR 0055) — a
 -- withdrawn position was written as `shares = 0`, indistinguishable from a
 -- position that still exists at zero.
