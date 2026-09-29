@@ -5,9 +5,12 @@
 # free to grow. It is a ratchet: a file already over the limit may stay as it
 # is or shrink, it may not grow, and a new file may not start over the limit.
 #
-# The staged copy is compared with the HEAD copy. A task moved between status
-# directories (git mv) is compared with its HEAD copy at the old path, so
-# promoting or archiving a long task does not count as growth.
+# The staged copy is compared with the task's main file in HEAD, found by its
+# task id wherever it was: a task moved between status directories, or turned
+# from a single file into a directory, is measured against what it replaced,
+# so neither counts as growth. Git's own rename pairing is not enough: it
+# needs the two files to be at least 50% alike, and a README rewritten while
+# the detail moves to notes/ is not.
 set -eu
 
 limit=150
@@ -46,17 +49,21 @@ while IFS="$tab" read -r state old new; do
   esac
 
   staged="$(count_lines ":$new")"
-  if [ "$state" = A ]; then
-    before=0
-  else
-    before="$(count_lines "HEAD:$old")"
-  fi
+  # Two tasks can share an id after a merge; the larger of them counts.
+  before=0
+  id="$(printf '%s' "${rest#*/}" | cut -c1-4)"
+  for path in $(git ls-tree -r --name-only HEAD lore/1-tasks |
+    grep -E "^lore/1-tasks/(backlog|active|blocked|archive)/${id}_[^/]*(\.md|/README\.md)\$"); do
+    n="$(count_lines "HEAD:$path")"
+    [ "$n" -gt "$before" ] && before="$n"
+  done
 
   if [ "$staged" -gt "$limit" ] && [ "$staged" -gt "$before" ]; then
-    task="${new%/README.md}"
-    task="${task%.md}"
     echo "$new: $before → $staged lines (limit $limit)." >&2
-    echo "  Move detail into $task/notes/ (convert a single-file task to a directory first); keep the main file to the current state." >&2
+    case "$new" in
+      */README.md) echo "  Move detail into ${new%/README.md}/notes/; keep the README to the current state." >&2 ;;
+      *) echo "  Turn the task into a directory (${new%.md}/README.md) and move detail into its notes/; keep the README to the current state." >&2 ;;
+    esac
     failed=1
   fi
 done <<EOF

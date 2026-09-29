@@ -100,6 +100,25 @@ echo "one more line" >>"$repo/lore/1-tasks/active/0005_FEATURE_big.md"
 git -C "$repo" add -A
 expect fail "git mv of a 300-line task that also grows"
 
+new_repo
+lines 300 "$repo/lore/1-tasks/active/0006_FEATURE_long.md"
+commit_all
+mkdir -p "$repo/lore/1-tasks/active/0006_FEATURE_long"
+git -C "$repo" mv lore/1-tasks/active/0006_FEATURE_long.md lore/1-tasks/active/0006_FEATURE_long/README.md
+printf 'rewritten %s\n' $(seq 1 160) >"$repo/lore/1-tasks/active/0006_FEATURE_long/README.md"
+lines 200 "$repo/lore/1-tasks/active/0006_FEATURE_long/notes/S-history.md"
+git -C "$repo" add -A
+expect pass "300-line task turned into a directory with a rewritten 160-line README"
+
+new_repo
+lines 300 "$repo/lore/1-tasks/active/0007_FEATURE_long.md"
+commit_all
+mkdir -p "$repo/lore/1-tasks/active/0007_FEATURE_long"
+git -C "$repo" mv lore/1-tasks/active/0007_FEATURE_long.md lore/1-tasks/active/0007_FEATURE_long/README.md
+printf 'rewritten %s\n' $(seq 1 310) >"$repo/lore/1-tasks/active/0007_FEATURE_long/README.md"
+git -C "$repo" add -A
+expect fail "task turned into a directory whose README grows past its old file"
+
 echo "repos kept in $root"
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed"; exit 1; }
 echo "all cases passed"
