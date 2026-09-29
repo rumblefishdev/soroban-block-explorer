@@ -77,6 +77,12 @@ siblings and moved the share-token oracle out of `pool_router.rs` into
   the feature commit that happened to touch the file.
 - Update the table above as files shrink; close the task when nothing
   production exceeds the CLAUDE.md limit.
+- Deferred (2026-09-29): nothing enforces the limit today — no husky hook,
+  ESLint rule, clippy setting or CI check, and 24 `.rs`/`.ts`/`.tsx` files
+  (generated excluded) exceed 800 lines. Candidate: a pre-commit check that
+  refuses a commit growing a file already over the limit, or creating a new
+  one over it; the existing stock stays unblocked, matching the ratchet.
+  Estimate ~1 h.
 
 ## 2026-09-16 (karolkow) — test files leave the code's directory
 
