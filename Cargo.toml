@@ -52,11 +52,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # AWS SDK
+# The service crates' default features also link the legacy HTTP client
+# (hyper 0.14 + rustls 0.21), which `BehaviorVersion::latest()` never uses,
+# and SigV4a, which only S3 multi-region access points need. Leaving them out
+# makes the api and indexer Lambdas ~2 MB smaller.
 aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-cloudwatch = "1"
-aws-sdk-s3 = "1"
+aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-secretsmanager = "1"
-aws-sdk-sqs = "1"
+aws-sdk-sqs = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 # Error handling
 thiserror = "2"
