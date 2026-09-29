@@ -6,10 +6,10 @@
 //! * [`stage::prepare`] — synchronous pre-write transform. Reads the
 //!   same `Extracted*` slices PG does and produces CH-shaped row
 //!   structs from [`rows`]. FK columns use a **hybrid key strategy**:
-//!   three high-fan-out hubs (`accounts`, `soroban_contracts`,
-//!   `transactions`) carry a deterministic surrogate `Int64 id`
-//!   derived via [`ids`] (`cityhash_102_128` lower 64 bits over the
-//!   StrKey / hash), keeping referencing tables narrow; the other 12
+//!   two high-fan-out hubs (`accounts`, `soroban_contracts`) carry a
+//!   deterministic surrogate `Int64 id` derived via [`ids`]
+//!   (`cityhash_102_128` lower 64 bits over the StrKey), keeping
+//!   referencing tables narrow; the other
 //!   tables use natural composite keys (StrKey / hash / tuple) on
 //!   their PK and reference the hubs by surrogate. Surrogates are
 //!   derived synchronously from the source key, so the writer is

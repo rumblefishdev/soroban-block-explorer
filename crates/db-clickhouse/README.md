@@ -270,7 +270,7 @@ MB on-disk vs the surrogate-id baseline, projected ~550 GB at 11 M
 full scale. Plus +10 ms write/ledger from `LowCardinality(String)`
 dictionary build on the high-cardinality FK columns.
 
-All FK columns referencing these three tables are `Int64`
+All FK columns referencing these two tables are `Int64`
 (`transactions.source_id`, `transaction_operations.contract_id`,
 `soroban_events.contract_id`, etc.) — cheap integer joins, ~7×
 smaller on-disk than 56-byte StrKey FK columns.

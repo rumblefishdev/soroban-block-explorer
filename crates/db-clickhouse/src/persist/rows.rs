@@ -1,5 +1,5 @@
 //! Row structs for the CH writer — production schema (hybrid: surrogate
-//! `id Int64` on the three high-cardinality FK hubs, natural / composite
+//! `id Int64` on the two high-cardinality FK hubs, natural / composite
 //! keys elsewhere).
 //!
 //! One `#[derive(clickhouse::Row, serde::Serialize)]` struct per table

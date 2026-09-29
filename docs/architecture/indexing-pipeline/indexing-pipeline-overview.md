@@ -241,9 +241,10 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    It stages rows via
    `db_clickhouse::persist::stage::prepare_with_sac_overrides`, opens a
    one-shot `PartitionWriter`, streams the staged rows, and commits. The
-   hybrid-key strategy keeps three high-fan-out hubs (`accounts`,
-   `soroban_contracts`, `transactions`) on a deterministic surrogate
-   `Int64 id` derived from the StrKey / hash via cityhash; the other 12
+   hybrid-key strategy keeps two high-fan-out hubs (`accounts`,
+   `soroban_contracts`) on a deterministic surrogate `Int64 id` derived
+   from the StrKey via cityhash (transactions are located by position,
+   ADR 0059); the other
    tables use natural composite keys with `LowCardinality(String)`
    dictionary encoding (per
    [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md))

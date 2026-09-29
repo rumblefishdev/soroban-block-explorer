@@ -3,8 +3,8 @@
 //!
 //! ## Design — hybrid surrogate / natural keys
 //!
-//! Three high-cardinality FK hubs (`accounts`, `soroban_contracts`,
-//! `transactions`) carry surrogate `id: Int64` derived via
+//! Two high-cardinality FK hubs (`accounts`, `soroban_contracts`) carry
+//! surrogate `id: Int64` derived via
 //! [`super::ids`] (`cityhash64(natural_key)`, deterministic). All FK
 //! columns pointing at these tables are `Int64` referencing those
 //! ids. Cheaper joins, smaller storage, faster scans vs natural-key

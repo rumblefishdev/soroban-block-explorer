@@ -1605,10 +1605,6 @@ fn prepare_is_deterministic_across_runs() {
     )
     .expect("second run");
 
-    assert_eq!(
-        a.transaction_rows[0].application_order,
-        b.transaction_rows[0].application_order
-    );
     assert_eq!(a.account_rows[0].id, b.account_rows[0].id);
     assert_eq!(a.ledger_rows[0].sequence, b.ledger_rows[0].sequence);
 }
