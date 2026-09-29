@@ -87,6 +87,10 @@ const NO_TOKEN_POOL: &str = "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e
 const EMPTY_POOL: &str = "f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5";
 const PARTIAL_POOL: &str = "b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7";
 const UNREAD_POOL: &str = "a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6";
+// A pool whose only holder is itself: the minimum liquidity it locked.
+const SELF_POOL: &str = "c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8";
+const SELF_POOL_CONTRACT: &str = "CDEMRSGIZDEMRSGIZDEMRSGIZDEMRSGIZDEMRSGIZDEMRSGIZDEMQUNJ";
+const SELF_POOL_TOKEN: &str = "CDE4TSOJZHE4TSOJZHE4TSOJZHE4TSOJZHE4TSOJZHE4TSOJZHE4T3VL";
 const SHARE_TOKEN: &str = "CDMH535JSD224YXPET3B4SJOLXTQQ24GRSCWACGYBKSH2DKFJYWI7SUW";
 const GAUGE: &str = "CAQCFVLOBK5GIULPNZRGSXFPMIDUTBDDKCEHQNCZGYNK5JEN6IY5RZQB";
 
@@ -120,17 +124,21 @@ async fn soroban_participants_are_share_token_holders() {
             "INSERT INTO pool_instance_state (pool_id, plane_id, share_token_id, total_shares, derived_at_ledger) VALUES \
              (unhex('{SOROBAN_POOL}'), 1, 77, 4000000000, 10), (unhex('{NO_TOKEN_POOL}'), 1, 0, 0, 10), \
              (unhex('{EMPTY_POOL}'), 1, 88, 0, 10), (unhex('{UNREAD_POOL}'), 1, 99, 500, 10), \
-             (unhex('{PARTIAL_POOL}'), 1, 77, 9000000000, 10)"
+             (unhex('{PARTIAL_POOL}'), 1, 77, 9000000000, 10), \
+             (unhex('{SELF_POOL}'), 1, 66, 1000, 10)"
         ),
         "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) VALUES \
-             (42, 77, 9990000000, 5), (42, 77, 3000000000, 20), (43, 77, 1000000000, 30), (44, 77, 0, 40)"
+             (42, 77, 9990000000, 5), (42, 77, 3000000000, 20), (43, 77, 1000000000, 30), (44, 77, 0, 40), \
+             (45, 66, 1000, 10)"
             .to_string(),
         format!(
             "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
-             (77, '{SHARE_TOKEN}', false), (43, '{GAUGE}', false)"
+             (77, '{SHARE_TOKEN}', false), (43, '{GAUGE}', false), \
+             (45, '{SELF_POOL_CONTRACT}', false), (66, '{SELF_POOL_TOKEN}', false)"
         ),
         format!(
-            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES ('{SHARE_TOKEN}', 7, 1)"
+            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
+             ('{SHARE_TOKEN}', 7, 1), ('{SELF_POOL_TOKEN}', 7, 1)"
         ),
         format!(
             "INSERT INTO accounts (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number) VALUES \
@@ -221,6 +229,21 @@ async fn soroban_participants_are_share_token_holders() {
             .expect("count runs"),
         Some(2),
         "the detail count matches the list"
+    );
+    // The pool's own contract is not a provider, so a pool holding only its
+    // locked minimum liquidity lists nobody.
+    assert_eq!(
+        fetch_soroban_participants(&ch, SELF_POOL, None, 10, Direction::Next)
+            .await
+            .expect("participants query runs")
+            .map(|rows| rows.len()),
+        Some(0)
+    );
+    assert_eq!(
+        count_soroban_participants(&ch, SELF_POOL)
+            .await
+            .expect("count runs"),
+        Some(0)
     );
     assert_eq!(
         count_soroban_participants(&ch, NO_TOKEN_POOL)
