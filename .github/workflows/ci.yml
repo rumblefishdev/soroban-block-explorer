@@ -257,8 +257,9 @@ jobs:
 
   # ClickHouse-gated e2e (task 0406), split out of `rust` so it runs in
   # parallel with clippy/test instead of serially behind them. It shares no
-  # step with that job: it compiles only the four crates it tests. Distinct
-  # rust-cache key, so its smaller target/ does not overwrite the main job's.
+  # step with that job, so it builds the test binaries of its crates (most of
+  # the workspace, through their dependencies) on its own. Distinct rust-cache
+  # key, so its target/ does not overwrite the main job's.
   rust-clickhouse-e2e:
     name: Rust (ClickHouse e2e)
     needs: changes
@@ -279,11 +280,10 @@ jobs:
           shared-key: ci-rust-ch-e2e
 
       # The suites self-skip when CLICKHOUSE_URL is unset, so the plain
-      # `cargo test` in the `rust` job has
-      # never executed them — the 0304 `sc.name` breakage reached prod
-      # green. Same image (pinned to the prod major, 26.3) and same
-      # schema path as local dev: the compose sidecar applies
-      # `crates/db-clickhouse/schema/init.sql` before the run.
+      # `cargo test` in the `rust` job has never executed them — the 0304
+      # `sc.name` breakage reached prod green. Same image (pinned to the
+      # prod major, 26.3) and same schema path as local dev: the compose
+      # sidecar applies `crates/db-clickhouse/schema/init.sql` before the run.
       - name: Start ClickHouse
         run: |
           docker compose up -d clickhouse
