@@ -1,5 +1,5 @@
 //! Row structs for the CH writer — production schema (hybrid: surrogate
-//! `id Int64` on the three high-cardinality FK hubs, natural / composite
+//! `id Int64` on the two high-cardinality FK hubs, natural / composite
 //! keys elsewhere).
 //!
 //! One `#[derive(clickhouse::Row, serde::Serialize)]` struct per table
@@ -401,11 +401,10 @@ pub struct LpPositionRow {
     pub closed_at_ledger: i64,
 }
 
-/// `transactions` — append-only fact hub, surrogate `id`,
+/// `transactions` — append-only fact hub,
 /// ORDER BY (ledger_sequence, application_order).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct TransactionRow {
-    pub id: i64,
     pub hash: [u8; 32],
     pub ledger_sequence: i64,
     pub application_order: i16,
