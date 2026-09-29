@@ -90,10 +90,13 @@ export default function LiquidityPoolDetailPage() {
           zero sub-section 404s. */}
       {/* A soroban pool's operations and providers are not indexed yet, so
           these sections say so instead of firing queries that can only come
-          back empty and read as "no activity". */}
+          back empty and read as "no activity". Its chart plots TVL from the
+          reserve history; volume and fees say "not indexed". */}
       {detail.data?.pool_kind === 'soroban' && (
         <>
-          <NotIndexedSection title="Activity chart" what="Pool history" />
+          <SectionErrorBoundary sectionName="pool-charts">
+            <PoolCharts poolId={poolId} volumeIndexed={false} />
+          </SectionErrorBoundary>
           <NotIndexedSection
             title="Pool participants"
             what="Liquidity providers"

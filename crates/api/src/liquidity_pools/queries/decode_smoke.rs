@@ -126,7 +126,7 @@ async fn lp_ch_rows_decode() {
         .expect("participant rows decode");
 
     // price context — `PriceContextChRow` (chart's 404 gate).
-    let ctx = fetch_pool_price_context(&ch, &pool)
+    let ctx = fetch_pool_chart_context(&ch, &pool)
         .await
         .expect("price-context row decodes")
         .expect("bootstrapped pool exists");
@@ -151,14 +151,14 @@ async fn lp_ch_rows_decode() {
     }
 
     // detail USD analytics — `Vol24ChRow` + `LastCloseChRow`.
-    fetch_pool_usd_analytics(&ch, &pool, &ctx, &[None, None])
+    fetch_pool_usd_analytics(&ch, &pool, &ctx.price, &[None, None])
         .await
         .expect("usd-analytics rows decode");
 
     // chart — `ChartChRow`, incl. the `samples_in_bucket` UInt64.
     let to = chrono::Utc::now();
     let from = to - chrono::Duration::days(90);
-    fetch_pool_chart(&ch, &pool, &ctx, "1d", from, to)
+    fetch_pool_chart(&ch, &pool, &ctx.price, "1d", from, to)
         .await
         .expect("chart rows decode");
 }

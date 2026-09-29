@@ -1,5 +1,7 @@
 //! `GET /v1/liquidity-pools/:id/chart` — the time-bucketed USD series.
 
+use std::collections::{BTreeMap, HashMap};
+
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
@@ -7,7 +9,8 @@ use serde::Deserialize;
 use crate::common::ch::millis_to_utc;
 
 use super::usd_analytics::{
-    MAX_PRICE_CARRY_SECONDS, PoolPriceContext, fee_revenue_usd, price_leg, priced_pair, usd_str,
+    MAX_PRICE_CARRY_SECONDS, PoolChartContext, PoolPriceContext, PriceLeg, fee_revenue_usd,
+    price_leg, priced_pair, usd_str,
 };
 use crate::liquidity_pools::dto::ChartDataPoint;
 
@@ -249,3 +252,189 @@ pub async fn fetch_pool_chart(
         })
         .collect())
 }
+
+/// One chart bucket of a soroban pool: the reserves of its last state row in
+/// the bucket, raw per leg, and the price bucket that row falls in.
+#[derive(Debug, Row, Deserialize)]
+struct SorobanReserveBucketRow {
+    bucket_ms: i64,
+    price_bucket_ms: i64,
+    reserves: Vec<String>,
+    samples_in_bucket: u64,
+}
+
+/// One priced candle of one leg (grain per interval, as the classic chart).
+#[derive(Debug, Row, Deserialize)]
+struct SorobanCloseRow {
+    asset_kind: String,
+    asset_code: String,
+    issuer_address: String,
+    bucket_ms: i64,
+    close_usd: f64,
+}
+
+/// `GET /v1/liquidity-pools/:id/chart` for a soroban pool — the TVL series
+/// from its reserve history, on the classic chart's buckets and price rules.
+///
+/// - **Reserves** come from `pool_state_changes`: one row per (pool, ledger),
+///   raw token units, one entry per leg in the pool's own order (a
+///   concentrated pool's vector carries per-tick state after its legs, so
+///   only the first `legs` entries are read). A bucket shows the last row in
+///   it; buckets with no reserve change are absent — sparse, like the classic
+///   chart, which only has buckets with snapshots.
+/// - **TVL** = Σ reserve / 10^decimals × the leg's close at that row's price
+///   bucket, carried back at most [`MAX_PRICE_CARRY_SECONDS`]. `NULL` unless
+///   EVERY leg has a known scale and a price — a partial sum understates the
+///   pool while looking real.
+/// - **Volume and fee revenue are `NULL`**: soroban pool trades are not read
+///   here yet, and an absent figure must not read as a zero-volume bucket.
+pub async fn fetch_soroban_pool_chart(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+    ctx: &PoolChartContext,
+    interval: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<ChartDataPoint>, clickhouse::error::Error> {
+    let (bucket_fn, series_view, price_bucket_fn) = match interval {
+        "1h" => (
+            "toStartOfHour",
+            "prices.price_usd_series_1h",
+            "toStartOfHour",
+        ),
+        "1d" => ("toStartOfDay", "prices.price_usd_series", "toStartOfDay"),
+        "1w" => ("toMonday", "prices.price_usd_series", "toStartOfDay"),
+        _ => panic!(
+            "fetch_soroban_pool_chart called with non-allowlisted interval `{interval}` — \
+             handler validation drift; expected 1h | 1d | 1w"
+        ),
+    };
+
+    // Same window and dedup shape as the classic chart: the state rows are
+    // bounded to the window's ledger range, and both `pool_state_changes`
+    // and `ledgers` are ReplacingMergeTrees read one row per key.
+    let reserves_sql = format!(
+        "SELECT \
+            l.bucket_ms                                                  AS bucket_ms, \
+            argMax(l.price_bucket_ms, s.ledger_sequence)                 AS price_bucket_ms, \
+            argMax(arrayMap(x -> toString(x), s.reserves), s.ledger_sequence) AS reserves, \
+            count()                                                      AS samples_in_bucket \
+         FROM ( \
+             SELECT ledger_sequence, reserves \
+             FROM pool_state_changes \
+             WHERE pool_id = unhex(?) \
+               AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
+             LIMIT 1 BY ledger_sequence \
+         ) s \
+         JOIN ( \
+             SELECT sequence, \
+                    toUnixTimestamp64Milli(toDateTime64({bucket_fn}(closed_at), 3, 'UTC')) AS bucket_ms, \
+                    toUnixTimestamp64Milli(toDateTime64({price_bucket_fn}(closed_at), 3, 'UTC')) AS price_bucket_ms \
+             FROM ledgers \
+             WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?) \
+             LIMIT 1 BY sequence \
+         ) l ON l.sequence = s.ledger_sequence \
+         GROUP BY bucket_ms \
+         ORDER BY bucket_ms ASC"
+    );
+    let buckets = client
+        .query(&reserves_sql)
+        .bind(pool_id_hex)
+        .bind(from.timestamp_millis())
+        .bind(from.timestamp_millis())
+        .bind(to.timestamp_millis())
+        .bind(from.timestamp_millis())
+        .bind(to.timestamp_millis())
+        .fetch_all::<SorobanReserveBucketRow>()
+        .await?;
+
+    // Closes of every priceable leg over the window, widened back by the carry
+    // cap so the first bucket can carry too; the in-progress price bucket is
+    // excluded (see `fetch_last_closes`).
+    let legs: Vec<&PriceLeg> = ctx
+        .price
+        .legs
+        .iter()
+        .filter(|l| !l.kind.is_empty())
+        .collect();
+    let mut closes: HashMap<&PriceLeg, BTreeMap<i64, f64>> = HashMap::new();
+    if !legs.is_empty() {
+        let identity_or = std::iter::repeat_n(
+            "(asset_kind = ? AND asset_code = ? AND issuer_address = ?)",
+            legs.len(),
+        )
+        .collect::<Vec<_>>()
+        .join(" OR ");
+        let closes_sql = format!(
+            "SELECT asset_kind, asset_code, issuer_address, \
+                    toUnixTimestamp64Milli(toDateTime64(bucket, 3, 'UTC')) AS bucket_ms, \
+                    toFloat64(close_usd) AS close_usd \
+             FROM {series_view} \
+             WHERE ({identity_or}) \
+               AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
+               AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
+               AND close_usd > 0",
+            carry = MAX_PRICE_CARRY_SECONDS,
+        );
+        let mut query = client.query(&closes_sql);
+        for leg in &legs {
+            query = query
+                .bind(leg.kind)
+                .bind(leg.code.as_str())
+                .bind(leg.issuer.as_str());
+        }
+        let rows = query
+            .bind(from.timestamp_millis())
+            .bind(to.timestamp_millis())
+            .fetch_all::<SorobanCloseRow>()
+            .await?;
+        for r in rows {
+            if let Some(leg) = legs.iter().find(|l| {
+                l.kind == r.asset_kind && l.code == r.asset_code && l.issuer == r.issuer_address
+            }) {
+                closes
+                    .entry(*leg)
+                    .or_default()
+                    .insert(r.bucket_ms, r.close_usd);
+            }
+        }
+    }
+
+    Ok(buckets
+        .into_iter()
+        .map(|b| ChartDataPoint {
+            bucket: millis_to_utc(b.bucket_ms),
+            tvl: soroban_tvl(ctx, &closes, &b.reserves, b.price_bucket_ms).map(usd_str),
+            volume: None,
+            fee_revenue: None,
+            samples_in_bucket: b.samples_in_bucket as i64,
+        })
+        .collect())
+}
+
+/// Σ reserve × close over every leg, or `None` when any leg lacks a known
+/// scale, a reserve, or a close within the carry cap at `price_bucket_ms`.
+fn soroban_tvl(
+    ctx: &PoolChartContext,
+    closes: &HashMap<&PriceLeg, BTreeMap<i64, f64>>,
+    reserves: &[String],
+    price_bucket_ms: i64,
+) -> Option<f64> {
+    let carry_ms = MAX_PRICE_CARRY_SECONDS * 1000;
+    ctx.price
+        .legs
+        .iter()
+        .zip(&ctx.leg_decimals)
+        .enumerate()
+        .map(|(i, (leg, decimals))| {
+            let decimals = (*decimals)?;
+            let raw: f64 = reserves.get(i)?.parse().ok()?;
+            let (at, close) = closes.get(leg)?.range(..=price_bucket_ms).next_back()?;
+            (price_bucket_ms - at <= carry_ms).then_some(raw / 10f64.powi(decimals as i32) * close)
+        })
+        .sum()
+}
+
+#[cfg(test)]
+mod tests;
