@@ -12,7 +12,9 @@ import { HumanizedSentence, sentenceIds } from './HumanizedSentence.js';
 const DEST = 'GC4QMEH5CY5HAEZVC2XNTRV2XBPQWUX2WCV3ANU32HBFNCYIKWHGK7XQ';
 const CONTRACT = 'CDDTJ7OZU2WZAEZNTUZWIRAE4EMP5CF63M3INFQWTLX4ENMYUFK6RCTX';
 
-function light(partial: Partial<OperationItem> & { type_name: string }) {
+function light(
+  partial: Partial<OperationItem> & { type_name: string }
+): OperationItem {
   return {
     appearance_id: 1,
     type: 1,
@@ -21,7 +23,7 @@ function light(partial: Partial<OperationItem> & { type_name: string }) {
     created_at: '2026-01-01T00:00:00Z',
     pool_ids: [],
     ...partial,
-  } as OperationItem;
+  };
 }
 
 function renderSentence(
@@ -46,7 +48,7 @@ describe('sentenceIds', () => {
         application_order: 1,
         details: { asset: `USDC:${DEST}`, contract: CONTRACT },
         result_code: 'Success',
-      } as XdrOperationDto
+      } satisfies XdrOperationDto
     );
     expect(ids.get('GC4Q…K7XQ')).toBe(DEST);
     expect(ids.get('CDDT…RCTX')).toBe(CONTRACT);
@@ -58,7 +60,7 @@ describe('sentenceIds', () => {
       application_order: 1,
       details: { balanceId: 'ab'.repeat(32), asset: 'USDC' },
       result_code: 'Success',
-    } as XdrOperationDto);
+    } satisfies XdrOperationDto);
     expect(ids.size).toBe(0);
   });
 });

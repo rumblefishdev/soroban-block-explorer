@@ -104,17 +104,16 @@ describe('PoolActivity table', () => {
     ],
   } as PoolItem;
 
-  const makeRow = (over: Partial<PoolActivityItem> = {}) =>
-    ({
-      transaction_hash: 'a'.repeat(64),
-      ledger_sequence: 63_904_097,
-      application_order: 1,
-      event: 'trade',
-      amounts: ['1200000000', '-5000000'],
-      source_account: 'G'.repeat(56),
-      created_at: '2026-08-11T14:26:36Z',
-      ...over,
-    } as PoolActivityItem);
+  const makeRow = (over: Partial<PoolActivityItem> = {}): PoolActivityItem => ({
+    transaction_hash: 'a'.repeat(64),
+    ledger_sequence: 63_904_097,
+    application_order: 1,
+    event: 'trade',
+    amounts: ['1200000000', '-5000000'],
+    source_account: 'G'.repeat(56),
+    created_at: '2026-08-11T14:26:36Z',
+    ...over,
+  });
 
   function mockRows(rows: PoolActivityItem[]) {
     hookMock.usePoolActivity.mockReturnValue({

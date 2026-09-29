@@ -38,7 +38,7 @@ function event(
     operation_index: null,
     stage: null,
     ...extra,
-  } as unknown as XdrEventDto;
+  };
 }
 
 function renderSection(

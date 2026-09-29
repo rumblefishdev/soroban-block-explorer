@@ -18,7 +18,7 @@ function light(
     created_at: '2026-01-01T00:00:00Z',
     pool_ids: [],
     ...partial,
-  } as OperationItem;
+  };
 }
 
 function heavyOf(details: Record<string, unknown>): XdrOperationDto {
