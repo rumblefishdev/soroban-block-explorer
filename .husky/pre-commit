@@ -5,6 +5,13 @@ own="$(git rev-parse --show-toplevel)/.husky/$(basename "$0")"
 [ "$0" -ef "$own" ] || { [ -f "$own" ] && exec sh -e "$own" "$@"; exit 0; }
 
 set -e
+
+# A lore task's main file may not grow past the size limit (lore/1-tasks/CLAUDE.md,
+# "Task Size"); detail belongs in the task's notes/. Only lore commits pay for it.
+if git diff --cached --name-only | grep -q '^lore/1-tasks/'; then
+  sh tools/scripts/check-task-file-size.sh
+fi
+
 pnpm exec lint-staged
 
 # Lint, typecheck and test the Nx projects the staged files belong to, deleted
