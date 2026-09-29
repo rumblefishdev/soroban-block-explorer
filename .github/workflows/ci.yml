@@ -38,7 +38,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
-              # The CH e2e leg of the rust job provisions ClickHouse from the
+              # The Rust (ClickHouse e2e) job provisions ClickHouse from the
               # compose file (image pin + schema sidecar), so compose changes
               # must re-run it.
               - 'docker-compose.yml'
@@ -242,12 +242,44 @@ jobs:
       # The api crate ships `swagger-ui` as an opt-in feature (task
       # 0042). Production Lambda builds stay on default features to
       # keep the binary lean (~4 MB vs ~15 MB). CI validates both
-      # configurations so neither path bit-rots.
+      # configurations so neither path bit-rots. The feature changes one
+      # test only (main.rs `swagger_ui_mounted_when_feature_enabled`); the
+      # plain `cargo test` above already ran the rest of the api suite, so
+      # this runs that test alone instead of the whole suite a second time.
+      # The grep fails the step if the name drifts and the filter matches
+      # nothing — cargo reports "0 passed" as green.
       - run: cargo clippy -p api --all-targets --features swagger-ui -- -D warnings
-      - run: cargo test -p api --features swagger-ui
+      - name: Swagger UI test
+        shell: bash
+        run: |
+          cargo test -p api --features swagger-ui --bin api -- --exact tests::swagger_ui_mounted_when_feature_enabled | tee swagger-run.log
+          grep -q 'test result: ok. 1 passed' swagger-run.log
 
-      # ClickHouse-gated e2e (task 0406). The suites self-skip when
-      # CLICKHOUSE_URL is unset, so the plain `cargo test` above has
+  # ClickHouse-gated e2e (task 0406), split out of `rust` so it runs in
+  # parallel with clippy/test instead of serially behind them. It shares no
+  # step with that job: it compiles only the four crates it tests. Distinct
+  # rust-cache key, so its smaller target/ does not overwrite the main job's.
+  rust-clickhouse-e2e:
+    name: Rust (ClickHouse e2e)
+    needs: changes
+    if: |
+      needs.changes.outputs.rust == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04-arm
+    env:
+      SQLX_OFFLINE: 'true'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-rust-ch-e2e
+
+      # The suites self-skip when CLICKHOUSE_URL is unset, so the plain
+      # `cargo test` in the `rust` job has
       # never executed them — the 0304 `sc.name` breakage reached prod
       # green. Same image (pinned to the prod major, 26.3) and same
       # schema path as local dev: the compose sidecar applies
