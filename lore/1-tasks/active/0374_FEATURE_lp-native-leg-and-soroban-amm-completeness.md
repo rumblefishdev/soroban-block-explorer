@@ -2698,3 +2698,19 @@ asset_id)`, `amount Int128` signed from the pool's side — the twin of
   11,559 of 11,559; router and config within 1% except 392 of 253,656
   steps (concentrated 187, constant 110, stable 95 — fee outflows and
   mixed intervals, not investigated per step).
+
+**W1 review + full-history check (2026-09-29).** `/code-review` (both axes)
+led to: `event_kind` stored (a trade may carry a zero leg, a withdrawal may
+pay out nothing); every leg written, zero ones too (183 zero-payout
+withdrawals in 62-63M left no row); map-form Phoenix deposit keys
+`actual_received_{a,b}` (18 events were dropped); every unreadable amount
+event logged at `error!`. Decided: a trade is the trader's view (gross in,
+received out) — old config pools pay a 1% commission out of the output side
+that is not in the row. Aquarius API `volume` has undocumented units and
+window (their `volume_usd` ≈ $24.9k vs our 24h ≈ $240.9k on PYUSD/USDC), so
+that done-when item is dropped as unverifiable. Whole history, read-only, 1M-
+ledger slices (50M → tip, 11.5M events): 100% of events decoded for every
+family and kind; pair reserve steps exact 486,131 of 486,134 — the 3 are the
+stale protocol-23 restores (58,774,376 / 58,779,504 / 58,779,518; the second
+is a third affected pool, `06c291d4…`); router within 1% except 0.03–0.29%.
+PRs: #539 (moves), #540 (W1, stacked).
