@@ -94,7 +94,7 @@ struct TableInserts {
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
     pool_amounts: Option<Insert<PoolOperationAmountRow>>,
-    soroban_pool_amounts: Option<Insert<SorobanPoolEventAmountRow>>,
+    soroban_pool_amounts: Option<Insert<PoolMovementRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
     pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
     pool_state_changes: Option<Insert<PoolStateChangeRow>>,
@@ -193,11 +193,11 @@ impl PartitionWriter {
                     )
                     .await?
                 }
-                "soroban_pool_event_amounts" => {
+                "pool_movements" => {
                     write_rows(
                         &self.client,
                         &mut self.inserts.soroban_pool_amounts,
-                        "soroban_pool_event_amounts",
+                        "pool_movements",
                         &staged.soroban_pool_amount_rows,
                     )
                     .await?
@@ -381,7 +381,7 @@ impl PartitionWriter {
         write_rows(
             &self.client,
             &mut self.inserts.soroban_pool_amounts,
-            "soroban_pool_event_amounts",
+            "pool_movements",
             &soroban_pool_amount_rows,
         )
         .await?;

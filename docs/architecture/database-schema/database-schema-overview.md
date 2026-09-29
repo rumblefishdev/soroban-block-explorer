@@ -127,8 +127,9 @@ Backbone timeline:
   rows, the contract stats, the contract's Invocations tab and the
   transaction page's invocations. Replaced `contract_transactions` and
   `soroban_invocations_appearances` (task 0586)
-- `soroban_pool_event_amounts` — the soroban twin of `pool_operation_amounts`
-  (task 0374, W1): per-(event, leg) amounts of every swap, deposit and
+- `pool_movements` — per-(event, leg) amounts of every pool's swaps,
+  deposits and withdrawals, shaped for both pool kinds; today soroban only
+  (task 0374, W1), classic joins in task 0598: per-(event, leg) amounts of every swap, deposit and
   withdrawal event of a registered soroban pool, located by the event's
   stellar-rpc id, signed from the pool's side, raw token units in `Int128`.
   Written only for pools in the registry (the pair family names its amounts by
@@ -280,7 +281,7 @@ ledgers
        ├─ operation_asset_appearances (partitioned)
        ├─ contract_activity (partitioned)         # (contract, tx position) + invocation caller (0541, 0586)
        ├─ pool_operation_amounts (partitioned)   # per-(op, pool, asset) amounts (0279, 0372)
-       ├─ soroban_pool_event_amounts (partitioned) # per-(event, leg) soroban pool amounts (0374)
+       ├─ pool_movements (partitioned) # per-(event, leg) pool amounts, soroban today (0374)
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
        └─ soroban_events_appearances (partitioned)
@@ -671,14 +672,16 @@ Purpose / design notes:
   this table's per-op grain and is a known, legitimate mismatch.
 - No skip index: every read is a `pool_id` PK-prefix seek.
 
-### 4.5.3a Soroban Pool Event Amounts (task 0374)
+### 4.5.3a Pool Movements (task 0374)
 
-What each swap, deposit and withdrawal event of a registered soroban pool
-moved through it — the soroban twin of `pool_operation_amounts`, driving the
-soroban pool activity feed and volume.
+What each swap, deposit and withdrawal moved through a liquidity pool — the
+table every pool's activity feed, volume and fees are meant to read. Its shape
+fits both pool kinds (a classic operation is one movement, `event_index = 0`);
+today it holds soroban pools, and classic pools join it as
+`pool_operation_amounts` retires (task 0598, decision 147 A′).
 
 ```sql
-CREATE TABLE soroban_pool_event_amounts (
+CREATE TABLE pool_movements (
     pool_id           FixedString(32),              -- the pool contract's 32-byte payload
     ledger_sequence   Int64  CODEC(Delta, ZSTD(1)),
     application_order Int16  CODEC(T64, ZSTD(1)),   -- the transaction's position

@@ -62,7 +62,7 @@ fn sac() -> HashMap<i64, i64> {
     HashMap::from([(ids::contract_id(USDC_SAC), USDC)])
 }
 
-fn legs(rows: &[SorobanPoolEventAmountRow]) -> Vec<(u32, i64, i128)> {
+fn legs(rows: &[PoolMovementRow]) -> Vec<(u32, i64, i128)> {
     rows.iter()
         .map(|r| (r.event_index, r.asset_id, r.amount))
         .collect()

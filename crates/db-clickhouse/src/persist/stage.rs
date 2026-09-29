@@ -247,7 +247,7 @@ pub struct StagedLedger {
     /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
     /// Filled by the caller: [`soroban_pool_amounts::stage_soroban_pool_amounts`].
-    pub soroban_pool_amount_rows: Vec<SorobanPoolEventAmountRow>,
+    pub soroban_pool_amount_rows: Vec<PoolMovementRow>,
     pub event_rows: Vec<SorobanEventRow>,
     /// Per-(contract, tx) presence plus the invocation's caller and call count
     /// (tasks 0541, 0586) → `contract_activity`, the contract-dimension twin of

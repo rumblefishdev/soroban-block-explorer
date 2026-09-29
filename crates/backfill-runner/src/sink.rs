@@ -184,7 +184,7 @@ impl PartitionWriterHandle {
             let pool_events = self
                 .only
                 .as_ref()
-                .is_none_or(|t| t.contains("soroban_pool_event_amounts"))
+                .is_none_or(|t| t.contains("pool_movements"))
                 && db_clickhouse::persist::has_contract_events(&parsed.events);
             let needed = db_clickhouse::persist::sac_classic_map_needed(
                 &parsed.soroban_token_balances,

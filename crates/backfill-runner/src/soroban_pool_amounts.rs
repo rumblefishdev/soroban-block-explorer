@@ -1,4 +1,4 @@
-//! Task 0374 (W1) — fill `soroban_pool_event_amounts` from the events already
+//! Task 0374 (W1) — fill `pool_movements` from the events already
 //! in `soroban_events`, for every pool in the registry.
 //!
 //! No archive re-parse: the events are stored decoded, and the live writer
@@ -75,7 +75,7 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<Stats, BackfillError>
                 stats.events_read += buf.len() as u64;
                 stats.rows += rows.len() as u64;
                 if !dry_run {
-                    insert_rows(client, "soroban_pool_event_amounts", &rows).await?;
+                    insert_rows(client, "pool_movements", &rows).await?;
                 }
                 buf.clear();
             }

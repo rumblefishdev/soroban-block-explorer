@@ -1,4 +1,4 @@
-//! Task 0374 (W1): the full ledger write drains `soroban_pool_event_amounts`
+//! Task 0374 (W1): the full ledger write drains `pool_movements`
 //! and round-trips an `Int128` amount no `Int64` could hold.
 //!
 //! The writer's two exhaustive destructures make a forgotten table a compile
@@ -10,7 +10,7 @@
 //!     cargo test -p db-clickhouse --test soroban_pool_amounts_write_e2e
 //! ```
 
-use db_clickhouse::persist::rows::{LedgerRow, SorobanPoolEventAmountRow};
+use db_clickhouse::persist::rows::{LedgerRow, PoolMovementRow};
 use db_clickhouse::persist::stage::StagedLedger;
 use db_clickhouse::persist::{PartitionWriter, TargetedTables};
 use db_clickhouse::{Config, apply_init_sql, client};
@@ -32,7 +32,7 @@ fn staged(ledger: i64) -> StagedLedger {
             transaction_count: 1,
             base_fee: 100,
         }],
-        soroban_pool_amount_rows: vec![SorobanPoolEventAmountRow {
+        soroban_pool_amount_rows: vec![PoolMovementRow {
             pool_id: [0x55; 32],
             ledger_sequence: ledger,
             application_order: 2,
@@ -48,7 +48,7 @@ fn staged(ledger: i64) -> StagedLedger {
 
 async fn cleanup(ch: &clickhouse::Client) {
     for (table, col) in [
-        ("soroban_pool_event_amounts", "ledger_sequence"),
+        ("pool_movements", "ledger_sequence"),
         ("ledgers", "sequence"),
     ] {
         ch.query(&format!(
@@ -82,7 +82,7 @@ async fn soroban_pool_amounts_land_on_full_and_targeted_writes() {
     writer.commit().await.expect("commit");
 
     let mut writer = PartitionWriter::open(ch.clone());
-    let only = TargetedTables::parse("soroban_pool_event_amounts").expect("targetable");
+    let only = TargetedTables::parse("pool_movements").expect("targetable");
     writer
         .write_only(&staged(TARGETED_LEDGER), &only)
         .await
@@ -92,7 +92,7 @@ async fn soroban_pool_amounts_land_on_full_and_targeted_writes() {
     let rows: Vec<(i64, u32, String)> = ch
         .query(
             "SELECT ledger_sequence, event_index, toString(amount) \
-             FROM soroban_pool_event_amounts \
+             FROM pool_movements \
              WHERE ledger_sequence IN (?, ?) ORDER BY ledger_sequence",
         )
         .bind(FULL_LEDGER)

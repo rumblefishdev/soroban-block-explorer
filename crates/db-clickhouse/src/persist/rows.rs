@@ -535,7 +535,7 @@ pub struct PoolOperationAmountRow {
     pub amount: i64,
 }
 
-/// `soroban_pool_event_amounts` — fact, what one swap / deposit / withdrawal
+/// `pool_movements` — fact, what one swap / deposit / withdrawal
 /// event of a registered soroban pool moved through it (task 0374, W1): one
 /// row per (event, leg), located by the event's stellar-rpc id (ADR 0059).
 /// The soroban twin of [`PoolOperationAmountRow`]: `amount` is SIGNED FROM
@@ -544,7 +544,7 @@ pub struct PoolOperationAmountRow {
 /// because a leg can be zero; every leg is written. Column order matches
 /// `init.sql`.
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
-pub struct SorobanPoolEventAmountRow {
+pub struct PoolMovementRow {
     pub pool_id: [u8; 32],
     pub ledger_sequence: i64,
     pub application_order: i16,

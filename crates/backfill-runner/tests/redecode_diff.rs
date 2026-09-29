@@ -165,7 +165,7 @@ fn stage_ledger(cache: &Path, seq: u32) -> Vec<StagedLedger> {
         .map(|meta| {
             let parsed = indexer::handler::process::parse_ledger(meta);
             // This diff reads no ClickHouse, so the SAC map and the pool
-            // registry are empty: `soroban_pool_event_amounts` is not compared
+            // registry are empty: `pool_movements` is not compared
             // here (its oracle is `soroban_pool_amounts_reconciliation`). The
             // three prior-verdict maps are empty on every backfill path.
             let sac_classic = HashMap::new();

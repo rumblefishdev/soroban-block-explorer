@@ -1,4 +1,4 @@
-//! `soroban_pool_event_amounts`: what each swap, deposit and withdrawal event
+//! `pool_movements`: what each swap, deposit and withdrawal event
 //! of a registered soroban pool moved, one row per (event, leg), signed from
 //! the pool's side — the soroban twin of `pool_operation_amounts`.
 //!
@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use super::{StagedLedger, contract_token_asset_id};
 use crate::persist::ids;
-use crate::persist::rows::{SorobanEventRow, SorobanPoolEventAmountRow};
+use crate::persist::rows::{PoolMovementRow, SorobanEventRow};
 
 /// A registered soroban pool, keyed by its contract surrogate
 /// (`soroban_events.contract_id`).
@@ -83,7 +83,7 @@ pub fn soroban_pool_amount_rows(
     events: &[SorobanEventRow],
     pools: &HashMap<i64, SorobanPool>,
     sac_classic: &HashMap<i64, i64>,
-) -> Vec<SorobanPoolEventAmountRow> {
+) -> Vec<PoolMovementRow> {
     let mut pool_events: Vec<(&SorobanEventRow, &SorobanPool)> = events
         .iter()
         .filter_map(|e| Some((e, pools.get(&e.contract_id)?)))
@@ -262,7 +262,7 @@ fn unreadable(ev: &SorobanEventRow, why: &str) {
 /// belongs to the pool. An event whose legs cannot be read, or that names a
 /// token the pool does not hold, is refused whole and logged.
 fn push(
-    out: &mut Vec<SorobanPoolEventAmountRow>,
+    out: &mut Vec<PoolMovementRow>,
     ev: &SorobanEventRow,
     pool: &SorobanPool,
     decoded: Option<Decoded>,
@@ -279,19 +279,16 @@ fn push(
     // Every leg is written, a zero one too: a withdrawal paying out nothing
     // (183 in ledgers 62-63M) still burned shares, and would otherwise leave
     // no row at all.
-    out.extend(
-        legs.into_iter()
-            .map(|(asset_id, amount)| SorobanPoolEventAmountRow {
-                pool_id: pool.pool_id,
-                ledger_sequence: ev.ledger_sequence,
-                application_order: ev.application_order,
-                operation_index: ev.operation_index,
-                event_index: ev.event_index,
-                event_kind: kind as u8,
-                asset_id,
-                amount,
-            }),
-    );
+    out.extend(legs.into_iter().map(|(asset_id, amount)| PoolMovementRow {
+        pool_id: pool.pool_id,
+        ledger_sequence: ev.ledger_sequence,
+        application_order: ev.application_order,
+        operation_index: ev.operation_index,
+        event_index: ev.event_index,
+        event_kind: kind as u8,
+        asset_id,
+        amount,
+    }));
 }
 
 /// `[trade, token_in, token_out, caller]` / `[amount_in, amount_out, fee]`:

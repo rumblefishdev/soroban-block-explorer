@@ -1091,14 +1091,17 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id);
 
--- soroban_pool_event_amounts: what each swap / deposit / withdrawal EVENT of a
--- registered soroban pool moved through it (task 0374, W1) — the soroban
--- twin of `pool_operation_amounts`, driving the soroban pool activity feed
--- and volume. ROW GRAIN = (event, leg), located by the event's stellar-rpc id
--- (ADR 0059): one operation can trade the same pool several times (0.74% of
--- router-family pool-operations), so an operation-level key would collapse
--- them. A per-field Phoenix swap (eight events) is one row group, keyed by its
--- opening `sender` event.
+-- pool_movements: what each swap / deposit / withdrawal moved through a
+-- liquidity pool, one row per leg — the table every pool's activity feed,
+-- volume and fees are meant to read, whatever the pool's kind. Today it holds
+-- soroban pools (task 0374, W1); classic pools join it and
+-- `pool_operation_amounts` retires in task 0598 — the shape was chosen to fit
+-- both (decision 147 A′). ROW GRAIN = (event, leg), located by the event's
+-- stellar-rpc id (ADR 0059); a classic operation is one movement,
+-- `event_index = 0`. One operation can trade the same soroban pool several
+-- times (0.74% of router-family pool-operations), so an operation-level key
+-- would collapse them. A per-field Phoenix swap (eight events) is one row
+-- group, keyed by its opening `sender` event.
 --
 -- `amount` is SIGNED FROM THE POOL'S SIDE, as in `pool_operation_amounts`,
 -- RAW token units in `Int128` — a soroban leg may carry 18 decimals — scaled
@@ -1110,7 +1113,7 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id
 -- written, so an event always leaves its rows. `asset_id` = the leg's `liquidity_pools.legs` id
 -- (a SAC token keyed onto the classic asset it wraps).
 --
--- Written only for events of pools in the registry (kind 1): the pair family
+-- Soroban rows are written only for events of pools in the registry (kind 1): the pair family
 -- names its amounts by leg position, and the registry is what proves the
 -- emitter is a pool. Same writer live and in the backfill, which reads
 -- `soroban_events` back through the same decoder (`stage/soroban_pool_amounts.rs`).
@@ -1118,7 +1121,7 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id
 -- READS MUST DEDUP (`LIMIT 1 BY` the sorting key): the live writer and the
 -- backfill overlap on purpose, and until a background merge a `sum(amount)`
 -- counts the overlap twice.
-CREATE TABLE IF NOT EXISTS soroban_pool_event_amounts (
+CREATE TABLE IF NOT EXISTS pool_movements (
     pool_id           FixedString(32),
     ledger_sequence   Int64  CODEC(Delta, ZSTD(1)),
     application_order Int16  CODEC(T64, ZSTD(1)),

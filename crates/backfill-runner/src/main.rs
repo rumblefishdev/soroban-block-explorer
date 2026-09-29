@@ -256,7 +256,7 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Task 0374 (W1) — fill `soroban_pool_event_amounts` for every registered
+    /// Task 0374 (W1) — fill `pool_movements` for every registered
     /// soroban pool from the events already in `soroban_events`, through the
     /// live writer's own decoder. No archive re-parse; idempotent. Run after
     /// the writer is deployed. `--dry-run` decodes and counts without writing.
