@@ -24,6 +24,13 @@ history:
     note: >
       Implementation task 0553 filed from the Implementation section. Status
       stays proposed until it ships.
+  - date: '2026-09-28'
+    status: proposed
+    who: karolkow
+    note: >
+      Consequence 3 corrected: resets are 2-4 a year and announced (networks docs;
+      next 2026-12-16), and must be detected by an alarm. Testnet starts
+      from its current genesis, backfilled from the public data lake (0553).
 ---
 
 # ADR 0052: Testnet as a second environment and pre-mainnet staging tier
@@ -147,9 +154,17 @@ to `deploy-testnet` by parameterising the env config.
 2. **CH isolation is quota-based.** Shared node ⇒ set the testnet profile/quota
    conservatively. The `read_rows` quota is a **hard error** when tripped (0290
    lesson), not a throttle — cap it generous-but-bounded (testnet data is tiny).
-3. **Testnet resets (~quarterly).** SDF wipes testnet. Runbook: `DROP DATABASE
-testnet` + restart Galexie from the new genesis — clean, isolated, no drop-size
-   limit. A plus: the reset regularly exercises the bootstrap/backfill path.
+3. **Testnet resets (2-4 a year, announced).** Per the Stellar networks docs:
+   at 17:00 UTC, at least two weeks' notice; the next is scheduled for
+   2026-12-16. Recent: 2025-03-19, 2025-08-14, 2025-12-17, none so far in 2026.
+   The public data lake starts a new genesis folder at each reset (the live
+   one, `2025-12-18/`, is dated a day after its reset; naming undocumented).
+   Nothing in the schema survives a reset — every
+   table is keyed on the ledger sequence — so a reset must be DETECTED (an alarm
+   on the sequence going backwards), not remembered. Runbook: `DROP DATABASE
+testnet`, backfill from the new genesis folder, restart Galexie — clean,
+   isolated, no drop-size limit. A plus: each reset exercises the
+   bootstrap/backfill path.
 4. **users.d change = compose recreate.** Adding the testnet CH user needs
    `docker compose up -d --force-recreate clickhouse` (single-file mount stale-inode;
    SQL-grant / restart won't apply it) — the 0314 `prices_writer`-grant lesson.
