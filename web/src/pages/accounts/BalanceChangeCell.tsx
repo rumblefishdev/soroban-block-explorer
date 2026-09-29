@@ -146,30 +146,26 @@ function ChangeAmount({
   const scaled = nonFungible
     ? null
     : scaleByDecimals(magnitude, change.decimals);
-  // A token with no known scale (`decimals: null`) moved an amount we cannot
-  // state: a plain "—", with no sign or colour that would read as a movement
+  // An amount we cannot state — the token's scale is unknown (`decimals:
+  // null`) or the amount does not read — is a plain "—" (what `formatAmount`
+  // prints for `null`), with no sign or colour that would read as a movement
   // of some size.
-  if (!nonFungible && scaled == null) {
-    return (
-      <Typography component="span" variant="bodySmRegular">
-        —
-      </Typography>
-    );
-  }
+  const stated = nonFungible || scaled != null;
   const figure = nonFungible ? magnitude : formatAmount(scaled, 2);
   return (
     <Typography
       component="span"
       variant="bodySmRegular"
       sx={(theme) => ({
-        color: inverted
-          ? 'inherit'
-          : negative
-          ? theme.palette.text.error
-          : theme.palette.text.success,
+        color:
+          !stated || inverted
+            ? 'inherit'
+            : negative
+            ? theme.palette.text.error
+            : theme.palette.text.success,
       })}
     >
-      {negative ? '−' : '+'}
+      {stated && (negative ? '−' : '+')}
       {figure}
       {nonFungible && ' NFT'}
       {nonFungible && change.token_id && ` #${change.token_id}`}
