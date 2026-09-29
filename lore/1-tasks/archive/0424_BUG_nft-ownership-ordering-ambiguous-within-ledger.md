@@ -2,7 +2,7 @@
 id: '0424'
 title: 'BUG: NFT ownership order is ambiguous within a ledger — current owner can be nondeterministic'
 type: BUG
-status: done
+status: completed
 related_adr: ['0059']
 related_tasks: ['0415', '0538', '0586']
 tags:
@@ -36,7 +36,7 @@ history:
       the same Rust extraction (293 B2); `event_order` leaves the API for the
       position (294 A).
   - date: '2026-09-29'
-    status: done
+    status: completed
     who: karolkow
     note: >
       Ownership changes carry the chain position `(ledger, application_order,

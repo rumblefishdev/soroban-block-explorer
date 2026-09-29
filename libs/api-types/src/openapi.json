@@ -1504,7 +1504,7 @@
             }
           },
           "400": {
-            "description": "Invalid pool_id, limit, or cursor",
+            "description": "Invalid pool_id, limit, or cursor; or `not_indexed`: a soroban pool whose providers are not readable (no share token — a concentrated pool — or a token that publishes no decimals)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4262,21 +4262,16 @@
             "items": {
               "type": "object",
               "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
-              "required": [
-                "account",
-                "shares",
-                "first_deposit_ledger",
-                "last_updated_ledger"
-              ],
+              "required": ["account", "shares", "last_updated_ledger"],
               "properties": {
                 "account": {
                   "type": "string",
-                  "description": "Participant account StrKey (G...)."
+                  "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
                 },
                 "first_deposit_ledger": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool."
+                  "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
                 },
                 "last_updated_ledger": {
                   "type": "integer",
@@ -4285,11 +4280,11 @@
                 },
                 "share_percentage": {
                   "type": ["string", "null"],
-                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`, over the pool's latest snapshot\nhowever old — a classic pool snapshots every change). `None` when the\npool has no snapshot or its total is 0; the frontend renders \"—\"."
+                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total`). Classic: over the pool's latest snapshot\nhowever old — a classic pool snapshots every change — and `None` when\nthe pool has no snapshot or its total is 0; the frontend renders \"—\".\nSoroban: over the pool's own stored total as on chain (the holders'\nsum where it keeps none), always present."
                 },
                 "shares": {
                   "type": "string",
-                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+                  "description": "Pool-share balance as a decimal string (no f64 round-trip): the\n`NUMERIC(28,7)` position of a classic pool, the share-token balance\nscaled by the token's decimals for a soroban one."
                 }
               }
             }
@@ -4538,21 +4533,16 @@
       "ParticipantItem": {
         "type": "object",
         "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
-        "required": [
-          "account",
-          "shares",
-          "first_deposit_ledger",
-          "last_updated_ledger"
-        ],
+        "required": ["account", "shares", "last_updated_ledger"],
         "properties": {
           "account": {
             "type": "string",
-            "description": "Participant account StrKey (G...)."
+            "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
           },
           "first_deposit_ledger": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool."
+            "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
           },
           "last_updated_ledger": {
             "type": "integer",
@@ -4561,11 +4551,11 @@
           },
           "share_percentage": {
             "type": ["string", "null"],
-            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`, over the pool's latest snapshot\nhowever old — a classic pool snapshots every change). `None` when the\npool has no snapshot or its total is 0; the frontend renders \"—\"."
+            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total`). Classic: over the pool's latest snapshot\nhowever old — a classic pool snapshots every change — and `None` when\nthe pool has no snapshot or its total is 0; the frontend renders \"—\".\nSoroban: over the pool's own stored total as on chain (the holders'\nsum where it keeps none), always present."
           },
           "shares": {
             "type": "string",
-            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+            "description": "Pool-share balance as a decimal string (no f64 round-trip): the\n`NUMERIC(28,7)` position of a classic pool, the share-token balance\nscaled by the token's decimals for a soroban one."
           }
         }
       },

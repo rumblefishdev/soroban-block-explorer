@@ -1789,27 +1789,32 @@ export type PaginatedNftTransferItem = {
 export type PaginatedParticipantItem = {
   data: Array<{
     /**
-     * Participant account StrKey (G...).
+     * Provider StrKey: a `G…` account, or for a soroban pool also a `C…`
+     * contract holding the share token (a gauge, a vault).
      */
     account: string;
     /**
-     * Ledger of the first deposit by this account into this pool.
+     * Ledger of the first deposit by this account into this pool. `null` for
+     * a soroban pool, whose share-token balances record no first deposit.
      */
-    first_deposit_ledger: number;
+    first_deposit_ledger?: number | null;
     /**
      * Ledger of the most recent change to this position.
      */
     last_updated_ledger: number;
     /**
      * Share of the pool, expressed as a decimal-string percentage
-     * (`100 * shares / total_pool_shares`, over the pool's latest snapshot
-     * however old — a classic pool snapshots every change). `None` when the
-     * pool has no snapshot or its total is 0; the frontend renders "—".
+     * (`100 * shares / total`). Classic: over the pool's latest snapshot
+     * however old — a classic pool snapshots every change — and `None` when
+     * the pool has no snapshot or its total is 0; the frontend renders "—".
+     * Soroban: over the pool's own stored total as on chain (the holders'
+     * sum where it keeps none), always present.
      */
     share_percentage?: string | null;
     /**
-     * Pool-share balance carried as a decimal string preserving the
-     * underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+     * Pool-share balance as a decimal string (no f64 round-trip): the
+     * `NUMERIC(28,7)` position of a classic pool, the share-token balance
+     * scaled by the token's decimals for a soroban one.
      */
     shares: string;
   }>;
@@ -2030,27 +2035,32 @@ export type PaginatedTransactionListItem = {
  */
 export type ParticipantItem = {
   /**
-   * Participant account StrKey (G...).
+   * Provider StrKey: a `G…` account, or for a soroban pool also a `C…`
+   * contract holding the share token (a gauge, a vault).
    */
   account: string;
   /**
-   * Ledger of the first deposit by this account into this pool.
+   * Ledger of the first deposit by this account into this pool. `null` for
+   * a soroban pool, whose share-token balances record no first deposit.
    */
-  first_deposit_ledger: number;
+  first_deposit_ledger?: number | null;
   /**
    * Ledger of the most recent change to this position.
    */
   last_updated_ledger: number;
   /**
    * Share of the pool, expressed as a decimal-string percentage
-   * (`100 * shares / total_pool_shares`, over the pool's latest snapshot
-   * however old — a classic pool snapshots every change). `None` when the
-   * pool has no snapshot or its total is 0; the frontend renders "—".
+   * (`100 * shares / total`). Classic: over the pool's latest snapshot
+   * however old — a classic pool snapshots every change — and `None` when
+   * the pool has no snapshot or its total is 0; the frontend renders "—".
+   * Soroban: over the pool's own stored total as on chain (the holders'
+   * sum where it keeps none), always present.
    */
   share_percentage?: string | null;
   /**
-   * Pool-share balance carried as a decimal string preserving the
-   * underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+   * Pool-share balance as a decimal string (no f64 round-trip): the
+   * `NUMERIC(28,7)` position of a classic pool, the share-token balance
+   * scaled by the token's decimals for a soroban one.
    */
   shares: string;
 };
@@ -3555,7 +3565,7 @@ export type ListParticipantsData = {
 
 export type ListParticipantsErrors = {
   /**
-   * Invalid pool_id, limit, or cursor
+   * Invalid pool_id, limit, or cursor; or `not_indexed`: a soroban pool whose providers are not readable (no share token — a concentrated pool — or a token that publishes no decimals)
    */
   400: ErrorEnvelope;
   /**

@@ -88,19 +88,19 @@ export default function LiquidityPoolDetailPage() {
       {/* Gate the sub-sections on resolved parent data so their queries never
           fire while the pool is still loading — a parent 404 then produces
           zero sub-section 404s. */}
-      {/* A soroban pool's operations and providers are not indexed yet, so
-          these sections say so instead of firing queries that can only come
-          back empty and read as "no activity". Its chart plots TVL from the
-          reserve history; volume and fees say "not indexed". */}
+      {/* A soroban pool's operations are not indexed yet, so its activity
+          says so instead of firing a query that can only come back empty and
+          read as "no activity". Its chart plots TVL from the reserve history
+          (volume and fees say "not indexed"); its providers are read from the
+          share token's holders. */}
       {detail.data?.pool_kind === 'soroban' && (
         <>
           <SectionErrorBoundary sectionName="pool-charts">
             <PoolCharts poolId={poolId} volumeIndexed={false} />
           </SectionErrorBoundary>
-          <NotIndexedSection
-            title="Pool participants"
-            what="Liquidity providers"
-          />
+          <SectionErrorBoundary sectionName="pool-participants">
+            <PoolParticipants poolId={poolId} />
+          </SectionErrorBoundary>
           <NotIndexedSection title="Recent activity" what="Pool activity" />
         </>
       )}

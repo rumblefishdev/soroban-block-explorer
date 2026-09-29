@@ -2,7 +2,7 @@
 id: '0376'
 title: 'NFT completeness: multi-owner, contract-owner, pending visibility, collection union'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0359']
 tags: [priority-medium, effort-large, layer-indexer, nft]
@@ -12,6 +12,13 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0359 tracker. Bundles K1-6, K2-5, K2-6, K3-7.'
+  - date: '2026-09-29'
+    status: active
+    who: karolkow
+    note: >
+      Activated for K2-5 only (decision 303 A): contract-owned NFTs resolve to
+      their C-address instead of null, in one small PR. K1-6, K2-6 and K3-7
+      stay open.
 ---
 
 # NFT ownership completeness
