@@ -416,8 +416,11 @@ if so, promote it as the convention instead of spreading in-process dedup.
       "transfer before mint" signal must be re-evaluated, not carried over)
       — 88 tokens, all the contracts' own `transfer`-then-`mint` emission in
       one operation with the same owner; 0 across ledgers (2026-09-29)
-- [ ] Every ledger-only-versioned RMT table audited and classified
+- [x] Every ledger-only-versioned RMT table audited and classified
       (mitigated in-process / not mitigated / not applicable), with the in-batch
-      dedup's cross-path limitation assessed
-- [ ] A single convention chosen and written down (composite version column vs
-      in-process last-wins), so new state tables do not reintroduce the tie
+      dedup's cross-path limitation assessed — measured instead (thread 327 A,
+      2026-09-29): 0 version ties with differing rows in all 14 non-empty
+      tables; a tie already merged away is invisible to that measurement
+- [x] A single convention chosen and written down (composite version column vs
+      in-process last-wins), so new state tables do not reintroduce the tie —
+      in-process last-wins per ledger, `clickhouse-pilot.md` §engines

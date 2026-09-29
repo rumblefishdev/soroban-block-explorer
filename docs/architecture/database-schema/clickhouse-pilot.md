@@ -361,7 +361,15 @@ Resolved in
 - **State tables** → `ReplacingMergeTree(version_column)` where a natural
   NOT NULL ledger column exists (`last_seen_ledger`,
   `last_updated_ledger`, `current_owner_ledger`,
-  `wasm_uploaded_at_ledger`); plain `ReplacingMergeTree` otherwise
+  `wasm_uploaded_at_ledger`); plain `ReplacingMergeTree` otherwise.
+  A ledger version cannot order two writes of one key inside one ledger,
+  so the merge would pick between them arbitrarily. **Convention (task
+  0424):** staging writes one row per key per ledger — the ledger's last
+  state, folded in the ledger's own execution order before insert, as
+  `stage::build_balance_rows` and the `nfts` fold do. The version column
+  stays ledger-only; a new state table follows the same rule instead of
+  adding a composite version. Measured 2026-09-29: 0 version ties with
+  differing rows in every state table.
 - **Immutable lookup tables** → plain `MergeTree`
 
 Every fact table uses `PARTITION BY intDiv(ledger_sequence, 500000)`.
