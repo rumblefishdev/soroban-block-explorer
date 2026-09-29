@@ -179,15 +179,20 @@ command. Stack depth two at most (B → D).
 
 ## PR A built and verified locally — 2026-09-29
 
-Branch `feat/0553-ledger-source-config` (uncommitted at the time of writing).
-Env knobs, each defaulting to today's production value: `CLICKHOUSE_DATABASE`
-(all three Lambdas — they had `default` hardcoded as `PROD_DATABASE`, missed by
-the list above; the env var only reached the CLIs), `LEDGER_KEY_PREFIX` and
-`LEDGER_BUCKET_REGION` (indexer), `PUBLIC_ARCHIVE_PREFIX` (API, backfill-runner).
-API, indexer and `backfill-runner run` refuse to start when the ledger folder's
+PR #543, branch `feat/0553-ledger-source-config`. Env knobs, each defaulting
+to today's production value: `CLICKHOUSE_DATABASE` (all three Lambdas — they
+had `default` hardcoded as `PROD_DATABASE`, missed by the list above; the env
+var only reached the CLIs) and `PUBLIC_ARCHIVE_PREFIX` (API, backfill-runner,
+indexer). The indexer reads the public dataset unsigned in `us-east-2` when
+`BUCKET_NAME` names it — a request signed by the Lambda role, which holds no
+grant there, is refused (review finding; the first cut had this wrong). API,
+indexer and `backfill-runner run` refuse to start when the ledger folder's
 network (`pubnet` / `testnet` segment) disagrees with
 `STELLAR_NETWORK_PASSPHRASE` — ledger meta carries no network, so a mismatch
-would otherwise hash silently wrong.
+would otherwise hash silently wrong. `snapshot-seed`, which reads the mainnet
+history archive and writes, refuses any other network. The history-archive URL
+and the snapshot ledger floor stay mainnet-only: testnet starts from genesis
+and never seeds.
 
 Local run (repo `timeouts.xml` mounted; a container without it fails with
 `channel closed`, the documented 30 s `http_receive_timeout` trap):
