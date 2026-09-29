@@ -2,7 +2,7 @@
 id: '0593'
 title: 'FEATURE: block Custom HTML and Custom JS in GTM, so a published tag cannot read the portal API key'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0437', '0451', '0589']
 tags: [frontend, security, analytics, priority-medium, effort-small]
@@ -22,6 +22,15 @@ history:
     note: >
       Started. Same change as the portal's in stellar-prices-api #362: one
       dataLayer push before GTM, a test, and a browser check.
+  - date: '2026-09-29'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Merged in #537 (90d1edf6) and live: the SPA deployed at 11:10 UTC from
+      52e0b07a serves `index-BmVZ6qtC.js`, and a fresh load on production has
+      `gtm.blocklist: ['customScripts']` in `dataLayer` before GTM. 2 files,
+      +1 test (410 in web). The portal has had the same line since
+      stellar-prices-api #362, deployed at 10:49 UTC.
 ---
 
 # FEATURE: block Custom HTML and Custom JS in GTM, so a published tag cannot read the portal API key
@@ -90,8 +99,10 @@ that GA4 still sends a `page_view` after "Accept All".
       `vite preview` build: a fresh visitor gets no cookies and one `G100`
       ping. After "Accept All" and a reload, `page_view` and `scroll` go out
       with `gcs=G111`.
-- [x] **Docs updated** — N/A: `docs/architecture/**` does not describe the
-      third-party tags.
+- [x] **Docs updated** — `docs/architecture/**` does not describe the GTM
+      tags. One related line was corrected on develop (bc0c1815):
+      `infrastructure/infrastructure-overview.md` said the `/api` SPA loads
+      no analytics, which Prices task 0316 changed.
 - [x] **API types regenerated** — N/A: nothing under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**` is touched.
 
@@ -105,6 +116,14 @@ that GA4 still sends a `page_view` after "Accept All".
   blocklist is a plain object and not `arguments`.
 - Web: lint (0 errors, 4 older warnings), typecheck, 410 tests.
 - The portal carries the same line and test in stellar-prices-api #362.
+- Deploy on 2026-09-29, 11:10 UTC: `make -C infra deploy-production-web`
+  from 52e0b07a, after `nx reset`. The bundle points to
+  `api-sorobanscan.rumblefishdev.com`, and the Turnstile arming check passed.
+  Invalidation I293LUC34XW67DUAMYX9HFGLKC. Before it, production served the
+  frontend of 51dbb699, which a rebuild reproduced byte for byte
+  (`index-CIZ7rvdJ.js`). So the deploy also shipped the unknown-token-scale
+  changes of 0374 and 0584 (`decimals: null` renders "—"). That frontend
+  reads both an integer and `null`, so it works with either API build.
 - Not verified: that GTM actually refuses a Custom HTML tag. That would need a
   tag published in the live container. It rests on Google's documented
   `gtm.blocklist` behaviour.
@@ -122,6 +141,23 @@ that GA4 still sends a `page_view` after "Accept All".
 2. **No `nonGoogleScripts` for now.** The container has no custom templates
    today, and a template runs only within the permissions it declares.
    Adding it later is one word, if templates ever appear.
+
+## Issues Encountered
+
+- **A stale `index.html` blanks the page after a deploy.** Right after the
+  sync, the browser pane loaded its cached `index.html`. It pointed at
+  `index-CIZ7rvdJ.js`, which `s3 sync --delete` had removed. CloudFront
+  answered with the SPA fallback (`text/html`), and the module failed to
+  load. Production's `index.html` carries no `Cache-Control` header, so a
+  browser picks its own freshness from `Last-Modified`. The page loads again
+  once that copy expires or on a reload with a fresh URL. It predates this
+  task. Recorded under Future Work.
+
+## Future Work
+
+- `Cache-Control: no-cache` (or a short max-age) on the SPA's `index.html`,
+  so a deploy never serves an old document that points at deleted assets.
+  Not opened as a task yet.
 
 ## Notes
 
