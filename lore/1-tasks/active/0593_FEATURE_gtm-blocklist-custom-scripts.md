@@ -2,7 +2,7 @@
 id: '0593'
 title: 'FEATURE: block Custom HTML and Custom JS in GTM, so a published tag cannot read the portal API key'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0437', '0451', '0589']
 tags: [frontend, security, analytics, priority-medium, effort-small]
@@ -16,6 +16,12 @@ history:
       Opened after reviewing what the explorer's GTM can reach on the Prices API
       portal (stellar-prices-api task 0316, PR #362). The portal PR carries the
       same blocklist.
+  - date: '2026-09-29'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started. Same change as the portal's in stellar-prices-api #362: one
+      dataLayer push before GTM, a test, and a browser check.
 ---
 
 # FEATURE: block Custom HTML and Custom JS in GTM, so a published tag cannot read the portal API key
