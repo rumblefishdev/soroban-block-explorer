@@ -2610,3 +2610,91 @@ null`. No database read: the surrogate is `ids::contract_id(address)`, pinned
 by a test against the production ids. Local API against production: 355 / 214
 / 14 / 192 null of 775, exactly the measured split. The list row and the pool
 header show the name as a second chip beside "Soroban".
+
+### Soroban participants from share-token holders (2026-09-28)
+
+Branch `feat/0374-soroban-participants`. Issue #405's remaining sections were
+chart, participants and activity; participants needed no indexing, only a
+read. A soroban pool's providers are the holders of its share token in
+`balances`. Measured on production, per family: the holders' sum equals the
+stored `total_shares` for 296/296 constant, 46/46 stable, 1/1 elastic and
+230/232 pair pools; config pools (18 with holders) store no total. All 4,088
+positions resolve to an account (3,777) or a contract (311). Concentrated
+pools (49) have no share token.
+
+- API: a `C…` pool lists the holders, scaled by the token's decimals,
+  percentage over the holders' sum, `first_deposit_ledger = null`; no share
+  token → 400 `not_indexed`. Detail `participant_count` counts the same
+  holders (the list's column stays null — one more `balances` scan per page).
+- Verified through the local API on production: two top holders equal the
+  chain's `balance()` to the unit (Aquarius PYUSD/USDC, Phoenix XLM/USDC);
+  a full walk of the busiest pool (638 holders, 7 pages) returns 638 unique
+  rows, percentages sum to 99.99997, back-paging returns the same page;
+  ~110–150 ms per page, detail count 59 / 638 / null (concentrated).
+- CH-gated test `soroban_participants_are_share_token_holders`.
+
+Still "not indexed" for soroban pools: chart and activity.
+
+**Coverage guard (review, 2026-09-28).** Providers are served only when the
+indexed holders add up to the pool's stored `total_shares` (a stored `0`
+cannot be checked: config family, emptied pools); otherwise list and detail
+count read "not indexed". Two pair pools fail it on production, and in both
+the chain's `total_supply` equals the stored total, so the gap is in our
+share-token balances: `CDIXSYDR…` — holders known for 26,752,186 of
+447,027,308,775 (0.006%); `CDLMAKG5…` — holders sum 92,024,604,911 against
+87,628,791,895 (a stale, too-large balance; two top holders match the chain
+exactly, so the excess sits elsewhere). Cause not yet traced.
+
+**Correction (same day) — the two gaps are on chain, not in our index.**
+Traced with raw ledger meta from the public archive: every holder's balance
+entry (`getLedgerEntries`) equals our newest `balances` row in both pools,
+and mints minus burns in their events equal our holders' sum. What diverges
+is the pool's own instance: after protocol 23 each instance was `restored`
+from a stale copy — `CDIXSYDR…` at 58,774,376 came back with the
+`TotalSupply` and reserves it had before a 99.99% withdrawal at 58,241,372;
+`CDLMAKG5…` at 58,779,518 came back without one later mint (4,395,813,016).
+Chain `total_supply()` still returns the stale figure, and the pools' token
+balances equal their (restored) reserves today. We mirror the chain
+faithfully; the chain is inconsistent with itself. Attributing it to the
+protocol-23 state-restore defect is inference from the `restored` change
+type and timing, not checked against a network disclosure. So the coverage
+guard above hides two correct holder lists; see decision 115 in the session.
+
+**Decision 115 (karolkow, 2026-09-28): the chain is the source of truth even
+where it shows wrong data.** The coverage guard is dropped. A soroban
+participant's percentage divides by the pool's stored `total_shares` (the
+figure withdrawals pay against, as classic divides by its snapshot); a pool
+keeping none (config family) or emptied divides by the holders' sum. The two
+stale-restored pools list their holders; their percentages sum to 0.006% and
+105%. Verified through the local API on production: 99.9999992% and
+99.9999975% on two ordinary pools, `not_indexed` on a concentrated one.
+
+### W1 — soroban pool event amounts (2026-09-29)
+
+Branches `refactor/0374-soroban-pools-stage-move` (two pure moves: the soroban
+pool staging helpers out of `stage.rs`, 2,943 → 2,715 lines; db-clickhouse lib
+tests into their own file) and `feat/0374-soroban-pool-operations` on top.
+
+- New table `soroban_pool_event_amounts`: one row per (event, leg), keyed
+  `(pool_id, ledger, application_order, operation_index, event_index,
+asset_id)`, `amount Int128` signed from the pool's side — the twin of
+  `pool_operation_amounts`. One decoder over the staged `soroban_events`
+  rows for all three families (router `trade`/`deposit_liquidity`/
+  `withdraw_liquidity`; pair `swap`/`deposit`/`withdraw`; config per-field
+  and map-form `swap`/`provide_liquidity`/`withdraw_liquidity`, the
+  per-field group keyed by its `sender` event).
+- **Deviation from approved assumption 4 (flagged):** rows are written only
+  for REGISTERED pools, not for every shape-matching event. The pair family
+  names its amounts by leg position (`amount_0`/`amount_1`, no token
+  addresses), so the pool's legs are needed at write time. The writer reads
+  the registry (~800 rows) per ledger alongside the SAC map; pools
+  registered in the same ledger join it first.
+- Backfill: `backfill-runner soroban-pool-amounts` streams each registered
+  pool's events from `soroban_events` through the same decoder — no archive
+  re-parse, idempotent.
+- Verified on production (read-only, 200k ledgers to 64,677,449): decoded
+  events equal the SQL shape counts for every family and kind (router
+  trades 361,145; pair 20,084; config 851); pair reserve steps exact
+  11,559 of 11,559; router and config within 1% except 392 of 253,656
+  steps (concentrated 187, constant 110, stable 95 — fee outflows and
+  mixed intervals, not investigated per step).

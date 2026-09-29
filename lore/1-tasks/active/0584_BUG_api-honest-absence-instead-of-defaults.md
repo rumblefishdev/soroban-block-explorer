@@ -2,7 +2,7 @@
 id: '0584'
 title: 'BUG: API renders defaults (1970 dates, empty ids, Classic kind) where a lookup missed'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0374']
 tags: [layer-api, priority-low, effort-small]
@@ -22,6 +22,13 @@ history:
       Widened (0374 decision 92 B): the guessed 7 decimals for a soroban token
       that publishes none, on account balances, balance changes and asset
       supply, moves here from 0374 decision 119.
+  - date: '2026-09-28'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Widened (decision 3 A): the API reads
+      soroban_contract_metadata 13 times in 7 files with three dedup styles;
+      one shared definition of the newest metadata row replaces them.
 ---
 
 # BUG: API renders defaults where a lookup missed
@@ -75,6 +82,7 @@ setting), merged accounts (0321).
 - [ ] Config-factory fee drift measured on production; outcome recorded here
 - [ ] No read scales a soroban token amount by an assumed 7; `decimals` is `null` where the token publishes none, and the frontend does not scale it
 - [ ] API types regenerated; docs updated where a field became nullable
+- [ ] Every read of `soroban_contract_metadata` goes through one definition of the newest row (NULLs included)
 
 ## 2026-09-28 — guessed 7 decimals: fixed on `fix/0584-unknown-token-decimals`
 
@@ -91,3 +99,27 @@ decimals. Local API against production: USST (`CBZ4DCE7…`, 18 decimals on
 chain, no metadata row — task 0473) now serves `decimals: null`; its
 balance on `GBQYWQHE…` and its total supply render "—" (before: scaled by 7,
 a balance of 1,125,292,924,600 instead of 11.25).
+
+## One read of contract metadata (2026-09-28, decision 3 A)
+
+The API read `soroban_contract_metadata` 13 times in 7 files, deduplicated
+three ways: `FINAL` (3), `argMax(x, version)` (8) and
+`argMax(tuple(x), version).1` (1, PR #518). `argMax` skips a `NULL`
+argument, so the eight fell back to an older version's name, symbol or
+decimals where the newest row has none. Production today: 0 of 3,947
+contracts differ between the forms, so the bug is latent.
+
+A plain view was considered and rejected: a Rust constant gives the same
+single definition without a production DDL or a deploy-order dependency,
+and the API is the table's only reader. Branch
+`fix/0584-one-contract-metadata-read`, stacked on #535:
+`common::contract_metadata::CONTRACT_METADATA` is the only read (newest
+whole row per contract, `FINAL`, as `init.sql` documents). A test fails if
+another file reads the table; a CH-gated test pins the `NULL` case (red
+with `argMax`: `"Old"` instead of `NULL`).
+
+Local API against production vs the deployed API: account balances, asset
+list/detail/code filter, NFT list/collection filter/detail, search by name
+and by id, soroban pool list — identical. One difference, not caused by this:
+contract name search has no `ORDER BY`, so its results come back in a
+different order on every call (same code, three calls, two orders).

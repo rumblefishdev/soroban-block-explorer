@@ -2,7 +2,7 @@
 id: '0588'
 title: 'REFACTOR: retire the endpoint-query SQL reference set — the Rust queries and their ClickHouse tests are the reference'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0060']
 related_tasks: ['0207', '0478', '0587']
 tags: [docs, clickhouse, api, cleanup, effort-small, priority-medium]
@@ -18,6 +18,13 @@ history:
       PR closed unmerged; 0478 and 0587 superseded by this task. (Corrected
       2026-09-28: this entry first said the Rust queries already run against
       the schema in CI — they do not; see Context and task 0480.)
+  - date: '2026-09-28'
+    status: completed
+    who: karolkow
+    note: >
+      Closed in the release sweep of production-2026.09.28-1: every lore-0588
+      commit is an ancestor of the tag, and the tag holds no endpoint-queries-
+      clickhouse path. Docs and refactor only — nothing on production changes.
 ---
 
 # REFACTOR: retire the endpoint-query SQL reference set

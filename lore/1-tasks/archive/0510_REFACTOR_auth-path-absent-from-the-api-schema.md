@@ -2,7 +2,7 @@
 id: '0510'
 title: 'REFACTOR: the auth path is absent from the API schema, so the frontend hand-mirrors its type'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0455']
 tags: ['api', 'frontend', 'openapi', 'effort-small', 'priority-medium']
@@ -34,6 +34,16 @@ history:
       operation named mint_session, five comments corrected, failure test
       strengthened, a test that the armed app serves the advertised path, and
       the request interceptor skips the mint itself.
+  - date: '2026-09-28'
+    status: completed
+    who: karolkow
+    note: >
+      Closed in the release sweep of production-2026.09.28-1: every lore-0510
+      commit is an ancestor of the tag, and the tag's openapi.json carries
+      /auth/session (mint_session). A refactor with no behaviour change; the
+      production SPA was served from this tag's build (list and detail reads
+      verified through the API the same evening). The session mint itself was
+      not probed directly — it sits behind Turnstile.
 ---
 
 # REFACTOR: the auth path is absent from the API schema

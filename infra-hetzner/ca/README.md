@@ -153,11 +153,19 @@ bundle = {
 print(json.dumps(bundle))
 PY
 
-# Upload to AWS Secrets Manager (CDK creates the secret stub
-# downstream; this command updates the value).
-aws secretsmanager put-secret-value \
-    --secret-id "soroban/<CN>-mtls" \
+# Upload to AWS Secrets Manager as `<mtlsSecretNamePrefix>/<CN>`.
+# The prefix is in infra/envs/<env>.json (production:
+# soroban/production/mtls). CDK does not create this secret; it
+# only reads it by name. So the first upload creates it:
+aws secretsmanager create-secret \
+    --region eu-central-1 \
+    --name "soroban/production/mtls/<CN>" \
     --secret-string "file://bundle.json"
+# A rotation replaces the value of the existing secret instead:
+#   aws secretsmanager put-secret-value \
+#       --region eu-central-1 \
+#       --secret-id "soroban/production/mtls/<CN>" \
+#       --secret-string "file://bundle.json"
 
 # Wipe the tmpfs stage — AWS SM is now the source of truth.
 cd /
@@ -170,9 +178,13 @@ rmdir /dev/shm/soroban-cert-upload
 rm -rf infra-hetzner/ca/out/<CN>/
 ```
 
-The IAM policy granting the Lambda execution role
-`secretsmanager:GetSecretValue` on that ARN is wired in the AWS
-CDK app (`infra/src/`), out of scope for this directory.
+The AWS CDK app (`infra/src/`) wires the rest, out of scope for
+this directory: the Lambda's `MTLS_SECRET_NAME` env var names the
+secret, and `secretsmanager:GetSecretValue` on that one ARN is
+granted to its execution role. The CN still has to be mapped to a
+ClickHouse user in `CLICKHOUSE_CN_USER_MAP`, see
+`docs/architecture/security/clickhouse-rbac.md`, "Adding a new
+service / dev cert".
 
 ## Rotation
 
