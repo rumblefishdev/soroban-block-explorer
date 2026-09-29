@@ -30,19 +30,24 @@ pub struct SharesCursor {
 /// (`queries::list_participants`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ParticipantItem {
-    /// Participant account StrKey (G...).
+    /// Provider StrKey: a `G…` account, or for a soroban pool also a `C…`
+    /// contract holding the share token (a gauge, a vault).
     pub account: String,
-    /// Pool-share balance carried as a decimal string preserving the
-    /// underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+    /// Pool-share balance as a decimal string (no f64 round-trip): the
+    /// `NUMERIC(28,7)` position of a classic pool, the share-token balance
+    /// scaled by the token's decimals for a soroban one.
     pub shares: String,
     /// Share of the pool, expressed as a decimal-string percentage
-    /// (`100 * shares / total_pool_shares`, over the pool's latest snapshot
-    /// however old — a classic pool snapshots every change). `None` when the
-    /// pool has no snapshot or its total is 0; the frontend renders "—".
+    /// (`100 * shares / total`). Classic: over the pool's latest snapshot
+    /// however old — a classic pool snapshots every change — and `None` when
+    /// the pool has no snapshot or its total is 0; the frontend renders "—".
+    /// Soroban: over the pool's own stored total as on chain (the holders'
+    /// sum where it keeps none), always present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
-    /// Ledger of the first deposit by this account into this pool.
-    pub first_deposit_ledger: i64,
+    /// Ledger of the first deposit by this account into this pool. `null` for
+    /// a soroban pool, whose share-token balances record no first deposit.
+    pub first_deposit_ledger: Option<i64>,
     /// Ledger of the most recent change to this position.
     pub last_updated_ledger: i64,
 }
