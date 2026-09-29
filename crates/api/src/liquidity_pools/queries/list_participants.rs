@@ -226,9 +226,13 @@ struct SorobanParticipantChRow {
 /// 23 while its holders' balances stayed current — and the percentages follow
 /// the chain, so they do not add up to 100.
 ///
+/// The pool's own contract is not a provider: a pool locks the minimum
+/// liquidity of its first deposit into itself (up to 1000 raw units in 242
+/// pools, production 2026-09-29), and in 33 of them that is the only holder.
+///
 /// `balances` is sorted by `(holder_id, asset_id)`, so the `asset_id` filter
-/// scans the table (~120M rows); the pool pages see a few dozen requests a
-/// day.
+/// scans it (~18M rows, 0.11 s on the busiest pool, 2026-09-29); the pool
+/// pages see a few dozen requests a day.
 pub async fn fetch_soroban_participants(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -252,7 +256,9 @@ pub async fn fetch_soroban_participants(
     };
     let sql = format!(
         "WITH (SELECT argMax(share_token_id, derived_at_ledger) FROM pool_instance_state \
-               WHERE pool_id = unhex(?)) AS token_id \
+               WHERE pool_id = unhex(?)) AS token_id, \
+              (SELECT any(id) FROM soroban_contracts \
+               WHERE substring(base32Decode(contract_id), 2, 32) = unhex(?)) AS pool_self \
          SELECT holder_id, \
                 toString(amt) AS raw_shares, \
                 toString(toDecimal128(amt * 100 / if(stored > 0, stored, total), 7)) \
@@ -270,7 +276,8 @@ pub async fn fetch_soroban_participants(
                  SELECT holder_id, \
                         argMax(amount, last_updated_ledger) AS amt, \
                         max(last_updated_ledger) AS lul \
-                 FROM balances WHERE asset_id = token_id AND token_id != 0 \
+                 FROM balances \
+                 WHERE asset_id = token_id AND token_id != 0 AND holder_id != pool_self \
                  GROUP BY holder_id \
              ) WHERE amt > 0 \
          ) \
@@ -280,6 +287,7 @@ pub async fn fetch_soroban_participants(
     );
     let rows = client
         .query(&sql)
+        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(pool_id_hex)
         .bind(limit)
@@ -352,8 +360,8 @@ struct HolderCountRow {
 }
 
 /// How many providers the soroban participants list holds — the detail
-/// KPI. Same `balances` scan as the list. `None` (not indexed) when the pool
-/// has no share token.
+/// KPI. Same `balances` scan as the list, without the pool itself. `None`
+/// (not indexed) when the pool has no share token.
 pub async fn count_soroban_participants(
     client: &clickhouse::Client,
     pool_id_hex: &str,
@@ -361,13 +369,17 @@ pub async fn count_soroban_participants(
     let row = client
         .query(
             "WITH (SELECT argMax(share_token_id, derived_at_ledger) FROM pool_instance_state \
-                   WHERE pool_id = unhex(?)) AS token \
+                   WHERE pool_id = unhex(?)) AS token, \
+                  (SELECT any(id) FROM soroban_contracts \
+                   WHERE substring(base32Decode(contract_id), 2, 32) = unhex(?)) AS pool_self \
              SELECT ifNull(token, 0) AS token_id, countIf(amt > 0) AS n \
              FROM ( \
                  SELECT argMax(amount, last_updated_ledger) AS amt FROM balances \
-                 WHERE asset_id = token AND token != 0 GROUP BY holder_id \
+                 WHERE asset_id = token AND token != 0 AND holder_id != pool_self \
+                 GROUP BY holder_id \
              )",
         )
+        .bind(pool_id_hex)
         .bind(pool_id_hex)
         .fetch_one::<HolderCountRow>()
         .await?;

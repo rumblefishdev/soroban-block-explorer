@@ -612,8 +612,10 @@ update ledger. Powers the "Pool participants" table on the LP detail page
 to close a doc-drift gap between the frontend page and the original endpoint
 inventory. A soroban pool (`C…` id) lists the holders of its share token
 (`pool_instance_state.share_token_id`) from `balances` instead — accounts and
-contracts, scaled by the token's decimals, percentages over the holders' sum,
-`first_deposit_ledger = null`. A pool with no share token (concentrated) answers
+contracts, scaled by the token's decimals, percentages over the pool's own
+stored total (the holders' sum where it keeps none), `first_deposit_ledger =
+null`. The pool's own contract is left out: it holds the minimum liquidity
+locked at its first deposit, not a provider's position. A pool with no share token (concentrated) answers
 400 `not_indexed`; the detail endpoint's `participant_count` counts the same
 holders.
 
