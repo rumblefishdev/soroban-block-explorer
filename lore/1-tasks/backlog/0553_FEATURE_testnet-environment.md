@@ -204,6 +204,30 @@ window — the mainnet derivation would name a contract that emits none there.
 The three refreshable MVs bind to `testnet.*`. The guard refuses a mainnet
 passphrase with the testnet folder.
 
+## PR A, post-merge devil's-advocate review — 2026-09-29
+
+Verdict: no production risk (every Lambda gets the exact mainnet passphrase;
+nothing sets `PUBLIC_ARCHIVE_PREFIX` or `CLICKHOUSE_DATABASE`). To settle in
+PR D before testnet goes live:
+
+- **The genesis partition would be skipped silently.** The lake's testnet
+  folder starts at ledger 2 (0 and 1 answer 404), so `FFFFFFFF--0-63999`
+  holds at most 63,998 files, and `sync_partition` wants exactly 64,000
+  (`backfill-runner/src/sync.rs:198,213`): `S3Incomplete`, a `warn`, and
+  ledgers 2–63,999 never ingested. The count check must start at the
+  network's first ledger.
+- **The network guard does not detect a reset.** It accepts any
+  `testnet/<date>` folder; an old folder just stops growing and the indexer
+  logs at `info`. Only the stall alarm catches it, and the prefix must never
+  move without dropping the database first.
+- **A prefix set with a non-lake bucket is ignored silently** (the indexer
+  applies it only when `BUCKET_NAME` is the lake). Refuse that combination
+  at start-up.
+
+Small follow-ups: the API guard compares the trimmed passphrase but hashes
+the raw one — trim once; nothing stops a testnet Lambda from calling the
+mainnet RPC default — extend the guard to the RPC list.
+
 ## Ledger source for testnet — decided 2026-09-29
 
 **Mainnet stays on its own Galexie. Testnet reads the public data lake**
