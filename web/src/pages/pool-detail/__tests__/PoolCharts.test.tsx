@@ -1,7 +1,7 @@
 import type { ChartDataPoint } from '@rumblefish/api-types';
 import { describe, expect, it } from 'vitest';
 
-import { toChartPoints } from './PoolCharts.js';
+import { toChartPoints } from '../PoolCharts.js';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
