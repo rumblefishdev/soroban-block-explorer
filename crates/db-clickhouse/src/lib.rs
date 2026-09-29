@@ -30,6 +30,16 @@ pub const DEFAULT_USER: &str = "default";
 /// same logical store under mTLS.
 pub const PROD_DATABASE: &str = "default";
 
+/// The database this process works in: `CLICKHOUSE_DATABASE`, else
+/// [`PROD_DATABASE`]. One schema per Stellar network on the shared server
+/// (ADR 0052) — the testnet deployment sets `testnet`, mainnet sets nothing.
+pub fn database_from_env() -> String {
+    std::env::var("CLICKHOUSE_DATABASE")
+        .ok()
+        .filter(|db| !db.is_empty())
+        .unwrap_or_else(|| PROD_DATABASE.to_string())
+}
+
 /// Configuration for a ClickHouse client, sourced from environment variables
 /// with safe local-dev defaults.
 #[derive(Debug, Clone)]
@@ -48,7 +58,7 @@ impl Config {
             url: std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| DEFAULT_URL.to_string()),
             user: std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| DEFAULT_USER.to_string()),
             password: std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default(),
-            database: std::env::var("CLICKHOUSE_DATABASE").unwrap_or_else(|_| "default".into()),
+            database: database_from_env(),
         }
     }
 }

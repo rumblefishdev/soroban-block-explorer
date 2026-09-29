@@ -181,7 +181,8 @@ async fn main() {
     // fetch from the Secrets Lambda Extension and the AWS SDK config load. Both
     // are tens to hundreds of milliseconds; running them sequentially would
     // double the cold-start budget.
-    let ch_fut = db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE);
+    let database = db_clickhouse::database_from_env();
+    let ch_fut = db_clickhouse::mtls::client_from_lambda_env(&database);
     let aws_config_fut = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()
         .region(aws_sdk_s3::config::Region::new("us-east-2"))
@@ -208,6 +209,14 @@ async fn main() {
              (e.g. \"Public Global Stellar Network ; September 2015\")."
         )
     });
+    // Heavy fields come from the public data lake; a folder of the other
+    // network would decode fine and match nothing (lore-0553).
+    if let Err(e) = xdr_parser::public_archive::check_archive_network(
+        &xdr_parser::public_archive::public_archive_prefix(),
+        passphrase.trim(),
+    ) {
+        panic!("{e}");
+    }
     let network_id = xdr_parser::network_id(&passphrase);
     let state = AppState::new(ch, runtime_enrichment, network_id);
     let app = app(&config, state);

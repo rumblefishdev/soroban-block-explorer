@@ -113,6 +113,10 @@ pub struct HandlerState {
     /// The doorbell handler derives object keys from ledger numbers and
     /// HEAD/GETs them against this bucket — it does not read the S3 event.
     pub bucket: String,
+    /// Key prefix inside [`Self::bucket`] (`LEDGER_KEY_PREFIX`, normalised to
+    /// end in `/`). Empty on mainnet, whose Galexie writes at the bucket root;
+    /// the testnet genesis folder of the public data lake on testnet.
+    pub key_prefix: String,
     pub cw_client: CloudWatchClient,
     /// ClickHouse client (mTLS to Hetzner via Caddy). Construction lives
     /// in `main.rs` cold start; cloning is cheap (the underlying
@@ -247,7 +251,7 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
             return Ok(());
         }
 
-        let key = ledger_s3_key(next);
+        let key = ledger_s3_key(&state.key_prefix, next);
         if !s3_object_exists(state, &key).await? {
             // `next` is not on S3 yet — stop. A future doorbell (when the file
             // lands) resumes here. This gate is what guarantees no gaps.
@@ -276,13 +280,29 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
 /// changes, update this in lockstep — a wrong key reads as a gap and stalls
 /// the tail. Verified against a live key:
 /// `L = 62528059` → `FC45E5FF--62528000-62591999/FC45E5C4--62528059.xdr.zst`.
-fn ledger_s3_key(ledger: i64) -> String {
+fn ledger_s3_key(prefix: &str, ledger: i64) -> String {
     const FILES_PER_PARTITION: i64 = 64_000;
     let part_start = (ledger / FILES_PER_PARTITION) * FILES_PER_PARTITION;
     let part_end = part_start + FILES_PER_PARTITION - 1;
     let part_prefix = 0xFFFF_FFFFu32 - part_start as u32;
     let file_prefix = 0xFFFF_FFFFu32 - ledger as u32;
-    format!("{part_prefix:08X}--{part_start}-{part_end}/{file_prefix:08X}--{ledger}.xdr.zst")
+    format!(
+        "{prefix}{part_prefix:08X}--{part_start}-{part_end}/{file_prefix:08X}--{ledger}.xdr.zst"
+    )
+}
+
+/// `LEDGER_KEY_PREFIX` for [`HandlerState::key_prefix`]; unset = bucket root.
+pub fn key_prefix_from_env() -> String {
+    normalize_key_prefix(&std::env::var("LEDGER_KEY_PREFIX").unwrap_or_default())
+}
+
+fn normalize_key_prefix(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{trimmed}/")
+    }
 }
 
 /// HEAD the object: `true` if it exists, `false` on `NotFound`. Any other

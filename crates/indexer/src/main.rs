@@ -13,10 +13,6 @@ use aws_sdk_sqs::Client as SqsClient;
 use lambda_runtime::{Error, service_fn};
 use tracing::info;
 
-/// Production CH database — the writer module's `init.sql` creates
-/// every table under the `default` database (`crates/db-clickhouse/schema/init.sql`).
-const CH_DATABASE: &str = "default";
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
@@ -47,7 +43,11 @@ async fn main() -> Result<(), Error> {
     // https://{CH_DOMAIN}. Any failure here (missing env, extension
     // unreachable, bundle malformed) returns from `main` so Lambda
     // surfaces it via CW `Init Errors`.
-    let ch_client = match db_clickhouse::mtls::client_from_lambda_env(CH_DATABASE).await {
+    let ch_client = match db_clickhouse::mtls::client_from_lambda_env(
+        &db_clickhouse::database_from_env(),
+    )
+    .await
+    {
         Ok(c) => c,
         Err(e) => {
             // Surface a structured `error!` line BEFORE propagating —
@@ -73,7 +73,17 @@ async fn main() -> Result<(), Error> {
     info!("mTLS ClickHouse client ready");
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let s3_client = S3Client::new(&aws_config);
+    // The ledger bucket may live in another region than the Lambda: testnet
+    // reads the public data lake (`us-east-2`) instead of its own Galexie
+    // bucket (lore-0553). Unset = the Lambda's region, as on mainnet.
+    let s3_client = match std::env::var("LEDGER_BUCKET_REGION") {
+        Ok(region) if !region.is_empty() => S3Client::from_conf(
+            aws_sdk_s3::config::Builder::from(&aws_config)
+                .region(aws_sdk_s3::config::Region::new(region))
+                .build(),
+        ),
+        _ => S3Client::new(&aws_config),
+    };
     let cw_client = CloudWatchClient::new(&aws_config);
     let sqs_client = SqsClient::new(&aws_config);
 
@@ -88,9 +98,18 @@ async fn main() -> Result<(), Error> {
         return Err("BUCKET_NAME env var is missing or empty".into());
     }
 
+    // Reading the public data lake (testnet): its folder must be this
+    // network's, or every transaction hashes wrong without an error.
+    let key_prefix = handler::key_prefix_from_env();
+    if !key_prefix.is_empty() {
+        let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_default();
+        xdr_parser::public_archive::check_archive_network(&key_prefix, passphrase.trim())?;
+    }
+
     let state = handler::HandlerState {
         s3_client,
         bucket,
+        key_prefix,
         cw_client,
         ch_client,
         enrichment_publisher,

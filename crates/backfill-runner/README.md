@@ -22,7 +22,12 @@ inserts — see [Writes](#writes) below.
   `CLICKHOUSE_PASSWORD` / `CLICKHOUSE_DATABASE` default via
   `db_clickhouse::Config::from_env`. For the mTLS Caddy endpoint pass
   `--ch-cert` / `--ch-key` / `--ch-ca` (task 0307).
-- Run from `us-east-1` (same region as the public archive) to avoid
+- `STELLAR_NETWORK_PASSPHRASE` set to the network being ingested. The
+  source folder defaults to `v1.1/stellar/ledgers/pubnet`; for testnet set
+  `PUBLIC_ARCHIVE_PREFIX` to its current genesis folder (e.g.
+  `v1.1/stellar/ledgers/testnet/2025-12-18`). `run` refuses to start when
+  the folder's network and the passphrase disagree (lore-0553).
+- Run from `us-east-2` (same region as the public archive) to avoid
   cross-region ingress costs.
 - Local scratch disk: **under ~2 × partition_size**. The runner keeps at
   most the partition being indexed plus the prefetched N+1 on disk, and
