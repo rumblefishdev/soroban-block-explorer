@@ -2,7 +2,7 @@
 id: '0591'
 title: 'OPS: api_reader and ingestion_writer have no <grants> — ClickHouse gives them ALL ON *.*'
 type: OPS
-status: active
+status: completed
 related_adr: ['0032']
 related_tasks: ['0240', '0314', '0396', '0567', '0568', '0569']
 tags: [clickhouse, security, infra-hetzner, priority-high, effort-small]
@@ -23,6 +23,15 @@ history:
     status: active
     who: stkrolikiewicz
     note: Activated.
+  - date: '2026-09-29'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      PR #531 merged 2026-09-28. services.xml deployed in place 2026-09-29
+      06:33 UTC (inode kept, hot reload, no restart). SHOW GRANTS matches the
+      file for all four users; 13/13 probes on prod as expected. Over the
+      first 7 minutes: api_reader 20 queries and ingestion_writer 1,832, all
+      without error; ledgers kept advancing.
 ---
 
 # OPS: api_reader and ingestion_writer have no `<grants>` — ClickHouse gives them ALL ON \*.\*
@@ -110,8 +119,9 @@ is not notified.
 - [x] `URL`, `REMOTE`, `S3` and the other external-source privileges, and
       `displaySecretsInShowAndSelect`, are gone from both unless a named need
       is written here
-- [ ] Deployed to production in place, verified with `SHOW GRANTS` and the
-      negative probes; API and ingestion healthy afterwards
+- [x] Deployed to production in place, verified with `SHOW GRANTS` and the
+      negative probes; API and ingestion healthy afterwards (2026-09-29, see
+      "Deploy and verification")
 - [x] `galexie`, `dev_read`, `dict_reader`: measured, and scoped here or moved
       to a follow-up task (`galexie` and `dev_read` scoped here; `dict_reader`
       is removed by 0396's pending rollout)
@@ -172,6 +182,19 @@ CH 26.3 with the new `users.d/` mounted:
   - `system.parts` for the Lambda users
   - `clusterAllReplicas` and `format()` for `dev_read`
 
+## Issues Encountered
+
+- **Pushing hit `ENOSPC` on the laptop.** The pre-push clippy build filled
+  the disk. After space was freed the push ran with hooks on, and
+  `CARGO_TARGET_DIR` pointed at an external disk.
+- **The deploy was run by hand.** The agent's permission policy refuses
+  production deploys, so the operator ran the one `cat >` command from their
+  terminal. The agent did the read-only checks before and after.
+- **Unfiltered probes on the `price_usd_series*` views fail with 241**
+  (`MEMORY_LIMIT_EXCEEDED`), not 497. `SELECT * … LIMIT 1` over a whole
+  series goes over the profile's memory cap, and the access check passes
+  before execution starts. `EXPLAIN` is the probe to use for these views.
+
 ## Design Decisions
 
 ### From Plan
@@ -207,7 +230,9 @@ CH 26.3 with the new `users.d/` mounted:
    - Its step 2 (`--tags app`) is still pending. As of 2026-09-28 `dict.xml`
      is still on the box and still mounted.
 
-## Deploy note
+## Deploy and verification
+
+### How
 
 Deploy `services.xml` alone, in place, the way 0561 did: an
 `ssh … 'cat > /srv/app/crates/db-clickhouse/users.d/services.xml'`. The
@@ -218,3 +243,43 @@ Do not use `--tags app`. Its users.d rsync runs with `delete: true`, so
 once 0396 is on the checkout it deletes `dict.xml`. The compose sync then
 drops the mount, and the container is recreated: not in place, and it
 couples this deploy to 0396's rollout.
+
+### Record, 2026-09-29
+
+- Before: the box's `services.xml` was byte-identical to the repo before this
+  change, and a copy was kept on the box as `/tmp/services.xml.pre-0591`.
+- Deployed 06:33:11 UTC with
+  `git show origin/develop:crates/db-clickhouse/users.d/services.xml | ssh sorban-prod 'cat > /srv/app/crates/db-clickhouse/users.d/services.xml'`.
+- The inode was the same before and after (`16777410`) on the host and in the
+  container, and the container saw the new file (9,793 bytes, 21 `GRANT`
+  lines).
+- `SHOW GRANTS` matched the file for `api_reader`, `ingestion_writer`,
+  `galexie` (none) and `dev_read`.
+- Probes, run as each user through `clickhouse-client --user` inside the
+  container, 13/13 as expected:
+  - allowed: `SELECT` on `default.ledgers` (both Lambda users), on
+    `prices.asset_metadata` (`api_reader`, `dev_read`), and on `system.parts`
+    (`dev_read`)
+  - refused with 497: `url()` (`api_reader`, `ingestion_writer`, `dev_read`),
+    `remote()` (`api_reader`), `INSERT INTO prices.asset_metadata … WHERE 0`
+    (`api_reader`, `ingestion_writer`), any read as `galexie`, and
+    `clusterAllReplicas` (`dev_read`)
+- `api_reader` can read every view in `prices`. `current_price_usd`,
+  `identity_by_contract`, `usd_reference` and `usd_reference_1h` answered.
+  The four `price_usd_series*` views passed `EXPLAIN`.
+- Live traffic over HTTP from 06:33:11 to 06:40:08:
+  - `ingestion_writer`: 1,832 queries, 0 errors
+  - `api_reader`: 20 queries, 0 errors, none of them on `prices.*`, so that
+    path is proven by the probes only
+  - `max(sequence)` in `ledgers` advanced over the check
+
+## Future Work
+
+No new task. What is left:
+
+- `dict_reader` and `dict.xml` go with step 2 of 0396's rollout
+  (`--tags app`), which is still pending.
+- Remove `/tmp/services.xml.pre-0591` on the box once `api_reader` has served
+  a `prices.*` read without error.
+- Tell the `dev_read` cert holders that `clusterAllReplicas` and `format()`
+  are refused now; `system.*` read on the one node returns the same rows.
