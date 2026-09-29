@@ -440,3 +440,15 @@ id` all `db-clickhouse` tests pass and the rows stay. Procedure in
 
 Branch `feat/0538-drop-transactions-id` (on `refactor/0538-ids-tests-file`,
 the two pure test moves the touched files required).
+
+**Challenged before the drop (2026-09-29, read-only).** `id` is the writer's
+`cityhash_102_128(hash)` lower 64 bits for 11,983 of 11,983 sampled rows
+(every one of the 30 partitions, 3,424 fee-bumps: the outer hash); the formula
+never changed since the first CH writer (b9db35487). SQL `cityHash64(hash)`
+gives a different value, so a recompute needs the Rust helper. Nothing depends
+on the column: no view, MV, dictionary, skip index or projection on
+`transactions`; no column in `default` or `prices` names a transaction
+surrogate; `query_log` since 2026-09-01 shows reads only by `dev_read`,
+`dev_shared` (0575 / 0586 fills), `api_reader` (last 2026-09-28 14:45 UTC) and
+one operator query; `prices_*` never read `transactions`. Gaps closed in docs:
+a restore of an older backup and a local ClickHouse keep `id`.
