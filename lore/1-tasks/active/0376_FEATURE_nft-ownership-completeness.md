@@ -59,6 +59,18 @@ rows — 96 accounts, 4 contracts, 0 with both, 0 with neither; token 40370 of
 contract sides linked to `/contracts/…`; token 59104 shows owner `CC3Z…UIOP`
 instead of "Burned".
 
+**Revised after review (2026-09-29, thread 338 A):** the pair of fields was
+replaced by the pool participants' shape — `owner_account`, `from_account`,
+`to_account` carry a `G…` account or a `C…` contract, resolved through both
+tables; the SPA links by `isContractId` (`38f556d2c`). Why: NFT storage has one
+owner column in one surrogate space (like a share-token holder), and a StrKey
+names its own kind; the `caller_account` / `caller_contract` pair mirrors two
+stored columns. Re-verified on production data: list 96 G / 4 C / 0 null,
+detail owner `CC3Z…UIOP`, transfers contract on both sides.
+Open from the review: no CH-gated Rust test covers a contract owner (the local
+ClickHouse has none to read); the API keeps both conventions, and the SPA
+checks a StrKey's kind inline in five places.
+
 ## Context
 
 Spawned from 0359. The NFT owner is a single-slot current value; contract owners
