@@ -89,11 +89,54 @@ check that the previous build's `/assets/<hash>.js` still returns JavaScript.
       browsers revalidate it
 - [ ] Hashed assets are served with a long `immutable` `Cache-Control`
 - [ ] Right after a deploy, the previous build's assets still load
-- [ ] `docs/deployment.md` states what the SPA deploy does to caching
-- [ ] **Docs updated** — `docs/deployment.md` and, if the delivery stack
-      changes, the relevant `docs/architecture/**` file
-- [ ] **API types regenerated** — N/A: nothing under `crates/api/**`,
+- [x] `docs/deployment.md` states what the SPA deploy does to caching
+- [x] **Docs updated** — `docs/deployment.md` (the two-pass sync). The
+      delivery stack does not change, and `docs/architecture/**` does not
+      describe the SPA cache headers, so nothing there changes.
+- [x] **API types regenerated** — N/A: nothing under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**` changes.
+
+The first three criteria are checked after the first deploy with the new
+recipe (`curl -sI` on `/`, on a current asset and on one from the previous
+build).
+
+## Implementation Notes
+
+- `infra/Makefile`, `deploy-production-web`: two `aws s3 sync` passes, then
+  the invalidation.
+  - Pass 1: `assets/*` with `public, max-age=31536000, immutable`, without
+    `--delete`.
+  - Pass 2: everything else with `public, max-age=0, s-maxage=60,
+must-revalidate`, with `--delete`. The CLI excludes filtered paths from
+    deletion, so this pass never removes `assets/*`.
+- `infra/src/__tests__/deploy-web-caching.test.ts` (new, 3 cases): reads the
+  recipe from the Makefile. It checks that there are two syncs with assets
+  first, the headers, no `--delete` on the assets pass, and the invalidation
+  after both. Run against the old recipe, the same parser fails. Infra: 8
+  tests, lint and typecheck green.
+- Measured on 2026-09-29: the bucket's `index.html` has no `CacheControl`
+  metadata, and one build's `assets/` is 49 objects, 1.34 MB.
+
+## Design Decisions
+
+### From Plan
+
+1. **Headers at upload, as the portal does**, rather than a response headers
+   policy in the delivery stack. The rule sits next to the deploy that writes
+   the files, and no CDK deploy is needed.
+
+### Emerged
+
+2. **`s-maxage=60` on `index.html`.** Without it, `max-age=0` would also drop
+   the CloudFront edge TTL to 0 and send every request to S3. With it, the
+   edge keeps the 60 s that [[0106]] chose, and browsers still revalidate.
+   The deploy invalidates `/*` anyway.
+3. **Old assets are never pruned.** At ~1.3 MB per build the bucket grows by
+   megabytes a year. A pruning step would have to know which builds may still
+   be cached. The recipe carries a `ponytail:` note with the upgrade path.
+4. **A text test of the Makefile, not `make -n`.** The recipe resolves the
+   bucket through `aws cloudformation` in a shell substitution, and a text
+   check needs neither AWS nor `make`.
 
 ## Notes
 
