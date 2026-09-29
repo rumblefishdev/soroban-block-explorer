@@ -141,9 +141,12 @@ posts to GitHub — it drafts, a human sends.
 ## Context
 
 @lore/0-session/current-user.md
-@lore/0-session/current-task.md
-@lore/0-session/next-tasks.md
 @lore/CLAUDE.md
+
+The current task is `lore/0-session/current-task.md` (a symlink to the task
+file); read it when the work concerns the task. Tasks ready to pick are listed
+in `lore/0-session/next-tasks.md`. Neither is imported: a task file can run to
+tens of kilobytes, and every session and subagent would load it up front.
 
 <!-- nx configuration start-->
 <!-- Leave the start & end comments to automatically receive updates. -->
