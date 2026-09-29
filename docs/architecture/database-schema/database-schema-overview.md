@@ -684,6 +684,7 @@ CREATE TABLE soroban_pool_event_amounts (
     application_order Int16  CODEC(T64, ZSTD(1)),   -- the transaction's position
     operation_index   UInt16 CODEC(T64, ZSTD(1)),
     event_index       UInt32 CODEC(T64, ZSTD(1)),   -- stellar-rpc event id (ADR 0059)
+    event_kind        UInt8,                        -- 0 trade, 1 deposit, 2 withdrawal
     asset_id          Int64,                        -- the leg, as in liquidity_pools.legs
     amount            Int128                        -- raw token units, SIGNED from the pool's side
 )
@@ -695,9 +696,11 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_in
 - **Grain is (event, leg)**, not (operation, leg): one operation can trade the
   same pool several times (0.74% of router-family pool-operations). A per-field
   Phoenix swap (eight events) is one row group keyed by its opening event.
-- **Signs name the event** as in `pool_operation_amounts`; a trade's input is
-  the trader's gross amount, fee included. `Int128` because a soroban leg may
-  carry 18 decimals; scaled at read by each leg's decimals.
+- **The kind is stored**, not read from the signs: a trade can carry a zero
+  leg (not written). A trade is written as the trader sees it — gross input
+  in, received output out; fees the pool pays to other recipients are not in
+  the row. `Int128` because a soroban leg may carry 18 decimals; scaled at
+  read by each leg's decimals.
 - **Registry-gated.** Rows are written only for pools in `liquidity_pools`
   (kind 1): the pair family names amounts by leg position, and the registry is
   what proves the emitter is a pool. The writer reads the registry per ledger

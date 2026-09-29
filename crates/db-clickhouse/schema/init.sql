@@ -1100,12 +1100,14 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id
 -- them. A per-field Phoenix swap (eight events) is one row group, keyed by its
 -- opening `sender` event.
 --
--- `amount` is SIGNED FROM THE POOL'S SIDE, as in `pool_operation_amounts`:
--- the signs name the event (trade `+/-`, deposit `+/+`, withdrawal `-/-`).
+-- `amount` is SIGNED FROM THE POOL'S SIDE, as in `pool_operation_amounts`,
 -- RAW token units in `Int128` — a soroban leg may carry 18 decimals — scaled
--- at read by each leg's own decimals. A trade's input is the trader's GROSS
--- amount (fee included). `asset_id` = the leg's `liquidity_pools.legs` id (a
--- SAC token keyed onto the classic asset it wraps).
+-- at read by each leg's own decimals. A trade is written as the trader sees
+-- it: gross input in, received output out; fees the pool pays to other
+-- recipients are not in the row. `event_kind` (0 trade, 1 deposit,
+-- 2 withdrawal) is STORED, not read from the signs: a trade can carry a zero
+-- leg, which is not written. `asset_id` = the leg's `liquidity_pools.legs` id
+-- (a SAC token keyed onto the classic asset it wraps).
 --
 -- Written only for events of pools in the registry (kind 1): the pair family
 -- names its amounts by leg position, and the registry is what proves the
@@ -1117,6 +1119,7 @@ CREATE TABLE IF NOT EXISTS soroban_pool_event_amounts (
     application_order Int16  CODEC(T64, ZSTD(1)),
     operation_index   UInt16 CODEC(T64, ZSTD(1)),
     event_index       UInt32 CODEC(T64, ZSTD(1)),
+    event_kind        UInt8,
     asset_id          Int64,
     amount            Int128
 )

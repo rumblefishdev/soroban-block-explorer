@@ -2,7 +2,8 @@
 //! read-only, over a recent window of ledgers.
 //!
 //! 1. **Coverage.** Per family and event kind, the events the decoder turns
-//!    into rows equal an independent SQL count of the same event shapes. A
+//!    into rows equal a separate SQL count of the same event shapes in our
+//!    own `soroban_events` (a check of the decoder, not of the chain). A
 //!    shape the decoder misreads, or a pool whose legs do not resolve, shows
 //!    up as a shortfall.
 //! 2. **Amounts, pair family.** A Soroswap pool keeps its whole fee, so the
@@ -19,17 +20,17 @@ use std::collections::{BTreeMap, HashMap};
 use db_clickhouse::persist::rows::SorobanEventRow;
 use db_clickhouse::persist::stage;
 
+/// Default window: the newest 200k ledgers. `POOL_FROM` / `POOL_TO` (ledger
+/// numbers, exclusive / inclusive) check any other range — the whole history
+/// is checked in slices of a few million ledgers.
 const WINDOW_LEDGERS: i64 = 200_000;
-
-/// (pool, ledger, transaction, operation, event) — one decoded event.
-type EventKey = ([u8; 32], i64, i16, u16, u32);
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn decoded_pool_events_match_the_chain() {
+async fn decoded_pool_events_match_their_events_and_reserves() {
     let user = std::env::var("USER").unwrap_or_default();
     let local = format!(
         "{}/../../infra-hetzner/ca/out/{user}/{user}",
@@ -67,7 +68,7 @@ async fn decoded_pool_events_match_the_chain() {
         .into_iter()
         .filter_map(|(hex_id, raw)| {
             let id: [u8; 32] = hex::decode(hex_id).ok()?.try_into().ok()?;
-            let (contract, _) = stage::soroban_pool_entry(id, vec![]);
+            let (contract, _) = stage::soroban_pool_amounts::soroban_pool_entry(id, vec![]);
             Some((contract, raw))
         })
         .collect();
@@ -88,7 +89,9 @@ async fn decoded_pool_events_match_the_chain() {
         .fetch_one()
         .await
         .unwrap();
-    let from = tip - WINDOW_LEDGERS;
+    let env_ledger = |k: &str| std::env::var(k).ok().map(|v| v.parse::<i64>().expect(k));
+    let tip = env_ledger("POOL_TO").unwrap_or(tip);
+    let from = env_ledger("POOL_FROM").unwrap_or(tip - WINDOW_LEDGERS);
     let ids = pools
         .keys()
         .map(i64::to_string)
@@ -106,44 +109,35 @@ async fn decoded_pool_events_match_the_chain() {
         .fetch_all()
         .await
         .unwrap();
-    let rows = stage::soroban_pool_amount_rows(&events, &pools, &sac);
+    let rows = stage::soroban_pool_amounts::soroban_pool_amount_rows(&events, &pools, &sac);
 
     // 1. Coverage: decoded events per (family, kind) against SQL shape counts.
     let pool_family: HashMap<[u8; 32], &str> = pools
         .iter()
         .map(|(c, p)| (p.pool_id, family.get(c).map(String::as_str).unwrap_or("?")))
         .collect();
-    // Signs per decoded event: (any leg entered, any leg left).
-    let mut signs: HashMap<EventKey, (bool, bool)> = HashMap::new();
+    // One count per decoded event, by its stored kind.
+    let mut seen = std::collections::HashSet::new();
+    let mut ours: BTreeMap<(String, &'static str), u64> = BTreeMap::new();
     for r in &rows {
-        let key = (
+        let event = (
             r.pool_id,
             r.ledger_sequence,
             r.application_order,
             r.operation_index,
             r.event_index,
         );
-        let e = signs.entry(key).or_default();
-        if r.amount > 0 {
-            e.0 = true;
-        } else {
-            e.1 = true;
+        if !seen.insert(event) {
+            continue;
         }
-    }
-    let mut ours: BTreeMap<(String, &'static str), u64> = BTreeMap::new();
-    for ((pool_id, ..), (entered, left)) in signs {
-        let kind = match (entered, left) {
-            (true, true) => "trade",
-            (true, false) => "deposit",
-            _ => "withdraw",
-        };
+        let kind = ["trade", "deposit", "withdraw"][r.event_kind as usize];
         *ours
-            .entry((pool_family[&pool_id].to_string(), kind))
+            .entry((pool_family[&r.pool_id].to_string(), kind))
             .or_default() += 1;
     }
     let expected: Vec<(String, String, u64)> = ch
         .query(&format!(
-            "SELECT multiIf(t0 = 'SoroswapPair', 'pair', t0t = 'string' OR (t0 IN ('swap','provide_liquidity') AND n = 1), 'config', 'router') AS fam, \
+            "SELECT multiIf(t0 = 'SoroswapPair', 'pair', t0t = 'string' OR (n = 1 AND t0 IN ('swap','provide_liquidity','withdraw_liquidity')), 'config', 'router') AS fam, \
                     multiIf(name IN ('trade','swap'), 'trade', \
                             name IN ('deposit_liquidity','deposit','provide_liquidity'), 'deposit', 'withdraw') AS kind, \
                     count() \
@@ -185,7 +179,8 @@ async fn decoded_pool_events_match_the_chain() {
     // Exact for the pair family (it keeps its whole fee); the router and
     // config families send part of the fee elsewhere, so those are reported
     // as exact / within 1% rather than asserted.
-    let pair_pools: Vec<(i64, &stage::SorobanPool)> = pools.iter().map(|(c, p)| (*c, p)).collect();
+    let pair_pools: Vec<(i64, &stage::soroban_pool_amounts::SorobanPool)> =
+        pools.iter().map(|(c, p)| (*c, p)).collect();
     let hexes = pair_pools
         .iter()
         .map(|(_, p)| format!("unhex('{}')", hex::encode(p.pool_id)))

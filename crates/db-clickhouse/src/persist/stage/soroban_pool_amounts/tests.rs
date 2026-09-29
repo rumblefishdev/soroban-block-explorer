@@ -227,3 +227,56 @@ fn only_registered_pools_and_their_own_tokens_are_read() {
     );
     assert!(soroban_pool_amount_rows(&[stranger, foreign], &pools(), &sac()).is_empty());
 }
+
+/// 42 trades on production have a zero `amount_in` or `amount_out`; the zero
+/// leg is not written, and the stored kind keeps the remaining row a trade.
+#[test]
+fn a_trade_with_a_zero_leg_stays_a_trade() {
+    let ev = event(
+        0,
+        &[sym("trade"), addr(PYUSD), addr(USDC_SAC), addr(ROUTER)],
+        vec_of(&[i128v(500), i128v(0), i128v(0)]),
+    );
+    let rows = soroban_pool_amount_rows(&[ev], &pools(), &sac());
+    assert_eq!(legs(&rows), vec![(0, ids::contract_id(PYUSD), 500)]);
+    assert_eq!(rows[0].event_kind, PoolEventKind::Trade as u8);
+}
+
+/// The map-form Phoenix deposit names its amounts `actual_received_{a,b}`
+/// (18 events on production were dropped before this was read).
+#[test]
+fn phoenix_map_deposit_reads_actual_received() {
+    let ev = event(
+        0,
+        &[sym("provide_liquidity")],
+        map_of(&[
+            ("actual_received_a", i128v(11)),
+            ("actual_received_b", i128v(20)),
+            ("sender", addr(ROUTER)),
+            ("token_a", addr(PYUSD)),
+            ("token_b", addr(USDC_SAC)),
+        ]),
+    );
+    let rows = soroban_pool_amount_rows(&[ev], &pools(), &sac());
+    assert_eq!(
+        legs(&rows),
+        vec![(0, ids::contract_id(PYUSD), 11), (0, USDC, 20)]
+    );
+    assert!(
+        rows.iter()
+            .all(|r| r.event_kind == PoolEventKind::Deposit as u8)
+    );
+}
+
+/// A malformed amount event and a per-field event outside a `sender` group
+/// are refused (and logged), not half-written.
+#[test]
+fn unreadable_amount_events_write_nothing() {
+    let short_trade = event(
+        0,
+        &[sym("trade"), addr(PYUSD), addr(USDC_SAC)],
+        vec_of(&[i128v(5)]),
+    );
+    let orphan_field = event(1, &[string("swap"), string("offer_amount")], i128v(5));
+    assert!(soroban_pool_amount_rows(&[short_trade, orphan_field], &pools(), &sac()).is_empty());
+}

@@ -1027,7 +1027,8 @@ range re-parse would fetch ~800 GB to decode ~1 GB.
    11,564 of 11,564 steps).
 
 A pool registered later is covered by the live writer from its first event.
-To fill one pool's history again, re-run the whole pass (it is cheap).
+The subcommand is a one-shot catch-up: it is deleted once it has run on
+production (`crates/backfill-runner/README.md`, clause 4).
 
 ## Event-name backfill (task 0517) — in-DB, per partition
 

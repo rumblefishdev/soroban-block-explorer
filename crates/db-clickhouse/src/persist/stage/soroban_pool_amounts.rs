@@ -57,19 +57,37 @@ pub fn stage_soroban_pool_amounts(
     };
 }
 
+/// What an event did to the pool — stored, not inferred from the signs: a
+/// trade may carry a zero leg (42 on production), which the signs alone
+/// would read as a deposit or a withdrawal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PoolEventKind {
+    Trade = 0,
+    Deposit = 1,
+    Withdrawal = 2,
+}
+
+/// An amount event, with its legs when they could be read.
+type Decoded = (PoolEventKind, Option<Vec<(i64, i128)>>);
+
 /// Amount rows for every pool event in `events`. `events` may span many
 /// contracts and transactions; per-field Phoenix events are grouped within
 /// their operation in `event_index` order.
+///
+/// An event that is not a swap, deposit or withdrawal (`update_reserves`,
+/// `sync`, `claim_fees`, …) is skipped. One that is but cannot be read is
+/// logged at `error!` and skipped — never dropped silently.
 pub fn soroban_pool_amount_rows(
     events: &[SorobanEventRow],
     pools: &HashMap<i64, SorobanPool>,
     sac_classic: &HashMap<i64, i64>,
 ) -> Vec<SorobanPoolEventAmountRow> {
-    let mut pool_events: Vec<&SorobanEventRow> = events
+    let mut pool_events: Vec<(&SorobanEventRow, &SorobanPool)> = events
         .iter()
-        .filter(|e| pools.contains_key(&e.contract_id))
+        .filter_map(|e| Some((e, pools.get(&e.contract_id)?)))
         .collect();
-    pool_events.sort_by_key(|e| {
+    pool_events.sort_by_key(|(e, _)| {
         (
             e.contract_id,
             e.ledger_sequence,
@@ -78,54 +96,54 @@ pub fn soroban_pool_amount_rows(
             e.event_index,
         )
     });
+    let op = |e: &SorobanEventRow| {
+        (
+            e.contract_id,
+            e.ledger_sequence,
+            e.application_order,
+            e.operation_index,
+        )
+    };
 
     let mut out = Vec::new();
     let mut i = 0;
     while i < pool_events.len() {
-        let ev = pool_events[i];
-        let pool = &pools[&ev.contract_id];
+        let (ev, pool) = pool_events[i];
+        i += 1;
         let (Ok(topics), Ok(data)) = (
             serde_json::from_str::<Value>(&ev.topics_xdr),
             serde_json::from_str::<Value>(&ev.data_xdr),
         ) else {
-            i += 1;
+            unreadable(ev, "event JSON does not parse");
             continue;
         };
-        let topics = topics.as_array().cloned().unwrap_or_default();
-        let key = |row: &SorobanEventRow| {
-            (
-                row.contract_id,
-                row.ledger_sequence,
-                row.application_order,
-                row.operation_index,
-            )
-        };
+        let topics = topics.as_array().map(Vec::as_slice).unwrap_or_default();
 
         // Phoenix, older format: one event per field, `("swap", "sender")`
         // opening each group. Gather the group's fields, then decode it once.
-        if let Some(name) = phoenix_field_event_name(&topics)
-            && str_value(&topics[1]) == Some("sender")
-        {
+        if let Some(name) = phoenix_field_event_name(topics) {
+            if topics.get(1).and_then(str_value) != Some("sender") {
+                unreadable(ev, "per-field pool event outside a `sender` group");
+                continue;
+            }
             let mut fields: HashMap<String, Value> = HashMap::new();
-            let mut j = i;
-            while j < pool_events.len() && key(pool_events[j]) == key(ev) {
-                let row = pool_events[j];
-                let Ok(t) = serde_json::from_str::<Value>(&row.topics_xdr) else {
-                    break;
-                };
-                let t = t.as_array().cloned().unwrap_or_default();
-                if phoenix_field_event_name(&t) != Some(name)
-                    || (j > i && str_value(&t[1]) == Some("sender"))
+            while let Some(&(next, _)) = pool_events.get(i) {
+                let t = serde_json::from_str::<Value>(&next.topics_xdr).ok();
+                let t = t.as_ref().and_then(Value::as_array).map(Vec::as_slice);
+                let field = t.and_then(|t| t.get(1)).and_then(str_value);
+                if op(next) != op(ev)
+                    || t.and_then(phoenix_field_event_name) != Some(name)
+                    || field == Some("sender")
                 {
                     break;
                 }
-                if let (Some(field), Ok(v)) = (
-                    str_value(&t[1]),
-                    serde_json::from_str::<Value>(&row.data_xdr),
-                ) {
-                    fields.insert(field.to_string(), v);
+                match (field, serde_json::from_str::<Value>(&next.data_xdr)) {
+                    (Some(f), Ok(v)) => {
+                        fields.insert(f.to_string(), v);
+                    }
+                    _ => unreadable(next, "per-field pool event does not parse"),
                 }
-                j += 1;
+                i += 1;
             }
             push(
                 &mut out,
@@ -133,11 +151,10 @@ pub fn soroban_pool_amount_rows(
                 pool,
                 phoenix_legs(name, &fields, pool, sac_classic),
             );
-            i = j;
             continue;
         }
 
-        let legs = match topic_names(&topics) {
+        let decoded = match topic_names(topics) {
             // Phoenix, newer format: `[swap]` etc. alone, with one map of the
             // same fields. Before the router arms: `withdraw_liquidity` is a
             // name both families use.
@@ -147,42 +164,66 @@ pub fn soroban_pool_amount_rows(
                 phoenix_legs(name, &map_fields(&data), pool, sac_classic)
             }
             // Router family (Aquarius): tokens in the topics, amounts in a vec.
-            (Some("trade"), _) => aquarius_trade(&topics, &data, sac_classic),
-            (Some("deposit_liquidity"), _) => aquarius_liquidity(&topics, &data, 1, sac_classic),
-            (Some("withdraw_liquidity"), _) => aquarius_liquidity(&topics, &data, -1, sac_classic),
+            (Some("trade"), _) => Some((
+                PoolEventKind::Trade,
+                aquarius_trade(topics, &data, sac_classic),
+            )),
+            (Some("deposit_liquidity"), _) => Some((
+                PoolEventKind::Deposit,
+                aquarius_liquidity(topics, &data, 1, sac_classic),
+            )),
+            (Some("withdraw_liquidity"), _) => Some((
+                PoolEventKind::Withdrawal,
+                aquarius_liquidity(topics, &data, -1, sac_classic),
+            )),
             // Pair family (Soroswap): `["SoroswapPair", name]`, amounts by leg position.
-            (Some("SoroswapPair"), Some("swap")) => soroswap_swap(&data, pool),
-            (Some("SoroswapPair"), Some("deposit")) => soroswap_liquidity(&data, pool, 1),
-            (Some("SoroswapPair"), Some("withdraw")) => soroswap_liquidity(&data, pool, -1),
+            (Some("SoroswapPair"), Some("swap")) => {
+                Some((PoolEventKind::Trade, soroswap_swap(&data, pool)))
+            }
+            (Some("SoroswapPair"), Some("deposit")) => {
+                Some((PoolEventKind::Deposit, soroswap_liquidity(&data, pool, 1)))
+            }
+            (Some("SoroswapPair"), Some("withdraw")) => Some((
+                PoolEventKind::Withdrawal,
+                soroswap_liquidity(&data, pool, -1),
+            )),
             _ => None,
         };
-        push(&mut out, ev, pool, legs);
-        i += 1;
+        push(&mut out, ev, pool, decoded);
     }
     out
 }
 
-/// Append one row per leg, after checking every leg belongs to the pool. A
-/// token the pool does not hold means the event is not what its shape claims,
-/// so the whole event is refused with a warning rather than half-written.
+fn unreadable(ev: &SorobanEventRow, why: &str) {
+    tracing::error!(
+        contract_id = ev.contract_id,
+        ledger_sequence = ev.ledger_sequence,
+        application_order = ev.application_order,
+        event_index = ev.event_index,
+        "soroban pool amount event skipped: {why}"
+    );
+}
+
+/// Append one row per leg of an amount event, after checking every leg
+/// belongs to the pool. An event whose legs cannot be read, or that names a
+/// token the pool does not hold, is refused whole and logged.
 fn push(
     out: &mut Vec<SorobanPoolEventAmountRow>,
     ev: &SorobanEventRow,
     pool: &SorobanPool,
-    legs: Option<Vec<(i64, i128)>>,
+    decoded: Option<Decoded>,
 ) {
-    let Some(legs) = legs else { return };
-    if let Some((asset, _)) = legs.iter().find(|(a, _)| !pool.legs.contains(a)) {
-        tracing::warn!(
-            contract_id = ev.contract_id,
-            ledger_sequence = ev.ledger_sequence,
-            event_index = ev.event_index,
-            asset_id = asset,
-            "soroban pool event names a token the pool does not hold: event skipped"
-        );
+    let Some((kind, legs)) = decoded else { return };
+    let Some(legs) = legs else {
+        unreadable(ev, "amount fields missing or malformed");
+        return;
+    };
+    if legs.iter().any(|(a, _)| !pool.legs.contains(a)) {
+        unreadable(ev, "names a token the pool does not hold");
         return;
     }
-    // A leg that nets to zero moved nothing (as in `pool_operation_amounts`).
+    // A leg that moved nothing is not written (as in `pool_operation_amounts`);
+    // the stored kind keeps a one-legged trade a trade.
     out.extend(
         legs.into_iter()
             .filter(|(_, amount)| *amount != 0)
@@ -192,6 +233,7 @@ fn push(
                 application_order: ev.application_order,
                 operation_index: ev.operation_index,
                 event_index: ev.event_index,
+                event_kind: kind as u8,
                 asset_id,
                 amount,
             }),
@@ -270,30 +312,59 @@ fn pair_legs(pool: &SorobanPool, a: i128, b: i128) -> Option<Vec<(i64, i128)>> {
 
 /// Phoenix fields, whichever format carried them. `token_a`/`token_b` are the
 /// pool's legs in order (its `query_config`).
+///
+/// A swap is written as the trader sees it: `offer_amount` in (equal to the
+/// `actual received amount` in 243,411 of 243,411 swaps), `return_amount`
+/// out. The pool also pays a commission and a referral fee out of the output
+/// side (vendor `do_swap`); those leave to other recipients and are not in
+/// the row — as the router family's input is the trader's gross amount.
 fn phoenix_legs(
     name: &str,
     f: &HashMap<String, Value>,
     pool: &SorobanPool,
     sac: &HashMap<i64, i64>,
-) -> Option<Vec<(i64, i128)>> {
+) -> Option<Decoded> {
     let token = |k: &str| Some(contract_token_asset_id(str_value(f.get(k)?)?, sac));
     let amount = |k: &str| int_value(f.get(k)?);
-    match name {
-        "swap" => Some(vec![
-            (token("sell_token")?, amount("offer_amount")?),
-            (token("buy_token")?, -amount("return_amount")?),
-        ]),
-        "provide_liquidity" => Some(vec![
-            (token("token_a")?, amount("token_a-amount")?),
-            (token("token_b")?, amount("token_b-amount")?),
-        ]),
-        "withdraw_liquidity" => pair_legs(
-            pool,
-            -amount("return_amount_a")?,
-            -amount("return_amount_b")?,
+    // The map form names a deposit's amounts `actual_received_{a,b}`.
+    let either = |k: &str, alt: &str| amount(k).or_else(|| amount(alt));
+    Some(match name {
+        "swap" => (
+            PoolEventKind::Trade,
+            (|| {
+                Some(vec![
+                    (token("sell_token")?, amount("offer_amount")?),
+                    (token("buy_token")?, -amount("return_amount")?),
+                ])
+            })(),
         ),
-        _ => None,
-    }
+        "provide_liquidity" => (
+            PoolEventKind::Deposit,
+            (|| {
+                Some(vec![
+                    (
+                        token("token_a")?,
+                        either("token_a-amount", "actual_received_a")?,
+                    ),
+                    (
+                        token("token_b")?,
+                        either("token_b-amount", "actual_received_b")?,
+                    ),
+                ])
+            })(),
+        ),
+        "withdraw_liquidity" => (
+            PoolEventKind::Withdrawal,
+            (|| {
+                pair_legs(
+                    pool,
+                    -amount("return_amount_a")?,
+                    -amount("return_amount_b")?,
+                )
+            })(),
+        ),
+        _ => return None,
+    })
 }
 
 /// `("swap"|"provide_liquidity"|"withdraw_liquidity", field)` as two Strings:
@@ -331,7 +402,7 @@ fn str_value(v: &Value) -> Option<&str> {
 fn int_value(v: &Value) -> Option<i128> {
     match v.get("value")? {
         Value::String(s) => s.parse().ok(),
-        Value::Number(n) => n.as_i64().map(i128::from),
+        Value::Number(n) => n.to_string().parse().ok(),
         _ => None,
     }
 }

@@ -129,7 +129,9 @@ pub async fn persist_ledger_clickhouse(
         // surrogate; re-map them onto the wrapped classic/native asset id below.
         fetch_sac_classic_map(
             client,
+            // Pool events key their tokens onto assets too (task 0374, W1).
             sac_classic_map_needed(soroban_token_balances, events, true)
+                || has_contract_events(events)
         ),
         // Task 0374 (W1): the registry keys a pool's events onto its legs.
         fetch_soroban_pools(client, has_contract_events(events)),
@@ -174,7 +176,11 @@ pub async fn persist_ledger_clickhouse(
         prior_contract_rows: &prior_contract_rows,
         asset_transfers,
     })?;
-    stage::stage_soroban_pool_amounts(&mut staged, &soroban_pools, &sac_classic);
+    stage::soroban_pool_amounts::stage_soroban_pool_amounts(
+        &mut staged,
+        &soroban_pools,
+        &sac_classic,
+    );
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
         pw.abort().await;
@@ -301,8 +307,6 @@ pub fn sac_classic_map_needed(
 ) -> bool {
     (writes_balances && !soroban_token_balances.is_empty())
         || stage::registers_soroban_pools(events)
-        // A pool event keys its tokens onto their assets (task 0374, W1).
-        || has_contract_events(events)
 }
 
 /// Whether the ledger carries any contract event — the gate for reading the
@@ -319,12 +323,12 @@ struct SorobanPoolLegsRow {
 }
 
 /// Every registered soroban pool (`liquidity_pools`, kind 1) with its legs,
-/// keyed by contract surrogate — what [`stage::stage_soroban_pool_amounts`]
+/// keyed by contract surrogate — what [`stage::soroban_pool_amounts::stage_soroban_pool_amounts`]
 /// needs to key a pool's events onto its legs. ~800 rows.
 pub async fn fetch_soroban_pools(
     client: &Client,
     needed: bool,
-) -> Result<HashMap<i64, stage::SorobanPool>, clickhouse::error::Error> {
+) -> Result<HashMap<i64, stage::soroban_pool_amounts::SorobanPool>, clickhouse::error::Error> {
     if !needed {
         return Ok(HashMap::new());
     }
@@ -338,9 +342,13 @@ pub async fn fetch_soroban_pools(
         .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|r| {
-            let pool_id: [u8; 32] = hex::decode(&r.pool_hex).ok()?.try_into().ok()?;
-            Some(stage::soroban_pool_entry(pool_id, r.legs))
+        .map(|r| {
+            // `FixedString(32)` hex: always 64 hex digits.
+            let pool_id: [u8; 32] = hex::decode(&r.pool_hex)
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .expect("liquidity_pools.pool_id is FixedString(32)");
+            stage::soroban_pool_amounts::soroban_pool_entry(pool_id, r.legs)
         })
         .collect())
 }

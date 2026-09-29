@@ -38,6 +38,7 @@ fn staged(ledger: i64) -> StagedLedger {
             application_order: 2,
             operation_index: 0,
             event_index: 7,
+            event_kind: 0,
             asset_id: 42,
             amount: -BIG,
         }],

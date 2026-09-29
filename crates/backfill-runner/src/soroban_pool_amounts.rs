@@ -3,12 +3,14 @@
 //!
 //! No archive re-parse: the events are stored decoded, and the live writer
 //! derives its rows from exactly those staged rows through the same decoder
-//! ([`stage::soroban_pool_amount_rows`]), so a backfilled row is byte-identical
+//! ([`stage::soroban_pool_amounts::soroban_pool_amount_rows`]), so a backfilled row is byte-identical
 //! to the one the live writer would have produced. Re-running is harmless
 //! (ReplacingMergeTree keyed by the event).
 //!
 //! Run AFTER the writer is deployed: events arriving meanwhile are covered by
 //! the writer, events before it by this pass, and the overlap collapses.
+//! A one-shot catch-up: delete it once it has run on production (README
+//! clause 4) — the live writer owns the table from then on.
 
 use std::collections::HashMap;
 
@@ -43,6 +45,7 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<Stats, BackfillError>
     };
 
     for (contract_id, pool) in &pools {
+        let rows_before = stats.rows;
         let one = HashMap::from([(*contract_id, pool.clone())]);
         // Key order of the table itself, so the read streams in order; `LIMIT 1
         // BY` drops unmerged ReplacingMergeTree duplicates of an event.
@@ -66,7 +69,8 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<Stats, BackfillError>
                 (Some(_), None) => false,
             };
             if ledger_ends && (next.is_none() || buf.len() >= CHUNK_EVENTS) {
-                let rows = stage::soroban_pool_amount_rows(&buf, &one, &sac_classic);
+                let rows =
+                    stage::soroban_pool_amounts::soroban_pool_amount_rows(&buf, &one, &sac_classic);
                 stats.events_read += buf.len() as u64;
                 stats.rows += rows.len() as u64;
                 if !dry_run {
@@ -81,7 +85,7 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<Stats, BackfillError>
         }
         tracing::info!(
             contract_id,
-            rows = stats.rows,
+            rows = stats.rows - rows_before,
             "soroban pool amounts: pool done"
         );
     }

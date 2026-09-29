@@ -179,23 +179,22 @@ impl PartitionWriterHandle {
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
+            // Task 0374 (W1) — pool events need the registry (for their legs)
+            // and the SAC map (for their tokens), when this write persists them.
+            let pool_events = self
+                .only
+                .as_ref()
+                .is_none_or(|t| t.contains("soroban_pool_event_amounts"))
+                && db_clickhouse::persist::has_contract_events(&parsed.events);
             let needed = db_clickhouse::persist::sac_classic_map_needed(
                 &parsed.soroban_token_balances,
                 &parsed.events,
                 writes_balances,
-            );
+            ) || pool_events;
             let sac_classic =
                 db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
-            // Task 0374 (W1) — the registry keys each pool event onto its legs.
-            let writes_pool_amounts = self
-                .only
-                .as_ref()
-                .is_none_or(|t| t.contains("soroban_pool_event_amounts"));
-            let soroban_pools = db_clickhouse::persist::fetch_soroban_pools(
-                pw.client(),
-                writes_pool_amounts && db_clickhouse::persist::has_contract_events(&parsed.events),
-            )
-            .await?;
+            let soroban_pools =
+                db_clickhouse::persist::fetch_soroban_pools(pw.client(), pool_events).await?;
             // Task 0220 — switch to the `_with_sac_overrides` entry
             // point so the CH writer flips `is_sac=true,
             // contract_type=Token` on pre-existing SAC skeleton
@@ -256,7 +255,7 @@ impl PartitionWriterHandle {
                     asset_transfers: &parsed.asset_transfers,
                 },
             )?;
-            db_clickhouse::persist::stage::stage_soroban_pool_amounts(
+            db_clickhouse::persist::stage::soroban_pool_amounts::stage_soroban_pool_amounts(
                 &mut staged,
                 &soroban_pools,
                 &sac_classic,

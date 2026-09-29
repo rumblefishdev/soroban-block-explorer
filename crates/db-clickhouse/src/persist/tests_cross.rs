@@ -380,6 +380,7 @@ fn column_order_soroban_pool_event_amounts() {
             "application_order",
             "operation_index",
             "event_index",
+            "event_kind",
             "asset_id",
             "amount",
         ],
