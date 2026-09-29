@@ -1,10 +1,11 @@
-//! Deterministic surrogate-ID derivation for the three high-cardinality
-//! FK hubs in the CH schema: `accounts`, `soroban_contracts`,
-//! `transactions`.
+//! Deterministic surrogate-ID derivation for the two high-cardinality
+//! FK hubs in the CH schema: `accounts` and `soroban_contracts`.
+//! Transactions have none: every table locates one by `(ledger_sequence,
+//! application_order)` (ADR 0059).
 //!
-//! ## Why surrogate IDs on these three (and not elsewhere)
+//! ## Why surrogate IDs on these two (and not elsewhere)
 //!
-//! These three tables are each referenced by 6–8 downstream tables.
+//! These two tables are each referenced by 6–8 downstream tables.
 //! At Stellar mainnet scale they accumulate tens of millions of unique
 //! values. Empirical measurement on the 10k-ledger smoke
 //! (62016000–62025999) showed a natural-key-everywhere variant added
@@ -115,14 +116,6 @@ pub fn contract_payload(strkey: &str) -> Option<[u8; 32]> {
 #[inline]
 pub fn address_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
-}
-
-/// `transactions.id` from the 32-byte tx hash bytes. No other table
-/// references it: each locates a transaction by `(ledger_sequence,
-/// application_order)` (ADR 0059, task 0538).
-#[inline]
-pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
-    hash64(hash_bytes)
 }
 
 /// `assets.id` / `balances.asset_id` surrogate (task 0331). Takes the SURROGATE

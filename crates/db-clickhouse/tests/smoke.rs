@@ -165,10 +165,9 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- transactions (append-only fact, partitioned) -----
     client
         .query(
-            "INSERT INTO transactions (id, hash, ledger_sequence, application_order, source_id, fee_charged, inner_tx_hash, successful, operation_count, has_soroban, parse_error) \
-             VALUES (?, unhex('0000000000000000000000000000000000000000000000000000000000000003'), ?, 1, ?, 100, NULL, true, 1, false, false)",
+            "INSERT INTO transactions (hash, ledger_sequence, application_order, source_id, fee_charged, inner_tx_hash, successful, operation_count, has_soroban, parse_error) \
+             VALUES (unhex('0000000000000000000000000000000000000000000000000000000000000003'), ?, 1, ?, 100, NULL, true, 1, false, false)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()

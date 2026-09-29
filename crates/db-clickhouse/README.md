@@ -251,15 +251,18 @@ applies, and the deterministic ID derivation rule — see
 
 ### Surrogate-id hubs (hybrid design)
 
-**Three** tables carry surrogate `id Int64` columns, derived
+**Two** hub tables carry surrogate `id Int64` columns, derived
 deterministically via `cityhash64(natural_key)` in
 [`crates/db-clickhouse/src/persist/ids.rs`](src/persist/ids.rs):
 
 - `accounts.id` ← `cityhash64(account_id StrKey)`
 - `soroban_contracts.id` ← `cityhash64(contract_id StrKey)`
-- `transactions.id` ← `cityhash64(hash bytes)`
 
-These three are the **central FK hubs** — referenced by 6–8
+`transactions.id` (`cityhash64(hash bytes)`) was the third until task 0538
+dropped it: every table locates a transaction by `(ledger_sequence,
+application_order)` (ADR 0059).
+
+These are the **central FK hubs** — referenced by 6–8
 downstream tables each, with tens of millions of unique values at
 full mainnet scale. Empirical measurement on the 10 k-ledger smoke
 (62016000–62025999) showed a fully-natural-key variant added ~500
@@ -267,7 +270,7 @@ MB on-disk vs the surrogate-id baseline, projected ~550 GB at 11 M
 full scale. Plus +10 ms write/ledger from `LowCardinality(String)`
 dictionary build on the high-cardinality FK columns.
 
-All FK columns referencing these three tables are `Int64`
+All FK columns referencing these two tables are `Int64`
 (`transactions.source_id`, `transaction_operations.contract_id`,
 `soroban_events.contract_id`, etc.) — cheap integer joins, ~7×
 smaller on-disk than 56-byte StrKey FK columns.
