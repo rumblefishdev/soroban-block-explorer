@@ -59,7 +59,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-secretsmanager = "1"
 aws-sdk-sqs = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 # Error handling
