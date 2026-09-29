@@ -2,7 +2,7 @@
 id: '0510'
 title: 'REFACTOR: the auth path is absent from the API schema, so the frontend hand-mirrors its type'
 type: REFACTOR
-status: done
+status: completed
 related_adr: []
 related_tasks: ['0455']
 tags: ['api', 'frontend', 'openapi', 'effort-small', 'priority-medium']
@@ -35,7 +35,7 @@ history:
       strengthened, a test that the armed app serves the advertised path, and
       the request interceptor skips the mint itself.
   - date: '2026-09-28'
-    status: done
+    status: completed
     who: karolkow
     note: >
       Closed in the release sweep of production-2026.09.28-1: every lore-0510
