@@ -117,14 +117,6 @@ pub fn address_id(strkey: &str) -> i64 {
     hash64(strkey.as_bytes())
 }
 
-/// `transactions.id` from the 32-byte tx hash bytes. No other table
-/// references it: each locates a transaction by `(ledger_sequence,
-/// application_order)` (ADR 0059, task 0538).
-#[inline]
-pub fn transaction_id(hash_bytes: &[u8; 32]) -> i64 {
-    hash64(hash_bytes)
-}
-
 /// `assets.id` / `balances.asset_id` surrogate (task 0331). Takes the SURROGATE
 /// FKs (`issuer_id`, `contract_id` — both already `cityhash64` of their StrKey)
 /// that `AssetRow` carries. By `assets.asset_type` (project enum: 0 native,

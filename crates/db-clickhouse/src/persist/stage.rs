@@ -1035,7 +1035,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let mut app_order_by_hash: HashMap<String, i16> = HashMap::with_capacity(transactions.len());
     for (idx, tx) in transactions.iter().enumerate() {
         let hash = decode_hash(&tx.hash, "tx.hash")?;
-        let tx_id = ids::transaction_id(&hash);
 
         let inner_tx_hash = match tx.inner_tx_hash.as_deref() {
             Some(h) => Some(decode_hash(h, "inner_tx_hash")?),
@@ -1047,7 +1046,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let op_count = op_count_by_tx.get(tx.hash.as_str()).copied().unwrap_or(0);
 
         out.transaction_rows.push(TransactionRow {
-            id: tx_id,
             hash,
             ledger_sequence: ledger_sequence_i64,
             application_order: app_order,

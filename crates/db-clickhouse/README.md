@@ -251,15 +251,18 @@ applies, and the deterministic ID derivation rule — see
 
 ### Surrogate-id hubs (hybrid design)
 
-**Three** tables carry surrogate `id Int64` columns, derived
+**Two** hub tables carry surrogate `id Int64` columns, derived
 deterministically via `cityhash64(natural_key)` in
 [`crates/db-clickhouse/src/persist/ids.rs`](src/persist/ids.rs):
 
 - `accounts.id` ← `cityhash64(account_id StrKey)`
 - `soroban_contracts.id` ← `cityhash64(contract_id StrKey)`
-- `transactions.id` ← `cityhash64(hash bytes)`
 
-These three are the **central FK hubs** — referenced by 6–8
+`transactions.id` (`cityhash64(hash bytes)`) was the third until task 0538
+dropped it: every table locates a transaction by `(ledger_sequence,
+application_order)` (ADR 0059).
+
+These are the **central FK hubs** — referenced by 6–8
 downstream tables each, with tens of millions of unique values at
 full mainnet scale. Empirical measurement on the 10 k-ledger smoke
 (62016000–62025999) showed a fully-natural-key variant added ~500

@@ -493,6 +493,27 @@ Frontend **content** is separate: `deploy-production-web`
   A drop before this deploy stops ingest on the next ledger with an NFT change:
   the earlier writer still inserts into both.
 
+- **`transactions.id` dropped (task 0538, step 7).** The indexer no longer
+  writes the hash surrogate; no table or reader references it. `id` is not in
+  the sort key, so no rebuild: give it a `DEFAULT` first (metadata only, no
+  mutation), so the new build — which does not name it — passes the client's
+  `DESCRIBE` check while the running build still writes it:
+
+  ```sql
+  ALTER TABLE transactions MODIFY COLUMN id Int64 DEFAULT 0;
+  ```
+
+  Then deploy Compute; then, once `system.query_log` shows no insert naming
+  `id` (the old build's containers are gone) and the prices-api check is
+  recorded in task 0538, drop it:
+
+  ```sql
+  ALTER TABLE transactions DROP COLUMN id;
+  ```
+
+  A drop before this deploy stops ingest on every ledger: the earlier writer
+  still inserts `id`. Deploying before the `DEFAULT` does the same.
+
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
   instead of `transaction_id` in `transaction_participants` and

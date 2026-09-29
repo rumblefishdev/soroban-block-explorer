@@ -6,8 +6,8 @@
 //! ledger detail pages. CH does not store `transactions.created_at`, so
 //! the ledger `closed_at` value is joined in and used as the API timestamp.
 //! For embedded transactions, `TsIdCursor.id` carries `application_order`
-//! on the CH path: unlike PostgreSQL's `BIGSERIAL`, CH `transactions.id`
-//! is a deterministic hash surrogate and must not define in-ledger order.
+//! on the CH path — the transaction's position, which is the in-ledger
+//! order (ADR 0059).
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -166,9 +166,8 @@ impl LedgerTxPageChRow {
     /// Merge this page row with its pre-fetched aggregates into `LedgerTxRow`.
     ///
     /// `LedgerTxRow.id` carries `application_order` on the CH path (the
-    /// `TsIdCursor.id` tie-break for embedded-tx pagination): CH
-    /// `transactions.id` is a deterministic hash surrogate and must not
-    /// define in-ledger order, so the cursor keys on `application_order`.
+    /// `TsIdCursor.id` tie-break for embedded-tx pagination): the
+    /// transaction's position is the in-ledger order (ADR 0059).
     fn into_ledger_tx_row(
         self,
         agg: ch::TxListAggregates,

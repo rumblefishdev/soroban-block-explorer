@@ -6,10 +6,8 @@ use super::*;
 fn determinism() {
     let g = "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV";
     let c = "CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV";
-    let h = [7u8; 32];
     assert_eq!(account_id(g), account_id(g));
     assert_eq!(contract_id(c), contract_id(c));
-    assert_eq!(transaction_id(&h), transaction_id(&h));
 }
 
 /// Different inputs ⇒ different outputs (single-byte sensitivity).
@@ -17,7 +15,6 @@ fn determinism() {
 fn distinct_inputs_yield_distinct_ids() {
     assert_ne!(account_id("GA"), account_id("GB"));
     assert_ne!(contract_id("CA"), contract_id("CB"));
-    assert_ne!(transaction_id(&[0u8; 32]), transaction_id(&[1u8; 32]));
 }
 
 /// Cross-table FK consistency — every account `_id` FK across the

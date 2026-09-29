@@ -405,7 +405,10 @@ Purpose:
 Design notes:
 
 - `id` provides an internal `BIGSERIAL` surrogate key referenced by child tables;
-  the composite `(id, created_at)` PK lets child tables cascade via the partitioning key
+  the composite `(id, created_at)` PK lets child tables cascade via the partitioning key.
+  ClickHouse has no `id`: every table locates a transaction by
+  `(ledger_sequence, application_order)`, and task 0538 dropped the hash surrogate
+  ([ADR 0059](../../../lore/2-adrs/0059_canonical-event-identity-and-location-names.md))
 - `hash` is the main public lookup key for transaction detail routes; binary storage
   per [ADR 0024](../../../lore/2-adrs/0024_hashes-bytea-binary-storage.md)
 - `source_id` is the `accounts.id` surrogate

@@ -893,12 +893,10 @@ ORDER BY (pool_id, account_id);
 -- Append-only fact tables (ReplacingMergeTree, partitioned)
 ----------------------------------------------------------------------
 
--- transactions: surrogate `id Int64`, legacy — no table references it since
--- task 0424 retired `nft_ownership`, the last one; every table joins by
--- `(ledger_sequence, application_order)` (ADR 0059, task 0538). ORDER BY
--- (ledger_sequence, application_order) for time-series scans.
+-- transactions: located by `(ledger_sequence, application_order)`, the key
+-- every other table joins on (ADR 0059). The hash surrogate `id` was dropped
+-- by task 0538 once no table referenced it.
 CREATE TABLE IF NOT EXISTS transactions (
-    id                Int64,
     hash              FixedString(32),
     ledger_sequence   Int64,
     application_order Int16,
