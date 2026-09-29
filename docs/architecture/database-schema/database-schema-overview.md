@@ -254,7 +254,8 @@ Derived explorer entities:
   a classic pool's row already moves with every trade and has no row here.
 - `pool_holders` (+ refreshable MV `pool_holders_mv`, every 5 minutes) — each
   Soroban pool's count of share-token holders with a positive balance in
-  `balances`, the pool list's `participant_count`. `balances` is sorted by
+  `balances`, the pool's own contract (its locked minimum liquidity) left out,
+  the pool list's `participant_count`. `balances` is sorted by
   holder, so counting per list page would scan it whole; one recompute of all
   pools reads ~105M rows in ~250 ms (2026-09-29). A pool with no share token
   (concentrated) has no row, and the list reads `null`, not 0.

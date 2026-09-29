@@ -885,7 +885,10 @@ GROUP BY s.pool_id;
 -- ~250 ms. Every 5 minutes: holders change slowly, and the pool page's own
 -- count and list are read live.
 -- A pool without a share token (concentrated) is absent: its providers are
--- positions, not holders, and the list shows "—" rather than 0.
+-- positions, not holders, and the list shows "—" rather than 0. The pool's own
+-- contract is not counted: it holds the minimum liquidity locked at its first
+-- deposit, not a provider's position (242 pools, 33 of them holding nothing
+-- else; production 2026-09-29).
 CREATE TABLE IF NOT EXISTS pool_holders (
     pool_id FixedString(32),
     holders UInt64
@@ -893,18 +896,25 @@ CREATE TABLE IF NOT EXISTS pool_holders (
 ENGINE = MergeTree
 ORDER BY pool_id;
 
--- Sources (`pool_instance_state`, `balances`) are defined above and MUST exist
--- before this CREATE.
+-- Sources (`pool_instance_state`, `soroban_contracts`, `balances`) are defined
+-- above and MUST exist before this CREATE.
 CREATE MATERIALIZED VIEW IF NOT EXISTS pool_holders_mv
 REFRESH EVERY 5 MINUTE
 TO pool_holders AS
-SELECT i.pool_id AS pool_id, countIf(h.amt > 0) AS holders
+SELECT i.pool_id AS pool_id, countIf(h.amt > 0 AND h.holder_id != ifNull(c.id, 0)) AS holders
 FROM (
     SELECT pool_id, argMax(share_token_id, derived_at_ledger) AS token
     FROM pool_instance_state
     GROUP BY pool_id
     HAVING token != 0
 ) AS i
+-- The pool's own contract surrogate: its `C…` id decodes to the pool id.
+LEFT JOIN (
+    SELECT substring(base32Decode(contract_id), 2, 32) AS pool_id, any(id) AS id
+    FROM soroban_contracts
+    WHERE startsWith(contract_id, 'C')
+    GROUP BY pool_id
+) AS c ON c.pool_id = i.pool_id
 LEFT JOIN (
     SELECT asset_id, holder_id, argMax(amount, last_updated_ledger) AS amt
     FROM balances

@@ -21,6 +21,7 @@ const DB: &str = "api_test_0374_pool_activity";
 const CLASSIC: &str = "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1";
 const SOROBAN_SPOOFED: &str = "5151515151515151515151515151515151515151515151515151515151515151";
 const SOROBAN_ACTIVE: &str = "5252525252525252525252525252525252525252525252525252525252525252";
+const SOROBAN_ACTIVE_CONTRACT: &str = "CBJFEUSSKJJFEUSSKJJFEUSSKJJFEUSSKJJFEUSSKJJFEUSSKJJFFBW5";
 
 async fn seed(ch: &clickhouse::Client) {
     for sql in [
@@ -40,10 +41,16 @@ async fn seed(ch: &clickhouse::Client) {
              (unhex('{SOROBAN_ACTIVE}'), 8, 77, 30, 110)"
         ),
         // Token 77: two holders, one emptied (not a provider), one whose
-        // older version was non-zero and newest is zero.
+        // older version was non-zero and newest is zero, and the pool's own
+        // contract (5) with its locked minimum liquidity — not a provider.
         "INSERT INTO balances (holder_id, asset_id, amount, last_updated_ledger) VALUES \
-             (1, 77, 10, 5), (2, 77, 20, 5), (3, 77, 0, 5), (4, 77, 9, 5), (4, 77, 0, 6)"
+             (1, 77, 10, 5), (2, 77, 20, 5), (3, 77, 0, 5), (4, 77, 9, 5), (4, 77, 0, 6), \
+             (5, 77, 1000, 5)"
             .to_string(),
+        format!(
+            "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
+             (5, '{SOROBAN_ACTIVE_CONTRACT}', false)"
+        ),
         // The spoofed pool's own plane last moved at 150; a FOREIGN plane (666)
         // publishes rows under its id at 900. The active pool moved at 300.
         format!(
