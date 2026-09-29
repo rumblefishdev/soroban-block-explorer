@@ -82,20 +82,49 @@ that GA4 still sends a `page_view` after "Accept All".
 
 ## Acceptance Criteria
 
-- [ ] `web/index.html` pushes `gtm.blocklist` with `customScripts` before
+- [x] `web/index.html` pushes `gtm.blocklist` with `customScripts` before
       the GTM snippet
-- [ ] A test fails if the blocklist is removed or moved after GTM
-- [ ] GA4 still works after consent (the Google tag is not blocked)
-- [ ] **Docs updated** — N/A: `docs/architecture/**` does not describe the
+- [x] A test fails if the blocklist is removed or moved after GTM. Checked
+      by mutation: removing the push fails the new case.
+- [x] GA4 still works after consent (the Google tag is not blocked). On a
+      `vite preview` build: a fresh visitor gets no cookies and one `G100`
+      ping. After "Accept All" and a reload, `page_view` and `scroll` go out
+      with `gcs=G111`.
+- [x] **Docs updated** — N/A: `docs/architecture/**` does not describe the
       third-party tags.
-- [ ] **API types regenerated** — N/A: nothing under `crates/api/**`,
+- [x] **API types regenerated** — N/A: nothing under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**` is touched.
+
+## Implementation Notes
+
+- `web/index.html`: one `dataLayer.push({ 'gtm.blocklist': ['customScripts'] })`
+  in the Consent Mode script, which already runs before the GTM snippet.
+- `web/src/__tests__/consent-mode.test.ts`: a new case asserts that the
+  blocklist script comes before the GTM loader and that the entry lands in
+  `dataLayer`. `consentCalls` reads entries with `Array.from`, because the
+  blocklist is a plain object and not `arguments`.
+- Web: lint (0 errors, 4 older warnings), typecheck, 410 tests.
+- The portal carries the same line and test in stellar-prices-api #362.
+- Not verified: that GTM actually refuses a Custom HTML tag. That would need a
+  tag published in the live container. It rests on Google's documented
+  `gtm.blocklist` behaviour.
+
+## Design Decisions
+
+### From Plan
+
+1. **`customScripts` only.** It covers Custom HTML tags and Custom
+   JavaScript variables, which are the two ways to run arbitrary code from
+   the container.
+
+### Emerged
+
+2. **No `nonGoogleScripts` for now.** The container has no custom templates
+   today, and a template runs only within the permissions it declares.
+   Adding it later is one word, if templates ever appear.
 
 ## Notes
 
-- Also decide whether to add `nonGoogleScripts`. It blocks tags that inject
-  non-Google scripts, including custom templates that do so. The container
-  has none today.
 - Outside the repo: keep the number of users with Publish permission on the
   container small, and require 2-step verification for publishing (GTM
   container settings).
