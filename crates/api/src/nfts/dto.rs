@@ -42,8 +42,12 @@ pub struct NftItem {
     pub name: Option<String>,
     pub media_url: Option<String>,
     pub minted_at_ledger: Option<i64>,
-    /// Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13).
+    /// Current owner G-StrKey when an account holds the NFT.
     pub owner_account: Option<String>,
+    /// Current owner C-StrKey when a contract holds the NFT. Exactly one of
+    /// `owner_account` / `owner_contract` is set; both are `null` for a burned
+    /// NFT (ADR 0037 §13).
+    pub owner_contract: Option<String>,
     /// Most recent ledger where ownership state changed
     /// (`nfts.current_owner_ledger`).
     pub last_seen_ledger: Option<i64>,
@@ -78,17 +82,24 @@ pub struct NftTransferItem {
     pub event_type_name: Option<String>,
     /// Raw NftEventType discriminant (ADR 0031).
     pub event_type: i16,
-    /// Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the
-    /// per-NFT ownership timeline (DESC window — older event sits at the
-    /// FOLLOWING window position). `null` on the mint row only.
+    /// Previous-owner G-StrKey, when an account held it, reconstructed via
+    /// `LEAD(owner_id)` over the per-NFT ownership timeline (DESC window —
+    /// older event sits at the FOLLOWING window position). With
+    /// `from_contract`, both `null` on the mint row only.
     ///
     /// Page boundaries are handled implicitly by the `limit + 1` peek
     /// fetch: the peek row participates in the window-function input, so
     /// the last *kept* row's `from_account` reads the peek's owner before
     /// `finalize_page` drops the peek. No client-side stitching needed.
     pub from_account: Option<String>,
-    /// New owner G-StrKey. `null` on burn.
+    /// Previous-owner C-StrKey when a contract held it; exactly one of the
+    /// `from_*` pair is set except on the mint row.
+    pub from_contract: Option<String>,
+    /// New owner G-StrKey when an account receives it.
     pub to_account: Option<String>,
+    /// New owner C-StrKey when a contract receives it; exactly one of the
+    /// `to_*` pair is set except on a burn.
+    pub to_contract: Option<String>,
     pub created_at: DateTime<Utc>,
     /// Where the change happened — its source event's location (task 0424,
     /// ADR 0059): the transaction's position in the ledger, the operation

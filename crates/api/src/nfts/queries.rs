@@ -47,11 +47,13 @@
 //!   whole-dimension JOIN — a hash JOIN reads the entire right table (~23M /
 //!   ~25M rows), which a `WHERE id IN (lit)` bloom seek (`idx_acc_id`) avoids
 //!   (task 0355 / fix c468c356).
-//! - **`accounts` reverse lookup (owner_id → G-StrKey)** uses that bloom seek:
-//!   the list / transfers paths via a page-scoped restricted CTE (`WHERE id IN
-//!   (page ids) GROUP BY id`, no `FINAL`); the single-row detail resolves its
-//!   one owner id in Rust via [`resolve_accounts`] (the shared `WHERE id IN`
-//!   resolver), and echoes the contract StrKey straight from the request input.
+//! - **Owner reverse lookup (owner_id → StrKey)** uses that bloom seek, in
+//!   `accounts` AND `soroban_contracts`: an owner is an account or a contract,
+//!   both hashed into one surrogate space (task 0376). The list / transfers
+//!   paths use page-scoped restricted CTEs (`WHERE id IN (page ids) GROUP BY
+//!   id`, no `FINAL`); the single-row detail resolves its one owner id in Rust
+//!   via [`resolve_accounts`] / [`resolve_contracts`] (the shared `WHERE id IN`
+//!   resolvers), and echoes the NFT's contract StrKey from the request input.
 //! - **`nullIf(...)`** maps a JOIN miss / sentinel to `None`. We do NOT use
 //!   `SETTINGS join_use_nulls = 1` — `api_reader` runs `readonly = 1` and
 //!   rejects per-query setting overrides.
@@ -77,7 +79,7 @@
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::{millis_to_utc, resolve_accounts};
+use crate::common::ch::{millis_to_utc, resolve_accounts, resolve_contracts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::{NftItem, NftListCursor, NftTransferCursor, NftTransferItem};
@@ -104,6 +106,7 @@ pub struct NftRow {
     pub media_url: Option<String>,
     pub minted_at_ledger: Option<i64>,
     pub owner_account: Option<String>,
+    pub owner_contract: Option<String>,
     pub last_seen_ledger: Option<i64>,
     /// Internal `soroban_contracts.id` (CH `Int64`) surrogate — cursor
     /// tiebreak only, never serialized.
@@ -143,6 +146,7 @@ struct NftListChRow {
     media_url: Option<String>,
     minted_at_ledger: Option<i64>,
     owner_account: Option<String>,
+    owner_contract: Option<String>,
     last_seen_ledger: Option<i64>,
     contract_surrogate: i64,
 }
@@ -156,6 +160,7 @@ fn map_list_row(r: NftListChRow) -> NftRow {
         media_url: r.media_url,
         minted_at_ledger: r.minted_at_ledger,
         owner_account: r.owner_account,
+        owner_contract: r.owner_contract,
         last_seen_ledger: r.last_seen_ledger,
         contract_surrogate: r.contract_surrogate,
     }
@@ -247,6 +252,12 @@ pub async fn fetch_list(
              WHERE id IN (SELECT current_owner_id FROM page WHERE current_owner_id IS NOT NULL) \
              GROUP BY id \
          ), \
+         own_c AS ( \
+             SELECT id, any(contract_id) AS contract_id \
+             FROM soroban_contracts \
+             WHERE id IN (SELECT current_owner_id FROM page WHERE current_owner_id IS NOT NULL) \
+             GROUP BY id \
+         ), \
          sc AS ( \
              SELECT id, any(contract_id) AS contract_id \
              FROM soroban_contracts \
@@ -267,12 +278,14 @@ pub async fn fetch_list(
              nullIf(p.e_media_url, '')         AS media_url, \
              p.minted_at_ledger                AS minted_at_ledger, \
              nullIf(own.account_id, '')        AS owner_account, \
+             nullIf(own_c.contract_id, '')     AS owner_contract, \
              nullIf(p.current_owner_ledger, 0) AS last_seen_ledger, \
              p.contract_surrogate              AS contract_surrogate \
          FROM page p \
          INNER JOIN sc  ON sc.id  = p.contract_surrogate \
          LEFT JOIN  scm ON scm.contract_id = sc.contract_id \
          LEFT JOIN  own ON own.id = p.current_owner_id \
+         LEFT JOIN  own_c ON own_c.id = p.current_owner_id \
          ORDER BY ifNull(p.minted_at_ledger, 0) {order}, p.contract_surrogate {order}, p.token_id {order}"
     );
 
@@ -305,8 +318,8 @@ pub async fn fetch_list(
 
 /// SELECT column order MUST match [`fetch_by_composite`] (positional decode).
 /// `current_owner_id` is the raw `Nullable(Int64)` surrogate (unowned NFT →
-/// NULL); its G-StrKey is resolved in Rust via [`resolve_accounts`], not a
-/// whole-`accounts` JOIN. The `contract_id` StrKey is the request input, echoed
+/// NULL); its StrKey is resolved in Rust via [`resolve_accounts`] /
+/// [`resolve_contracts`], not a whole-dimension JOIN. The `contract_id` StrKey is the request input, echoed
 /// back (no `soroban_contracts` JOIN).
 #[derive(Debug, Row, Deserialize)]
 struct NftChRow {
@@ -323,8 +336,9 @@ struct NftChRow {
 ///
 /// One `nfts` PK seek (`(contract_id, token_id)`, resolving the C-StrKey → Int64
 /// surrogate in the `cid` CTE) plus a scoped `nft_enrichment` collapse. The
-/// owner G-StrKey is resolved in Rust via [`resolve_accounts`] (a `WHERE id IN`
-/// bloom seek on the single owner id) instead of a whole-`accounts` JOIN, and
+/// owner StrKey is resolved in Rust via [`resolve_accounts`] /
+/// [`resolve_contracts`] (a `WHERE id IN` bloom seek on the single owner id)
+/// instead of a whole-dimension JOIN, and
 /// the contract StrKey is echoed from the request input instead of a
 /// whole-`soroban_contracts` JOIN — the two joins that turned this into a
 /// ~25M-row dimension scan (task 0355; same swap as 0344/0345/0354).
@@ -378,15 +392,23 @@ pub async fn fetch_by_composite(
         return Ok(None);
     };
 
-    // Owner G-StrKey via a single-id `WHERE id IN` bloom seek (unowned → None).
-    // `.filter(non-empty)` preserves the old `nullIf(own.account_id, '')` shape.
-    let owner_account = match r.current_owner_id {
-        Some(id) => resolve_accounts(client, vec![id])
-            .await?
-            .remove(&id)
-            .filter(|s| !s.is_empty()),
-        None => None,
-    };
+    // The owner id is an account or a contract (one surrogate space), so it is
+    // looked up in both; unowned → None. `.filter(non-empty)` preserves the old
+    // `nullIf(own.account_id, '')` shape.
+    let owner_ids: Vec<i64> = r.current_owner_id.into_iter().collect();
+    let (accounts, contracts) = tokio::join!(
+        resolve_accounts(client, owner_ids.clone()),
+        resolve_contracts(client, owner_ids),
+    );
+    let (mut accounts, mut contracts) = (accounts?, contracts?);
+    let owner_account = r
+        .current_owner_id
+        .and_then(|id| accounts.remove(&id))
+        .filter(|s| !s.is_empty());
+    let owner_contract = r
+        .current_owner_id
+        .and_then(|id| contracts.remove(&id))
+        .filter(|s| !s.is_empty());
 
     Ok(Some(NftItem {
         contract_id: contract_id.to_string(),
@@ -396,6 +418,7 @@ pub async fn fetch_by_composite(
         media_url: r.media_url,
         minted_at_ledger: r.minted_at_ledger,
         owner_account,
+        owner_contract,
         last_seen_ledger: r.last_seen_ledger,
     }))
 }
@@ -435,7 +458,9 @@ struct NftTransferChRow {
     ledger_sequence: i64,
     event_type: i16,
     to_account: Option<String>,
+    to_contract: Option<String>,
     from_account: Option<String>,
+    from_contract: Option<String>,
     created_at_ms: i64,
     application_order: i16,
     operation_index: u16,
@@ -449,7 +474,9 @@ fn map_transfer_row(r: NftTransferChRow) -> NftTransferItem {
         event_type_name: nft_event_type_name(r.event_type),
         event_type: r.event_type,
         from_account: r.from_account,
+        from_contract: r.from_contract,
         to_account: r.to_account,
+        to_contract: r.to_contract,
         created_at: millis_to_utc(r.created_at_ms),
         application_order: r.application_order,
         operation_index: r.operation_index,
@@ -526,6 +553,12 @@ pub async fn fetch_transfers(
              WHERE id IN (SELECT owner_id FROM page WHERE owner_id IS NOT NULL) \
              GROUP BY id \
          ), \
+         owner_contracts AS ( \
+             SELECT id, any(contract_id) AS contract_id \
+             FROM soroban_contracts \
+             WHERE id IN (SELECT owner_id FROM page WHERE owner_id IS NOT NULL) \
+             GROUP BY id \
+         ), \
          txs AS ( \
              SELECT ledger_sequence, application_order, any(lower(hex(hash))) AS hash \
              FROM transactions \
@@ -544,17 +577,24 @@ pub async fn fetch_transfers(
              p.ledger_sequence      AS ledger_sequence, \
              p.event_type           AS event_type, \
              nullIf(own.account_id, '') AS to_account, \
+             nullIf(oc.contract_id, '') AS to_contract, \
              leadInFrame(nullIf(own.account_id, '')) OVER ( \
                  ORDER BY p.ledger_sequence DESC, p.application_order DESC, \
                           p.operation_index DESC, p.event_index DESC \
                  ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING \
              )                      AS from_account, \
+             leadInFrame(nullIf(oc.contract_id, '')) OVER ( \
+                 ORDER BY p.ledger_sequence DESC, p.application_order DESC, \
+                          p.operation_index DESC, p.event_index DESC \
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING \
+             )                      AS from_contract, \
              led.closed_at          AS created_at_ms, \
              p.application_order    AS application_order, \
              p.operation_index      AS operation_index, \
              p.event_index          AS event_index \
          FROM page p \
          LEFT JOIN owners own ON own.id = p.owner_id \
+         LEFT JOIN owner_contracts oc ON oc.id = p.owner_id \
          LEFT JOIN txs ON txs.ledger_sequence = p.ledger_sequence \
                       AND txs.application_order = p.application_order \
          INNER JOIN led       ON led.sequence = p.ledger_sequence \

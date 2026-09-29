@@ -510,9 +510,11 @@ place where indexed contract metadata and decoded usage history are exposed.
 (substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`).
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
-media URL.
+media URL. The owner is an account (`owner_account`) or a contract (`owner_contract`), resolved
+through `accounts` and `soroban_contracts`; both are null once the NFT is burned.
 
-**`GET /nfts/:id/transfers`** - Transfer history for a single NFT.
+**`GET /nfts/:id/transfers`** - Transfer history for a single NFT; each side is an account or a
+contract (`from_account` / `from_contract`, `to_account` / `to_contract`).
 
 NFT responses should tolerate sparse metadata because the ecosystem and available metadata
 quality may vary significantly.

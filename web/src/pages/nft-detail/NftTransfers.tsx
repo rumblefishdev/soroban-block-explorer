@@ -16,6 +16,7 @@ import { useNftTransfers, usePagedRows } from '../../api/index.js';
 import { DataList } from '../detail/DataList.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
 
+import { OwnerIdentifier } from '../nfts/OwnerIdentifier.js';
 import { NftEventBadge } from './NftEventBadge.js';
 
 interface NftTransfersProps {
@@ -40,10 +41,13 @@ const columns: ExplorerTableColumn<NftTransferItem>[] = [
     id: 'from',
     header: 'From',
     width: 160,
-    // `from_account` is null on the mint row.
+    // Both `from_*` fields are null on the mint row.
     cell: (row) =>
-      row.from_account ? (
-        <IdentifierDisplay value={row.from_account} type="account" />
+      row.from_account || row.from_contract ? (
+        <OwnerIdentifier
+          account={row.from_account}
+          contract={row.from_contract}
+        />
       ) : (
         <Dash />
       ),
@@ -52,10 +56,10 @@ const columns: ExplorerTableColumn<NftTransferItem>[] = [
     id: 'to',
     header: 'To',
     width: 160,
-    // `to_account` is null on a burn.
+    // Both `to_*` fields are null on a burn.
     cell: (row) =>
-      row.to_account ? (
-        <IdentifierDisplay value={row.to_account} type="account" />
+      row.to_account || row.to_contract ? (
+        <OwnerIdentifier account={row.to_account} contract={row.to_contract} />
       ) : (
         <Dash />
       ),
