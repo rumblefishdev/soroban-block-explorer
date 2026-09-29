@@ -28,7 +28,7 @@
 - Verification-only code (oracles, corpus checks) belongs in the crate's
   `tests/` directory, not in the production module it verifies.
 - Touching a file with inline or sibling tests? Move them to their proper
-  place in the same PR, as a separate `refactor(...)` commit. New files
+  place — in a structure PR when the task also edits them. New files
   must not be born over the limit.
 - Touching a file over the limit? It must not grow: first move the topic
   you edit into its own file, so the file ends shorter than you found it.
