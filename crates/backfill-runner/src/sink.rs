@@ -186,6 +186,16 @@ impl PartitionWriterHandle {
             );
             let sac_classic =
                 db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
+            // Task 0374 (W1) — the registry keys each pool event onto its legs.
+            let writes_pool_amounts = self
+                .only
+                .as_ref()
+                .is_none_or(|t| t.contains("soroban_pool_event_amounts"));
+            let soroban_pools = db_clickhouse::persist::fetch_soroban_pools(
+                pw.client(),
+                writes_pool_amounts && db_clickhouse::persist::has_contract_events(&parsed.events),
+            )
+            .await?;
             // Task 0220 — switch to the `_with_sac_overrides` entry
             // point so the CH writer flips `is_sac=true,
             // contract_type=Token` on pre-existing SAC skeleton
@@ -196,7 +206,7 @@ impl PartitionWriterHandle {
             // out as a follow-up.
             // Mirrored in `tests/redecode_diff.rs` (rollout gate 7b), which re-runs
             // this exact staging on archive files — change both together.
-            let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
+            let mut staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
                 &db_clickhouse::persist::stage::StageInputs {
                     ledger: &parsed.ledger,
                     transactions: &parsed.transactions,
@@ -246,6 +256,11 @@ impl PartitionWriterHandle {
                     asset_transfers: &parsed.asset_transfers,
                 },
             )?;
+            db_clickhouse::persist::stage::stage_soroban_pool_amounts(
+                &mut staged,
+                &soroban_pools,
+                &sac_classic,
+            );
             if let Some(only) = &self.only {
                 pw.write_only(&staged, only).await?;
             } else {

@@ -109,7 +109,13 @@ pub async fn persist_ledger_clickhouse(
     //   for contracts deployed earlier), memoised by `classification_cache`.
     // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
     // All three are independent reads; one `join!` pays a single round-trip.
-    let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows, sac_classic) = tokio::join!(
+    let (
+        prior_wasm_verdicts,
+        prior_contract_verdicts,
+        prior_contract_rows,
+        sac_classic,
+        soroban_pools,
+    ) = tokio::join!(
         fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
         fetch_prior_contract_verdicts(
             client,
@@ -125,17 +131,21 @@ pub async fn persist_ledger_clickhouse(
             client,
             sac_classic_map_needed(soroban_token_balances, events, true)
         ),
+        // Task 0374 (W1): the registry keys a pool's events onto its legs.
+        fetch_soroban_pools(client, has_contract_events(events)),
     );
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
     // here would otherwise orphan contract-held balances under their surrogate key.
     let sac_classic = sac_classic?;
+    // Fail closed: without the registry every pool event of the ledger is lost.
+    let soroban_pools = soroban_pools?;
     // Fail closed here too: a skipped upgrade row has no recovery pass.
     let prior_contract_rows = prior_contract_rows?;
     // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
     // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
     // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
     // this ledger — no post-prepare mutation.
-    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+    let mut staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
         transactions,
         operations,
@@ -164,6 +174,7 @@ pub async fn persist_ledger_clickhouse(
         prior_contract_rows: &prior_contract_rows,
         asset_transfers,
     })?;
+    stage::stage_soroban_pool_amounts(&mut staged, &soroban_pools, &sac_classic);
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
         pw.abort().await;
@@ -290,6 +301,48 @@ pub fn sac_classic_map_needed(
 ) -> bool {
     (writes_balances && !soroban_token_balances.is_empty())
         || stage::registers_soroban_pools(events)
+        // A pool event keys its tokens onto their assets (task 0374, W1).
+        || has_contract_events(events)
+}
+
+/// Whether the ledger carries any contract event — the gate for reading the
+/// pool registry. ponytail: not narrowed to pool-shaped events; a pool trades
+/// in nearly every ledger, so the narrower gate would save almost nothing.
+pub fn has_contract_events(events: &[(String, Vec<xdr_parser::ExtractedEvent>)]) -> bool {
+    events.iter().any(|(_, evs)| !evs.is_empty())
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct SorobanPoolLegsRow {
+    pool_hex: String,
+    legs: Vec<i64>,
+}
+
+/// Every registered soroban pool (`liquidity_pools`, kind 1) with its legs,
+/// keyed by contract surrogate — what [`stage::stage_soroban_pool_amounts`]
+/// needs to key a pool's events onto its legs. ~800 rows.
+pub async fn fetch_soroban_pools(
+    client: &Client,
+    needed: bool,
+) -> Result<HashMap<i64, stage::SorobanPool>, clickhouse::error::Error> {
+    if !needed {
+        return Ok(HashMap::new());
+    }
+    let rows = client
+        .query(
+            "SELECT lower(hex(pool_id)) AS pool_hex, \
+                    argMax(legs, last_updated_ledger) AS legs \
+             FROM liquidity_pools WHERE pool_kind = 1 GROUP BY pool_id",
+        )
+        .fetch_all::<SorobanPoolLegsRow>()
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let pool_id: [u8; 32] = hex::decode(&r.pool_hex).ok()?.try_into().ok()?;
+            Some(stage::soroban_pool_entry(pool_id, r.legs))
+        })
+        .collect())
 }
 
 /// One AGGREGATED row of the `fetch_sac_classic_map` query (a projection, not the

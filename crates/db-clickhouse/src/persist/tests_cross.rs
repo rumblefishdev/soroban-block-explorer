@@ -371,6 +371,22 @@ fn column_order_pool_operation_amounts() {
 }
 
 #[test]
+fn column_order_soroban_pool_event_amounts() {
+    assert_columns::<SorobanPoolEventAmountRow>(
+        "soroban_pool_event_amounts",
+        &[
+            "pool_id",
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "event_index",
+            "asset_id",
+            "amount",
+        ],
+    );
+}
+
+#[test]
 fn column_order_soroban_events() {
     assert_columns::<SorobanEventRow>(
         "soroban_events",

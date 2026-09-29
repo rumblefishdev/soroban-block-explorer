@@ -246,6 +246,9 @@ pub struct StagedLedger {
     /// position (task 0372) → `pool_operation_amounts`: trades from
     /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
+    /// `soroban_pool_event_amounts`, from `event_rows` — filled by the caller
+    /// through [`soroban_pool_amount_rows`], which needs the pool registry.
+    pub soroban_pool_amount_rows: Vec<SorobanPoolEventAmountRow>,
     pub event_rows: Vec<SorobanEventRow>,
     /// Per-(contract, tx) presence plus the invocation's caller and call count
     /// (tasks 0541, 0586) → `contract_activity`, the contract-dimension twin of
@@ -2691,8 +2694,12 @@ mod contract_activity;
 mod nfts;
 mod operations;
 mod presence;
+mod soroban_pool_amounts;
 mod soroban_pools;
 
+pub use soroban_pool_amounts::{
+    SorobanPool, soroban_pool_amount_rows, soroban_pool_entry, stage_soroban_pool_amounts,
+};
 pub use soroban_pools::registers_soroban_pools;
 use soroban_pools::{
     config_pool_registry_row, contract_token_asset_id, factory_pair_registry_row,

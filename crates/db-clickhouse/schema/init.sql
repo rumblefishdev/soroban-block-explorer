@@ -1091,6 +1091,39 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id);
 
+-- soroban_pool_event_amounts: what each swap / deposit / withdrawal EVENT of a
+-- registered soroban pool moved through it (task 0374, W1) — the soroban
+-- twin of `pool_operation_amounts`, driving the soroban pool activity feed
+-- and volume. ROW GRAIN = (event, leg), located by the event's stellar-rpc id
+-- (ADR 0059): one operation can trade the same pool several times (0.74% of
+-- router-family pool-operations), so an operation-level key would collapse
+-- them. A per-field Phoenix swap (eight events) is one row group, keyed by its
+-- opening `sender` event.
+--
+-- `amount` is SIGNED FROM THE POOL'S SIDE, as in `pool_operation_amounts`:
+-- the signs name the event (trade `+/-`, deposit `+/+`, withdrawal `-/-`).
+-- RAW token units in `Int128` — a soroban leg may carry 18 decimals — scaled
+-- at read by each leg's own decimals. A trade's input is the trader's GROSS
+-- amount (fee included). `asset_id` = the leg's `liquidity_pools.legs` id (a
+-- SAC token keyed onto the classic asset it wraps).
+--
+-- Written only for events of pools in the registry (kind 1): the pair family
+-- names its amounts by leg position, and the registry is what proves the
+-- emitter is a pool. Same writer live and in the backfill, which reads
+-- `soroban_events` back through the same decoder (`stage/soroban_pool_amounts.rs`).
+CREATE TABLE IF NOT EXISTS soroban_pool_event_amounts (
+    pool_id           FixedString(32),
+    ledger_sequence   Int64  CODEC(Delta, ZSTD(1)),
+    application_order Int16  CODEC(T64, ZSTD(1)),
+    operation_index   UInt16 CODEC(T64, ZSTD(1)),
+    event_index       UInt32 CODEC(T64, ZSTD(1)),
+    asset_id          Int64,
+    amount            Int128
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_index, asset_id);
+
 -- soroban_events: full-content per-event row (ADR 0044 §4a unfold).
 -- ZSTD codecs on the ScVal-decoded JSON columns. `signature` is the
 -- first-topic Symbol, lifted for cheap `WHERE signature = 'transfer'`.

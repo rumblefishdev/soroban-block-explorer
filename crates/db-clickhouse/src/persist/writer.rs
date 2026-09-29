@@ -94,6 +94,7 @@ struct TableInserts {
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
     pool_amounts: Option<Insert<PoolOperationAmountRow>>,
+    soroban_pool_amounts: Option<Insert<SorobanPoolEventAmountRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
     pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
     pool_state_changes: Option<Insert<PoolStateChangeRow>>,
@@ -192,6 +193,15 @@ impl PartitionWriter {
                     )
                     .await?
                 }
+                "soroban_pool_event_amounts" => {
+                    write_rows(
+                        &self.client,
+                        &mut self.inserts.soroban_pool_amounts,
+                        "soroban_pool_event_amounts",
+                        &staged.soroban_pool_amount_rows,
+                    )
+                    .await?
+                }
                 "asset_transfers" => {
                     write_rows(
                         &self.client,
@@ -276,6 +286,7 @@ impl PartitionWriter {
             tx_operation_rows,
             op_asset_rows,
             pool_amount_rows,
+            soroban_pool_amount_rows,
             event_rows,
             contract_activity_rows,
             asset_rows,
@@ -365,6 +376,13 @@ impl PartitionWriter {
             &mut self.inserts.pool_amounts,
             "pool_operation_amounts",
             &pool_amount_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.soroban_pool_amounts,
+            "soroban_pool_event_amounts",
+            &soroban_pool_amount_rows,
         )
         .await?;
         write_rows(
@@ -534,6 +552,7 @@ impl PartitionWriter {
             participants,
             op_assets,
             pool_amounts,
+            soroban_pool_amounts,
             pools,
             pool_instance_state,
             pool_state_changes,
@@ -564,6 +583,7 @@ impl PartitionWriter {
         end(participants).await?;
         end(op_assets).await?;
         end(pool_amounts).await?;
+        end(soroban_pool_amounts).await?;
         end(pools).await?;
         end(pool_instance_state).await?;
         end(pool_state_changes).await?;

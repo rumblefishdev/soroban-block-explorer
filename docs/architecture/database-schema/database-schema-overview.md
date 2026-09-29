@@ -127,6 +127,12 @@ Backbone timeline:
   rows, the contract stats, the contract's Invocations tab and the
   transaction page's invocations. Replaced `contract_transactions` and
   `soroban_invocations_appearances` (task 0586)
+- `soroban_pool_event_amounts` — the soroban twin of `pool_operation_amounts`
+  (task 0374, W1): per-(event, leg) amounts of every swap, deposit and
+  withdrawal event of a registered soroban pool, located by the event's
+  stellar-rpc id, signed from the pool's side, raw token units in `Int128`.
+  Written only for pools in the registry (the pair family names its amounts by
+  leg position); a per-field Phoenix swap is one row group
 - `pool_operation_amounts` — per-(operation, pool, asset) amounts, the driver of
   pool activity (task 0279 / issue #371, 0491), keyed pool-first and by the
   transaction position (replaced `lp_operation_amounts`, task 0372). `amount` is raw stroops in a
@@ -274,6 +280,7 @@ ledgers
        ├─ operation_asset_appearances (partitioned)
        ├─ contract_activity (partitioned)         # (contract, tx position) + invocation caller (0541, 0586)
        ├─ pool_operation_amounts (partitioned)   # per-(op, pool, asset) amounts (0279, 0372)
+       ├─ soroban_pool_event_amounts (partitioned) # per-(event, leg) soroban pool amounts (0374)
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
        └─ soroban_events_appearances (partitioned)
@@ -663,6 +670,39 @@ Purpose / design notes:
   A leg negative here. An op crossing one pool in both directions nets out at
   this table's per-op grain and is a known, legitimate mismatch.
 - No skip index: every read is a `pool_id` PK-prefix seek.
+
+### 4.5.3a Soroban Pool Event Amounts (task 0374)
+
+What each swap, deposit and withdrawal event of a registered soroban pool
+moved through it — the soroban twin of `pool_operation_amounts`, driving the
+soroban pool activity feed and volume.
+
+```sql
+CREATE TABLE soroban_pool_event_amounts (
+    pool_id           FixedString(32),              -- the pool contract's 32-byte payload
+    ledger_sequence   Int64  CODEC(Delta, ZSTD(1)),
+    application_order Int16  CODEC(T64, ZSTD(1)),   -- the transaction's position
+    operation_index   UInt16 CODEC(T64, ZSTD(1)),
+    event_index       UInt32 CODEC(T64, ZSTD(1)),   -- stellar-rpc event id (ADR 0059)
+    asset_id          Int64,                        -- the leg, as in liquidity_pools.legs
+    amount            Int128                        -- raw token units, SIGNED from the pool's side
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_index, asset_id);
+```
+
+- **Grain is (event, leg)**, not (operation, leg): one operation can trade the
+  same pool several times (0.74% of router-family pool-operations). A per-field
+  Phoenix swap (eight events) is one row group keyed by its opening event.
+- **Signs name the event** as in `pool_operation_amounts`; a trade's input is
+  the trader's gross amount, fee included. `Int128` because a soroban leg may
+  carry 18 decimals; scaled at read by each leg's decimals.
+- **Registry-gated.** Rows are written only for pools in `liquidity_pools`
+  (kind 1): the pair family names amounts by leg position, and the registry is
+  what proves the emitter is a pool. The writer reads the registry per ledger
+  alongside the SAC map; the backfill (`backfill-runner soroban-pool-amounts`)
+  reads `soroban_events` back through the same decoder.
 
 ### 4.5.4 Asset Transfers (task 0540)
 

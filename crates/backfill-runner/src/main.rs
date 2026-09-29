@@ -18,6 +18,7 @@ mod rpc_snapshot;
 mod run;
 mod sink;
 mod snapshot;
+mod soroban_pool_amounts;
 mod status;
 mod sync;
 mod util;
@@ -254,6 +255,16 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Task 0374 (W1) — fill `soroban_pool_event_amounts` for every registered
+    /// soroban pool from the events already in `soroban_events`, through the
+    /// live writer's own decoder. No archive re-parse; idempotent. Run after
+    /// the writer is deployed. `--dry-run` decodes and counts without writing.
+    /// CH-only.
+    SorobanPoolAmounts {
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -375,6 +386,15 @@ async fn main() {
                 stats.keys_requested,
                 stats.entries_returned,
                 stats.balances_decoded,
+            );
+        }
+        Command::SorobanPoolAmounts { dry_run } => {
+            let stats = soroban_pool_amounts::execute(&sink, dry_run)
+                .await
+                .expect("soroban_pool_amounts failed — idempotent, safe to re-run");
+            println!(
+                "soroban_pool_amounts completed (dry_run={}): pools={} events_read={} rows={}",
+                stats.dry_run, stats.pools, stats.events_read, stats.rows,
             );
         }
         Command::NftReclassify { dry_run } => {

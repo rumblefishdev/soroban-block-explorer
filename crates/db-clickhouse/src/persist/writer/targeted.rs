@@ -42,6 +42,9 @@ impl TargetedTables {
         "pool_state_changes",
         "pool_instance_state",
         "liquidity_pools",
+        // Task 0374 (W1): event-derived, keyed by the event's own position, no
+        // version column — a re-parsed row is byte-identical to the original.
+        "soroban_pool_event_amounts",
     ];
     /// Parse a comma-separated list; rejects unknown or duplicate names.
     pub fn parse(spec: &str) -> Result<Self, String> {
