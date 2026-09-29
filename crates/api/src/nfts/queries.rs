@@ -106,7 +106,6 @@ pub struct NftRow {
     pub media_url: Option<String>,
     pub minted_at_ledger: Option<i64>,
     pub owner_account: Option<String>,
-    pub owner_contract: Option<String>,
     pub last_seen_ledger: Option<i64>,
     /// Internal `soroban_contracts.id` (CH `Int64`) surrogate — cursor
     /// tiebreak only, never serialized.
@@ -146,7 +145,6 @@ struct NftListChRow {
     media_url: Option<String>,
     minted_at_ledger: Option<i64>,
     owner_account: Option<String>,
-    owner_contract: Option<String>,
     last_seen_ledger: Option<i64>,
     contract_surrogate: i64,
 }
@@ -160,7 +158,6 @@ fn map_list_row(r: NftListChRow) -> NftRow {
         media_url: r.media_url,
         minted_at_ledger: r.minted_at_ledger,
         owner_account: r.owner_account,
-        owner_contract: r.owner_contract,
         last_seen_ledger: r.last_seen_ledger,
         contract_surrogate: r.contract_surrogate,
     }
@@ -277,8 +274,7 @@ pub async fn fetch_list(
              nullIf(p.e_name, '')              AS name, \
              nullIf(p.e_media_url, '')         AS media_url, \
              p.minted_at_ledger                AS minted_at_ledger, \
-             nullIf(own.account_id, '')        AS owner_account, \
-             nullIf(own_c.contract_id, '')     AS owner_contract, \
+             coalesce(nullIf(own.account_id, ''), nullIf(own_c.contract_id, '')) AS owner_account, \
              nullIf(p.current_owner_ledger, 0) AS last_seen_ledger, \
              p.contract_surrogate              AS contract_surrogate \
          FROM page p \
@@ -392,23 +388,23 @@ pub async fn fetch_by_composite(
         return Ok(None);
     };
 
-    // The owner id is an account or a contract (one surrogate space), so it is
-    // looked up in both; unowned → None. `.filter(non-empty)` preserves the old
-    // `nullIf(own.account_id, '')` shape.
-    let owner_ids: Vec<i64> = r.current_owner_id.into_iter().collect();
-    let (accounts, contracts) = tokio::join!(
-        resolve_accounts(client, owner_ids.clone()),
-        resolve_contracts(client, owner_ids),
-    );
-    let (mut accounts, mut contracts) = (accounts?, contracts?);
-    let owner_account = r
-        .current_owner_id
-        .and_then(|id| accounts.remove(&id))
-        .filter(|s| !s.is_empty());
-    let owner_contract = r
-        .current_owner_id
-        .and_then(|id| contracts.remove(&id))
-        .filter(|s| !s.is_empty());
+    // The owner is an account or a contract; its surrogate lives in exactly one
+    // of the two tables (one surrogate space). Unowned → None. `.filter(non-empty)`
+    // preserves the old `nullIf(own.account_id, '')` shape.
+    let owner_account = match r.current_owner_id {
+        Some(id) => {
+            let (accounts, contracts) = tokio::try_join!(
+                resolve_accounts(client, vec![id]),
+                resolve_contracts(client, vec![id]),
+            )?;
+            accounts
+                .get(&id)
+                .or_else(|| contracts.get(&id))
+                .cloned()
+                .filter(|s| !s.is_empty())
+        }
+        None => None,
+    };
 
     Ok(Some(NftItem {
         contract_id: contract_id.to_string(),
@@ -418,7 +414,6 @@ pub async fn fetch_by_composite(
         media_url: r.media_url,
         minted_at_ledger: r.minted_at_ledger,
         owner_account,
-        owner_contract,
         last_seen_ledger: r.last_seen_ledger,
     }))
 }
@@ -458,9 +453,7 @@ struct NftTransferChRow {
     ledger_sequence: i64,
     event_type: i16,
     to_account: Option<String>,
-    to_contract: Option<String>,
     from_account: Option<String>,
-    from_contract: Option<String>,
     created_at_ms: i64,
     application_order: i16,
     operation_index: u16,
@@ -474,9 +467,7 @@ fn map_transfer_row(r: NftTransferChRow) -> NftTransferItem {
         event_type_name: nft_event_type_name(r.event_type),
         event_type: r.event_type,
         from_account: r.from_account,
-        from_contract: r.from_contract,
         to_account: r.to_account,
-        to_contract: r.to_contract,
         created_at: millis_to_utc(r.created_at_ms),
         application_order: r.application_order,
         operation_index: r.operation_index,
@@ -547,13 +538,13 @@ pub async fn fetch_transfers(
              LIMIT 1 BY no.ledger_sequence, no.application_order, no.operation_index, no.event_index \
              LIMIT ? \
          ), \
-         owners AS ( \
+         own AS ( \
              SELECT id, any(account_id) AS account_id \
              FROM accounts \
              WHERE id IN (SELECT owner_id FROM page WHERE owner_id IS NOT NULL) \
              GROUP BY id \
          ), \
-         owner_contracts AS ( \
+         own_c AS ( \
              SELECT id, any(contract_id) AS contract_id \
              FROM soroban_contracts \
              WHERE id IN (SELECT owner_id FROM page WHERE owner_id IS NOT NULL) \
@@ -576,25 +567,19 @@ pub async fn fetch_transfers(
              nullIf(txs.hash, '')   AS transaction_hash, \
              p.ledger_sequence      AS ledger_sequence, \
              p.event_type           AS event_type, \
-             nullIf(own.account_id, '') AS to_account, \
-             nullIf(oc.contract_id, '') AS to_contract, \
-             leadInFrame(nullIf(own.account_id, '')) OVER ( \
+             coalesce(nullIf(own.account_id, ''), nullIf(own_c.contract_id, '')) AS to_account, \
+             leadInFrame(coalesce(nullIf(own.account_id, ''), nullIf(own_c.contract_id, ''))) OVER ( \
                  ORDER BY p.ledger_sequence DESC, p.application_order DESC, \
                           p.operation_index DESC, p.event_index DESC \
                  ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING \
              )                      AS from_account, \
-             leadInFrame(nullIf(oc.contract_id, '')) OVER ( \
-                 ORDER BY p.ledger_sequence DESC, p.application_order DESC, \
-                          p.operation_index DESC, p.event_index DESC \
-                 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING \
-             )                      AS from_contract, \
              led.closed_at          AS created_at_ms, \
              p.application_order    AS application_order, \
              p.operation_index      AS operation_index, \
              p.event_index          AS event_index \
          FROM page p \
-         LEFT JOIN owners own ON own.id = p.owner_id \
-         LEFT JOIN owner_contracts oc ON oc.id = p.owner_id \
+         LEFT JOIN own   ON own.id   = p.owner_id \
+         LEFT JOIN own_c ON own_c.id = p.owner_id \
          LEFT JOIN txs ON txs.ledger_sequence = p.ledger_sequence \
                       AND txs.application_order = p.application_order \
          INNER JOIN led       ON led.sequence = p.ledger_sequence \

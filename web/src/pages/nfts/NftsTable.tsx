@@ -68,13 +68,11 @@ const columns: ExplorerTableColumn<NftItem>[] = [
     id: 'owner',
     header: 'Owner',
     width: 160,
-    // Both owner fields are null for burned NFTs (ADR 0037 §13).
+    // `owner_account` (a G… account or a C… contract) is null for burned
+    // NFTs (ADR 0037 §13).
     cell: (row) =>
-      row.owner_account || row.owner_contract ? (
-        <OwnerIdentifier
-          account={row.owner_account}
-          contract={row.owner_contract}
-        />
+      row.owner_account ? (
+        <OwnerIdentifier value={row.owner_account} />
       ) : (
         <Dash />
       ),

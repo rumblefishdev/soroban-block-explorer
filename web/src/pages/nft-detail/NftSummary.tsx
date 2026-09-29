@@ -87,13 +87,11 @@ export function NftSummary({ nft }: NftSummaryProps) {
       />
       <Row
         label="Current owner"
-        // Both owner fields are null once an NFT is burned (ADR 0037 §13).
+        // `owner_account` (a G… account or a C… contract) is null once an NFT
+        // is burned (ADR 0037 §13).
         value={
-          nft.owner_account || nft.owner_contract ? (
-            <OwnerIdentifier
-              account={nft.owner_account}
-              contract={nft.owner_contract}
-            />
+          nft.owner_account ? (
+            <OwnerIdentifier value={nft.owner_account} />
           ) : (
             <Typography
               variant="bodySmMedium"

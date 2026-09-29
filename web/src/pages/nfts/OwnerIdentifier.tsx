@@ -1,22 +1,18 @@
-import { IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  IdentifierDisplay,
+  isContractId,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 /**
- * An NFT holder: an account or a contract (task 0376 — a contract holder used
- * to render as a dash, or as "Burned" on the detail page). Returns `null` when
- * neither is set, so each caller keeps its own empty state.
+ * An NFT holder, linked to its page: a `G…` account or a `C…` contract (task
+ * 0376 — a contract holder used to render as a dash, or as "Burned" on the
+ * detail page). The API carries both in one field.
  */
-export function OwnerIdentifier({
-  account,
-  contract,
-}: {
-  account: string | null | undefined;
-  contract: string | null | undefined;
-}) {
-  if (account) {
-    return <IdentifierDisplay value={account} type="account" />;
-  }
-  if (contract) {
-    return <IdentifierDisplay value={contract} type="contract" />;
-  }
-  return null;
+export function OwnerIdentifier({ value }: { value: string }) {
+  return (
+    <IdentifierDisplay
+      value={value}
+      type={isContractId(value) ? 'contract' : 'account'}
+    />
+  );
 }

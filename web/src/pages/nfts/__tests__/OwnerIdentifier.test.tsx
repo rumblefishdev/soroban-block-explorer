@@ -10,7 +10,7 @@ const CONTRACT = 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75';
 
 describe('NFT owner identifier (task 0376)', () => {
   it('links an account owner to the account', () => {
-    renderWithProviders(<OwnerIdentifier account={ACCOUNT} contract={null} />);
+    renderWithProviders(<OwnerIdentifier value={ACCOUNT} />);
     expect(screen.getByRole('link')).toHaveAttribute(
       'href',
       routes.account(ACCOUNT)
@@ -18,15 +18,10 @@ describe('NFT owner identifier (task 0376)', () => {
   });
 
   it('links a contract owner to the contract', () => {
-    renderWithProviders(<OwnerIdentifier account={null} contract={CONTRACT} />);
+    renderWithProviders(<OwnerIdentifier value={CONTRACT} />);
     expect(screen.getByRole('link')).toHaveAttribute(
       'href',
       routes.contract(CONTRACT)
     );
-  });
-
-  it('renders nothing when neither owner is set', () => {
-    renderWithProviders(<OwnerIdentifier account={null} contract={null} />);
-    expect(screen.queryByRole('link')).toBeNull();
   });
 });
