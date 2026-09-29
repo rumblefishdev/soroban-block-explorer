@@ -1135,7 +1135,8 @@ export type NftDetailResponse = {
   minted_at_ledger?: number | null;
   name?: string | null;
   /**
-   * Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13).
+   * Current owner StrKey: a `G…` account, or a `C…` contract holding the
+   * NFT. `null` for burned NFTs (ADR 0037 §13).
    */
   owner_account?: string | null;
   token_id: string;
@@ -1175,7 +1176,8 @@ export type NftItem = {
   minted_at_ledger?: number | null;
   name?: string | null;
   /**
-   * Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13).
+   * Current owner StrKey: a `G…` account, or a `C…` contract holding the
+   * NFT. `null` for burned NFTs (ADR 0037 §13).
    */
   owner_account?: string | null;
   token_id: string;
@@ -1202,9 +1204,10 @@ export type NftTransferItem = {
    */
   event_type_name?: string | null;
   /**
-   * Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the
-   * per-NFT ownership timeline (DESC window — older event sits at the
-   * FOLLOWING window position). `null` on the mint row only.
+   * Previous-owner StrKey (a `G…` account or a `C…` contract),
+   * reconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline
+   * (DESC window — older event sits at the FOLLOWING window position).
+   * `null` on the mint row only.
    *
    * Page boundaries are handled implicitly by the `limit + 1` peek
    * fetch: the peek row participates in the window-function input, so
@@ -1215,7 +1218,7 @@ export type NftTransferItem = {
   ledger_sequence: number;
   operation_index: number;
   /**
-   * New owner G-StrKey. `null` on burn.
+   * New owner StrKey (a `G…` account or a `C…` contract). `null` on burn.
    */
   to_account?: string | null;
   transaction_hash: string;
@@ -1720,7 +1723,8 @@ export type PaginatedNftItem = {
     minted_at_ledger?: number | null;
     name?: string | null;
     /**
-     * Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13).
+     * Current owner StrKey: a `G…` account, or a `C…` contract holding the
+     * NFT. `null` for burned NFTs (ADR 0037 §13).
      */
     owner_account?: string | null;
     token_id: string;
@@ -1756,9 +1760,10 @@ export type PaginatedNftTransferItem = {
      */
     event_type_name?: string | null;
     /**
-     * Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the
-     * per-NFT ownership timeline (DESC window — older event sits at the
-     * FOLLOWING window position). `null` on the mint row only.
+     * Previous-owner StrKey (a `G…` account or a `C…` contract),
+     * reconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline
+     * (DESC window — older event sits at the FOLLOWING window position).
+     * `null` on the mint row only.
      *
      * Page boundaries are handled implicitly by the `limit + 1` peek
      * fetch: the peek row participates in the window-function input, so
@@ -1769,7 +1774,7 @@ export type PaginatedNftTransferItem = {
     ledger_sequence: number;
     operation_index: number;
     /**
-     * New owner G-StrKey. `null` on burn.
+     * New owner StrKey (a `G…` account or a `C…` contract). `null` on burn.
      */
     to_account?: string | null;
     transaction_hash: string;

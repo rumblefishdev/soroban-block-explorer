@@ -7,6 +7,8 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 
+import { OwnerIdentifier } from '../nfts/OwnerIdentifier.js';
+
 interface NftSummaryProps {
   nft: NftDetailResponse;
 }
@@ -85,10 +87,11 @@ export function NftSummary({ nft }: NftSummaryProps) {
       />
       <Row
         label="Current owner"
-        // `owner_account` is null once an NFT is burned (ADR 0037 §13).
+        // `owner_account` (a G… account or a C… contract) is null once an NFT
+        // is burned (ADR 0037 §13).
         value={
           nft.owner_account ? (
-            <IdentifierDisplay value={nft.owner_account} type="account" />
+            <OwnerIdentifier value={nft.owner_account} />
           ) : (
             <Typography
               variant="bodySmMedium"

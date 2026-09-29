@@ -3414,7 +3414,7 @@
               },
               "owner_account": {
                 "type": ["string", "null"],
-                "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+                "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
               },
               "token_id": {
                 "type": "string"
@@ -3463,7 +3463,7 @@
           },
           "owner_account": {
             "type": ["string", "null"],
-            "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+            "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
           },
           "token_id": {
             "type": "string"
@@ -3508,7 +3508,7 @@
           },
           "from_account": {
             "type": ["string", "null"],
-            "description": "Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the\nper-NFT ownership timeline (DESC window — older event sits at the\nFOLLOWING window position). `null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
+            "description": "Previous-owner StrKey (a `G…` account or a `C…` contract),\nreconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline\n(DESC window — older event sits at the FOLLOWING window position).\n`null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -3521,7 +3521,7 @@
           },
           "to_account": {
             "type": ["string", "null"],
-            "description": "New owner G-StrKey. `null` on burn."
+            "description": "New owner StrKey (a `G…` account or a `C…` contract). `null` on burn."
           },
           "transaction_hash": {
             "type": "string"
@@ -4168,7 +4168,7 @@
                 },
                 "owner_account": {
                   "type": ["string", "null"],
-                  "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+                  "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
                 },
                 "token_id": {
                   "type": "string"
@@ -4226,7 +4226,7 @@
                 },
                 "from_account": {
                   "type": ["string", "null"],
-                  "description": "Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the\nper-NFT ownership timeline (DESC window — older event sits at the\nFOLLOWING window position). `null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
+                  "description": "Previous-owner StrKey (a `G…` account or a `C…` contract),\nreconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline\n(DESC window — older event sits at the FOLLOWING window position).\n`null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
                 },
                 "ledger_sequence": {
                   "type": "integer",
@@ -4239,7 +4239,7 @@
                 },
                 "to_account": {
                   "type": ["string", "null"],
-                  "description": "New owner G-StrKey. `null` on burn."
+                  "description": "New owner StrKey (a `G…` account or a `C…` contract). `null` on burn."
                 },
                 "transaction_hash": {
                   "type": "string"

@@ -770,7 +770,7 @@ Expanded behavior:
 Single NFT overview.
 
 - NFT summary - name, identifier/token ID, collection name, contract ID (link), owner
-  account (link)
+  (link to the account or the contract that holds it)
 - Media preview - image, video, or other media associated with the NFT
 - Metadata - full attribute list (traits, properties)
 - Transfer history - table of ownership changes
