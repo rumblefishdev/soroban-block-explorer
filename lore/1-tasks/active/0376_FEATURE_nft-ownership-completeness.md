@@ -42,6 +42,23 @@ omission, not missing data.
 Found while sweeping for contradictions during task 0540; the shared-vocabulary
 side of it is [[0542]].
 
+## K2-5 — contract owners (2026-09-29)
+
+**Re-measured (read-only):** 1,117 distinct current owners — 762 accounts,
+355 contracts (32%), 0 in neither; contracts hold 2,851 of 13,364 owned NFTs
+(21%). The list showed a dash for them and the detail page said **"Burned"**.
+
+**Change** (branch `feat/0376-contract-nft-owners`, `f5129eac6`, local): the
+list, detail and transfers queries also resolve the owner id in
+`soroban_contracts` and return `owner_contract` / `from_contract` /
+`to_contract` beside the account fields — the `caller_account` /
+`caller_contract` convention. SPA: `OwnerIdentifier` links a contract owner to
+its contract page. Verified with `bin/local` on production data: list of 100
+rows — 96 accounts, 4 contracts, 0 with both, 0 with neither; token 40370 of
+`CBHU…A6GR` shows mint → `CDLM…VAHL` (contract) → transfer to `GAA4…JXOG`, both
+contract sides linked to `/contracts/…`; token 59104 shows owner `CC3Z…UIOP`
+instead of "Burned".
+
 ## Context
 
 Spawned from 0359. The NFT owner is a single-slot current value; contract owners
