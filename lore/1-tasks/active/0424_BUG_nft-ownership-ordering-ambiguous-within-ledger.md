@@ -298,6 +298,20 @@ event_index)` equals `nfts.current_owner_id` for **all 14,187** (and the
   and its regression test — the measurement shows no wrong owner, and the
   fold that keeps it right is staging's last-wins over the ledger's own
   event order. Dropped for good, not deferred.
+- **0415's "transfer before mint" re-checked on the chain order**
+  (2026-09-29, read-only, `nft_ownership_changes`, `DISTINCT` rows): of
+  8,216 tokens with both a mint and a transfer, **88** have their first
+  transfer before their first mint — the same 88, now determined by the
+  data rather than by two counters. All 88 are one pattern: same ledger,
+  same transaction, same operation, `transfer` at `event_index` 0 and
+  `mint` at 1, both naming the same owner; 4 contracts (70 / 16 / 1 / 1
+  tokens). The raw events in `soroban_events` carry that order, e.g. ledger
+  61,199,710, `application_order` 214: `transfer(C…JNPM → C…6FTL)` then
+  `mint(C…6FTL)`. So the contracts emit the transfer first; no token is
+  transferred before it exists in a way that changes the owner, and 0
+  tokens show a transfer before the mint across ledgers. Not a data defect.
+  Side count: 23 tokens have transfers but no mint in the table (not
+  examined here).
 
 ## Implementation
 
@@ -382,8 +396,10 @@ if so, promote it as the convention instead of spreading in-process dedup.
       chain's last; 0 version ties with different owners in `nfts`
 - [ ] ~~Regression test covers both emission orders in a single ledger~~ —
       skipped with the fix (thread 328)
-- [ ] 0415's consistency checks re-run against the corrected ordering (the earlier
+- [x] 0415's consistency checks re-run against the corrected ordering (the earlier
       "transfer before mint" signal must be re-evaluated, not carried over)
+      — 88 tokens, all the contracts' own `transfer`-then-`mint` emission in
+      one operation with the same owner; 0 across ledgers (2026-09-29)
 - [ ] Every ledger-only-versioned RMT table audited and classified
       (mitigated in-process / not mitigated / not applicable), with the in-batch
       dedup's cross-path limitation assessed
