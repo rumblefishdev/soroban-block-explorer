@@ -325,6 +325,22 @@ event_index)` equals `nfts.current_owner_id` for **all 14,187** (and the
 - Add a regression test: two ownership events for one token in one ledger, in both
   emission orders, must yield the later one as current owner.
 
+- **Version ties measured on every versioned state table** (2026-09-29,
+  read-only; thread 327). For each key: its unmerged rows at the highest
+  version, counted as distinct full rows (`uniqExact(cityHash64(*))`) — more
+  than one is a tie the merge would settle arbitrarily. **0 ties at the
+  highest version and 0 tied versions at all** in `account_entry_state`
+  (11,115,160 keys), `accounts` (14,913,214), `balances` (69,805,994, 32
+  slices), `claimable_balance_holdings` (5,905,541), `liquidity_pools`
+  (54,392), `lp_positions` (110,006), `soroban_contracts` (154,051),
+  `soroban_contract_metadata` (3,947), `asset_enrichment` (361,871),
+  `nft_enrichment` (76,211), `nfts_pending` (277), `pool_instance_state`
+  (817); `nfts` 0 (measured 2026-09-28); `account_balances_current` and
+  `contract_executable_refs` empty. Limit: only unmerged rows are visible — a
+  tie a merge already settled leaves no trace, so this shows the tie is not
+  occurring now, not that it never did. Slicing trap: `account_id % 8` drops
+  negative keys (`%` keeps the sign) — use `positiveModulo`.
+
 ## Subtask: event display order ignores the CAP-67 stage
 
 Same class (ordering thrown away at ingest), different table — found in the
