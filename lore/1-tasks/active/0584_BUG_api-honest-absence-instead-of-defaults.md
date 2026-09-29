@@ -107,3 +107,17 @@ list/detail/code filter, NFT list/collection filter/detail, search by name
 and by id, soroban pool list — identical. One difference, not caused by this:
 contract name search has no `ORDER BY`, so its results come back in a
 different order on every call (same code, three calls, two orders).
+
+## 2026-09-29 — "publishes no decimals" is our gap, not the token's
+
+The 127 held Soroban tokens without decimals in `soroban_contract_metadata`,
+asked on chain (`decimals()` simulated over RPC, mainnet): 124 answer, 2
+answer 43,224 (the two `PIKA` contracts — not a scale), 1 has no token
+interface (only `get_balance`). Of the 124: 82 are 7, 42 are not (0: 1,
+6: 8, 8: 5, 9: 2, 13: 9, 18: 17); 185 holdings sit on those 42. So nearly
+every such token does publish its decimals — through the SEP-41 function,
+not in the `METADATA` instance-storage layout the parser reads. Before #535
+those 185 holdings render off by 10^(d−7); after it they read "—"; the
+real values come from task 0473 (standard-compliant metadata reads). The
+wording "a token that publishes no decimals" in #535's comments should say
+"whose decimals we have not read".
