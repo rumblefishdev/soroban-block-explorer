@@ -261,7 +261,7 @@ pub async fn fetch_soroban_participants(
                WHERE substring(base32Decode(contract_id), 2, 32) = unhex(?)) AS pool_self \
          SELECT holder_id, \
                 toString(amt) AS raw_shares, \
-                toString(toDecimal128(amt * 100 / if(stored > 0, stored, total), 7)) \
+                toString(toDecimal256(amt, 7) * 100 / if(stored > 0, stored, total)) \
                     AS share_percentage, \
                 lul AS last_updated_ledger, \
                 (SELECT argMax(tuple(m.decimals), m.version).1 \
