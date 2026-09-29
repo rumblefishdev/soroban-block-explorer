@@ -29,9 +29,11 @@ CI speed. This task carries the repo-side changes the owner picked.
 - Done in the repo: `/pr` requires a `## Verified` section (real-data
   evidence); 0525 names `stage.rs` as the next split; 13 stale backlog tasks
   archived (5 done, 6 superseded, 2 merged into 0447 and 0503).
-- Open: a commit check that stops a task file over 150 lines from growing
-  (`lore/1-tasks/CLAUDE.md` already sets the limit); CI runs only the one
-  swagger-ui test and moves the ClickHouse e2e into its own job.
+- In review (2026-09-29): #544 task-file size ratchet + "Stan teraz" in the
+  template; #545 CI — swagger-ui runs its one test, ClickHouse e2e in its own
+  job; #546 AWS SDK without the legacy HTTP stack and SigV4a (api −6.5%,
+  indexer −9.6% binary size) plus the unused secretsmanager dependency.
+- Memory cleanup (outside the repo): 97 → 47 notes, index 15.2 → 7.6 KB.
 
 ## Acceptance Criteria
 
