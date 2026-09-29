@@ -2,7 +2,7 @@
 id: '0595'
 title: 'BUG: the SPA index.html has no Cache-Control, so a browser can keep an old one that points at deleted assets'
 type: BUG
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0106', '0593']
 tags: [frontend, infra, deploy, priority-medium, effort-small]
@@ -16,6 +16,12 @@ history:
     note: >
       Seen during the 0593 SPA deploy on 2026-09-29. Right after the sync, a
       browser with a cached index.html got a blank page.
+  - date: '2026-09-29'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started. Cache-Control at upload and a split sync that keeps the
+      previous build's assets, as the Prices portal deploy does.
 ---
 
 # BUG: the SPA index.html has no Cache-Control, so a browser can keep an old one that points at deleted assets
