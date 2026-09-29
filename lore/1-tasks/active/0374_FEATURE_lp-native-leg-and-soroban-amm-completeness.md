@@ -2714,3 +2714,28 @@ family and kind; pair reserve steps exact 486,131 of 486,134 — the 3 are the
 stale protocol-23 restores (58,774,376 / 58,779,504 / 58,779,518; the second
 is a third affected pool, `06c291d4…`); router within 1% except 0.03–0.29%.
 PRs: #539 (moves), #540 (W1, stacked).
+
+### Decisions (karolkow, 2026-09-29) — W1 table: 145 A, then 147 A′; review of #540
+
+- **145 A supersedes 72 A.** W1 does not widen `pool_operation_amounts` (991M
+  rows, 6.08 GiB; `amount Int64`, keyed by operation): that would need
+  `MODIFY COLUMN amount Int128` over every row, two new columns and
+  `MODIFY ORDER BY` on production, columns meaningless for classic rows, and a
+  change to the classic writer and readers. Its operation-level key would also
+  collapse the 0.74% of router operations that trade one pool twice.
+- **147 A′ — the from-scratch shape.** Built from scratch, both kinds would
+  share one table keyed by the event (a classic operation = one movement,
+  `event_index = 0`), kind stored, `Int128`. The W1 table already has that
+  shape, so it was renamed `pool_movements` (row `PoolMovementRow`) before
+  its production CREATE; classic pools join it and `pool_operation_amounts`
+  retires in task 0598. Until then, readers branch by pool kind.
+- **Devil's advocate on #540** (verdict: ship with changes; the simpler
+  alternatives were measured and are worse — `asset_transfers` 2.79B rows a
+  year and blind to trade vs deposit; reserve deltas net a buy and a sell in
+  one ledger; decoding `soroban_events` at read time 410 MiB per chart load
+  and the three-family decoder moved into SQL). Fixed in #540: every skipped
+  event name is either on `NON_AMOUNT_EVENTS` (35 names, full history of
+  registered pools) or logged at `warn!`; the reconciliation test checks
+  every event is accounted for (fails on 13,462 events with `update_reserves`
+  taken off the list); the backfill stays as the re-derive path
+  (`docs/backfills.md`); reads must dedup.
