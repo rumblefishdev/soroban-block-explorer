@@ -418,3 +418,25 @@ classic payments and trades since protocol 23).
 pin `ledger_sequence` first, and one ledger fits one granule. The detail read
 matches `hash OR inner_tx_hash`, which is how an inner hash found through
 `transaction_hash_index` resolves.
+
+## Step 7 — `transactions.id` (2026-09-29)
+
+**Measured (read-only, production):** `transactions.id` 31.78 GiB of 221.84
+GiB, 4.25 B rows; not in the sort, primary or partition key (`ORDER BY
+(ledger_sequence, application_order)`), so a `DROP COLUMN` needs no rebuild.
+No table carries `transaction_id` since task 0424. `system.query_log`, 14
+days, reads of `transactions.id`: `api_reader` last 2026-09-28 14:45 UTC,
+before the 0424 readers deploy, none since; `dev_shared` only the one-off
+fills of 0575 / 0586 (last 2026-09-25); no `prices_*` user. In code, only the
+writer names it (`TransactionRow.id` ← `ids::transaction_id`).
+
+**Deploy order, tested on the local ClickHouse:** `MODIFY COLUMN id Int64
+DEFAULT 0` is metadata only (0 mutations, parts unchanged). With it, the new
+build (no `id`) inserts cleanly while the old one still writes `id`; without
+it the new build fails `SchemaMismatch` ("non-default columns are missing: id")
+— reproduced by the CH-gated tests on a stale local table. After `DROP COLUMN
+id` all `db-clickhouse` tests pass and the rows stay. Procedure in
+`docs/deployment.md`.
+
+Branch `feat/0538-drop-transactions-id` (on `refactor/0538-ids-tests-file`,
+the two pure test moves the touched files required).
