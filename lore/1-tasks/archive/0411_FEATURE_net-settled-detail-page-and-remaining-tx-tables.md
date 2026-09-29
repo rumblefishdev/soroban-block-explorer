@@ -2,7 +2,7 @@
 id: '0411'
 title: 'FEATURE: net-settled on tx detail page + remaining tx-list tables'
 type: FEATURE
-status: backlog
+status: superseded
 related_adr: []
 related_tasks: ['0393', '0453']
 tags: ['frontend', 'api', 'phase-future', 'effort-small', 'priority-low']
@@ -44,6 +44,12 @@ history:
       living in the shared `common/ch.rs`) is resolved by deletion — the flag
       and the query are both gone. Reinstating the read is the moment to place
       it correctly, in the transactions domain, on 0417's companion table.
+  - date: 2026-09-29
+    status: superseded
+    who: karolkow
+    note: >-
+      Superseded: shipped (b53e6e552, 05c38a024), then 0540 removed net_settled end to end.
+      Backlog review of 2026-09-29.
 ---
 
 # FEATURE: net-settled on tx detail page + remaining tx-list tables

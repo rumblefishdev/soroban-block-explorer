@@ -2,7 +2,7 @@
 id: '0128'
 title: 'D3: public GitHub repository setup'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: ['0127', '0129']
 tags: [priority-low, effort-small, layer-ops, audit-gap]
@@ -14,6 +14,12 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Spawned from pipeline audit — D3 acceptance criteria #2 requires public repo but no task existed.'
+  - date: 2026-09-29
+    status: completed
+    who: karolkow
+    note: >-
+      Done: the repository is public and package.json declares MIT. Leftover: no root LICENSE file.
+      Backlog review of 2026-09-29.
 ---
 
 # D3: public GitHub repository setup

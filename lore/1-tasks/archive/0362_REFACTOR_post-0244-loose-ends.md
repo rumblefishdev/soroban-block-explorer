@@ -2,7 +2,7 @@
 id: '0362'
 title: 'Post-0244 loose ends: stale RDS docs, 0214 mis-archive, Phase-3 trustline pointer, galexie metadata validation'
 type: REFACTOR
-status: backlog
+status: completed
 related_adr: ['0032', '0051', '0055']
 related_tasks:
   ['0244', '0239', '0214', '0304', '0310', '0331', '0339', '0463', '0502']
@@ -36,6 +36,12 @@ history:
       "don't micro-decompose" convention. Each is independently pickable; none
       blocks anything. Phase-3 trustline is tracked here as a POINTER only — it is
       a design-gated feature, not do-able in this task.
+  - date: 2026-09-29
+    status: completed
+    who: karolkow
+    note: >-
+      Done: all four items were ticked (5af12098); only the archive move was left.
+      Backlog review of 2026-09-29.
 ---
 
 # Post-0244 loose ends

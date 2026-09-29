@@ -2,7 +2,7 @@
 id: '0090'
 title: 'Security audit: OWASP Top 10, IAM least-privilege, infrastructure hardening'
 type: FEATURE
-status: backlog
+status: completed
 related_adr: []
 related_tasks: []
 tags: [priority-high, effort-medium, layer-testing]
@@ -38,6 +38,12 @@ history:
       decision for whoever signs the audit off, not a bookkeeping fix. Also worth
       folding in: GitHub currently reports 37 dependency vulnerabilities on the
       default branch (2 critical, 17 high), which no criterion covers.
+  - date: 2026-09-29
+    status: completed
+    who: karolkow
+    note: >-
+      Done: signed-off checklist docs/scf/milestone-3-security-checklist.md (11 controls + OWASP table); leftovers live in 0253 and 0556.
+      Backlog review of 2026-09-29.
 ---
 
 # Security audit: OWASP Top 10, IAM least-privilege, infrastructure hardening
