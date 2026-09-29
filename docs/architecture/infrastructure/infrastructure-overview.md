@@ -391,9 +391,11 @@ redeploying `ApiGateway` as soon as the run ends.
   and `/api` alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
   referrer, user agent and viewer IP, never cookies. Objects expire after 30
   days, because the lines carry viewer IPs and the Prices portal's privacy
-  policy keeps technical logs for up to 30 days. It is the only record of
-  traffic to the `/api` SPA, which loads no analytics script. It counts page
-  loads, not in-app navigation. The bucket is `ObjectWriter`-owned because
+  policy keeps technical logs for up to 30 days. It is the only complete
+  record of traffic to the `/api` SPA. Since Prices task 0316 (2026-09-29)
+  that SPA also loads GA4 through the explorer's GTM, but GA counts only
+  visitors who consent. The logs count page loads, not in-app navigation.
+  The bucket is `ObjectWriter`-owned because
   legacy standard logging delivers through ACLs.
 
 **Swagger UI**
