@@ -21,6 +21,9 @@ use db_clickhouse::persist::stage;
 
 const WINDOW_LEDGERS: i64 = 200_000;
 
+/// (pool, ledger, transaction, operation, event) — one decoded event.
+type EventKey = ([u8; 32], i64, i16, u16, u32);
+
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
@@ -110,19 +113,17 @@ async fn decoded_pool_events_match_the_chain() {
         .iter()
         .map(|(c, p)| (p.pool_id, family.get(c).map(String::as_str).unwrap_or("?")))
         .collect();
-    let mut decoded: BTreeMap<(String, &str), BTreeMap<(i64, i16, u16, u32), (bool, bool)>> =
-        BTreeMap::new();
+    // Signs per decoded event: (any leg entered, any leg left).
+    let mut signs: HashMap<EventKey, (bool, bool)> = HashMap::new();
     for r in &rows {
-        let e = decoded
-            .entry((pool_family[&r.pool_id].to_string(), ""))
-            .or_default()
-            .entry((
-                r.ledger_sequence,
-                r.application_order,
-                r.operation_index,
-                r.event_index,
-            ))
-            .or_default();
+        let key = (
+            r.pool_id,
+            r.ledger_sequence,
+            r.application_order,
+            r.operation_index,
+            r.event_index,
+        );
+        let e = signs.entry(key).or_default();
         if r.amount > 0 {
             e.0 = true;
         } else {
@@ -130,15 +131,15 @@ async fn decoded_pool_events_match_the_chain() {
         }
     }
     let mut ours: BTreeMap<(String, &'static str), u64> = BTreeMap::new();
-    for ((fam, _), evs) in decoded {
-        for (_, (pos, neg)) in evs {
-            let kind = match (pos, neg) {
-                (true, true) => "trade",
-                (true, false) => "deposit",
-                _ => "withdraw",
-            };
-            *ours.entry((fam.clone(), kind)).or_default() += 1;
-        }
+    for ((pool_id, ..), (entered, left)) in signs {
+        let kind = match (entered, left) {
+            (true, true) => "trade",
+            (true, false) => "deposit",
+            _ => "withdraw",
+        };
+        *ours
+            .entry((pool_family[&pool_id].to_string(), kind))
+            .or_default() += 1;
     }
     let expected: Vec<(String, String, u64)> = ch
         .query(&format!(

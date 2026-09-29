@@ -94,10 +94,12 @@ fn init_sql_parses_into_statements() {
     // ownership rows located by their event. 39 → 41.
     // task 0424: dropped `nft_ownership` + `_pending` — every reader moved
     // to `nft_ownership_changes`. 41 → 39.
+    // task 0374: added `soroban_pool_event_amounts` — per-(event, leg) soroban
+    // pool amounts. 39 → 40.
     assert_eq!(
         stmts.len(),
-        39,
-        "expected 36 tables + 3 materialized views, got {}",
+        40,
+        "expected 37 tables + 3 materialized views, got {}",
         stmts.len()
     );
 }
