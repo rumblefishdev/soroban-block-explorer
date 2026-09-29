@@ -19,7 +19,8 @@ function SupplyValue({
   code,
 }: {
   supply?: string | null;
-  decimals: number;
+  /** `null` when the token publishes no scale: the supply renders "—". */
+  decimals: number | null | undefined;
   code?: string | null;
 }) {
   return (

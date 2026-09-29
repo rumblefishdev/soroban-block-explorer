@@ -143,22 +143,29 @@ function ChangeAmount({
   // `scaleByDecimals` takes UNSIGNED raw integers (a negative returns null, by
   // its own contract), so the sign is split off here and re-attached — rather
   // than widening a shared formatter every other caller depends on.
-  const figure = nonFungible
-    ? magnitude
-    : formatAmount(scaleByDecimals(magnitude, change.decimals), 2);
+  const scaled = nonFungible
+    ? null
+    : scaleByDecimals(magnitude, change.decimals);
+  // An amount we cannot state — the token's scale is unknown (`decimals:
+  // null`) or the amount does not read — is a plain "—" (what `formatAmount`
+  // prints for `null`), with no sign or colour that would read as a movement
+  // of some size.
+  const stated = nonFungible || scaled != null;
+  const figure = nonFungible ? magnitude : formatAmount(scaled, 2);
   return (
     <Typography
       component="span"
       variant="bodySmRegular"
       sx={(theme) => ({
-        color: inverted
-          ? 'inherit'
-          : negative
-          ? theme.palette.text.error
-          : theme.palette.text.success,
+        color:
+          !stated || inverted
+            ? 'inherit'
+            : negative
+            ? theme.palette.text.error
+            : theme.palette.text.success,
       })}
     >
-      {negative ? '−' : '+'}
+      {stated && (negative ? '−' : '+')}
       {figure}
       {nonFungible && ' NFT'}
       {nonFungible && change.token_id && ` #${change.token_id}`}

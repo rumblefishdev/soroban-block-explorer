@@ -21,6 +21,12 @@ describe('scaleByDecimals', () => {
     expect(scaleByDecimals('42', 0)).toBe('42');
   });
 
+  // An asset whose scale is unknown renders "—", never a guessed scale.
+  it('returns null when decimals are unknown', () => {
+    expect(scaleByDecimals('1000000000000000000', null)).toBeNull();
+    expect(scaleByDecimals('1000000000000000000', undefined)).toBeNull();
+  });
+
   it('returns null for null / negative / non-integer input', () => {
     expect(scaleByDecimals(null, 7)).toBeNull();
     expect(scaleByDecimals(undefined, 7)).toBeNull();
