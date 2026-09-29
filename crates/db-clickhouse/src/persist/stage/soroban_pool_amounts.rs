@@ -75,9 +75,10 @@ type Decoded = (PoolEventKind, Option<Vec<(i64, i128)>>);
 /// contracts and transactions; per-field Phoenix events are grouped within
 /// their operation in `event_index` order.
 ///
-/// An event that is not a swap, deposit or withdrawal (`update_reserves`,
-/// `sync`, `claim_fees`, …) is skipped. One that is but cannot be read is
-/// logged at `error!` and skipped — never dropped silently.
+/// An event known to carry no amount ([`NON_AMOUNT_EVENTS`]) is skipped. One
+/// with a name in neither list is logged at `warn!` — a renamed `trade` would
+/// otherwise zero a pool's volume without a trace — and one that is an amount
+/// event but cannot be read at `error!`. Nothing is dropped silently.
 pub fn soroban_pool_amount_rows(
     events: &[SorobanEventRow],
     pools: &HashMap<i64, SorobanPool>,
@@ -187,12 +188,65 @@ pub fn soroban_pool_amount_rows(
                 PoolEventKind::Withdrawal,
                 soroswap_liquidity(&data, pool, -1),
             )),
-            _ => None,
+            (Some("SoroswapPair"), Some("sync" | "skim")) => None,
+            (Some(name), _) if NON_AMOUNT_EVENTS.contains(&name) => None,
+            (name, _) => {
+                tracing::warn!(
+                    contract_id = ev.contract_id,
+                    ledger_sequence = ev.ledger_sequence,
+                    event_index = ev.event_index,
+                    name = name.unwrap_or("<none>"),
+                    "soroban pool event with an unknown name skipped"
+                );
+                None
+            }
         };
         push(&mut out, ev, pool, decoded);
     }
     out
 }
+
+/// Events a pool emits that carry no swap, deposit or withdrawal amount: every
+/// other name registered pools have emitted over the full history (production,
+/// 2026-09-29) — rewards, fees, admin, upgrades, state snapshots, and the
+/// SEP-41 events of a pool that is its own share token.
+pub const NON_AMOUNT_EVENTS: &[&str] = &[
+    "update_reserves",
+    "pool_state",
+    "reserves_sync",
+    "position_update",
+    "claim_reward",
+    "claim_fees",
+    "claim_protocol_fee",
+    "set_rewards_config",
+    "set_rewards_state",
+    "rewards_gauge_add",
+    "rewards_gauge_remove",
+    "rewards_gauge_claim",
+    "rewards_gauge_schedule_reward",
+    "set_privileged_addrs",
+    "set_protocol_fee",
+    "enable_emergency_mode",
+    "disable_emergency_mode",
+    "commit_transfer_ownership",
+    "apply_transfer_ownership",
+    "commit_upgrade",
+    "apply_upgrade",
+    "revert_upgrade",
+    "executable_update",
+    "initialize",
+    "kill_deposit",
+    "kill_swap",
+    "kill_claim",
+    "unkill_deposit",
+    "unkill_swap",
+    "unkill_claim",
+    "toggle_trading",
+    "blend_pool",
+    "mint",
+    "burn",
+    "transfer",
+];
 
 fn unreadable(ev: &SorobanEventRow, why: &str) {
     tracing::error!(

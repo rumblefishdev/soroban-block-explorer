@@ -1021,14 +1021,26 @@ range re-parse would fetch ~800 GB to decode ~1 GB.
 
 3. Verify, read-only:
    `cargo test -p backfill-runner --test soroban_pool_amounts_reconciliation -- --nocapture`
-   — per family and kind, decoded events equal an SQL count of the event
-   shapes, and every pair-family reserve step equals the sum of the amounts
-   (measured 2026-09-29 over 200k ledgers before any write: 100% of events,
-   11,564 of 11,564 steps).
+   — every amount event the pools emitted was decoded, every other event name
+   is on the decoder's list of events that carry no amount
+   (`NON_AMOUNT_EVENTS`), and every pair-family reserve step equals the sum of
+   the amounts (measured 2026-09-29 over 200k ledgers: 0 undecoded, 0 unknown
+   names, 11,576 of 11,576 steps). `POOL_FROM` / `POOL_TO` check other ranges.
 
 A pool registered later is covered by the live writer from its first event.
-The subcommand is a one-shot catch-up: it is deleted once it has run on
-production (`crates/backfill-runner/README.md`, clause 4).
+
+**Re-deriving after a decoder change.** The table is derived data, and the
+subcommand stays: it is the only way to rebuild it short of an archive
+re-parse. A re-run alone is not enough — rows are keyed by the event, so a row
+the new decoder no longer produces would survive. Empty the table first
+(Karol runs it; production write), then refill and verify:
+
+```sql
+TRUNCATE TABLE soroban_pool_event_amounts
+```
+
+then steps 2 and 3. Readers see the pools' volume and activity missing for
+the minutes the refill takes.
 
 ## Event-name backfill (task 0517) — in-DB, per partition
 

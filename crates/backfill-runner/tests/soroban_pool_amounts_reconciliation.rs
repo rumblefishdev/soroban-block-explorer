@@ -1,11 +1,10 @@
 //! Task 0374 (W1) — checks the soroban pool event decoder against production,
 //! read-only, over a recent window of ledgers.
 //!
-//! 1. **Coverage.** Per family and event kind, the events the decoder turns
-//!    into rows equal a separate SQL count of the same event shapes in our
-//!    own `soroban_events` (a check of the decoder, not of the chain). A
-//!    shape the decoder misreads, or a pool whose legs do not resolve, shows
-//!    up as a shortfall.
+//! 1. **Every event accounted for.** Each amount event a registered pool
+//!    emitted in the window was decoded into rows, and every other event name
+//!    is on the decoder's list of events that carry no amount. A renamed or
+//!    new amount event fails here instead of reading as a pool with no volume.
 //! 2. **Amounts, pair family.** A Soroswap pool keeps its whole fee, so the
 //!    change of its stored reserves between two `pool_state_changes` rows
 //!    equals the sum of our amounts in between, to the unit.
@@ -120,90 +119,37 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
         .unwrap();
     let rows = stage::soroban_pool_amounts::soroban_pool_amount_rows(&events, &pools, &sac);
 
-    // 1. Coverage: decoded events per (family, kind) against SQL shape counts.
-    let pool_family: HashMap<[u8; 32], &str> = pools
-        .iter()
-        .map(|(c, p)| (p.pool_id, family.get(c).map(String::as_str).unwrap_or("?")))
-        .collect();
-    // One count per decoded event, by its stored kind.
-    let mut seen = std::collections::HashSet::new();
-    let mut ours: BTreeMap<(String, &'static str), u64> = BTreeMap::new();
-    for r in &rows {
-        let event = (
-            r.pool_id,
-            r.ledger_sequence,
-            r.application_order,
-            r.operation_index,
-            r.event_index,
-        );
-        if !seen.insert(event) {
-            continue;
-        }
-        let kind = ["trade", "deposit", "withdraw"][r.event_kind as usize];
-        *ours
-            .entry((pool_family[&r.pool_id].to_string(), kind))
-            .or_default() += 1;
-    }
-    let expected: Vec<(String, String, u64)> = ch
-        .query(&format!(
-            "SELECT multiIf(t0 = 'SoroswapPair', 'pair', t0t = 'string' OR (n = 1 AND t0 IN ('swap','provide_liquidity','withdraw_liquidity')), 'config', 'router') AS fam, \
-                    multiIf(name IN ('trade','swap'), 'trade', \
-                            name IN ('deposit_liquidity','deposit','provide_liquidity'), 'deposit', 'withdraw') AS kind, \
-                    count() \
-             FROM ( \
-                 SELECT JSONExtractString(topics_xdr, 1, 'value') AS t0, \
-                        JSONExtractString(topics_xdr, 1, 'type') AS t0t, \
-                        JSONLength(topics_xdr) AS n, \
-                        if(t0 = 'SoroswapPair', JSONExtractString(topics_xdr, 2, 'value'), t0) AS name, \
-                        JSONExtractString(topics_xdr, 2, 'value') AS field \
-                 FROM soroban_events \
-                 WHERE contract_id IN ({ids}) AND ledger_sequence > {from} AND ledger_sequence <= {tip} \
-                 LIMIT 1 BY contract_id, ledger_sequence, transaction_index, operation_index, event_index \
-             ) \
-             WHERE name IN ('trade','deposit_liquidity','withdraw_liquidity','swap','deposit','withdraw','provide_liquidity') \
-               AND (t0t != 'string' OR t0 = 'SoroswapPair' OR field = 'sender') \
-             GROUP BY fam, kind ORDER BY fam, kind"
-        ))
-        .fetch_all()
-        .await
-        .unwrap();
+    // 1. Every event a pool emitted is accounted for: an amount event was
+    // decoded, and any other name is on the decoder's list of events that
+    // carry no amount — a renamed `trade` fails here instead of reading as a
+    // pool with no volume.
     println!(
         "window: ledgers {from}..={tip}, {} events read, {} rows",
         events.len(),
         rows.len()
     );
-    let mut short = Vec::new();
-    for (fam, kind, n) in &expected {
-        let got = ours
-            .get(&(fam.clone(), kind_str(kind)))
-            .copied()
-            .unwrap_or(0);
-        println!("{fam:>6} {kind:>8}: events {n:>8}, decoded {got:>8}");
-        if got != *n {
-            short.push(format!("{fam} {kind}: {got} of {n}"));
-        }
-    }
-    if !short.is_empty() {
-        // Name the missing events: the same shape rule as the SQL above,
-        // applied to the events already read, minus the decoded ones.
-        let decoded: std::collections::HashSet<(i64, i64, u32, u16, u32)> = rows
-            .iter()
-            .map(|r| {
-                let contract = pools
-                    .iter()
-                    .find(|(_, p)| p.pool_id == r.pool_id)
-                    .map(|(c, _)| *c)
-                    .unwrap();
-                (
-                    contract,
-                    r.ledger_sequence,
-                    r.application_order as u32,
-                    r.operation_index,
-                    r.event_index,
-                )
-            })
-            .collect();
-        for e in events.iter().filter(|e| is_amount_shape(&e.topics_xdr)) {
+    let decoded: std::collections::HashSet<(i64, i64, u32, u16, u32)> = rows
+        .iter()
+        .map(|r| {
+            let contract = pools
+                .iter()
+                .find(|(_, p)| p.pool_id == r.pool_id)
+                .map(|(c, _)| *c)
+                .unwrap();
+            (
+                contract,
+                r.ledger_sequence,
+                r.application_order as u32,
+                r.operation_index,
+                r.event_index,
+            )
+        })
+        .collect();
+    let mut missing = 0;
+    let mut unknown: BTreeMap<String, u64> = BTreeMap::new();
+    for e in &events {
+        let name = event_name(&e.topics_xdr);
+        if is_amount_shape(&e.topics_xdr) {
             let key = (
                 e.contract_id,
                 e.ledger_sequence,
@@ -212,14 +158,21 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
                 e.event_index,
             );
             if !decoded.contains(&key) {
+                missing += 1;
                 println!(
-                    "  missing: {key:?} {} {}",
+                    "  not decoded: {key:?} {} {}",
                     e.topics_xdr,
                     &e.data_xdr[..e.data_xdr.len().min(300)]
                 );
             }
+        } else if !AMOUNT_NAMES.contains(&name.as_str())
+            && !stage::soroban_pool_amounts::NON_AMOUNT_EVENTS.contains(&name.as_str())
+            && !["SoroswapPair:sync", "SoroswapPair:skim"].contains(&name.as_str())
+        {
+            *unknown.entry(name).or_default() += 1;
         }
     }
+    println!("amount events not decoded: {missing}; unknown names: {unknown:?}");
 
     // 2. Δ stored reserves against Σ our amounts, between two state rows.
     // Exact for the pair family (it keeps its whole fee); the router and
@@ -313,9 +266,13 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
         );
     }
 
+    assert_eq!(
+        missing, 0,
+        "amount events the decoder did not turn into rows"
+    );
     assert!(
-        short.is_empty(),
-        "decoded fewer events than exist: {short:?}"
+        unknown.is_empty(),
+        "pool events with a name in neither list: {unknown:?}"
     );
     assert!(
         off.is_empty(),
@@ -324,15 +281,35 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
     );
 }
 
-fn kind_str(kind: &str) -> &'static str {
-    match kind {
-        "trade" => "trade",
-        "deposit" => "deposit",
-        _ => "withdraw",
+/// Names of the events that carry amounts, in any family; a Phoenix
+/// per-field event carries one of them with a field name as its second topic.
+const AMOUNT_NAMES: [&str; 7] = [
+    "trade",
+    "deposit_liquidity",
+    "withdraw_liquidity",
+    "swap",
+    "deposit",
+    "withdraw",
+    "provide_liquidity",
+];
+
+/// The event's name: its first topic, or `SoroswapPair:<second>` for the
+/// pair family, whose first topic names the contract type.
+fn event_name(topics_xdr: &str) -> String {
+    let t: serde_json::Value = serde_json::from_str(topics_xdr).unwrap_or_default();
+    let v = |i: usize| {
+        t.get(i)
+            .and_then(|x| x.get("value"))
+            .and_then(|x| x.as_str())
+    };
+    match (v(0), v(1)) {
+        (Some("SoroswapPair"), Some(second)) => format!("SoroswapPair:{second}"),
+        (first, _) => first.unwrap_or("<none>").to_string(),
     }
 }
 
-/// The SQL coverage count's shape rule, for naming a missing event.
+/// An event that opens an amount: a named amount event, or the `sender`
+/// event that opens a Phoenix per-field group.
 fn is_amount_shape(topics_xdr: &str) -> bool {
     let t: serde_json::Value = serde_json::from_str(topics_xdr).unwrap_or_default();
     let v = |i: usize, k: &str| {
@@ -346,16 +323,7 @@ fn is_amount_shape(topics_xdr: &str) -> bool {
     } else {
         v(0, "value")
     };
-    let named = [
-        "trade",
-        "deposit_liquidity",
-        "withdraw_liquidity",
-        "swap",
-        "deposit",
-        "withdraw",
-        "provide_liquidity",
-    ]
-    .contains(&name);
+    let named = AMOUNT_NAMES.contains(&name);
     named
         && (v(0, "type") != "string"
             || v(0, "value") == "SoroswapPair"

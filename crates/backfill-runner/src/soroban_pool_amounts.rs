@@ -9,8 +9,9 @@
 //!
 //! Run AFTER the writer is deployed: events arriving meanwhile are covered by
 //! the writer, events before it by this pass, and the overlap collapses.
-//! A one-shot catch-up: delete it once it has run on production (README
-//! clause 4) — the live writer owns the table from then on.
+//! Not a one-shot: the table is derived data, and this is the only way to
+//! re-derive it after a decoder change short of an archive re-parse — so it
+//! stays (runbook: `docs/backfills.md`, "Soroban pool event amounts").
 
 use std::collections::HashMap;
 

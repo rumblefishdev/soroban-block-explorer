@@ -706,7 +706,13 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_in
   (kind 1): the pair family names amounts by leg position, and the registry is
   what proves the emitter is a pool. The writer reads the registry per ledger
   alongside the SAC map; the backfill (`backfill-runner soroban-pool-amounts`)
-  reads `soroban_events` back through the same decoder.
+  reads `soroban_events` back through the same decoder, and stays as the way
+  to re-derive the table after a decoder change.
+- **Nothing dropped silently.** An event name that is neither an amount event
+  nor on the decoder's `NON_AMOUNT_EVENTS` list is logged at `warn!`, and the
+  reconciliation test fails on it.
+- **Reads dedup** (`LIMIT 1 BY` the key): the live writer and the backfill
+  overlap on purpose, so an unmerged `sum(amount)` would count twice.
 
 ### 4.5.4 Asset Transfers (task 0540)
 

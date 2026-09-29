@@ -1114,6 +1114,10 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id
 -- names its amounts by leg position, and the registry is what proves the
 -- emitter is a pool. Same writer live and in the backfill, which reads
 -- `soroban_events` back through the same decoder (`stage/soroban_pool_amounts.rs`).
+--
+-- READS MUST DEDUP (`LIMIT 1 BY` the sorting key): the live writer and the
+-- backfill overlap on purpose, and until a background merge a `sum(amount)`
+-- counts the overlap twice.
 CREATE TABLE IF NOT EXISTS soroban_pool_event_amounts (
     pool_id           FixedString(32),
     ledger_sequence   Int64  CODEC(Delta, ZSTD(1)),
