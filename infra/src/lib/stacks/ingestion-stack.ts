@@ -258,9 +258,7 @@ export class IngestionStack extends cdk.Stack {
       workingDirectory: '/data',
       environment: {
         ...sharedContainerEnv,
-        // TEST VALUE (task 0241 SQS smoke) — start near tip so captive-core
-        // catches up in minutes and the live tail flows fast. REVERT to
-        // '63230777' before the real cutover / snapshot-restore re-run.
+        // The mainnet ledger of the live-export cutover (task 0241).
         START: '63230777',
       },
       secrets: sharedContainerSecrets,

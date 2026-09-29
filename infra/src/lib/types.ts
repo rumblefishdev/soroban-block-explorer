@@ -6,11 +6,11 @@
  * data plane lives on the Hetzner-hosted ClickHouse box reached over
  * mTLS. There is no RDS, no NAT Gateway, no private subnet.
  *
- * Production is the only supported AWS environment until product
- * explicitly asks to bring staging back (see task 0249 archive notes).
+ * One deployment per Stellar network (ADR 0052): `production` is mainnet,
+ * `testnet` is being built (task 0553).
  */
 export interface EnvironmentConfig {
-  readonly envName: 'production';
+  readonly envName: 'production' | 'testnet';
   readonly awsRegion: string;
 
   // Network (consumed by NetworkStack)
@@ -50,6 +50,11 @@ export interface EnvironmentConfig {
   readonly galexieDesiredCount: number;
   /** Stellar network passphrase. Determines which network Galexie connects to. */
   readonly stellarNetworkPassphrase: string;
+  /**
+   * Soroban RPC endpoints of this network, tried in order on failure. The API
+   * receives them as `SOROBAN_RPC_URLS`.
+   */
+  readonly sorobanRpcUrls: readonly string[];
   /** CloudWatch Logs retention in days for ECS log groups. */
   readonly ecsLogRetentionDays: number;
   /** Graceful shutdown timeout in seconds. ECS waits this long after SIGTERM before SIGKILL. */
@@ -424,6 +429,10 @@ export function relativeRecordName(fqdn: string, zoneName: string): string {
  */
 export function validateConfig(config: EnvironmentConfig): void {
   const errors: string[] = [];
+
+  if (config.sorobanRpcUrls.length === 0) {
+    errors.push('sorobanRpcUrls must list at least one endpoint');
+  }
 
   // CloudFront cert must be in us-east-1 regardless of awsRegion.
   if (
