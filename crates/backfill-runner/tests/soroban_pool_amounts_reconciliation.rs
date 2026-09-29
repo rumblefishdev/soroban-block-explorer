@@ -25,12 +25,19 @@ use db_clickhouse::persist::stage;
 /// is checked in slices of a few million ledgers.
 const WINDOW_LEDGERS: i64 = 200_000;
 
+/// Ledgers where a pair-family pool's instance was restored from a stale copy
+/// after protocol 23 (raw ledger meta: change type `restored`): its reserves
+/// jump back with no pool event, so the step cannot match the amounts.
+const RESTORED_STALE: [i64; 3] = [58_774_376, 58_779_504, 58_779_518];
+
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn decoded_pool_events_match_their_events_and_reserves() {
+    // The decoder names every event it refuses (`error!`); show them.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     let user = std::env::var("USER").unwrap_or_default();
     let local = format!(
         "{}/../../infra-hetzner/ca/out/{user}/{user}",
@@ -90,7 +97,9 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
         .await
         .unwrap();
     let env_ledger = |k: &str| std::env::var(k).ok().map(|v| v.parse::<i64>().expect(k));
-    let tip = env_ledger("POOL_TO").unwrap_or(tip);
+    // Never past the tip read above: events arriving during the run would be
+    // counted by the SQL but not in the events already read.
+    let tip = env_ledger("POOL_TO").unwrap_or(tip).min(tip);
     let from = env_ledger("POOL_FROM").unwrap_or(tip - WINDOW_LEDGERS);
     let ids = pools
         .keys()
@@ -174,6 +183,43 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
             short.push(format!("{fam} {kind}: {got} of {n}"));
         }
     }
+    if !short.is_empty() {
+        // Name the missing events: the same shape rule as the SQL above,
+        // applied to the events already read, minus the decoded ones.
+        let decoded: std::collections::HashSet<(i64, i64, u32, u16, u32)> = rows
+            .iter()
+            .map(|r| {
+                let contract = pools
+                    .iter()
+                    .find(|(_, p)| p.pool_id == r.pool_id)
+                    .map(|(c, _)| *c)
+                    .unwrap();
+                (
+                    contract,
+                    r.ledger_sequence,
+                    r.application_order as u32,
+                    r.operation_index,
+                    r.event_index,
+                )
+            })
+            .collect();
+        for e in events.iter().filter(|e| is_amount_shape(&e.topics_xdr)) {
+            let key = (
+                e.contract_id,
+                e.ledger_sequence,
+                e.transaction_index,
+                e.operation_index,
+                e.event_index,
+            );
+            if !decoded.contains(&key) {
+                println!(
+                    "  missing: {key:?} {} {}",
+                    e.topics_xdr,
+                    &e.data_xdr[..e.data_xdr.len().min(300)]
+                );
+            }
+        }
+    }
 
     // 2. Δ stored reserves against Σ our amounts, between two state rows.
     // Exact for the pair family (it keeps its whole fee); the router and
@@ -211,6 +257,7 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
             .push(r);
     }
     let mut steps: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
+    let mut config_samples = Vec::new();
     let mut off = Vec::new();
     for (contract, pool) in &pair_pools {
         let fam = match family.get(contract).map(String::as_str) {
@@ -246,10 +293,15 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
                 .all(|(d, m)| (d - m).abs() * 100 <= m.abs().max(1))
             {
                 s.2 += 1;
-            } else if fam == "pair" {
+            } else if fam == "pair" && !RESTORED_STALE.contains(l2) {
                 off.push((hex::encode(pool.pool_id), *l2, delta, moved));
+            } else if fam == "config" && config_samples.len() < 5 {
+                config_samples.push((hex::encode(pool.pool_id), *l1, *l2, delta, moved));
             }
         }
+    }
+    for c in &config_samples {
+        println!("  config step beyond 1%: {c:?}");
     }
     for (fam, (n, exact, near)) in &steps {
         println!("{fam:>6} reserve steps: {n}, exact {exact}, within 1% {near}");
@@ -278,4 +330,34 @@ fn kind_str(kind: &str) -> &'static str {
         "deposit" => "deposit",
         _ => "withdraw",
     }
+}
+
+/// The SQL coverage count's shape rule, for naming a missing event.
+fn is_amount_shape(topics_xdr: &str) -> bool {
+    let t: serde_json::Value = serde_json::from_str(topics_xdr).unwrap_or_default();
+    let v = |i: usize, k: &str| {
+        t.get(i)
+            .and_then(|x| x.get(k))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+    };
+    let name = if v(0, "value") == "SoroswapPair" {
+        v(1, "value")
+    } else {
+        v(0, "value")
+    };
+    let named = [
+        "trade",
+        "deposit_liquidity",
+        "withdraw_liquidity",
+        "swap",
+        "deposit",
+        "withdraw",
+        "provide_liquidity",
+    ]
+    .contains(&name);
+    named
+        && (v(0, "type") != "string"
+            || v(0, "value") == "SoroswapPair"
+            || v(1, "value") == "sender")
 }

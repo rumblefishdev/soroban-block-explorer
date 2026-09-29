@@ -541,7 +541,8 @@ pub struct PoolOperationAmountRow {
 /// The soroban twin of [`PoolOperationAmountRow`]: `amount` is SIGNED FROM
 /// THE POOL'S SIDE, raw token units in `Int128` (a soroban leg may carry 18
 /// decimals). `event_kind` is stored (0 trade, 1 deposit, 2 withdrawal)
-/// because a trade can carry a zero leg. Column order matches `init.sql`.
+/// because a leg can be zero; every leg is written. Column order matches
+/// `init.sql`.
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
 pub struct SorobanPoolEventAmountRow {
     pub pool_id: [u8; 32],

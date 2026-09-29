@@ -696,8 +696,9 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_in
 - **Grain is (event, leg)**, not (operation, leg): one operation can trade the
   same pool several times (0.74% of router-family pool-operations). A per-field
   Phoenix swap (eight events) is one row group keyed by its opening event.
-- **The kind is stored**, not read from the signs: a trade can carry a zero
-  leg (not written). A trade is written as the trader sees it — gross input
+- **The kind is stored**, not read from the signs: a leg can be zero (a trade
+  with a zero side, a withdrawal paying out nothing), and every leg is written
+  so an event always leaves its rows. A trade is written as the trader sees it — gross input
   in, received output out; fees the pool pays to other recipients are not in
   the row. `Int128` because a soroban leg may carry 18 decimals; scaled at
   read by each leg's decimals.

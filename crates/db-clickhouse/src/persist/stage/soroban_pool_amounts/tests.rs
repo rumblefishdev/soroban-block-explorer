@@ -228,8 +228,8 @@ fn only_registered_pools_and_their_own_tokens_are_read() {
     assert!(soroban_pool_amount_rows(&[stranger, foreign], &pools(), &sac()).is_empty());
 }
 
-/// 42 trades on production have a zero `amount_in` or `amount_out`; the zero
-/// leg is not written, and the stored kind keeps the remaining row a trade.
+/// 42 trades on production have a zero `amount_in` or `amount_out`: both legs
+/// are written, and the stored kind says trade whatever the signs show.
 #[test]
 fn a_trade_with_a_zero_leg_stays_a_trade() {
     let ev = event(
@@ -238,8 +238,14 @@ fn a_trade_with_a_zero_leg_stays_a_trade() {
         vec_of(&[i128v(500), i128v(0), i128v(0)]),
     );
     let rows = soroban_pool_amount_rows(&[ev], &pools(), &sac());
-    assert_eq!(legs(&rows), vec![(0, ids::contract_id(PYUSD), 500)]);
-    assert_eq!(rows[0].event_kind, PoolEventKind::Trade as u8);
+    assert_eq!(
+        legs(&rows),
+        vec![(0, ids::contract_id(PYUSD), 500), (0, USDC, 0)]
+    );
+    assert!(
+        rows.iter()
+            .all(|r| r.event_kind == PoolEventKind::Trade as u8)
+    );
 }
 
 /// The map-form Phoenix deposit names its amounts `actual_received_{a,b}`

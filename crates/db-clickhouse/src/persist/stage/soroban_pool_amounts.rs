@@ -58,8 +58,8 @@ pub fn stage_soroban_pool_amounts(
 }
 
 /// What an event did to the pool — stored, not inferred from the signs: a
-/// trade may carry a zero leg (42 on production), which the signs alone
-/// would read as a deposit or a withdrawal.
+/// trade may carry a zero leg (42 on production) and a withdrawal may pay out
+/// nothing, which the signs alone would misread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PoolEventKind {
@@ -222,11 +222,11 @@ fn push(
         unreadable(ev, "names a token the pool does not hold");
         return;
     }
-    // A leg that moved nothing is not written (as in `pool_operation_amounts`);
-    // the stored kind keeps a one-legged trade a trade.
+    // Every leg is written, a zero one too: a withdrawal paying out nothing
+    // (183 in ledgers 62-63M) still burned shares, and would otherwise leave
+    // no row at all.
     out.extend(
         legs.into_iter()
-            .filter(|(_, amount)| *amount != 0)
             .map(|(asset_id, amount)| SorobanPoolEventAmountRow {
                 pool_id: pool.pool_id,
                 ledger_sequence: ev.ledger_sequence,

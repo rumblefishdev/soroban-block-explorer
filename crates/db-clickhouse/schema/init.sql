@@ -1105,8 +1105,9 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id
 -- at read by each leg's own decimals. A trade is written as the trader sees
 -- it: gross input in, received output out; fees the pool pays to other
 -- recipients are not in the row. `event_kind` (0 trade, 1 deposit,
--- 2 withdrawal) is STORED, not read from the signs: a trade can carry a zero
--- leg, which is not written. `asset_id` = the leg's `liquidity_pools.legs` id
+-- 2 withdrawal) is STORED, not read from the signs: a leg can be zero (a
+-- trade with a zero side, a withdrawal paying out nothing), and every leg is
+-- written, so an event always leaves its rows. `asset_id` = the leg's `liquidity_pools.legs` id
 -- (a SAC token keyed onto the classic asset it wraps).
 --
 -- Written only for events of pools in the registry (kind 1): the pair family
