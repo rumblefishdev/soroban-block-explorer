@@ -2,7 +2,7 @@
 id: '0585'
 title: 'REFACTOR: the parser emits a 0-based operation index (stellar-rpc convention)'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0059']
 related_tasks: ['0372', '0538', '0573']
 tags: [xdr-parser, clickhouse, effort-small, priority-medium]
@@ -19,6 +19,15 @@ history:
       after 0372's last PR). The tables store the 0-based operation_index
       since 0372; the parser still emits the 1-based Horizon position and the
       writer subtracts one.
+  - date: '2026-09-30'
+    status: active
+    who: karolkow
+    note: >
+      Activated (thread 346 A) as the step before 0538's wire rename (#554,
+      held as a draft): the parser counts from 0, the offsets go, and the API
+      keeps its 1-based fields for now with one `+ 1`; #554 then renames them
+      and drops that `+ 1`. The variant-B draft branch no longer exists —
+      rewritten from this task's scope.
 ---
 
 # The parser emits a 0-based operation index
@@ -52,8 +61,9 @@ number: the API wire (`application_order`, the `#op-N` anchor).
 
 - [ ] `ExtractedOperation.operation_index` is 0-based; its doc says so
 - [ ] No `- 1` / `checked_sub` conversion left between parser and tables
-- [ ] API wire unchanged: operation `application_order` / `appearance_id`
-      still 1-based (checked against production through the dev proxy)
+- [ ] API wire unchanged by this PR: operation `application_order` /
+      `appearance_id` still 1-based (checked against production data);
+      the rename to 0-based `operation_index` is #554's
 - [ ] A test that fails if the parser goes back to 1-based
 - [ ] **Docs updated** — `types.rs`, xdr-parsing overview if it names the
       convention
