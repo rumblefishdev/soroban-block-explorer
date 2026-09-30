@@ -6,7 +6,9 @@ network starts again from ledger 1, under the same passphrase. Nothing in the
 `testnet` database survives it: every table is keyed on the ledger sequence,
 so the new chain's ledger N would overwrite the old one's.
 
-The same steps build the database the first time (steps 4–6).
+The same steps build the database the first time (steps 4–7):
+`infra/envs/testnet.json` is committed paused (`indexerLambdaConcurrency: 0`),
+so the first deploy starts nothing until the backfill is in.
 
 ## How it shows up
 
@@ -34,9 +36,18 @@ A new dated folder, and an RPC tip far below the last ledger in `testnet`,
 mean a reset. List the new folder twice a minute apart: its newest partition
 must grow.
 
+Not a reset — the RPC tip is close to the last indexed ledger:
+
+- the indexer fails (`testnet-ledger-processor-error-rate`, its logs): testnet
+  took a protocol upgrade the parser cannot decode yet — bump `stellar-xdr`
+  (testnet upgrades weeks before mainnet, so mainnet needs the same bump);
+- the indexer runs clean but finds no next file: the lake is late — wait, the
+  alarm clears by itself once files land.
+
 **2. Pause the testnet indexer:** `indexerLambdaConcurrency: 0` in
-`infra/envs/testnet.json`, then `make -C infra deploy-testnet`. The keepalive
-messages keep queueing and are harmless.
+`infra/envs/testnet.json`, then `make -C infra deploy-testnet`. The same
+setting disables the once-a-minute keepalive, so nothing queues while paused;
+`testnet-ingestion-stall` stays in alarm until step 7.
 
 **3. Drop the database** (production ClickHouse box, as `default`; irreversible,
 testnet data only):
@@ -77,7 +88,8 @@ Ranges run in parallel as separate processes; after a parallel run,
 `repair-tier1` is mandatory, with the indexer still paused.
 
 **7. Resume:** `indexerLambdaConcurrency: 1`, `make -C infra deploy-testnet`.
-The indexer continues from `max(sequence) + 1`.
+This also enables the keepalive; its first wake continues from
+`max(sequence) + 1`.
 
 ## Done when
 

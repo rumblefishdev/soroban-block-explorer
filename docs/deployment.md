@@ -121,9 +121,12 @@ and edge-secret rule in `rf-domains`, the testnet hostname on the Turnstile
 widget; then `enableCloudflareApiDomain`, `enableEdgeSecretLock` and
 `enableAuthLayer` flip to `true` and the SPA is rebuilt.
 
-A new `testnet` database is empty, and the indexer does nothing until it holds
-a first ledger: backfill from genesis first
-([`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md), steps 4–6).
+`infra/envs/testnet.json` is committed **paused** (`indexerLambdaConcurrency:
+0`, which also disables the keepalive): a new `testnet` database is empty, and
+an indexer with nothing to continue from would only keep the stall alarm
+firing. The first deploy therefore starts nothing; backfill from genesis, then
+resume ([`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md), steps
+4–7).
 
 ---
 

@@ -441,6 +441,7 @@ export class ComputeStack extends cdk.Stack {
       new PublicLakeKeepalive(this, 'PublicLakeKeepalive', {
         envName: config.envName,
         ingestQueue,
+        enabled: config.indexerLambdaConcurrency > 0,
       });
       // The indexer queues its own next wake-up, one per ledger it expects.
       processorFunction.addEnvironment(

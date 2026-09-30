@@ -18,20 +18,17 @@ const require = createRequire(import.meta.url);
 const testnet = require('../../envs/testnet.json') as EnvironmentConfig;
 
 type Resource = { Type: string; Properties: Record<string, unknown> };
-const templates: Record<string, Record<string, Resource>> = {};
-const ofType = (stack: string, type: string): Resource[] =>
-  Object.values(templates[stack] ?? {}).filter((r) => r.Type === type);
+type Templates = Record<string, Record<string, Resource>>;
 
-beforeAll(() => {
+// Each synth writes into its own directory: CDK reads CDK_OUTDIR per app.
+function synth(config: EnvironmentConfig): Templates {
   const out = mkdtempSync(join(tmpdir(), 'testnet-synth-'));
   process.env['CDK_OUTDIR'] = out;
   process.env['CDK_CONTEXT_JSON'] = JSON.stringify({
     'aws:cdk:bundling-stacks': [],
   });
-  createApp({
-    config: testnet,
-    cargoWorkspacePath: resolve(here, '../../..'),
-  });
+  createApp({ config, cargoWorkspacePath: resolve(here, '../../..') });
+  const templates: Templates = {};
   for (const file of readdirSync(out)) {
     const match = /^Explorer-testnet-(\w+)\.template\.json$/.exec(file);
     if (match?.[1]) {
@@ -39,6 +36,23 @@ beforeAll(() => {
         .Resources as Record<string, Resource>;
     }
   }
+  return templates;
+}
+
+// The committed config starts paused; the reset runbook's last step resumes it.
+let templates: Templates = {};
+let resumed: Templates = {};
+const ofType = (stack: string, type: string, from = templates): Resource[] =>
+  Object.values(from[stack] ?? {}).filter((r) => r.Type === type);
+// The indexer's consumer of its ingest queue (the enrichment worker has its own).
+const ingestConsumers = (from: Templates): Resource[] =>
+  ofType('Compute', 'AWS::Lambda::EventSourceMapping', from).filter((m) =>
+    JSON.stringify(m.Properties['EventSourceArn']).includes('LedgerIngestQueue')
+  );
+
+beforeAll(() => {
+  templates = synth(testnet);
+  resumed = synth({ ...testnet, indexerLambdaConcurrency: 1 });
 });
 
 describe('testnet environment', () => {
@@ -78,16 +92,25 @@ describe('testnet environment', () => {
     );
   });
 
-  it('wakes the indexer once a minute, and publishes no S3 events', () => {
-    const schedules = ofType('Compute', 'AWS::Scheduler::Schedule');
+  it('ships paused: no queue consumer, no keepalive, until the database holds ledgers', () => {
+    expect(testnet.indexerLambdaConcurrency).toBe(0);
+    expect(ingestConsumers(templates)).toHaveLength(0);
+    const [keepalive] = ofType('Compute', 'AWS::Scheduler::Schedule');
+    expect(keepalive?.Properties['State']).toBe('DISABLED');
+  });
+
+  it('once resumed, wakes the indexer once a minute and publishes no S3 events', () => {
+    const schedules = ofType('Compute', 'AWS::Scheduler::Schedule', resumed);
     expect(schedules).toHaveLength(1);
+    expect(schedules[0]?.Properties['State']).toBe('ENABLED');
     expect(schedules[0]?.Properties['ScheduleExpression']).toBe(
       'rate(1 minute)'
     );
     expect(JSON.stringify(schedules[0]?.Properties['Target'])).toContain(
       'keepalive'
     );
-    expect(ofType('Compute', 'AWS::SNS::Topic')).toHaveLength(0);
+    expect(ingestConsumers(resumed)).toHaveLength(1);
+    expect(ofType('Compute', 'AWS::SNS::Topic', resumed)).toHaveLength(0);
   });
 
   it('alarms on a stall instead of on Galexie, and leaves the cost monitor to production', () => {

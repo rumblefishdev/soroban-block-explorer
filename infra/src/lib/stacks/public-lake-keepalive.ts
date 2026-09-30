@@ -8,6 +8,11 @@ export interface PublicLakeKeepaliveProps {
   readonly envName: string;
   /** The indexer's ingest queue; each message wakes one reconcile. */
   readonly ingestQueue: sqs.IQueue;
+  /**
+   * False while the indexer is paused: a paused indexer gets no messages, so
+   * none pile up in its queue.
+   */
+  readonly enabled: boolean;
 }
 
 /**
@@ -27,6 +32,7 @@ export class PublicLakeKeepalive extends Construct {
     new scheduler.Schedule(this, 'Schedule', {
       scheduleName: `${props.envName}-lake-keepalive`,
       description: 'Wakes the indexer once a minute (task 0553)',
+      enabled: props.enabled,
       schedule: scheduler.ScheduleExpression.rate(cdk.Duration.minutes(1)),
       target: new targets.SqsSendMessage(props.ingestQueue, {
         input: scheduler.ScheduleTargetInput.fromObject({ keepalive: true }),
