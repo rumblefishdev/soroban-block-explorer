@@ -23,7 +23,7 @@ struct PoolDetailChRow {
     legs: Vec<i64>,
     fee_bps: i32,
     created_at_ledger: i64,
-    participant_count: i64,
+    participant_count: Option<i64>,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
     reserve_b: Option<String>,
@@ -88,9 +88,11 @@ pub async fn fetch_pool_by_id(
                     (SELECT minOrNull(ledger_sequence) FROM liquidity_pool_snapshots \
                       WHERE pool_id = unhex(?)), \
                     lp.last_updated_ledger)          AS created_at_ledger, \
-                toInt64(ifNull( \
+                /* classic: its `lp_positions`; soroban: NULL here, its \
+                   share-token holders are counted by the handler. */ \
+                if(lp.pool_kind = 0, toNullable(toInt64(ifNull( \
                     (SELECT count() FROM lp_positions FINAL \
-                      WHERE pool_id = unhex(?) AND shares > 0), 0)) AS participant_count, \
+                      WHERE pool_id = unhex(?) AND shares > 0), 0))), NULL) AS participant_count, \
                 s.ledger_sequence                    AS latest_snapshot_ledger, \
                 toString(s.reserve_a)                AS reserve_a, \
                 toString(s.reserve_b)                AS reserve_b, \
@@ -162,9 +164,7 @@ pub async fn fetch_pool_by_id(
         created_at_ledger: r.created_at_ledger,
         // Detail does not paginate; the field is set for struct completeness.
         cursor_ledger: r.created_at_ledger,
-        // A soroban pool's count is its share-token holders, read by the
-        // handler; `lp_positions` holds classic providers only.
-        participant_count: (pool_kind == domain::PoolKind::Classic).then_some(r.participant_count),
+        participant_count: r.participant_count,
         latest_snapshot_ledger: r.latest_snapshot_ledger,
         total_shares,
         // Filled by the handler from `fetch_pool_usd_analytics` (0199
