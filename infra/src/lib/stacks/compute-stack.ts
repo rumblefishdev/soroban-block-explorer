@@ -15,7 +15,7 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
-import { PublicLakeDoorbell } from './public-lake-doorbell.js';
+import { PublicLakeKeepalive } from './public-lake-keepalive.js';
 
 const DLQ_RETENTION_DAYS = 14;
 
@@ -436,8 +436,9 @@ export class ComputeStack extends cdk.Stack {
         });
       }
     } else {
-      // No bucket of ours to publish events: ring the indexer on a schedule.
-      new PublicLakeDoorbell(this, 'PublicLakeDoorbell', {
+      // No bucket of ours to publish events: the indexer paces itself, and a
+      // once-a-minute keepalive restarts it if that stops.
+      new PublicLakeKeepalive(this, 'PublicLakeKeepalive', {
         envName: config.envName,
         ingestQueue,
       });

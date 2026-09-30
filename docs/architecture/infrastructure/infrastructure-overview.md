@@ -614,8 +614,9 @@ Current environments (post-task-0249):
   the Hetzner-hosted ClickHouse data plane over mTLS.
 - **Testnet** (task 0553, ADR 0052) — the same code against Stellar
   Testnet, `Explorer-testnet-*` stacks from `envs/testnet.json`. No Galexie,
-  ledger bucket or VPC: the indexer reads SDF's public data lake, rung every
-  2 s by EventBridge Scheduler. Data in a `testnet` database on the same
+  ledger bucket or VPC: the indexer reads SDF's public data lake and paces
+  itself, one delayed SQS message per ledger it expects, with a
+  once-a-minute Scheduler keepalive. Data in a `testnet` database on the same
   ClickHouse box, under its own users and quotas.
 
 AWS-side staging was retired by task 0249 and is not redeployed in

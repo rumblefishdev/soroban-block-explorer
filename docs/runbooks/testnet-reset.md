@@ -35,8 +35,8 @@ mean a reset. List the new folder twice a minute apart: its newest partition
 must grow.
 
 **2. Pause the testnet indexer:** `indexerLambdaConcurrency: 0` in
-`infra/envs/testnet.json`, then `make -C infra deploy-testnet`. The doorbells
-keep queueing and are harmless.
+`infra/envs/testnet.json`, then `make -C infra deploy-testnet`. The keepalive
+messages keep queueing and are harmless.
 
 **3. Drop the database** (production ClickHouse box, as `default`; irreversible,
 testnet data only):

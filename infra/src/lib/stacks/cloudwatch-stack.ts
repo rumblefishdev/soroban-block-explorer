@@ -435,14 +435,16 @@ export class CloudWatchStack extends cdk.Stack {
     } else {
       // ---------------------
       // Alarm 1c: public-lake stall (task 0553)
-      // With the public data lake the doorbell rings on a schedule whether or
-      // not a ledger landed, so the doorbell count proves nothing. What does:
+      // With the public data lake the indexer rings itself and a keepalive
+      // rings every minute whether or not a ledger landed, so the doorbell
+      // count proves nothing. What does:
       // how old the newest indexed ledger is. One alarm covers a lake outage,
       // a testnet reset (the old genesis folder stops growing; the sequence
       // never goes backwards) and a protocol upgrade the parser cannot decode.
-      // Measured 2026-09-30 over an hour of testnet: the lag with a 2 s
-      // doorbell peaks near 10 s, so 60 s for 3 minutes never pages on a
-      // healthy lake. BREACHING: a stalled indexer publishes no datapoint.
+      // Simulated 2026-09-30 on an hour of measured testnet arrivals: with the
+      // indexer pacing itself the lag peaks near 10 s, so 60 s for 3 minutes
+      // never pages on a healthy lake. BREACHING: a stalled indexer publishes
+      // no datapoint.
       // ---------------------
       withActions(
         new cloudwatch.Alarm(this, 'LakeStallAlarm', {

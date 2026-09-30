@@ -76,19 +76,15 @@ describe('testnet environment', () => {
     );
   });
 
-  it('rings the indexer every 2 s through the minute, and publishes no S3 events', () => {
-    // The input embeds the queue URL, so CloudFormation holds it as an
-    // Fn::Join rather than a JSON string; read the delays from its text.
-    const delays = ofType('Compute', 'AWS::Scheduler::Schedule')
-      .flatMap((s) =>
-        [
-          ...JSON.stringify(s.Properties['Target']).matchAll(
-            /DelaySeconds\W+(\d+)/g
-          ),
-        ].map((m) => Number(m[1]))
-      )
-      .sort((a, b) => a - b);
-    expect(delays).toEqual(Array.from({ length: 30 }, (_, i) => i * 2));
+  it('wakes the indexer once a minute, and publishes no S3 events', () => {
+    const schedules = ofType('Compute', 'AWS::Scheduler::Schedule');
+    expect(schedules).toHaveLength(1);
+    expect(schedules[0]?.Properties['ScheduleExpression']).toBe(
+      'rate(1 minute)'
+    );
+    expect(JSON.stringify(schedules[0]?.Properties['Target'])).toContain(
+      'keepalive'
+    );
     expect(ofType('Compute', 'AWS::SNS::Topic')).toHaveLength(0);
   });
 

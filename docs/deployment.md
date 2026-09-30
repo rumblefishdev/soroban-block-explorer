@@ -96,8 +96,10 @@ and region. What differs from production:
 
 - **No Galexie, no ledger bucket, no VPC.** `ledgerSource: public-lake`: the
   indexer reads SDF's public data lake (`aws-public-blockchain`, folder in
-  `publicArchivePrefix`). The lake publishes no events, so EventBridge
-  Scheduler rings the indexer every 2 s (`public-lake-doorbell.ts`).
+  `publicArchivePrefix`). The lake publishes no events, so the indexer paces
+  itself: after each ledger it queues one message delayed to when the next
+  file should have landed. A once-a-minute EventBridge Scheduler keepalive
+  (`public-lake-keepalive.ts`) restarts that chain if it stops.
 - **Its own ClickHouse database**, `testnet` on the production box, reached as
   `testnet_reader` / `testnet_writer` through certs under
   `soroban/testnet/mtls/*` (`docs/architecture/security/clickhouse-rbac.md`).
