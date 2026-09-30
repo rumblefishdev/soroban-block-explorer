@@ -501,6 +501,15 @@ buckets against this:
 | open             | live                      | differ, ours newer        | `divergent ours newer`        | nothing — the live parser saw more                          |
 | open             | live                      | differ, SAME ledger       | **`divergent SAME ledger`**   | nothing — defect signal                                     |
 
+**Signers are gated on version, not on a verdict.** `account_entry_state`
+gets a row only for a live account whose entry is newer than our newest row
+of it (task 0521) — the rule the classic-pool pass uses. The summary line
+reports new, changed and unchanged, and the three sum to the snapshot's live
+accounts. On a first seed nearly all are new; on any later pass nearly all
+are unchanged (0 written of 10,909,433 on 2026-09-02). **A later pass that
+writes millions again is the signal** that the live signers writer stopped
+stamping.
+
 **Version discipline:** a live fact versions on the entry's own
 `lastModifiedLedgerSeq`; an absence fact (closure, ghost) on the run's
 checkpoint ledger, meaning "true at or before". Never a synthetic stamp. The
