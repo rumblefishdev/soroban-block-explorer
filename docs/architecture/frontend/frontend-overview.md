@@ -740,7 +740,7 @@ Contract details and interface.
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state
 - Invocations tab - recent invocations table (transaction hash, caller — an account or a
-  contract, each linked (task 0487) — status,
+  contract in one `caller` field, each linked (tasks 0487, 0600) — status,
   ledger, timestamp). The appearance index carries no per-call function name — call
   detail is XDR-only (ADR 0034), so the transaction hash links to the full detail
 - Events tab - recent events table (event type, topics, data, ledger). Only `contract`
