@@ -47,6 +47,11 @@ pub const INVALID_ID: &str = "invalid_id";
 /// Resource not found by its primary key (hash, ID, …).
 pub const NOT_FOUND: &str = "not_found";
 
+/// The resource exists but the data this endpoint serves is not recorded for
+/// it (e.g. the providers of a concentrated soroban pool) — distinct from an
+/// empty result, which would read as "none".
+pub const NOT_INDEXED: &str = "not_indexed";
+
 /// Path parameter `:hash` failed shape validation (not 64 hex chars).
 /// Used by `transactions/:hash` and any other hex-hash path.
 pub const INVALID_HASH: &str = "invalid_hash";

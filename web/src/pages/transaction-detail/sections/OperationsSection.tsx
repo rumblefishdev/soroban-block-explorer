@@ -44,7 +44,6 @@ export function OperationsSection({ tx }: OperationsSectionProps) {
       light={selected?.light}
       heavy={selected?.heavy ?? null}
       applied={tx.successful}
-      fallbackOrder={selectedIndex + 1}
       txSourceAccount={tx.source_account ?? null}
       operationTree={tx.heavy?.operation_tree}
       contractEvents={tx.heavy?.contract_events ?? []}

@@ -38,7 +38,7 @@ function event(
     operation_index: null,
     stage: null,
     ...extra,
-  } as unknown as XdrEventDto;
+  };
 }
 
 function renderSection(
@@ -164,7 +164,7 @@ describe('EventsSection (#378 — the consensus stream is the event list)', () =
       // The refund fires AFTER the operation below it — the row number is a
       // position in the record, the stage is the time.
       'after tx',
-      'op 1',
+      'op 0',
     ]);
   });
 

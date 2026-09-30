@@ -32,7 +32,7 @@ function matchLight(
 ): OperationItem | undefined {
   const upper = heavy.op_type.toUpperCase();
   return (
-    lightOps.find((l) => l.application_order === heavy.application_order) ??
+    lightOps.find((l) => l.operation_index === heavy.operation_index) ??
     // ponytail: folded rows share one light identity per type, so a type
     // match returns the right identity for every heavy op in the fold. Mixed
     // same-type folds with differing destinations would pick the first row —
@@ -50,9 +50,10 @@ export function buildOperationEntries(
   return heavyOps.map((heavy) => {
     const light = matchLight(heavy, lightOps);
     const base: OperationItem = light ?? {
-      appearance_id: heavy.application_order,
+      appearance_id: heavy.operation_index + 1,
       created_at: tx.created_at,
       ledger_sequence: tx.ledger_sequence,
+      operation_index: heavy.operation_index,
       pool_ids: [],
       type: 0,
       type_name: heavy.op_type.toUpperCase(),
@@ -62,8 +63,8 @@ export function buildOperationEntries(
     // lives on `light`, which the panels use).
     const row: OperationItem = {
       ...base,
-      appearance_id: heavy.application_order,
-      application_order: heavy.application_order,
+      appearance_id: heavy.operation_index + 1,
+      operation_index: heavy.operation_index,
     };
     return { row, light, heavy };
   });

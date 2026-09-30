@@ -160,6 +160,35 @@
             </interval>
         </prices_read>
 
+        <!-- testnet tenant (task 0553). Copies of prices_read and
+             prices_write under their own names, for the same reason as the
+             prices pair: testnet traffic never draws down a mainnet service's
+             budget, and testnet_read is not `unlimited`, so testnet cannot
+             drain the shared box. -->
+        <testnet_read>   <!-- mirrors prices_read -->
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>10000000000</result_rows>
+                <read_rows>50000000000</read_rows>
+                <read_bytes>1099511627776</read_bytes>
+                <execution_time>0</execution_time>
+            </interval>
+        </testnet_read>
+
+        <testnet_write>   <!-- mirrors prices_write -->
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+                <written_bytes>1125899906842624</written_bytes>
+            </interval>
+        </testnet_write>
+
         <!-- low_volume quota removed in task 0241 — its only consumers
              (migration_admin + partition_admin) were removed with the
              PG-era migration + partition Lambdas. -->

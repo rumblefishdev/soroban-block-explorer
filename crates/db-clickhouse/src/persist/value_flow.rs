@@ -82,12 +82,11 @@ pub fn build_value_flow_rows(
                 t.transaction_hash
             )));
         };
-        // `operation_index` is 1-based (Horizon convention); `op_index` is the
-        // zero-based envelope position the event container reports.
+        // Both are the operation's 0-based envelope position (ADR 0059).
         let op = ops_by_hash
             .get(t.transaction_hash.as_str())
             .and_then(|ops| ops.get(t.op_index as usize))
-            .filter(|op| op.operation_index == t.op_index + 1);
+            .filter(|op| op.operation_index == t.op_index);
 
         let (from_id, from_kind, from_muxed_id) = endpoint(t.from.as_deref(), |g| {
             // Sender: the op's own source if it overrides, else the tx source.

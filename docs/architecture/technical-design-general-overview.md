@@ -418,9 +418,11 @@ types, return types).
 `filter[collection]`, `filter[contract_id]`.
 
 **`GET /nfts/:contract_id/:token_id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
-media URL.
+media URL. The owner (`owner`) is a `G…` account or a `C…` contract; null once the NFT is
+burned. List rows carry the same field.
 
-**`GET /nfts/:contract_id/:token_id/transfers`** — Transfer history for a single NFT.
+**`GET /nfts/:contract_id/:token_id/transfers`** — Transfer history for a single NFT; each side of a
+change (`from`, `to`) is likewise a `G…` account or a `C…` contract.
 
 #### Liquidity Pools
 

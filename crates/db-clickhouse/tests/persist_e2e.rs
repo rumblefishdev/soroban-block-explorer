@@ -88,7 +88,7 @@ fn fixture_ops(tx_hash: &str) -> Vec<(String, Vec<ExtractedOperation>)> {
     let pool = "ab".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx_hash.to_string(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::LiquidityPoolDeposit,
         source_account: None,
         asset_appearances: vec![],

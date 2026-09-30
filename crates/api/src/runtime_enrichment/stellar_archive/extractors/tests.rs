@@ -69,3 +69,48 @@ fn transaction_page_events_carry_rpc_ids_in_execution_order() {
     assert_eq!(ids, sorted, "consensus events in rpc id order");
     assert!(heavy.diagnostic_events.iter().all(|e| e.id.is_none()));
 }
+
+/// The wire numbers operations from 0 (ADR 0059): the first operation is
+/// `operation_index` 0, and an operation's events name the same index.
+#[test]
+fn operations_are_numbered_from_zero_like_their_events() {
+    let meta = ledger();
+    let net_id = xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE);
+    let ledger_info = xdr_parser::extract_ledger(&meta);
+    let txs = xdr_parser::extract_transactions(
+        &meta,
+        ledger_info.sequence,
+        ledger_info.closed_at,
+        &net_id,
+    );
+
+    // A transaction with several operations and at least one operation event.
+    let heavy = txs
+        .iter()
+        .filter_map(|tx| extract_e3_heavy(&meta, &tx.hash, &net_id))
+        .find(|h| {
+            h.operations.len() > 1
+                && h.contract_events
+                    .iter()
+                    .any(|e| e.operation_index.is_some())
+        })
+        .expect("a multi-operation transaction with an operation event");
+
+    let indexes: Vec<i16> = heavy
+        .operations
+        .iter()
+        .map(|op| op.operation_index)
+        .collect();
+    let expected: Vec<i16> = (0..heavy.operations.len() as i16).collect();
+    assert_eq!(indexes, expected);
+    for e in heavy
+        .contract_events
+        .iter()
+        .filter_map(|e| e.operation_index)
+    {
+        assert!(
+            indexes.contains(&e),
+            "event names operation {e}, which does not exist"
+        );
+    }
+}

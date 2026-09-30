@@ -126,7 +126,7 @@ async fn lp_ch_rows_decode() {
         .expect("participant rows decode");
 
     // price context — `PriceContextChRow` (chart's 404 gate).
-    let ctx = fetch_pool_price_context(&ch, &pool)
+    let ctx = fetch_pool_chart_context(&ch, &pool)
         .await
         .expect("price-context row decodes")
         .expect("bootstrapped pool exists");
@@ -151,16 +151,53 @@ async fn lp_ch_rows_decode() {
     }
 
     // detail USD analytics — `Vol24ChRow` + `LastCloseChRow`.
-    fetch_pool_usd_analytics(&ch, &pool, &ctx, &[None, None])
+    fetch_pool_usd_analytics(&ch, &pool, &ctx.price, &[None, None])
         .await
         .expect("usd-analytics rows decode");
 
     // chart — `ChartChRow`, incl. the `samples_in_bucket` UInt64.
     let to = chrono::Utc::now();
     let from = to - chrono::Duration::days(90);
-    fetch_pool_chart(&ch, &pool, &ctx, "1d", from, to)
+    fetch_pool_chart(&ch, &pool, &ctx.price, "1d", from, to)
         .await
         .expect("chart rows decode");
+
+    // soroban chart — `SorobanChartChRow`, on the pool with the newest
+    // reserve change, so the window has rows to decode.
+    #[derive(clickhouse::Row, serde::Deserialize)]
+    struct SorobanPoolRow {
+        pool: String,
+    }
+    let Some(soroban) = ch
+        .query(
+            "SELECT lower(hex(pool_id)) AS pool FROM pool_state_changes \
+             ORDER BY ledger_sequence DESC LIMIT 1",
+        )
+        .fetch_optional::<SorobanPoolRow>()
+        .await
+        .expect("soroban pool id decodes")
+    else {
+        eprintln!("no soroban pool state — skipping soroban chart decode");
+        return;
+    };
+    let soroban_ctx = fetch_pool_chart_context(&ch, &soroban.pool)
+        .await
+        .expect("soroban chart context decodes")
+        .expect("soroban pool exists");
+    let points = fetch_soroban_pool_chart(
+        &ch,
+        &soroban.pool,
+        &soroban_ctx,
+        "1h",
+        to - chrono::Duration::days(1),
+        to,
+    )
+    .await
+    .expect("soroban chart rows decode");
+    assert!(
+        !points.is_empty(),
+        "the newest reserve change is in the last day"
+    );
 }
 
 /// Paging must not repeat a row, which it does the moment the outer

@@ -1504,7 +1504,7 @@
             }
           },
           "400": {
-            "description": "Invalid pool_id, limit, or cursor",
+            "description": "Invalid pool_id, limit, or cursor; or `not_indexed`: a soroban pool whose providers are not readable (no share token — a concentrated pool — or a token that publishes no decimals)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2045,13 +2045,7 @@
       "AccountBalance": {
         "type": "object",
         "description": "Native rows have `null` `asset_code` / `asset_issuer`; classic credit rows have\nboth; Soroban (type-3) token rows carry `contract_id` + on-chain `name`/`symbol`\ninstead (the account portfolio includes Soroban balances, task 0331 Option C).",
-        "required": [
-          "type",
-          "balance",
-          "decimals",
-          "last_updated_ledger",
-          "sac_deployed"
-        ],
+        "required": ["type", "balance", "last_updated_ledger", "sac_deployed"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -2072,9 +2066,9 @@
             "description": "C-strkey of the Soroban token's contract (type-3 only) — the identity +\nlink target (`/assets/${contract_id}`). `null` for native / classic."
           },
           "decimals": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "Display decimals — 7 for classic, on-chain `METADATA` for Soroban tokens.",
+            "description": "Display decimals — 7 for native and classic, on-chain metadata for a\nSoroban token. `null` when the token publishes none we could read: the\nbalance then has no known scale, and a guessed 7 would be off by 10^11\nfor an 18-decimal token.",
             "minimum": 0
           },
           "last_updated_ledger": {
@@ -2103,7 +2097,7 @@
       "AccountBalanceChange": {
         "type": "object",
         "description": "One asset's net balance change for the account whose page this is\n(task 0540). Relative to that account by construction: the same\ntransaction seen from another account carries different numbers.",
-        "required": ["asset", "decimals", "nft_delta"],
+        "required": ["asset", "nft_delta"],
         "properties": {
           "amount": {
             "type": ["string", "null"],
@@ -2118,9 +2112,9 @@
             "description": "Display code (`\"USDC\"`, or a bespoke token's on-chain symbol).\n`null` for native — render as XLM — and for a token with no symbol."
           },
           "decimals": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "Display decimals — 7 for native/classic/SAC, on-chain `METADATA` for a\nbespoke Soroban token.",
+            "description": "Display decimals — 7 for native/classic/SAC, on-chain metadata for a\nbespoke Soroban token; `null` when none could be read (never a guessed 7).",
             "minimum": 0
           },
           "nft_delta": {
@@ -2350,7 +2344,7 @@
           {
             "type": "object",
             "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
-            "required": ["id", "asset_type", "decimals"],
+            "required": ["id", "asset_type"],
             "properties": {
               "asset_code": {
                 "type": ["string", "null"]
@@ -2369,9 +2363,9 @@
                 "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
               },
               "decimals": {
-                "type": "integer",
+                "type": ["integer", "null"],
                 "format": "int32",
-                "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+                "description": "Display decimals — 7 for native and classic (Stellar precision), a\nSoroban token's on-chain metadata. Load-bearing for amount rendering.\n`null` when the token publishes none we could read: its amounts then\nhave no known scale, and a guessed 7 would be off by 10^11 for an\n18-decimal token.",
                 "minimum": 0
               },
               "holder_count": {
@@ -2436,7 +2430,7 @@
       "AssetItem": {
         "type": "object",
         "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
-        "required": ["id", "asset_type", "decimals"],
+        "required": ["id", "asset_type"],
         "properties": {
           "asset_code": {
             "type": ["string", "null"]
@@ -2455,9 +2449,9 @@
             "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
           },
           "decimals": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int32",
-            "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+            "description": "Display decimals — 7 for native and classic (Stellar precision), a\nSoroban token's on-chain metadata. Load-bearing for amount rendering.\n`null` when the token publishes none we could read: its amounts then\nhave no known scale, and a guessed 7 would be off by 10^11 for an\n18-decimal token.",
             "minimum": 0
           },
           "holder_count": {
@@ -3191,13 +3185,9 @@
         "type": "object",
         "required": ["contract_id", "ledger_sequence", "created_at"],
         "properties": {
-          "caller_account": {
+          "caller": {
             "type": ["string", "null"],
-            "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
-          },
-          "caller_contract": {
-            "type": ["string", "null"],
-            "description": "Root caller C-StrKey when a contract made the call; exactly one of the\ntwo callers is set."
+            "description": "Root caller: a `G…` account or a `C…` contract (task 0600). Per ADR\n0034 nested-call hierarchy is XDR-only."
           },
           "contract_id": {
             "type": "string"
@@ -3221,13 +3211,9 @@
           "successful"
         ],
         "properties": {
-          "caller_account": {
+          "caller": {
             "type": ["string", "null"],
-            "description": "Caller G-StrKey when an account made the call."
-          },
-          "caller_contract": {
-            "type": ["string", "null"],
-            "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
+            "description": "Who made the call: a `G…` account or a `C…` contract (task 0600)."
           },
           "created_at": {
             "type": "string",
@@ -3418,9 +3404,9 @@
               "name": {
                 "type": ["string", "null"]
               },
-              "owner_account": {
+              "owner": {
                 "type": ["string", "null"],
-                "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+                "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
               },
               "token_id": {
                 "type": "string"
@@ -3467,9 +3453,9 @@
           "name": {
             "type": ["string", "null"]
           },
-          "owner_account": {
+          "owner": {
             "type": ["string", "null"],
-            "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+            "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
           },
           "token_id": {
             "type": "string"
@@ -3512,9 +3498,9 @@
             "type": ["string", "null"],
             "description": "`mint | transfer | burn` — pre-decoded via `nft_event_type_name(...)`."
           },
-          "from_account": {
+          "from": {
             "type": ["string", "null"],
-            "description": "Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the\nper-NFT ownership timeline (DESC window — older event sits at the\nFOLLOWING window position). `null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
+            "description": "Previous-owner StrKey (a `G…` account or a `C…` contract),\nreconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline\n(DESC window — older event sits at the FOLLOWING window position).\n`null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -3525,9 +3511,9 @@
             "format": "int32",
             "minimum": 0
           },
-          "to_account": {
+          "to": {
             "type": ["string", "null"],
-            "description": "New owner G-StrKey. `null` on burn."
+            "description": "New owner StrKey (a `G…` account or a `C…` contract). `null` on burn."
           },
           "transaction_hash": {
             "type": "string"
@@ -3541,6 +3527,7 @@
           "type_name",
           "type",
           "pool_ids",
+          "operation_index",
           "ledger_sequence",
           "created_at"
         ],
@@ -3548,12 +3535,7 @@
           "appearance_id": {
             "type": "integer",
             "format": "int64",
-            "description": "Equal to `application_order` (the table has no surrogate id since\nPR #175). Use `application_order` for apply-order display and to join\nagainst `XdrOperationDto.application_order` from the heavy overlay."
-          },
-          "application_order": {
-            "type": ["integer", "null"],
-            "format": "int32",
-            "description": "1-based per-tx apply position carrying on-chain operation order\n(task 0192). For folded appearance rows (multiple identical-identity\nenvelope ops collapsed into one row, see task 0163) this is the\nMIN of the folded ops' indices — the position of the row's first\noccurrence in `tx.operations[]`. `None` for pre-task-0192 rows\nwhere the column was not yet populated; clients fall back to\n`appearance_id` order in that case."
+            "description": "The operation's 1-based position (the table has no surrogate id since\nPR #175). Join against the heavy overlay by `operation_index`."
           },
           "asset_code": {
             "type": ["string", "null"],
@@ -3575,6 +3557,11 @@
           "ledger_sequence": {
             "type": "integer",
             "format": "int64"
+          },
+          "operation_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The operation's position in its transaction's envelope, 0-based\n(ADR 0059, stellar-rpc `operationIndex`); equals the heavy overlay's\n`XdrOperationDto.operation_index`."
           },
           "pool_ids": {
             "type": "array",
@@ -3784,7 +3771,7 @@
             "items": {
               "type": "object",
               "description": "Asset row returned by list and detail. Surfaces both the decoded\n`asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`\nSMALLINT.",
-              "required": ["id", "asset_type", "decimals"],
+              "required": ["id", "asset_type"],
               "properties": {
                 "asset_code": {
                   "type": ["string", "null"]
@@ -3803,9 +3790,9 @@
                   "description": "Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where\nthe contract IS the asset. `null` for native / classic_credit (a wrapping\nSAC's address rides in `sac_contract_id`)."
                 },
                 "decimals": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int32",
-                  "description": "Display decimals — on-chain `METADATA` for Soroban tokens, else 7\n(Stellar classic precision). Load-bearing for amount rendering.",
+                  "description": "Display decimals — 7 for native and classic (Stellar precision), a\nSoroban token's on-chain metadata. Load-bearing for amount rendering.\n`null` when the token publishes none we could read: its amounts then\nhave no known scale, and a guessed 7 would be off by 10^11 for an\n18-decimal token.",
                   "minimum": 0
                 },
                 "holder_count": {
@@ -4052,13 +4039,9 @@
                 "successful"
               ],
               "properties": {
-                "caller_account": {
+                "caller": {
                   "type": ["string", "null"],
-                  "description": "Caller G-StrKey when an account made the call."
-                },
-                "caller_contract": {
-                  "type": ["string", "null"],
-                  "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
+                  "description": "Who made the call: a `G…` account or a `C…` contract (task 0600)."
                 },
                 "created_at": {
                   "type": "string",
@@ -4172,9 +4155,9 @@
                 "name": {
                   "type": ["string", "null"]
                 },
-                "owner_account": {
+                "owner": {
                   "type": ["string", "null"],
-                  "description": "Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13)."
+                  "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
                 },
                 "token_id": {
                   "type": "string"
@@ -4230,9 +4213,9 @@
                   "type": ["string", "null"],
                   "description": "`mint | transfer | burn` — pre-decoded via `nft_event_type_name(...)`."
                 },
-                "from_account": {
+                "from": {
                   "type": ["string", "null"],
-                  "description": "Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the\nper-NFT ownership timeline (DESC window — older event sits at the\nFOLLOWING window position). `null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
+                  "description": "Previous-owner StrKey (a `G…` account or a `C…` contract),\nreconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline\n(DESC window — older event sits at the FOLLOWING window position).\n`null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
                 },
                 "ledger_sequence": {
                   "type": "integer",
@@ -4243,9 +4226,9 @@
                   "format": "int32",
                   "minimum": 0
                 },
-                "to_account": {
+                "to": {
                   "type": ["string", "null"],
-                  "description": "New owner G-StrKey. `null` on burn."
+                  "description": "New owner StrKey (a `G…` account or a `C…` contract). `null` on burn."
                 },
                 "transaction_hash": {
                   "type": "string"
@@ -4268,21 +4251,16 @@
             "items": {
               "type": "object",
               "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
-              "required": [
-                "account",
-                "shares",
-                "first_deposit_ledger",
-                "last_updated_ledger"
-              ],
+              "required": ["account", "shares", "last_updated_ledger"],
               "properties": {
                 "account": {
                   "type": "string",
-                  "description": "Participant account StrKey (G...)."
+                  "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
                 },
                 "first_deposit_ledger": {
-                  "type": "integer",
+                  "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool."
+                  "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
                 },
                 "last_updated_ledger": {
                   "type": "integer",
@@ -4291,11 +4269,11 @@
                 },
                 "share_percentage": {
                   "type": ["string", "null"],
-                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`, over the pool's latest snapshot\nhowever old — a classic pool snapshots every change). `None` when the\npool has no snapshot or its total is 0; the frontend renders \"—\"."
+                  "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total`). Classic: over the pool's latest snapshot\nhowever old — a classic pool snapshots every change — and `None` when\nthe pool has no snapshot or its total is 0; the frontend renders \"—\".\nSoroban: over the pool's own stored total as on chain (the holders'\nsum where it keeps none), always present."
                 },
                 "shares": {
                   "type": "string",
-                  "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+                  "description": "Pool-share balance as a decimal string (no f64 round-trip): the\n`NUMERIC(28,7)` position of a classic pool, the share-token balance\nscaled by the token's decimals for a soroban one."
                 }
               }
             }
@@ -4318,7 +4296,7 @@
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
-                "application_order",
+                "operation_index",
                 "amounts",
                 "source_account",
                 "created_at"
@@ -4330,11 +4308,6 @@
                     "type": ["string", "null"]
                   },
                   "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nEvery entry is `null` in the malformed case above."
-                },
-                "application_order": {
-                  "type": "integer",
-                  "format": "int32",
-                  "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482)."
                 },
                 "created_at": {
                   "type": "string",
@@ -4355,6 +4328,11 @@
                   "type": "integer",
                   "format": "int64"
                 },
+                "operation_index": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The operation's 0-based position in its transaction (ADR 0059); the\ntransaction page's `#op-N` anchor this row links to is\n`operation_index + 1` (task 0482)."
+                },
                 "pools_crossed": {
                   "type": ["integer", "null"],
                   "format": "int64",
@@ -4366,7 +4344,7 @@
                 },
                 "transaction_hash": {
                   "type": "string",
-                  "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `application_order` too."
+                  "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `operation_index` too."
                 }
               }
             }
@@ -4544,21 +4522,16 @@
       "ParticipantItem": {
         "type": "object",
         "description": "One participant row returned by the participants list\n(`queries::list_participants`).",
-        "required": [
-          "account",
-          "shares",
-          "first_deposit_ledger",
-          "last_updated_ledger"
-        ],
+        "required": ["account", "shares", "last_updated_ledger"],
         "properties": {
           "account": {
             "type": "string",
-            "description": "Participant account StrKey (G...)."
+            "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
           },
           "first_deposit_ledger": {
-            "type": "integer",
+            "type": ["integer", "null"],
             "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool."
+            "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
           },
           "last_updated_ledger": {
             "type": "integer",
@@ -4567,11 +4540,11 @@
           },
           "share_percentage": {
             "type": ["string", "null"],
-            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total_pool_shares`, over the pool's latest snapshot\nhowever old — a classic pool snapshots every change). `None` when the\npool has no snapshot or its total is 0; the frontend renders \"—\"."
+            "description": "Share of the pool, expressed as a decimal-string percentage\n(`100 * shares / total`). Classic: over the pool's latest snapshot\nhowever old — a classic pool snapshots every change — and `None` when\nthe pool has no snapshot or its total is 0; the frontend renders \"—\".\nSoroban: over the pool's own stored total as on chain (the holders'\nsum where it keeps none), always present."
           },
           "shares": {
             "type": "string",
-            "description": "Pool-share balance carried as a decimal string preserving the\nunderlying `NUMERIC(28,7)` precision (no f64 round-trip)."
+            "description": "Pool-share balance as a decimal string (no f64 round-trip): the\n`NUMERIC(28,7)` position of a classic pool, the share-token balance\nscaled by the token's decimals for a soroban one."
           }
         }
       },
@@ -4581,7 +4554,7 @@
         "required": [
           "transaction_hash",
           "ledger_sequence",
-          "application_order",
+          "operation_index",
           "amounts",
           "source_account",
           "created_at"
@@ -4593,11 +4566,6 @@
               "type": ["string", "null"]
             },
             "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nEvery entry is `null` in the malformed case above."
-          },
-          "application_order": {
-            "type": "integer",
-            "format": "int32",
-            "description": "The operation's 1-based position in its transaction (Horizon's\n`application_order`), and the `#op-N` anchor on the transaction detail\npage this row links to (task 0482)."
           },
           "created_at": {
             "type": "string",
@@ -4618,6 +4586,11 @@
             "type": "integer",
             "format": "int64"
           },
+          "operation_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The operation's 0-based position in its transaction (ADR 0059); the\ntransaction page's `#op-N` anchor this row links to is\n`operation_index + 1` (task 0482)."
+          },
           "pools_crossed": {
             "type": ["integer", "null"],
             "format": "int64",
@@ -4629,7 +4602,7 @@
           },
           "transaction_hash": {
             "type": "string",
-            "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `application_order` too."
+            "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `operation_index` too."
           }
         }
       },
@@ -5080,7 +5053,7 @@
           "operation_index": {
             "type": ["integer", "null"],
             "format": "int32",
-            "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 per-operation container only; `None` for fee and diagnostic\nevents). Matches `XdrOperationDto.application_order - 1`."
+            "description": "Zero-based envelope position of the operation that emitted this event\n(CAP-67 per-operation container only; `None` for fee and diagnostic\nevents). Equals the emitting `XdrOperationDto.operation_index`."
           },
           "stage": {
             "type": ["string", "null"],
@@ -5096,19 +5069,19 @@
       "XdrOperationDto": {
         "type": "object",
         "description": "Operation raw parameters (XDR-decoded full details).",
-        "required": ["op_type", "application_order", "details"],
+        "required": ["op_type", "operation_index", "details"],
         "properties": {
-          "application_order": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Application order within the transaction (1-based, matches Horizon\n`paging_token` convention)."
-          },
           "details": {
             "description": "Full operation details (type-specific JSON)."
           },
           "op_type": {
             "type": "string",
             "description": "Operation type tag (e.g. `\"payment\"`, `\"invoke_host_function\"`)."
+          },
+          "operation_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The operation's position in its transaction's envelope, 0-based\n(ADR 0059, stellar-rpc `operationIndex`)."
           },
           "result_code": {
             "type": ["string", "null"],

@@ -16,7 +16,7 @@ function counter(name: string, value: number): XdrEventDto {
     event_index: null,
     operation_index: null,
     stage: null,
-  } as unknown as XdrEventDto;
+  };
 }
 
 function fnCall(): XdrEventDto {
@@ -29,7 +29,7 @@ function fnCall(): XdrEventDto {
     event_index: null,
     operation_index: null,
     stage: null,
-  } as unknown as XdrEventDto;
+  };
 }
 
 /** The real counter set from mainnet `0a120260…c38e`. */
@@ -82,11 +82,10 @@ describe('resource counters (#378)', () => {
     // this panel is total. A skip here would delete a counter from the page
     // outright, and 18-of-19-without-saying-so is the failure mode that
     // omission would license.
-    const odd = (name: string, data: unknown): XdrEventDto =>
-      ({
-        ...counter(name, 0),
-        data,
-      } as unknown as XdrEventDto);
+    const odd = (name: string, data: unknown): XdrEventDto => ({
+      ...counter(name, 0),
+      data,
+    });
 
     const all = allResourceFacts(
       readResourceCounters([
@@ -104,11 +103,10 @@ describe('resource counters (#378)', () => {
   });
 
   it('names counters the host left unlabelled instead of discarding them', () => {
-    const nameless = (value: number) =>
-      ({
-        ...counter('x', value),
-        topics: [{ type: 'sym', value: 'core_metrics' }],
-      } as unknown as XdrEventDto);
+    const nameless = (value: number): XdrEventDto => ({
+      ...counter('x', value),
+      topics: [{ type: 'sym', value: 'core_metrics' }],
+    });
     expect(
       allResourceFacts(readResourceCounters([nameless(7), nameless(8)]))
     ).toEqual([

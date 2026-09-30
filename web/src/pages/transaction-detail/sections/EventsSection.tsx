@@ -42,7 +42,7 @@ const STAGE_LABEL: Record<string, string> = {
  *  transfer" — the row number is a position in the record, the stage is the
  *  time. */
 function whereLabel(event: XdrEventDto): string {
-  if (event.operation_index != null) return `op ${event.operation_index + 1}`;
+  if (event.operation_index != null) return `op ${event.operation_index}`;
   if (event.stage != null) return STAGE_LABEL[event.stage] ?? event.stage;
   return '—';
 }

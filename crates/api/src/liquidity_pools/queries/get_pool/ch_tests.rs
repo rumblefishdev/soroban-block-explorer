@@ -1,4 +1,5 @@
-//! ClickHouse-backed check of the detail's `created_at_ledger` (task 0374).
+//! ClickHouse-backed check of the detail's `created_at_ledger` and
+//! `participant_count` (task 0374).
 //!
 //! The value is the pool's first snapshot ledger, falling back to its own row
 //! when it has none. A soroban pool never has a snapshot, and plain `min` over
@@ -48,6 +49,15 @@ async fn detail_created_at_falls_back_without_a_snapshot() {
              (unhex('{CLASSIC}'), 1000, 1, 1, 1), \
              (unhex('{CLASSIC}'), 5000, 2, 2, 2)"
         ),
+        // One open and one closed classic position. A row under the soroban
+        // pool must not count: its providers are share-token holders, which
+        // the handler reads, never `lp_positions`.
+        format!(
+            "INSERT INTO lp_positions (pool_id, account_id, shares, first_deposit_ledger, last_updated_ledger) VALUES \
+             (unhex('{CLASSIC}'), 1, 5, 1000, 1000), \
+             (unhex('{CLASSIC}'), 2, 0, 1000, 2000), \
+             (unhex('{SOROBAN}'), 3, 5, 1000, 1000)"
+        ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
     }
@@ -67,6 +77,23 @@ async fn detail_created_at_falls_back_without_a_snapshot() {
         created(SOROBAN).await,
         60_059_011,
         "a pool with no snapshot falls back to its own ledger, not 0"
+    );
+
+    let participants = |hex: &'static str| {
+        let ch = ch.clone();
+        async move {
+            fetch_pool_by_id(&ch, hex)
+                .await
+                .expect("detail query runs")
+                .expect("pool exists")
+                .participant_count
+        }
+    };
+    assert_eq!(participants(CLASSIC).await, Some(1), "open positions only");
+    assert_eq!(
+        participants(SOROBAN).await,
+        None,
+        "a soroban pool is not counted from lp_positions"
     );
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))

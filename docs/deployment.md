@@ -238,6 +238,19 @@ the repo root as `make -C infra <target>` (or `cd infra && make <target>`).
 Frontend **content** is separate: `deploy-production-web`
 (build → S3 sync → CloudFront invalidation).
 
+The sync runs in two passes, and the order matters (task 0595):
+
+1. `assets/*` goes up first with `public, max-age=31536000, immutable`, and
+   it is **never deleted**. A browser that still holds the previous
+   `index.html` then finds that build's files, instead of receiving the SPA
+   fallback HTML where a script should be, which renders a blank page.
+2. Everything else, `index.html` included, goes up with
+   `public, max-age=0, s-maxage=60, must-revalidate`. Browsers revalidate it
+   on every load, and CloudFront keeps it for at most 60 s. `--delete`
+   applies to this pass only.
+
+Old hashed assets pile up at about 1.3 MB per build. Nothing prunes them.
+
 ### Gotchas — read before you deploy
 
 - **Any `ALTER` on a table the indexer writes can stop ingestion — even an
@@ -492,6 +505,33 @@ Frontend **content** is separate: `deploy-production-web`
 
   A drop before this deploy stops ingest on the next ledger with an NFT change:
   the earlier writer still inserts into both.
+
+- **`transactions.id` dropped (task 0538, step 7).** The indexer no longer
+  writes the hash surrogate; no table or reader references it. `id` is not in
+  the sort key, so no rebuild: give it a `DEFAULT` first (metadata only, no
+  mutation), so the new build — which does not name it — passes the client's
+  `DESCRIBE` check while the running build still writes it:
+
+  ```sql
+  ALTER TABLE transactions MODIFY COLUMN id Int64 DEFAULT 0;
+  ```
+
+  Then deploy Compute; then, once `system.query_log` shows no insert naming
+  `id` (the old build's containers are gone) and the prices-api check is
+  recorded in task 0538, drop it:
+
+  ```sql
+  ALTER TABLE transactions DROP COLUMN id;
+  ```
+
+  A drop before this deploy stops ingest on every ledger: the earlier writer
+  still inserts `id`. Deploying before the `DEFAULT` does the same. After the
+  drop, `backfill-runner` and the parallel-backfill workers (whose parts the
+  merge scripts attach) must be built from this change or later: an older
+  build still writes `id`, which `query_log` cannot show until it runs. A local
+  ClickHouse keeps the column too (`init.sql` never alters an existing table),
+  so the CH-gated tests fail with `SchemaMismatch … missing: id` until the same
+  `DROP COLUMN` runs there.
 
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`

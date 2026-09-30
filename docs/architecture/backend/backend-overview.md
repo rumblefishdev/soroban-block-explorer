@@ -451,8 +451,11 @@ The displayed `name`, `symbol`, and `decimals` are **read-composed from side
 tables**, not from the `assets` row — `assets.name` has had no writer since task 0297. On the ClickHouse read path `name` resolves `asset_enrichment.name`
 (classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (on-chain
 SEP-41 `METADATA`, task 0297) → `'Stellar Lumens'` for native; `symbol` /
-`decimals` come from `soroban_contract_metadata` (decimals defaults to 7 for
-classic/SAC). See `crates/api/src/assets/queries.rs`.
+`decimals` come from `soroban_contract_metadata`. `decimals` is 7 for native
+and classic/SAC (fixed by the protocol) and `null` for a Soroban token that
+publishes none we could read — its raw amounts then render as "—", never
+scaled by a guessed 7 (the same rule on account balances and balance
+changes). See `crates/api/src/assets/queries.rs`.
 
 **`GET /assets/:id/transactions`** - Paginated transactions involving this asset
 (addressed by the same `:id` token forms).
@@ -507,9 +510,11 @@ place where indexed contract metadata and decoded usage history are exposed.
 (substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`).
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
-media URL.
+media URL. The owner (`owner`) is a `G…` account or a `C…` contract, resolved through
+`accounts` and `soroban_contracts` (one surrogate space); null once the NFT is burned.
 
-**`GET /nfts/:id/transfers`** - Transfer history for a single NFT.
+**`GET /nfts/:id/transfers`** - Transfer history for a single NFT; each side (`from`,
+`to`) is a `G…` account or a `C…` contract.
 
 NFT responses should tolerate sparse metadata because the ecosystem and available metadata
 quality may vary significantly.
@@ -535,8 +540,10 @@ no client held a key to use them.
 Each `PoolItem` carries `legs` — the pool's assets in registration order, two
 for a classic pool and two to four for a Soroban one, replacing the
 `asset_a` / `asset_b` pair — plus `pool_kind`, `participant_count` (count of
-active LP positions; task 0246 — `null` for a Soroban pool, whose providers
-hold its share token and are not indexed yet), the snapshot fields, and a compute-at-read
+active LP positions for a classic pool, task 0246; for a Soroban pool the
+holders of its share token from `balance_aggregates`, ≤2 minutes stale,
+its own contract left out — `null` for
+a pool with no share token), the snapshot fields, and a compute-at-read
 USD `tvl` (task 0199 Phase A2 — one batched price lookup per page; `volume`
 and `fee_revenue` stay `null` on the list, they are detail-only).
 
@@ -603,13 +610,24 @@ window — `1h→7d`, `1d→90d`, `1w→104w`), `to` (ISO 8601, default `now()`,
 exclusive upper bound). `from < to` enforced; bucket count capped to keep
 aggregation bounded. Bucket aggregation policy in
 `crates/api/src/liquidity_pools/queries/get_pool_chart.rs`.
+A Soroban pool's series comes from its reserve history (`pool_state_changes`,
+raw per leg, scaled by each leg's own decimals) on the same buckets and price
+rules — TVL only; `volume` and `fee_revenue` are `null` until its trades are
+indexed, and the frontend's Volume and Fees tabs say "not indexed".
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, first deposit ledger, and last
 update ledger. Powers the "Pool participants" table on the LP detail page
 (frontend §6.14). Backed by `lp_positions` (ADR 0037 §16). Added during task 0167
 to close a doc-drift gap between the frontend page and the original endpoint
-inventory.
+inventory. A soroban pool (`C…` id) lists the holders of its share token
+(`pool_instance_state.share_token_id`) from `balances` instead — accounts and
+contracts, scaled by the token's decimals, percentages over the pool's own
+stored total (the holders' sum where it keeps none), `first_deposit_ledger =
+null`. The pool's own contract is left out: it holds the minimum liquidity
+locked at its first deposit, not a provider's position. A pool with no share token (concentrated) answers
+400 `not_indexed`; the detail endpoint's `participant_count` counts the same
+holders.
 
 These endpoints combine factual current-state reads with historical aggregate reads, so the
 backend should keep raw pool state and chart-series generation concerns clearly separated.

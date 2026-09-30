@@ -42,8 +42,9 @@ pub struct NftItem {
     pub name: Option<String>,
     pub media_url: Option<String>,
     pub minted_at_ledger: Option<i64>,
-    /// Current owner G-StrKey, or `null` for burned NFTs (ADR 0037 §13).
-    pub owner_account: Option<String>,
+    /// Current owner StrKey: a `G…` account, or a `C…` contract holding the
+    /// NFT. `null` for burned NFTs (ADR 0037 §13).
+    pub owner: Option<String>,
     /// Most recent ledger where ownership state changed
     /// (`nfts.current_owner_ledger`).
     pub last_seen_ledger: Option<i64>,
@@ -78,17 +79,18 @@ pub struct NftTransferItem {
     pub event_type_name: Option<String>,
     /// Raw NftEventType discriminant (ADR 0031).
     pub event_type: i16,
-    /// Previous-owner G-StrKey reconstructed via `LEAD(owner_id)` over the
-    /// per-NFT ownership timeline (DESC window — older event sits at the
-    /// FOLLOWING window position). `null` on the mint row only.
+    /// Previous-owner StrKey (a `G…` account or a `C…` contract),
+    /// reconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline
+    /// (DESC window — older event sits at the FOLLOWING window position).
+    /// `null` on the mint row only.
     ///
     /// Page boundaries are handled implicitly by the `limit + 1` peek
     /// fetch: the peek row participates in the window-function input, so
-    /// the last *kept* row's `from_account` reads the peek's owner before
+    /// the last *kept* row's `from` reads the peek's owner before
     /// `finalize_page` drops the peek. No client-side stitching needed.
-    pub from_account: Option<String>,
-    /// New owner G-StrKey. `null` on burn.
-    pub to_account: Option<String>,
+    pub from: Option<String>,
+    /// New owner StrKey (a `G…` account or a `C…` contract). `null` on burn.
+    pub to: Option<String>,
     pub created_at: DateTime<Utc>,
     /// Where the change happened — its source event's location (task 0424,
     /// ADR 0059): the transaction's position in the ledger, the operation

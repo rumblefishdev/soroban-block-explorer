@@ -63,8 +63,12 @@ async fn main() {
         key_pem: read(format!("{mtls_dir}/{user}.key")),
         ca_pem: read(format!("{mtls_dir}/ca.crt")),
     };
-    let ch = db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
-        .expect("failed to build mTLS ClickHouse client");
+    let ch = db_clickhouse::mtls::client_with_mtls(
+        &domain,
+        &bundle,
+        &db_clickhouse::database_from_env(),
+    )
+    .expect("failed to build mTLS ClickHouse client");
 
     let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()
@@ -82,7 +86,9 @@ async fn main() {
 
     let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE")
         .unwrap_or_else(|_| "Public Global Stellar Network ; September 2015".into());
-    let network_id = xdr_parser::network_id(&passphrase);
+    // Trimmed as in main.rs, so a stray space in the env cannot change the
+    // network id.
+    let network_id = xdr_parser::network_id(passphrase.trim());
 
     let state = AppState::new(ch, runtime_enrichment, network_id);
     // Routes only — no edge lock / auth / CORS. Same registration the Lambda

@@ -18,6 +18,13 @@
   "galexieEphemeralStorage": 100,
   "galexieDesiredCount": 1,
   "stellarNetworkPassphrase": "Public Global Stellar Network ; September 2015",
+  "ledgerSource": "galexie",
+  "sorobanRpcUrls": [
+    "https://mainnet.sorobanrpc.com",
+    "https://soroban-rpc.mainnet.stellar.gateway.fm/",
+    "https://rpc.ankr.com/stellar_soroban",
+    "https://stellar.api.onfinality.io/public"
+  ],
   "ecsLogRetentionDays": 90,
   "galexieStopTimeout": 120,
   "ecsExecEnabled": false,

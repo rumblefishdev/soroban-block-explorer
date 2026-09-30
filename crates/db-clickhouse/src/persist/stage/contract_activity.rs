@@ -37,7 +37,7 @@ pub(super) fn rows(
             let Some(contract) = &inv.contract_id else {
                 continue;
             };
-            let (caller_id, caller_contract_id) = match inv.caller_account.as_deref() {
+            let (caller_id, caller_contract_id) = match inv.caller.as_deref() {
                 Some(k) if is_strkey_account(k) => (Some(ids::account_id(k)), None),
                 Some(k) if k.starts_with('C') => (None, Some(ids::contract_id(k))),
                 _ => (None, None),

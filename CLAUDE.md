@@ -28,7 +28,7 @@
 - Verification-only code (oracles, corpus checks) belongs in the crate's
   `tests/` directory, not in the production module it verifies.
 - Touching a file with inline or sibling tests? Move them to their proper
-  place in the same PR, as a separate `refactor(...)` commit. New files
+  place — in a structure PR when the task also edits them. New files
   must not be born over the limit.
 - Touching a file over the limit? It must not grow: first move the topic
   you edit into its own file, so the file ends shorter than you found it.
@@ -127,6 +127,20 @@ per-layer deep-dives (`infra/README.md`, `infra-hetzner/README.md`,
 These encode durable rules. Keep transient state (which task is open, which PR is
 pending) out of them — it rots and makes the guide untrustworthy.
 
+## Evidence — conclusions from the whole population, not a sample
+
+A claim that code is correct, two paths are equal, or a case "never
+happens" rests on the **whole population**: the full history in ledger
+slices, every pool, every family, every code version — read-only queries on
+production are cheap and pre-approved. A small or convenient sample hides the
+rare classes that break things (a W1 equality was first claimed from 360 rows
+in 200 ledgers containing none of the 17 Phoenix withdrawals in history; the
+full-history query, 4,405,583 of 4,405,583, was the proof).
+
+When a sample is unavoidable (archive re-parse, RPC): draw it from several
+periods, include the rare classes on purpose, and report its size, how it was
+drawn and what it cannot show — never "confirmed" or "identical" unqualified.
+
 ## GitHub Issues
 
 Issues close at **deploy**, never at merge — merged code is not shipped code.
@@ -141,9 +155,12 @@ posts to GitHub — it drafts, a human sends.
 ## Context
 
 @lore/0-session/current-user.md
-@lore/0-session/current-task.md
-@lore/0-session/next-tasks.md
 @lore/CLAUDE.md
+
+The current task is `lore/0-session/current-task.md` (a symlink to the task
+file); read it when the work concerns the task. Tasks ready to pick are listed
+in `lore/0-session/next-tasks.md`. Neither is imported: a task file can run to
+tens of kilobytes, and every session and subagent would load it up front.
 
 <!-- nx configuration start-->
 <!-- Leave the start & end comments to automatically receive updates. -->

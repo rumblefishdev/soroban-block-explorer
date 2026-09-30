@@ -1,7 +1,9 @@
 import GroupIcon from '@mui/icons-material/GroupOutlined';
+import HourglassIcon from '@mui/icons-material/HourglassEmptyOutlined';
 import { Typography } from '@mui/material';
 import type { ParticipantItem } from '@rumblefish/api-types';
 import {
+  addressType,
   EmptyState,
   ExplorerTable,
   IdentifierDisplay,
@@ -24,7 +26,17 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     id: 'account',
     header: 'Account',
     width: 160,
-    cell: (row) => <IdentifierWithCopy value={row.account} type="account" />,
+    // A soroban pool's share token is also held by contracts (gauges, vaults).
+    cell: (row) => {
+      const type = addressType(row.account);
+      return (
+        <IdentifierWithCopy
+          value={row.account}
+          type={type ?? 'account'}
+          linked={type != null}
+        />
+      );
+    },
   },
   {
     id: 'shares',
@@ -63,12 +75,16 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Since ledger',
     align: 'right',
     width: 120,
-    cell: (row) => (
-      <IdentifierDisplay
-        value={String(row.first_deposit_ledger)}
-        type="ledger"
-      />
-    ),
+    // `null` for a soroban pool: its share-token balances keep no first deposit.
+    cell: (row) =>
+      row.first_deposit_ledger == null ? (
+        '—'
+      ) : (
+        <IdentifierDisplay
+          value={String(row.first_deposit_ledger)}
+          type="ledger"
+        />
+      ),
   },
 ];
 
@@ -98,6 +114,22 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
     goNext,
     goPrev
   );
+
+  // A concentrated soroban pool keeps positions, not a share token.
+  if (
+    (error as { body?: { code?: unknown } } | null)?.body?.code ===
+    'not_indexed'
+  ) {
+    return (
+      <SectionCard title="Pool participants">
+        <EmptyState
+          icon={<HourglassIcon />}
+          title="Not indexed yet"
+          description="Liquidity providers of this pool are not indexed yet."
+        />
+      </SectionCard>
+    );
+  }
 
   let body: ReactNode;
   if (isLoading || isPlaceholderData) {

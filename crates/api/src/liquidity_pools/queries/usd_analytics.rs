@@ -134,27 +134,39 @@ pub struct PoolPriceContext {
     pub fee_bps: i32,
 }
 
+/// What the chart needs about the pool: the price context, which chart it
+/// gets (a soroban pool's reserves are raw and live in `pool_state_changes`),
+/// and each leg's display scale — `None` where the token's scale is unknown.
+#[derive(Debug, Clone)]
+pub struct PoolChartContext {
+    pub price: PoolPriceContext,
+    pub pool_kind: domain::PoolKind,
+    pub leg_decimals: Vec<Option<u32>>,
+}
+
 /// SELECT column order MUST match this struct (clickhouse positional decode).
 #[derive(Debug, Row, Deserialize)]
 struct PriceContextChRow {
     legs: Vec<i64>,
     fee_bps: i32,
+    pool_kind: i16,
 }
 
-/// Resolve the pool's leg identities + `fee_bps`. `None` = pool unknown
-/// (the chart handler's 404 gate — replaces `pool_exists` there).
+/// Resolve the pool's leg identities, `fee_bps`, kind and leg scales. `None`
+/// = pool unknown (the chart handler's 404 gate — replaces `pool_exists`
+/// there).
 ///
 /// Leg identity comes from the shared resolver, which carries the issuer
 /// StrKey with it — so the restricted-`iss` CTE this used to run (never
 /// `accounts FINAL`: a 14M-row hash build, box-confirmed Code 241) is gone
 /// along with the pair columns it keyed on.
-pub async fn fetch_pool_price_context(
+pub async fn fetch_pool_chart_context(
     client: &clickhouse::Client,
     pool_id_hex: &str,
-) -> Result<Option<PoolPriceContext>, clickhouse::error::Error> {
+) -> Result<Option<PoolChartContext>, clickhouse::error::Error> {
     let row = client
         .query(
-            "SELECT legs, fee_bps FROM liquidity_pools FINAL \
+            "SELECT legs, fee_bps, toInt16(pool_kind) AS pool_kind FROM liquidity_pools FINAL \
              WHERE pool_id = unhex(?) LIMIT 1",
         )
         .bind(pool_id_hex)
@@ -165,13 +177,21 @@ pub async fn fetch_pool_price_context(
     let leg_ids: BTreeSet<i64> = r.legs.iter().copied().collect();
     let identities = resolve_asset_identities(client, &leg_ids).await?;
 
-    Ok(Some(PoolPriceContext {
-        legs: r
+    Ok(Some(PoolChartContext {
+        price: PoolPriceContext {
+            legs: r
+                .legs
+                .iter()
+                .map(|id| price_leg_of(*id, &identities))
+                .collect(),
+            fee_bps: r.fee_bps,
+        },
+        pool_kind: crate::common::strkey::decode_pool_kind(pool_id_hex, r.pool_kind),
+        leg_decimals: r
             .legs
             .iter()
-            .map(|id| price_leg_of(*id, &identities))
+            .map(|id| identities.get(id).and_then(|i| i.decimals))
             .collect(),
-        fee_bps: r.fee_bps,
     }))
 }
 

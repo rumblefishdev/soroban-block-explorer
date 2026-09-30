@@ -42,7 +42,9 @@ use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
     responses(
         (status = 200, description = "Paginated participants list",
          body = Paginated<ParticipantItem>),
-        (status = 400, description = "Invalid pool_id, limit, or cursor", body = ErrorEnvelope),
+        (status = 400, description = "Invalid pool_id, limit, or cursor; or `not_indexed`: \
+         a soroban pool whose providers are not readable (no share token — a concentrated \
+         pool — or a token that publishes no decimals)", body = ErrorEnvelope),
         (status = 404, description = "Pool not found",  body = ErrorEnvelope),
         (status = 500, description = "Database error",  body = ErrorEnvelope),
     )
@@ -71,17 +73,33 @@ pub async fn list_participants(
     // existence answer — so they go out together (task 0446). `exists` is still
     // what decides the 404 and is still checked first, so responses are
     // unchanged; the cost is one wasted page read when the pool is missing.
+    //
+    // A `C…` id is a soroban pool: its providers are the holders of its share
+    // token, not `lp_positions` rows.
     let ch = state.ch();
-    let (exists, fetched) = tokio::join!(
-        queries::pool_exists(&ch, &pool_id_hex),
-        queries::fetch_participants(
-            &ch,
-            &pool_id_hex,
-            pagination.cursor.as_ref(),
-            fetch_limit,
-            direction,
-        ),
-    );
+    let soroban = pool_id.starts_with('C');
+    let (exists, fetched) = tokio::join!(queries::pool_exists(&ch, &pool_id_hex), async {
+        if soroban {
+            queries::fetch_soroban_participants(
+                &ch,
+                &pool_id_hex,
+                pagination.cursor.as_ref(),
+                fetch_limit,
+                direction,
+            )
+            .await
+        } else {
+            queries::fetch_participants(
+                &ch,
+                &pool_id_hex,
+                pagination.cursor.as_ref(),
+                fetch_limit,
+                direction,
+            )
+            .await
+            .map(Some)
+        }
+    },);
     match exists.map_err(|e| e.to_string()) {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
@@ -92,9 +110,17 @@ pub async fn list_participants(
     }
 
     let mut rows = match fetched.map_err(|e| e.to_string()) {
-        Ok(r) => r,
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return errors::bad_request(
+                errors::NOT_INDEXED,
+                "this pool's providers are not indexed: it has no share token \
+                 (a concentrated pool keeps positions), or the token publishes no \
+                 decimals",
+            );
+        }
         Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_participants");
+            tracing::error!(pool_id = %pool_id, soroban, error = %e, "DB error in the participants read");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -111,7 +137,7 @@ pub async fn list_participants(
         |dir, last| {
             cursor::encode(
                 &SharesCursor {
-                    shares: last.shares.clone(),
+                    shares: last.cursor_shares.clone(),
                     account_id: last.account_id_surrogate,
                 },
                 dir,
@@ -171,8 +197,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
-        participant_count: (row.pool_kind == domain::PoolKind::Classic)
-            .then_some(row.participant_count),
+        participant_count: row.participant_count,
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         total_shares: row.total_shares,
         tvl: row.tvl,
@@ -352,17 +377,20 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
             .collect(),
         fee_bps: row.fee_bps,
     };
-    match queries::fetch_pool_usd_analytics(
-        &state.ch(),
-        &pool_id_hex,
-        &ctx,
-        &row.legs
-            .iter()
-            .map(|l| l.reserve.as_deref())
-            .collect::<Vec<_>>(),
-    )
-    .await
-    {
+    let reserves: Vec<Option<&str>> = row.legs.iter().map(|l| l.reserve.as_deref()).collect();
+    let soroban = row.pool_kind == domain::PoolKind::Soroban;
+    let ch = state.ch();
+    let (analytics, soroban_count) = tokio::join!(
+        queries::fetch_pool_usd_analytics(&ch, &pool_id_hex, &ctx, &reserves),
+        async {
+            if soroban {
+                queries::count_soroban_participants(&ch, &pool_id_hex).await
+            } else {
+                Ok(None)
+            }
+        },
+    );
+    match analytics {
         Ok(analytics) => {
             row.tvl = analytics.tvl;
             // The analytics read "no snapshot in the window" as a zero-volume
@@ -379,7 +407,17 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         }
     }
 
-    let mut resp = Json(map_pool_item(row)).into_response();
+    let mut item = map_pool_item(row);
+    // A soroban pool's providers are its share token's holders — the count
+    // the participants section lists. Degrades to "not indexed" on error.
+    match soroban_count {
+        Ok(n) if soroban => item.participant_count = n,
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in count_soroban_participants");
+        }
+    }
+    let mut resp = Json(item).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
     resp
 }
@@ -514,9 +552,7 @@ pub async fn list_pool_activity(
         .map(|r| PoolActivityItem {
             transaction_hash: r.transaction_hash,
             ledger_sequence: r.ledger_sequence,
-            // The operation's 1-based position (the `#op-N` anchor); the
-            // tables store the 0-based index (ADR 0059).
-            application_order: r.operation_index + 1,
+            operation_index: r.operation_index,
             event: r.event,
             amounts: r.amounts,
             source_account: r.source_account,
@@ -673,18 +709,28 @@ pub async fn get_pool_chart(
     // 43.7M rows / 4.66 s for a pool that does not exist, against 16.5k rows /
     // 3.6 ms for the gate. Pool ids are user-supplied strkeys. If a future
     // change breaks the data dependency, that measurement still stands.
-    let ctx = match queries::fetch_pool_price_context(&state.ch(), &pool_id_hex).await {
+    let ctx = match queries::fetch_pool_chart_context(&state.ch(), &pool_id_hex).await {
         Ok(Some(ctx)) => ctx,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_price_context");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_chart_context");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
-    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
-        .await
-        .map_err(|e| e.to_string());
+    // A soroban pool's reserves are its state rows, raw per leg; a classic
+    // pool's are its snapshots.
+    let fetched = match ctx.pool_kind {
+        domain::PoolKind::Classic => {
+            queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx.price, &interval, from, to)
+                .await
+        }
+        domain::PoolKind::Soroban => {
+            queries::fetch_soroban_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
+                .await
+        }
+    }
+    .map_err(|e| e.to_string());
     let data_points = match fetched {
         Ok(r) => r,
         Err(e) => {
@@ -710,3 +756,6 @@ mod normalize_asset_code_tests;
 
 #[cfg(test)]
 mod map_pool_item_tests;
+
+#[cfg(test)]
+mod participants_tests;

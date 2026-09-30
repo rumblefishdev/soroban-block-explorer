@@ -86,9 +86,11 @@ docs/architecture files updated for ADR 0032 traceability, and lore.
 
 The CH schema mirrors Postgres's logical entity model (same tables,
 same column meanings) but uses a **hybrid key design** post-empirical
-measurement: surrogate `id Int64` on three high-cardinality FK hubs
-(`accounts`, `soroban_contracts`, `transactions`) derived via
-`cityhash64(natural_key)` for cheap integer joins; natural / composite
+measurement: surrogate `id Int64` on two high-cardinality FK hubs
+(`accounts`, `soroban_contracts`) derived via
+`cityhash64(natural_key)` for cheap integer joins (`transactions.id`
+was the third, dropped by task 0538: every table locates a transaction
+by `(ledger_sequence, application_order)`, ADR 0059); natural / composite
 primary keys on the other 12 tables where StrKey-hash composites are
 already cheap. PG snapshot the pilot was sized against:
 [`sources/db-schema-snapshot.md`](../../../lore/1-tasks/active/0204_FEATURE_clickhouse-pilot-crate-docker-schema/sources/db-schema-snapshot.md).
@@ -109,7 +111,7 @@ already cheap. PG snapshot the pilot was sized against:
 | `soroban_contracts`                                    | `soroban_contracts`             | state            | surrogate `id Int64`; ORDER BY `contract_id`; version = `wasm_uploaded_at_ledger`                                                                                                                                                                                                                                                                                                          |
 | `soroban_events_appearances` (folded ADR 0033 design)  | `soroban_events` **(NEW)**      | append-only fact | full-content per-event row (ADR 0044 §4a unfold); `ZSTD(3)` on JSON cols                                                                                                                                                                                                                                                                                                                   |
 | `soroban_invocations_appearances`                      | `contract_activity`             | append-only fact | PK = `(contract_id, ledger_sequence, application_order)` — the transaction position plus the caller (task 0586; replaced `contract_transactions` too)                                                                                                                                                                                                                                      |
-| `transactions`                                         | `transactions`                  | append-only fact | surrogate `id Int64`; ORDER BY `(ledger_sequence, application_order)`; bloom-filter on `hash`                                                                                                                                                                                                                                                                                              |
+| `transactions`                                         | `transactions`                  | append-only fact | ORDER BY `(ledger_sequence, application_order)`, no surrogate (task 0538)                                                                                                                                                                                                                                                                                                                  |
 | `transaction_hash_index`                               | `transaction_hash_prefix_index` | append-only fact | keyed by an 8-byte hash prefix (task 0580); the Dictionary was removed (task 0396)                                                                                                                                                                                                                                                                                                         |
 | `transaction_participants`                             | `transaction_participants`      | append-only fact | PK = `(account_id, ledger_sequence, application_order)` (task 0575)                                                                                                                                                                                                                                                                                                                        |
 | `wasm_interface_metadata`                              | `wasm_interface_metadata`       | immutable lookup | `metadata` is `String CODEC(ZSTD(3))` (was JSONB)                                                                                                                                                                                                                                                                                                                                          |
@@ -359,7 +361,15 @@ Resolved in
 - **State tables** → `ReplacingMergeTree(version_column)` where a natural
   NOT NULL ledger column exists (`last_seen_ledger`,
   `last_updated_ledger`, `current_owner_ledger`,
-  `wasm_uploaded_at_ledger`); plain `ReplacingMergeTree` otherwise
+  `wasm_uploaded_at_ledger`); plain `ReplacingMergeTree` otherwise.
+  A ledger version cannot order two writes of one key inside one ledger,
+  so the merge would pick between them arbitrarily. **Convention (task
+  0424):** staging writes one row per key per ledger — the ledger's last
+  state, folded in the ledger's own execution order before insert, as
+  `stage::build_balance_rows` and the `nfts` fold do. The version column
+  stays ledger-only; a new state table follows the same rule instead of
+  adding a composite version. Measured 2026-09-29: 0 version ties with
+  differing rows in every state table.
 - **Immutable lookup tables** → plain `MergeTree`
 
 Every fact table uses `PARTITION BY intDiv(ledger_sequence, 500000)`.
@@ -626,14 +636,15 @@ transport, compression CPU on both sides for no measurable gain.
 After empirical measurement on a 10 k-ledger smoke (full-natural-key
 variant added ~500 MB on-disk + +10 ms persist / ledger), the
 production schema settled on a **hybrid**: surrogate `id Int64` on
-the three central FK hubs, natural / composite primary keys on the
-other 12 tables.
+the central FK hubs, natural / composite primary keys on the
+other tables. `transactions` was a third hub until task 0538 dropped
+its `id`: every table now locates a transaction by position (ADR 0059).
 
 | Table                           | ORDER BY                                                                                    | Surrogate `id`? |
 | ------------------------------- | ------------------------------------------------------------------------------------------- | --------------- |
 | `accounts`                      | `account_id` (StrKey G…)                                                                    | **yes — Int64** |
 | `soroban_contracts`             | `contract_id` (StrKey C…)                                                                   | **yes — Int64** |
-| `transactions`                  | `(ledger_sequence, application_order)`                                                      | **yes — Int64** |
+| `transactions`                  | `(ledger_sequence, application_order)`                                                      | no (task 0538)  |
 | `assets`                        | `(asset_type, asset_code, issuer_id, contract_id)`                                          | no              |
 | `account_balances_current`      | `(account_id, asset_type, asset_code, issuer_id)`                                           | no              |
 | `nfts`                          | `(contract_id, token_id)`                                                                   | no              |
@@ -647,14 +658,14 @@ other 12 tables.
 | `nft_ownership_changes`         | `(contract_id, token_id, ledger_sequence, application_order, operation_index, event_index)` | no              |
 | `liquidity_pool_snapshots`      | `(pool_id, ledger_sequence)`                                                                | no              |
 
-The three surrogate `id` values are deterministic
+The two surrogate `id` values are deterministic
 `cityhash64(natural_key)` (lower 64 bits of CityHash 1.0.2 128-bit).
 All `_id` FK columns across the schema (`source_id`, `contract_id`,
-`transaction_id`, `caller_id`, `issuer_id`, etc.) carry the same
+`caller_id`, `issuer_id`, etc.) carry the same
 derived Int64. Cross-table joins are cheap integer equality.
 
 ORDER BY on the hub tables uses the natural key (`account_id`,
-`contract_id`, `(ledger_sequence, application_order)`) so direct
+`contract_id`) so direct
 queries like `WHERE account_id = 'GDMOSA…'` granule-prune cheaply.
 The surrogate `id` is for FK joins, not granule pruning.
 
@@ -672,7 +683,7 @@ space, projected 10 M+ unique values long-term) and the
 "our cityhash ≠ CH SQL `cityHash64()`" footgun (different algorithm
 variant). The hybrid drops surrogate IDs from the tables where
 natural composite keys are already cheap (`assets`,
-`liquidity_pool_snapshots`, etc.) and keeps them on the three real
+`liquidity_pool_snapshots`, etc.) and keeps them on the real
 FK hubs.
 
 ##### Deliberate divergence from CH SQL `cityHash64()`

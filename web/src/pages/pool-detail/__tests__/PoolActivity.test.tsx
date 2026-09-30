@@ -85,8 +85,8 @@ describe('activityRowKey', () => {
    *  operations against the same pool, and each is its own row. */
   it('separates two operations of one transaction', () => {
     const hash = 'a'.repeat(64);
-    const first = { transaction_hash: hash, application_order: 1 };
-    const second = { transaction_hash: hash, application_order: 2 };
+    const first = { transaction_hash: hash, operation_index: 0 };
+    const second = { transaction_hash: hash, operation_index: 1 };
     expect(activityRowKey(first as PoolActivityItem)).not.toBe(
       activityRowKey(second as PoolActivityItem)
     );
@@ -104,17 +104,16 @@ describe('PoolActivity table', () => {
     ],
   } as PoolItem;
 
-  const makeRow = (over: Partial<PoolActivityItem> = {}) =>
-    ({
-      transaction_hash: 'a'.repeat(64),
-      ledger_sequence: 63_904_097,
-      application_order: 1,
-      event: 'trade',
-      amounts: ['1200000000', '-5000000'],
-      source_account: 'G'.repeat(56),
-      created_at: '2026-08-11T14:26:36Z',
-      ...over,
-    } as PoolActivityItem);
+  const makeRow = (over: Partial<PoolActivityItem> = {}): PoolActivityItem => ({
+    transaction_hash: 'a'.repeat(64),
+    ledger_sequence: 63_904_097,
+    operation_index: 0,
+    event: 'trade',
+    amounts: ['1200000000', '-5000000'],
+    source_account: 'G'.repeat(56),
+    created_at: '2026-08-11T14:26:36Z',
+    ...over,
+  });
 
   function mockRows(rows: PoolActivityItem[]) {
     hookMock.usePoolActivity.mockReturnValue({
@@ -130,11 +129,11 @@ describe('PoolActivity table', () => {
   it('renders one row per operation, each with its own event and figure', () => {
     mockRows([
       makeRow({
-        application_order: 1,
+        operation_index: 0,
         event: 'deposit',
         amounts: ['1200000000', '5000000'],
       }),
-      makeRow({ application_order: 2, event: 'trade' }),
+      makeRow({ operation_index: 1, event: 'trade' }),
     ]);
     renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
 
@@ -154,14 +153,15 @@ describe('PoolActivity table', () => {
   });
 
   it('links a row to its own operation anchor, not just the transaction', () => {
-    mockRows([makeRow({ application_order: 7 })]);
+    // The anchor is the operation_index itself: 6 is the page's `#op-6`.
+    mockRows([makeRow({ operation_index: 6 })]);
     renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
 
     const link = screen
       .getAllByRole('link')
       .find((a) => a.getAttribute('href')?.includes('#op-'));
     expect(link?.getAttribute('href')).toBe(
-      `/transactions/${'a'.repeat(64)}#op-7`
+      `/transactions/${'a'.repeat(64)}#op-6`
     );
   });
 
@@ -185,8 +185,8 @@ describe('PoolActivity table', () => {
 
   it('marks a multi-pool route hop, and only then', () => {
     mockRows([
-      makeRow({ application_order: 1, pools_crossed: 4 }),
-      makeRow({ application_order: 2, pools_crossed: 1 }),
+      makeRow({ operation_index: 0, pools_crossed: 4 }),
+      makeRow({ operation_index: 1, pools_crossed: 1 }),
     ]);
     renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
     expect(screen.getByText('via 4 pools')).toBeInTheDocument();
