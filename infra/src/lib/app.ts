@@ -33,29 +33,41 @@ export function createApp({
 
   const prefix = `Explorer-${config.envName}`;
 
-  const network = new NetworkStack(app, `${prefix}-Network`, { env, config });
+  // Our own ledger bucket, the Galexie writing it and the VPC Galexie runs
+  // in exist only when this environment produces its ledgers itself; with
+  // `public-lake` the indexer reads SDF's public bucket instead (task 0553).
+  const ownsLedgers = config.ledgerSource === 'galexie';
 
-  const ledgerBucket = new LedgerBucketStack(app, `${prefix}-LedgerBucket`, {
-    env,
-    config,
-  });
+  const network = ownsLedgers
+    ? new NetworkStack(app, `${prefix}-Network`, { env, config })
+    : undefined;
+
+  const ledgerBucket = ownsLedgers
+    ? new LedgerBucketStack(app, `${prefix}-LedgerBucket`, {
+        env,
+        config,
+      })
+    : undefined;
 
   const compute = new ComputeStack(app, `${prefix}-Compute`, {
     env,
     config,
-    ledgerBucketArn: ledgerBucket.bucket.bucketArn,
-    ledgerBucketName: ledgerBucket.bucket.bucketName,
+    ledgerBucketArn: ledgerBucket?.bucket.bucketArn,
+    ledgerBucketName: ledgerBucket?.bucket.bucketName,
     cargoWorkspacePath,
   });
 
-  const ingestion = new IngestionStack(app, `${prefix}-Ingestion`, {
-    env,
-    config,
-    vpc: network.vpc,
-    ecsSecurityGroup: network.ecsSecurityGroup,
-    ledgerBucketArn: ledgerBucket.bucket.bucketArn,
-    ledgerBucketName: ledgerBucket.bucket.bucketName,
-  });
+  const ingestion =
+    ledgerBucket && network
+      ? new IngestionStack(app, `${prefix}-Ingestion`, {
+          env,
+          config,
+          vpc: network.vpc,
+          ecsSecurityGroup: network.ecsSecurityGroup,
+          ledgerBucketArn: ledgerBucket.bucket.bucketArn,
+          ledgerBucketName: ledgerBucket.bucket.bucketName,
+        })
+      : undefined;
   // CDK auto-detects dependencies from cross-stack references
   // (vpc, ecsSecurityGroup, bucket ARN/name).
 
@@ -86,8 +98,8 @@ export function createApp({
     deadLetterQueue: compute.deadLetterQueue,
     enrichmentDlq: compute.enrichmentDlq,
     enrichmentWorkerFunction: compute.enrichmentWorkerFunction,
-    galexieCluster: ingestion.cluster,
-    galexieService: ingestion.liveService,
+    galexieCluster: ingestion?.cluster,
+    galexieService: ingestion?.liveService,
     restApi: apiGateway.api,
     spaDistributionDomainName: delivery.distribution.distributionDomainName,
   });
@@ -103,8 +115,10 @@ export function createApp({
     });
   }
 
-  // HetznerDnsStack only when the env has a real `chDomainName`.
+  // HetznerDnsStack only when the env has a real `chDomainName` and owns
+  // its record.
   if (
+    config.provisionChDns !== false &&
     !config.chDomainName.includes('PLACEHOLDER') &&
     !config.chDomainName.includes('CHANGE')
   ) {
