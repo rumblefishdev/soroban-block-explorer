@@ -96,13 +96,17 @@ Promote the task when any of these happens:
 
 Two PRs — production must act between them.
 
-1. **Query fix, on 26.3.** Dedup every joined RMT table explicitly (its own
-   `FINAL` or an aggregating subquery) instead of relying on propagation. Add
-   a test on the docker ClickHouse that fails when a joined table's
-   duplicates leak into the result. Works on both versions — ships first.
-   Patch alternative: `analyzer_compatibility_apply_final_to_all_joined_tables=1`
-   in the reader profiles (exists from 26.8). Cheaper, but keeps the queries
-   relying on hidden behaviour.
+1. **Query fix, on 26.3 — built 2026-09-30.** An audit of all 77 SQL joins
+   in `crates/` found one site that depends on propagation
+   (`ledgers::fetch_transactions`) and one where it is masked by
+   `fetch_optional` (`transactions::fetch_detail`); both now read
+   `ledgers l FINAL` (same `read_rows` on prod: 24,576). Every other join
+   dedups its own side or collapses duplicates later. Guard:
+   `crates/api/tests/sql_conventions.rs` (text check, red on both sites
+   before the fix). A docker e2e test could not fail on 26.3, which still
+   propagates; the difference was shown on local 26.3 vs 26.8 images
+   instead (bare join 2 vs 4 rows; with `l FINAL` 2 on both). Patch
+   alternative not taken: the 26.8 compatibility setting.
 2. **Version bump.** Image tag in `docker-compose.yml`, the Hetzner Ansible
    role and the docs; local run of the CH-gated tests on the new image;
    production recreate in a maintenance window (pages the self-clearing CH
@@ -111,8 +115,8 @@ Two PRs — production must act between them.
 
 ## Acceptance Criteria
 
-- [ ] No API query relies on `FINAL` propagating across a `JOIN`; a test
-      proves it on the docker ClickHouse.
+- [x] No API query relies on `FINAL` propagating across a `JOIN`; a text
+      check guards it (docker e2e cannot fail on 26.3 — see Implementation).
 - [ ] Every breaking change from 26.4 up to the target is checked against our
       code and config, with the result written here.
 - [ ] Local CH-gated tests pass on the target image.

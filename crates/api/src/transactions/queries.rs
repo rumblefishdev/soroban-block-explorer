@@ -187,7 +187,7 @@ pub async fn fetch_detail(
                 l.closed_at AS created_at, \
                 t.parse_error \
              FROM transactions t FINAL \
-             INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+             INNER JOIN ledgers l FINAL ON l.sequence = t.ledger_sequence \
              WHERE t.ledger_sequence = ? \
                AND (t.hash = unhex(?) OR t.inner_tx_hash = unhex(?))",
         )
