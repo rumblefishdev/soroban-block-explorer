@@ -392,16 +392,19 @@ mainnet transactions carry exactly one (5 369 984 of 6 349 043, measured on
 production over ledgers 63 680 000–63 700 000, deduplicated), and an index of a
 single row is pure width tax.
 
-`#op-N` is 1-based and user-supplied, so `useSelectedOp` resolves it against
+`#op-N` is the operation's 0-based `operation_index`, as the chain counts it
+(`#op-0` is the first operation), and user-supplied, so `useSelectedOp` resolves it against
 the decoded operation list and owns the result, the way `useTableUrlState` owns
 `sort`/`dir`: the index handed to the section always addresses an existing
 operation, and no consumer carries a range guard. A fragment naming an
 operation the transaction does not have resolves to the first one **with no
-notice**: the card numbers itself from `operation_index` (shown 1-based, like
+notice**: the card numbers itself from `operation_index` (shown from 0, like
 the fragment), not from the fragment, so the reader gets a correctly numbered operation and nothing is
 hidden or mislabelled. Reaching that state needs a hand-edited URL — `#op-N` is
 written in one place, from a picker click, and an operation count never changes,
-so a shared link that worked once keeps working. The fragment itself is left
+so a shared link that worked once keeps working. (Once broken on purpose:
+task 0538 moved the anchor and the labels from 1-based to the chain's
+0-based index, so a link shared before that lands one operation later.) The fragment itself is left
 alone, so the address bar still shows what was asked for. While the archive
 fetch is in flight or has failed the list length is unknown, and an unresolvable
 fragment then makes no claim at all rather than asserting a count nobody

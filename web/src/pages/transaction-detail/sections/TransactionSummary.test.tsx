@@ -55,7 +55,7 @@ describe('opFailReason', () => {
         op('create_account', 2, 'OpNoAccount'),
       ])
     );
-    expect(reason).toBe('Create Account #2 — LOW_RESERVE (+1 more failed)');
+    expect(reason).toBe('Create Account #1 — LOW_RESERVE (+1 more failed)');
   });
 
   it('returns null when codes are absent (old responses, validation failures)', () => {
@@ -71,7 +71,7 @@ describe('TransactionSummary failed strip', () => {
         <TransactionSummary tx={tx([op('create_account', 0, 'LowReserve')])} />
       </>
     );
-    expect(screen.getByText(/Create Account #1 — LOW_RESERVE/)).toBeTruthy();
+    expect(screen.getByText(/Create Account #0 — LOW_RESERVE/)).toBeTruthy();
   });
 });
 

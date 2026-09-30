@@ -1,4 +1,3 @@
-import type { OperationItem } from '@rumblefish/api-types';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { Box, Stack, Typography } from '@mui/material';
 
@@ -15,11 +14,6 @@ interface OperationPickerProps {
   txSourceAccount: string | null;
   selectedIndex: number;
   onSelect: (index: number) => void;
-}
-
-// Shown 1-based, like the `#op-N` anchor.
-function opNumber(op: OperationItem): number {
-  return op.operation_index + 1;
 }
 
 export function OperationPicker({
@@ -118,7 +112,7 @@ export function OperationPicker({
                     color: theme.palette.text.primary,
                   })}
                 >
-                  {formatOperationType(op.type_name)} #{opNumber(op)}
+                  {formatOperationType(op.type_name)} #{op.operation_index}
                 </Typography>
                 {summary != null && (
                   <Typography

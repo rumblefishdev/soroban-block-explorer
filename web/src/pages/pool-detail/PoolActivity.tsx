@@ -301,9 +301,7 @@ function activityColumns(
         <IdentifierWithCopy
           value={row.transaction_hash}
           type="transaction"
-          href={`/transactions/${row.transaction_hash}#op-${
-            row.operation_index + 1
-          }`}
+          href={`/transactions/${row.transaction_hash}#op-${row.operation_index}`}
         />
       ),
     },

@@ -153,7 +153,7 @@ describe('PoolActivity table', () => {
   });
 
   it('links a row to its own operation anchor, not just the transaction', () => {
-    // The anchor is 1-based: operation_index 6 is the page's `#op-7`.
+    // The anchor is the operation_index itself: 6 is the page's `#op-6`.
     mockRows([makeRow({ operation_index: 6 })]);
     renderWithProviders(<PoolActivity poolId="LPOOL" pool={poolItem} />);
 
@@ -161,7 +161,7 @@ describe('PoolActivity table', () => {
       .getAllByRole('link')
       .find((a) => a.getAttribute('href')?.includes('#op-'));
     expect(link?.getAttribute('href')).toBe(
-      `/transactions/${'a'.repeat(64)}#op-7`
+      `/transactions/${'a'.repeat(64)}#op-6`
     );
   });
 

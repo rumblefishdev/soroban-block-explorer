@@ -38,7 +38,7 @@ describe('OperationPicker', () => {
         />
       </ExplorerThemeProvider>
     );
-    expect(screen.getByText('Payment #1')).toBeTruthy();
+    expect(screen.getByText('Payment #0')).toBeTruthy();
     expect(screen.getByText(`Sent XLM to GA5X…GKTM`)).toBeTruthy();
   });
 
