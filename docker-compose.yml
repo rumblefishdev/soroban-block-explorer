@@ -77,19 +77,19 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+    # Shares the ClickHouse container's network, so 127.0.0.1:9000 in the
+    # client config is the server — in production too, where the config is
+    # the one the backup script uses inside that container.
+    network_mode: service:clickhouse
     volumes:
       - ./crates/db-clickhouse/schema/init.sql:/init.sql:ro
       - ./crates/db-clickhouse/schema/apply_init.sh:/apply_init.sh:ro
+      # Connection; docker-compose.prod.yml mounts production's at this path.
+      - ./crates/db-clickhouse/schema/client.local.xml:/etc/clickhouse-client/config.xml:ro
     environment:
       # Mainnet's database and testnet's (task 0553); same schema in both.
       EXPLORER_DATABASES: default testnet
-    entrypoint:
-      - sh
-      - /apply_init.sh
-      - --host=clickhouse
-      - --port=9000
-      - --user=default
-      - --password=clickhouse
+    entrypoint: [sh, /apply_init.sh]
     restart: 'no'
 
 volumes:
