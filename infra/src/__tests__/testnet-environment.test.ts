@@ -68,6 +68,8 @@ describe('testnet environment', () => {
     }
     const indexer = env['testnet-soroban-explorer-indexer'];
     expect(indexer?.['BUCKET_NAME']).toBe('aws-public-blockchain');
+    // The indexer paces itself through its own queue.
+    expect(indexer?.['INGEST_QUEUE_URL']).toBeDefined();
     expect(indexer?.['PUBLIC_ARCHIVE_PREFIX']).toBe(
       testnet.publicArchivePrefix
     );

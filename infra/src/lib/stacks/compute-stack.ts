@@ -442,6 +442,12 @@ export class ComputeStack extends cdk.Stack {
         envName: config.envName,
         ingestQueue,
       });
+      // The indexer queues its own next wake-up, one per ledger it expects.
+      processorFunction.addEnvironment(
+        'INGEST_QUEUE_URL',
+        ingestQueue.queueUrl
+      );
+      ingestQueue.grantSendMessages(processorFunction);
     }
 
     // SQS → indexer event-source-mapping. Gated on concurrency so a
