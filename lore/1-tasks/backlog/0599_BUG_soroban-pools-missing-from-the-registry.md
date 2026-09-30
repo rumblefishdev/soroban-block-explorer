@@ -29,6 +29,15 @@ pool family we should register.
   58M to the tip: 42 unregistered contracts emit concentrated-liquidity
   `[swap]` maps (`amount0`, `amount1`, `sqrt_price_x96`, `tick`; ~119k
   events), and 2 more emit `amount_in`, `amount_out`, `recipient` (~86k).
+- Found 2026-09-30 during the W1 backfill: a Soroswap-shaped fork, first
+  topic `RaumFiPair` and kinds `swap_pair_event`, `deposit_pair_event`,
+  `withdraw_pair_event`, `sync_pair_event` (same map fields as
+  `SoroswapPair`). Whole history: one contract,
+  `CBXZK6363UPH444OD6RNC6ZQ7RAUMKGXTGO574WMYTOW5TSPL4UFULSN`, ledgers
+  52,786,193–53,857,580, 171 swaps, 24 deposits, 21 withdrawals. It stages
+  pool state, so the W1 decoder reads it and logs "unknown name"; registering
+  it means adding `RaumFiPair` to the pair arm and re-running
+  `soroban-pool-amounts`.
 - The registry knows three families (router, pair factory, config factory);
   a pool of any other family is invisible end to end.
 
