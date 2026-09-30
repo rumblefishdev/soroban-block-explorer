@@ -27,8 +27,11 @@ six SPA sites each re-derive the type, with different answers for `M…`/`B…`.
 
 ## Stan teraz
 
-- Done: decision 339 A (+ owner), karolkow, 2026-09-30
-- Next: PR 1 — one `addressType` in `libs/ui`; PR 2 — API field renames
+- Done: decision 339 A (+ owner); #563 merged (`addressType`)
+- Open: #564 (API `caller` / `owner` / `from` / `to`, deploy Compute + Web
+  together), #565 (internal names, `[structure only]`, thread 368 A)
+- Later (thread 369 B): pool participants `account` → `holder`, its own
+  Compute + Web window
 - In force: API contract changes; types regenerated; no storage change
 
 ## Context (measured 2026-09-30)
@@ -56,7 +59,8 @@ six SPA sites each re-derive the type, with different answers for `M…`/`B…`.
 
 ## Acceptance Criteria
 
-- [ ] One `addressType` in `libs/ui`; no prefix check left in `web/src` pages
+- [x] One `addressType` in `libs/ui`; no prefix check left in `web/src` pages
+      (#563)
 - [ ] Invocation DTOs carry `caller`; NFT DTOs carry `owner` / `from` / `to`
 - [ ] Contract and transaction pages and NFT pages render and link as before
       (checked on production data)
