@@ -1015,7 +1015,8 @@ range re-parse would fetch ~800 GB to decode ~1 GB.
    backfill-runner soroban-pool-amounts
    ```
 
-   One streaming read per registered pool, in the table's own key order;
+   One streaming read per pool that staged state (`pool_state_changes`), limited to
+   the ledgers where it did — the live writer's own rule; the registry supplies legs only, in the table's own key order;
    ~6M events, minutes. Idempotent: rows are keyed by the event, so the
    overlap with the live writer and any re-run collapse on merge.
 
