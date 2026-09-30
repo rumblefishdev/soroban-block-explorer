@@ -195,6 +195,7 @@ fn stage_ledger(cache: &Path, seq: u32) -> Vec<StagedLedger> {
                 prior_contract_verdicts: &HashMap::new(),
                 prior_contract_rows: &HashMap::new(),
                 asset_transfers: &parsed.asset_transfers,
+                soroban_pools: &HashMap::new(),
             })
             .expect("stage")
         })

@@ -88,6 +88,7 @@ fn raw_registration_ledger_stages_the_exact_rows() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &std::collections::HashMap::new(),
     })
     .expect("staging the raw ledger succeeds");
 

@@ -246,8 +246,9 @@ pub struct StagedLedger {
     /// position (task 0372) → `pool_operation_amounts`: trades from
     /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
-    /// Filled by the caller: [`soroban_pool_amounts::stage_soroban_pool_amounts`].
-    pub soroban_pool_amount_rows: Vec<PoolMovementRow>,
+    /// Task 0374 (W1) → `pool_movements`: the swaps, deposits and withdrawals
+    /// of registered soroban pools, decoded from `event_rows`.
+    pub pool_movement_rows: Vec<PoolMovementRow>,
     pub event_rows: Vec<SorobanEventRow>,
     /// Per-(contract, tx) presence plus the invocation's caller and call count
     /// (tasks 0541, 0586) → `contract_activity`, the contract-dimension twin of
@@ -353,6 +354,10 @@ pub struct StageInputs<'a> {
     /// `xdr_parser::extract_asset_transfers` (per-op consensus events only,
     /// emitter-gated, payload-checked). Empty for legacy callers.
     pub asset_transfers: &'a [ExtractedAssetTransfer],
+    /// Task 0374 (W1) — the registered soroban pools by contract surrogate,
+    /// which key a pool's events onto its legs. Empty for legacy callers (no
+    /// `pool_movements` rows).
+    pub soroban_pools: &'a HashMap<i64, soroban_pool_amounts::SorobanPool>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -400,6 +405,7 @@ pub fn prepare(
         prior_contract_verdicts: &HashMap::new(),
         prior_contract_rows: &HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
 }
 
@@ -639,6 +645,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         prior_contract_verdicts,
         prior_contract_rows,
         asset_transfers,
+        soroban_pools,
     } = *input;
 
     let ledger_sequence_i64 = i64::from(ledger.sequence);
@@ -2151,6 +2158,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     )?;
     out.asset_transfer_rows = value_flow.transfers;
     out.transaction_memo_rows = value_flow.memos;
+
+    // ---- pool_movements (0374, W1): from the event rows staged above ----
+    out.pool_movement_rows =
+        soroban_pool_amounts::pool_movement_rows(&out, soroban_pools, sac_classic);
 
     Ok(out)
 }

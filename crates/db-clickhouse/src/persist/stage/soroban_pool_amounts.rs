@@ -34,27 +34,26 @@ pub fn soroban_pool_entry(pool_id: [u8; 32], legs: Vec<i64>) -> (i64, SorobanPoo
     (ids::contract_id(&strkey), SorobanPool { pool_id, legs })
 }
 
-/// Fill [`StagedLedger::soroban_pool_amount_rows`] from the ledger's staged
-/// events. A pool registered in this very ledger joins `pools` first, so its
-/// first trades are not lost to the prefetch having run before it existed.
-pub fn stage_soroban_pool_amounts(
-    staged: &mut StagedLedger,
+/// The ledger's [`StagedLedger::pool_movement_rows`], from its staged events.
+/// A pool registered in this very ledger joins `pools` first, so its first
+/// trades are not lost to the prefetch having run before it existed.
+pub(super) fn pool_movement_rows(
+    staged: &StagedLedger,
     pools: &HashMap<i64, SorobanPool>,
     sac_classic: &HashMap<i64, i64>,
-) {
+) -> Vec<PoolMovementRow> {
     let registered_now: Vec<(i64, SorobanPool)> = staged
         .pool_rows
         .iter()
         .filter(|r| r.pool_kind == 1)
         .map(|r| soroban_pool_entry(r.pool_id, r.legs.clone()))
         .collect();
-    staged.soroban_pool_amount_rows = if registered_now.is_empty() {
-        soroban_pool_amount_rows(&staged.event_rows, pools, sac_classic)
-    } else {
-        let mut all = pools.clone();
-        all.extend(registered_now);
-        soroban_pool_amount_rows(&staged.event_rows, &all, sac_classic)
-    };
+    if registered_now.is_empty() {
+        return soroban_pool_amount_rows(&staged.event_rows, pools, sac_classic);
+    }
+    let mut all = pools.clone();
+    all.extend(registered_now);
+    soroban_pool_amount_rows(&staged.event_rows, &all, sac_classic)
 }
 
 /// What an event did to the pool — stored, not inferred from the signs: a

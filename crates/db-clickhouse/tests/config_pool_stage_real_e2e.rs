@@ -170,6 +170,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             prior_wasm_verdicts: &std::collections::HashMap::new(),
             prior_contract_verdicts: &std::collections::HashMap::new(),
             prior_contract_rows: &std::collections::HashMap::new(),
+            soroban_pools: &std::collections::HashMap::new(),
         })
         .expect("staging the raw ledger succeeds");
 

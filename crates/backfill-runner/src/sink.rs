@@ -179,22 +179,24 @@ impl PartitionWriterHandle {
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
-            // Task 0374 (W1) — pool events need the registry (for their legs)
-            // and the SAC map (for their tokens), when this write persists them.
-            let pool_events = self
+            // Task 0374 (W1): pool events need the registry (for their legs).
+            let writes_pool_movements = self
                 .only
                 .as_ref()
-                .is_none_or(|t| t.contains("pool_movements"))
-                && db_clickhouse::persist::has_contract_events(&parsed.events);
+                .is_none_or(|t| t.contains("pool_movements"));
             let needed = db_clickhouse::persist::sac_classic_map_needed(
                 &parsed.soroban_token_balances,
                 &parsed.events,
                 writes_balances,
-            ) || pool_events;
+                writes_pool_movements,
+            );
             let sac_classic =
                 db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
-            let soroban_pools =
-                db_clickhouse::persist::fetch_soroban_pools(pw.client(), pool_events).await?;
+            let soroban_pools = db_clickhouse::persist::fetch_soroban_pools(
+                pw.client(),
+                db_clickhouse::persist::pool_registry_needed(&parsed.events, writes_pool_movements),
+            )
+            .await?;
             // Task 0220 — switch to the `_with_sac_overrides` entry
             // point so the CH writer flips `is_sac=true,
             // contract_type=Token` on pre-existing SAC skeleton
@@ -205,7 +207,7 @@ impl PartitionWriterHandle {
             // out as a follow-up.
             // Mirrored in `tests/redecode_diff.rs` (rollout gate 7b), which re-runs
             // this exact staging on archive files — change both together.
-            let mut staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
+            let staged = db_clickhouse::persist::stage::prepare_with_sac_overrides(
                 &db_clickhouse::persist::stage::StageInputs {
                     ledger: &parsed.ledger,
                     transactions: &parsed.transactions,
@@ -253,13 +255,9 @@ impl PartitionWriterHandle {
                     // it: `wasm-upgrade-backfill` was removed in task 0425.
                     prior_contract_rows: &std::collections::HashMap::new(),
                     asset_transfers: &parsed.asset_transfers,
+                    soroban_pools: &soroban_pools,
                 },
             )?;
-            db_clickhouse::persist::stage::soroban_pool_amounts::stage_soroban_pool_amounts(
-                &mut staged,
-                &soroban_pools,
-                &sac_classic,
-            );
             if let Some(only) = &self.only {
                 pw.write_only(&staged, only).await?;
             } else {

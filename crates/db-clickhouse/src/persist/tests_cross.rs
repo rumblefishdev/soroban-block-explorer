@@ -1980,6 +1980,7 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -2145,6 +2146,7 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         prior_contract_verdicts: &prior,
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -2190,6 +2192,7 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         prior_contract_verdicts: &prior,
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -2237,6 +2240,7 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -2297,6 +2301,7 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -2355,6 +2360,7 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -2544,6 +2550,7 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -2655,6 +2662,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -2736,6 +2744,7 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare_with_sac_overrides");
 
@@ -3712,6 +3721,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare itself succeeds — one refused registration must not fail the ledger");
 
@@ -3741,14 +3751,33 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &router_ledger,
+        false,
         false
     ));
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &pair_ledger,
+        false,
         false
     ));
-    assert!(!crate::persist::sac_classic_map_needed(&[], &[], true));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[],
+        true,
+        true
+    ));
+
+    // Pool events key their tokens on the map too (task 0374, W1): any event
+    // needs it, and the registry, exactly when `pool_movements` is written.
+    assert!(crate::persist::sac_classic_map_needed(
+        &[],
+        &pair_ledger,
+        false,
+        true
+    ));
+    assert!(crate::persist::pool_registry_needed(&pair_ledger, true));
+    assert!(!crate::persist::pool_registry_needed(&pair_ledger, false));
+    assert!(!crate::persist::pool_registry_needed(&[], true));
 
     // A contract-held balance needs the map exactly when `balances` is written.
     let balance = [xdr_parser::ExtractedSorobanBalance {
@@ -3758,10 +3787,16 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         ledger: 1,
         closed: false,
     }];
-    assert!(crate::persist::sac_classic_map_needed(&balance, &[], true));
+    assert!(crate::persist::sac_classic_map_needed(
+        &balance,
+        &[],
+        true,
+        false
+    ));
     assert!(!crate::persist::sac_classic_map_needed(
         &balance,
         &[],
+        false,
         false
     ));
 }
@@ -3856,6 +3891,7 @@ fn stage_registration(
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare")
 }
@@ -3929,6 +3965,7 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare");
 
@@ -4147,6 +4184,7 @@ fn stage_router_writes(writes: &[xdr_parser::pool_family::PoolFamilyWrite]) -> s
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare")
 }
@@ -4307,6 +4345,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
         asset_transfers: &[],
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare");
 
@@ -4457,6 +4496,7 @@ fn stage_factory_pair(
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
+        soroban_pools: &HashMap::new(),
     })
     .expect("prepare")
 }
@@ -4691,6 +4731,7 @@ fn stage_config_pool(
         prior_wasm_verdicts: &std::collections::HashMap::new(),
         prior_contract_verdicts: &std::collections::HashMap::new(),
         prior_contract_rows: &std::collections::HashMap::new(),
+        soroban_pools: &HashMap::new(),
     })
     .expect("staging succeeds — refusals must not fail the ledger")
 }

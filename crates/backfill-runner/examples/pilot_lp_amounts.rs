@@ -72,6 +72,7 @@ fn main() {
                 prior_contract_verdicts: &HashMap::new(),
                 prior_contract_rows: &HashMap::new(),
                 asset_transfers: &parsed.asset_transfers,
+                soroban_pools: &HashMap::new(),
             })
             .expect("stage");
             ledgers += 1;

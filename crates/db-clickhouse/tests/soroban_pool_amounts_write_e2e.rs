@@ -32,7 +32,7 @@ fn staged(ledger: i64) -> StagedLedger {
             transaction_count: 1,
             base_fee: 100,
         }],
-        soroban_pool_amount_rows: vec![PoolMovementRow {
+        pool_movement_rows: vec![PoolMovementRow {
             pool_id: [0x55; 32],
             ledger_sequence: ledger,
             application_order: 2,

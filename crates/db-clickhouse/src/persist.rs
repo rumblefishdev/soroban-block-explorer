@@ -129,12 +129,10 @@ pub async fn persist_ledger_clickhouse(
         // surrogate; re-map them onto the wrapped classic/native asset id below.
         fetch_sac_classic_map(
             client,
-            // Pool events key their tokens onto assets too (task 0374, W1).
-            sac_classic_map_needed(soroban_token_balances, events, true)
-                || has_contract_events(events)
+            sac_classic_map_needed(soroban_token_balances, events, true, true)
         ),
         // Task 0374 (W1): the registry keys a pool's events onto its legs.
-        fetch_soroban_pools(client, has_contract_events(events)),
+        fetch_soroban_pools(client, pool_registry_needed(events, true)),
     );
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
     // here would otherwise orphan contract-held balances under their surrogate key.
@@ -147,7 +145,7 @@ pub async fn persist_ledger_clickhouse(
     // inside `prepare_with_sac_overrides` (same channel as the other two prior-*
     // reads) so it rewrites `soroban_contracts.wasm_hash` for contracts upgraded
     // this ledger — no post-prepare mutation.
-    let mut staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
+    let staged = stage::prepare_with_sac_overrides(&stage::StageInputs {
         ledger,
         transactions,
         operations,
@@ -175,12 +173,8 @@ pub async fn persist_ledger_clickhouse(
         prior_contract_verdicts: &prior_contract_verdicts,
         prior_contract_rows: &prior_contract_rows,
         asset_transfers,
+        soroban_pools: &soroban_pools,
     })?;
-    stage::soroban_pool_amounts::stage_soroban_pool_amounts(
-        &mut staged,
-        &soroban_pools,
-        &sac_classic,
-    );
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
         pw.abort().await;
@@ -291,7 +285,8 @@ async fn fetch_prior_wasm_verdicts(
 
 /// Whether a ledger needs the SAC → classic map: it has a contract-held token
 /// balance to re-key AND this write persists `balances`, OR it registers a
-/// soroban pool, whose legs key on the same map.
+/// soroban pool, whose legs key on the same map, OR it may carry pool events
+/// AND this write persists `pool_movements` — their tokens key on it too.
 ///
 /// The pool arm is what went missing. Gating on balances alone left a pool
 /// registered in a ledger with no token balance change keyed on its SAC
@@ -304,16 +299,23 @@ pub fn sac_classic_map_needed(
     soroban_token_balances: &[ExtractedSorobanBalance],
     events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
     writes_balances: bool,
+    writes_pool_movements: bool,
 ) -> bool {
     (writes_balances && !soroban_token_balances.is_empty())
         || stage::registers_soroban_pools(events)
+        || pool_registry_needed(events, writes_pool_movements)
 }
 
-/// Whether the ledger carries any contract event — the gate for reading the
-/// pool registry. ponytail: not narrowed to pool-shaped events; a pool trades
-/// in nearly every ledger, so the narrower gate would save almost nothing.
-pub fn has_contract_events(events: &[(String, Vec<xdr_parser::ExtractedEvent>)]) -> bool {
-    events.iter().any(|(_, evs)| !evs.is_empty())
+/// Whether a ledger needs the soroban pool registry: this write persists
+/// `pool_movements` AND the ledger carries any contract event. Live, that is
+/// nearly every ledger (one ~800-row read); the gate is for the backfill —
+/// ledgers before Soroban carry no events, and a targeted write of another
+/// table needs no registry. ponytail: not narrowed to pool-shaped events.
+pub fn pool_registry_needed(
+    events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
+    writes_pool_movements: bool,
+) -> bool {
+    writes_pool_movements && events.iter().any(|(_, evs)| !evs.is_empty())
 }
 
 #[derive(clickhouse::Row, serde::Deserialize)]
