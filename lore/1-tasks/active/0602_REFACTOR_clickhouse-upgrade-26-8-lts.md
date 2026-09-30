@@ -2,7 +2,7 @@
 id: '0602'
 title: 'ClickHouse upgrade 26.3 → 26.8 LTS — dormant until a problem it solves'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0420']
 tags: ['clickhouse', 'dormant', 'effort-medium', 'priority-low']
@@ -16,6 +16,12 @@ history:
       Task created from a changelog review of 26.4–26.9 against production
       (26.3.10.60). Parked on purpose: pick it up when one of the triggers
       below shows up, not before.
+  - date: 2026-09-30
+    status: active
+    who: karolkow
+    note: >
+      Activated for the first PR only: explicit dedup of joined RMT tables,
+      which is correct on 26.3 too. The version bump stays parked.
 ---
 
 # ClickHouse upgrade 26.3 → 26.8 LTS — dormant until a problem it solves
