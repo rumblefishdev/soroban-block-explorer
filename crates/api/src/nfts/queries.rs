@@ -604,3 +604,6 @@ mod tests;
 
 #[cfg(test)]
 mod decode_smoke;
+
+#[cfg(test)]
+mod ch_tests;
