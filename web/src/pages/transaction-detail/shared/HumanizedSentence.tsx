@@ -1,19 +1,11 @@
 import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
 import { Fragment } from 'react';
-import { IdentifierWithCopy } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  addressType,
+  IdentifierWithCopy,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { detailsObj, humanizeOp, shortId } from './humanizeOp.js';
-
-/** Strkeys with a detail route of their own: account, contract, pool. Balance
- *  ids (hex) and asset codes deliberately do not match — nothing links to a
- *  page that does not exist. Mirrors the JSON viewer's rule (0460 #14). */
-const LINKABLE_STRKEY = /^[GCL][A-Z2-7]{55}$/;
-
-function idType(value: string): 'account' | 'contract' | 'pool' {
-  if (value.startsWith('C')) return 'contract';
-  if (value.startsWith('L')) return 'pool';
-  return 'account';
-}
 
 /** Every linkable identifier reachable from the operation, keyed by the
  *  SHORT form the sentence prints (`GA5X…GKTM` → the full strkey).
@@ -28,7 +20,9 @@ export function sentenceIds(
   const ids = new Map<string, string>();
   const visit = (value: unknown, depth = 0): void => {
     if (typeof value === 'string') {
-      if (LINKABLE_STRKEY.test(value)) ids.set(shortId(value), value);
+      // Only an address with a page of its own: balance ids (hex) and asset
+      // codes never link, like in the JSON viewer (0460 #14).
+      if (addressType(value) != null) ids.set(shortId(value), value);
       return;
     }
     if (depth > 4 || value == null || typeof value !== 'object') return;
@@ -70,11 +64,12 @@ export function HumanizedSentence({
     <>
       {text.split(pattern).map((piece, index) => {
         const full = ids.get(piece);
-        return full != null ? (
+        const type = full != null ? addressType(full) : null;
+        return full != null && type != null ? (
           <IdentifierWithCopy
             key={index}
             value={full}
-            type={idType(full)}
+            type={type}
             tone="inherit"
             fontSize="inherit"
           />

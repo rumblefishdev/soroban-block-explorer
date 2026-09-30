@@ -280,7 +280,7 @@ async fn same_ledger_changes_come_in_chain_order() {
             "newest first, by location: {newer:?} then {older:?}"
         );
         assert_eq!(
-            newer.from_account, older.to_account,
+            newer.from, older.to,
             "a change starts from the owner the previous change left"
         );
     }

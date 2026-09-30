@@ -84,7 +84,7 @@ async fn nft_held_by_a_contract_is_served_with_its_address() {
         list.iter()
             .find(|r| r.token_id == token)
             .unwrap_or_else(|| panic!("{token} must be listed"))
-            .owner_account
+            .owner
             .clone()
     };
     assert_eq!(owner("held-by-contract").as_deref(), Some(VAULT));
@@ -95,7 +95,7 @@ async fn nft_held_by_a_contract_is_served_with_its_address() {
         .await
         .expect("detail must run")
         .expect("detail must find the token");
-    assert_eq!(detail.owner_account.as_deref(), Some(VAULT));
+    assert_eq!(detail.owner.as_deref(), Some(VAULT));
 
     // ---- transfers: newest first; the move into the vault starts at Alice ----
     let transfers = fetch_transfers(
@@ -110,7 +110,7 @@ async fn nft_held_by_a_contract_is_served_with_its_address() {
     .expect("transfers must run");
     let moves: Vec<_> = transfers
         .iter()
-        .map(|t| (t.from_account.as_deref(), t.to_account.as_deref()))
+        .map(|t| (t.from.as_deref(), t.to.as_deref()))
         .collect();
     assert_eq!(moves, [(Some(ALICE), Some(VAULT)), (None, Some(ALICE))]);
 

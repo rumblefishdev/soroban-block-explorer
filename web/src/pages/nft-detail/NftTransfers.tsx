@@ -41,21 +41,15 @@ const columns: ExplorerTableColumn<NftTransferItem>[] = [
     id: 'from',
     header: 'From',
     width: 160,
-    // `from_account` (a G… account or a C… contract) is null on the mint row.
-    cell: (row) =>
-      row.from_account ? (
-        <OwnerIdentifier value={row.from_account} />
-      ) : (
-        <Dash />
-      ),
+    // `from` (a G… account or a C… contract) is null on the mint row.
+    cell: (row) => (row.from ? <OwnerIdentifier value={row.from} /> : <Dash />),
   },
   {
     id: 'to',
     header: 'To',
     width: 160,
-    // `to_account` (a G… account or a C… contract) is null on a burn.
-    cell: (row) =>
-      row.to_account ? <OwnerIdentifier value={row.to_account} /> : <Dash />,
+    // `to` (a G… account or a C… contract) is null on a burn.
+    cell: (row) => (row.to ? <OwnerIdentifier value={row.to} /> : <Dash />),
   },
   {
     id: 'transaction',

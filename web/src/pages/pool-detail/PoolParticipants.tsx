@@ -3,6 +3,7 @@ import HourglassIcon from '@mui/icons-material/HourglassEmptyOutlined';
 import { Typography } from '@mui/material';
 import type { ParticipantItem } from '@rumblefish/api-types';
 import {
+  addressType,
   EmptyState,
   ExplorerTable,
   IdentifierDisplay,
@@ -26,12 +27,16 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
     header: 'Account',
     width: 160,
     // A soroban pool's share token is also held by contracts (gauges, vaults).
-    cell: (row) => (
-      <IdentifierWithCopy
-        value={row.account}
-        type={row.account.startsWith('C') ? 'contract' : 'account'}
-      />
-    ),
+    cell: (row) => {
+      const type = addressType(row.account);
+      return (
+        <IdentifierWithCopy
+          value={row.account}
+          type={type ?? 'account'}
+          linked={type != null}
+        />
+      );
+    },
   },
   {
     id: 'shares',
