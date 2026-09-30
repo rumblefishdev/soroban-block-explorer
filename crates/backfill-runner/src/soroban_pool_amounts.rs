@@ -37,7 +37,7 @@ pub struct Stats {
 
 pub async fn execute(sink: &Sink, dry_run: bool) -> Result<Stats, BackfillError> {
     let client = sink.client();
-    let pools = db_clickhouse::persist::fetch_soroban_pools(client, None).await?;
+    let pools = db_clickhouse::persist::fetch_soroban_pools(client).await?;
     let sac_classic = db_clickhouse::persist::fetch_sac_classic_map(client, true).await?;
     let mut stats = Stats {
         dry_run,

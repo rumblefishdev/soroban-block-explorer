@@ -109,18 +109,7 @@ pub async fn persist_ledger_clickhouse(
     //   for contracts deployed earlier), memoised by `classification_cache`.
     // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
     // All three are independent reads; one `join!` pays a single round-trip.
-    // Task 0374 (W1): a Phoenix withdrawal names its amounts by leg position
-    // and nothing in its ledger shows the legs — only those pools are looked
-    // up (17 events in all history). Every other pool is recognised and keyed
-    // from the ledger itself, in staging.
-    let withdraw_pools = stage::soroban_pool_amounts::phoenix_withdraw_pools(events);
-    let (
-        prior_wasm_verdicts,
-        prior_contract_verdicts,
-        prior_contract_rows,
-        sac_classic,
-        soroban_pools,
-    ) = tokio::join!(
+    let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows, sac_classic) = tokio::join!(
         fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
         fetch_prior_contract_verdicts(
             client,
@@ -136,13 +125,10 @@ pub async fn persist_ledger_clickhouse(
             client,
             sac_classic_map_needed(soroban_token_balances, events, true, true)
         ),
-        fetch_soroban_pools(client, Some(&withdraw_pools)),
     );
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
     // here would otherwise orphan contract-held balances under their surrogate key.
     let sac_classic = sac_classic?;
-    // Fail closed: without its legs a Phoenix withdrawal is lost.
-    let soroban_pools = soroban_pools?;
     // Fail closed here too: a skipped upgrade row has no recovery pass.
     let prior_contract_rows = prior_contract_rows?;
     // Task 0320 live path: `prior_contract_rows` feeds `build_wasm_upgrade_rows`
@@ -177,7 +163,6 @@ pub async fn persist_ledger_clickhouse(
         prior_contract_verdicts: &prior_contract_verdicts,
         prior_contract_rows: &prior_contract_rows,
         asset_transfers,
-        soroban_pools: &soroban_pools,
     })?;
     let mut pw = PartitionWriter::open(client.clone());
     if let Err(err) = pw.write_ledger(staged).await {
@@ -317,33 +302,19 @@ struct SorobanPoolLegsRow {
     legs: Vec<i64>,
 }
 
-/// Registered soroban pools (`liquidity_pools`, kind 1) with their legs,
-/// keyed by contract surrogate: every one (`None`, ~800 rows — the backfill
-/// and the checks), or only `Some(pools)`, a primary-key seek that reads
-/// nothing when the list is empty (the live writer, which needs legs only for
-/// a Phoenix withdrawal).
+/// Every registered soroban pool (`liquidity_pools`, kind 1) with its legs,
+/// keyed by contract surrogate (~800 rows) — for the backfill, which reads
+/// pool events back from `soroban_events` without their ledger's entry
+/// writes, and for the checks. The live writer never reads it.
 pub async fn fetch_soroban_pools(
     client: &Client,
-    only: Option<&[[u8; 32]]>,
 ) -> Result<HashMap<i64, stage::soroban_pool_amounts::SorobanPool>, clickhouse::error::Error> {
-    let filter = match only {
-        None => String::new(),
-        Some([]) => return Ok(HashMap::new()),
-        Some(pools) => format!(
-            "AND pool_id IN ({})",
-            pools
-                .iter()
-                .map(|p| format!("unhex('{}')", hex::encode(p)))
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
-    };
     let rows = client
-        .query(&format!(
+        .query(
             "SELECT lower(hex(pool_id)) AS pool_hex, \
                     argMax(legs, last_updated_ledger) AS legs \
-             FROM liquidity_pools WHERE pool_kind = 1 {filter} GROUP BY pool_id"
-        ))
+             FROM liquidity_pools WHERE pool_kind = 1 GROUP BY pool_id",
+        )
         .fetch_all::<SorobanPoolLegsRow>()
         .await?;
     Ok(rows

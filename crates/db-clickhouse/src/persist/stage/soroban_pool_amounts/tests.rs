@@ -54,6 +54,7 @@ fn pools() -> HashMap<i64, SorobanPool> {
         SorobanPool {
             pool_id: [9; 32],
             legs: vec![ids::contract_id(PYUSD), USDC],
+            ..SorobanPool::default()
         },
     )])
 }

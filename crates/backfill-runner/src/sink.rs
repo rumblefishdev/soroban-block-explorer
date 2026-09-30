@@ -192,16 +192,6 @@ impl PartitionWriterHandle {
             );
             let sac_classic =
                 db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
-            let withdraw_pools = if writes_pool_movements {
-                db_clickhouse::persist::stage::soroban_pool_amounts::phoenix_withdraw_pools(
-                    &parsed.events,
-                )
-            } else {
-                Vec::new()
-            };
-            let soroban_pools =
-                db_clickhouse::persist::fetch_soroban_pools(pw.client(), Some(&withdraw_pools))
-                    .await?;
             // Task 0220 — switch to the `_with_sac_overrides` entry
             // point so the CH writer flips `is_sac=true,
             // contract_type=Token` on pre-existing SAC skeleton
@@ -260,7 +250,6 @@ impl PartitionWriterHandle {
                     // it: `wasm-upgrade-backfill` was removed in task 0425.
                     prior_contract_rows: &std::collections::HashMap::new(),
                     asset_transfers: &parsed.asset_transfers,
-                    soroban_pools: &soroban_pools,
                 },
             )?;
             if let Some(only) = &self.only {

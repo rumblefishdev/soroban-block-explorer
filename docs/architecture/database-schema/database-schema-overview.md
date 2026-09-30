@@ -710,9 +710,10 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_in
   ledger (every amount event of a registered pool has one: 100% over 200k
   ledgers) — so a ledger's rows depend on that ledger alone, whatever order
   the ledgers are processed in. Pair legs come from the pair's own instance in
-  the ledger; only a Phoenix withdrawal (legs by position, 17 events in all
-  history) looks its pool up. Readers start from the registry, as the reserve
-  reader does. The backfill (`backfill-runner soroban-pool-amounts`) reads
+  the ledger, and a Phoenix withdrawal (legs by position, its CONFIG written
+  only at creation) reads them from the pool's own payouts in the same
+  operation — the writer reads no registry at all. Readers start from the
+  registry, as the reserve reader does. The backfill (`backfill-runner soroban-pool-amounts`) reads
   `soroban_events` back through the same decoder with the registry, and stays
   as the way to re-derive the table after a decoder change.
 - **Nothing dropped silently.** An event name that is neither an amount event

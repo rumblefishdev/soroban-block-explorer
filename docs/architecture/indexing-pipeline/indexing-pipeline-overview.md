@@ -343,8 +343,7 @@ schema on Hetzner. That write includes both:
 - low-level structured explorer records (`ledgers`, `transactions`,
   `transaction_operations`, `pool_operation_amounts`,
   `pool_movements` (decoded in staging from the ledger's pool events, for
-  the pools the ledger staged state for — no registry read, save a point
-  lookup for a Phoenix withdrawal),
+  the pools the ledger staged state for — no registry read),
   `transaction_participants`, and the appearance indexes `soroban_events`,
   `contract_activity`)
 - derived explorer-facing state (`accounts`, `soroban_contracts`,

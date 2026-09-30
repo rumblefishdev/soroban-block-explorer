@@ -57,7 +57,7 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
     let ch = db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
         .expect("mTLS ClickHouse client");
 
-    let pools = db_clickhouse::persist::fetch_soroban_pools(&ch, None)
+    let pools = db_clickhouse::persist::fetch_soroban_pools(&ch)
         .await
         .unwrap();
     let sac = db_clickhouse::persist::fetch_sac_classic_map(&ch, true)

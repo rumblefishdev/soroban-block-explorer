@@ -11,8 +11,8 @@
 //! a ledger's movements depend on that ledger alone. Readers start from the
 //! registry, as the reserve reader does, so a contract that only looks like a
 //! pool is never read. Legs, needed where amounts are named by position, come
-//! from the ledger too: a pair's own instance, a pool registered in it; only a
-//! Phoenix withdrawal needs its legs looked up.
+//! from the ledger too: a pair's own instance, a pool registered in it, and
+//! for a Phoenix withdrawal the pool's own payouts in the same operation.
 
 use std::collections::HashMap;
 
@@ -22,20 +22,32 @@ use super::{StagedLedger, contract_token_asset_id};
 use crate::persist::ids;
 use crate::persist::rows::{PoolMovementRow, SorobanEventRow};
 
-/// A registered soroban pool, keyed by its contract surrogate
+/// A soroban pool, keyed by its contract surrogate
 /// (`soroban_events.contract_id`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SorobanPool {
     pub pool_id: [u8; 32],
-    /// `liquidity_pools.legs`: asset ids in the pool's own token order.
+    /// Asset ids in the pool's own token order (`liquidity_pools.legs`), where
+    /// known; empty where nothing in the ledger shows them.
     pub legs: Vec<i64>,
+    /// What the pool paid out in each operation of the ledger (asset id,
+    /// amount), by `(application_order, operation_index)` — the legs of a
+    /// Phoenix withdrawal. Empty when read back from `soroban_events`.
+    pub payouts: HashMap<(i16, u16), Vec<(i64, i128)>>,
 }
 
 /// A registry entry keyed by the pool's contract surrogate, the key its
 /// events carry.
 pub fn soroban_pool_entry(pool_id: [u8; 32], legs: Vec<i64>) -> (i64, SorobanPool) {
     let strkey = stellar_strkey::Contract(pool_id).to_string();
-    (ids::contract_id(&strkey), SorobanPool { pool_id, legs })
+    (
+        ids::contract_id(&strkey),
+        SorobanPool {
+            pool_id,
+            legs,
+            ..SorobanPool::default()
+        },
+    )
 }
 
 /// The ledger's [`StagedLedger::pool_movement_rows`], from its staged events.
@@ -43,12 +55,11 @@ pub fn soroban_pool_entry(pool_id: [u8; 32], legs: Vec<i64>) -> (i64, SorobanPoo
 /// The pools are the ones this ledger staged state rows for: every amount event
 /// of a registered pool has one in the same ledger (100% of 269,641 pool-ledgers
 /// over 200k ledgers, production 2026-09-30). Their legs, where known: a pair's
-/// own instance (`pair_legs`), a pool registered in this ledger, a looked-up
-/// pool (`looked_up`, the Phoenix withdrawals).
+/// own instance (`pair_legs`), a pool registered in this ledger; and each
+/// pool's payouts, from which a Phoenix withdrawal reads its legs.
 pub(super) fn pool_movement_rows(
     staged: &StagedLedger,
     pair_legs: &HashMap<[u8; 32], Vec<i64>>,
-    looked_up: &HashMap<i64, SorobanPool>,
     sac_classic: &HashMap<i64, i64>,
 ) -> Vec<PoolMovementRow> {
     let mut pools: HashMap<i64, SorobanPool> = HashMap::new();
@@ -57,15 +68,26 @@ pub(super) fn pool_movement_rows(
         let (contract, pool) = soroban_pool_entry(r.pool_id, legs);
         pools.entry(contract).or_insert(pool);
     }
-    let registered = staged.pool_rows.iter().filter(|r| r.pool_kind == 1);
-    let known = registered
-        .map(|r| soroban_pool_entry(r.pool_id, r.legs.clone()))
-        .chain(looked_up.iter().map(|(c, p)| (*c, p.clone())));
-    for (contract, known) in known {
+    for r in staged.pool_rows.iter().filter(|r| r.pool_kind == 1) {
+        let (contract, registered) = soroban_pool_entry(r.pool_id, r.legs.clone());
         if let Some(pool) = pools.get_mut(&contract)
             && pool.legs.is_empty()
         {
-            pool.legs = known.legs;
+            pool.legs = registered.legs;
+        }
+    }
+    for t in &staged.asset_transfer_rows {
+        let (Some(from), Some(amount)) = (t.from_id, t.amount) else {
+            continue;
+        };
+        if t.from_kind == "C"
+            && let Some(pool) = pools.get_mut(&from)
+        {
+            let op = (t.application_order, t.op_index as u16);
+            pool.payouts
+                .entry(op)
+                .or_default()
+                .push((t.asset_id, amount));
         }
     }
     soroban_pool_amount_rows(&staged.event_rows, &pools, sac_classic)
@@ -91,37 +113,6 @@ pub fn carries_pool_amounts(events: &[(String, Vec<xdr_parser::ExtractedEvent>)]
             )
         )
     })
-}
-
-/// The emitters of a Phoenix withdrawal in this ledger — the one amount event
-/// whose legs nothing in its ledger shows (`return_amount_a/b` by position; the
-/// pool's CONFIG is written only at creation), so they are looked up.
-pub fn phoenix_withdraw_pools(
-    events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
-) -> Vec<[u8; 32]> {
-    let mut out: Vec<[u8; 32]> = events
-        .iter()
-        .flat_map(|(_, evs)| evs)
-        .filter(|ev| {
-            let Some(t) = ev.topics.as_array() else {
-                return false;
-            };
-            // Per-field `("withdraw_liquidity", "sender")` as Strings, or the
-            // newer `[withdraw_liquidity]` alone with one map.
-            let per_field = t.len() == 2
-                && type_of(&t[0]) == Some("string")
-                && str_value(&t[0]) == Some("withdraw_liquidity")
-                && str_value(&t[1]) == Some("sender");
-            let map_form = t.len() == 1
-                && str_value(&t[0]) == Some("withdraw_liquidity")
-                && type_of(&ev.data) == Some("map");
-            per_field || map_form
-        })
-        .filter_map(|ev| ids::contract_payload(ev.contract_id.as_deref()?))
-        .collect();
-    out.sort_unstable();
-    out.dedup();
-    out
 }
 
 /// What an event did to the pool — stored, not inferred from the signs: a
@@ -217,7 +208,7 @@ pub fn soroban_pool_amount_rows(
                 &mut out,
                 ev,
                 pool,
-                phoenix_legs(name, &fields, pool, sac_classic),
+                phoenix_legs(name, &fields, pool, op_of(ev), sac_classic),
             );
             continue;
         }
@@ -229,7 +220,7 @@ pub fn soroban_pool_amount_rows(
             (Some(name @ ("swap" | "provide_liquidity" | "withdraw_liquidity")), None)
                 if topics.len() == 1 && type_of(&data) == Some("map") =>
             {
-                phoenix_legs(name, &map_fields(&data), pool, sac_classic)
+                phoenix_legs(name, &map_fields(&data), pool, op_of(ev), sac_classic)
             }
             // Router family (Aquarius): tokens in the topics, amounts in a vec.
             (Some("trade"), _) => Some((
@@ -442,6 +433,7 @@ fn phoenix_legs(
     name: &str,
     f: &HashMap<String, Value>,
     pool: &SorobanPool,
+    op: (i16, u16),
     sac: &HashMap<i64, i64>,
 ) -> Option<Decoded> {
     let token = |k: &str| Some(contract_token_asset_id(str_value(f.get(k)?)?, sac));
@@ -476,15 +468,33 @@ fn phoenix_legs(
         "withdraw_liquidity" => (
             PoolEventKind::Withdrawal,
             (|| {
-                pair_legs(
-                    pool,
-                    -amount("return_amount_a")?,
-                    -amount("return_amount_b")?,
-                )
+                let (a, b) = (amount("return_amount_a")?, amount("return_amount_b")?);
+                if pool.legs.len() == 2 {
+                    return pair_legs(pool, -a, -b);
+                }
+                // The event names its amounts by position and the pool writes
+                // its token order (CONFIG) only at creation — but the pool pays
+                // each amount out in this operation, so a leg is the asset of
+                // the one payout of its amount (17 of 17 withdrawals in all
+                // history, production 2026-09-30). Equal amounts cannot tell
+                // the legs apart and are refused.
+                let paid = pool.payouts.get(&op)?;
+                let leg_of = |x: i128| -> Option<i64> {
+                    let mut hits = paid.iter().filter(|(_, v)| *v == x);
+                    let (asset, _) = hits.next()?;
+                    hits.next().is_none().then_some(*asset)
+                };
+                (a != b).then_some(())?;
+                Some(vec![(leg_of(a)?, -a), (leg_of(b)?, -b)])
             })(),
         ),
         _ => return None,
     })
+}
+
+/// The event's operation within its ledger, the key of a pool's payouts.
+fn op_of(ev: &SorobanEventRow) -> (i16, u16) {
+    (ev.application_order, ev.operation_index)
 }
 
 /// `("swap"|"provide_liquidity"|"withdraw_liquidity", field)` as two Strings:

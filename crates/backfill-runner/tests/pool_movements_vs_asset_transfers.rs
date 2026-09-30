@@ -69,7 +69,7 @@ async fn movements_match_attributed_transfers() {
     )
     .unwrap();
 
-    let pools = db_clickhouse::persist::fetch_soroban_pools(&ch, None)
+    let pools = db_clickhouse::persist::fetch_soroban_pools(&ch)
         .await
         .unwrap();
     let sac = db_clickhouse::persist::fetch_sac_classic_map(&ch, true)
