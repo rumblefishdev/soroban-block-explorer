@@ -1,14 +1,25 @@
-//! MEASUREMENT (decision 152, not committed): can a pool movement's amounts
-//! come from `asset_transfers` instead of a per-family parse of the pool
-//! event's data?
+//! Task 0374 (W1) — an independent check of the pool movement decoder:
+//! the token transfers (`asset_transfers`) that touch a pool against the
+//! amounts decoded from the pool's own events, read-only, on production.
 //!
-//! For every decoded movement (the W1 decoder over `soroban_events`), the
-//! transfers that touch the pool contract in the same operation are
-//! attributed to a pool amount event by position: a transfer at
-//! `event_pos_in_op = p` belongs to the first of the pool's amount events
-//! whose `event_index > p` (the token moves, then the pool reports). The
-//! attributed net flow per leg (into the pool +, out −) is compared with the
-//! decoded amount.
+//! Checked per OPERATION where the pool emitted exactly one amount event and
+//! no payout — there every transfer touching the pool is that movement's
+//! (which transfer belongs to which event otherwise depends on each family's
+//! own ordering). Net flow per leg, into the pool +, out −, must equal the
+//! decoded amount, except two known classes:
+//! - a leg token that emits no standard SEP-41 `transfer` (one emits its own
+//!   `transfer_event`), which `asset_transfers` rightly skips — only the pool
+//!   event carries that amount;
+//! - a config-family swap, whose pool pays a commission to a third party out
+//!   of the output side: the event reports what the trader got;
+//! - a surplus: more moved through the pool's balance than its reserves
+//!   count (an exhausted swap keeps its whole input; a router sends a token
+//!   beyond the traded amount) — the reserves side with the event.
+//!
+//! Measured 2026-09-30 over 200k ledgers: pair 100%; every compared router
+//! and config movement equal or in a known class. ~2% of movements are not
+//! compared (several amount events or a payout in one operation). Skips
+//! without a client certificate.
 //!
 //!   POOL_FROM=… POOL_TO=… cargo test -p backfill-runner \
 //!     --test pool_movements_vs_asset_transfers -- --nocapture
@@ -18,12 +29,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use db_clickhouse::persist::rows::SorobanEventRow;
 use db_clickhouse::persist::stage;
 
+/// An operation of one pool: (pool contract, ledger, application order, op).
+type Op = (i64, i64, i16, u16);
+/// Decoded movements by (operation, event index): amount per leg asset.
+type Movements = BTreeMap<(Op, u32), BTreeMap<i64, i128>>;
+
 #[derive(clickhouse::Row, serde::Deserialize, Debug)]
 struct TransferRow {
     ledger_sequence: i64,
     application_order: i16,
     op_index: i16,
-    event_pos_in_op: i16,
     asset_id: i64,
     amount: String,
     from_pool: i64,
@@ -95,37 +110,50 @@ async fn movements_match_attributed_transfers() {
         .collect::<Vec<_>>()
         .join(",");
 
-    let events: Vec<SorobanEventRow> = ch
-        .query(&format!(
-            "SELECT contract_id, ledger_sequence, transaction_index, operation_index, \
-                    event_index, application_order, event_type, signature, topics_xdr, data_xdr \
-             FROM soroban_events \
-             WHERE contract_id IN ({ids}) AND ledger_sequence > {from} AND ledger_sequence <= {to} \
-             LIMIT 1 BY contract_id, ledger_sequence, transaction_index, operation_index, event_index"
-        ))
-        .fetch_all()
-        .await
-        .unwrap();
+    // Both reads go in 50k-ledger slices to stay under the read profile's
+    // 30 s cap on a busy server.
+    let slices: Vec<(i64, i64)> = (from..to)
+        .step_by(50_000)
+        .map(|lo| (lo, (lo + 50_000).min(to)))
+        .collect();
+    let mut events: Vec<SorobanEventRow> = Vec::new();
+    for (lo, hi) in &slices {
+        events.extend(
+            ch.query(&format!(
+                "SELECT contract_id, ledger_sequence, transaction_index, operation_index, \
+                        event_index, application_order, event_type, signature, topics_xdr, data_xdr \
+                 FROM soroban_events \
+                 WHERE contract_id IN ({ids}) AND ledger_sequence > {lo} AND ledger_sequence <= {hi} \
+                 LIMIT 1 BY contract_id, ledger_sequence, transaction_index, operation_index, event_index"
+            ))
+            .fetch_all::<SorobanEventRow>()
+            .await
+            .unwrap(),
+        );
+    }
     let rows = stage::soroban_pool_amounts::soroban_pool_amount_rows(&events, &pools, &sac);
 
-    let transfers: Vec<TransferRow> = ch
-        .query(&format!(
-            "SELECT ledger_sequence, application_order, op_index, event_pos_in_op, asset_id, \
-                    toString(ifNull(amount, 0)) AS amount, \
-                    if(from_kind = 'C', ifNull(from_id, 0), 0) AS from_pool, \
-                    if(to_kind = 'C', ifNull(to_id, 0), 0) AS to_pool \
-             FROM asset_transfers \
-             WHERE ledger_sequence > {from} AND ledger_sequence <= {to} \
-               AND ((from_kind = 'C' AND from_id IN ({ids})) OR (to_kind = 'C' AND to_id IN ({ids}))) \
-             LIMIT 1 BY ledger_sequence, application_order, op_index, event_pos_in_op"
-        ))
-        .fetch_all()
-        .await
-        .unwrap();
+    let mut transfers: Vec<TransferRow> = Vec::new();
+    for (lo, hi) in &slices {
+        transfers.extend(
+            ch.query(&format!(
+                "SELECT ledger_sequence, application_order, op_index, asset_id, \
+                        toString(ifNull(amount, 0)) AS amount, \
+                        if(from_kind = 'C', ifNull(from_id, 0), 0) AS from_pool, \
+                        if(to_kind = 'C', ifNull(to_id, 0), 0) AS to_pool \
+                 FROM asset_transfers \
+                 WHERE ledger_sequence > {lo} AND ledger_sequence <= {hi} \
+                   AND ((from_kind = 'C' AND from_id IN ({ids})) OR (to_kind = 'C' AND to_id IN ({ids}))) \
+                 LIMIT 1 BY ledger_sequence, application_order, op_index, event_pos_in_op"
+            ))
+            .fetch_all::<TransferRow>()
+            .await
+            .unwrap(),
+        );
+    }
 
-    // Movement events per (pool contract, ledger, app order, op), by position.
-    type Op = (i64, i64, i16, u16);
-    let mut decoded: BTreeMap<(Op, u32), BTreeMap<i64, i128>> = BTreeMap::new();
+    // Movements per (pool contract, ledger, app order, op).
+    let mut decoded: Movements = BTreeMap::new();
     let mut kinds: HashMap<(Op, u32), u8> = HashMap::new();
     for r in &rows {
         let op = (
@@ -141,15 +169,47 @@ async fn movements_match_attributed_transfers() {
             .or_default() += r.amount;
         kinds.insert((op, r.event_index), r.event_kind);
     }
-    let mut event_positions: HashMap<Op, Vec<u32>> = HashMap::new();
-    for (op, e) in decoded.keys() {
-        event_positions.entry(*op).or_default().push(*e);
-    }
 
-    // Attribute each pool transfer to the pool's next amount event in its op.
+    // Which transfer belongs to which event depends on each family's own
+    // order of transfers and events (a concentrated withdrawal reports
+    // `claim_fees` between its transfers and its event), so the check is per
+    // OPERATION: compared are the ops where the pool emitted exactly one
+    // amount event and no payout (`claim_fees`, `claim_reward`, …) — there,
+    // every transfer touching the pool is that movement's.
+    const PAYOUTS: [&str; 6] = [
+        "claim_fees",
+        "claim_reward",
+        "claim_protocol_fee",
+        "rewards_gauge_claim",
+        "SoroswapPair:skim",
+        "reserves_sync",
+    ];
+    let mut amount_events: HashMap<Op, Vec<u32>> = HashMap::new();
+    for (op, e) in decoded.keys() {
+        amount_events.entry(*op).or_default().push(*e);
+    }
+    let mut has_payout: HashSet<Op> = HashSet::new();
+    for ev in &events {
+        let t: serde_json::Value = serde_json::from_str(&ev.topics_xdr).unwrap_or_default();
+        let v = |i: usize| {
+            t.get(i)
+                .and_then(|x| x.get("value"))
+                .and_then(|x| x.as_str())
+        };
+        let name = match (v(0), v(1)) {
+            (Some("SoroswapPair"), Some(second)) => format!("SoroswapPair:{second}"),
+            (first, _) => first.unwrap_or_default().to_string(),
+        };
+        if PAYOUTS.contains(&name.as_str()) {
+            has_payout.insert((
+                ev.contract_id,
+                ev.ledger_sequence,
+                ev.application_order,
+                ev.operation_index,
+            ));
+        }
+    }
     let mut attributed: HashMap<(Op, u32), BTreeMap<i64, i128>> = HashMap::new();
-    let mut after_last = 0u64;
-    let mut no_event_op = 0u64;
     for t in &transfers {
         let amount: i128 = t.amount.parse().unwrap();
         for (pool, sign) in [(t.to_pool, 1i128), (t.from_pool, -1i128)] {
@@ -162,71 +222,177 @@ async fn movements_match_attributed_transfers() {
                 t.application_order,
                 t.op_index as u16,
             );
-            let Some(positions) = event_positions.get(&op) else {
-                no_event_op += 1;
-                continue;
-            };
-            match positions
-                .iter()
-                .find(|e| **e as i64 > t.event_pos_in_op as i64)
-            {
-                Some(e) => {
-                    *attributed
-                        .entry((op, *e))
-                        .or_default()
-                        .entry(t.asset_id)
-                        .or_default() += sign * amount;
-                }
-                None => after_last += 1,
+            if let Some([e]) = amount_events.get(&op).map(Vec::as_slice) {
+                *attributed
+                    .entry((op, *e))
+                    .or_default()
+                    .entry(t.asset_id)
+                    .or_default() += sign * amount;
             }
         }
     }
+    let compared =
+        |op: &Op| amount_events.get(op).is_some_and(|v| v.len() == 1) && !has_payout.contains(op);
+
+    // Tokens with no standard transfer in the window: a token that emits its
+    // own event (`transfer_event`) instead of SEP-41 `transfer` never reaches
+    // `asset_transfers`, so only the pool event carries its amount.
+    let seen: HashSet<i64> = transfers.iter().map(|t| t.asset_id).collect();
 
     // Compare per movement, on the pool's legs only (a share-token mint/burn
     // or a reward token that is not a leg is not a movement amount).
-    let mut stats: BTreeMap<(String, u8), (u64, u64)> = BTreeMap::new();
-    let mut samples: BTreeMap<(String, u8), Vec<String>> = BTreeMap::new();
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Verdict {
+        Equal,
+        /// A leg's token emits no standard transfers; the other legs agree.
+        NonStandardToken,
+        /// Config family swap: the pool pays a commission to a third party out
+        /// of the output side, so more leaves the pool than the trader gets.
+        Commission,
+        /// The pool's balance holds tokens its reserves do not count, so the
+        /// transfers and the event differ in size, never in direction: a swap
+        /// that exhausted the pool keeps its whole input but prices only what
+        /// it used; a router sends a token beyond the amount traded; a pair
+        /// counts dust already in its balance as input. The judge is the
+        /// change of the pool's own reserves: on every leg where the two
+        /// differ, the event must be the closer of the two.
+        Surplus,
+        Other,
+    }
+    let mut stats: BTreeMap<(String, u8), BTreeMap<Verdict, u64>> = BTreeMap::new();
+    let mut other: Vec<String> = Vec::new();
+    let mut not_compared = 0u64;
     for ((op, e), legs) in &decoded {
+        if !compared(op) {
+            not_compared += 1;
+            continue;
+        }
         let pool = &pools[&op.0];
         let fam = family.get(&pool.pool_id).cloned().unwrap_or_default();
         let kind = kinds[&(*op, *e)];
-        let got = attributed.get(&(*op, *e));
-        let leg_set: HashSet<i64> = pool.legs.iter().copied().collect();
-        let equal = legs
-            .iter()
-            .all(|(a, amt)| got.and_then(|g| g.get(a)).copied().unwrap_or(0) == *amt)
-            && got.is_none_or(|g| {
-                g.iter()
-                    .filter(|(a, _)| leg_set.contains(a))
-                    .all(|(a, v)| legs.get(a).copied().unwrap_or(0) == *v)
-            });
-        let s = stats.entry((fam.clone(), kind)).or_default();
-        s.0 += 1;
-        if equal {
-            s.1 += 1;
+        let flow = |a: &i64| {
+            attributed
+                .get(&(*op, *e))
+                .and_then(|g| g.get(a))
+                .copied()
+                .unwrap_or(0)
+        };
+        let extra_leg = attributed.get(&(*op, *e)).is_some_and(|g| {
+            g.iter()
+                .any(|(a, v)| pool.legs.contains(a) && !legs.contains_key(a) && *v != 0)
+        });
+        let equal_on = |pred: &dyn Fn(&i64, &i128) -> bool| {
+            !extra_leg
+                && legs
+                    .iter()
+                    .filter(|(a, m)| pred(a, m))
+                    .all(|(a, m)| flow(a) == *m)
+        };
+        let verdict = if equal_on(&|_, _| true) {
+            Verdict::Equal
+        } else if legs.keys().any(|a| !seen.contains(a)) && equal_on(&|a, _| seen.contains(a)) {
+            Verdict::NonStandardToken
+        } else if fam == "config"
+            && kind == 0
+            && equal_on(&|_, m| *m > 0)
+            && legs.iter().all(|(a, m)| *m > 0 || flow(a) <= *m)
+        {
+            Verdict::Commission
+        } else if !extra_leg
+            && legs.iter().all(|(a, m)| {
+                let f = flow(a);
+                f == *m || f.signum() == m.signum()
+            })
+            && reserves_side_with_event(&ch, &decoded, pool, *op, legs, &flow).await
+        {
+            Verdict::Surplus
         } else {
-            let v = samples.entry((fam, kind)).or_default();
-            if v.len() < 3 {
-                v.push(format!("{op:?} ev {e}: decoded {legs:?} transfers {got:?}"));
-            }
+            Verdict::Other
+        };
+        *stats
+            .entry((fam.clone(), kind))
+            .or_default()
+            .entry(verdict)
+            .or_default() += 1;
+        if verdict == Verdict::Other {
+            other.push(format!(
+                "{fam} kind {kind} {op:?} ev {e}: decoded {legs:?} transfers {:?}",
+                attributed.get(&(*op, *e))
+            ));
         }
     }
     println!(
         "window {from}..={to}: {} events, {} movements, {} pool transfers; \
-         transfers after the op's last pool event {after_last}, in ops with no movement {no_event_op}",
+         not compared (several amount events or a payout in the op): {not_compared}",
         events.len(),
         decoded.len(),
         transfers.len()
     );
-    for ((fam, kind), (n, eq)) in &stats {
-        println!(
-            "{fam:>22} kind {kind}: {n:>8} movements, equal {eq:>8} ({:.3}%)",
-            100.0 * *eq as f64 / *n as f64
-        );
+    for ((fam, kind), v) in &stats {
+        println!("{fam:>22} kind {kind}: {v:?}");
     }
-    for ((fam, kind), v) in &samples {
-        for s in v {
-            println!("  {fam} {kind}: {s}");
+    for o in other.iter().take(20) {
+        println!("  other: {o}");
+    }
+    assert!(
+        other.is_empty(),
+        "{} movements disagree with their transfers outside the known classes",
+        other.len()
+    );
+}
+
+/// Whether the pool's own reserves side with its event against the transfers:
+/// between the state row this movement wrote and the one before it — and only
+/// when no other movement of the pool falls in between — each leg where the
+/// two differ must have moved closer to the event's amount than to the
+/// transfers'.
+async fn reserves_side_with_event(
+    ch: &clickhouse::Client,
+    decoded: &Movements,
+    pool: &stage::soroban_pool_amounts::SorobanPool,
+    op: Op,
+    legs: &BTreeMap<i64, i128>,
+    flow: &dyn Fn(&i64) -> i128,
+) -> bool {
+    let ledger = op.1;
+    let states: Vec<(i64, String)> = ch
+        .query(&format!(
+            "SELECT ledger_sequence, arrayStringConcat(arrayMap(x -> toString(x), any(reserves)), ',') \
+             FROM pool_state_changes \
+             WHERE pool_id = unhex('{}') AND ledger_sequence <= {ledger} \
+             GROUP BY ledger_sequence ORDER BY ledger_sequence DESC LIMIT 2",
+            hex::encode(pool.pool_id)
+        ))
+        .fetch_all()
+        .await
+        .unwrap();
+    // A pool's first state row starts from empty reserves.
+    let empty = (0i64, vec!["0"; pool.legs.len()].join(","));
+    let (after_at, after, before_at, before) = match states.as_slice() {
+        [(a_at, a), (b_at, b)] => (*a_at, a, *b_at, b),
+        [(a_at, a)] => (*a_at, a, empty.0, &empty.1),
+        _ => return false,
+    };
+    if after_at != ledger {
+        return false;
+    }
+    let alone = decoded.keys().all(|((c, l, a, o), _)| {
+        *c != op.0 || *l <= before_at || *l > ledger || (*l, *a, *o) == (op.1, op.2, op.3)
+    });
+    if !alone {
+        return false;
+    }
+    let parse = |r: &String| -> Vec<i128> { r.split(',').map(|x| x.parse().unwrap()).collect() };
+    let (after, before) = (parse(after), parse(before));
+    legs.iter().all(|(a, m)| {
+        let f = flow(a);
+        if f == *m {
+            return true;
         }
-    }
+        let Some(i) = pool.legs.iter().position(|l| l == a) else {
+            return false;
+        };
+        let delta = after[i] - before[i];
+        (delta - m).abs() < (delta - f).abs()
+    })
 }

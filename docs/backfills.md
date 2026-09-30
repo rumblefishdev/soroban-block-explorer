@@ -1026,6 +1026,13 @@ range re-parse would fetch ~800 GB to decode ~1 GB.
    (`NON_AMOUNT_EVENTS`), and every pair-family reserve step equals the sum of
    the amounts (measured 2026-09-29 over 200k ledgers: 0 undecoded, 0 unknown
    names, 11,576 of 11,576 steps). `POOL_FROM` / `POOL_TO` check other ranges.
+   Then the independent witness, the token transfers:
+   `cargo test -p backfill-runner --test pool_movements_vs_asset_transfers -- --nocapture`
+   — per operation with one amount event and no payout, the transfers touching
+   the pool equal the decoded amounts, or fall in a named class (a leg token
+   with no standard `transfer`; a config swap's commission; a balance surplus
+   the pool's own reserves side against). Green 2026-09-30 on six 200–300k
+   slices from 55M to the tip; ~2% of movements are not compared.
 
 A pool registered later is covered by the live writer from its first event.
 
