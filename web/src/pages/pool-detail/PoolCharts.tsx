@@ -237,9 +237,20 @@ export function toChartPoints(
 
 interface PoolChartsProps {
   poolId: string;
+  /**
+   * `false` for a soroban pool: its trades are not indexed yet, so the
+   * Volume and Fees tabs say so instead of reading as "no activity".
+   */
+  volumeIndexed?: boolean;
 }
 
-function PoolChartsContent({ poolId }: { poolId: string }) {
+function PoolChartsContent({
+  poolId,
+  volumeIndexed = true,
+}: {
+  poolId: string;
+  volumeIndexed?: boolean;
+}) {
   const [metric, setMetric] = useState<ChartMetric>('tvl');
   const [period, setPeriod] = useState<ChartPeriod>('1D');
 
@@ -269,7 +280,8 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
    * can fix a missing price.
    *
    * `tvl` is the discriminator because it is unambiguous — reserves exist
-   * on every snapshot, so a null `tvl` can only mean a leg has no price. A
+   * on every snapshot, so a null `tvl` can only mean a leg has no price — or,
+   * for a Soroban pool, a leg whose token publishes no decimals. A
    * null `volume` is ambiguous by design (it also means "no swaps in this
    * bucket"), which is why the check does not use the selected metric.
    *
@@ -279,6 +291,7 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
    * 12-day hole in otherwise healthy series), and so does an asset whose
    * feed simply starts later than the window.
    */
+  const notIndexed = !volumeIndexed && metric !== 'tvl';
   const unpriceable = useMemo(() => {
     if (!data || data.data_points.length === 0) return false;
     if (points.length > 0) return false;
@@ -336,7 +349,7 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
           />
         ) : (
           <TimeSeriesChart
-            data={points}
+            data={notIndexed ? [] : points}
             // Per-metric rendering — see METRIC_RENDERING. This departs
             // from Figma node `325:24354` (flat line, a hollow mark on
             // every bucket): static marks are gone entirely (task 0505 —
@@ -352,10 +365,19 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
             intervals={[]}
             loading={isLoading}
             emptyState={
-              unpriceable ? (
+              notIndexed ? (
+                <ChartEmptyState
+                  title="Not indexed yet"
+                  hint={`${METRIC_LABELS[metric]} for Soroban pools is not indexed yet.`}
+                />
+              ) : unpriceable ? (
                 <ChartEmptyState
                   title="USD values unavailable"
-                  hint="We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
+                  hint={
+                    volumeIndexed
+                      ? "We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
+                      : "We have no price data or no token scale for one of this pool's assets in this period, so its value can't be shown in USD."
+                  }
                 />
               ) : (
                 <ChartEmptyState
@@ -382,14 +404,14 @@ function PoolChartsContent({ poolId }: { poolId: string }) {
  * series (task 0199 compute-at-read). An unpriceable pool gets its own
  * empty state saying so — see `unpriceable`.
  */
-export function PoolCharts({ poolId }: PoolChartsProps) {
+export function PoolCharts({ poolId, volumeIndexed }: PoolChartsProps) {
   return (
     <LazySection
       placeholder={<CardSkeleton />}
       minHeight={420}
       rootMargin="200px"
     >
-      <PoolChartsContent poolId={poolId} />
+      <PoolChartsContent poolId={poolId} volumeIndexed={volumeIndexed} />
     </LazySection>
   );
 }

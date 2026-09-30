@@ -608,6 +608,10 @@ window — `1h→7d`, `1d→90d`, `1w→104w`), `to` (ISO 8601, default `now()`,
 exclusive upper bound). `from < to` enforced; bucket count capped to keep
 aggregation bounded. Bucket aggregation policy in
 `crates/api/src/liquidity_pools/queries/get_pool_chart.rs`.
+A Soroban pool's series comes from its reserve history (`pool_state_changes`,
+raw per leg, scaled by each leg's own decimals) on the same buckets and price
+rules — TVL only; `volume` and `fee_revenue` are `null` until its trades are
+indexed, and the frontend's Volume and Fees tabs say "not indexed".
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, first deposit ledger, and last

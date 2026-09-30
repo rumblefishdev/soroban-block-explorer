@@ -7,7 +7,8 @@ use serde::Deserialize;
 use crate::common::ch::millis_to_utc;
 
 use super::usd_analytics::{
-    MAX_PRICE_CARRY_SECONDS, PoolPriceContext, fee_revenue_usd, price_leg, priced_pair, usd_str,
+    MAX_PRICE_CARRY_SECONDS, PoolChartContext, PoolPriceContext, fee_revenue_usd, price_leg,
+    priced_pair, usd_str,
 };
 use crate::liquidity_pools::dto::ChartDataPoint;
 
@@ -100,24 +101,7 @@ pub async fn fetch_pool_chart(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<Vec<ChartDataPoint>, clickhouse::error::Error> {
-    // Defensive second gate (the handler validates against the allowlist
-    // first) — fail loud on allowlist drift rather than emit a wrong bucket.
-    assert!(
-        matches!(interval, "1h" | "1d" | "1w"),
-        "fetch_pool_chart called with non-allowlisted interval `{interval}` — \
-         handler validation drift; expected 1h | 1d | 1w"
-    );
-    let bucket_fn = match interval {
-        "1h" => "toStartOfHour",
-        "1d" => "toStartOfDay",
-        "1w" => "toMonday",
-        _ => unreachable!("interval validated against the 1h|1d|1w allowlist above"),
-    };
-    let (series_view, price_bucket_fn) = match interval {
-        "1h" => ("prices.price_usd_series_1h", "toStartOfHour"),
-        "1d" | "1w" => ("prices.price_usd_series", "toStartOfDay"),
-        _ => unreachable!("interval validated against the 1h|1d|1w allowlist above"),
-    };
+    let (bucket_fn, series_view, price_bucket_fn) = chart_grain(interval);
 
     // `bucket_ms`: each truncated bucket is coerced to a UTC `DateTime64(3)`
     // then to epoch millis, so `millis_to_utc` round-trips it on the Rust side
@@ -248,4 +232,157 @@ pub async fn fetch_pool_chart(
             samples_in_bucket: r.samples_in_bucket as i64,
         })
         .collect())
+}
+
+/// `GET /v1/liquidity-pools/:id/chart` for a soroban pool — the TVL series
+/// from its reserve history, on the classic chart's buckets and price rules.
+///
+/// - **Reserves** come from `pool_state_changes`: one row per (pool, ledger),
+///   raw token units, one entry per leg in the pool's own order (a
+///   concentrated pool's vector carries per-tick state after its legs, so
+///   only the first `legs` entries are read). Buckets with no reserve change
+///   are absent — sparse, like the classic chart, which only has buckets with
+///   snapshots.
+/// - **TVL**, per state row: Σ reserve / 10^decimals × the leg's close, priced
+///   exactly as the classic chart prices a snapshot — `ASOF` on the row's own
+///   price bucket, carried back at most [`MAX_PRICE_CARRY_SECONDS`]. `NULL`
+///   unless EVERY leg has a known scale and a price — a partial sum
+///   understates the pool while looking real. A bucket shows its last row
+///   that prices, as the classic chart does.
+/// - **Volume and fee revenue are `NULL`**: soroban pool trades are not read
+///   here yet, and an absent figure must not read as a zero-volume bucket.
+///
+/// The price rows carry the leg they price (`indexOf` of their identity in the
+/// pool's leg list), so one `ASOF` join prices every leg, however many.
+pub async fn fetch_soroban_pool_chart(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+    ctx: &PoolChartContext,
+    interval: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<ChartDataPoint>, clickhouse::error::Error> {
+    let (bucket_fn, series_view, price_bucket_fn) = chart_grain(interval);
+
+    // Same window and dedup shape as the classic chart: the state rows are
+    // bounded to the window's ledger range, and both `pool_state_changes`
+    // and `ledgers` are ReplacingMergeTrees read one row per key. An
+    // unpriceable leg (empty kind) matches no price row; an unknown scale is
+    // bound as -1. Either leaves that leg NULL, and so the row's TVL.
+    let sql = format!(
+        "SELECT \
+            bucket_ms, \
+            argMaxIf(tvl_row, ledger_sequence, isNotNull(tvl_row)) AS tvl, \
+            count()                                                AS samples_in_bucket \
+         FROM ( \
+             SELECT bucket_ms, ledger_sequence, \
+                    if(countIf(isNull(leg_usd)) > 0, NULL, sum(leg_usd)) AS tvl_row \
+             FROM ( \
+                 SELECT \
+                    l.bucket_ms                                   AS bucket_ms, \
+                    s.ledger_sequence                             AS ledger_sequence, \
+                    if(dateDiff('second', p.bucket, l.price_bucket) <= {carry} AND s.scale >= 0, \
+                       s.reserve / pow(10, s.scale) * nullIf(toFloat64(p.close_usd), 0), NULL) AS leg_usd \
+                 FROM ( \
+                     SELECT ledger_sequence, leg, \
+                            toFloat64(reserves[leg])     AS reserve, \
+                            arrayElement(?, leg)          AS scale \
+                     FROM ( \
+                         SELECT ledger_sequence, reserves \
+                         FROM pool_state_changes \
+                         WHERE pool_id = unhex(?) \
+                           AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
+                           AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
+                         ORDER BY ledger_sequence DESC \
+                         LIMIT 1 BY ledger_sequence \
+                     ) \
+                     ARRAY JOIN range(1, ? + 1) AS leg \
+                     WHERE leg <= length(reserves) \
+                 ) s \
+                 JOIN ( \
+                     SELECT sequence, {price_bucket_fn}(closed_at) AS price_bucket, \
+                            toUnixTimestamp64Milli(toDateTime64({bucket_fn}(closed_at), 3, 'UTC')) AS bucket_ms \
+                     FROM ledgers \
+                     WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?) \
+                     LIMIT 1 BY sequence \
+                 ) l ON l.sequence = s.ledger_sequence \
+                 ASOF LEFT JOIN ( \
+                     SELECT toUInt64(indexOf(arrayZip(?, ?, ?), (asset_kind, asset_code, issuer_address))) AS leg, \
+                            bucket, close_usd \
+                     FROM {series_view} \
+                     WHERE leg > 0 \
+                       AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
+                       AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
+                       AND close_usd > 0 \
+                 ) p ON p.leg = s.leg AND p.bucket <= l.price_bucket \
+             ) \
+             GROUP BY bucket_ms, ledger_sequence \
+         ) \
+         GROUP BY bucket_ms \
+         ORDER BY bucket_ms ASC",
+        carry = MAX_PRICE_CARRY_SECONDS,
+    );
+
+    let legs = &ctx.price.legs;
+    let scales: Vec<i32> = ctx
+        .leg_decimals
+        .iter()
+        .map(|d| d.map_or(-1, |d| d as i32))
+        .collect();
+    let rows = client
+        .query(&sql)
+        .bind(scales)
+        .bind(pool_id_hex)
+        .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
+        .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
+        .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
+        .bind(legs.len() as u64) // one row per leg
+        .bind(from.timestamp_millis()) // ledgers: closed_at >= from
+        .bind(to.timestamp_millis()) // ledgers: closed_at <  to
+        .bind(legs.iter().map(|l| l.kind).collect::<Vec<_>>()) // leg identities
+        .bind(legs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>())
+        .bind(legs.iter().map(|l| l.issuer.as_str()).collect::<Vec<_>>())
+        .bind(from.timestamp_millis()) // prices: bucket >= floor(from)
+        .bind(to.timestamp_millis()) // prices: bucket < to
+        .fetch_all::<SorobanChartChRow>()
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| ChartDataPoint {
+            bucket: millis_to_utc(r.bucket_ms),
+            tvl: r.tvl.map(usd_str),
+            volume: None,
+            fee_revenue: None,
+            samples_in_bucket: r.samples_in_bucket as i64,
+        })
+        .collect())
+}
+
+/// SELECT column order MUST match this struct (clickhouse positional decode).
+#[derive(Debug, Row, Deserialize)]
+pub(super) struct SorobanChartChRow {
+    pub(super) bucket_ms: i64,
+    pub(super) tvl: Option<f64>,
+    pub(super) samples_in_bucket: u64,
+}
+
+/// The `1h | 1d | 1w` allowlist → the chart's bucket function, the price
+/// series view, and the price bucket a row is priced at. A 1w bucket prices at
+/// its row's DAY: weekly candles are not provided. Fails loud on allowlist
+/// drift (the handler validates first) rather than emit a wrong bucket.
+fn chart_grain(interval: &str) -> (&'static str, &'static str, &'static str) {
+    match interval {
+        "1h" => (
+            "toStartOfHour",
+            "prices.price_usd_series_1h",
+            "toStartOfHour",
+        ),
+        "1d" => ("toStartOfDay", "prices.price_usd_series", "toStartOfDay"),
+        "1w" => ("toMonday", "prices.price_usd_series", "toStartOfDay"),
+        _ => panic!(
+            "chart called with non-allowlisted interval `{interval}` — handler \
+             validation drift; expected 1h | 1d | 1w"
+        ),
+    }
 }
