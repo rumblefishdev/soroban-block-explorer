@@ -2,7 +2,7 @@
 id: '0521'
 title: 'BUG: the snapshot seed re-emits every signers row on every pass, so one of its four reported numbers carries no information'
 type: BUG
-status: active
+status: completed
 related_adr: ['0057']
 related_tasks: ['0463', '0503', '0515']
 tags:
@@ -29,6 +29,12 @@ history:
     who: karolkow
     note: >
       PR #446 now conflicts with develop: task 0210 moved the seed passes into modules and made account_entry_state a full rewrite. The gate must be re-applied on that structure.
+  - date: '2026-09-30'
+    status: completed
+    who: karolkow
+    note: >
+      #568 merged (replaces #446); production dry run 0 written, 11,004,932
+      unchanged of 11,004,932 live accounts.
 ---
 
 # BUG: the snapshot seed re-emits every signers row on every pass
@@ -44,15 +50,23 @@ not a measurement.
 
 ## Stan teraz
 
-- Done: the gate built and proven on production (dry run 2026-09-02: 0
-  written, 10,909,433 unchanged) — PR #446, branch
-  `fix/0521_snapshot-seed-signers-version-gate`, never merged.
-- Blocked on develop: task 0210 (merged since) split the seed into modules
-  (`balances`, `claimable`, `pools`) and now describes `account_entry_state`
-  as a full rewrite; merging develop into #446 conflicts in four places of
-  `snapshot/seed.rs` (checked 2026-09-30, merge aborted).
-- Next: re-apply the gate on the new structure (estimate ~1.5 h) and re-run
-  the dry run, or close #446 if the full rewrite is wanted.
+- Done: #568 merged 2026-09-30 — the gate rebuilt as
+  `snapshot/entry_state.rs` on 0210's module layout (thread 377 A), using
+  the pool pass's rule `pools::need`. #446 closed as superseded.
+- Production dry run 2026-09-30 (checkpoint 64,699,071, read-only):
+  `account_entry_state 0 (0 new, 0 changed; 11004932 unchanged)` — the sum
+  equals the snapshot's 11,004,932 live accounts; the old code would have
+  written all 11,004,932. `--execute` not needed for signers.
+
+## Design Decisions
+
+### Emerged
+
+1. **Rule shared with the pool pass** (`pools::need`, thread 378): the same
+   version comparison, already tested on all four cases, instead of a second
+   copy; debt: the shared rule lives in `pools.rs`.
+2. **Move and gate in one PR** (thread 379): the 20-line pass moved into its
+   own module where it changed; `move-split-guard` did not object.
 
 ## Acceptance Criteria
 
