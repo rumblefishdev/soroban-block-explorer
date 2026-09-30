@@ -31,6 +31,10 @@ the immutable MergeTree parts into the data dir's `shadow/` (**~0 extra disk —
 full local copy**), Borg pushes that frozen tree to the Hetzner BX21 Storage Box
 (client-side encrypted + deduplicated), then `UNFREEZE` releases the hardlinks.
 
+It freezes the `default` database only. Testnet's `testnet` database is left
+out on purpose (task 0553): it is rebuilt from the public data lake by a
+backfill from genesis, the same path a testnet reset takes.
+
 This **replaced** the original `BACKUP DATABASE … TO Disk` mechanism, which wrote
 a full local copy (~737 GiB) that could not fit on this box — dataset ≈ disk size
 → **ENOSPC → prod incident**. That history is why the weekly path is FREEZE-based

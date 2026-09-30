@@ -261,7 +261,11 @@ Old hashed assets pile up at about 1.3 MB per build. Nothing prunes them.
   `ALTER`, `DROP` or `EXCHANGE` in a runbook below is run once per database
   (`clickhouse-client --database testnet …`), and both indexers are recycled
   after it (`testnet-soroban-explorer-indexer` too). A table missing from
-  `testnet` stops testnet ingestion, not mainnet's.
+  `testnet` stops testnet ingestion, not mainnet's. After an
+  `ansible-playbook … --tags app` run, read the sidecar's log: Compose does
+  not report a sidecar that failed, and the log must end with
+  `init.sql applied to testnet`
+  (`ssh sorban-prod docker logs app-db-clickhouse-init-1`).
 
 - **Any `ALTER` on a table the indexer writes can stop ingestion — even an
   ADD.** clickhouse-rs 0.15 checks the row struct against `DESCRIBE TABLE`
