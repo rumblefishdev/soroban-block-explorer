@@ -42,11 +42,6 @@ pub fn extract_operations(
     ops.iter()
         .enumerate()
         .map(|(i, op)| {
-            // operation_index is 1-based to match Stellar ecosystem convention
-            // (Horizon paging_token encodes op_app_order in low 12 bits, also
-            // 1-based). Surfaces as user-facing `application_order` in
-            // `XdrOperationDto`. See task 0172 / ADR 0028.
-            let op_index = i + 1;
             let source_account = op.source_account.as_ref().map(muxed_to_g_strkey);
             // Task 0359: every asset the op touches — body + same-op meta changes
             // (no result grain; see `asset_appearances` docs). `op_source` (op
@@ -68,12 +63,12 @@ pub fn extract_operations(
                 op_changes,
                 ledger_sequence,
                 tx_index,
-                op_index,
+                i,
             );
             ExtractedOperation {
                 transaction_hash: transaction_hash.to_string(),
-                operation_index: u32::try_from(op_index)
-                    .expect("operation index does not fit into u32"),
+                // 0-based, as stellar-rpc's `operationIndex` (ADR 0059).
+                operation_index: u32::try_from(i).expect("operation index does not fit into u32"),
                 op_type,
                 source_account,
                 details,

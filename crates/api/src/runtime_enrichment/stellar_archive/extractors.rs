@@ -99,10 +99,8 @@ pub fn extract_e3_heavy(
             )
             .into_iter()
             .filter_map(|op| {
-                // operation_index is 1-based (Horizon convention); the XDR
-                // result array is 0-based.
                 let result_code = any_op_results
-                    .and_then(|rs| rs.get((op.operation_index as usize).saturating_sub(1)))
+                    .and_then(|rs| rs.get(op.operation_index as usize))
                     .map(|r| xdr_parser::op_result_code(r).to_string());
                 to_operation_dto(op, result_code)
             })
@@ -259,9 +257,8 @@ fn to_operation_dto(
     op: xdr_parser::ExtractedOperation,
     result_code: Option<String>,
 ) -> Option<XdrOperationDto> {
-    // The parser numbers operations from 1; the wire uses the 0-based
-    // `operation_index` (ADR 0059).
-    let operation_index = to_i16_index(op.operation_index - 1, "operation_index")?;
+    // Parser, tables and wire all count from 0 (ADR 0059).
+    let operation_index = to_i16_index(op.operation_index, "operation_index")?;
     Some(XdrOperationDto {
         op_type: op.op_type.to_string(),
         operation_index,

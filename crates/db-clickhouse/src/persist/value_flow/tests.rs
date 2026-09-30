@@ -122,7 +122,7 @@ fn event(source: EventSource, position_in_tx: u32, op: Option<(u32, u32)>) -> Ex
 #[test]
 fn plain_payment_row_carries_ids_kinds_and_the_official_identity() {
     let txs = [tx(None, None)];
-    let ops = [(TX.to_string(), vec![payment_op(1, G_RECEIVER, None, None)])];
+    let ops = [(TX.to_string(), vec![payment_op(0, G_RECEIVER, None, None)])];
     let t = [transfer(
         0,
         0,
@@ -159,7 +159,7 @@ fn muxed_destination_comes_from_the_envelope_and_keeps_the_g_surrogate() {
     let txs = [tx(None, None)];
     let ops = [(
         TX.to_string(),
-        vec![payment_op(1, G_RECEIVER, Some(3_539_365_402), None)],
+        vec![payment_op(0, G_RECEIVER, Some(3_539_365_402), None)],
     )];
     let t = [transfer(
         0,
@@ -187,7 +187,7 @@ fn muxed_id_is_not_borrowed_from_an_op_whose_destination_is_someone_else() {
     let txs = [tx(None, None)];
     let ops = [(
         TX.to_string(),
-        vec![payment_op(1, G_RECEIVER, Some(42), None)],
+        vec![payment_op(0, G_RECEIVER, Some(42), None)],
     )];
     let t = [transfer(
         0,
@@ -210,8 +210,8 @@ fn muxed_source_comes_from_the_op_override_or_the_tx_source() {
     let ops = [(
         TX.to_string(),
         vec![
-            payment_op(1, G_RECEIVER, None, None),
-            payment_op(2, G_RECEIVER, None, Some((G_RECEIVER, Some(9)))),
+            payment_op(0, G_RECEIVER, None, None),
+            payment_op(1, G_RECEIVER, None, Some((G_RECEIVER, Some(9)))),
         ],
     )];
     let t = [
@@ -350,7 +350,7 @@ fn a_transfer_for_an_unknown_transaction_is_a_staging_error_not_a_dropped_row() 
 fn muxed_id_follows_only_the_transfer_of_the_ops_delivered_asset() {
     const USDC_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
     let txs = [tx(None, None)];
-    let mut path = payment_op(1, G_RECEIVER, Some(3_539_365_402), None);
+    let mut path = payment_op(0, G_RECEIVER, Some(3_539_365_402), None);
     path.op_type = OperationType::PathPaymentStrictSend;
     path.details = json!({
         "destination": G_RECEIVER,

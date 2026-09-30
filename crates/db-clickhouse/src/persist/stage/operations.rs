@@ -91,14 +91,8 @@ pub(super) fn operation_rows(
                 // onto one saturated value would share a key and the RMT would
                 // drop a fill silently — the loss the per-op summing exists to
                 // prevent. Unreachable while Stellar caps ops per tx at 100.
-                let op_order = i16::try_from(op.operation_index)
+                let operation_index = i16::try_from(op.operation_index)
                     .map_err(|_| staging_err("operation position (>i16)"))?;
-                // 1-based in the parser, 0-based in the position-keyed table
-                // (ADR 0059); a 0 here is a parser bug, not a first operation.
-                let operation_index = op_order
-                    .checked_sub(1)
-                    .filter(|i| *i >= 0)
-                    .ok_or_else(|| staging_err("operation position 0 — expected 1-based"))?;
                 for (pool_id, asset_id, amount) in pool_fill_amounts(&op.details) {
                     out.pool_amount_rows.push(PoolOperationAmountRow {
                         pool_id,
@@ -127,18 +121,13 @@ pub(super) fn operation_rows(
                 .or_insert(op.operation_index);
         }
     }
-    for (k, min_apply_order) in op_agg {
+    for (k, min_operation_index) in op_agg {
         let Some(&application_order) = app_order_by_hash.get(&k.tx_hash_hex) else {
             continue;
         };
-        // The group's smallest operation position: 1-based from the parser,
-        // 0-based in `transaction_operations` (ADR 0059).
-        let op_order = i16::try_from(min_apply_order)
+        // The group's smallest operation position (ADR 0059: 0-based).
+        let operation_index = i16::try_from(min_operation_index)
             .map_err(|_| staging_err("operation_index >i16 — protocol violation"))?;
-        let operation_index = op_order
-            .checked_sub(1)
-            .filter(|i| *i >= 0)
-            .ok_or_else(|| staging_err("operation position 0 — expected 1-based"))?;
         out.tx_operation_rows.push(TransactionOperationRow {
             ledger_sequence: ledger_sequence_i64,
             application_order,

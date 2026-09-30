@@ -70,9 +70,8 @@ fn transaction_page_events_carry_rpc_ids_in_execution_order() {
     assert!(heavy.diagnostic_events.iter().all(|e| e.id.is_none()));
 }
 
-/// The wire numbers operations from 0 (ADR 0059), while the parser counts
-/// from 1: the first operation is `operation_index` 0, and an operation's
-/// events name the same index.
+/// The wire numbers operations from 0 (ADR 0059): the first operation is
+/// `operation_index` 0, and an operation's events name the same index.
 #[test]
 fn operations_are_numbered_from_zero_like_their_events() {
     let meta = ledger();
