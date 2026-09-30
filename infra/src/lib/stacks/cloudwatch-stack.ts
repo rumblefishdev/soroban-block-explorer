@@ -232,35 +232,39 @@ export class CloudWatchStack extends cdk.Stack {
         },
       })
     );
-    const costAnomalyMonitor = new ce.CfnAnomalyMonitor(
-      this,
-      'CostAnomalyMonitor',
-      {
-        monitorName: `${config.envName}-cost-anomaly-by-service`,
-        monitorType: 'DIMENSIONAL',
-        monitorDimension: 'SERVICE',
-      }
-    );
-    new ce.CfnAnomalySubscription(this, 'CostAnomalySubscription', {
-      subscriptionName: `${config.envName}-cost-anomaly-to-alarm-topic`,
-      monitorArnList: [costAnomalyMonitor.attrMonitorArn],
-      // IMMEDIATE = notify as soon as the anomaly is detected (cost data
-      // refreshes a few times a day, so "immediate" means hours, not
-      // minutes — still ~20x faster than the July discovery). SNS
-      // subscribers require IMMEDIATE; DAILY/WEEKLY are email-only.
-      frequency: 'IMMEDIATE',
-      subscribers: [{ type: 'SNS', address: alarmTopic.topicArn }],
-      // Only anomalies whose total impact reaches this many USD notify —
-      // keeps single-cent blips out of Slack while the July shape (a
-      // service's spend stepping up day after day) clears it easily.
-      thresholdExpression: JSON.stringify({
-        Dimensions: {
-          Key: 'ANOMALY_TOTAL_IMPACT_ABSOLUTE',
-          MatchOptions: ['GREATER_THAN_OR_EQUAL'],
-          Values: [String(config.costAnomalyAlertThresholdUsd)],
-        },
-      }),
-    });
+    // An account holds one AWS-services cost monitor, so only the environment
+    // that owns the account's cost watch creates it (task 0553).
+    if (config.provisionCostAnomalyMonitor !== false) {
+      const costAnomalyMonitor = new ce.CfnAnomalyMonitor(
+        this,
+        'CostAnomalyMonitor',
+        {
+          monitorName: `${config.envName}-cost-anomaly-by-service`,
+          monitorType: 'DIMENSIONAL',
+          monitorDimension: 'SERVICE',
+        }
+      );
+      new ce.CfnAnomalySubscription(this, 'CostAnomalySubscription', {
+        subscriptionName: `${config.envName}-cost-anomaly-to-alarm-topic`,
+        monitorArnList: [costAnomalyMonitor.attrMonitorArn],
+        // IMMEDIATE = notify as soon as the anomaly is detected (cost data
+        // refreshes a few times a day, so "immediate" means hours, not
+        // minutes — still ~20x faster than the July discovery). SNS
+        // subscribers require IMMEDIATE; DAILY/WEEKLY are email-only.
+        frequency: 'IMMEDIATE',
+        subscribers: [{ type: 'SNS', address: alarmTopic.topicArn }],
+        // Only anomalies whose total impact reaches this many USD notify —
+        // keeps single-cent blips out of Slack while the July shape (a
+        // service's spend stepping up day after day) clears it easily.
+        thresholdExpression: JSON.stringify({
+          Dimensions: {
+            Key: 'ANOMALY_TOTAL_IMPACT_ABSOLUTE',
+            MatchOptions: ['GREATER_THAN_OR_EQUAL'],
+            Values: [String(config.costAnomalyAlertThresholdUsd)],
+          },
+        }),
+      });
+    }
 
     const alarmAction = new cloudwatchActions.SnsAction(alarmTopic);
 
@@ -426,6 +430,38 @@ export class CloudWatchStack extends cdk.Stack {
           // Galexie already pages via the lag alarm's BREACHING above.
           // Paging here too would double-page one incident.
           treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        })
+      );
+    } else {
+      // ---------------------
+      // Alarm 1c: public-lake stall (task 0553)
+      // With the public data lake the doorbell rings on a schedule whether or
+      // not a ledger landed, so the doorbell count proves nothing. What does:
+      // how old the newest indexed ledger is. One alarm covers a lake outage,
+      // a testnet reset (the old genesis folder stops growing; the sequence
+      // never goes backwards) and a protocol upgrade the parser cannot decode.
+      // Measured 2026-09-30 over an hour of testnet: the lag with a 2 s
+      // doorbell peaks near 10 s, so 60 s for 3 minutes never pages on a
+      // healthy lake. BREACHING: a stalled indexer publishes no datapoint.
+      // ---------------------
+      withActions(
+        new cloudwatch.Alarm(this, 'LakeStallAlarm', {
+          alarmName: `${config.envName}-ingestion-stall`,
+          alarmDescription:
+            'The newest indexed ledger is over 60 s old for 3 minutes, or none was indexed. Lake outage, testnet reset or an undecodable protocol upgrade. Runbook: docs/runbooks/testnet-reset.md.',
+          metric: new cloudwatch.Metric({
+            namespace: 'SorobanBlockExplorer/Indexer',
+            metricName: 'IngestionLagSeconds',
+            dimensionsMap: { Environment: config.envName },
+            period: cdk.Duration.minutes(1),
+            statistic: cloudwatch.Stats.MAXIMUM,
+          }),
+          threshold: 60,
+          comparisonOperator:
+            cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+          evaluationPeriods: 3,
+          datapointsToAlarm: 3,
+          treatMissingData: cloudwatch.TreatMissingData.BREACHING,
         })
       );
     }

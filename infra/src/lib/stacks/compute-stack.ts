@@ -15,6 +15,7 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
+import { PublicLakeDoorbell } from './public-lake-doorbell.js';
 
 const DLQ_RETENTION_DAYS = 14;
 
@@ -434,6 +435,12 @@ export class ComputeStack extends cdk.Stack {
           stringValue: value,
         });
       }
+    } else {
+      // No bucket of ours to publish events: ring the indexer on a schedule.
+      new PublicLakeDoorbell(this, 'PublicLakeDoorbell', {
+        envName: config.envName,
+        ingestQueue,
+      });
     }
 
     // SQS → indexer event-source-mapping. Gated on concurrency so a
