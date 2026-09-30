@@ -86,6 +86,7 @@ Spawned from 0359. The NFT owner is a single-slot current value; contract owners
 ## Acceptance Criteria
 
 - [ ] owner history retained (not single-slot) — K1-6
-- [ ] contract-owner resolved (no NULL) — K2-5
+- [x] contract-owner resolved (no NULL) — K2-5 (PR #548, deployed 2026-09-30:
+      token 59104 owner `CC3Z…UIOP`; collection `CDUT…` 15 C / 5 G / 0 null)
 - [ ] pending NFTs visible — K2-6
 - [ ] collection activity unioned on contract page — K3-7
