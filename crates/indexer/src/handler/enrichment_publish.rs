@@ -363,7 +363,7 @@ mod tests {
             contract_id: contract.into(),
             token_id: token.into(),
             collection_name: None,
-            owner_account: None,
+            owner: None,
             name: None,
             media_url: None,
             minted_at_ledger: Some(42),
