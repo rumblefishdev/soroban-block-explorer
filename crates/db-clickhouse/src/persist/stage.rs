@@ -246,6 +246,10 @@ pub struct StagedLedger {
     /// position (task 0372) → `pool_operation_amounts`: trades from
     /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
+    /// Task 0374 (W1) → `pool_movements`: the swaps, deposits and withdrawals
+    /// of the soroban pools this ledger staged state for, decoded from
+    /// `event_rows`.
+    pub pool_movement_rows: Vec<PoolMovementRow>,
     pub event_rows: Vec<SorobanEventRow>,
     /// Per-(contract, tx) presence plus the invocation's caller and call count
     /// (tasks 0541, 0586) → `contract_activity`, the contract-dimension twin of
@@ -1101,6 +1105,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             PoolFamilyWrite::AddressList(w) => address_lists.push(w),
         }
     }
+    // A pair's legs, from its own instance written in this ledger: its
+    // `swap`/`deposit`/`withdraw` events name amounts by leg position only.
+    let pair_legs: HashMap<[u8; 32], Vec<i64>> = factory_pairs
+        .iter()
+        .filter_map(|sp| {
+            let legs = [&sp.state.token_0, &sp.state.token_1]
+                .map(|t| contract_token_asset_id(t, sac_classic))
+                .to_vec();
+            Some((ids::contract_payload(&sp.state.pair)?, legs))
+        })
+        .collect();
 
     // Soroban pool registrations (task 0374): the semantic decode lives in
     // `xdr_parser::pool_router` (same idiom as `detect_nft_events`); this
@@ -2148,6 +2163,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     out.asset_transfer_rows = value_flow.transfers;
     out.transaction_memo_rows = value_flow.memos;
 
+    // ---- pool_movements (0374, W1): from the event rows staged above ----
+    out.pool_movement_rows =
+        soroban_pool_amounts::pool_movement_rows(&out, &pair_legs, sac_classic);
+
     Ok(out)
 }
 
@@ -2689,6 +2708,7 @@ mod contract_activity;
 mod nfts;
 mod operations;
 mod presence;
+pub mod soroban_pool_amounts;
 mod soroban_pools;
 
 pub use soroban_pools::registers_soroban_pools;

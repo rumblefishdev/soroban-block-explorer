@@ -370,6 +370,23 @@ fn column_order_pool_operation_amounts() {
 }
 
 #[test]
+fn column_order_pool_movements() {
+    assert_columns::<PoolMovementRow>(
+        "pool_movements",
+        &[
+            "pool_id",
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "event_index",
+            "event_kind",
+            "asset_id",
+            "amount",
+        ],
+    );
+}
+
+#[test]
 fn column_order_soroban_events() {
     assert_columns::<SorobanEventRow>(
         "soroban_events",
@@ -3718,14 +3735,47 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &router_ledger,
+        false,
         false
     ));
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &pair_ledger,
+        false,
         false
     ));
-    assert!(!crate::persist::sac_classic_map_needed(&[], &[], true));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[],
+        true,
+        true
+    ));
+
+    // A pool's amount events key their tokens on the map too (task 0374, W1),
+    // exactly when `pool_movements` is written; other events do not.
+    let mut trade = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    trade.topics = serde_json::json!([{"type": "sym", "value": "trade"}]);
+    let trade_ledger = vec![("tx".to_string(), vec![trade])];
+    assert!(crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        true
+    ));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        false
+    ));
+    let mut other = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    other.topics = serde_json::json!([{"type": "sym", "value": "update_reserves"}]);
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[("tx".to_string(), vec![other])],
+        false,
+        true
+    ));
 
     // A contract-held balance needs the map exactly when `balances` is written.
     let balance = [xdr_parser::ExtractedSorobanBalance {
@@ -3735,10 +3785,16 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         ledger: 1,
         closed: false,
     }];
-    assert!(crate::persist::sac_classic_map_needed(&balance, &[], true));
+    assert!(crate::persist::sac_classic_map_needed(
+        &balance,
+        &[],
+        true,
+        false
+    ));
     assert!(!crate::persist::sac_classic_map_needed(
         &balance,
         &[],
+        false,
         false
     ));
 }

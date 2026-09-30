@@ -123,7 +123,7 @@ pub async fn persist_ledger_clickhouse(
         // surrogate; re-map them onto the wrapped classic/native asset id below.
         fetch_sac_classic_map(
             client,
-            sac_classic_map_needed(soroban_token_balances, events, true)
+            sac_classic_map_needed(soroban_token_balances, events, true, true)
         ),
     );
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
@@ -274,12 +274,14 @@ async fn fetch_prior_wasm_verdicts(
 
 /// Whether a ledger needs the SAC → classic map: it has a contract-held token
 /// balance to re-key AND this write persists `balances`, OR it registers a
-/// soroban pool, whose legs key on the same map.
+/// soroban pool, whose legs key on the same map, OR it may carry pool events
+/// AND this write persists `pool_movements` — their tokens key on it too.
 ///
 /// The pool arm is what went missing. Gating on balances alone left a pool
 /// registered in a ledger with no token balance change keyed on its SAC
 /// surrogate — the orphan defect task 0374's repair runbook exists for — so the
-/// live writer kept producing it after the fix. `writes_balances` is asked of
+/// live writer kept producing it after the fix. A pool's amount events key
+/// their tokens on it too, when this write persists `pool_movements`. `writes_balances` is asked of
 /// the caller rather than inferred from a targeted write: whether `balances`
 /// is written is the fact the balance arm depends on, and a targeted write
 /// that one day includes it must still get the map.
@@ -287,9 +289,45 @@ pub fn sac_classic_map_needed(
     soroban_token_balances: &[ExtractedSorobanBalance],
     events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
     writes_balances: bool,
+    writes_pool_movements: bool,
 ) -> bool {
     (writes_balances && !soroban_token_balances.is_empty())
         || stage::registers_soroban_pools(events)
+        || (writes_pool_movements && stage::soroban_pool_amounts::carries_pool_amounts(events))
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct SorobanPoolLegsRow {
+    pool_hex: String,
+    legs: Vec<i64>,
+}
+
+/// Every registered soroban pool (`liquidity_pools`, kind 1) with its legs,
+/// keyed by contract surrogate (~800 rows) — for the backfill, which reads
+/// pool events back from `soroban_events` without their ledger's entry
+/// writes, and for the checks. The live writer never reads it.
+pub async fn fetch_soroban_pools(
+    client: &Client,
+) -> Result<HashMap<i64, stage::soroban_pool_amounts::SorobanPool>, clickhouse::error::Error> {
+    let rows = client
+        .query(
+            "SELECT lower(hex(pool_id)) AS pool_hex, \
+                    argMax(legs, last_updated_ledger) AS legs \
+             FROM liquidity_pools WHERE pool_kind = 1 GROUP BY pool_id",
+        )
+        .fetch_all::<SorobanPoolLegsRow>()
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            // `FixedString(32)` hex: always 64 hex digits.
+            let pool_id: [u8; 32] = hex::decode(&r.pool_hex)
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .expect("liquidity_pools.pool_id is FixedString(32)");
+            stage::soroban_pool_amounts::soroban_pool_entry(pool_id, r.legs)
+        })
+        .collect())
 }
 
 /// One AGGREGATED row of the `fetch_sac_classic_map` query (a projection, not the

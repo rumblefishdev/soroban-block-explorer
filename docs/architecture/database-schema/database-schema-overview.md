@@ -127,6 +127,13 @@ Backbone timeline:
   rows, the contract stats, the contract's Invocations tab and the
   transaction page's invocations. Replaced `contract_transactions` and
   `soroban_invocations_appearances` (task 0586)
+- `pool_movements` — per-(event, leg) amounts of every pool's swaps,
+  deposits and withdrawals, shaped for both pool kinds; today soroban only
+  (task 0374, W1), classic joins in task 0598: per-(event, leg) amounts of every swap, deposit and
+  withdrawal event of a registered soroban pool, located by the event's
+  stellar-rpc id, signed from the pool's side, raw token units in `Int128`.
+  Written only for pools in the registry (the pair family names its amounts by
+  leg position); a per-field Phoenix swap is one row group
 - `pool_operation_amounts` — per-(operation, pool, asset) amounts, the driver of
   pool activity (task 0279 / issue #371, 0491), keyed pool-first and by the
   transaction position (replaced `lp_operation_amounts`, task 0372). `amount` is raw stroops in a
@@ -274,6 +281,7 @@ ledgers
        ├─ operation_asset_appearances (partitioned)
        ├─ contract_activity (partitioned)         # (contract, tx position) + invocation caller (0541, 0586)
        ├─ pool_operation_amounts (partitioned)   # per-(op, pool, asset) amounts (0279, 0372)
+       ├─ pool_movements (partitioned) # per-(event, leg) pool amounts, soroban today (0374)
        ├─ asset_transfers (partitioned)          # one row per token movement (0540)
        ├─ transaction_memos (partitioned)        # memo per transaction (0540)
        └─ soroban_events_appearances (partitioned)
@@ -666,6 +674,56 @@ Purpose / design notes:
   A leg negative here. An op crossing one pool in both directions nets out at
   this table's per-op grain and is a known, legitimate mismatch.
 - No skip index: every read is a `pool_id` PK-prefix seek.
+
+### 4.5.3a Pool Movements (task 0374)
+
+What each swap, deposit and withdrawal moved through a liquidity pool — the
+table every pool's activity feed, volume and fees are meant to read. Its shape
+fits both pool kinds (a classic operation is one movement, `event_index = 0`);
+today it holds soroban pools, and classic pools join it as
+`pool_operation_amounts` retires (task 0598, decision 147 A′).
+
+```sql
+CREATE TABLE pool_movements (
+    pool_id           FixedString(32),              -- the pool contract's 32-byte payload
+    ledger_sequence   Int64  CODEC(Delta, ZSTD(1)),
+    application_order Int16  CODEC(T64, ZSTD(1)),   -- the transaction's position
+    operation_index   UInt16 CODEC(T64, ZSTD(1)),
+    event_index       UInt32 CODEC(T64, ZSTD(1)),   -- stellar-rpc event id (ADR 0059)
+    event_kind        UInt8,                        -- 0 trade, 1 deposit, 2 withdrawal
+    asset_id          Int64,                        -- the leg, as in liquidity_pools.legs
+    amount            Int128                        -- raw token units, SIGNED from the pool's side
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_index, asset_id);
+```
+
+- **Grain is (event, leg)**, not (operation, leg): one operation can trade the
+  same pool several times (0.74% of router-family pool-operations). A per-field
+  Phoenix swap (eight events) is one row group keyed by its opening event.
+- **The kind is stored**, not read from the signs: a leg can be zero (a trade
+  with a zero side, a withdrawal paying out nothing), and every leg is written
+  so an event always leaves its rows. A trade is written as the trader sees it — gross input
+  in, received output out; fees the pool pays to other recipients are not in
+  the row. `Int128` because a soroban leg may carry 18 decimals; scaled at
+  read by each leg's decimals.
+- **Recognised from the ledger, trusted at read.** A pool is recognised the
+  way its state is — by the state rows its own entry writes staged in the same
+  ledger (every amount event of a registered pool has one: 100% over 200k
+  ledgers) — so a ledger's rows depend on that ledger alone, whatever order
+  the ledgers are processed in. Pair legs come from the pair's own instance in
+  the ledger, and a Phoenix withdrawal (legs by position, its CONFIG written
+  only at creation) reads them from the pool's own payouts in the same
+  operation — the writer reads no registry at all. Readers start from the
+  registry, as the reserve reader does. The backfill (`backfill-runner soroban-pool-amounts`) reads
+  `soroban_events` back through the same decoder with the registry, and stays
+  as the way to re-derive the table after a decoder change.
+- **Nothing dropped silently.** An event name that is neither an amount event
+  nor on the decoder's `NON_AMOUNT_EVENTS` list is logged at `warn!`, and the
+  reconciliation test fails on it.
+- **Reads dedup** (`LIMIT 1 BY` the key): the live writer and the backfill
+  overlap on purpose, so an unmerged `sum(amount)` would count twice.
 
 ### 4.5.4 Asset Transfers (task 0540)
 
