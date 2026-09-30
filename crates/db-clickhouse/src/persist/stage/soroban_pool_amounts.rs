@@ -6,9 +6,13 @@
 //! events, so the live writer and the backfill (which reads `soroban_events`
 //! back) run the very same function on the very same bytes.
 //!
-//! Only events emitted by a REGISTERED pool are read: the pair family names
-//! its amounts by position (`amount_0` / `amount_1`), so the pool's `legs` are
-//! needed to key them, and the registry is what proves the emitter is a pool.
+//! A pool is recognised the way its state is — by the state rows its own
+//! ledger-entry writes staged in the same ledger, never by a registry read, so
+//! a ledger's movements depend on that ledger alone. Readers start from the
+//! registry, as the reserve reader does, so a contract that only looks like a
+//! pool is never read. Legs, needed where amounts are named by position, come
+//! from the ledger too: a pair's own instance, a pool registered in it; only a
+//! Phoenix withdrawal needs its legs looked up.
 
 use std::collections::HashMap;
 
@@ -35,25 +39,89 @@ pub fn soroban_pool_entry(pool_id: [u8; 32], legs: Vec<i64>) -> (i64, SorobanPoo
 }
 
 /// The ledger's [`StagedLedger::pool_movement_rows`], from its staged events.
-/// A pool registered in this very ledger joins `pools` first, so its first
-/// trades are not lost to the prefetch having run before it existed.
+///
+/// The pools are the ones this ledger staged state rows for: every amount event
+/// of a registered pool has one in the same ledger (100% of 269,641 pool-ledgers
+/// over 200k ledgers, production 2026-09-30). Their legs, where known: a pair's
+/// own instance (`pair_legs`), a pool registered in this ledger, a looked-up
+/// pool (`looked_up`, the Phoenix withdrawals).
 pub(super) fn pool_movement_rows(
     staged: &StagedLedger,
-    pools: &HashMap<i64, SorobanPool>,
+    pair_legs: &HashMap<[u8; 32], Vec<i64>>,
+    looked_up: &HashMap<i64, SorobanPool>,
     sac_classic: &HashMap<i64, i64>,
 ) -> Vec<PoolMovementRow> {
-    let registered_now: Vec<(i64, SorobanPool)> = staged
-        .pool_rows
-        .iter()
-        .filter(|r| r.pool_kind == 1)
-        .map(|r| soroban_pool_entry(r.pool_id, r.legs.clone()))
-        .collect();
-    if registered_now.is_empty() {
-        return soroban_pool_amount_rows(&staged.event_rows, pools, sac_classic);
+    let mut pools: HashMap<i64, SorobanPool> = HashMap::new();
+    for r in &staged.pool_state_change_rows {
+        let legs = pair_legs.get(&r.pool_id).cloned().unwrap_or_default();
+        let (contract, pool) = soroban_pool_entry(r.pool_id, legs);
+        pools.entry(contract).or_insert(pool);
     }
-    let mut all = pools.clone();
-    all.extend(registered_now);
-    soroban_pool_amount_rows(&staged.event_rows, &all, sac_classic)
+    let registered = staged.pool_rows.iter().filter(|r| r.pool_kind == 1);
+    let known = registered
+        .map(|r| soroban_pool_entry(r.pool_id, r.legs.clone()))
+        .chain(looked_up.iter().map(|(c, p)| (*c, p.clone())));
+    for (contract, known) in known {
+        if let Some(pool) = pools.get_mut(&contract)
+            && pool.legs.is_empty()
+        {
+            pool.legs = known.legs;
+        }
+    }
+    soroban_pool_amount_rows(&staged.event_rows, &pools, sac_classic)
+}
+
+/// Whether the ledger carries an event named like a pool amount event — the
+/// gate for the SAC map, which keys their tokens. A name only: the emitter is
+/// recognised as a pool in staging.
+pub fn carries_pool_amounts(events: &[(String, Vec<xdr_parser::ExtractedEvent>)]) -> bool {
+    events.iter().flat_map(|(_, evs)| evs).any(|ev| {
+        matches!(
+            ev.topics
+                .get(0)
+                .and_then(|t| t.get("value"))
+                .and_then(Value::as_str),
+            Some(
+                "trade"
+                    | "swap"
+                    | "deposit_liquidity"
+                    | "withdraw_liquidity"
+                    | "provide_liquidity"
+                    | "SoroswapPair"
+            )
+        )
+    })
+}
+
+/// The emitters of a Phoenix withdrawal in this ledger — the one amount event
+/// whose legs nothing in its ledger shows (`return_amount_a/b` by position; the
+/// pool's CONFIG is written only at creation), so they are looked up.
+pub fn phoenix_withdraw_pools(
+    events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
+) -> Vec<[u8; 32]> {
+    let mut out: Vec<[u8; 32]> = events
+        .iter()
+        .flat_map(|(_, evs)| evs)
+        .filter(|ev| {
+            let Some(t) = ev.topics.as_array() else {
+                return false;
+            };
+            // Per-field `("withdraw_liquidity", "sender")` as Strings, or the
+            // newer `[withdraw_liquidity]` alone with one map.
+            let per_field = t.len() == 2
+                && type_of(&t[0]) == Some("string")
+                && str_value(&t[0]) == Some("withdraw_liquidity")
+                && str_value(&t[1]) == Some("sender");
+            let map_form = t.len() == 1
+                && str_value(&t[0]) == Some("withdraw_liquidity")
+                && type_of(&ev.data) == Some("map");
+            per_field || map_form
+        })
+        .filter_map(|ev| ids::contract_payload(ev.contract_id.as_deref()?))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// What an event did to the pool — stored, not inferred from the signs: a
@@ -257,9 +325,11 @@ fn unreadable(ev: &SorobanEventRow, why: &str) {
     );
 }
 
-/// Append one row per leg of an amount event, after checking every leg
-/// belongs to the pool. An event whose legs cannot be read, or that names a
-/// token the pool does not hold, is refused whole and logged.
+/// Append one row per leg of an amount event. An event whose legs cannot be
+/// read is refused whole and logged, and so is one naming a token the pool does
+/// not hold — checked where the legs are known here (a pair, a pool registered
+/// in this ledger, a looked-up pool); the reconciliation test checks the rest
+/// against the registry.
 fn push(
     out: &mut Vec<PoolMovementRow>,
     ev: &SorobanEventRow,
@@ -268,10 +338,10 @@ fn push(
 ) {
     let Some((kind, legs)) = decoded else { return };
     let Some(legs) = legs else {
-        unreadable(ev, "amount fields missing or malformed");
+        unreadable(ev, "amount fields missing or malformed, or legs unknown");
         return;
     };
-    if legs.iter().any(|(a, _)| !pool.legs.contains(a)) {
+    if !pool.legs.is_empty() && legs.iter().any(|(a, _)| !pool.legs.contains(a)) {
         unreadable(ev, "names a token the pool does not hold");
         return;
     }

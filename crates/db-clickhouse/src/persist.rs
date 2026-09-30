@@ -109,6 +109,11 @@ pub async fn persist_ledger_clickhouse(
     //   for contracts deployed earlier), memoised by `classification_cache`.
     // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
     // All three are independent reads; one `join!` pays a single round-trip.
+    // Task 0374 (W1): a Phoenix withdrawal names its amounts by leg position
+    // and nothing in its ledger shows the legs — only those pools are looked
+    // up (17 events in all history). Every other pool is recognised and keyed
+    // from the ledger itself, in staging.
+    let withdraw_pools = stage::soroban_pool_amounts::phoenix_withdraw_pools(events);
     let (
         prior_wasm_verdicts,
         prior_contract_verdicts,
@@ -131,13 +136,12 @@ pub async fn persist_ledger_clickhouse(
             client,
             sac_classic_map_needed(soroban_token_balances, events, true, true)
         ),
-        // Task 0374 (W1): the registry keys a pool's events onto its legs.
-        fetch_soroban_pools(client, pool_registry_needed(events, true)),
+        fetch_soroban_pools(client, Some(&withdraw_pools)),
     );
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
     // here would otherwise orphan contract-held balances under their surrogate key.
     let sac_classic = sac_classic?;
-    // Fail closed: without the registry every pool event of the ledger is lost.
+    // Fail closed: without its legs a Phoenix withdrawal is lost.
     let soroban_pools = soroban_pools?;
     // Fail closed here too: a skipped upgrade row has no recovery pass.
     let prior_contract_rows = prior_contract_rows?;
@@ -291,7 +295,8 @@ async fn fetch_prior_wasm_verdicts(
 /// The pool arm is what went missing. Gating on balances alone left a pool
 /// registered in a ledger with no token balance change keyed on its SAC
 /// surrogate — the orphan defect task 0374's repair runbook exists for — so the
-/// live writer kept producing it after the fix. `writes_balances` is asked of
+/// live writer kept producing it after the fix. A pool's amount events key
+/// their tokens on it too, when this write persists `pool_movements`. `writes_balances` is asked of
 /// the caller rather than inferred from a targeted write: whether `balances`
 /// is written is the fact the balance arm depends on, and a targeted write
 /// that one day includes it must still get the map.
@@ -303,19 +308,7 @@ pub fn sac_classic_map_needed(
 ) -> bool {
     (writes_balances && !soroban_token_balances.is_empty())
         || stage::registers_soroban_pools(events)
-        || pool_registry_needed(events, writes_pool_movements)
-}
-
-/// Whether a ledger needs the soroban pool registry: this write persists
-/// `pool_movements` AND the ledger carries any contract event. Live, that is
-/// nearly every ledger (one ~800-row read); the gate is for the backfill —
-/// ledgers before Soroban carry no events, and a targeted write of another
-/// table needs no registry. ponytail: not narrowed to pool-shaped events.
-pub fn pool_registry_needed(
-    events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
-    writes_pool_movements: bool,
-) -> bool {
-    writes_pool_movements && events.iter().any(|(_, evs)| !evs.is_empty())
+        || (writes_pool_movements && stage::soroban_pool_amounts::carries_pool_amounts(events))
 }
 
 #[derive(clickhouse::Row, serde::Deserialize)]
@@ -324,22 +317,33 @@ struct SorobanPoolLegsRow {
     legs: Vec<i64>,
 }
 
-/// Every registered soroban pool (`liquidity_pools`, kind 1) with its legs,
-/// keyed by contract surrogate — what [`stage::soroban_pool_amounts::stage_soroban_pool_amounts`]
-/// needs to key a pool's events onto its legs. ~800 rows.
+/// Registered soroban pools (`liquidity_pools`, kind 1) with their legs,
+/// keyed by contract surrogate: every one (`None`, ~800 rows — the backfill
+/// and the checks), or only `Some(pools)`, a primary-key seek that reads
+/// nothing when the list is empty (the live writer, which needs legs only for
+/// a Phoenix withdrawal).
 pub async fn fetch_soroban_pools(
     client: &Client,
-    needed: bool,
+    only: Option<&[[u8; 32]]>,
 ) -> Result<HashMap<i64, stage::soroban_pool_amounts::SorobanPool>, clickhouse::error::Error> {
-    if !needed {
-        return Ok(HashMap::new());
-    }
+    let filter = match only {
+        None => String::new(),
+        Some([]) => return Ok(HashMap::new()),
+        Some(pools) => format!(
+            "AND pool_id IN ({})",
+            pools
+                .iter()
+                .map(|p| format!("unhex('{}')", hex::encode(p)))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    };
     let rows = client
-        .query(
+        .query(&format!(
             "SELECT lower(hex(pool_id)) AS pool_hex, \
                     argMax(legs, last_updated_ledger) AS legs \
-             FROM liquidity_pools WHERE pool_kind = 1 GROUP BY pool_id",
-        )
+             FROM liquidity_pools WHERE pool_kind = 1 {filter} GROUP BY pool_id"
+        ))
         .fetch_all::<SorobanPoolLegsRow>()
         .await?;
     Ok(rows

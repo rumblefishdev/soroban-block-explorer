@@ -1113,10 +1113,11 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id
 -- written, so an event always leaves its rows. `asset_id` = the leg's `liquidity_pools.legs` id
 -- (a SAC token keyed onto the classic asset it wraps).
 --
--- Soroban rows are written only for events of pools in the registry (kind 1): the pair family
--- names its amounts by leg position, and the registry is what proves the
--- emitter is a pool. Same writer live and in the backfill, which reads
--- `soroban_events` back through the same decoder (`stage/soroban_pool_amounts.rs`).
+-- Soroban rows are written for the pools a ledger staged state rows for —
+-- recognised from the ledger itself, never a registry read, so rows do not
+-- depend on processing order; readers start from the registry. Same decoder
+-- live and in the backfill, which reads `soroban_events` back
+-- (`stage/soroban_pool_amounts.rs`).
 --
 -- READS MUST DEDUP (`LIMIT 1 BY` the sorting key): the live writer and the
 -- backfill overlap on purpose, and until a background merge a `sum(amount)`

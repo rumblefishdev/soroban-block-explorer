@@ -3767,17 +3767,31 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         true
     ));
 
-    // Pool events key their tokens on the map too (task 0374, W1): any event
-    // needs it, and the registry, exactly when `pool_movements` is written.
+    // A pool's amount events key their tokens on the map too (task 0374, W1),
+    // exactly when `pool_movements` is written; other events do not.
+    let mut trade = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    trade.topics = serde_json::json!([{"type": "sym", "value": "trade"}]);
+    let trade_ledger = vec![("tx".to_string(), vec![trade])];
     assert!(crate::persist::sac_classic_map_needed(
         &[],
-        &pair_ledger,
+        &trade_ledger,
         false,
         true
     ));
-    assert!(crate::persist::pool_registry_needed(&pair_ledger, true));
-    assert!(!crate::persist::pool_registry_needed(&pair_ledger, false));
-    assert!(!crate::persist::pool_registry_needed(&[], true));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        false
+    ));
+    let mut other = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    other.topics = serde_json::json!([{"type": "sym", "value": "update_reserves"}]);
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[("tx".to_string(), vec![other])],
+        false,
+        true
+    ));
 
     // A contract-held balance needs the map exactly when `balances` is written.
     let balance = [xdr_parser::ExtractedSorobanBalance {

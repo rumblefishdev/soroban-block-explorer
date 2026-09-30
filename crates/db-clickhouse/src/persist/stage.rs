@@ -354,9 +354,9 @@ pub struct StageInputs<'a> {
     /// `xdr_parser::extract_asset_transfers` (per-op consensus events only,
     /// emitter-gated, payload-checked). Empty for legacy callers.
     pub asset_transfers: &'a [ExtractedAssetTransfer],
-    /// Task 0374 (W1) — the registered soroban pools by contract surrogate,
-    /// which key a pool's events onto its legs. Empty for legacy callers (no
-    /// `pool_movements` rows).
+    /// Task 0374 (W1) — registered pools looked up by contract surrogate for
+    /// their legs, only where nothing in the ledger shows them (a Phoenix
+    /// withdrawal). Empty otherwise, and for legacy callers.
     pub soroban_pools: &'a HashMap<i64, soroban_pool_amounts::SorobanPool>,
 }
 
@@ -1112,6 +1112,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             PoolFamilyWrite::AddressList(w) => address_lists.push(w),
         }
     }
+    // A pair's legs, from its own instance written in this ledger: its
+    // `swap`/`deposit`/`withdraw` events name amounts by leg position only.
+    let pair_legs: HashMap<[u8; 32], Vec<i64>> = factory_pairs
+        .iter()
+        .filter_map(|sp| {
+            let legs = [&sp.state.token_0, &sp.state.token_1]
+                .map(|t| contract_token_asset_id(t, sac_classic))
+                .to_vec();
+            Some((ids::contract_payload(&sp.state.pair)?, legs))
+        })
+        .collect();
 
     // Soroban pool registrations (task 0374): the semantic decode lives in
     // `xdr_parser::pool_router` (same idiom as `detect_nft_events`); this
@@ -2161,7 +2172,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
 
     // ---- pool_movements (0374, W1): from the event rows staged above ----
     out.pool_movement_rows =
-        soroban_pool_amounts::pool_movement_rows(&out, soroban_pools, sac_classic);
+        soroban_pool_amounts::pool_movement_rows(&out, &pair_legs, soroban_pools, sac_classic);
 
     Ok(out)
 }

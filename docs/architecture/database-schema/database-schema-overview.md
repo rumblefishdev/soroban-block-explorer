@@ -705,12 +705,16 @@ ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_in
   in, received output out; fees the pool pays to other recipients are not in
   the row. `Int128` because a soroban leg may carry 18 decimals; scaled at
   read by each leg's decimals.
-- **Registry-gated.** Rows are written only for pools in `liquidity_pools`
-  (kind 1): the pair family names amounts by leg position, and the registry is
-  what proves the emitter is a pool. The writer reads the registry per ledger
-  alongside the SAC map; the backfill (`backfill-runner soroban-pool-amounts`)
-  reads `soroban_events` back through the same decoder, and stays as the way
-  to re-derive the table after a decoder change.
+- **Recognised from the ledger, trusted at read.** A pool is recognised the
+  way its state is — by the state rows its own entry writes staged in the same
+  ledger (every amount event of a registered pool has one: 100% over 200k
+  ledgers) — so a ledger's rows depend on that ledger alone, whatever order
+  the ledgers are processed in. Pair legs come from the pair's own instance in
+  the ledger; only a Phoenix withdrawal (legs by position, 17 events in all
+  history) looks its pool up. Readers start from the registry, as the reserve
+  reader does. The backfill (`backfill-runner soroban-pool-amounts`) reads
+  `soroban_events` back through the same decoder with the registry, and stays
+  as the way to re-derive the table after a decoder change.
 - **Nothing dropped silently.** An event name that is neither an amount event
   nor on the decoder's `NON_AMOUNT_EVENTS` list is logged at `warn!`, and the
   reconciliation test fails on it.
