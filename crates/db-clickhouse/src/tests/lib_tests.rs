@@ -96,12 +96,10 @@ fn init_sql_parses_into_statements() {
     // to `nft_ownership_changes`. 41 → 39.
     // task 0374: added `pool_movements` — per-(event, leg) soroban
     // pool amounts. 39 → 40.
-    // task 0374: added `pool_holders` + its refreshable MV — the soroban
-    // pool list's participant count. 40 → 42.
     assert_eq!(
         stmts.len(),
-        42,
-        "expected 38 tables + 4 materialized views, got {}",
+        40,
+        "expected 37 tables + 3 materialized views, got {}",
         stmts.len()
     );
 }

@@ -53,8 +53,8 @@ pub struct PoolRow {
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
     /// Providers: a classic pool's `lp_positions` with shares > 0 (task 0246);
-    /// a soroban pool's share-token holders (`pool_holders` on the list, a
-    /// live count on the detail). `None` where they are not read — a pool
+    /// a soroban pool's share-token holders (`balance_aggregates` on the
+    /// list, a live count on the detail). `None` where they are not read — a pool
     /// with no share token.
     pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,

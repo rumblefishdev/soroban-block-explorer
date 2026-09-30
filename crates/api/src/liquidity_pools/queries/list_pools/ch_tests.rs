@@ -85,7 +85,7 @@ async fn list_orders_by_activity_from_the_declared_plane_only() {
     seed(&ch).await;
 
     // Run the MVs now instead of waiting for their schedules.
-    for view in ["pool_activity_mv", "pool_holders_mv"] {
+    for view in ["pool_activity_mv", "balance_aggregates_mv"] {
         for sql in [
             format!("SYSTEM REFRESH VIEW {DB}.{view}"),
             format!("SYSTEM WAIT VIEW {DB}.{view}"),

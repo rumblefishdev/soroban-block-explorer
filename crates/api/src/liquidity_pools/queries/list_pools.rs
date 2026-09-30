@@ -266,6 +266,21 @@ pub async fn fetch_pool_list(
          band AS ( \
              SELECT min(activity_ledger) - 10000 AS lo, \
                     max(activity_ledger) + 10000 AS hi FROM page \
+         ), \
+         share_token AS ( \
+             SELECT pool_id, argMax(share_token_id, derived_at_ledger) AS token \
+             FROM pool_instance_state \
+             WHERE pool_id IN (SELECT pool_id FROM page) \
+             GROUP BY pool_id \
+             HAVING token != 0 \
+         ), \
+         /* The pool's own contract surrogate: its `C…` id decodes to the pool id. */ \
+         pool_self AS ( \
+             SELECT substring(base32Decode(contract_id), 2, 32) AS pool_id, any(id) AS id \
+             FROM soroban_contracts \
+             WHERE startsWith(contract_id, 'C') \
+               AND substring(base32Decode(contract_id), 2, 32) IN (SELECT pool_id FROM share_token) \
+             GROUP BY pool_id \
          ) \
          SELECT \
              lower(hex(lp.pool_id))                          AS pool_id_hex, \
@@ -279,7 +294,7 @@ pub async fn fetch_pool_list(
                 absent (NULL) for a pool with no share token. The LEFT JOIN miss \
                 reads defaults, not NULL, so the match is tested on the key. */ \
              if(lp.pool_kind = 0, toNullable(toInt64(ifNull(pc.participant_count, 0))), \
-                if(ph.pool_id = lp.pool_id, toNullable(toInt64(ph.holders)), NULL)) \
+                if(ph.pool_id = lp.pool_id, toNullable(ph.holders), NULL)) \
                                                              AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
              toString(s.reserve_a)                           AS reserve_a, \
@@ -309,9 +324,28 @@ pub async fn fetch_pool_list(
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
              GROUP BY pool_id \
          ) pc ON pc.pool_id = lp.pool_id \
+         /* A soroban pool's providers: the holder count `balance_aggregates` \
+            keeps for its share token, less the pool's own contract when it \
+            holds some — the minimum liquidity locked at its first deposit, \
+            not a provider. The count refreshes every 2 minutes while the \
+            pool's own balance is read live, so in a new pool's first minutes \
+            the difference can be -1; `greatest` shows 0 there. */ \
          LEFT JOIN ( \
-             SELECT pool_id, holders FROM pool_holders \
-             WHERE pool_id IN (SELECT pool_id FROM page) \
+             SELECT t.pool_id AS pool_id, \
+                    greatest(toInt64(ifNull(ba.holder_count, 0)) - toInt64(me.held), 0) AS holders \
+             FROM share_token t \
+             LEFT JOIN balance_aggregates ba ON ba.asset_id = t.token \
+             LEFT JOIN ( \
+                 SELECT c.pool_id AS pool_id, argMax(b.amount, b.last_updated_ledger) > 0 AS held \
+                 FROM pool_self c \
+                 INNER JOIN share_token t ON t.pool_id = c.pool_id \
+                 INNER JOIN ( \
+                     SELECT holder_id, asset_id, amount, last_updated_ledger FROM balances \
+                     WHERE holder_id IN (SELECT id FROM pool_self) \
+                       AND asset_id IN (SELECT token FROM share_token) \
+                 ) b ON b.holder_id = c.id AND b.asset_id = t.token \
+                 GROUP BY c.pool_id \
+             ) me ON me.pool_id = t.pool_id \
          ) ph ON ph.pool_id = lp.pool_id \
          /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
             duplicate rows): without it this LEFT JOIN doubled every page row \
