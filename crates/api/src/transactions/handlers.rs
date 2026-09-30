@@ -405,7 +405,7 @@ fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
                 // reach here and not one is a soroban pool.
                 .map(|h| pool_id_hex_to_strkey(h, PoolKind::Classic))
                 .collect(),
-            application_order: op.application_order,
+            operation_index: op.operation_index,
             ledger_sequence: op.ledger_sequence,
             created_at: op.created_at,
         })

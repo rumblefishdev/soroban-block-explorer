@@ -11,7 +11,7 @@ function light(
   return {
     appearance_id: 1,
     type: 1,
-    application_order: 1,
+    operation_index: 0,
     ledger_sequence: 100,
     created_at: '2026-01-01T00:00:00Z',
     pool_ids: [],
@@ -20,7 +20,7 @@ function light(
 }
 
 function heavy(details: Record<string, unknown>): XdrOperationDto {
-  return { op_type: 'payment', application_order: 1, details };
+  return { op_type: 'payment', operation_index: 0, details };
 }
 
 describe('humanizeOp', () => {

@@ -13,7 +13,7 @@ const OP_HASH = /^#op-(\d+)$/;
  * one rather than asserting anything (0377).
  *
  * Out of range resolves to the first operation WITHOUT announcing it, and that
- * is deliberate: the card labels itself from `application_order`, not from the
+ * is deliberate: the card labels itself from `operation_index`, not from the
  * fragment, so the reader sees a correctly numbered operation. Nothing is
  * hidden and nothing is mislabelled — the only way here is a hand-edited URL,
  * and a notice for that case was cut as unearned (task 0482).

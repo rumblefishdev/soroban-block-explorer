@@ -15,7 +15,7 @@ function entry(
   const light: OperationItem = {
     appearance_id: order,
     type: 1,
-    application_order: order,
+    operation_index: order - 1,
     ledger_sequence: 1,
     created_at: '2026-01-01T00:00:00Z',
     pool_ids: [],

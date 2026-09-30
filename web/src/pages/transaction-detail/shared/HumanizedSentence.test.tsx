@@ -18,7 +18,7 @@ function light(
   return {
     appearance_id: 1,
     type: 1,
-    application_order: 1,
+    operation_index: 0,
     ledger_sequence: 1,
     created_at: '2026-01-01T00:00:00Z',
     pool_ids: [],
@@ -45,7 +45,7 @@ describe('sentenceIds', () => {
       light({ type_name: 'PAYMENT', destination_account: DEST }),
       {
         op_type: 'PAYMENT',
-        application_order: 1,
+        operation_index: 0,
         details: { asset: `USDC:${DEST}`, contract: CONTRACT },
         result_code: 'Success',
       } satisfies XdrOperationDto
@@ -57,7 +57,7 @@ describe('sentenceIds', () => {
   it('ignores ids with no detail page (hex balance ids, asset codes)', () => {
     const ids = sentenceIds(light({ type_name: 'CLAIM_CLAIMABLE_BALANCE' }), {
       op_type: 'CLAIM_CLAIMABLE_BALANCE',
-      application_order: 1,
+      operation_index: 0,
       details: { balanceId: 'ab'.repeat(32), asset: 'USDC' },
       result_code: 'Success',
     } satisfies XdrOperationDto);

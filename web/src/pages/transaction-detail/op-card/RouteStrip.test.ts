@@ -5,7 +5,7 @@ import { parseOperationTree } from './CallTree.js';
 import { buildRouteModel } from './RouteStrip.js';
 
 function heavy(details: Record<string, unknown>): XdrOperationDto {
-  return { op_type: 'x', application_order: 1, details };
+  return { op_type: 'x', operation_index: 0, details };
 }
 
 describe('buildRouteModel', () => {

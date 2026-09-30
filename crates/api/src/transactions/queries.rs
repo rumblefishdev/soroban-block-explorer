@@ -82,9 +82,8 @@ pub struct OpRow {
     /// Crossed liquidity pools, hex-encoded (full crossed-pool list from
     /// path-payment claim atoms, task 0261/0268).
     pub pool_ids: Vec<String>,
-    /// 1-based per-tx apply position (task 0192). `None` for pre-task-0192
-    /// rows; the caller falls back to `appearance_id` ordering.
-    pub application_order: Option<i16>,
+    /// The operation's 0-based position in its transaction (ADR 0059).
+    pub operation_index: i16,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
@@ -304,37 +303,31 @@ pub async fn fetch_operations(
 
     Ok(raw
         .into_iter()
-        .map(|r| {
-            // The wire keeps the operation's 1-based position (Horizon's
-            // `application_order`, the `#op-N` anchor); the table stores the
-            // 0-based `operation_index` (ADR 0059).
-            let position = r.operation_index + 1;
-            OpRow {
-                appearance_id: i64::from(position),
-                type_name: operation_type_label(r.op_type),
-                op_type: r.op_type,
-                source_account: r
-                    .source_id
-                    .and_then(|id| accounts.get(&id).cloned())
-                    .filter(|s| !s.is_empty()),
-                destination_account: r
-                    .destination_id
-                    .and_then(|id| accounts.get(&id).cloned())
-                    .filter(|s| !s.is_empty()),
-                contract_id: r
-                    .contract_id
-                    .and_then(|id| contracts.get(&id).cloned())
-                    .filter(|s| !s.is_empty()),
-                asset_code: r.asset_code.filter(|s| !s.is_empty()),
-                asset_issuer: r
-                    .asset_issuer_id
-                    .and_then(|id| accounts.get(&id).cloned())
-                    .filter(|s| !s.is_empty()),
-                pool_ids: r.pool_ids,
-                application_order: Some(position),
-                ledger_sequence: r.ledger_sequence,
-                created_at: millis_to_utc(r.created_at),
-            }
+        .map(|r| OpRow {
+            appearance_id: i64::from(r.operation_index) + 1,
+            type_name: operation_type_label(r.op_type),
+            op_type: r.op_type,
+            source_account: r
+                .source_id
+                .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            destination_account: r
+                .destination_id
+                .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            contract_id: r
+                .contract_id
+                .and_then(|id| contracts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            asset_code: r.asset_code.filter(|s| !s.is_empty()),
+            asset_issuer: r
+                .asset_issuer_id
+                .and_then(|id| accounts.get(&id).cloned())
+                .filter(|s| !s.is_empty()),
+            pool_ids: r.pool_ids,
+            operation_index: r.operation_index,
+            ledger_sequence: r.ledger_sequence,
+            created_at: millis_to_utc(r.created_at),
         })
         .collect())
 }
