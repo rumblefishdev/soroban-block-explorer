@@ -13,16 +13,16 @@ function light(
   return {
     appearance_id: 1,
     type: 1,
-    application_order: 2,
+    operation_index: 1,
     ledger_sequence: 1,
     created_at: '2026-01-01T00:00:00Z',
     pool_ids: [],
     ...partial,
-  } as OperationItem;
+  };
 }
 
 function heavyOf(details: Record<string, unknown>): XdrOperationDto {
-  return { op_type: 'PAYMENT', application_order: 2, details };
+  return { op_type: 'PAYMENT', operation_index: 1, details };
 }
 
 function renderCard(props: Partial<Parameters<typeof OperationCard>[0]> = {}) {
@@ -32,7 +32,6 @@ function renderCard(props: Partial<Parameters<typeof OperationCard>[0]> = {}) {
         light={light({ type_name: 'PAYMENT', destination_account: DEST })}
         heavy={heavyOf({ amount: 1_005_000_000, asset: 'native' })}
         applied
-        fallbackOrder={1}
         txSourceAccount={null}
         {...props}
       />
@@ -44,7 +43,7 @@ describe('OperationCard', () => {
   it('renders the headline sentence, order and type label', () => {
     renderCard();
     expect(screen.getByText('Sent 100.5 XLM to GA5X…GKTM')).toBeTruthy();
-    expect(screen.getByText('2 · Payment')).toBeTruthy();
+    expect(screen.getByText('1 · Payment')).toBeTruthy();
   });
 
   it('labels the card "not applied" and keeps the disclosure on a failed transaction', () => {
@@ -108,7 +107,7 @@ describe('OperationCard', () => {
         },
       ],
     });
-    // heavy.application_order = 2 → matches operation_index 1 only.
+    // heavy.operation_index = 1 → matches the events of operation 1 only.
     expect(screen.getByText('transfer')).toBeTruthy();
     expect(screen.queryByText('mint')).toBeNull();
   });

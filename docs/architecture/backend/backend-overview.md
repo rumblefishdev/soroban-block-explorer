@@ -510,9 +510,11 @@ place where indexed contract metadata and decoded usage history are exposed.
 (substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`).
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
-media URL.
+media URL. The owner (`owner`) is a `G…` account or a `C…` contract, resolved through
+`accounts` and `soroban_contracts` (one surrogate space); null once the NFT is burned.
 
-**`GET /nfts/:id/transfers`** - Transfer history for a single NFT.
+**`GET /nfts/:id/transfers`** - Transfer history for a single NFT; each side (`from`,
+`to`) is a `G…` account or a `C…` contract.
 
 NFT responses should tolerate sparse metadata because the ecosystem and available metadata
 quality may vary significantly.
@@ -607,6 +609,10 @@ window — `1h→7d`, `1d→90d`, `1w→104w`), `to` (ISO 8601, default `now()`,
 exclusive upper bound). `from < to` enforced; bucket count capped to keep
 aggregation bounded. Bucket aggregation policy in
 `crates/api/src/liquidity_pools/queries/get_pool_chart.rs`.
+A Soroban pool's series comes from its reserve history (`pool_state_changes`,
+raw per leg, scaled by each leg's own decimals) on the same buckets and price
+rules — TVL only; `volume` and `fee_revenue` are `null` until its trades are
+indexed, and the frontend's Volume and Fees tabs say "not indexed".
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, first deposit ledger, and last

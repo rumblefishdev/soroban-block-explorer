@@ -65,17 +65,19 @@ Caddy does not know the password to forge Basic Auth.
 
 ## Per-service user matrix
 
-| CH user            | Profile            | Quota          | Permitted operations                                                                                                                                                                                                                                                         | Consumer                                                                                                 |
-| ------------------ | ------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `default`          | `default`          | `default`      | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)                                                                                                                                                                                                                  | `db-clickhouse-init` sidecar + backup script + SSH ops                                                   |
-| `dev_shared`       | `admin`            | `unlimited`    | Everything (admin, `<no_password/>` + loopback/bridge networks)                                                                                                                                                                                                              | Dev laptops (one shared cert-gated user)                                                                 |
-| `galexie`          | `write_no_ddl`     | `high_write`   | Nothing (empty `<grants/>`, task 0591): Galexie writes to S3 only and never queries ClickHouse                                                                                                                                                                               | Galexie ECS task                                                                                         |
-| `api_reader`       | `read_only`        | `unlimited`    | SELECT on `default.*` and `prices.*` (inline `<grants>`, task 0591)                                                                                                                                                                                                          | Lambda API (read-heavy)                                                                                  |
-| `ingestion_writer` | `write_no_ddl`     | `high_write`   | SELECT, INSERT on `default.*` (inline `<grants>`, task 0591)                                                                                                                                                                                                                 | Lambda Ingestion and the enrichment worker Lambda                                                        |
-| `dev_read`         | `read_only`        | `dev_read`     | SELECT on `default.*`, `prices.*`, `system.*` (inline `<grants>`, task 0591)                                                                                                                                                                                                 | Teammate read-only mTLS cert                                                                             |
-| `prices_writer`    | `write_no_ddl`     | `prices_write` | SELECT, INSERT, OPTIMIZE + ALTER DELETE on `prices.*`; SELECT on `system.parts` / `system.mutations` / `system.view_refreshes` ; SELECT on `default.soroban_events` / `default.soroban_contracts` only (inline `<grants>`; 0314 + 0477 self-monitoring, 0569 coverage sweep) | prices-api ingestion (separate service, task 0063)                                                       |
-| `prices_reader`    | `read_only`        | `prices_read`  | SELECT on `prices.*` only (inline `<grants>`)                                                                                                                                                                                                                                | prices-api / BE LP-analytics `price_usd_series` JOIN                                                     |
-| `prices_admin`     | `prices_write_ddl` | `prices_write` | SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE on `prices.*`; SELECT on `default.*`, `system.parts`, `system.mutations`, `system.columns`, `system.disks` (inline `<grants>`; tasks 0567 + 0568)                                                                  | prices-api operator campaigns (history re-ingest, partition repair) — operator-held cert, never a Lambda |
+| CH user            | Profile            | Quota           | Permitted operations                                                                                                                                                                                                                                                         | Consumer                                                                                                 |
+| ------------------ | ------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `default`          | `default`          | `default`       | Everything (admin, password from `CLICKHOUSE_PASSWORD` env)                                                                                                                                                                                                                  | `db-clickhouse-init` sidecar + backup script + SSH ops                                                   |
+| `dev_shared`       | `admin`            | `unlimited`     | Everything (admin, `<no_password/>` + loopback/bridge networks)                                                                                                                                                                                                              | Dev laptops (one shared cert-gated user)                                                                 |
+| `galexie`          | `write_no_ddl`     | `high_write`    | Nothing (empty `<grants/>`, task 0591): Galexie writes to S3 only and never queries ClickHouse                                                                                                                                                                               | Galexie ECS task                                                                                         |
+| `api_reader`       | `read_only`        | `unlimited`     | SELECT on `default.*` and `prices.*` (inline `<grants>`, task 0591)                                                                                                                                                                                                          | Lambda API (read-heavy)                                                                                  |
+| `ingestion_writer` | `write_no_ddl`     | `high_write`    | SELECT, INSERT on `default.*` (inline `<grants>`, task 0591)                                                                                                                                                                                                                 | Lambda Ingestion and the enrichment worker Lambda                                                        |
+| `dev_read`         | `read_only`        | `dev_read`      | SELECT on `default.*`, `prices.*`, `testnet.*`, `system.*` (inline `<grants>`, tasks 0591, 0553)                                                                                                                                                                             | Teammate read-only mTLS cert                                                                             |
+| `prices_writer`    | `prices_write_ddl` | `prices_write`  | SELECT, INSERT, OPTIMIZE + ALTER DELETE on `prices.*`; SELECT on `system.parts` / `system.mutations` / `system.view_refreshes` ; SELECT on `default.soroban_events` / `default.soroban_contracts` only (inline `<grants>`; 0314 + 0477 self-monitoring, 0569 coverage sweep) | prices-api ingestion (separate service, task 0063)                                                       |
+| `prices_reader`    | `read_only`        | `prices_read`   | SELECT on `prices.*` only (inline `<grants>`)                                                                                                                                                                                                                                | prices-api / BE LP-analytics `price_usd_series` JOIN                                                     |
+| `prices_admin`     | `prices_write_ddl` | `prices_write`  | SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE on `prices.*`; SELECT on `default.*`, `system.parts`, `system.mutations`, `system.columns`, `system.disks` (inline `<grants>`; tasks 0567 + 0568)                                                                  | prices-api operator campaigns (history re-ingest, partition repair) — operator-held cert, never a Lambda |
+| `testnet_reader`   | `read_only`        | `testnet_read`  | SELECT on `testnet.*` and `prices.*` (task 0553)                                                                                                                                                                                                                             | Testnet Lambda API                                                                                       |
+| `testnet_writer`   | `write_no_ddl`     | `testnet_write` | SELECT, INSERT on `testnet.*` only (task 0553)                                                                                                                                                                                                                               | Testnet Lambda Ingestion and enrichment worker                                                           |
 
 > `migration_admin` + `partition_admin` were removed in task 0241 (from
 > `crates/db-clickhouse/users.d/services.xml`) together with the PG-era
@@ -101,7 +103,8 @@ second tenant alongside BE's `default` data.
   unscoped proxy-trust user left.
 - **What BE users reach in `prices.*`.** The prices certs are confined to
   `prices.*`, bar the `default.*` reads in the matrix. In the other
-  direction, since task 0591: `api_reader` and `dev_read` read `prices.*`
+  direction, since task 0591: `api_reader` and `dev_read` (and, since task
+  0553, `testnet_reader`) read `prices.*`
   (the API's LP USD analytics and chart read `prices.price_usd_series` and
   `prices.price_usd_series_1h`); `ingestion_writer` and `galexie` cannot
   reach it; only `dev_shared` and `default` can write to it.
@@ -109,6 +112,36 @@ second tenant alongside BE's `default` data.
 The `prices` database and its schema are created and owned by prices-api over
 loopback admin (`db-clickhouse-init` on their side), **not** in this repo. This
 repo provides only the access-control config those certs map onto.
+
+### `testnet` tenant (task 0553, ADR 0052)
+
+The testnet explorer keeps its data in a `testnet` database on this same
+server — the third tenant, after `default` and `prices`. Same pattern as
+`prices`: inline `<grants>` confine each testnet user to `testnet.*` (plus
+`prices.*` for the reader), so a testnet cert can neither read nor write
+mainnet data.
+
+- **`testnet_reader` reads `prices.*`**, like `api_reader`. prices-api has
+  no testnet counterpart, so the testnet explorer shows mainnet USD prices.
+  They match mainly native XLM; testnet tokens have other issuers and
+  contracts, so most get no price.
+- **Same shape as `prices`.** The reader and writer reuse the
+  `read_only` and `write_no_ddl` profiles; the quotas `testnet_read` /
+  `testnet_write` are copies of `prices_read` / `prices_write`, each under
+  its own name so testnet never spends a mainnet user's budget.
+- **No testnet admin user.** Operator work on testnet runs as it does on
+  mainnet: creating the database, applying `init.sql` and the reset's
+  `DROP DATABASE` box-side as `default`; `backfill-runner` with the operator
+  write cert (`dev_shared`) and `CLICKHOUSE_DATABASE=testnet`. A backfill
+  that forgets the variable lands in `default`, but cannot overwrite
+  mainnet: testnet ledgers sit far below mainnet's first stored ledger
+  (50,457,424), so every such row is removable by that bound.
+- **Readers from the BE side.** `dev_read` and `dev_shared` read `testnet.*`;
+  `api_reader`, `ingestion_writer` and the prices users cannot reach it.
+
+Verified 2026-09-29 on a local ClickHouse 26.3 with these files: every
+cross-database read and write above refused with Code 497, DDL refused to
+`testnet_writer`, and `dev_read` / `dev_shared` read `testnet`.
 
 ## Caddy CN → CH user mapping
 
@@ -125,7 +158,14 @@ the full list. Convention:
 | `prices-ingestion`                | `prices_writer`    |
 | `prices-api`                      | `prices_reader`    |
 | `prices-admin-<environment>`      | `prices_admin`     |
+| `lambda-api-testnet`              | `testnet_reader`   |
+| `lambda-ingestion-testnet`        | `testnet_writer`   |
+| `lambda-enrichment-testnet`       | `testnet_writer`   |
 | `<firstname>-laptop`              | `dev_shared`       |
+
+`<environment>` in the `api_reader` / `ingestion_writer` / `galexie` rows is
+`production`. A testnet Lambda's cert must map to a `testnet_*` user — mapped
+by the production convention, it would read and write mainnet data.
 
 > `lambda-partition-<env>` and `lambda-migration-<env>` were retired in task
 > 0241: the partition + migration Lambdas were removed, and their CH users
@@ -168,6 +208,8 @@ returns as 403 before any backend hop.
   for 26 min on 2026-09-03). Dedicated name for the same isolation
   reason; deliberately not `unlimited` so the prices tenant cannot
   drain the shared box.
+- `testnet_read` / `testnet_write` — copies of `prices_read` /
+  `prices_write`, for the same isolation reason.
 
 ## Known limitations
 

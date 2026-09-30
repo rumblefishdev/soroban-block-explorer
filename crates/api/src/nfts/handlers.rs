@@ -31,7 +31,7 @@ fn map_item(r: NftRow) -> NftItem {
         name: r.name,
         media_url: r.media_url,
         minted_at_ledger: r.minted_at_ledger,
-        owner_account: r.owner_account,
+        owner: r.owner,
         last_seen_ledger: r.last_seen_ledger,
     }
 }

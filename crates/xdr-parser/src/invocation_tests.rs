@@ -78,7 +78,7 @@ fn extract_single_invocation() {
     assert_eq!(inv.transaction_hash, "abcd1234");
     assert!(inv.contract_id.is_some());
     assert_eq!(inv.function_name.as_deref(), Some("transfer"));
-    assert_eq!(inv.caller_account.as_deref(), Some(source_account_str()));
+    assert_eq!(inv.caller.as_deref(), Some(source_account_str()));
     assert!(inv.return_value.is_null());
     assert_eq!(inv.depth, 0);
     assert_eq!(inv.invocation_index, 0);
@@ -159,7 +159,7 @@ fn extract_nested_invocations_with_caller_chain() {
     assert_eq!(result.invocations[0].function_name.as_deref(), Some("swap"));
     assert_eq!(result.invocations[0].depth, 0);
     assert_eq!(
-        result.invocations[0].caller_account.as_deref(),
+        result.invocations[0].caller.as_deref(),
         Some(source_account_str())
     );
 
@@ -170,7 +170,7 @@ fn extract_nested_invocations_with_caller_chain() {
     );
     assert_eq!(result.invocations[1].depth, 1);
     assert_eq!(
-        result.invocations[1].caller_account.as_deref(),
+        result.invocations[1].caller.as_deref(),
         result.invocations[0].contract_id.as_deref()
     );
 
@@ -323,7 +323,7 @@ fn create_contract_invocation() {
     assert!(inv.contract_id.is_none());
     assert_eq!(inv.function_name.as_deref(), Some("createContract"));
     // caller is still the tx source for root
-    assert_eq!(inv.caller_account.as_deref(), Some(source_account_str()));
+    assert_eq!(inv.caller.as_deref(), Some(source_account_str()));
     assert_eq!(inv.function_args["type"], "createContract");
     assert_eq!(inv.function_args["executable"]["type"], "wasm");
 }
@@ -398,7 +398,7 @@ fn deeply_nested_invocations() {
     );
     assert!(!result.invocations[0].successful);
     assert_eq!(
-        result.invocations[0].caller_account.as_deref(),
+        result.invocations[0].caller.as_deref(),
         Some(source_account_str())
     );
 
@@ -409,7 +409,7 @@ fn deeply_nested_invocations() {
         Some("mid_fn")
     );
     assert_eq!(
-        result.invocations[1].caller_account.as_deref(),
+        result.invocations[1].caller.as_deref(),
         result.invocations[0].contract_id.as_deref()
     );
 
@@ -420,7 +420,7 @@ fn deeply_nested_invocations() {
         Some("leaf_fn")
     );
     assert_eq!(
-        result.invocations[2].caller_account.as_deref(),
+        result.invocations[2].caller.as_deref(),
         result.invocations[1].contract_id.as_deref()
     );
 
@@ -548,7 +548,7 @@ fn build_v1_tx(operations: Vec<Operation>) -> Transaction {
 
 /// Bug 0177 regression: a per-op `source_account` override carrying a
 /// `MuxedAccount::MuxedEd25519` variant used to surface a 69-char M-strkey
-/// as `caller_account`, overflowing `accounts.account_id VARCHAR(56)` at
+/// as `caller`, overflowing `accounts.account_id VARCHAR(56)` at
 /// persist time. The override path must canonicalize to the 56-char
 /// underlying ed25519 G-strkey, identical to the bare-ed25519 case.
 #[test]
@@ -608,14 +608,14 @@ fn per_op_muxed_source_collapses_to_underlying_g_strkey() {
 
     assert_eq!(result.invocations.len(), 1);
     let caller = result.invocations[0]
-        .caller_account
+        .caller
         .as_deref()
-        .expect("caller_account populated");
+        .expect("caller populated");
     assert_eq!(caller.len(), 56, "expected 56-char G-strkey, got {caller}");
     assert!(caller.starts_with('G'), "expected G prefix, got {caller}");
     assert_eq!(
         caller, expected_g,
-        "caller_account must canonicalize to the underlying ed25519 G-strkey"
+        "caller must canonicalize to the underlying ed25519 G-strkey"
     );
     assert_ne!(
         caller,
@@ -736,7 +736,7 @@ fn diag_walker_single_call_returns_one_row() {
     assert_eq!(inv.depth, 0);
     assert_eq!(inv.invocation_index, 0);
     assert!(inv.contract_id.as_deref().unwrap().starts_with('C'));
-    assert_eq!(inv.caller_account.as_deref(), Some(source_account_str()));
+    assert_eq!(inv.caller.as_deref(), Some(source_account_str()));
 }
 
 /// Nested router → pool sub-call: 2 rows, second row's caller is the
@@ -766,17 +766,14 @@ fn diag_walker_nested_call_chains_contract_caller() {
 
     // Root: router, called by tx source (G-account).
     assert_eq!(invs[0].depth, 0);
-    assert_eq!(
-        invs[0].caller_account.as_deref(),
-        Some(source_account_str())
-    );
+    assert_eq!(invs[0].caller.as_deref(), Some(source_account_str()));
     let router_id = invs[0].contract_id.clone().expect("router contract id");
     assert!(router_id.starts_with('C'));
 
     // Child: pool, called by the router (C-prefix). This is the row
     // that the auth tree would never produce for an auth-less router.
     assert_eq!(invs[1].depth, 1);
-    assert_eq!(invs[1].caller_account.as_deref(), Some(router_id.as_str()));
+    assert_eq!(invs[1].caller.as_deref(), Some(router_id.as_str()));
     let pool_id = invs[1].contract_id.clone().expect("pool contract id");
     assert!(pool_id.starts_with('C'));
     assert_ne!(pool_id, router_id, "pool and router must be distinct");
@@ -1021,7 +1018,7 @@ fn diag_root_caller_honours_per_op_source_and_canonicalises_muxed() {
 
     assert_eq!(result.invocations.len(), 1, "expected single root frame");
     let caller = result.invocations[0]
-        .caller_account
+        .caller
         .as_deref()
         .expect("root caller populated");
     assert_eq!(caller.len(), 56, "expected 56-char G-strkey, got {caller}");

@@ -270,6 +270,10 @@ Primary navigation entrypoints:
 Navigation rules:
 
 - every major entity identifier should be linkable from anywhere it appears
+- an address takes its link from itself: `addressType` (`libs/ui`) reads the
+  StrKey's first letter — `G` account, `C` contract, `L` pool — and gives
+  `null` (shown, not linked) for forms with no page (`M…`, `B…`). The API
+  sends an account-or-contract address in one field (task 0600)
 - exact search hits should resolve directly to the detail page when confidence is high
 - broad or ambiguous matches should remain on a grouped search results page
 - list routes should preserve filters and cursor state in the URL when practical
@@ -392,16 +396,19 @@ mainnet transactions carry exactly one (5 369 984 of 6 349 043, measured on
 production over ledgers 63 680 000–63 700 000, deduplicated), and an index of a
 single row is pure width tax.
 
-`#op-N` is 1-based and user-supplied, so `useSelectedOp` resolves it against
+`#op-N` is the operation's 0-based `operation_index`, as the chain counts it
+(`#op-0` is the first operation), and user-supplied, so `useSelectedOp` resolves it against
 the decoded operation list and owns the result, the way `useTableUrlState` owns
 `sort`/`dir`: the index handed to the section always addresses an existing
 operation, and no consumer carries a range guard. A fragment naming an
 operation the transaction does not have resolves to the first one **with no
-notice**: the card numbers itself from `application_order`, not from the
-fragment, so the reader gets a correctly numbered operation and nothing is
+notice**: the card numbers itself from `operation_index` (shown from 0, like
+the fragment), not from the fragment, so the reader gets a correctly numbered operation and nothing is
 hidden or mislabelled. Reaching that state needs a hand-edited URL — `#op-N` is
 written in one place, from a picker click, and an operation count never changes,
-so a shared link that worked once keeps working. The fragment itself is left
+so a shared link that worked once keeps working. (Once broken on purpose:
+task 0538 moved the anchor and the labels from 1-based to the chain's
+0-based index, so a link shared before that lands one operation later.) The fragment itself is left
 alone, so the address bar still shows what was asked for. While the archive
 fetch is in flight or has failed the list length is unknown, and an unresolvable
 fragment then makes no claim at all rather than asserting a count nobody
@@ -430,7 +437,7 @@ The card shows:
   stamps every node with the whole transaction's verdict — so the UI
   deliberately renders no per-node ✓/✗ there;
 - the operation's own events, matched via `XdrEventDto.operation_index`
-  (`application_order - 1`);
+  (equal to the operation's `operation_index`);
 - an "Operation details" disclosure with every raw `details` key — exactness
   preserved; nothing null/empty that matters for debugging is hidden;
 - on a failed transaction the card dims and carries a "not applied" label.
@@ -733,7 +740,7 @@ Contract details and interface.
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state
 - Invocations tab - recent invocations table (transaction hash, caller — an account or a
-  contract, each linked (task 0487) — status,
+  contract in one `caller` field, each linked (tasks 0487, 0600) — status,
   ledger, timestamp). The appearance index carries no per-call function name — call
   detail is XDR-only (ADR 0034), so the transaction hash links to the full detail
 - Events tab - recent events table (event type, topics, data, ledger). Only `contract`
@@ -770,7 +777,7 @@ Expanded behavior:
 Single NFT overview.
 
 - NFT summary - name, identifier/token ID, collection name, contract ID (link), owner
-  account (link)
+  (link to the account or the contract that holds it)
 - Media preview - image, video, or other media associated with the NFT
 - Metadata - full attribute list (traits, properties)
 - Transfer history - table of ownership changes

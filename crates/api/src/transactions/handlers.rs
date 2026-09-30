@@ -292,8 +292,7 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
             .into_iter()
             .map(|r| InvocationAppearanceItem {
                 contract_id: r.contract_id,
-                caller_account: r.caller_account,
-                caller_contract: r.caller_contract,
+                caller: r.caller,
                 ledger_sequence: r.ledger_sequence,
                 created_at: r.created_at,
             })
@@ -405,7 +404,7 @@ fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
                 // reach here and not one is a soroban pool.
                 .map(|h| pool_id_hex_to_strkey(h, PoolKind::Classic))
                 .collect(),
-            application_order: op.application_order,
+            operation_index: op.operation_index,
             ledger_sequence: op.ledger_sequence,
             created_at: op.created_at,
         })

@@ -135,20 +135,17 @@ pub struct EventAppearanceItem {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct InvocationAppearanceItem {
     pub contract_id: String,
-    /// Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
-    pub caller_account: Option<String>,
-    /// Root caller C-StrKey when a contract made the call; exactly one of the
-    /// two callers is set.
-    pub caller_contract: Option<String>,
+    /// Root caller: a `G…` account or a `C…` contract (task 0600). Per ADR
+    /// 0034 nested-call hierarchy is XDR-only.
+    pub caller: Option<String>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OperationItem {
-    /// Equal to `application_order` (the table has no surrogate id since
-    /// PR #175). Use `application_order` for apply-order display and to join
-    /// against `XdrOperationDto.application_order` from the heavy overlay.
+    /// The operation's 1-based position (the table has no surrogate id since
+    /// PR #175). Join against the heavy overlay by `operation_index`.
     pub appearance_id: i64,
     /// Operation type tag in canonical SCREAMING_SNAKE_CASE
     /// (e.g. `"INVOKE_HOST_FUNCTION"`).
@@ -174,14 +171,10 @@ pub struct OperationItem {
     /// read path, which extracts pool crossings from claim atoms across
     /// path-payment, offer, and LP deposit/withdraw ops.
     pub pool_ids: Vec<String>,
-    /// 1-based per-tx apply position carrying on-chain operation order
-    /// (task 0192). For folded appearance rows (multiple identical-identity
-    /// envelope ops collapsed into one row, see task 0163) this is the
-    /// MIN of the folded ops' indices — the position of the row's first
-    /// occurrence in `tx.operations[]`. `None` for pre-task-0192 rows
-    /// where the column was not yet populated; clients fall back to
-    /// `appearance_id` order in that case.
-    pub application_order: Option<i16>,
+    /// The operation's position in its transaction's envelope, 0-based
+    /// (ADR 0059, stellar-rpc `operationIndex`); equals the heavy overlay's
+    /// `XdrOperationDto.operation_index`.
+    pub operation_index: i16,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }

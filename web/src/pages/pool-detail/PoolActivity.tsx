@@ -201,7 +201,7 @@ function assetCodeNode(leg: PoolAssetLeg): ReactNode {
 /** Stable identity for a row. The hash is NOT unique here — a transaction
  *  running several operations against one pool appears once per operation. */
 export function activityRowKey(row: PoolActivityItem): string {
-  return `${row.transaction_hash}-${row.application_order}`;
+  return `${row.transaction_hash}-${row.operation_index}`;
 }
 
 function activityColumns(
@@ -301,7 +301,7 @@ function activityColumns(
         <IdentifierWithCopy
           value={row.transaction_hash}
           type="transaction"
-          href={`/transactions/${row.transaction_hash}#op-${row.application_order}`}
+          href={`/transactions/${row.transaction_hash}#op-${row.operation_index}`}
         />
       ),
     },

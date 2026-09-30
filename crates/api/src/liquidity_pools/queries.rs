@@ -144,14 +144,14 @@ mod soroban_total_shares;
 mod usd_analytics;
 
 pub use get_pool::fetch_pool_by_id;
-pub use get_pool_chart::fetch_pool_chart;
+pub use get_pool_chart::{fetch_pool_chart, fetch_soroban_pool_chart};
 pub use list_participants::{
     count_soroban_participants, fetch_participants, fetch_soroban_participants, pool_exists,
 };
 pub use list_pool_activity::{fetch_pool_activity, fetch_pool_asset_ids};
 pub use list_pools::{ResolvedPoolListParams, fetch_pool_list};
 pub use usd_analytics::{
-    PoolPriceContext, fetch_pool_price_context, fetch_pool_usd_analytics, price_leg,
+    PoolPriceContext, fetch_pool_chart_context, fetch_pool_usd_analytics, price_leg,
 };
 
 /// `fee_bps / 100` as a decimal string (e.g. 30 → "0.3", 25 → "0.25",

@@ -230,14 +230,14 @@ fn flatten_invocation(
     struct Frame<'a> {
         node: &'a SorobanAuthorizedInvocation,
         depth: u32,
-        caller_account: Option<String>,
+        caller: Option<String>,
         return_value: Value,
     }
 
     let mut stack = vec![Frame {
         node: root,
         depth: 0,
-        caller_account: root_caller,
+        caller: root_caller,
         return_value: root_return_value,
     }];
 
@@ -248,7 +248,7 @@ fn flatten_invocation(
         out.push(ExtractedInvocation {
             transaction_hash: ctx.transaction_hash.to_string(),
             contract_id: contract_id.clone(),
-            caller_account: frame.caller_account,
+            caller: frame.caller,
             function_name,
             function_args,
             return_value: frame.return_value,
@@ -266,7 +266,7 @@ fn flatten_invocation(
             stack.push(Frame {
                 node: child,
                 depth: frame.depth + 1,
-                caller_account: contract_id.clone(),
+                caller: contract_id.clone(),
                 return_value: Value::Null,
             });
         }
@@ -346,7 +346,7 @@ pub fn extract_invocations_from_diagnostics(
                 out.push(ExtractedInvocation {
                     transaction_hash: transaction_hash.to_string(),
                     contract_id: Some(contract_id.clone()),
-                    caller_account: Some(caller),
+                    caller: Some(caller),
                     function_name: None,
                     function_args: Value::Null,
                     return_value: Value::Null,

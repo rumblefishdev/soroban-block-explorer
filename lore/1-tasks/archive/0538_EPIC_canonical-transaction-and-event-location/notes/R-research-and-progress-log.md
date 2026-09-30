@@ -1,166 +1,7 @@
----
-id: '0538'
-title: 'EPIC: locate every transaction, operation and event by its canonical position — replace the surrogate transaction id project-wide'
-type: EPIC
-status: active
-related_adr: ['0059']
-related_tasks: ['0393', '0417', '0541', '0558', '0575']
-tags:
-  [
-    'clickhouse',
-    'storage',
-    'performance',
-    'epic',
-    'phase-future',
-    'effort-large',
-    'priority-high',
-  ]
-links:
-  - crates/db-clickhouse/schema/init.sql
-history:
-  - date: 2026-09-03
-    status: backlog
-    who: karolkow
-    note: >
-      Filed after a measurement made while shipping the net-settled column
-      (0411/0393). The surrogate `transaction_id` was found to occupy ~267 GiB
-      across seven tables at a compression ratio of 1.0, and the 32-byte
-      transaction hash is stored twice for a further ~273 GiB. Together that is
-      ~45% of a 1.16 TiB database spent on identity alone. The natural key
-      `(ledger_sequence, application_order)` was verified unique and costs
-      0.135 B/row against 8.03 B/row for the surrogate. Filed as RESEARCH, not
-      REFACTOR: the saving is real but every candidate touches a sort key, so
-      the question to answer first is which subset is worth the rewrite.
-  - date: 2026-09-16
-    status: backlog
-    who: karolkow
-    note: >
-      Re-measured. `transaction_id` columns now 270.10 GiB = 26% of a 1.01 TiB
-      database; free space 368.72 GiB. First concrete table decided: task 0541
-      keys `soroban_events` by the canonical event location, which drops its
-      50.48 GiB `transaction_id` for a reason beyond storage — event order and
-      rpc-comparable ids.
-  - date: 2026-09-16
-    status: backlog
-    who: karolkow
-    note: >
-      Turned from research into the programme (decision 209 A): the complete
-      move of every table from the surrogate `transaction_id` to the canonical
-      location, with 0541 as its first table. Scope widened by a second defect
-      found while checking reads — lists order rows inside a ledger by the
-      surrogate, i.e. by hash, not by execution order.
-  - date: 2026-09-23
-    status: active
-    who: karolkow
-    note: >
-      Promoted. Steps 1 and 3 are done: ADR 0059 names the positions, and task
-      0541 keyed `soroban_events` by the rpc event id (−242 GiB with the drops).
-      Step 5 starts with task 0575 (`transaction_participants` +
-      `operation_asset_appearances`, 170.13 GiB of `transaction_id`). The
-      target shape is measured on production as `contract_transactions`:
-      `application_order` behind a leading id costs 1.31 B/row against 8.03.
-      Re-measured below.
-  - date: 2026-09-23
-    status: active
-    who: karolkow
-    note: >
-      The rule was written only as one line of ADR 0059, while the `init.sql`
-      header still presented `transactions.id` as the FK hub and ADR 0056
-      rule 4 read as "new tables key on surrogates". Guard added (decision
-      karolkow, 2026-09-23, option B): `tests/schema_conventions.rs` fails on
-      a `transaction_id` column outside a shrinking allowlist; `init.sql`
-      header, `CLAUDE.md` and ADR 0056 rule 4 now say the same thing.
----
+# Research and progress log (moved from README, 2026-09-30)
 
-# EPIC: canonical location for transactions, operations and events
-
-## Programme (decided karolkow, 2026-09-16)
-
-**Target:** one way to locate rows everywhere — the position Stellar itself
-uses: transaction = `(ledger_sequence, application_order)` (1-based, the order
-applied), operation = its index in the transaction (0-based), event = its
-position within the operation (0-based), with stellar-rpc's sentinels for fee
-events (task 0541 has the source-read definition). The surrogate
-`transaction_id` (hash64 of the hash) disappears from every table; lookups by
-hash keep using `transaction_hash_index`.
-
-**Two defects, one cause:**
-
-1. **Storage.** `transaction_id` columns are 270.10 GiB = 26% of the database,
-   plus `transactions.id` 31.32 GiB (measured 2026-09-16, table below).
-2. **Order.** Lists order rows inside one ledger by the surrogate — by hash,
-   not by execution. Measured on ledger 64 454 000 for contract `CAS3J7GY…`:
-   transactions at positions 195, 231, 9, 211, 221, 139 are listed in that
-   order. Found by code reading in 11 list queries across 6 API modules:
-   `transactions` (4 — contract- and operation-type-filtered lists),
-   `assets` (2), `contracts` (2 — invocations, events), `accounts` (1),
-   `liquidity_pools` (1), `nfts` (1). Every one pages on
-   `(ledger_sequence, transaction_id)`.
-
-**Steps, in order — each table its own deploy window:**
-
-1. **ADR** — the convention: canonical location as identity and sort key;
-   surrogates only where a measurement justifies one. Settle the name clash
-   (`application_order` is the transaction position in `transactions` /
-   `asset_transfers` / `soroban_event_ops`, the operation position in
-   `operations_appearances` / `lp_operation_amounts`).
-2. **Measure before migrating** (the research below): rebuild ONE partition of
-   one presence table with the new key and measure its real size (position
-   behind a leading `account_id` / `asset_id` compresses worse), and benchmark
-   the two-column join on the hot list endpoints against today's.
-3. **`soroban_events`** — task 0541 (decided): canonical key, rpc-format ids,
-   `soroban_event_ops` dropped.
-4. **NFT ownership location** — replace `nft_ownership.event_order` (a local
-   ordinal per `(collection, token, ledger)`, so distinct pieces in one bulk
-   move all commonly carry `0`) with the canonical transaction / operation /
-   event position. That gives `asset_transfers`, `soroban_events` and
-   `nft_ownership` one exact join key and removes the need to infer a sender's
-   pieces from the previous-owner timeline.
-5. **Presence tables by saving**: `operation_asset_appearances` (87.68 GiB),
-   `transaction_participants` (81.46), `operations_appearances` (33.00),
-   `soroban_invocations_appearances` (8.30), `operation_pools` (4.76),
-   `lp_operation_amounts` (4.43). Each: new table, fill from the old one +
-   `transactions` (no S3), coverage gate. Since task 0580 (2026-09-24,
-   decision karolkow) as a **parallel change** — new table under a new name,
-   dual write, fill, readers, stop the old write, drop — four ordinary
-   deploys and no window (`docs/deployment.md`); 0575's `EXCHANGE TABLES`
-   window stopped ingest for 51 minutes.
-6. **Readers**: every list pages on the canonical position — execution order
-   inside a ledger, cursor `(ledger_sequence, application_order[, op, event])`.
-7. **`transactions.id`** dropped once nothing joins on it. The indexer joins
-   by hash in memory too: eight extracted types carry a `transaction_hash`
-   string, and staging resolves them through maps keyed by it
-   (`persist/stage.rs` `tx_id_by_hash` / `app_order_by_hash`,
-   `persist/value_flow.rs` `tx_by_hash` / `ops_by_hash`). Those joins move to
-   the position with the tables. An event already carries it — since 0541 its
-   rpc id holds the transaction's `application_order`, and a transfer comes
-   only from an operation event (0541 review, 2026-09-21).
-8. **Duplicate hash** (`transactions.hash` + `transaction_hash_index.hash`,
-   ~275 GiB) — decided from the research question below, not assumed.
-
-**Constraints:** free space 368.72 GiB of 1.72 TiB with backups on the same
-volume — tables are rebuilt one at a time, largest last or after a cleanup;
-never two copies of two tables at once. Every struct change ships with
-`DEFAULT` and the DDL-before-writer order (ingest froze twice in 0548).
-
-## Acceptance Criteria (programme)
-
-- [ ] ADR adopted; `application_order` means one thing
-- [ ] Partition-level measurement and join benchmark recorded before step 4
-- [x] No table carries `transaction_id`; `transactions.id` dropped (2026-09-29)
-- [x] No new table can add `transaction_id`: `crates/db-clickhouse/tests/schema_conventions.rs`
-      (allowlist of the 8 tables that still carry it; each migrated table
-      removes its entry — the test fails on a stale one) — 2026-09-23
-- [ ] `nft_ownership` carries the canonical event location; its per-token
-      `event_order` is no longer used as event identity
-- [ ] Every list returns rows in execution order inside a ledger — verified on
-      ledger 64 454 000 for contract `CAS3J7GY…` and on one account, one asset
-- [ ] Event ids on the wire match stellar-rpc `getEvents` (sampled)
-- [ ] Database size re-measured after each table; saving reported per table
-- [ ] **Docs updated** — `docs/architecture/database-schema/**`, API data
-      contracts; **API types regenerated** where cursors change
-
----
+The epic README keeps the programme and its criteria; this note keeps the
+original research and every dated measurement and step record.
 
 # RESEARCH: identity columns that do not compress (original research, kept)
 
@@ -253,19 +94,6 @@ Two facts follow directly:
   `ALTER`ed and forces a rebuild (the same wall 0393 hit; see its notes).
 - No migration lands without a read-path benchmark first — the 0243/0386 quota
   outages were both read-shape regressions.
-
-## Acceptance Criteria
-
-- [ ] Per-table verdict: migrate / leave / new-tables-only, each with its
-      measured saving and its measured read-path cost
-- [ ] Two-column join benchmarked on the hot tx-list endpoints against today's
-      single-column join
-- [x] Duplicate-hash question settled: what `transaction_hash_index` is for and
-      whether a narrower structure serves it — task 0580: an 8-byte prefix
-      index replaced it, −124.8 GiB net (2026-09-24)
-- [ ] Log TTL quantified and handed over as a standalone config change
-- [ ] Recommendation written as an ADR if a schema-wide convention is adopted
-      (identity columns use the natural key; surrogates only where measured)
 
 ## Re-measured 2026-09-16 (production, `system.columns` / `system.parts`)
 
@@ -460,3 +288,66 @@ without `id` 11:34:31, the old build's last 11:34:23; rows from ledger
 `system.columns` 0). `transactions` 221.85 → 190.07 GiB, rows kept
 (4,247,615,868 and growing); ingest continuous (180 of 180 ledgers in 15 min,
 0 writer exceptions). Production has no transaction surrogate left.
+
+## Closing checks (2026-09-30, read-only)
+
+- **Execution order, deployed API** (dev proxy, a position cursor at ledger
+  64,454,000): contract `CAS3J7GY…` transactions list returns positions
+  150, 142, 59, 46, 35, 27 — its six transactions in the ledger, descending;
+  account `GA7KMPLJ…` returns 173, 90, 48, 34, 18, 17, 11, 4; the native asset
+  list's first ten map (by hash) to 188, 186, 185, 184, 182, 181, 179, 178,
+  174, 173. All strictly descending by `(ledger, application_order)`. The
+  2026-09-16 defect listed that contract's rows as 195, 231, 9, 211, 221, 139.
+- **Event ids vs stellar-rpc**: contract `CAS3J7GY…`, ledger 64,690,001 — our
+  `/v1/contracts/{id}/events` returns 321 ids, `getEvents` on
+  `soroban-rpc.mainnet.stellar.gateway.fm` returns 321; same set, same order
+  (e.g. `0277841438673207296-0000000000`).
+- **Size**: `default` database 610.76 GiB (was 1.01 TiB on 2026-09-16); free
+  872.61 GiB of 1.72 TiB (was 368.72). Per step: 0541 −242 GiB with its drops;
+  0575 `operation_asset_appearances` −74, `transaction_participants` −69,
+  `operations_appearances` −32, `soroban_invocations_appearances` −7,
+  `operation_pools` −4 GiB; 0580 −124.8 GiB; 0586 −23.4 GiB; 0424 (no size
+  gain, last `transaction_id`); step 7 `transactions.id` −31.78 GiB.
+- **Still open — `application_order` means one thing**: in the schema it does
+  (only the transaction's position; the tables that used it for the operation
+  are gone). The API still uses it for an operation's 1-based position in
+  three DTOs — `XdrOperationDto` (transaction page), the transaction detail
+  operation rows (`transactions/dto.rs` ~184) and `PoolActivityItem` — beside
+  the transaction's position in the list, NFT-transfer and account DTOs.
+  ADR 0059 lists the operation DTOs as the old spelling.
+
+## Research acceptance criteria (moved from the README, all met)
+
+- [x] Per-table verdict: migrate / leave / new-tables-only, each with its
+      measured saving and its measured read-path cost
+- [x] Two-column join benchmarked on the hot tx-list endpoints against today's
+      single-column join
+- [x] Duplicate-hash question settled: what `transaction_hash_index` is for and
+      whether a narrower structure serves it — task 0580: an 8-byte prefix
+      index replaced it, −124.8 GiB net (2026-09-24)
+- [x] Log TTL quantified and handed over as a standalone config change (task 0563)
+- [x] Recommendation written as an ADR if a schema-wide convention is adopted (ADR 0059)
+      (identity columns use the natural key; surrogates only where measured)
+
+## `application_order` means one thing — closed (2026-09-30)
+
+- **#555** (task 0585): the parser emits the 0-based operation index; the
+  writer's `checked_sub(1)`, value flow's `+ 1` and the archive extractor's
+  `- 1` are gone. Stored values unchanged.
+- **#554**: `XdrOperationDto`, the transaction detail operation rows and
+  `PoolActivityItem` send `operation_index` (0-based) instead of the
+  operation's 1-based `application_order`. `appearance_id` (legacy 1-based id)
+  stays.
+- **#556** (decision karolkow, thread 349 B): the SPA shows the index
+  unchanged — `Payment #0`, `#op-0` is the first operation; links shared
+  before it land one operation later, no compatibility kept.
+- **Verified after the deploy** (Lambdas 2026-09-30 10:57 UTC, read-only):
+  indexer — 174 ledgers / 56,419 transactions written after 11:00 UTC, every
+  one's first operation at 0 and none past `operation_count` (720 / 201,425
+  before: same); `pool_operation_amounts` 43,124 and `asset_transfers`
+  119,850 rows after, 0 operation positions out of range. Deployed API — 50
+  transactions (25 before, 25 after the deploy): 111 heavy operations numbered
+  exactly 0..n-1, light rows equal to `transaction_operations`, 38 operation
+  events in range, no operation carries `application_order`; 100 pool
+  activity rows carry `operation_index`. Deployed SPA bundle: anchor
+  `#op-${index}`, resolver `o<n?o:0`, event label `op ${operation_index}`.

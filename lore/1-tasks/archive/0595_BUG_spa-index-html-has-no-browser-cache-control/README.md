@@ -2,7 +2,7 @@
 id: '0595'
 title: 'BUG: the SPA index.html has no Cache-Control, so a browser can keep an old one that points at deleted assets'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0106', '0593']
 tags: [frontend, infra, deploy, priority-medium, effort-small]
@@ -22,6 +22,16 @@ history:
     note: >
       Started. Cache-Control at upload and a split sync that keeps the
       previous build's assets, as the Prices portal deploy does.
+  - date: '2026-09-30'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Merged in #547 (c9f0a704). Deployed on 2026-09-30 at 06:58 UTC with the
+      new recipe and the SPA content already live (52e0b07a,
+      `index-BmVZ6qtC.js`, same hash), because develop's frontend (0374
+      soroban providers, 0376) needs an API that is not deployed yet. 61
+      uploads, 0 deletes. Headers verified live. The previous-build check
+      waits for the next content deploy. Infra 8 tests (+3).
 ---
 
 # BUG: the SPA index.html has no Cache-Control, so a browser can keep an old one that points at deleted assets
@@ -63,37 +73,35 @@ The Prices portal already does it right on the same distribution
 with `public, max-age=31536000, immutable`, everything else with
 `public, max-age=0, must-revalidate`, and it syncs without `--delete`.
 
-## Implementation Plan
-
-### Step 1: headers at upload
-
-Split the sync in `deploy-production-web` as the portal does. `assets/*` gets
-`public, max-age=31536000, immutable`. The rest, `index.html` included, gets
-`public, max-age=0, must-revalidate`.
-
-### Step 2: keep the previous build's assets
-
-Drop `--delete` from the assets sync, so a stale `index.html` still finds its
-files. Decide how old assets are pruned: an S3 lifecycle rule on a prefix, a
-second sync after a grace period, or none, since they are small.
-
-### Step 3: verify
-
-After a deploy, check the headers with `curl -sI`: `/` shows
-`max-age=0, must-revalidate`, and `/assets/<hash>.js` shows `immutable`. Also
-check that the previous build's `/assets/<hash>.js` still returns JavaScript.
-
 ## Acceptance Criteria
 
-- [ ] `index.html` (and the apex) is served with a `Cache-Control` that makes
-      browsers revalidate it
-- [ ] Hashed assets are served with a long `immutable` `Cache-Control`
-- [ ] Right after a deploy, the previous build's assets still load
-- [ ] `docs/deployment.md` states what the SPA deploy does to caching
-- [ ] **Docs updated** — `docs/deployment.md` and, if the delivery stack
-      changes, the relevant `docs/architecture/**` file
-- [ ] **API types regenerated** — N/A: nothing under `crates/api/**`,
+- [x] `index.html` (and the apex) is served with a `Cache-Control` that makes
+      browsers revalidate it. Live: `/`, `/index.html` and an SPA route (served
+      by the error fallback) return
+      `public, max-age=0, s-maxage=60, must-revalidate`, and a request with
+      `If-None-Match` gets `304`.
+- [x] Hashed assets are served with a long `immutable` `Cache-Control`.
+      Live: `index-BmVZ6qtC.js` and `index-CkSoW2dv.css` return
+      `public, max-age=31536000, immutable`.
+- [ ] Right after a deploy, the previous build's assets still load. The
+      mechanism is verified: the deploy logged 0 deletes, and a `--dryrun` of
+      pass 2 from a directory holding only `index.html` deleted nothing under
+      `assets/`. The live check needs a deploy that changes the bundle:
+      afterwards `/assets/index-BmVZ6qtC.js` must still return JavaScript.
+- [x] `docs/deployment.md` states what the SPA deploy does to caching
+- [x] **Docs updated** — `docs/deployment.md` (the two-pass sync). The
+      delivery stack does not change, and `docs/architecture/**` does not
+      describe the SPA cache headers, so nothing there changes.
+- [x] **API types regenerated** — N/A: nothing under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**` changes.
+
+The first deploy with the new recipe (2026-09-30) re-shipped unchanged
+content, so it proved the headers but not the previous-build case.
+
+## Details
+
+The plan, implementation notes, design decisions and issues are in
+[notes/S-implementation-and-deploy.md](notes/S-implementation-and-deploy.md).
 
 ## Notes
 

@@ -9,6 +9,7 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { NftNameCell } from './NftNameCell.js';
+import { OwnerIdentifier } from './OwnerIdentifier.js';
 
 interface NftsTableProps {
   rows: readonly NftItem[];
@@ -67,13 +68,10 @@ const columns: ExplorerTableColumn<NftItem>[] = [
     id: 'owner',
     header: 'Owner',
     width: 160,
-    // `owner_account` is null for burned NFTs (ADR 0037 §13).
+    // `owner` (a G… account or a C… contract) is null for burned
+    // NFTs (ADR 0037 §13).
     cell: (row) =>
-      row.owner_account ? (
-        <IdentifierDisplay value={row.owner_account} type="account" />
-      ) : (
-        <Dash />
-      ),
+      row.owner ? <OwnerIdentifier value={row.owner} /> : <Dash />,
   },
 ];
 

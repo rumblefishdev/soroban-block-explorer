@@ -43,7 +43,7 @@ export function opFailReason(
   if (first?.result_code == null) return null;
   const label = formatOperationType(first.op_type.toUpperCase());
   const more = failed.length - 1;
-  return `${label} #${first.application_order} — ${screamingSnake(
+  return `${label} #${first.operation_index} — ${screamingSnake(
     first.result_code
   )}${more > 0 ? ` (+${more} more failed)` : ''}`;
 }

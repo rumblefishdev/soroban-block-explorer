@@ -1136,6 +1136,51 @@ ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id);
 
+-- pool_movements: what each swap / deposit / withdrawal moved through a
+-- liquidity pool, one row per leg — the table every pool's activity feed,
+-- volume and fees are meant to read, whatever the pool's kind. Today it holds
+-- soroban pools (task 0374, W1); classic pools join it and
+-- `pool_operation_amounts` retires in task 0598 — the shape was chosen to fit
+-- both (decision 147 A′). ROW GRAIN = (event, leg), located by the event's
+-- stellar-rpc id (ADR 0059); a classic operation is one movement,
+-- `event_index = 0`. One operation can trade the same soroban pool several
+-- times (0.74% of router-family pool-operations), so an operation-level key
+-- would collapse them. A per-field Phoenix swap (eight events) is one row
+-- group, keyed by its opening `sender` event.
+--
+-- `amount` is SIGNED FROM THE POOL'S SIDE, as in `pool_operation_amounts`,
+-- RAW token units in `Int128` — a soroban leg may carry 18 decimals — scaled
+-- at read by each leg's own decimals. A trade is written as the trader sees
+-- it: gross input in, received output out; fees the pool pays to other
+-- recipients are not in the row. `event_kind` (0 trade, 1 deposit,
+-- 2 withdrawal) is STORED, not read from the signs: a leg can be zero (a
+-- trade with a zero side, a withdrawal paying out nothing), and every leg is
+-- written, so an event always leaves its rows. `asset_id` = the leg's `liquidity_pools.legs` id
+-- (a SAC token keyed onto the classic asset it wraps).
+--
+-- Soroban rows are written for the pools a ledger staged state rows for —
+-- recognised from the ledger itself, never a registry read, so rows do not
+-- depend on processing order; readers start from the registry. Same decoder
+-- live and in the backfill, which reads `soroban_events` back
+-- (`stage/soroban_pool_amounts.rs`).
+--
+-- READS MUST DEDUP (`LIMIT 1 BY` the sorting key): the live writer and the
+-- backfill overlap on purpose, and until a background merge a `sum(amount)`
+-- counts the overlap twice.
+CREATE TABLE IF NOT EXISTS pool_movements (
+    pool_id           FixedString(32),
+    ledger_sequence   Int64  CODEC(Delta, ZSTD(1)),
+    application_order Int16  CODEC(T64, ZSTD(1)),
+    operation_index   UInt16 CODEC(T64, ZSTD(1)),
+    event_index       UInt32 CODEC(T64, ZSTD(1)),
+    event_kind        UInt8,
+    asset_id          Int64,
+    amount            Int128
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_index, asset_id);
+
 -- soroban_events: full-content per-event row (ADR 0044 §4a unfold).
 -- ZSTD codecs on the ScVal-decoded JSON columns. `signature` is the
 -- first-topic Symbol, lifted for cheap `WHERE signature = 'transfer'`.

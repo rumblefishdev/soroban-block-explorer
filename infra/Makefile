@@ -120,6 +120,14 @@ build-production-web:
 			fi; \
 		fi
 
+# Two syncs, assets first (task 0595). Hashed `assets/*` are immutable and are
+# never deleted, so a browser still holding the previous index.html finds its
+# files. Everything else, index.html included, is revalidated by browsers on
+# every load; CloudFront may keep it for 60 s (`s-maxage`). Without these
+# headers a browser guessed index.html's freshness and could keep an old one
+# pointing at deleted assets, which loads as a blank page.
+# ponytail: old assets are never pruned (~1.3 MB per build); prune ones no
+# recent index.html references if the bucket ever matters.
 deploy-production-web: build-production-web
 	@BUCKET=$$(aws cloudformation describe-stacks --region eu-central-1 \
 		--stack-name Explorer-production-Delivery \
@@ -128,7 +136,11 @@ deploy-production-web: build-production-web
 		--stack-name Explorer-production-Delivery \
 		--query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text); \
 	echo "SPA bucket=$$BUCKET  distribution=$$DIST"; \
-	cd .. && aws s3 sync web/dist/ "s3://$$BUCKET/" --delete && \
+	cd .. && \
+	aws s3 sync web/dist/ "s3://$$BUCKET/" --exclude '*' --include 'assets/*' \
+		--cache-control 'public, max-age=31536000, immutable' && \
+	aws s3 sync web/dist/ "s3://$$BUCKET/" --exclude 'assets/*' --delete \
+		--cache-control 'public, max-age=0, s-maxage=60, must-revalidate' && \
 	aws cloudfront create-invalidation --distribution-id "$$DIST" --paths "/*"
 
 # --- CI/CD (shared, deploy once per account) ---

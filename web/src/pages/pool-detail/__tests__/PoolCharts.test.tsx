@@ -1,7 +1,16 @@
 import type { ChartDataPoint } from '@rumblefish/api-types';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
-import { toChartPoints } from './PoolCharts.js';
+import { renderWithProviders } from '../../../test-utils.js';
+import { PoolCharts, toChartPoints } from '../PoolCharts.js';
+
+const hookMock = vi.hoisted(() => ({ usePoolChart: vi.fn() }));
+
+vi.mock('../../../api/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../api/index.js')>()),
+  usePoolChart: hookMock.usePoolChart,
+}));
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -65,5 +74,42 @@ describe('toChartPoints', () => {
     );
     expect(pts).toHaveLength(1);
     expect(pts[0]?.value).toBe(5);
+  });
+});
+
+describe('PoolCharts', () => {
+  const chart = {
+    data: {
+      data_points: [
+        {
+          bucket: '2026-09-28T00:00:00Z',
+          tvl: '8026654.16',
+          samples_in_bucket: 3,
+        },
+      ],
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  };
+
+  it('says volume is not indexed for a pool whose trades are not read', () => {
+    hookMock.usePoolChart.mockReturnValue(chart);
+    renderWithProviders(<PoolCharts poolId="CDMH" volumeIndexed={false} />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Volume' }));
+
+    expect(screen.getByText('Not indexed yet')).toBeInTheDocument();
+    expect(screen.queryByText('No activity in this period')).toBeNull();
+  });
+
+  it('keeps the no-activity state where volume is indexed', () => {
+    hookMock.usePoolChart.mockReturnValue(chart);
+    renderWithProviders(<PoolCharts poolId="LABC" />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Volume' }));
+
+    expect(screen.getByText('No activity in this period')).toBeInTheDocument();
   });
 });

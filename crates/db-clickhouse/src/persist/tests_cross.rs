@@ -370,6 +370,23 @@ fn column_order_pool_operation_amounts() {
 }
 
 #[test]
+fn column_order_pool_movements() {
+    assert_columns::<PoolMovementRow>(
+        "pool_movements",
+        &[
+            "pool_id",
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "event_index",
+            "event_kind",
+            "asset_id",
+            "amount",
+        ],
+    );
+}
+
+#[test]
 fn column_order_soroban_events() {
     assert_columns::<SorobanEventRow>(
         "soroban_events",
@@ -888,7 +905,7 @@ fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
             tx2.hash.clone(),
             vec![ExtractedOperation {
                 transaction_hash: tx2.hash.clone(),
-                operation_index: 3,
+                operation_index: 2,
                 op_type: OperationType::InvokeHostFunction,
                 source_account: None,
                 asset_appearances: vec![],
@@ -902,7 +919,7 @@ fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
     let invocation = |contract: &str| ExtractedInvocation {
         transaction_hash: tx2.hash.clone(),
         contract_id: Some(contract.to_owned()),
-        caller_account: None,
+        caller: None,
         function_name: Some("f".into()),
         function_args: serde_json::json!([]),
         return_value: serde_json::Value::Null,
@@ -1014,7 +1031,7 @@ fn prepare_folds_identical_operations() {
             "asset": "native",
         }),
     };
-    let ops = vec![(tx.hash.clone(), vec![make_op(1), make_op(2)])];
+    let ops = vec![(tx.hash.clone(), vec![make_op(0), make_op(1)])];
 
     let staged = stage::prepare(
         &ledger,
@@ -1095,7 +1112,7 @@ fn prepare_registers_op_counterparties_as_participants() {
     let seller = "G".to_string() + &"S".repeat(55);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
         asset_appearances: vec![],
@@ -1150,7 +1167,7 @@ fn prepare_stages_operation_asset_appearances() {
     // must key as the FIRST-CLASS surrogate, not an empty sentinel.
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageSellOffer,
         source_account: None,
         asset_appearances: vec![
@@ -1236,7 +1253,7 @@ fn op_asset_appearances_dedup_same_asset_across_ops_in_one_tx() {
         destination_muxed_id: None,
         details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
     };
-    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
+    let ops = vec![(tx.hash.clone(), vec![mk(0), mk(1)])];
 
     let staged = stage::prepare(
         &ledger,
@@ -1294,8 +1311,8 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
     let ops = vec![(
         tx.hash.clone(),
         vec![
-            make_op(1, vec![&pool_b, &pool_a]),
-            make_op(2, vec![&pool_a]),
+            make_op(0, vec![&pool_b, &pool_a]),
+            make_op(1, vec![&pool_a]),
         ],
     )];
 
@@ -1345,7 +1362,7 @@ fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
     let quiet = "bb".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
         asset_appearances: vec![],
@@ -1416,7 +1433,7 @@ fn prepare_lp_deposit_single_element_pool_ids() {
     let pool = "ab".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::LiquidityPoolDeposit,
         source_account: None,
         asset_appearances: vec![],
@@ -1483,7 +1500,7 @@ fn prepare_offer_op_pool_ids_from_details() {
     let pool = "cd".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
         asset_appearances: vec![],
@@ -1538,7 +1555,7 @@ fn transaction_operations_fold_keeps_the_smallest_index() {
         destination_muxed_id: None,
         details: serde_json::json!({ "liquidityPoolId": pool }),
     };
-    let ops = vec![(tx.hash.clone(), vec![mk(2), mk(3)])];
+    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
 
     let staged = stage::prepare(
         &ledger,
@@ -1754,7 +1771,7 @@ fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
         contract_id: contract.to_string(),
         token_id: token.to_string(),
         collection_name: None,
-        owner_account: None,
+        owner: None,
         name: None,
         media_url: None,
         minted_at_ledger: Some(10),
@@ -1767,18 +1784,17 @@ fn synthetic_nft_event(
     tx_hash: &str,
     contract: &str,
     token: &str,
-    event_order: u16,
+    event_index: u16,
 ) -> ExtractedNftEvent {
     ExtractedNftEvent {
         transaction_hash: tx_hash.to_string(),
         contract_id: contract.to_string(),
         token_id: token.to_string(),
         event_type: NftEventType::Mint,
-        owner_account: None,
-        event_order,
+        owner: None,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
-        // Operation 2's event `event_order`. `transaction_index` deliberately
+        // Operation 2's event `event_index`. `transaction_index` deliberately
         // differs from the transaction's position (1, its only transaction)
         // so the routing tests pin that `application_order` comes from the
         // ledger's transaction order, as for `soroban_events`, not from the id.
@@ -1786,7 +1802,7 @@ fn synthetic_nft_event(
             ledger_sequence: 10,
             transaction_index: 7,
             operation_index: 2,
-            event_index: u32::from(event_order),
+            event_index: u32::from(event_index),
         }),
     }
 }
@@ -3380,11 +3396,11 @@ fn same_ledger_nft_owner_flip_keeps_the_last_owner() {
         sac_asset: None,
     };
     let minted = ExtractedNft {
-        owner_account: Some("GFIRST".to_string()),
+        owner: Some("GFIRST".to_string()),
         ..synthetic_nft(&contract, "tk1")
     };
     let transferred = ExtractedNft {
-        owner_account: Some("GSECOND".to_string()),
+        owner: Some("GSECOND".to_string()),
         ..minted.clone()
     };
     let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
@@ -3719,14 +3735,47 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &router_ledger,
+        false,
         false
     ));
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &pair_ledger,
+        false,
         false
     ));
-    assert!(!crate::persist::sac_classic_map_needed(&[], &[], true));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[],
+        true,
+        true
+    ));
+
+    // A pool's amount events key their tokens on the map too (task 0374, W1),
+    // exactly when `pool_movements` is written; other events do not.
+    let mut trade = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    trade.topics = serde_json::json!([{"type": "sym", "value": "trade"}]);
+    let trade_ledger = vec![("tx".to_string(), vec![trade])];
+    assert!(crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        true
+    ));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        false
+    ));
+    let mut other = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    other.topics = serde_json::json!([{"type": "sym", "value": "update_reserves"}]);
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[("tx".to_string(), vec![other])],
+        false,
+        true
+    ));
 
     // A contract-held balance needs the map exactly when `balances` is written.
     let balance = [xdr_parser::ExtractedSorobanBalance {
@@ -3736,10 +3785,16 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         ledger: 1,
         closed: false,
     }];
-    assert!(crate::persist::sac_classic_map_needed(&balance, &[], true));
+    assert!(crate::persist::sac_classic_map_needed(
+        &balance,
+        &[],
+        true,
+        false
+    ));
     assert!(!crate::persist::sac_classic_map_needed(
         &balance,
         &[],
+        false,
         false
     ));
 }
