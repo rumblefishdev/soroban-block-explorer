@@ -227,9 +227,9 @@
     <!-- testnet tenant (task 0553, ADR 0052): the testnet explorer's
              data lives in the `testnet` database on this same box. Every
              testnet user is confined to testnet.*: a testnet cert can never
-             read or write mainnet data, and has no grant on prices.* on
-             purpose — prices are mainnet prices, and a testnet pool priced
-             with them shows plausible, wrong USD figures. Same shape as the
+             read or write mainnet data. testnet_reader also reads prices.*,
+             like api_reader: prices-api has no testnet counterpart, so the
+             testnet explorer shows mainnet USD prices. Same shape as the
              prices tenant, each user on its own quota. Operator work on
              testnet (schema, backfill, reset) runs as on mainnet: box-side as
              `default`, or with the operator write cert (dev_shared) and
@@ -246,6 +246,7 @@
       <access_management>0</access_management>
       <grants>
         <query>GRANT SELECT ON testnet.*</query>
+        <query>GRANT SELECT ON prices.*</query>
       </grants>
     </testnet_reader>
 

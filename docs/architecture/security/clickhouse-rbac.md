@@ -76,7 +76,7 @@ Caddy does not know the password to forge Basic Auth.
 | `prices_writer`    | `prices_write_ddl` | `prices_write`  | SELECT, INSERT, OPTIMIZE + ALTER DELETE on `prices.*`; SELECT on `system.parts` / `system.mutations` / `system.view_refreshes` ; SELECT on `default.soroban_events` / `default.soroban_contracts` only (inline `<grants>`; 0314 + 0477 self-monitoring, 0569 coverage sweep) | prices-api ingestion (separate service, task 0063)                                                       |
 | `prices_reader`    | `read_only`        | `prices_read`   | SELECT on `prices.*` only (inline `<grants>`)                                                                                                                                                                                                                                | prices-api / BE LP-analytics `price_usd_series` JOIN                                                     |
 | `prices_admin`     | `prices_write_ddl` | `prices_write`  | SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE on `prices.*`; SELECT on `default.*`, `system.parts`, `system.mutations`, `system.columns`, `system.disks` (inline `<grants>`; tasks 0567 + 0568)                                                                  | prices-api operator campaigns (history re-ingest, partition repair) — operator-held cert, never a Lambda |
-| `testnet_reader`   | `read_only`        | `testnet_read`  | SELECT on `testnet.*` only (task 0553)                                                                                                                                                                                                                                       | Testnet Lambda API                                                                                       |
+| `testnet_reader`   | `read_only`        | `testnet_read`  | SELECT on `testnet.*` and `prices.*` (task 0553)                                                                                                                                                                                                                             | Testnet Lambda API                                                                                       |
 | `testnet_writer`   | `write_no_ddl`     | `testnet_write` | SELECT, INSERT on `testnet.*` only (task 0553)                                                                                                                                                                                                                               | Testnet Lambda Ingestion and enrichment worker                                                           |
 
 > `migration_admin` + `partition_admin` were removed in task 0241 (from
@@ -103,7 +103,8 @@ second tenant alongside BE's `default` data.
   unscoped proxy-trust user left.
 - **What BE users reach in `prices.*`.** The prices certs are confined to
   `prices.*`, bar the `default.*` reads in the matrix. In the other
-  direction, since task 0591: `api_reader` and `dev_read` read `prices.*`
+  direction, since task 0591: `api_reader` and `dev_read` (and, since task
+  0553, `testnet_reader`) read `prices.*`
   (the API's LP USD analytics and chart read `prices.price_usd_series` and
   `prices.price_usd_series_1h`); `ingestion_writer` and `galexie` cannot
   reach it; only `dev_shared` and `default` can write to it.
@@ -116,12 +117,14 @@ repo provides only the access-control config those certs map onto.
 
 The testnet explorer keeps its data in a `testnet` database on this same
 server — the third tenant, after `default` and `prices`. Same pattern as
-`prices`: inline `<grants>` confine each testnet user to `testnet.*`, so a
-testnet cert can neither read nor write mainnet data.
+`prices`: inline `<grants>` confine each testnet user to `testnet.*` (plus
+`prices.*` for the reader), so a testnet cert can neither read nor write
+mainnet data.
 
-- **No grant on `prices.*`.** Prices are mainnet prices; a testnet pool
-  priced with them would show plausible, wrong USD figures. Without the grant
-  the price read errors and the API returns the USD fields as NULL.
+- **`testnet_reader` reads `prices.*`**, like `api_reader`. prices-api has
+  no testnet counterpart, so the testnet explorer shows mainnet USD prices.
+  They match mainly native XLM; testnet tokens have other issuers and
+  contracts, so most get no price.
 - **Same shape as `prices`.** The reader and writer reuse the
   `read_only` and `write_no_ddl` profiles; the quotas `testnet_read` /
   `testnet_write` are copies of `prices_read` / `prices_write`, each under
