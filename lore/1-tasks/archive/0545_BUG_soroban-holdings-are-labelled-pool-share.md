@@ -2,7 +2,7 @@
 id: '0545'
 title: 'BUG: every Soroban holding is labelled `pool_share` — two asset-type enums collided'
 type: BUG
-status: active
+status: completed
 related_adr: ['0051']
 related_tasks: ['0463', '0331', '0339']
 tags: [backend, api, accounts, data-correctness, priority-medium, effort-small]
@@ -23,6 +23,11 @@ history:
       Found while auditing why LP positions live outside `balances` (0463
       planning). Two enums share the number 3 with different meanings, and the
       API renders the wrong one. Measured on production before filing.
+  - date: '2026-09-30'
+    status: completed
+    who: karolkow
+    note: >
+      Fixed under 0496 (02014e010, 2026-08-27), live. Checked on production 2026-09-30.
 ---
 
 # BUG: Soroban holdings render as `pool_share`
@@ -77,11 +82,14 @@ string is wrong even for the case it was written for.
 
 ## Acceptance criteria
 
-- [ ] A Soroban holding no longer reads as `pool_share` on the account page
-- [ ] Every copy of the type → label mapping agrees, with one shared source
-- [ ] The chosen string is recorded, with the reason it is not Horizon's
-- [ ] **Docs updated** — frontend data contract, since the value is on the wire
-- [ ] **API types regenerated** if the field's documented values change
+- [x] A Soroban holding no longer reads as `pool_share` on the account page
+- [x] Every copy of the type → label mapping agrees, with one shared source
+      (`AssetFamily::as_str`)
+- [x] The chosen string is recorded, with the reason it is not Horizon's
+- [x] **Docs updated** — frontend data contract, since the value is on the wire
+      (the OpenAPI field description; `docs/architecture` mentions of
+      `pool_share` all describe the XDR enum, correctly)
+- [x] **API types regenerated** if the field's documented values change
       (`npx nx run @rumblefish/api-types:generate`)
 
 ## Implementation — 2026-08-27
@@ -126,3 +134,10 @@ Two enums may map the same integer; the LABEL functions must never cross.
 747 workspace tests green (258 domain / 15+api / 100 db-clickhouse / 19
 indexer / 355 xdr-parser), clippy clean. Production re-verification of the
 account response happens at deploy per the release flow.
+
+## Closing check (2026-09-30, read-only)
+
+- Deployed API, account `GA5EIFCE…RHA7FI` (holds a Soroban token): balances
+  labelled `native` 1, `classic_credit` 1, `soroban` 1 — no `pool_share`.
+- `crates/api`, `web/src`, `openapi.json`: `pool_share` appears only in
+  comments and descriptions of the old defect.

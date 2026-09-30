@@ -2,7 +2,7 @@
 id: '0474'
 title: 'Inferara logo in the Code-tab attribution line'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0465']
 tags: ['effort-small', 'frontend', 'cooperation-inferara']
@@ -27,6 +27,11 @@ history:
       archive-at-deploy convention. To close: deploy the SPA, eyeball
       the mark in both themes on prod, optionally let Inferara confirm
       on issue #374, then archive.
+  - date: '2026-09-30'
+    status: completed
+    who: karolkow
+    note: >
+      Live on production (#394). Closing check below; not eyeballed in both themes.
 ---
 
 # Inferara logo in the Code-tab attribution line
@@ -60,8 +65,17 @@ mode), while the inline vector is crisp at any scale.
 
 ## Acceptance Criteria
 
-- [ ] Full Inferara mark renders at the end of the attribution line,
-      bottom-aligned, correct in both light and dark mode.
-- [ ] Copy and links unchanged.
-- [ ] **Docs updated** — N/A (no architecture-shape change).
-- [ ] **API types regenerated** — N/A (frontend only).
+- [x] Full Inferara mark renders at the end of the attribution line,
+      bottom-aligned, correct in both light and dark mode (deployed bundle; see below)
+- [x] Copy and links unchanged.
+- [x] **Docs updated** — N/A (no architecture-shape change).
+- [x] **API types regenerated** — N/A (frontend only).
+
+## Closing check (2026-09-30, read-only)
+
+- The deployed `ContractDetailPage` chunk renders "WASM decompilation provided
+  by Inferara · soroban-ret · inferara.com" followed by the `InferaraMark`
+  component (`web/src/pages/contracts/ContractCode.tsx:583`), whose maze uses
+  `currentColor`, so it follows the theme.
+- Not eyeballed in both themes on production: the Code tab needs the API,
+  which sits behind the browser challenge.

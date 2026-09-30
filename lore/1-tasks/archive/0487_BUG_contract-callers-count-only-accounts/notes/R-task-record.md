@@ -1,30 +1,6 @@
----
-id: '0487'
-title: 'BUG: contract callers count only accounts — "Unique callers 0" on 97% of contract pages, "—" on 27% of invocation rows'
-type: BUG
-status: active
-related_adr: []
-related_tasks: ['0300', '0331', '0345', '0420', '0586']
-tags:
-  [backend, api, frontend, clickhouse, contracts, priority-high, effort-small]
-links: []
-history:
-  - date: '2026-08-17'
-    status: backlog
-    who: karolkow
-    note: >
-      Found on production while verifying the 0472 deploy: a contract with
-      4,593,403 invocations in the window reported 0 unique callers. Root
-      cause and blast radius measured against production ClickHouse before
-      filing; every number below is measured, not estimated.
-  - date: '2026-09-28'
-    status: active
-    who: karolkow
-    note: >
-      Activated after task 0586 moved every reader onto `contract_activity`
-      (#513), which carries both caller columns. Decided (thread 282 A): one
-      number — "Unique callers" counts accounts and contracts together.
----
+# Task 0487 — full record until 2026-09-30
+
+Moved from the task file when it outgrew the 150-line limit; the README keeps the summary, criteria and current state.
 
 # BUG: a caller that is a contract is not a caller
 
