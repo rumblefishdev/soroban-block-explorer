@@ -29,6 +29,10 @@ one table and retire the old one.
 
 - Classic writer also writes `pool_movements` (`event_index = 0`, kind from
   the operation type), dual-write first.
+- Before sourcing classic history from `asset_transfers` (`L` transfers +
+  operation type) instead of `pool_operation_amounts`, measure it the way
+  0374 measured soroban pools (`pool_movements_vs_asset_transfers`): that
+  table cannot see tokens with non-standard transfer events.
 - History: `INSERT … SELECT` from `pool_operation_amounts` joined to the
   operation type — ClickHouse-side, no archive re-parse (991M rows; Karol runs
   it). Verify row counts and `sum(amount)` per pool against the old table.
