@@ -4,12 +4,15 @@
 //! `prefix` is the network's folder (`v1.1/stellar/ledgers/pubnet` unless
 //! `PUBLIC_ARCHIVE_PREFIX` says otherwise — see `xdr_parser::public_archive`),
 //! `HEX = uppercase_hex(u32::MAX - seq_or_start)` zero-padded to 8 chars,
-//! and each partition folder holds exactly `PARTITION_SIZE` ledgers.
+//! and each partition folder holds exactly `PARTITION_SIZE` ledgers — except
+//! the genesis partition, which begins at `FIRST_LEDGER`.
 
 use std::path::{Path, PathBuf};
 
 pub const BUCKET: &str = xdr_parser::public_archive::PUBLIC_BUCKET;
 pub const PARTITION_SIZE: u32 = 64_000;
+/// Ledgers 0 and 1 have no close meta on any network, so no archive holds them.
+pub const FIRST_LEDGER: u32 = 2;
 
 /// S3 partition folder covering a given ledger sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +28,17 @@ impl Partition {
         let end = start + PARTITION_SIZE - 1;
         let hex = format!("{:08X}", u32::MAX - start);
         Self { start, end, hex }
+    }
+
+    /// First ledger this partition holds: its `start`, or `FIRST_LEDGER` in
+    /// the genesis partition.
+    pub fn first_ledger(&self) -> u32 {
+        self.start.max(FIRST_LEDGER)
+    }
+
+    /// Number of `.xdr.zst` files a complete copy of this partition holds.
+    pub fn ledger_count(&self) -> usize {
+        (self.end - self.first_ledger() + 1) as usize
     }
 
     /// S3 key prefix (no bucket, no scheme, no trailing slash):
@@ -57,7 +71,7 @@ impl Partition {
         temp_dir.join(format!("{}--{}-{}", self.hex, self.start, self.end))
     }
 
-    /// Intersect this partition's `[start, end]` with a run's requested
+    /// Intersect this partition's `[first_ledger, end]` with a run's requested
     /// `[run_start, run_end]`. Returned bounds are inclusive.
     ///
     /// A partition at either edge of the run range may only partially
@@ -70,7 +84,7 @@ impl Partition {
     /// least partially overlaps the run range; otherwise the returned
     /// pair may have `first > last`.
     pub fn clamped(&self, run_start: u32, run_end: u32) -> (u32, u32) {
-        (run_start.max(self.start), run_end.min(self.end))
+        (run_start.max(self.first_ledger()), run_end.min(self.end))
     }
 
     /// Local filesystem path for a single ledger within this partition's
