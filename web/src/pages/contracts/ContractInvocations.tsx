@@ -1,5 +1,6 @@
 import type { PaginatedInvocationItem } from '@rumblefish/api-types';
 import {
+  addressType,
   Dash,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
@@ -22,21 +23,20 @@ const rowKey = (row: InvocationRow, index: number) =>
   `${row.transaction_hash}-${row.ledger_sequence}-${index}`;
 
 /**
- * The invocation's caller: an account or a contract (task 0487 — a contract
- * caller used to render as a dash). The dash is left for a row with neither.
+ * The invocation's caller: an account or a contract, in one field (tasks 0487,
+ * 0600 — a contract caller used to render as a dash). The dash is left for a
+ * row with no caller.
  */
-export function CallerCell({
-  row,
-}: {
-  row: Pick<InvocationRow, 'caller_account' | 'caller_contract'>;
-}) {
-  if (row.caller_account) {
-    return <IdentifierDisplay value={row.caller_account} type="account" />;
-  }
-  if (row.caller_contract) {
-    return <IdentifierDisplay value={row.caller_contract} type="contract" />;
-  }
-  return <Dash />;
+export function CallerCell({ row }: { row: Pick<InvocationRow, 'caller'> }) {
+  if (!row.caller) return <Dash />;
+  const type = addressType(row.caller);
+  return (
+    <IdentifierDisplay
+      value={row.caller}
+      type={type ?? 'account'}
+      linked={type != null}
+    />
+  );
 }
 
 // Figma shows a "Function" column, but the invocations appearance index

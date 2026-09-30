@@ -10,9 +10,7 @@ const CONTRACT = 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75';
 
 describe('Invocations tab Caller cell (task 0487)', () => {
   it('links an account caller to the account', () => {
-    renderWithProviders(
-      <CallerCell row={{ caller_account: ACCOUNT, caller_contract: null }} />
-    );
+    renderWithProviders(<CallerCell row={{ caller: ACCOUNT }} />);
     expect(screen.getByRole('link')).toHaveAttribute(
       'href',
       routes.account(ACCOUNT)
@@ -20,19 +18,15 @@ describe('Invocations tab Caller cell (task 0487)', () => {
   });
 
   it('links a contract caller to the contract instead of a dash', () => {
-    renderWithProviders(
-      <CallerCell row={{ caller_account: null, caller_contract: CONTRACT }} />
-    );
+    renderWithProviders(<CallerCell row={{ caller: CONTRACT }} />);
     expect(screen.getByRole('link')).toHaveAttribute(
       'href',
       routes.contract(CONTRACT)
     );
   });
 
-  it('renders no link when neither caller is known', () => {
-    renderWithProviders(
-      <CallerCell row={{ caller_account: null, caller_contract: null }} />
-    );
+  it('renders no link when the caller is not known', () => {
+    renderWithProviders(<CallerCell row={{ caller: null }} />);
     expect(screen.queryByRole('link')).toBeNull();
   });
 });

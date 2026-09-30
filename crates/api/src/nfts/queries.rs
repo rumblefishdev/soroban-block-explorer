@@ -105,7 +105,7 @@ pub struct NftRow {
     pub name: Option<String>,
     pub media_url: Option<String>,
     pub minted_at_ledger: Option<i64>,
-    pub owner_account: Option<String>,
+    pub owner: Option<String>,
     pub last_seen_ledger: Option<i64>,
     /// Internal `soroban_contracts.id` (CH `Int64`) surrogate — cursor
     /// tiebreak only, never serialized.
@@ -144,7 +144,7 @@ struct NftListChRow {
     name: Option<String>,
     media_url: Option<String>,
     minted_at_ledger: Option<i64>,
-    owner_account: Option<String>,
+    owner: Option<String>,
     last_seen_ledger: Option<i64>,
     contract_surrogate: i64,
 }
@@ -157,7 +157,7 @@ fn map_list_row(r: NftListChRow) -> NftRow {
         name: r.name,
         media_url: r.media_url,
         minted_at_ledger: r.minted_at_ledger,
-        owner_account: r.owner_account,
+        owner: r.owner,
         last_seen_ledger: r.last_seen_ledger,
         contract_surrogate: r.contract_surrogate,
     }
@@ -274,7 +274,7 @@ pub async fn fetch_list(
              nullIf(p.e_name, '')              AS name, \
              nullIf(p.e_media_url, '')         AS media_url, \
              p.minted_at_ledger                AS minted_at_ledger, \
-             coalesce(nullIf(own.account_id, ''), nullIf(own_c.contract_id, '')) AS owner_account, \
+             coalesce(nullIf(own.account_id, ''), nullIf(own_c.contract_id, '')) AS owner, \
              nullIf(p.current_owner_ledger, 0) AS last_seen_ledger, \
              p.contract_surrogate              AS contract_surrogate \
          FROM page p \
@@ -391,7 +391,7 @@ pub async fn fetch_by_composite(
     // The owner is an account or a contract; its surrogate lives in exactly one
     // of the two tables (one surrogate space). Unowned → None. `.filter(non-empty)`
     // preserves the old `nullIf(own.account_id, '')` shape.
-    let owner_account = match r.current_owner_id {
+    let owner = match r.current_owner_id {
         Some(id) => {
             let (accounts, contracts) = tokio::try_join!(
                 resolve_accounts(client, vec![id]),
@@ -413,7 +413,7 @@ pub async fn fetch_by_composite(
         name: r.name,
         media_url: r.media_url,
         minted_at_ledger: r.minted_at_ledger,
-        owner_account,
+        owner,
         last_seen_ledger: r.last_seen_ledger,
     }))
 }
@@ -466,8 +466,8 @@ fn map_transfer_row(r: NftTransferChRow) -> NftTransferItem {
         ledger_sequence: r.ledger_sequence,
         event_type_name: nft_event_type_name(r.event_type),
         event_type: r.event_type,
-        from_account: r.from_account,
-        to_account: r.to_account,
+        from: r.from_account,
+        to: r.to_account,
         created_at: millis_to_utc(r.created_at_ms),
         application_order: r.application_order,
         operation_index: r.operation_index,
