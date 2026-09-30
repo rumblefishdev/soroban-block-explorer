@@ -238,6 +238,19 @@ the repo root as `make -C infra <target>` (or `cd infra && make <target>`).
 Frontend **content** is separate: `deploy-production-web`
 (build → S3 sync → CloudFront invalidation).
 
+The sync runs in two passes, and the order matters (task 0595):
+
+1. `assets/*` goes up first with `public, max-age=31536000, immutable`, and
+   it is **never deleted**. A browser that still holds the previous
+   `index.html` then finds that build's files, instead of receiving the SPA
+   fallback HTML where a script should be, which renders a blank page.
+2. Everything else, `index.html` included, goes up with
+   `public, max-age=0, s-maxage=60, must-revalidate`. Browsers revalidate it
+   on every load, and CloudFront keeps it for at most 60 s. `--delete`
+   applies to this pass only.
+
+Old hashed assets pile up at about 1.3 MB per build. Nothing prunes them.
+
 ### Gotchas — read before you deploy
 
 - **Any `ALTER` on a table the indexer writes can stop ingestion — even an
