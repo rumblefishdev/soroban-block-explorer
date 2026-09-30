@@ -57,7 +57,7 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
     let ch = db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
         .expect("mTLS ClickHouse client");
 
-    let pools = db_clickhouse::persist::fetch_soroban_pools(&ch, true)
+    let pools = db_clickhouse::persist::fetch_soroban_pools(&ch, None)
         .await
         .unwrap();
     let sac = db_clickhouse::persist::fetch_sac_classic_map(&ch, true)
@@ -106,17 +106,24 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
         .collect::<Vec<_>>()
         .join(",");
 
-    let events: Vec<SorobanEventRow> = ch
-        .query(&format!(
-            "SELECT contract_id, ledger_sequence, transaction_index, operation_index, \
-                    event_index, application_order, event_type, signature, topics_xdr, data_xdr \
-             FROM soroban_events \
-             WHERE contract_id IN ({ids}) AND ledger_sequence > {from} AND ledger_sequence <= {tip} \
-             LIMIT 1 BY contract_id, ledger_sequence, transaction_index, operation_index, event_index"
-        ))
-        .fetch_all()
-        .await
-        .unwrap();
+    // In 50k-ledger slices, to stay under the read profile's 30 s cap on a
+    // busy server.
+    let mut events: Vec<SorobanEventRow> = Vec::new();
+    for lo in (from..tip).step_by(50_000) {
+        let hi = (lo + 50_000).min(tip);
+        events.extend(
+            ch.query(&format!(
+                "SELECT contract_id, ledger_sequence, transaction_index, operation_index, \
+                        event_index, application_order, event_type, signature, topics_xdr, data_xdr \
+                 FROM soroban_events \
+                 WHERE contract_id IN ({ids}) AND ledger_sequence > {lo} AND ledger_sequence <= {hi} \
+                 LIMIT 1 BY contract_id, ledger_sequence, transaction_index, operation_index, event_index"
+            ))
+            .fetch_all::<SorobanEventRow>()
+            .await
+            .unwrap(),
+        );
+    }
     let rows = stage::soroban_pool_amounts::soroban_pool_amount_rows(&events, &pools, &sac);
 
     // 1. Every event a pool emitted is accounted for: an amount event was
