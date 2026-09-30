@@ -10,3 +10,6 @@ crates/
 .nx
 AGENTS.md
 CLAUDE.md
+# Copied verbatim from stellar/stellar-dev-skill; formatting would drift them from upstream
+.claude/skills/stellar-standards/
+.claude/skills/stellar-assets/
