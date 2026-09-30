@@ -8,6 +8,24 @@ fn partition_bounds() {
     assert_eq!(p.hex, "FC4DB5FF");
 }
 
+/// Ledgers 0 and 1 exist in no archive, so the genesis partition holds
+/// two files fewer than every other.
+#[test]
+fn genesis_partition_starts_at_ledger_two() {
+    let p = Partition::from_ledger(0);
+    assert_eq!(p.first_ledger(), 2);
+    assert_eq!(p.ledger_count(), 63_998);
+    assert_eq!(p.clamped(0, 100), (2, 100));
+}
+
+#[test]
+fn a_later_partition_holds_partition_size_ledgers() {
+    let p = Partition::from_ledger(62_026_937);
+    assert_eq!(p.first_ledger(), 62_016_000);
+    assert_eq!(p.ledger_count(), PARTITION_SIZE as usize);
+    assert_eq!(p.clamped(0, u32::MAX), (62_016_000, 62_079_999));
+}
+
 #[test]
 fn partition_folder_key() {
     let p = Partition::from_ledger(62_026_937);

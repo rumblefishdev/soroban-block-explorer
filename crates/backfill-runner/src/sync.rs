@@ -19,7 +19,7 @@
 //! public archive silently returns exit 0 with a partial local copy.
 //! Indexing then panics on the first missing local file (`ingest.rs:176`).
 //! To prevent that, [`sync_partition`] now post-validates the local file
-//! count against `PARTITION_SIZE` and probes S3 directly via
+//! count against [`Partition::ledger_count`] and probes S3 directly via
 //! [`S3Driver::object_count`] to disambiguate "S3 archive lag" (skip
 //! gracefully) from "local sync failed despite full S3" (retry, then
 //! error). See task 0225 + [`SyncOutcome`].
@@ -32,7 +32,7 @@ use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::error::BackfillError;
-use crate::partition::{PARTITION_SIZE, Partition};
+use crate::partition::Partition;
 
 // Retry policy for the `aws s3 sync` subprocess (task 0145 decision).
 // Hardcoded — not operator-tunable; change the constants if the numbers drift.
@@ -44,7 +44,7 @@ const RETRY_MULTIPLIER: u32 = 2;
 /// Outcome of [`sync_partition`].
 ///
 /// - [`SyncOutcome::Complete`] — local folder has exactly
-///   `PARTITION_SIZE` `.xdr.zst` files; safe to index.
+///   [`Partition::ledger_count`] `.xdr.zst` files; safe to index.
 /// - [`SyncOutcome::S3Incomplete`] — S3 itself is missing files for this
 ///   partition (archive lag for the live tail of the chain). Caller
 ///   should log + skip. Operator reruns the range once S3 catches up.
@@ -156,7 +156,9 @@ impl S3Driver for AwsCliS3Driver {
 /// `aws s3 sync` itself — a second call over a fully-synced dir is a
 /// cheap LIST with no GETs.
 ///
-/// Post-sync the local file count is validated against `PARTITION_SIZE`:
+/// Post-sync the local file count is validated against
+/// [`Partition::ledger_count`] — `PARTITION_SIZE`, fewer in the genesis
+/// partition:
 ///
 /// - **Match** → [`SyncOutcome::Complete`]. Safe to index.
 /// - **Local partial, S3 complete** → retry sync once. Still partial →
@@ -175,11 +177,13 @@ pub async fn sync_partition(
     let local = partition.local_folder(temp_dir);
     tokio::fs::create_dir_all(&local).await?;
 
+    let need = partition.ledger_count();
+
     // Fast path: if the local folder already holds the full partition
-    // (PARTITION_SIZE `.xdr.zst` files), skip the `aws s3 sync`
+    // (`need` `.xdr.zst` files), skip the `aws s3 sync`
     // subprocess entirely. Public-archive partitions are immutable
     // once closed, so a complete local snapshot is authoritative.
-    if let Some((file_count, total_bytes)) = local_partition_complete(&local).await? {
+    if let Some((file_count, total_bytes)) = local_partition_complete(&local, need).await? {
         info!(
             partition = partition.start,
             file_count,
@@ -195,7 +199,7 @@ pub async fn sync_partition(
     let duration = start.elapsed();
     let (file_count, total_bytes) = dir_stats(&local).await?;
 
-    if file_count == PARTITION_SIZE as usize {
+    if file_count == need {
         info!(
             partition = partition.start,
             sync_duration_ms = duration.as_millis(),
@@ -206,23 +210,23 @@ pub async fn sync_partition(
         return Ok(SyncOutcome::Complete);
     }
 
-    // Post-sync count is short of `PARTITION_SIZE`. Probe S3 to learn
+    // Post-sync count is short of `need`. Probe S3 to learn
     // whether the gap is upstream (archive lag) or local (network
     // glitch / disk issue that AWS CLI swallowed silently).
     let s3_count = driver.object_count(partition).await?;
-    if s3_count < PARTITION_SIZE as usize {
+    if s3_count < need {
         warn!(
             partition = partition.start,
             local_files = file_count,
             s3_files = s3_count,
-            need = PARTITION_SIZE,
+            need,
             "S3 archive lag — partition incomplete on S3, skipping; rerun \
              this range once the upstream archive catches up"
         );
         return Ok(SyncOutcome::S3Incomplete {
             local: file_count,
             s3: s3_count,
-            need: PARTITION_SIZE as usize,
+            need,
         });
     }
 
@@ -232,12 +236,12 @@ pub async fn sync_partition(
         partition = partition.start,
         local_files = file_count,
         s3_files = s3_count,
-        need = PARTITION_SIZE,
+        need,
         "local sync partial despite full S3 — retrying"
     );
     driver.sync_partition_files(partition, &local).await?;
     let (file_count_retry, total_bytes_retry) = dir_stats(&local).await?;
-    if file_count_retry == PARTITION_SIZE as usize {
+    if file_count_retry == need {
         info!(
             partition = partition.start,
             file_count = file_count_retry,
@@ -251,29 +255,32 @@ pub async fn sync_partition(
         partition_start: partition.start,
         local: file_count_retry,
         s3: s3_count,
-        need: PARTITION_SIZE as usize,
+        need,
     })
 }
 
-/// Cheap pre-check: if `local` already contains exactly `PARTITION_SIZE`
+/// Cheap pre-check: if `local` already contains exactly `need`
 /// `.xdr.zst` files, return their `(count, total_bytes)` so the caller
 /// can short-circuit the `aws s3 sync` subprocess. Returns `None` for
 /// anything else (missing dir, partial dir, extra files) — the safe
 /// default is "run the sync".
 ///
 /// Safety: public-archive partitions are immutable once their end
-/// ledger is written, so file-count parity with `PARTITION_SIZE` is
+/// ledger is written, so file-count parity with `need` is
 /// sufficient to declare the local snapshot authoritative for the
 /// closed partitions a backfill covers. The "current" (in-progress)
 /// partition cannot match this check by construction.
-async fn local_partition_complete(dir: &Path) -> Result<Option<(usize, u64)>, BackfillError> {
-    count_complete_partition(dir, PARTITION_SIZE as usize).await
+async fn local_partition_complete(
+    dir: &Path,
+    need: usize,
+) -> Result<Option<(usize, u64)>, BackfillError> {
+    count_complete_partition(dir, need).await
 }
 
 /// Inner generic helper exposed for unit tests so they can exercise the
 /// completeness logic against a small fixture without materialising
 /// 64 000 files on disk per test. Production calls go through
-/// `local_partition_complete` which fixes `expected = PARTITION_SIZE`.
+/// `local_partition_complete` with the partition's ledger count.
 async fn count_complete_partition(
     dir: &Path,
     expected: usize,
