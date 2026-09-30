@@ -2,9 +2,9 @@
 id: '0538'
 title: 'EPIC: locate every transaction, operation and event by its canonical position — replace the surrogate transaction id project-wide'
 type: EPIC
-status: active
+status: completed
 related_adr: ['0059']
-related_tasks: ['0393', '0417', '0541', '0558', '0575']
+related_tasks: ['0393', '0417', '0541', '0558', '0575', '0585']
 tags:
   [
     'clickhouse',
@@ -70,6 +70,15 @@ history:
       karolkow, 2026-09-23, option B): `tests/schema_conventions.rs` fails on
       a `transaction_id` column outside a shrinking allowlist; `init.sql`
       header, `CLAUDE.md` and ADR 0056 rule 4 now say the same thing.
+  - date: 2026-09-30
+    status: completed
+    who: karolkow
+    note: >
+      Every criterion met. Last one closed by #555 (0585, the parser counts
+      from 0), #554 (API operation fields renamed to 0-based
+      `operation_index`) and #556 (the SPA shows it unchanged, `#op-0` is
+      the first operation), deployed and verified 2026-09-30; database
+      1.01 TiB -> 610.76 GiB. Record in the note.
 ---
 
 # EPIC: canonical location for transactions, operations and events
@@ -145,9 +154,8 @@ never two copies of two tables at once. Every struct change ships with
 
 ## Acceptance Criteria (programme)
 
-- [ ] ADR adopted; `application_order` means one thing — ADR 0059 accepted and
-      the schema agrees; three API operation DTOs still use it for the operation
-      (closing checks in the note)
+- [x] ADR adopted; `application_order` means one thing — ADR 0059, schema and
+      API agree; the operation is `operation_index` everywhere (#554, #556)
 - [x] Partition-level measurement and join benchmark recorded before step 4
       — 0541 (events: first page 285 → 119 ms on XLM) and 0575 step 1 (trial
       partition + account / asset list benchmark, every list < 1 s, < 1 GiB)
@@ -166,19 +174,6 @@ never two copies of two tables at once. Every struct change ships with
 
 ---
 
-## Research acceptance criteria
-
-- [x] Per-table verdict: migrate / leave / new-tables-only, each with its
-      measured saving and its measured read-path cost
-- [x] Two-column join benchmarked on the hot tx-list endpoints against today's
-      single-column join
-- [x] Duplicate-hash question settled: what `transaction_hash_index` is for and
-      whether a narrower structure serves it — task 0580: an 8-byte prefix
-      index replaced it, −124.8 GiB net (2026-09-24)
-- [x] Log TTL quantified and handed over as a standalone config change (task 0563)
-- [x] Recommendation written as an ADR if a schema-wide convention is adopted (ADR 0059)
-      (identity columns use the natural key; surrogates only where measured)
-
-The original research, every dated measurement, the per-step records and the
-2026-09-30 closing checks are in
+The research acceptance criteria (all met), the original research, every dated
+measurement, the per-step records and the 2026-09-30 closing checks are in
 [notes/R-research-and-progress-log.md](notes/R-research-and-progress-log.md).

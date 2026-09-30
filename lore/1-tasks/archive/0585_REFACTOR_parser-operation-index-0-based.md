@@ -2,7 +2,7 @@
 id: '0585'
 title: 'REFACTOR: the parser emits a 0-based operation index (stellar-rpc convention)'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0059']
 related_tasks: ['0372', '0538', '0573']
 tags: [xdr-parser, clickhouse, effort-small, priority-medium]
@@ -28,6 +28,14 @@ history:
       keeps its 1-based fields for now with one `+ 1`; #554 then renames them
       and drops that `+ 1`. The variant-B draft branch no longer exists —
       rewritten from this task's scope.
+  - date: '2026-09-30'
+    status: completed
+    who: karolkow
+    note: >
+      #555 merged and deployed with #554 and #556 (2026-09-30). Wire checked
+      before merge (4 transactions, 20 pool rows identical to the deployed
+      API) and after the deploy (174 ledgers written 0-based, 0 anomalies;
+      details in 0538's note).
 ---
 
 # The parser emits a 0-based operation index
@@ -59,11 +67,20 @@ number: the API wire (`application_order`, the `#op-N` anchor).
 
 ## Acceptance Criteria
 
-- [ ] `ExtractedOperation.operation_index` is 0-based; its doc says so
-- [ ] No `- 1` / `checked_sub` conversion left between parser and tables
-- [ ] API wire unchanged by this PR: operation `application_order` /
+- [x] `ExtractedOperation.operation_index` is 0-based; its doc says so
+- [x] No `- 1` / `checked_sub` conversion left between parser and tables
+- [x] API wire unchanged by this PR: operation `application_order` /
       `appearance_id` still 1-based (checked against production data);
       the rename to 0-based `operation_index` is #554's
-- [ ] A test that fails if the parser goes back to 1-based
-- [ ] **Docs updated** — `types.rs`, xdr-parsing overview if it names the
-      convention
+- [x] A test that fails if the parser goes back to 1-based (`operation_tests.rs`
+      asserts positions 0, 1, 2)
+- [x] **Docs updated** — `types.rs` (its last stale line fixed in #556);
+      xdr-parsing overview N/A — it does not name the convention
+
+## Design Decisions
+
+### Emerged
+
+1. **The SPA's `+ 1` went too** (#556, karolkow, thread 349 B): the plan kept
+   a 1-based display number; the page now shows the chain's index and the
+   `#op-N` anchor is 0-based, without compatibility for older links.

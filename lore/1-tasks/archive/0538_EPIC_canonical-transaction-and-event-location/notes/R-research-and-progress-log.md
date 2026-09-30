@@ -315,3 +315,39 @@ without `id` 11:34:31, the old build's last 11:34:23; rows from ledger
   operation rows (`transactions/dto.rs` ~184) and `PoolActivityItem` — beside
   the transaction's position in the list, NFT-transfer and account DTOs.
   ADR 0059 lists the operation DTOs as the old spelling.
+
+## Research acceptance criteria (moved from the README, all met)
+
+- [x] Per-table verdict: migrate / leave / new-tables-only, each with its
+      measured saving and its measured read-path cost
+- [x] Two-column join benchmarked on the hot tx-list endpoints against today's
+      single-column join
+- [x] Duplicate-hash question settled: what `transaction_hash_index` is for and
+      whether a narrower structure serves it — task 0580: an 8-byte prefix
+      index replaced it, −124.8 GiB net (2026-09-24)
+- [x] Log TTL quantified and handed over as a standalone config change (task 0563)
+- [x] Recommendation written as an ADR if a schema-wide convention is adopted (ADR 0059)
+      (identity columns use the natural key; surrogates only where measured)
+
+## `application_order` means one thing — closed (2026-09-30)
+
+- **#555** (task 0585): the parser emits the 0-based operation index; the
+  writer's `checked_sub(1)`, value flow's `+ 1` and the archive extractor's
+  `- 1` are gone. Stored values unchanged.
+- **#554**: `XdrOperationDto`, the transaction detail operation rows and
+  `PoolActivityItem` send `operation_index` (0-based) instead of the
+  operation's 1-based `application_order`. `appearance_id` (legacy 1-based id)
+  stays.
+- **#556** (decision karolkow, thread 349 B): the SPA shows the index
+  unchanged — `Payment #0`, `#op-0` is the first operation; links shared
+  before it land one operation later, no compatibility kept.
+- **Verified after the deploy** (Lambdas 2026-09-30 10:57 UTC, read-only):
+  indexer — 174 ledgers / 56,419 transactions written after 11:00 UTC, every
+  one's first operation at 0 and none past `operation_count` (720 / 201,425
+  before: same); `pool_operation_amounts` 43,124 and `asset_transfers`
+  119,850 rows after, 0 operation positions out of range. Deployed API — 50
+  transactions (25 before, 25 after the deploy): 111 heavy operations numbered
+  exactly 0..n-1, light rows equal to `transaction_operations`, 38 operation
+  events in range, no operation carries `application_order`; 100 pool
+  activity rows carry `operation_index`. Deployed SPA bundle: anchor
+  `#op-${index}`, resolver `o<n?o:0`, event label `op ${operation_index}`.
