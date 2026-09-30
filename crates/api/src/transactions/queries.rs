@@ -98,9 +98,8 @@ pub struct EventAppearanceRow {
 #[derive(Debug)]
 pub struct TransactionInvocationRow {
     pub contract_id: String,
-    pub caller_account: Option<String>,
-    /// Set instead of `caller_account` when a contract made the call (task 0487).
-    pub caller_contract: Option<String>,
+    /// A `G…` account or a `C…` contract (tasks 0487, 0600).
+    pub caller: Option<String>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
@@ -463,13 +462,14 @@ pub async fn fetch_transaction_invocations(
                 .get(&r.contract_surrogate)
                 .cloned()
                 .unwrap_or_default(),
-            caller_account: r
+            // Exactly one of the two caller ids is set.
+            caller: r
                 .caller_id
                 .and_then(|id| accounts.get(&id).cloned())
-                .filter(|s| !s.is_empty()),
-            caller_contract: r
-                .caller_contract_id
-                .and_then(|id| contracts.get(&id).cloned())
+                .or_else(|| {
+                    r.caller_contract_id
+                        .and_then(|id| contracts.get(&id).cloned())
+                })
                 .filter(|s| !s.is_empty()),
             ledger_sequence: r.ledger_sequence,
             created_at: millis_to_utc(r.created_at),

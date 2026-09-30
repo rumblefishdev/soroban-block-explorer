@@ -370,6 +370,23 @@ fn column_order_pool_operation_amounts() {
 }
 
 #[test]
+fn column_order_pool_movements() {
+    assert_columns::<PoolMovementRow>(
+        "pool_movements",
+        &[
+            "pool_id",
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "event_index",
+            "event_kind",
+            "asset_id",
+            "amount",
+        ],
+    );
+}
+
+#[test]
 fn column_order_soroban_events() {
     assert_columns::<SorobanEventRow>(
         "soroban_events",
@@ -902,7 +919,7 @@ fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
     let invocation = |contract: &str| ExtractedInvocation {
         transaction_hash: tx2.hash.clone(),
         contract_id: Some(contract.to_owned()),
-        caller_account: None,
+        caller: None,
         function_name: Some("f".into()),
         function_args: serde_json::json!([]),
         return_value: serde_json::Value::Null,
@@ -1754,7 +1771,7 @@ fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
         contract_id: contract.to_string(),
         token_id: token.to_string(),
         collection_name: None,
-        owner_account: None,
+        owner: None,
         name: None,
         media_url: None,
         minted_at_ledger: Some(10),
@@ -1774,7 +1791,7 @@ fn synthetic_nft_event(
         contract_id: contract.to_string(),
         token_id: token.to_string(),
         event_type: NftEventType::Mint,
-        owner_account: None,
+        owner: None,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
         // Operation 2's event `event_index`. `transaction_index` deliberately
@@ -3379,11 +3396,11 @@ fn same_ledger_nft_owner_flip_keeps_the_last_owner() {
         sac_asset: None,
     };
     let minted = ExtractedNft {
-        owner_account: Some("GFIRST".to_string()),
+        owner: Some("GFIRST".to_string()),
         ..synthetic_nft(&contract, "tk1")
     };
     let transferred = ExtractedNft {
-        owner_account: Some("GSECOND".to_string()),
+        owner: Some("GSECOND".to_string()),
         ..minted.clone()
     };
     let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
@@ -3718,14 +3735,47 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &router_ledger,
+        false,
         false
     ));
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &pair_ledger,
+        false,
         false
     ));
-    assert!(!crate::persist::sac_classic_map_needed(&[], &[], true));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[],
+        true,
+        true
+    ));
+
+    // A pool's amount events key their tokens on the map too (task 0374, W1),
+    // exactly when `pool_movements` is written; other events do not.
+    let mut trade = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    trade.topics = serde_json::json!([{"type": "sym", "value": "trade"}]);
+    let trade_ledger = vec![("tx".to_string(), vec![trade])];
+    assert!(crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        true
+    ));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        false
+    ));
+    let mut other = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    other.topics = serde_json::json!([{"type": "sym", "value": "update_reserves"}]);
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[("tx".to_string(), vec![other])],
+        false,
+        true
+    ));
 
     // A contract-held balance needs the map exactly when `balances` is written.
     let balance = [xdr_parser::ExtractedSorobanBalance {
@@ -3735,10 +3785,16 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         ledger: 1,
         closed: false,
     }];
-    assert!(crate::persist::sac_classic_map_needed(&balance, &[], true));
+    assert!(crate::persist::sac_classic_map_needed(
+        &balance,
+        &[],
+        true,
+        false
+    ));
     assert!(!crate::persist::sac_classic_map_needed(
         &balance,
         &[],
+        false,
         false
     ));
 }

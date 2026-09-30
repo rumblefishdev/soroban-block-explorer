@@ -953,14 +953,10 @@ export type InterfaceResponse = {
 
 export type InvocationAppearanceItem = {
   /**
-   * Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
+   * Root caller: a `G…` account or a `C…` contract (task 0600). Per ADR
+   * 0034 nested-call hierarchy is XDR-only.
    */
-  caller_account?: string | null;
-  /**
-   * Root caller C-StrKey when a contract made the call; exactly one of the
-   * two callers is set.
-   */
-  caller_contract?: string | null;
+  caller?: string | null;
   contract_id: string;
   created_at: string;
   ledger_sequence: number;
@@ -968,14 +964,9 @@ export type InvocationAppearanceItem = {
 
 export type InvocationItem = {
   /**
-   * Caller G-StrKey when an account made the call.
+   * Who made the call: a `G…` account or a `C…` contract (task 0600).
    */
-  caller_account?: string | null;
-  /**
-   * Caller C-StrKey when a contract made the call; exactly one of the two
-   * is set on an invocation.
-   */
-  caller_contract?: string | null;
+  caller?: string | null;
   created_at: string;
   ledger_sequence: number;
   successful: boolean;
@@ -1138,7 +1129,7 @@ export type NftDetailResponse = {
    * Current owner StrKey: a `G…` account, or a `C…` contract holding the
    * NFT. `null` for burned NFTs (ADR 0037 §13).
    */
-  owner_account?: string | null;
+  owner?: string | null;
   token_id: string;
 } & {
   /**
@@ -1179,7 +1170,7 @@ export type NftItem = {
    * Current owner StrKey: a `G…` account, or a `C…` contract holding the
    * NFT. `null` for burned NFTs (ADR 0037 §13).
    */
-  owner_account?: string | null;
+  owner?: string | null;
   token_id: string;
 };
 
@@ -1211,16 +1202,16 @@ export type NftTransferItem = {
    *
    * Page boundaries are handled implicitly by the `limit + 1` peek
    * fetch: the peek row participates in the window-function input, so
-   * the last *kept* row's `from_account` reads the peek's owner before
+   * the last *kept* row's `from` reads the peek's owner before
    * `finalize_page` drops the peek. No client-side stitching needed.
    */
-  from_account?: string | null;
+  from?: string | null;
   ledger_sequence: number;
   operation_index: number;
   /**
    * New owner StrKey (a `G…` account or a `C…` contract). `null` on burn.
    */
-  to_account?: string | null;
+  to?: string | null;
   transaction_hash: string;
 };
 
@@ -1641,14 +1632,9 @@ export type PaginatedEventItem = {
 export type PaginatedInvocationItem = {
   data: Array<{
     /**
-     * Caller G-StrKey when an account made the call.
+     * Who made the call: a `G…` account or a `C…` contract (task 0600).
      */
-    caller_account?: string | null;
-    /**
-     * Caller C-StrKey when a contract made the call; exactly one of the two
-     * is set on an invocation.
-     */
-    caller_contract?: string | null;
+    caller?: string | null;
     created_at: string;
     ledger_sequence: number;
     successful: boolean;
@@ -1721,7 +1707,7 @@ export type PaginatedNftItem = {
      * Current owner StrKey: a `G…` account, or a `C…` contract holding the
      * NFT. `null` for burned NFTs (ADR 0037 §13).
      */
-    owner_account?: string | null;
+    owner?: string | null;
     token_id: string;
   }>;
   page: PageInfo;
@@ -1762,16 +1748,16 @@ export type PaginatedNftTransferItem = {
      *
      * Page boundaries are handled implicitly by the `limit + 1` peek
      * fetch: the peek row participates in the window-function input, so
-     * the last *kept* row's `from_account` reads the peek's owner before
+     * the last *kept* row's `from` reads the peek's owner before
      * `finalize_page` drops the peek. No client-side stitching needed.
      */
-    from_account?: string | null;
+    from?: string | null;
     ledger_sequence: number;
     operation_index: number;
     /**
      * New owner StrKey (a `G…` account or a `C…` contract). `null` on burn.
      */
-    to_account?: string | null;
+    to?: string | null;
     transaction_hash: string;
   }>;
   page: PageInfo;

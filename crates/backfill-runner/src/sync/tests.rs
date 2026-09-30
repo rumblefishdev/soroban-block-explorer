@@ -4,6 +4,7 @@
 //! the staging dry-run (task 0145 plan, Step 8). Here we lock the retry
 //! constants against the spec so drift is a compile-less signal.
 use super::*;
+use crate::partition::PARTITION_SIZE;
 
 #[test]
 fn retry_constants_match_spec() {
@@ -251,6 +252,22 @@ async fn sync_complete_happy_path() {
     let local = partition.local_folder(tmp.path());
     let entries = std::fs::read_dir(&local).unwrap().count();
     assert_eq!(entries, PARTITION_SIZE as usize);
+}
+
+/// The genesis partition holds ledgers 2..=63_999 only; a sync that brought
+/// all of them is complete, not archive lag.
+#[tokio::test]
+async fn sync_complete_genesis_partition_from_ledger_two() {
+    let tmp = tempfile::tempdir().unwrap();
+    let partition = Partition::from_ledger(0);
+    let driver = MockS3Driver::new(vec![SyncStep::Writes(63_998)], vec![/* ls never called */]);
+
+    let outcome = sync_partition(&driver, &partition, tmp.path())
+        .await
+        .expect("genesis partition returns Ok");
+
+    assert_eq!(outcome, SyncOutcome::Complete);
+    assert_eq!(driver.ls_calls(), 0, "no S3 ls when the partition is whole");
 }
 
 #[tokio::test]

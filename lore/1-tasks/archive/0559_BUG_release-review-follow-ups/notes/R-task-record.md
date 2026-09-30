@@ -1,38 +1,6 @@
----
-id: '0559'
-title: 'BUG: release review follow-ups — keyboard access to balance changes, cursor snapshot, silent reserve layout, stale node_modules'
-type: BUG
-status: active
-related_adr: []
-related_tasks: ['0540', '0547', '0548', '0374', '0554']
-tags:
-  [
-    frontend,
-    api,
-    xdr-parsing,
-    tooling,
-    accessibility,
-    priority-medium,
-    effort-small,
-  ]
-links: []
-history:
-  - date: '2026-09-16'
-    status: active
-    who: karolkow
-    note: >
-      Task created from the automated review of release PR #453
-      (production-2026.09.16-1). Each finding was verified against the code
-      before it was accepted; the documentation-only findings landed directly
-      on develop, these five change behaviour and go through a PR.
-  - date: '2026-09-16'
-    status: active
-    who: karolkow
-    note: >
-      Steps 1 and 2 (the `+N` popover and the visible external-management
-      sentence) declined in review after a local walkthrough and reverted
-      (7cfdbf76, ecfe59ea); both UI elements stay as they were. Steps 3–5 kept.
----
+# Task 0559 — full record until 2026-09-30
+
+Moved from the task file when it outgrew the 150-line limit; the README keeps the summary, criteria and current state.
 
 # BUG: release review follow-ups
 

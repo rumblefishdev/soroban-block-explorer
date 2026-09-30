@@ -1,30 +1,6 @@
----
-id: '0521'
-title: 'BUG: the snapshot seed re-emits every signers row on every pass, so one of its four reported numbers carries no information'
-type: BUG
-status: active
-related_adr: ['0057']
-related_tasks: ['0463', '0503', '0515']
-tags:
-  [
-    snapshot,
-    backfill-runner,
-    clickhouse,
-    data-integrity,
-    effort-small,
-    priority-medium,
-  ]
-links: []
-history:
-  - date: '2026-08-27'
-    status: active
-    who: karolkow
-    note: >
-      Filed from the 0463 idempotency measurement (S1, checkpoint 64,132,415):
-      `balances` corrections fell 44,834,785 → 1 on the second pass, while
-      `account_entry_state` emitted 10,872,072 rows again — the full live-account
-      set, unchanged.
----
+# Task 0521 — full record until 2026-09-30
+
+Moved from the task file when it outgrew the 150-line limit; the README keeps the summary, criteria and current state.
 
 # BUG: the snapshot seed re-emits every signers row on every pass
 

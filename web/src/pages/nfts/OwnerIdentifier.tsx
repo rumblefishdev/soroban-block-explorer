@@ -1,6 +1,6 @@
 import {
+  addressType,
   IdentifierDisplay,
-  isContractId,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 /**
@@ -9,10 +9,12 @@ import {
  * detail page). The API carries both in one field.
  */
 export function OwnerIdentifier({ value }: { value: string }) {
+  const type = addressType(value);
   return (
     <IdentifierDisplay
       value={value}
-      type={isContractId(value) ? 'contract' : 'account'}
+      type={type ?? 'account'}
+      linked={type != null}
     />
   );
 }

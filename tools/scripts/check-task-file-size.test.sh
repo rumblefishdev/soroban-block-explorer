@@ -119,6 +119,30 @@ printf 'rewritten %s\n' $(seq 1 310) >"$repo/lore/1-tasks/active/0007_FEATURE_lo
 git -C "$repo" add -A
 expect fail "task turned into a directory whose README grows past its old file"
 
+new_repo
+lines 300 "$repo/$task"
+commit_all
+git -C "$repo" checkout -q -b side
+lines 320 "$repo/$task"
+commit_all
+git -C "$repo" checkout -q -
+echo "unrelated" >"$repo/other.txt"
+commit_all
+git -C "$repo" merge -q --no-commit --no-ff side
+expect pass "merge brings in a 300 -> 320 growth made on the other branch"
+
+new_repo
+lines 300 "$repo/$task"
+commit_all
+git -C "$repo" checkout -q -b side
+lines 320 "$repo/$task"
+commit_all
+git -C "$repo" checkout -q -
+git -C "$repo" merge -q --no-commit --no-ff side
+lines 330 "$repo/$task"
+git -C "$repo" add -A
+expect fail "merge that grows the task past both parents"
+
 echo "repos kept in $root"
 [ "$failures" -eq 0 ] || { echo "$failures case(s) failed"; exit 1; }
 echo "all cases passed"

@@ -412,7 +412,8 @@ Gotchas, all recorded:
 ## `backfill-runner` reference
 
 **Subcommands:** `run`, `status`, `bootstrap`, `repair-tier1`,
-`contract-type-rebuild`, `balance-seed`, `nft-reclassify`. Most one-shot ops
+`contract-type-rebuild`, `balance-seed`, `nft-reclassify`,
+`soroban-pool-amounts`. Most one-shot ops
 subcommands take `--dry-run`. No separate bins remain.
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),
@@ -427,14 +428,14 @@ new binary.
 
 **Flags — with the traps:**
 
-| Flag                | Reality                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--start` / `--end` | u32, inclusive. This is also how you parallelise (disjoint ranges).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--reindex`         | Bypasses the resume-skip so an already-ingested range is re-parsed. Without it, re-parsing history is a silent **0-row no-op** — `run` skips whatever is already in `ledgers`.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--only <t,…>`      | Persists **only** the named additive tables — `pool_operation_amounts` (task 0279 as `lp_operation_amounts`, formerly `--lp-amounts-only`; task 0372), `asset_transfers`, `transaction_memos` (task 0540), `liquidity_pools`, `pool_state_changes`, `pool_instance_state` (task 0518); anything else is refused at parse time. Implies `--reindex`. Writes no `ledgers` marker, so resume is manual — narrow `--start`; re-running a range is a no-op **for one decoder version only** (after a decoder change the old and new rows share a key — run the 0503 tie query below before trusting a re-run). See the rule-3 note below. |
-| `--keep-partitions` | **Debug only.** "Do not pass this for a real backfill — disk grows linearly."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--target`          | **Does not exist.** Survives only in stale doc comments; PG was retired (0244), CH is the sole target.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--workers`         | **Does not exist.** Run K processes instead.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Flag                | Reality                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--start` / `--end` | u32, inclusive. This is also how you parallelise (disjoint ranges).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `--reindex`         | Bypasses the resume-skip so an already-ingested range is re-parsed. Without it, re-parsing history is a silent **0-row no-op** — `run` skips whatever is already in `ledgers`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `--only <t,…>`      | Persists **only** the named additive tables — `pool_operation_amounts` (task 0279 as `lp_operation_amounts`, formerly `--lp-amounts-only`; task 0372), `asset_transfers`, `transaction_memos` (task 0540), `liquidity_pools`, `pool_state_changes`, `pool_instance_state` (task 0518), `pool_movements` (task 0374); anything else is refused at parse time. Implies `--reindex`. Writes no `ledgers` marker, so resume is manual — narrow `--start`; re-running a range is a no-op **for one decoder version only** (after a decoder change the old and new rows share a key — run the 0503 tie query below before trusting a re-run). See the rule-3 note below. |
+| `--keep-partitions` | **Debug only.** "Do not pass this for a real backfill — disk grows linearly."                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--target`          | **Does not exist.** Survives only in stale doc comments; PG was retired (0244), CH is the sole target.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `--workers`         | **Does not exist.** Run K processes instead.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 **Config** (flag-or-env): `CLICKHOUSE_URL`, `CLICKHOUSE_USER`,
 `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`; `CLICKHOUSE_CERT` / `_KEY` / `_CA`
@@ -1000,6 +1001,54 @@ range re-parse would fetch ~800 GB to decode ~1 GB.
 --test pool_reserves_reconciliation -- --nocapture`. Before this backfill
    it lists the 6 non-empty pools (one leg × 10 or × 10^11) and `CAZ6W4WH…`
    (measured 2026-09-15: 762 of 769 equal); after it, only `CAZ6W4WH…`.
+
+## Soroban pool event amounts (task 0374, W1) — from `soroban_events`
+
+`pool_movements` is filled from the pool events already stored in
+`soroban_events`, through the live writer's own decoder — no archive re-parse.
+
+1. The table exists (`CREATE TABLE` from `init.sql`), then the writer deploys.
+2. After the deploy, with the indexer running (nothing is swapped):
+
+   ```bash
+   backfill-runner soroban-pool-amounts --dry-run   # decodes and counts, writes nothing
+   backfill-runner soroban-pool-amounts
+   ```
+
+   One streaming read per pool that staged state (`pool_state_changes`), in
+   the table's own key order and limited to the ledgers where it did — the
+   live writer's own rule; the registry supplies only legs. ~6M events, minutes. Idempotent: rows are keyed by the event, so the
+   overlap with the live writer and any re-run collapse on merge.
+
+3. Verify, read-only:
+   `cargo test -p backfill-runner --test soroban_pool_amounts_reconciliation -- --nocapture`
+   — every amount event the pools emitted was decoded, every other event name
+   is on the decoder's list of events that carry no amount
+   (`NON_AMOUNT_EVENTS`), and every pair-family reserve step equals the sum of
+   the amounts (measured 2026-09-29 over 200k ledgers: 0 undecoded, 0 unknown
+   names, 11,576 of 11,576 steps). `POOL_FROM` / `POOL_TO` check other ranges.
+   Then the independent witness, the token transfers:
+   `cargo test -p backfill-runner --test pool_movements_vs_asset_transfers -- --nocapture`
+   — per operation with one amount event and no payout, the transfers touching
+   the pool equal the decoded amounts, or fall in a named class (a leg token
+   with no standard `transfer`; a config swap's commission; a balance surplus
+   the pool's own reserves side against). Green 2026-09-30 on six 200–300k
+   slices from 55M to the tip; ~2% of movements are not compared.
+
+A pool registered later is covered by the live writer from its first event.
+
+**Re-deriving after a decoder change.** The table is derived data, and the
+subcommand stays: it is the only way to rebuild it short of an archive
+re-parse. A re-run alone is not enough — rows are keyed by the event, so a row
+the new decoder no longer produces would survive. Empty the table first
+(Karol runs it; production write), then refill and verify:
+
+```sql
+TRUNCATE TABLE pool_movements
+```
+
+then steps 2 and 3. Readers see the pools' volume and activity missing for
+the minutes the refill takes.
 
 ## Event-name backfill (task 0517) — in-DB, per partition
 

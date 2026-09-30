@@ -197,8 +197,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
-        participant_count: (row.pool_kind == domain::PoolKind::Classic)
-            .then_some(row.participant_count),
+        participant_count: row.participant_count,
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         total_shares: row.total_shares,
         tvl: row.tvl,
@@ -710,18 +709,28 @@ pub async fn get_pool_chart(
     // 43.7M rows / 4.66 s for a pool that does not exist, against 16.5k rows /
     // 3.6 ms for the gate. Pool ids are user-supplied strkeys. If a future
     // change breaks the data dependency, that measurement still stands.
-    let ctx = match queries::fetch_pool_price_context(&state.ch(), &pool_id_hex).await {
+    let ctx = match queries::fetch_pool_chart_context(&state.ch(), &pool_id_hex).await {
         Ok(Some(ctx)) => ctx,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_price_context");
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_chart_context");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
 
-    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
-        .await
-        .map_err(|e| e.to_string());
+    // A soroban pool's reserves are its state rows, raw per leg; a classic
+    // pool's are its snapshots.
+    let fetched = match ctx.pool_kind {
+        domain::PoolKind::Classic => {
+            queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx.price, &interval, from, to)
+                .await
+        }
+        domain::PoolKind::Soroban => {
+            queries::fetch_soroban_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
+                .await
+        }
+    }
+    .map_err(|e| e.to_string());
     let data_points = match fetched {
         Ok(r) => r,
         Err(e) => {

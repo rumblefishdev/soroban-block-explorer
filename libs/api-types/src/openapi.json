@@ -3185,13 +3185,9 @@
         "type": "object",
         "required": ["contract_id", "ledger_sequence", "created_at"],
         "properties": {
-          "caller_account": {
+          "caller": {
             "type": ["string", "null"],
-            "description": "Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only."
-          },
-          "caller_contract": {
-            "type": ["string", "null"],
-            "description": "Root caller C-StrKey when a contract made the call; exactly one of the\ntwo callers is set."
+            "description": "Root caller: a `G…` account or a `C…` contract (task 0600). Per ADR\n0034 nested-call hierarchy is XDR-only."
           },
           "contract_id": {
             "type": "string"
@@ -3215,13 +3211,9 @@
           "successful"
         ],
         "properties": {
-          "caller_account": {
+          "caller": {
             "type": ["string", "null"],
-            "description": "Caller G-StrKey when an account made the call."
-          },
-          "caller_contract": {
-            "type": ["string", "null"],
-            "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
+            "description": "Who made the call: a `G…` account or a `C…` contract (task 0600)."
           },
           "created_at": {
             "type": "string",
@@ -3412,7 +3404,7 @@
               "name": {
                 "type": ["string", "null"]
               },
-              "owner_account": {
+              "owner": {
                 "type": ["string", "null"],
                 "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
               },
@@ -3461,7 +3453,7 @@
           "name": {
             "type": ["string", "null"]
           },
-          "owner_account": {
+          "owner": {
             "type": ["string", "null"],
             "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
           },
@@ -3506,9 +3498,9 @@
             "type": ["string", "null"],
             "description": "`mint | transfer | burn` — pre-decoded via `nft_event_type_name(...)`."
           },
-          "from_account": {
+          "from": {
             "type": ["string", "null"],
-            "description": "Previous-owner StrKey (a `G…` account or a `C…` contract),\nreconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline\n(DESC window — older event sits at the FOLLOWING window position).\n`null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
+            "description": "Previous-owner StrKey (a `G…` account or a `C…` contract),\nreconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline\n(DESC window — older event sits at the FOLLOWING window position).\n`null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
           },
           "ledger_sequence": {
             "type": "integer",
@@ -3519,7 +3511,7 @@
             "format": "int32",
             "minimum": 0
           },
-          "to_account": {
+          "to": {
             "type": ["string", "null"],
             "description": "New owner StrKey (a `G…` account or a `C…` contract). `null` on burn."
           },
@@ -4047,13 +4039,9 @@
                 "successful"
               ],
               "properties": {
-                "caller_account": {
+                "caller": {
                   "type": ["string", "null"],
-                  "description": "Caller G-StrKey when an account made the call."
-                },
-                "caller_contract": {
-                  "type": ["string", "null"],
-                  "description": "Caller C-StrKey when a contract made the call; exactly one of the two\nis set on an invocation."
+                  "description": "Who made the call: a `G…` account or a `C…` contract (task 0600)."
                 },
                 "created_at": {
                   "type": "string",
@@ -4167,7 +4155,7 @@
                 "name": {
                   "type": ["string", "null"]
                 },
-                "owner_account": {
+                "owner": {
                   "type": ["string", "null"],
                   "description": "Current owner StrKey: a `G…` account, or a `C…` contract holding the\nNFT. `null` for burned NFTs (ADR 0037 §13)."
                 },
@@ -4225,9 +4213,9 @@
                   "type": ["string", "null"],
                   "description": "`mint | transfer | burn` — pre-decoded via `nft_event_type_name(...)`."
                 },
-                "from_account": {
+                "from": {
                   "type": ["string", "null"],
-                  "description": "Previous-owner StrKey (a `G…` account or a `C…` contract),\nreconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline\n(DESC window — older event sits at the FOLLOWING window position).\n`null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from_account` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
+                  "description": "Previous-owner StrKey (a `G…` account or a `C…` contract),\nreconstructed via `LEAD(owner_id)` over the per-NFT ownership timeline\n(DESC window — older event sits at the FOLLOWING window position).\n`null` on the mint row only.\n\nPage boundaries are handled implicitly by the `limit + 1` peek\nfetch: the peek row participates in the window-function input, so\nthe last *kept* row's `from` reads the peek's owner before\n`finalize_page` drops the peek. No client-side stitching needed."
                 },
                 "ledger_sequence": {
                   "type": "integer",
@@ -4238,7 +4226,7 @@
                   "format": "int32",
                   "minimum": 0
                 },
-                "to_account": {
+                "to": {
                   "type": ["string", "null"],
                   "description": "New owner StrKey (a `G…` account or a `C…` contract). `null` on burn."
                 },

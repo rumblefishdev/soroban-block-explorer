@@ -92,6 +92,10 @@ async fn main() -> Result<(), Error> {
     // this network's folder — which must match the passphrase, or every
     // transaction would hash wrong without an error.
     xdr_parser::public_archive::check_configured_archive()?;
+    check_folder_needs_lake(
+        &bucket,
+        xdr_parser::public_archive::configured_archive_prefix().as_deref(),
+    )?;
     let (s3_client, key_prefix) = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
         let public = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .no_credentials()
@@ -121,3 +125,21 @@ async fn main() -> Result<(), Error> {
 
     lambda_runtime::run(service_fn(|event| handler::handler(event, &state))).await
 }
+
+/// A ledger folder is read only inside the public data lake; our own Galexie
+/// bucket keeps ledgers at its root. A folder configured next to our own
+/// bucket would be ignored without a word, so that pairing is refused.
+fn check_folder_needs_lake(bucket: &str, configured_prefix: Option<&str>) -> Result<(), String> {
+    match configured_prefix {
+        Some(prefix) if bucket != xdr_parser::public_archive::PUBLIC_BUCKET => Err(format!(
+            "PUBLIC_ARCHIVE_PREFIX is `{prefix}`, but BUCKET_NAME is `{bucket}`: a ledger \
+             folder is read only from `{}`, so it would be ignored",
+            xdr_parser::public_archive::PUBLIC_BUCKET
+        )),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/main_tests.rs"]
+mod tests;

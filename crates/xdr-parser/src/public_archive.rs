@@ -16,14 +16,19 @@ pub const PUBLIC_BUCKET_REGION: &str = "us-east-2";
 /// Mainnet's folder inside [`PUBLIC_BUCKET`].
 pub const PUBNET_PREFIX: &str = "v1.1/stellar/ledgers/pubnet";
 
-/// The configured folder: `PUBLIC_ARCHIVE_PREFIX`, else [`PUBNET_PREFIX`].
+/// `PUBLIC_ARCHIVE_PREFIX` when it names a folder; `None` when unset or blank.
 /// No trailing slash.
-pub fn public_archive_prefix() -> String {
+pub fn configured_archive_prefix() -> Option<String> {
     std::env::var("PUBLIC_ARCHIVE_PREFIX")
         .ok()
         .map(|p| p.trim().trim_end_matches('/').to_string())
         .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| PUBNET_PREFIX.to_string())
+}
+
+/// The configured folder: `PUBLIC_ARCHIVE_PREFIX`, else [`PUBNET_PREFIX`].
+/// No trailing slash.
+pub fn public_archive_prefix() -> String {
+    configured_archive_prefix().unwrap_or_else(|| PUBNET_PREFIX.to_string())
 }
 
 /// Refuse a data-lake folder that belongs to another network than

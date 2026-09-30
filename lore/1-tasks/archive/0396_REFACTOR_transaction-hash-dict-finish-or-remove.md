@@ -2,7 +2,7 @@
 id: '0396'
 title: 'REFACTOR: resolve transaction_hash_dict redundancy — finish (Rust→dictGet) or remove (dead-but-prod-wired)'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0395', '0397']
 tags: [clickhouse, tech-debt, effort-small, priority-low]
@@ -47,6 +47,11 @@ history:
       Decided: remove. Production reads NOT_LOADED, 0 elements; task 0580
       re-keys transaction_hash_index by a hash prefix, which the dictionary's
       String key could not follow anyway. PR 1 of task 0580's split.
+  - date: '2026-09-30'
+    status: completed
+    who: karolkow
+    note: >
+      Removed (#488, #490); production DROP DICTIONARY ran 2026-09-24 08:09 UTC.
 ---
 
 # REFACTOR: transaction_hash_dict — finish or remove
@@ -88,9 +93,9 @@ Footprint (removal is multi-file, incl. prod ops):
 ## Acceptance Criteria
 
 - [x] Decision recorded (finish vs remove) with rationale — remove, whole footprint (below).
-- [ ] If finish: `lookup_hash_ledger` uses `dictGet`; smoke test still green;
+- [ ] ~~If finish~~ — not chosen: `lookup_hash_ledger` uses `dictGet`; smoke test still green;
       measured 244k→~0 on the by-hash lookup.
-- [ ] If remove: all listed references reconciled (incl. ops script + docs +
+- [x] If remove: all listed references reconciled (incl. ops script + docs +
       runbook); prod `DROP DICTIONARY` handed to ops; docs/architecture updated
       per ADR 0032.
 
@@ -128,3 +133,9 @@ Verified: `smoke` green on a fresh ClickHouse 26.3 (0 dictionaries after
 
 Overlaps task 0381's "Dead dictionary + `idx_tx_hash_bloom` removal": the
 bloom went in task 0579, the dictionary here.
+
+## Closing check (2026-09-30, read-only)
+
+- `system.query_log`: `DROP DICTIONARY transaction_hash_dict` finished
+  2026-09-24 08:09:36 UTC.
+- `system.dictionaries` is empty; no `Dictionary` engine in `system.tables`.

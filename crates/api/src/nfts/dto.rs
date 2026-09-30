@@ -44,7 +44,7 @@ pub struct NftItem {
     pub minted_at_ledger: Option<i64>,
     /// Current owner StrKey: a `G…` account, or a `C…` contract holding the
     /// NFT. `null` for burned NFTs (ADR 0037 §13).
-    pub owner_account: Option<String>,
+    pub owner: Option<String>,
     /// Most recent ledger where ownership state changed
     /// (`nfts.current_owner_ledger`).
     pub last_seen_ledger: Option<i64>,
@@ -86,11 +86,11 @@ pub struct NftTransferItem {
     ///
     /// Page boundaries are handled implicitly by the `limit + 1` peek
     /// fetch: the peek row participates in the window-function input, so
-    /// the last *kept* row's `from_account` reads the peek's owner before
+    /// the last *kept* row's `from` reads the peek's owner before
     /// `finalize_page` drops the peek. No client-side stitching needed.
-    pub from_account: Option<String>,
+    pub from: Option<String>,
     /// New owner StrKey (a `G…` account or a `C…` contract). `null` on burn.
-    pub to_account: Option<String>,
+    pub to: Option<String>,
     pub created_at: DateTime<Utc>,
     /// Where the change happened — its source event's location (task 0424,
     /// ADR 0059): the transaction's position in the ledger, the operation

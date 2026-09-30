@@ -17,9 +17,8 @@ pub struct ContractInvocationRow {
     pub transaction_hash: String,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
-    pub caller_account: Option<String>,
-    /// Set instead of `caller_account` when a contract made the call (task 0487).
-    pub caller_contract: Option<String>,
+    /// A `G…` account or a `C…` contract (tasks 0487, 0600).
+    pub caller: Option<String>,
     pub successful: bool,
 }
 
@@ -176,13 +175,14 @@ pub async fn fetch_contract_invocations(
             transaction_hash: tx.hash.clone(),
             ledger_sequence: key.ledger_sequence,
             created_at: millis_to_utc(tx.created_at),
-            caller_account: key
+            // Exactly one of the two caller ids is set.
+            caller: key
                 .caller_id
                 .and_then(|id| accounts.get(&id).cloned())
-                .filter(|s| !s.is_empty()),
-            caller_contract: key
-                .caller_contract_id
-                .and_then(|id| contracts.get(&id).cloned())
+                .or_else(|| {
+                    key.caller_contract_id
+                        .and_then(|id| contracts.get(&id).cloned())
+                })
                 .filter(|s| !s.is_empty()),
             successful: tx.successful,
         });

@@ -270,6 +270,10 @@ Primary navigation entrypoints:
 Navigation rules:
 
 - every major entity identifier should be linkable from anywhere it appears
+- an address takes its link from itself: `addressType` (`libs/ui`) reads the
+  StrKey's first letter — `G` account, `C` contract, `L` pool — and gives
+  `null` (shown, not linked) for forms with no page (`M…`, `B…`). The API
+  sends an account-or-contract address in one field (task 0600)
 - exact search hits should resolve directly to the detail page when confidence is high
 - broad or ambiguous matches should remain on a grouped search results page
 - list routes should preserve filters and cursor state in the URL when practical
@@ -736,7 +740,7 @@ Contract details and interface.
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state
 - Invocations tab - recent invocations table (transaction hash, caller — an account or a
-  contract, each linked (task 0487) — status,
+  contract in one `caller` field, each linked (tasks 0487, 0600) — status,
   ledger, timestamp). The appearance index carries no per-call function name — call
   detail is XDR-only (ADR 0034), so the transaction hash links to the full detail
 - Events tab - recent events table (event type, topics, data, ledger). Only `contract`

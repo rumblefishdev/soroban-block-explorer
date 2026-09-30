@@ -510,11 +510,11 @@ place where indexed contract metadata and decoded usage history are exposed.
 (substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`).
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
-media URL. The owner (`owner_account`) is a `G…` account or a `C…` contract, resolved through
+media URL. The owner (`owner`) is a `G…` account or a `C…` contract, resolved through
 `accounts` and `soroban_contracts` (one surrogate space); null once the NFT is burned.
 
-**`GET /nfts/:id/transfers`** - Transfer history for a single NFT; each side (`from_account`,
-`to_account`) is a `G…` account or a `C…` contract.
+**`GET /nfts/:id/transfers`** - Transfer history for a single NFT; each side (`from`,
+`to`) is a `G…` account or a `C…` contract.
 
 NFT responses should tolerate sparse metadata because the ecosystem and available metadata
 quality may vary significantly.
@@ -540,8 +540,10 @@ no client held a key to use them.
 Each `PoolItem` carries `legs` — the pool's assets in registration order, two
 for a classic pool and two to four for a Soroban one, replacing the
 `asset_a` / `asset_b` pair — plus `pool_kind`, `participant_count` (count of
-active LP positions; task 0246 — `null` for a Soroban pool, whose providers
-hold its share token and are not indexed yet), the snapshot fields, and a compute-at-read
+active LP positions for a classic pool, task 0246; for a Soroban pool the
+holders of its share token from `balance_aggregates`, ≤2 minutes stale,
+its own contract left out — `null` for
+a pool with no share token), the snapshot fields, and a compute-at-read
 USD `tvl` (task 0199 Phase A2 — one batched price lookup per page; `volume`
 and `fee_revenue` stay `null` on the list, they are detail-only).
 
@@ -608,6 +610,10 @@ window — `1h→7d`, `1d→90d`, `1w→104w`), `to` (ISO 8601, default `now()`,
 exclusive upper bound). `from < to` enforced; bucket count capped to keep
 aggregation bounded. Bucket aggregation policy in
 `crates/api/src/liquidity_pools/queries/get_pool_chart.rs`.
+A Soroban pool's series comes from its reserve history (`pool_state_changes`,
+raw per leg, scaled by each leg's own decimals) on the same buckets and price
+rules — TVL only; `volume` and `fee_revenue` are `null` until its trades are
+indexed, and the frontend's Volume and Fees tabs say "not indexed".
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, first deposit ledger, and last

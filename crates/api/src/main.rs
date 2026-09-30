@@ -203,7 +203,7 @@ async fn main() {
             .expect("failed to build wasm-code RPC client"),
     };
 
-    let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {
+    let raw_passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {
         panic!(
             "STELLAR_NETWORK_PASSPHRASE env not set; required to align tx_set \
              envelopes with apply-order tx_processing when re-extracting \
@@ -211,10 +211,17 @@ async fn main() {
              (e.g. \"Public Global Stellar Network ; September 2015\")."
         )
     });
+    // Trimmed once, as the indexer does: the archive guard and the network id
+    // must see the same passphrase.
+    let passphrase = raw_passphrase.trim();
     // Heavy fields come from the public data lake; a folder of the other
     // network would decode fine and match nothing (lore-0553).
-    xdr_parser::public_archive::check_configured_archive().unwrap_or_else(|e| panic!("{e}"));
-    let network_id = xdr_parser::network_id(&passphrase);
+    xdr_parser::public_archive::check_archive_network(
+        &xdr_parser::public_archive::public_archive_prefix(),
+        passphrase,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let network_id = xdr_parser::network_id(passphrase);
     let state = AppState::new(ch, runtime_enrichment, network_id);
     let app = app(&config, state);
 
