@@ -553,9 +553,7 @@ pub async fn list_pool_activity(
         .map(|r| PoolActivityItem {
             transaction_hash: r.transaction_hash,
             ledger_sequence: r.ledger_sequence,
-            // The operation's 1-based position (the `#op-N` anchor); the
-            // tables store the 0-based index (ADR 0059).
-            application_order: r.operation_index + 1,
+            operation_index: r.operation_index,
             event: r.event,
             amounts: r.amounts,
             source_account: r.source_account,

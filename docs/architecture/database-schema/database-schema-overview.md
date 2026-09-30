@@ -497,8 +497,8 @@ Design notes:
 
 - **Located by position** (ADR 0059): `(ledger_sequence, application_order)`
   is the transaction, `operation_index` the operation — 0-based, like
-  stellar-rpc's `operationIndex`. The API sends `operation_index + 1`, the
-  1-based position the wire has always carried (the `#op-N` anchor).
+  stellar-rpc's `operationIndex`. The API sends it as `operation_index` too;
+  only the SPA's `#op-N` anchor and labels show it 1-based.
 - **A folded row carries the group's smallest `operation_index`**, reduced with
   an explicit `min()` so it does not depend on HashMap order (task 0192). An
   operation folded into an earlier identical one has no row of its own.

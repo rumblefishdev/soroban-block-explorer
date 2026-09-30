@@ -1226,21 +1226,10 @@ export type NftTransferItem = {
 
 export type OperationItem = {
   /**
-   * Equal to `application_order` (the table has no surrogate id since
-   * PR #175). Use `application_order` for apply-order display and to join
-   * against `XdrOperationDto.application_order` from the heavy overlay.
+   * The operation's 1-based position (the table has no surrogate id since
+   * PR #175). Join against the heavy overlay by `operation_index`.
    */
   appearance_id: number;
-  /**
-   * 1-based per-tx apply position carrying on-chain operation order
-   * (task 0192). For folded appearance rows (multiple identical-identity
-   * envelope ops collapsed into one row, see task 0163) this is the
-   * MIN of the folded ops' indices — the position of the row's first
-   * occurrence in `tx.operations[]`. `None` for pre-task-0192 rows
-   * where the column was not yet populated; clients fall back to
-   * `appearance_id` order in that case.
-   */
-  application_order?: number | null;
   /**
    * Asset code (≤12 chars) for classic asset operations.
    */
@@ -1250,6 +1239,12 @@ export type OperationItem = {
   created_at: string;
   destination_account?: string | null;
   ledger_sequence: number;
+  /**
+   * The operation's position in its transaction's envelope, 0-based
+   * (ADR 0059, stellar-rpc `operationIndex`); equals the heavy overlay's
+   * `XdrOperationDto.operation_index`.
+   */
+  operation_index: number;
   /**
    * Liquidity pools crossed by this operation, as SEP-23 strkeys
    * (`L...`, 56 chars). Encoded from the DB hex form at the response
@@ -1851,15 +1846,15 @@ export type PaginatedPoolActivityItem = {
      * Every entry is `null` in the malformed case above.
      */
     amounts: Array<string | null>;
-    /**
-     * The operation's 1-based position in its transaction (Horizon's
-     * `application_order`), and the `#op-N` anchor on the transaction detail
-     * page this row links to (task 0482).
-     */
-    application_order: number;
     created_at: string;
     event?: null | PoolEvent;
     ledger_sequence: number;
+    /**
+     * The operation's 0-based position in its transaction (ADR 0059); the
+     * transaction page's `#op-N` anchor this row links to is
+     * `operation_index + 1` (task 0482).
+     */
+    operation_index: number;
     /**
      * How many pools the WHOLE operation crossed — `length(pool_ids)` from
      * the same appearance seek that resolves the source account. `1` for
@@ -1883,7 +1878,7 @@ export type PaginatedPoolActivityItem = {
     /**
      * Transaction hash (64-char lowercase hex). NOT unique across rows — a
      * transaction running several operations against this pool appears once
-     * per operation, so a row key needs `application_order` too.
+     * per operation, so a row key needs `operation_index` too.
      */
     transaction_hash: string;
   }>;
@@ -2096,15 +2091,15 @@ export type PoolActivityItem = {
    * Every entry is `null` in the malformed case above.
    */
   amounts: Array<string | null>;
-  /**
-   * The operation's 1-based position in its transaction (Horizon's
-   * `application_order`), and the `#op-N` anchor on the transaction detail
-   * page this row links to (task 0482).
-   */
-  application_order: number;
   created_at: string;
   event?: null | PoolEvent;
   ledger_sequence: number;
+  /**
+   * The operation's 0-based position in its transaction (ADR 0059); the
+   * transaction page's `#op-N` anchor this row links to is
+   * `operation_index + 1` (task 0482).
+   */
+  operation_index: number;
   /**
    * How many pools the WHOLE operation crossed — `length(pool_ids)` from
    * the same appearance seek that resolves the source account. `1` for
@@ -2128,7 +2123,7 @@ export type PoolActivityItem = {
   /**
    * Transaction hash (64-char lowercase hex). NOT unique across rows — a
    * transaction running several operations against this pool appears once
-   * per operation, so a row key needs `application_order` too.
+   * per operation, so a row key needs `operation_index` too.
    */
   transaction_hash: string;
 };
@@ -2586,7 +2581,7 @@ export type XdrEventDto = {
   /**
    * Zero-based envelope position of the operation that emitted this event
    * (CAP-67 per-operation container only; `None` for fee and diagnostic
-   * events). Matches `XdrOperationDto.application_order - 1`.
+   * events). Equals the emitting `XdrOperationDto.operation_index`.
    */
   operation_index?: number | null;
   /**
@@ -2608,11 +2603,6 @@ export type XdrEventDto = {
  */
 export type XdrOperationDto = {
   /**
-   * Application order within the transaction (1-based, matches Horizon
-   * `paging_token` convention).
-   */
-  application_order: number;
-  /**
    * Full operation details (type-specific JSON).
    */
   details: unknown;
@@ -2620,6 +2610,11 @@ export type XdrOperationDto = {
    * Operation type tag (e.g. `"payment"`, `"invoke_host_function"`).
    */
   op_type: string;
+  /**
+   * The operation's position in its transaction's envelope, 0-based
+   * (ADR 0059, stellar-rpc `operationIndex`).
+   */
+  operation_index: number;
   /**
    * Per-operation result code from the transaction result XDR, using the
    * XDR library's variant names: `"Success"`, `"LowReserve"`, `"Trapped"`,

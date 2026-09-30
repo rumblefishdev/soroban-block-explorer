@@ -397,8 +397,8 @@ the decoded operation list and owns the result, the way `useTableUrlState` owns
 `sort`/`dir`: the index handed to the section always addresses an existing
 operation, and no consumer carries a range guard. A fragment naming an
 operation the transaction does not have resolves to the first one **with no
-notice**: the card numbers itself from `application_order`, not from the
-fragment, so the reader gets a correctly numbered operation and nothing is
+notice**: the card numbers itself from `operation_index` (shown 1-based, like
+the fragment), not from the fragment, so the reader gets a correctly numbered operation and nothing is
 hidden or mislabelled. Reaching that state needs a hand-edited URL — `#op-N` is
 written in one place, from a picker click, and an operation count never changes,
 so a shared link that worked once keeps working. The fragment itself is left
@@ -430,7 +430,7 @@ The card shows:
   stamps every node with the whole transaction's verdict — so the UI
   deliberately renders no per-node ✓/✗ there;
 - the operation's own events, matched via `XdrEventDto.operation_index`
-  (`application_order - 1`);
+  (equal to the operation's `operation_index`);
 - an "Operation details" disclosure with every raw `details` key — exactness
   preserved; nothing null/empty that matters for debugging is hidden;
 - on a failed transaction the card dims and carries a "not applied" label.

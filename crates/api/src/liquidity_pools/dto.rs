@@ -369,13 +369,13 @@ pub struct PoolActivityCursor {
 pub struct PoolActivityItem {
     /// Transaction hash (64-char lowercase hex). NOT unique across rows — a
     /// transaction running several operations against this pool appears once
-    /// per operation, so a row key needs `application_order` too.
+    /// per operation, so a row key needs `operation_index` too.
     pub transaction_hash: String,
     pub ledger_sequence: i64,
-    /// The operation's 1-based position in its transaction (Horizon's
-    /// `application_order`), and the `#op-N` anchor on the transaction detail
-    /// page this row links to (task 0482).
-    pub application_order: i16,
+    /// The operation's 0-based position in its transaction (ADR 0059); the
+    /// transaction page's `#op-N` anchor this row links to is
+    /// `operation_index + 1` (task 0482).
+    pub operation_index: i16,
     /// `null` when not every leg of the pool landed in `pool_operation_amounts`
     /// for this operation. Rare but real: 350 of 6.09M operations in the
     /// 100k ledgers to 64,576,995 carry one leg only. The read stays total

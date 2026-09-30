@@ -132,8 +132,8 @@ pub fn extract_e3_heavy(
 
 // --- private helpers ---
 
-/// Checked `u32 → i16` conversion for an operation's `application_order`,
-/// which correlates to a DB `SMALLINT` column.
+/// Checked `u32 → i16` conversion for an operation's position, which
+/// correlates to a DB `SMALLINT` column.
 /// Returns `None` and logs a warning if the value overflows i16 — the caller
 /// skips the row rather than silently truncate and corrupt correlation with DB.
 fn to_i16_index(value: u32, kind: &'static str) -> Option<i16> {
@@ -259,10 +259,12 @@ fn to_operation_dto(
     op: xdr_parser::ExtractedOperation,
     result_code: Option<String>,
 ) -> Option<XdrOperationDto> {
-    let application_order = to_i16_index(op.operation_index, "application_order")?;
+    // The parser numbers operations from 1; the wire uses the 0-based
+    // `operation_index` (ADR 0059).
+    let operation_index = to_i16_index(op.operation_index - 1, "operation_index")?;
     Some(XdrOperationDto {
         op_type: op.op_type.to_string(),
-        application_order,
+        operation_index,
         details: op.details,
         result_code,
     })

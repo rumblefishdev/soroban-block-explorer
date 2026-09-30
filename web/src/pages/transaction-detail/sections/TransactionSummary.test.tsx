@@ -11,10 +11,10 @@ import { opFailReason, TransactionSummary } from './TransactionSummary.js';
 
 function op(
   op_type: string,
-  application_order: number,
+  operation_index: number,
   result_code: string | null
 ): XdrOperationDto {
-  return { op_type, application_order, details: {}, result_code };
+  return { op_type, operation_index, details: {}, result_code };
 }
 
 function tx(
@@ -50,16 +50,16 @@ describe('opFailReason', () => {
   it('names the first failing op with its code (0352 fixture 7af6d0ed…)', () => {
     const reason = opFailReason(
       tx([
-        op('begin_sponsoring_future_reserves', 1, 'Success'),
-        op('create_account', 2, 'LowReserve'),
-        op('create_account', 3, 'OpNoAccount'),
+        op('begin_sponsoring_future_reserves', 0, 'Success'),
+        op('create_account', 1, 'LowReserve'),
+        op('create_account', 2, 'OpNoAccount'),
       ])
     );
     expect(reason).toBe('Create Account #2 — LOW_RESERVE (+1 more failed)');
   });
 
   it('returns null when codes are absent (old responses, validation failures)', () => {
-    expect(opFailReason(tx([op('create_account', 1, null)]))).toBeNull();
+    expect(opFailReason(tx([op('create_account', 0, null)]))).toBeNull();
     expect(opFailReason(tx([]))).toBeNull();
   });
 });
@@ -68,7 +68,7 @@ describe('TransactionSummary failed strip', () => {
   it('shows the per-op reason on the strip', () => {
     renderWithProviders(
       <>
-        <TransactionSummary tx={tx([op('create_account', 1, 'LowReserve')])} />
+        <TransactionSummary tx={tx([op('create_account', 0, 'LowReserve')])} />
       </>
     );
     expect(screen.getByText(/Create Account #1 — LOW_RESERVE/)).toBeTruthy();

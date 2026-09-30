@@ -17,8 +17,9 @@ interface OperationPickerProps {
   onSelect: (index: number) => void;
 }
 
-function opNumber(op: OperationItem, index: number): number {
-  return op.application_order ?? index + 1;
+// Shown 1-based, like the `#op-N` anchor.
+function opNumber(op: OperationItem): number {
+  return op.operation_index + 1;
 }
 
 export function OperationPicker({
@@ -117,7 +118,7 @@ export function OperationPicker({
                     color: theme.palette.text.primary,
                   })}
                 >
-                  {formatOperationType(op.type_name)} #{opNumber(op, index)}
+                  {formatOperationType(op.type_name)} #{opNumber(op)}
                 </Typography>
                 {summary != null && (
                   <Typography
