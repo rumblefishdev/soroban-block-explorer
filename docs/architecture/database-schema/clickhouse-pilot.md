@@ -419,8 +419,10 @@ idempotent file. Two paths apply it; both share the file via
    `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE` and applies the file
    over the HTTP interface using the official `clickhouse` crate.
 2. **Compose boot:** the `db-clickhouse-init` sidecar runs
-   `clickhouse-client --queries-file /init.sql` against the `clickhouse`
-   service after it reports healthy. Same SQL as the Rust CLI; uses
+   `schema/apply_init.sh`, which creates each database in
+   `EXPLORER_DATABASES` (`default` for mainnet, `testnet`; task 0553) and
+   runs `clickhouse-client --queries-file /init.sql` in it, after the
+   `clickhouse` service reports healthy. Same SQL as the Rust CLI; uses
    `clickhouse-client` only to avoid a workspace compile during boot.
 
 `docker compose down -v` is safe: the volume is rebuilt cleanly and the

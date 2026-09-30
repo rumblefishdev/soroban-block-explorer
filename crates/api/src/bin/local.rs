@@ -86,7 +86,9 @@ async fn main() {
 
     let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE")
         .unwrap_or_else(|_| "Public Global Stellar Network ; September 2015".into());
-    let network_id = xdr_parser::network_id(&passphrase);
+    // Trimmed as in main.rs, so a stray space in the env cannot change the
+    // network id.
+    let network_id = xdr_parser::network_id(passphrase.trim());
 
     let state = AppState::new(ch, runtime_enrichment, network_id);
     // Routes only — no edge lock / auth / CORS. Same registration the Lambda
