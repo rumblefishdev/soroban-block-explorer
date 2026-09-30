@@ -847,8 +847,8 @@ messages at 12:13.
       fixture and asserted to report `protocol_version = 28`. Weaker than it
       reads: the fixture also decodes under stellar-xdr 26 (review 2026-09-14);
       the constructed-arm round-trips are what fail under 27
-- [ ] Post-vote: indexer decodes mainnet proto-28 ledgers, DLQ stays empty,
-      ingestion-lag alarm quiet
+- [x] Post-vote (checked 2026-09-30): 241,367 p28 ledgers from 64,458,446, no gap, 0 parse
+      errors in 66.9M txs; ledger DLQ 0, its alarm OK since 08-27, lag alarm OK since 09-14
 - [x] **Decided 2026-09-10** — what `wasm_hash` and the upgradeable chip say for
       an external-ref contract (gaps 1 and 2 above): both closed by option C,
       see "The model that closed them" and "Gap 2 is closed"
