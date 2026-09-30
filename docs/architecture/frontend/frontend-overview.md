@@ -270,6 +270,10 @@ Primary navigation entrypoints:
 Navigation rules:
 
 - every major entity identifier should be linkable from anywhere it appears
+- an address takes its link from itself: `addressType` (`libs/ui`) reads the
+  StrKey's first letter — `G` account, `C` contract, `L` pool — and gives
+  `null` (shown, not linked) for forms with no page (`M…`, `B…`). The API
+  sends an account-or-contract address in one field (task 0600)
 - exact search hits should resolve directly to the detail page when confidence is high
 - broad or ambiguous matches should remain on a grouped search results page
 - list routes should preserve filters and cursor state in the URL when practical
