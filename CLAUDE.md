@@ -127,6 +127,20 @@ per-layer deep-dives (`infra/README.md`, `infra-hetzner/README.md`,
 These encode durable rules. Keep transient state (which task is open, which PR is
 pending) out of them — it rots and makes the guide untrustworthy.
 
+## Evidence — conclusions from the whole population, not a sample
+
+A claim that code is correct, two paths are equal, or a case "never
+happens" rests on the **whole population**: the full history in ledger
+slices, every pool, every family, every code version — read-only queries on
+production are cheap and pre-approved. A small or convenient sample hides the
+rare classes that break things (a W1 equality was first claimed from 360 rows
+in 200 ledgers containing none of the 17 Phoenix withdrawals in history; the
+full-history query, 4,405,583 of 4,405,583, was the proof).
+
+When a sample is unavoidable (archive re-parse, RPC): draw it from several
+periods, include the rare classes on purpose, and report its size, how it was
+drawn and what it cannot show — never "confirmed" or "identical" unqualified.
+
 ## GitHub Issues
 
 Issues close at **deploy**, never at merge — merged code is not shipped code.
