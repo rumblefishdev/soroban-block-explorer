@@ -1738,7 +1738,6 @@ fn mint_event_yields_owner_to() {
     assert_eq!(out[0].token_id, "42");
     assert_eq!(out[0].event_type, NftEventType::Mint);
     assert_eq!(out[0].owner_account.as_deref(), Some("GRECIPIENT"));
-    assert_eq!(out[0].event_order, 0);
     assert_eq!(out[0].ledger_sequence, 100);
 }
 
@@ -1777,7 +1776,7 @@ fn burn_event_yields_owner_none() {
 }
 
 #[test]
-fn event_order_monotonic_per_triple() {
+fn keeps_one_tokens_changes_in_ledger_order() {
     let events = vec![
         make_nft_event("CNFT1", "mint", 42, None, Some("GA"), 100),
         make_nft_event("CNFT1", "transfer", 42, Some("GA"), Some("GB"), 100),
@@ -1785,28 +1784,8 @@ fn event_order_monotonic_per_triple() {
     ];
     let out = extract_nft_ownership_events(&events);
 
-    assert_eq!(out.len(), 3);
-    assert_eq!(out[0].event_order, 0);
-    assert_eq!(out[1].event_order, 1);
-    assert_eq!(out[2].event_order, 2);
-}
-
-#[test]
-fn event_order_resets_per_token() {
-    let events = vec![
-        // Same contract, same ledger, different tokens.
-        make_nft_event("CNFT1", "mint", 42, None, Some("GA"), 100),
-        make_nft_event("CNFT1", "mint", 43, None, Some("GB"), 100),
-        // Different contract, same ledger.
-        make_nft_event("CNFT2", "mint", 42, None, Some("GC"), 100),
-    ];
-    let out = extract_nft_ownership_events(&events);
-
-    assert_eq!(out.len(), 3);
-    // Each (contract, token, ledger) triple starts its own counter.
-    assert_eq!(out[0].event_order, 0);
-    assert_eq!(out[1].event_order, 0);
-    assert_eq!(out[2].event_order, 0);
+    let owners: Vec<_> = out.iter().map(|e| e.owner_account.as_deref()).collect();
+    assert_eq!(owners, [Some("GA"), Some("GB"), Some("GC")]);
 }
 
 #[test]
@@ -1880,35 +1859,17 @@ fn unknown_event_kind_skipped() {
 }
 
 #[test]
-fn event_order_overflow_skips_excess_events() {
-    // Pathological-input guard: once a (contract, token, ledger)
-    // triple has emitted i16::MAX events, further events for that
-    // triple are skipped with a warn rather than overflowing the
-    // SMALLINT column at staging.
-    const OVERFLOW_AT: u16 = i16::MAX as u16;
-
-    let mut events = Vec::with_capacity((OVERFLOW_AT as usize) + 5);
-    for _ in 0..(OVERFLOW_AT as usize + 5) {
-        events.push(make_nft_event(
-            "CNFT1",
-            "transfer",
-            42,
-            Some("GA"),
-            Some("GB"),
-            100,
-        ));
-    }
+fn keeps_every_change_past_the_old_smallint_cap() {
+    // The retired `nft_ownership` stored a per-token counter as SMALLINT and
+    // the parser dropped every event past 32,767 for one (contract, token,
+    // ledger). A row is now placed by its event id, so nothing is dropped.
+    let count = i16::MAX as usize + 5;
+    let events: Vec<_> = (0..count)
+        .map(|_| make_nft_event("CNFT1", "transfer", 42, Some("GA"), Some("GB"), 100))
+        .collect();
     let out = extract_nft_ownership_events(&events);
 
-    // Emits exactly i16::MAX + 1 rows (event_order 0..=32_767),
-    // then refuses to write more — five excess events dropped.
-    assert_eq!(
-        out.len(),
-        OVERFLOW_AT as usize + 1,
-        "should emit one row per slot 0..=i16::MAX, no overflow"
-    );
-    assert_eq!(out.first().unwrap().event_order, 0);
-    assert_eq!(out.last().unwrap().event_order, i16::MAX as u16);
+    assert_eq!(out.len(), count);
 }
 
 // ----------------------------------------------------------------------
