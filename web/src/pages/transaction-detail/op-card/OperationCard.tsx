@@ -92,8 +92,8 @@ export function OperationCard({
 
   // heavy is 1:1 with the envelope; the light row is folded, so its
   // operation_index is the FIRST of the fold — wrong for later copies. Shown
-  // 1-based, like the `#op-N` anchor.
-  const order = (heavy?.operation_index ?? light.operation_index) + 1;
+  // as the chain counts it, from 0, like the `#op-N` anchor.
+  const order = heavy?.operation_index ?? light.operation_index;
   const label = formatOperationType(light.type_name);
   const soroban = isSorobanOp(light.type_name);
   const routeModel = buildRouteModel(heavy);

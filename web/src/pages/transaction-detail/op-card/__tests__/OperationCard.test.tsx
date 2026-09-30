@@ -43,7 +43,7 @@ describe('OperationCard', () => {
   it('renders the headline sentence, order and type label', () => {
     renderCard();
     expect(screen.getByText('Sent 100.5 XLM to GA5X…GKTM')).toBeTruthy();
-    expect(screen.getByText('2 · Payment')).toBeTruthy();
+    expect(screen.getByText('1 · Payment')).toBeTruthy();
   });
 
   it('labels the card "not applied" and keeps the disclosure on a failed transaction', () => {

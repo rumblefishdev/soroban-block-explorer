@@ -584,8 +584,7 @@ pub struct ExtractedLpPosition {
 /// Extracted operation data. Feeds the `transaction_operations` indexer path
 /// (task 0163) where operations of identical identity are collapsed into a
 /// single row, and the API's XDR re-materialisation path
-/// (`stellar_archive::extractors`) where `operation_index + 1` is surfaced as
-/// `application_order` in the DTO.
+/// (`stellar_archive::extractors`), which sends `operation_index` unchanged.
 ///
 /// **Note:** field names do not directly mirror DB column names:
 /// - `transaction_hash` → resolved to the transaction's position
