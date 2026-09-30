@@ -2,7 +2,7 @@
 name: stellar-assets
 description: Classic Stellar assets, trustlines, authorization flags, clawback and the Stellar Asset Contract (SAC) that exposes them as SEP-41 tokens. Use when interpreting balances, trustlines, supply, issuer flags, clawback or SAC events and contract ids in indexed data.
 user-invocable: true
-argument-hint: '[asset question]'
+argument-hint: "[asset question]"
 ---
 
 # Stellar Assets, Trustlines, and SAC
@@ -14,7 +14,6 @@ argument-hint: '[asset question]'
 Stellar's native token mechanism: classic asset issuance, trustlines, and the Stellar Asset Contract (SAC) bridge that makes classic assets usable from smart contracts. Default to classic assets over custom contract tokens unless you need custom logic.
 
 ## When to use this skill
-
 - Issuing a new asset (stablecoin, security token, utility token)
 - Setting up trustlines from a client or contract
 - Managing issuer flags (auth required, auth revocable, clawback)
@@ -22,13 +21,13 @@ Stellar's native token mechanism: classic asset issuance, trustlines, and the St
 - Building regulated-asset flows (compliance, KYC, freeze)
 
 ## Related skills
-
 - Custom token contracts (when classic isn't enough) → `https://skills.stellar.org/skills/smart-contracts/SKILL.md`
 - UI flows for trustline creation and asset display → `https://skills.stellar.org/skills/dapp/SKILL.md`
 - Looking up balances and trustline state → `https://skills.stellar.org/skills/data/SKILL.md`
 - Token-related SEPs (SEP-41, SEP-7, etc.) → `../stellar-standards/SKILL.md`
 
 ---
+
 
 ## Overview
 
@@ -43,24 +42,24 @@ Stellar has two token mechanisms:
 
 ### Asset Types
 
-| Type                  | Description                                    |
-| --------------------- | ---------------------------------------------- |
-| Native (XLM)          | Stellar's native currency, no trustline needed |
-| Credit                | Issued by an account, requires trustline       |
-| Liquidity Pool Shares | Represent LP positions                         |
+| Type | Description |
+|------|-------------|
+| Native (XLM) | Stellar's native currency, no trustline needed |
+| Credit | Issued by an account, requires trustline |
+| Liquidity Pool Shares | Represent LP positions |
 
 ### Asset Identifiers
 
 ```typescript
-import * as StellarSdk from '@stellar/stellar-sdk';
+import * as StellarSdk from "@stellar/stellar-sdk";
 
 // Native XLM
 const xlm = StellarSdk.Asset.native();
 
 // Credit asset (code + issuer)
 const usdc = new StellarSdk.Asset(
-  'USDC',
-  'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'
+  "USDC",
+  "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
 );
 
 // Asset code rules:
@@ -73,11 +72,9 @@ const usdc = new StellarSdk.Asset(
 ### Create Issuing Account
 
 ```typescript
-import * as StellarSdk from '@stellar/stellar-sdk';
+import * as StellarSdk from "@stellar/stellar-sdk";
 
-const server = new StellarSdk.Horizon.Server(
-  'https://horizon-testnet.stellar.org'
-);
+const server = new StellarSdk.Horizon.Server("https://horizon-testnet.stellar.org");
 
 // 1. Create issuing account (should be separate from distribution)
 const issuerKeypair = StellarSdk.Keypair.random();
@@ -85,20 +82,16 @@ const distributorKeypair = StellarSdk.Keypair.random();
 
 // 2. Fund accounts (testnet)
 await fetch(`https://friendbot.stellar.org?addr=${issuerKeypair.publicKey()}`);
-await fetch(
-  `https://friendbot.stellar.org?addr=${distributorKeypair.publicKey()}`
-);
+await fetch(`https://friendbot.stellar.org?addr=${distributorKeypair.publicKey()}`);
 ```
 
 ### Issue Asset
 
 ```typescript
-const asset = new StellarSdk.Asset('MYTOKEN', issuerKeypair.publicKey());
+const asset = new StellarSdk.Asset("MYTOKEN", issuerKeypair.publicKey());
 
 // 1. Distributor creates trustline to issuer
-const distributorAccount = await server.loadAccount(
-  distributorKeypair.publicKey()
-);
+const distributorAccount = await server.loadAccount(distributorKeypair.publicKey());
 
 const trustlineTx = new StellarSdk.TransactionBuilder(distributorAccount, {
   fee: StellarSdk.BASE_FEE,
@@ -107,7 +100,7 @@ const trustlineTx = new StellarSdk.TransactionBuilder(distributorAccount, {
   .addOperation(
     StellarSdk.Operation.changeTrust({
       asset: asset,
-      limit: '1000000', // Max amount to hold
+      limit: "1000000", // Max amount to hold
     })
   )
   .setTimeout(180)
@@ -127,7 +120,7 @@ const issueTx = new StellarSdk.TransactionBuilder(issuerAccount, {
     StellarSdk.Operation.payment({
       destination: distributorKeypair.publicKey(),
       asset: asset,
-      amount: '1000000',
+      amount: "1000000",
     })
   )
   .setTimeout(180)
@@ -171,8 +164,8 @@ const setFlagsTx = new StellarSdk.TransactionBuilder(issuerAccount, {
   .addOperation(
     StellarSdk.Operation.setOptions({
       setFlags:
-        StellarSdk.AuthRequiredFlag | // Trustlines require approval
-        StellarSdk.AuthRevocableFlag | // Can freeze trustlines
+        StellarSdk.AuthRequiredFlag |    // Trustlines require approval
+        StellarSdk.AuthRevocableFlag |   // Can freeze trustlines
         StellarSdk.AuthClawbackEnabledFlag, // Can clawback tokens
     })
   )
@@ -182,12 +175,12 @@ const setFlagsTx = new StellarSdk.TransactionBuilder(issuerAccount, {
 
 ### Flag Descriptions
 
-| Flag                    | Effect                                          |
-| ----------------------- | ----------------------------------------------- |
-| `AUTH_REQUIRED`         | Users must get approval before receiving tokens |
-| `AUTH_REVOCABLE`        | Issuer can freeze user balances                 |
-| `AUTH_IMMUTABLE`        | Flags cannot be changed (permanent)             |
-| `AUTH_CLAWBACK_ENABLED` | Issuer can clawback tokens from accounts        |
+| Flag | Effect |
+|------|--------|
+| `AUTH_REQUIRED` | Users must get approval before receiving tokens |
+| `AUTH_REVOCABLE` | Issuer can freeze user balances |
+| `AUTH_IMMUTABLE` | Flags cannot be changed (permanent) |
+| `AUTH_CLAWBACK_ENABLED` | Issuer can clawback tokens from accounts |
 
 ### Authorize Trustline
 
@@ -223,7 +216,7 @@ const clawbackTx = new StellarSdk.TransactionBuilder(issuerAccount, {
     StellarSdk.Operation.clawback({
       asset: asset,
       from: targetAccountId,
-      amount: '100',
+      amount: "100",
     })
   )
   .setTimeout(180)
@@ -242,7 +235,7 @@ const changeTrustTx = new StellarSdk.TransactionBuilder(userAccount, {
   .addOperation(
     StellarSdk.Operation.changeTrust({
       asset: asset,
-      limit: '10000', // Max amount to hold (see "Remove Trustline" for limit: "0")
+      limit: "10000", // Max amount to hold (see "Remove Trustline" for limit: "0")
     })
   )
   .setTimeout(180)
@@ -273,17 +266,17 @@ is in a deletable state. Before submitting:
 const account = await server.loadAccount(userPublicKey);
 const trustline = account.balances.find(
   (b) =>
-    b.asset_type !== 'native' &&
-    b.asset_type !== 'liquidity_pool_shares' &&
+    b.asset_type !== "native" &&
+    b.asset_type !== "liquidity_pool_shares" &&
     b.asset_code === asset.getCode() &&
     b.asset_issuer === asset.getIssuer()
 );
 
-if (!trustline) throw new Error('No trustline (display/claimable state only?)');
+if (!trustline) throw new Error("No trustline (display/claimable state only?)");
 if (parseFloat(trustline.balance) !== 0)
-  throw new Error('Balance must be 0 — send funds away or back to issuer');
+  throw new Error("Balance must be 0 — send funds away or back to issuer");
 if (parseFloat(trustline.buying_liabilities) !== 0)
-  throw new Error('Cancel open offers buying this asset first');
+  throw new Error("Cancel open offers buying this asset first");
 
 // Liquidity-pool usage (precondition 4) is not visible on this balance line —
 // if the asset is still in one of the account's pools, the submit below fails
@@ -297,7 +290,7 @@ const removeTrustTx = new StellarSdk.TransactionBuilder(account, {
   .addOperation(
     StellarSdk.Operation.changeTrust({
       asset: asset,
-      limit: '0', // Delete the trustline
+      limit: "0", // Delete the trustline
     })
   )
   .setTimeout(180)
@@ -309,15 +302,13 @@ try {
   await server.submitTransaction(removeTrustTx);
 } catch (e) {
   const codes = e.response?.data?.extras?.result_codes?.operations ?? [];
-  if (codes.includes('op_invalid_limit')) {
+  if (codes.includes("op_invalid_limit")) {
     // CHANGE_TRUST_INVALID_LIMIT: balance or buying liabilities remain
-    throw new Error('Clear balance and open offers before removing trustline');
+    throw new Error("Clear balance and open offers before removing trustline");
   }
-  if (codes.includes('op_cannot_delete')) {
+  if (codes.includes("op_cannot_delete")) {
     // CHANGE_TRUST_CANNOT_DELETE: trustline is used by a liquidity pool
-    throw new Error(
-      'Withdraw from liquidity pools referencing this asset first'
-    );
+    throw new Error("Withdraw from liquidity pools referencing this asset first");
   }
   throw e;
 }
@@ -329,15 +320,15 @@ try {
 const account = await server.loadAccount(userPublicKey);
 const trustline = account.balances.find(
   (b) =>
-    b.asset_type !== 'native' &&
-    b.asset_code === 'USDC' &&
+    b.asset_type !== "native" &&
+    b.asset_code === "USDC" &&
     b.asset_issuer === usdcIssuer
 );
 
 if (trustline) {
-  console.log('Balance:', trustline.balance);
-  console.log('Limit:', trustline.limit);
-  console.log('Authorized:', trustline.is_authorized);
+  console.log("Balance:", trustline.balance);
+  console.log("Limit:", trustline.limit);
+  console.log("Authorized:", trustline.is_authorized);
 }
 ```
 
@@ -358,9 +349,9 @@ stellar contract asset deploy \
 ### SAC Address Derivation
 
 ```typescript
-import * as StellarSdk from '@stellar/stellar-sdk';
+import * as StellarSdk from "@stellar/stellar-sdk";
 
-const asset = new StellarSdk.Asset('USDC', issuerPublicKey);
+const asset = new StellarSdk.Asset("USDC", issuerPublicKey);
 const contractId = asset.contractId(StellarSdk.Networks.TESTNET);
 // Returns the deterministic SAC contract address
 ```
@@ -388,7 +379,6 @@ pub fn transfer_asset(
 ### SAC vs Custom Token Interface
 
 SAC implements the standard SEP-41 token interface:
-
 - `balance(id: Address) -> i128`
 - `transfer(from: Address, to: Address, amount: i128)`
 - `approve(from: Address, spender: Address, amount: i128, expiration_ledger: u32)`
@@ -400,7 +390,6 @@ SAC implements the standard SEP-41 token interface:
 ## When to Use What
 
 ### Use Stellar Assets When:
-
 - Standard fungible token (currency, stablecoin)
 - Need full ecosystem support (wallets, exchanges)
 - Regulatory compliance features (freeze, clawback)
@@ -408,7 +397,6 @@ SAC implements the standard SEP-41 token interface:
 - DEX integration via order book
 
 ### Use Custom Contract Tokens When:
-
 - Complex transfer logic (royalties, fees, restrictions)
 - Custom authorization schemes
 - Non-standard token behaviors
@@ -436,7 +424,7 @@ SAC implements the standard SEP-41 token interface:
 > outside the contract and bypass the role model entirely.
 >
 > **Do it in this order: `set_admin` first, then lock the issuer.** A SAC's
-> admin starts as the issuer account, and only the _current_ admin can
+> admin starts as the issuer account, and only the *current* admin can
 > authorize the first `set_admin`. Lock the issuer before that call and the
 > admin stays the locked issuer forever, because nobody can sign the handover
 > ([SAC admin guide](https://developers.stellar.org/docs/build/guides/tokens/custom-sac-admin)).
@@ -444,7 +432,6 @@ SAC implements the standard SEP-41 token interface:
 > issuer then.
 
 ### Use SAC When:
-
 - Need a Stellar asset inside a smart contract
 - Building DeFi protocols with existing assets
 - Bridge between classic and smart contract operations
@@ -457,8 +444,8 @@ SAC implements the standard SEP-41 token interface:
 const account = await server.loadAccount(publicKey);
 
 for (const balance of account.balances) {
-  if (balance.asset_type === 'native') {
-    console.log('XLM:', balance.balance);
+  if (balance.asset_type === "native") {
+    console.log("XLM:", balance.balance);
   } else {
     console.log(`${balance.asset_code}:`, balance.balance);
   }
@@ -469,12 +456,15 @@ for (const balance of account.balances) {
 
 ```typescript
 // Search for assets by code
-const assets = await server.assets().forCode('USDC').call();
+const assets = await server
+  .assets()
+  .forCode("USDC")
+  .call();
 
 // Get specific asset details
 const assetDetails = await server
   .assets()
-  .forCode('USDC')
+  .forCode("USDC")
   .forIssuer(issuerPublicKey)
   .call();
 ```
@@ -484,7 +474,7 @@ const assetDetails = await server
 ```typescript
 const stats = await server
   .assets()
-  .forCode('USDC')
+  .forCode("USDC")
   .forIssuer(issuerPublicKey)
   .call();
 
@@ -529,14 +519,12 @@ Standard contract interface for NFTs on Stellar. Reference implementations avail
 ## Best Practices
 
 ### Asset Issuance
-
 - Use separate issuing and distribution accounts
 - Lock issuer after initial distribution for fixed supply
 - Publish stellar.toml with asset metadata
 - Consider multisig for issuer account
 
 ### Trustline Management
-
 - Check trustline exists before sending payments
 - Handle trustline creation in onboarding flow
 - Respect trustline limits
@@ -545,7 +533,6 @@ Standard contract interface for NFTs on Stellar. Reference implementations avail
   buying the asset, and exit liquidity pools that reference it
 
 ### Security
-
 - Validate asset issuer, not just code
 - Be cautious of assets with clawback enabled
 - Verify stellar.toml from authoritative source
@@ -555,7 +542,7 @@ Standard contract interface for NFTs on Stellar. Reference implementations avail
   plus SAC derivation, never by the presence of `home_domain` or a
   `[[CURRENCIES]]` entry
 - **When `AUTH_REVOCABLE` and `AUTH_CLAWBACK_ENABLED` are both set, check the
-  issuer lock _and_ the admin roles before listing the asset.** Those flags
+  issuer lock *and* the admin roles before listing the asset.** Those flags
   mean balances can be frozen or clawed back. A contract SAC admin does not
   contain that power on its own: an issuer whose master key still signs can
   mint, freeze and claw back directly, whatever the admin contract allows. So
