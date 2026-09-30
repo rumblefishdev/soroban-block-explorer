@@ -42,7 +42,7 @@ fn contract(tag: char) -> String {
     "C".to_string() + &tag.to_string().repeat(55)
 }
 
-fn owner_account() -> String {
+fn owner() -> String {
     "G".to_string() + &"B".repeat(55)
 }
 
@@ -68,7 +68,7 @@ fn fixture_tx() -> ExtractedTransaction {
         hash: tx_hash(),
         inner_tx_hash: None,
         ledger_sequence: E2E_LEDGER,
-        source_account: owner_account(),
+        source_account: owner(),
         fee_source: None,
         fee_charged: 100,
         successful: true,
@@ -91,7 +91,7 @@ fn fixture_nft(contract_id: &str, token: &str) -> ExtractedNft {
         contract_id: contract_id.to_string(),
         token_id: token.to_string(),
         collection_name: None,
-        owner_account: Some(owner_account()),
+        owner: Some(owner()),
         name: None,
         media_url: None,
         minted_at_ledger: Some(E2E_LEDGER),
@@ -143,7 +143,7 @@ fn fixture_event(contract_id: &str, token: &str, order: u16) -> ExtractedNftEven
         contract_id: contract_id.to_string(),
         token_id: token.to_string(),
         event_type: NftEventType::Transfer,
-        owner_account: Some(owner_account()),
+        owner: Some(owner()),
         ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
         event_id: Some(xdr_parser::EventId {
@@ -179,7 +179,7 @@ async fn cleanup(cl: &clickhouse::Client, contracts: &[&str]) {
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!(
             "ALTER TABLE accounts DELETE WHERE account_id = '{}'",
-            owner_account()
+            owner()
         ),
     ] {
         let _ = cl.query(&stmt).execute().await;

@@ -1636,7 +1636,7 @@ fn nft_mint_event_produces_nft() {
     assert_eq!(nfts.len(), 1);
     assert_eq!(nfts[0].contract_id, "CNFT789");
     assert_eq!(nfts[0].token_id, "42");
-    assert_eq!(nfts[0].owner_account.as_deref(), Some("GOWNER"));
+    assert_eq!(nfts[0].owner.as_deref(), Some("GOWNER"));
     assert_eq!(nfts[0].minted_at_ledger, Some(100));
 }
 
@@ -1656,7 +1656,7 @@ fn nft_transfer_event() {
 
     let nfts = detect_nfts(&events);
     assert_eq!(nfts.len(), 1);
-    assert_eq!(nfts[0].owner_account.as_deref(), Some("GTO"));
+    assert_eq!(nfts[0].owner.as_deref(), Some("GTO"));
     assert!(nfts[0].minted_at_ledger.is_none());
 }
 
@@ -1677,7 +1677,7 @@ fn nft_burn_event() {
     let nfts = detect_nfts(&events);
     assert_eq!(nfts.len(), 1);
     assert_eq!(nfts[0].token_id, "unique-nft-id");
-    assert!(nfts[0].owner_account.is_none());
+    assert!(nfts[0].owner.is_none());
 }
 
 #[test]
@@ -1737,7 +1737,7 @@ fn mint_event_yields_owner_to() {
     assert_eq!(out[0].contract_id, "CNFT1");
     assert_eq!(out[0].token_id, "42");
     assert_eq!(out[0].event_type, NftEventType::Mint);
-    assert_eq!(out[0].owner_account.as_deref(), Some("GRECIPIENT"));
+    assert_eq!(out[0].owner.as_deref(), Some("GRECIPIENT"));
     assert_eq!(out[0].ledger_sequence, 100);
 }
 
@@ -1755,7 +1755,7 @@ fn transfer_event_yields_owner_to() {
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].event_type, NftEventType::Transfer);
-    assert_eq!(out[0].owner_account.as_deref(), Some("GTO"));
+    assert_eq!(out[0].owner.as_deref(), Some("GTO"));
 }
 
 #[test]
@@ -1772,7 +1772,7 @@ fn burn_event_yields_owner_none() {
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].event_type, NftEventType::Burn);
-    assert!(out[0].owner_account.is_none());
+    assert!(out[0].owner.is_none());
 }
 
 #[test]
@@ -1784,7 +1784,7 @@ fn keeps_one_tokens_changes_in_ledger_order() {
     ];
     let out = extract_nft_ownership_events(&events);
 
-    let owners: Vec<_> = out.iter().map(|e| e.owner_account.as_deref()).collect();
+    let owners: Vec<_> = out.iter().map(|e| e.owner.as_deref()).collect();
     assert_eq!(owners, [Some("GA"), Some("GB"), Some("GC")]);
 }
 

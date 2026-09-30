@@ -15,7 +15,7 @@ pub fn detect_nfts(nft_events: &[NftEvent]) -> Vec<ExtractedNft> {
             continue;
         }
 
-        let (owner_account, minted_at_ledger) = match event.event_kind.as_str() {
+        let (owner, minted_at_ledger) = match event.event_kind.as_str() {
             "mint" => (event.to.clone(), Some(event.ledger_sequence)),
             "transfer" => (event.to.clone(), None),
             "burn" => (None, None),
@@ -26,7 +26,7 @@ pub fn detect_nfts(nft_events: &[NftEvent]) -> Vec<ExtractedNft> {
             contract_id: event.contract_id.clone(),
             token_id,
             collection_name: None,
-            owner_account,
+            owner,
             name: None,
             media_url: None,
             minted_at_ledger,
@@ -68,7 +68,7 @@ fn token_id_to_string(token_id: &Value) -> String {
 /// The parser (`detect_nft_events`) emits events with a JSON-typed
 /// `token_id`, string `event_kind` ("mint"/"transfer"/"burn"), and split
 /// `from`/`to` fields. The persistence layer expects a stringified
-/// `token_id`, the `NftEventType` enum, and a unified `owner_account`
+/// `token_id`, the `NftEventType` enum, and a unified `owner`
 /// field (`Some(to)` for mint/transfer, `None` for burn).
 ///
 /// Events with empty `token_id` are skipped (matches `detect_nfts`
@@ -101,7 +101,7 @@ pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEven
             }
         };
 
-        let owner_account = match event_type {
+        let owner = match event_type {
             NftEventType::Mint | NftEventType::Transfer => event.to.clone(),
             NftEventType::Burn => None,
         };
@@ -111,7 +111,7 @@ pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEven
             contract_id: event.contract_id.clone(),
             token_id,
             event_type,
-            owner_account,
+            owner,
             ledger_sequence: event.ledger_sequence,
             created_at: event.created_at,
             event_id: event.event_id,

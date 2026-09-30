@@ -902,7 +902,7 @@ fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
     let invocation = |contract: &str| ExtractedInvocation {
         transaction_hash: tx2.hash.clone(),
         contract_id: Some(contract.to_owned()),
-        caller_account: None,
+        caller: None,
         function_name: Some("f".into()),
         function_args: serde_json::json!([]),
         return_value: serde_json::Value::Null,
@@ -1754,7 +1754,7 @@ fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
         contract_id: contract.to_string(),
         token_id: token.to_string(),
         collection_name: None,
-        owner_account: None,
+        owner: None,
         name: None,
         media_url: None,
         minted_at_ledger: Some(10),
@@ -1774,7 +1774,7 @@ fn synthetic_nft_event(
         contract_id: contract.to_string(),
         token_id: token.to_string(),
         event_type: NftEventType::Mint,
-        owner_account: None,
+        owner: None,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
         // Operation 2's event `event_index`. `transaction_index` deliberately
@@ -3379,11 +3379,11 @@ fn same_ledger_nft_owner_flip_keeps_the_last_owner() {
         sac_asset: None,
     };
     let minted = ExtractedNft {
-        owner_account: Some("GFIRST".to_string()),
+        owner: Some("GFIRST".to_string()),
         ..synthetic_nft(&contract, "tk1")
     };
     let transferred = ExtractedNft {
-        owner_account: Some("GSECOND".to_string()),
+        owner: Some("GSECOND".to_string()),
         ..minted.clone()
     };
     let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);

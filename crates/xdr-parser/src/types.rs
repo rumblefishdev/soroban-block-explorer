@@ -212,7 +212,7 @@ pub struct ExtractedInvocation {
     pub contract_id: Option<String>,
     /// Account or contract that initiated this call. For root invocations this is the
     /// transaction source account; for sub-invocations it is the parent's contract address.
-    pub caller_account: Option<String>,
+    pub caller: Option<String>,
     /// Function name invoked. `None` for contract creation invocations.
     pub function_name: Option<String>,
     /// ScVal-decoded function arguments as JSON value (typically an array; may be an object for
@@ -519,7 +519,7 @@ pub struct ExtractedNft {
     pub contract_id: String,
     pub token_id: String,
     pub collection_name: Option<String>,
-    pub owner_account: Option<String>,
+    pub owner: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
     pub minted_at_ledger: Option<u32>,
@@ -544,7 +544,7 @@ pub struct ExtractedNftEvent {
     /// Event kind (ADR 0031). Maps to `nft_ownership.event_type SMALLINT`.
     pub event_type: NftEventType,
     /// New owner after the event. `None` for burns.
-    pub owner_account: Option<String>,
+    pub owner: Option<String>,
     /// Parent ledger sequence number.
     pub ledger_sequence: u32,
     /// Unix seconds. Matches parent transaction partitioning key.

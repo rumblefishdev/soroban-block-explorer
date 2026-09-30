@@ -89,7 +89,7 @@ pub(super) fn nft_rows(
         let contract_id_int = ids::contract_id(&nft.contract_id);
         let watermark = i64::from(nft.last_seen_ledger);
         let key = (contract_id_int, nft.token_id.clone());
-        let owner_id = nft.owner_account.as_deref().map(ids::account_id);
+        let owner_id = nft.owner.as_deref().map(ids::account_id);
 
         match route {
             NftRoute::Hot => match nft_hot_indices.get(&key).copied() {
@@ -177,7 +177,7 @@ pub(super) fn nft_rows(
             application_order,
             operation_index: id.operation_index,
             event_index: id.event_index,
-            owner_id: ev.owner_account.as_deref().map(ids::account_id),
+            owner_id: ev.owner.as_deref().map(ids::account_id),
             event_type: ev.event_type as i16,
         };
         match route {

@@ -812,7 +812,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     for (tx_hash, invs) in invocations {
         let entry = participants_per_tx.entry(tx_hash.clone()).or_default();
         for inv in invs {
-            if let Some(caller) = &inv.caller_account
+            if let Some(caller) = &inv.caller
                 && is_strkey_account(caller)
             {
                 account_keys.insert(caller.clone());
@@ -858,12 +858,12 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
     for nft in nfts {
-        if let Some(owner) = &nft.owner_account {
+        if let Some(owner) = &nft.owner {
             account_keys.insert(owner.clone());
         }
     }
     for ev in nft_events {
-        if let Some(owner) = &ev.owner_account
+        if let Some(owner) = &ev.owner
             && is_strkey_account(owner)
         {
             account_keys.insert(owner.clone());
