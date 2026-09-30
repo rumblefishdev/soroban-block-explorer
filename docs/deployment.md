@@ -253,6 +253,16 @@ Old hashed assets pile up at about 1.3 MB per build. Nothing prunes them.
 
 ### Gotchas — read before you deploy
 
+- **Every schema change runs on each explorer database: `default` (mainnet)
+  and `testnet` (task 0553).** Both hold the same `init.sql`. The sidecar
+  (`crates/db-clickhouse/schema/apply_init.sh`, list in `EXPLORER_DATABASES`
+  of `docker-compose.yml`) creates missing tables in both on every
+  `docker compose up`, but it never alters an existing table — so every
+  `ALTER`, `DROP` or `EXCHANGE` in a runbook below is run once per database
+  (`clickhouse-client --database testnet …`), and both indexers are recycled
+  after it (`testnet-soroban-explorer-indexer` too). A table missing from
+  `testnet` stops testnet ingestion, not mainnet's.
+
 - **Any `ALTER` on a table the indexer writes can stop ingestion — even an
   ADD.** clickhouse-rs 0.15 checks the row struct against `DESCRIBE TABLE`
   before every insert: a table column the struct does not name must have a

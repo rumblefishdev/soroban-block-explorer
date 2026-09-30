@@ -240,16 +240,18 @@ services:
     # (not via root bypass). The official `clickhouse-server`
     # image's USER directive defaults to root and the entrypoint
     # script drops to 101 only for the server process; when we
-    # override the entrypoint to `clickhouse-client` directly the
-    # drop-priv step is skipped, so we set the user explicitly.
+    # override the entrypoint with our own script the drop-priv
+    # step is skipped, so we set the user explicitly.
+    #
+    # The script and EXPLORER_DATABASES come from the base file: it
+    # applies init.sql to `default` and `testnet` (task 0553).
     user: '101:101'
     entrypoint:
-      - clickhouse-client
+      - sh
+      - /apply_init.sh
       - --config-file=/etc/clickhouse-backup/client.xml
       - --host=clickhouse
       - --port=9000
-      - --multiquery
-      - --queries-file=/init.sql
     volumes:
       - /etc/soroban-backup/clickhouse-client.xml:/etc/clickhouse-backup/client.xml:ro
     # `restart: 'no'` is inherited from the base. Re-runs on every

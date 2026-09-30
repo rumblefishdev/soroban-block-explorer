@@ -283,7 +283,8 @@ multi-region failover plan.
   in task 0244.
 - holds the schema in `crates/db-clickhouse/schema/init.sql` (28 tables, 3 materialized
   views, 1 `Dictionary` as of 2026-07-22); applied idempotently by the
-  `db-clickhouse-init` sidecar after `clickhouse` reports healthy, and equally by the
+  `db-clickhouse-init` sidecar after `clickhouse` reports healthy — to mainnet's
+  `default` and testnet's `testnet` database alike (task 0553) — and equally by the
   Rust `db-clickhouse-init` CLI when iterating outside Docker
 - the ClickHouse _pilot_ framing this section used to carry is spent. ClickHouse is no
   longer a parallel store being evaluated next to RDS — per

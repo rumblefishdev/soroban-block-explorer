@@ -59,8 +59,9 @@ services:
       timeout: 3s
       retries: 10
 
-  # Sidecar: applies `crates/db-clickhouse/schema/init.sql` to the
-  # ClickHouse service once it is healthy. Idempotent — every statement
+  # Sidecar: applies `crates/db-clickhouse/schema/init.sql` to every
+  # explorer database in EXPLORER_DATABASES (`apply_init.sh`, task 0553)
+  # once the ClickHouse service is healthy. Idempotent — every statement
   # is `CREATE … IF NOT EXISTS`, so re-running is a no-op. Survives
   # `docker compose down -v` cleanly because the schema is re-applied
   # on the next `up`.
@@ -78,14 +79,17 @@ services:
         condition: service_healthy
     volumes:
       - ./crates/db-clickhouse/schema/init.sql:/init.sql:ro
+      - ./crates/db-clickhouse/schema/apply_init.sh:/apply_init.sh:ro
+    environment:
+      # Mainnet's database and testnet's (task 0553); same schema in both.
+      EXPLORER_DATABASES: default testnet
     entrypoint:
-      - clickhouse-client
+      - sh
+      - /apply_init.sh
       - --host=clickhouse
       - --port=9000
       - --user=default
       - --password=clickhouse
-      - --multiquery
-      - --queries-file=/init.sql
     restart: 'no'
 
 volumes:
