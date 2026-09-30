@@ -2,7 +2,7 @@
 id: '0596'
 title: 'Remove the dead NFT event_order counter from the parser'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0059']
 related_tasks: ['0424']
 tags: ['xdr-parser', 'nft', 'effort-small', 'priority-low']
@@ -15,6 +15,11 @@ history:
     who: karolkow
     note: >
       Spawned from 0424 future work.
+  - date: '2026-09-30'
+    status: active
+    who: karolkow
+    note: >
+      Activated (thread 596) after 0538 closed.
 ---
 
 # Remove the dead NFT event_order counter from the parser
