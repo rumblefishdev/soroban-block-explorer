@@ -888,7 +888,7 @@ fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
             tx2.hash.clone(),
             vec![ExtractedOperation {
                 transaction_hash: tx2.hash.clone(),
-                operation_index: 3,
+                operation_index: 2,
                 op_type: OperationType::InvokeHostFunction,
                 source_account: None,
                 asset_appearances: vec![],
@@ -1014,7 +1014,7 @@ fn prepare_folds_identical_operations() {
             "asset": "native",
         }),
     };
-    let ops = vec![(tx.hash.clone(), vec![make_op(1), make_op(2)])];
+    let ops = vec![(tx.hash.clone(), vec![make_op(0), make_op(1)])];
 
     let staged = stage::prepare(
         &ledger,
@@ -1095,7 +1095,7 @@ fn prepare_registers_op_counterparties_as_participants() {
     let seller = "G".to_string() + &"S".repeat(55);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
         asset_appearances: vec![],
@@ -1150,7 +1150,7 @@ fn prepare_stages_operation_asset_appearances() {
     // must key as the FIRST-CLASS surrogate, not an empty sentinel.
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageSellOffer,
         source_account: None,
         asset_appearances: vec![
@@ -1236,7 +1236,7 @@ fn op_asset_appearances_dedup_same_asset_across_ops_in_one_tx() {
         destination_muxed_id: None,
         details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
     };
-    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
+    let ops = vec![(tx.hash.clone(), vec![mk(0), mk(1)])];
 
     let staged = stage::prepare(
         &ledger,
@@ -1294,8 +1294,8 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
     let ops = vec![(
         tx.hash.clone(),
         vec![
-            make_op(1, vec![&pool_b, &pool_a]),
-            make_op(2, vec![&pool_a]),
+            make_op(0, vec![&pool_b, &pool_a]),
+            make_op(1, vec![&pool_a]),
         ],
     )];
 
@@ -1345,7 +1345,7 @@ fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
     let quiet = "bb".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
         asset_appearances: vec![],
@@ -1416,7 +1416,7 @@ fn prepare_lp_deposit_single_element_pool_ids() {
     let pool = "ab".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::LiquidityPoolDeposit,
         source_account: None,
         asset_appearances: vec![],
@@ -1483,7 +1483,7 @@ fn prepare_offer_op_pool_ids_from_details() {
     let pool = "cd".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
         asset_appearances: vec![],
@@ -1538,7 +1538,7 @@ fn transaction_operations_fold_keeps_the_smallest_index() {
         destination_muxed_id: None,
         details: serde_json::json!({ "liquidityPoolId": pool }),
     };
-    let ops = vec![(tx.hash.clone(), vec![mk(2), mk(3)])];
+    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
 
     let staged = stage::prepare(
         &ledger,

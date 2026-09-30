@@ -584,15 +584,15 @@ pub struct ExtractedLpPosition {
 /// Extracted operation data. Feeds the `transaction_operations` indexer path
 /// (task 0163) where operations of identical identity are collapsed into a
 /// single row, and the API's XDR re-materialisation path
-/// (`stellar_archive::extractors`) where `operation_index` is surfaced as
+/// (`stellar_archive::extractors`) where `operation_index + 1` is surfaced as
 /// `application_order` in the DTO.
 ///
 /// **Note:** field names do not directly mirror DB column names:
 /// - `transaction_hash` → resolved to the transaction's position
 ///   (`application_order`) by the persistence layer
-/// - `operation_index` → `transaction_operations.operation_index`, minus one
-///   (the table is 0-based, ADR 0059); surfaced in the `stellar_archive` DTO
-///   as `application_order`
+/// - `operation_index` → `transaction_operations.operation_index` as is (both
+///   0-based, ADR 0059); surfaced in the `stellar_archive` DTO as the 1-based
+///   `application_order`
 /// - `op_type` → `type` (`type` is a Rust keyword)
 /// - `source_account: None` → operation inherits the transaction source account
 #[derive(Debug, Clone)]
@@ -600,9 +600,8 @@ pub struct ExtractedOperation {
     /// Parent transaction hash, hex-encoded (64 chars). Used to resolve the
     /// transaction's position at persistence time.
     pub transaction_hash: String,
-    /// 1-based index of this operation within the transaction (matches Horizon
-    /// `paging_token` convention; see ADR 0028 / task 0172). Persisted 0-based
-    /// as `transaction_operations.operation_index` (ADR 0059).
+    /// 0-based position of this operation in the transaction's envelope, as
+    /// stellar-rpc's `operationIndex` and the tables (ADR 0059).
     pub operation_index: u32,
     /// Operation type (ADR 0031). Maps to `transaction_operations.type SMALLINT`.
     pub op_type: OperationType,
