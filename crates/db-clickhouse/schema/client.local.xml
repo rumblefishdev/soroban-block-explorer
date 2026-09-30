@@ -1,0 +1,13 @@
+<!--
+  clickhouse-client connection for the local db-clickhouse-init sidecar
+  (docker-compose.yml). Production mounts its own file, rendered by Ansible
+  from infra-hetzner/ansible/roles/app/templates/clickhouse-client.xml.j2, at
+  the same path. The password is the local development one from
+  docker-compose.yml.
+-->
+<config>
+  <user>default</user>
+  <password>clickhouse</password>
+  <host>127.0.0.1</host>
+  <port>9000</port>
+</config>
