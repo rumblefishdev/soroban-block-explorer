@@ -117,6 +117,15 @@ as "process this object":
   (`indexerLambdaConcurrency = 0`), so a paused indexer still captures events
   durably (visible `ApproximateNumberOfMessages`, multi-day retention) instead
   of dropping them.
+- **Testnet reads the public data lake** (task 0553), which sends no events,
+  and EventBridge Scheduler fires anywhere inside its minute. So the indexer
+  paces itself (`handler/lake_pacing.rs`): after each wake it queues one SQS
+  message, delayed to ~3 s after the next ledger's expected close, whose body
+  names the ledger it expects (`{"expect":N,"attempt":k}`). A late file is
+  looked for again after 1, 2, 4, 8, then 15 s. A once-a-minute keepalive
+  starts a chain only when it found new ledgers itself (the chain had died),
+  and a chain message whose ledger is already stored is dropped, so two
+  chains merge. About one wake per ledger. On mainnet the body stays ignored.
 
 A backlog drains across the stream of doorbells (one per S3 file ≫ the handful
 of time-budget stops needed); the next doorbell always resumes from the

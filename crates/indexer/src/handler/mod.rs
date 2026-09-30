@@ -20,6 +20,7 @@
 //! The indexer drives ClickHouse only and contains no PG / sqlx code.
 
 pub mod enrichment_publish;
+pub mod lake_pacing;
 pub mod process;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
@@ -51,11 +52,13 @@ pub struct SqsEvent {
 
 #[derive(Debug, Deserialize)]
 pub struct SqsMessage {
-    // Doorbell body is ignored (see module docs) — we only keep `messageId`
-    // to name a batch-item-failure on a failed reconcile. Serde ignores the
-    // unmapped `body` field in the SQS event JSON.
+    // `messageId` names a batch-item-failure on a failed reconcile. The body
+    // is ignored on mainnet (see module docs); reading the public data lake,
+    // the indexer paces itself through it (`lake_pacing`, task 0553).
     #[serde(rename = "messageId")]
     pub message_id: String,
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 /// Partial-batch-failure response read by the SQS event-source-mapping.
@@ -134,6 +137,9 @@ pub struct HandlerState {
     /// batched query per first sighting of a contract. Cloning shares the inner
     /// `Arc`, so all invocations on a warm container share the memo.
     pub classification_cache: ClassificationCache,
+    /// Present only when reading the public data lake (task 0553): the lake
+    /// sends no events, so the indexer queues its own next wake-up.
+    pub pacer: Option<lake_pacing::Pacer>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,10 +171,20 @@ pub async fn handler(
     let mut batch_item_failures = Vec::new();
 
     for msg in &payload.records {
-        // Body irrelevant — every doorbell triggers the same reconcile.
-        // batchSize is 1, so this loops once; if it ever isn't, a second
-        // reconcile in the same batch is a cheap no-op (cursor already moved).
-        if let Err(e) = reconcile(state).await {
+        // On mainnet the body is irrelevant — every doorbell triggers the same
+        // reconcile. batchSize is 1, so this loops once; if it ever isn't, a
+        // second reconcile in the same batch is a cheap no-op (cursor already
+        // moved).
+        let result = match &state.pacer {
+            Some(pacer) => {
+                lake_pacing::paced(pacer, &state.ch_client, msg.body.as_deref(), || {
+                    reconcile(state)
+                })
+                .await
+            }
+            None => reconcile(state).await,
+        };
+        if let Err(e) = result {
             // Full error Display on purpose (policy reversed 2026-08-10,
             // lore-0455): the old sanitizer reduced the 0454 outage to the
             // undiagnosable label "ClickHouse error". Everything ClickHouse

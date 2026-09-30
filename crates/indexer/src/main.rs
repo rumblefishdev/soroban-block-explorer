@@ -77,7 +77,7 @@ async fn main() -> Result<(), Error> {
     let sqs_client = SqsClient::new(&aws_config);
 
     let enrichment_publisher =
-        handler::enrichment_publish::Publisher::from_env(sqs_client, ch_client.clone())?;
+        handler::enrichment_publish::Publisher::from_env(sqs_client.clone(), ch_client.clone())?;
 
     // The doorbell handler derives S3 keys from ledger numbers and reads them
     // from this bucket (it does not parse the S3 event). CDK always injects
@@ -110,6 +110,13 @@ async fn main() -> Result<(), Error> {
         (S3Client::new(&aws_config), String::new())
     };
 
+    // The lake sends no events: the indexer queues its own next wake-up.
+    let pacer = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
+        Some(handler::lake_pacing::Pacer::from_env(sqs_client)?)
+    } else {
+        None
+    };
+
     let state = handler::HandlerState {
         s3_client,
         bucket,
@@ -119,6 +126,7 @@ async fn main() -> Result<(), Error> {
         enrichment_publisher,
         // Task 0283 live G9 — fresh per cold start; warms across invocations.
         classification_cache: domain::ClassificationCache::new(),
+        pacer,
     };
 
     info!("indexer ready — starting Lambda runtime");
