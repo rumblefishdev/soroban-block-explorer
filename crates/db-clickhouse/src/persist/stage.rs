@@ -247,7 +247,8 @@ pub struct StagedLedger {
     /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
     /// Task 0374 (W1) → `pool_movements`: the swaps, deposits and withdrawals
-    /// of registered soroban pools, decoded from `event_rows`.
+    /// of the soroban pools this ledger staged state for, decoded from
+    /// `event_rows`.
     pub pool_movement_rows: Vec<PoolMovementRow>,
     pub event_rows: Vec<SorobanEventRow>,
     /// Per-(contract, tx) presence plus the invocation's caller and call count
