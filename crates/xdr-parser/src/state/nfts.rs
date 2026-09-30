@@ -63,7 +63,7 @@ fn token_id_to_string(token_id: &Value) -> String {
 // ---------------------------------------------------------------------------
 
 /// Transform raw parser `NftEvent` records into schema-shaped
-/// `ExtractedNftEvent` rows for `nft_ownership`.
+/// `ExtractedNftEvent` rows for `nft_ownership_changes`.
 ///
 /// The parser (`detect_nft_events`) emits events with a JSON-typed
 /// `token_id`, string `event_kind` ("mint"/"transfer"/"burn"), and split
@@ -71,31 +71,16 @@ fn token_id_to_string(token_id: &Value) -> String {
 /// `token_id`, the `NftEventType` enum, and a unified `owner_account`
 /// field (`Some(to)` for mint/transfer, `None` for burn).
 ///
-/// Additionally, this fn computes `event_order` — a per-`(contract, token,
-/// ledger)` monotonic ordinal (SMALLINT) required by the schema PK
-/// `(nft_id, created_at, ledger_sequence, event_order)` and by the
-/// LEAD-window pagination in `17_get_nfts_transfers.sql`.
-///
 /// Events with empty `token_id` are skipped (matches `detect_nfts`
 /// behaviour). Events with `event_kind` not in {"mint","transfer","burn"}
 /// are skipped — the parser already restricts emission to these three
 /// kinds, so the guard is defensive.
 ///
-/// Pathological-input guard: `event_order` is persisted as SMALLINT so
-/// the schema bound is `i16::MAX = 32_767`. Once a single
-/// `(contract, token, ledger)` triple has already produced that many
-/// rows, further events for the same triple are skipped with a warn
-/// instead of overflowing the staging `try_into::<i16>()` and failing
-/// the whole ledger. No real NFT contract reaches this bound; the cap
-/// exists to keep ingestion robust against a malicious / buggy
-/// contract emitting tens of thousands of events for one NFT in a
-/// single ledger.
+/// Every other event is kept: a row's place is its stellar-rpc `event_id`
+/// (task 0424), so however many changes one token sees in one ledger, none
+/// is dropped.
 #[instrument(skip(events), fields(event_count = events.len()))]
 pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEvent> {
-    /// SMALLINT max — `nft_ownership.event_order` is stored as i16 in PG.
-    const MAX_EVENT_ORDER: u16 = i16::MAX as u16;
-
-    let mut order_counter: HashMap<(String, String, u32), u16> = HashMap::new();
     let mut out: Vec<ExtractedNftEvent> = Vec::with_capacity(events.len());
 
     for event in events {
@@ -121,32 +106,12 @@ pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEven
             NftEventType::Burn => None,
         };
 
-        let key = (
-            event.contract_id.clone(),
-            token_id.clone(),
-            event.ledger_sequence,
-        );
-        let counter = order_counter.entry(key).or_insert(0);
-        if *counter > MAX_EVENT_ORDER {
-            warn!(
-                contract_id = %event.contract_id,
-                token_id = %token_id,
-                ledger_sequence = event.ledger_sequence,
-                max = MAX_EVENT_ORDER,
-                "event_order would exceed SMALLINT range; skipping further events for triple"
-            );
-            continue;
-        }
-        let event_order = *counter;
-        *counter = counter.saturating_add(1);
-
         out.push(ExtractedNftEvent {
             transaction_hash: event.transaction_hash.clone(),
             contract_id: event.contract_id.clone(),
             token_id,
             event_type,
             owner_account,
-            event_order,
             ledger_sequence: event.ledger_sequence,
             created_at: event.created_at,
             event_id: event.event_id,

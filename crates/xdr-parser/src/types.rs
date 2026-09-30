@@ -528,16 +528,14 @@ pub struct ExtractedNft {
     pub created_at: i64,
 }
 
-/// NFT ownership event carried from the parser into `nft_ownership`.
+/// NFT ownership event carried from the parser into `nft_ownership_changes`.
 ///
 /// Schema-shaped superset of `NftEvent` that resolves the NFT row identity
-/// (`contract_id`, `token_id`) and carries the ownership transition needed for
-/// `nft_ownership` rows. Not produced by the parser today — task 0118 (NFT
-/// false-positive filtering) will gate population. Until then, `process_ledger`
-/// passes an empty slice.
+/// (`contract_id`, `token_id`) and carries the ownership transition.
 #[derive(Debug, Clone)]
 pub struct ExtractedNftEvent {
-    /// Parent transaction hash, hex-encoded. Resolved to `transaction_id` at persistence time.
+    /// Parent transaction hash, hex-encoded. Resolved to the transaction's
+    /// `application_order` at persistence time.
     pub transaction_hash: String,
     /// NFT collection contract address (C... StrKey).
     pub contract_id: String,
@@ -547,8 +545,6 @@ pub struct ExtractedNftEvent {
     pub event_type: NftEventType,
     /// New owner after the event. `None` for burns.
     pub owner_account: Option<String>,
-    /// Stable order within the ledger. Maps to `nft_ownership.event_order`.
-    pub event_order: u16,
     /// Parent ledger sequence number.
     pub ledger_sequence: u32,
     /// Unix seconds. Matches parent transaction partitioning key.

@@ -144,7 +144,6 @@ fn fixture_event(contract_id: &str, token: &str, order: u16) -> ExtractedNftEven
         token_id: token.to_string(),
         event_type: NftEventType::Transfer,
         owner_account: Some(owner_account()),
-        event_order: order,
         ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
         event_id: Some(xdr_parser::EventId {
