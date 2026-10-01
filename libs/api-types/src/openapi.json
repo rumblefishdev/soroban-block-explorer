@@ -4624,7 +4624,7 @@
       },
       "PoolEvent": {
         "type": "string",
-        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `pool_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
+        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `pool_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\nA soroban pool's events are written to `pool_movements.event_kind` as this\nenum's discriminant — stored, not inferred from the signs: a trade may\ncarry a zero leg (42 on production) and a withdrawal may pay out nothing,\nwhich the signs alone would misread.\n\n`#[repr(u8)]` rather than the `i16` of the other enums here: the column it\nis stored in is `UInt8`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
         "enum": ["trade", "deposit", "withdrawal"]
       },
       "PoolItem": {

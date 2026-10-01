@@ -2190,6 +2190,13 @@ export type PoolAssetLeg = {
  * and nothing else — `pool_operation_amounts.amount` is signed from the pool's
  * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
  * There is no operation-type column to read and no join to `operations`.
+ * A soroban pool's events are written to `pool_movements.event_kind` as this
+ * enum's discriminant — stored, not inferred from the signs: a trade may
+ * carry a zero leg (42 on production) and a withdrawal may pay out nothing,
+ * which the signs alone would misread.
+ *
+ * `#[repr(u8)]` rather than the `i16` of the other enums here: the column it
+ * is stored in is `UInt8`.
  *
  * Classified in SQL rather than here, because the same expression is the
  * `filter[event]` predicate: two classifiers would eventually disagree, and

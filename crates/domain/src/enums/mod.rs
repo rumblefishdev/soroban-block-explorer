@@ -5,7 +5,8 @@
 //! `soroban_contracts.contract_type`) guarded by a `CHECK` range.
 //! The Rust enum pins on-disk layout via `#[repr(i16)]`, decodes/encodes
 //! as SMALLINT, and renders the canonical string at the API boundary
-//! through serde.
+//! through serde. `PoolEvent` is `#[repr(u8)]`: its ClickHouse column is
+//! `UInt8`.
 //!
 //! Readable SQL labels for psql / BI live in the
 //! `20260422000000_enum_label_functions` migration (one IMMUTABLE helper
