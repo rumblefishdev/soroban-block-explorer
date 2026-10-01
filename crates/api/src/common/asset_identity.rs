@@ -82,7 +82,7 @@ pub(crate) struct ResolvedAsset {
 /// while still reading as a number. `family` is `None` when no `assets` row
 /// resolved: an unmatched join's default 0 would otherwise claim native.
 /// The one place this rule lives for account balances, balance changes, asset
-/// supply and pool legs (reserves, chart). The pool
+/// supply and pool legs (reserves, activity scale, chart). The pool
 /// share-token read keeps its own until it moves to the state table in task
 /// 0590.
 ///

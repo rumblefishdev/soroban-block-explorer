@@ -5,22 +5,24 @@ use serde::{Deserialize, Serialize};
 
 use super::EnumDecodeError;
 
-/// What an operation did to the pool, named by the SIGN PAIR of its two legs
-/// and nothing else — `pool_operation_amounts.amount` is signed from the pool's
-/// perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
+/// What a row of pool activity did to the pool. A classic operation is named
+/// by the SIGN PAIR of its two legs and nothing else —
+/// `pool_operation_amounts.amount` is signed from the pool's perspective, so
+/// `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
 /// There is no operation-type column to read and no join to `operations`.
-/// A soroban pool's events are written to `pool_movements.event_kind` as this
-/// enum's discriminant — stored, not inferred from the signs: a trade may
-/// carry a zero leg (42 on production) and a withdrawal may pay out nothing,
-/// which the signs alone would misread.
+/// A soroban pool's row is one event, named by the kind the pool declared,
+/// stored in `pool_movements.event_kind` as this enum's discriminant — not
+/// inferred from the signs: a trade may carry a zero leg (42 on production)
+/// and a withdrawal may pay out nothing, which the signs alone would misread.
+///
+/// Classified on the server rather than in the page, and the `filter[event]`
+/// predicate selects on the same value — the classic signs, the soroban
+/// stored kind: two classifiers would eventually disagree, and the one the
+/// user sees must be the one the filter used. This deliberately reverses the
+/// client-side policy the retired `/transactions` shape carried.
 ///
 /// `#[repr(u8)]` rather than the `i16` of the other enums here: the column it
-/// is stored in is `UInt8`.
-///
-/// Classified in SQL rather than here, because the same expression is the
-/// `filter[event]` predicate: two classifiers would eventually disagree, and
-/// the one the user sees must be the one the filter used. This deliberately
-/// reverses the client-side policy the retired `/transactions` shape carried.
+/// is stored in, `pool_movements.event_kind`, is `UInt8`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
