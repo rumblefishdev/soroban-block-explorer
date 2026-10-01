@@ -258,7 +258,7 @@ pub async fn fetch_soroban_participants(
         "WITH (SELECT argMax(share_token_id, derived_at_ledger) FROM pool_instance_state \
                WHERE pool_id = unhex(?)) AS token_id, \
               (SELECT any(id) FROM soroban_contracts \
-               WHERE substring(base32Decode(contract_id), 2, 32) = unhex(?)) AS pool_self \
+               WHERE substring(tryBase32Decode(contract_id), 2, 32) = unhex(?)) AS pool_self \
          SELECT holder_id, \
                 toString(amt) AS raw_shares, \
                 toString(toDecimal256(amt, 7) * 100 / if(stored > 0, stored, total)) \
@@ -371,7 +371,7 @@ pub async fn count_soroban_participants(
             "WITH (SELECT argMax(share_token_id, derived_at_ledger) FROM pool_instance_state \
                    WHERE pool_id = unhex(?)) AS token, \
                   (SELECT any(id) FROM soroban_contracts \
-                   WHERE substring(base32Decode(contract_id), 2, 32) = unhex(?)) AS pool_self \
+                   WHERE substring(tryBase32Decode(contract_id), 2, 32) = unhex(?)) AS pool_self \
              SELECT ifNull(token, 0) AS token_id, countIf(amt > 0) AS n \
              FROM ( \
                  SELECT argMax(amount, last_updated_ledger) AS amt FROM balances \

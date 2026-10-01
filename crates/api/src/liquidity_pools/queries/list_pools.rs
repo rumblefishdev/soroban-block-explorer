@@ -274,12 +274,13 @@ pub async fn fetch_pool_list(
              GROUP BY pool_id \
              HAVING token != 0 \
          ), \
-         /* The pool's own contract surrogate: its `C…` id decodes to the pool id. */ \
+         /* The pool's own contract surrogate: its `C…` id decodes to the pool id. \
+            `try`: one id that does not decode must not fail the whole list. */ \
          pool_self AS ( \
-             SELECT substring(base32Decode(contract_id), 2, 32) AS pool_id, any(id) AS id \
+             SELECT substring(tryBase32Decode(contract_id), 2, 32) AS pool_id, any(id) AS id \
              FROM soroban_contracts \
              WHERE startsWith(contract_id, 'C') \
-               AND substring(base32Decode(contract_id), 2, 32) IN (SELECT pool_id FROM share_token) \
+               AND substring(tryBase32Decode(contract_id), 2, 32) IN (SELECT pool_id FROM share_token) \
              GROUP BY pool_id \
          ) \
          SELECT \
