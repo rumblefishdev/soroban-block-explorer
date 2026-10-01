@@ -35,6 +35,11 @@ async fn soroban_total_shares_follow_the_measured_rule() {
         .await
         .expect("apply init.sql");
 
+    // Share-token ids must be real `C…` StrKeys: the list query base32-decodes
+    // every contract id to find each pool's own contract.
+    let token_901 = stellar_strkey::Contract([0x91; 32]).to_string();
+    let token_904 = stellar_strkey::Contract([0x94; 32]).to_string();
+
     for sql in [
         format!(
             "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs) VALUES \
@@ -60,12 +65,14 @@ async fn soroban_total_shares_follow_the_measured_rule() {
              (unhex('{NO_KEY}'), 1, 0, 0, 200), \
              (unhex('{NO_SCALE}'), 1, 904, 4622, 200)"
         ),
-        "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
-         (901, 'CSHARETOKEN901', false), (904, 'CSHARETOKEN904', false)"
-            .to_string(),
-        "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
-         ('CSHARETOKEN901', 7, 1)"
-            .to_string(),
+        format!(
+            "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
+             (901, '{token_901}', false), (904, '{token_904}', false)"
+        ),
+        format!(
+            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
+             ('{token_901}', 7, 1)"
+        ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
     }
