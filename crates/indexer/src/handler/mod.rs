@@ -182,7 +182,7 @@ pub async fn handler(
                 })
                 .await
             }
-            None => reconcile(state).await,
+            None => reconcile(state).await.map(|_| ()),
         };
         if let Err(e) = result {
             // Full error Display on purpose (policy reversed 2026-08-10,
@@ -224,6 +224,15 @@ pub async fn handler(
     })
 }
 
+/// What one reconcile did: how many ledgers it stored, and the newest stored
+/// ledger after it (0 while the table is empty). Mainnet ignores it; reading
+/// the data lake, the indexer paces itself by it (`lake_pacing`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reconciled {
+    pub persisted: u64,
+    pub newest: i64,
+}
+
 /// Persist the contiguous run of ledgers from `max(sequence) + 1` upward, in
 /// strict ascending order, until either:
 ///   * the next ledger is **not yet on S3** (a gap) — return Ok and wait for a
@@ -234,7 +243,7 @@ pub async fn handler(
 /// Returns Err only on a hard CH/S3 failure, which fails the doorbell so SQS
 /// redelivers it. Already-persisted ledgers stay committed (the `ledgers` row
 /// is written last per ledger), so a resume never reprocesses them.
-async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
+async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
     let start = Instant::now();
 
     let max_seq: i64 = state
@@ -250,7 +259,10 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
     // the live tail runs, so this is a guard, not a normal path.
     if max_seq <= 0 {
         warn!("ledgers table is empty (max=0) — no cursor to advance from; no-op");
-        return Ok(());
+        return Ok(Reconciled {
+            persisted: 0,
+            newest: 0,
+        });
     }
 
     let mut next = max_seq + 1;
@@ -264,7 +276,10 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
                 next,
                 persisted, "reconcile hit time budget — stopping; next doorbell resumes"
             );
-            return Ok(());
+            return Ok(Reconciled {
+                persisted,
+                newest: next - 1,
+            });
         }
 
         let key = ledger_s3_key(&state.key_prefix, next);
@@ -276,7 +291,10 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
             } else {
                 info!(next, persisted, "reached gap on S3 — contiguous run done");
             }
-            return Ok(());
+            return Ok(Reconciled {
+                persisted,
+                newest: next - 1,
+            });
         }
 
         info!(ledger = next, key = key.as_str(), "processing ledger");

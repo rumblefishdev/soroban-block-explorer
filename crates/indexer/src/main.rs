@@ -96,7 +96,9 @@ async fn main() -> Result<(), Error> {
         &bucket,
         xdr_parser::public_archive::configured_archive_prefix().as_deref(),
     )?;
-    let (s3_client, key_prefix) = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
+    // The lake sends no events: reading it, the indexer also queues its own
+    // next wake-up (`Pacer`).
+    let (s3_client, key_prefix, pacer) = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
         let public = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .no_credentials()
             .region(aws_sdk_s3::config::Region::new(
@@ -105,16 +107,10 @@ async fn main() -> Result<(), Error> {
             .load()
             .await;
         let prefix = format!("{}/", xdr_parser::public_archive::public_archive_prefix());
-        (S3Client::new(&public), prefix)
+        let pacer = handler::lake_pacing::Pacer::from_env(sqs_client)?;
+        (S3Client::new(&public), prefix, Some(pacer))
     } else {
-        (S3Client::new(&aws_config), String::new())
-    };
-
-    // The lake sends no events: the indexer queues its own next wake-up.
-    let pacer = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
-        Some(handler::lake_pacing::Pacer::from_env(sqs_client)?)
-    } else {
-        None
+        (S3Client::new(&aws_config), String::new(), None)
     };
 
     let state = handler::HandlerState {
