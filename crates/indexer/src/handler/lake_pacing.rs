@@ -14,14 +14,13 @@
 //!
 //! Mainnet never builds a [`Pacer`], and its doorbell bodies stay ignored.
 
-use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_sdk_sqs::Client as SqsClient;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use super::{HandlerError, Reconciled};
+use super::{HandlerError, HandlerState, Reconciled, reconcile};
 
 const INGEST_QUEUE_URL_ENV: &str = "INGEST_QUEUE_URL";
 /// Stellar closes a ledger about every 5 s.
@@ -53,8 +52,13 @@ pub enum Wake {
 
 impl Wake {
     pub fn parse(body: Option<&str>) -> Self {
-        body.and_then(|b| serde_json::from_str::<Expect>(b).ok())
-            .map_or(Wake::Keepalive, Wake::Chain)
+        let Some(body) = body else {
+            return Wake::Keepalive;
+        };
+        match serde_json::from_str::<Expect>(body) {
+            Ok(expect) => Wake::Chain(expect),
+            Err(_) => Wake::Keepalive,
+        }
     }
 }
 
@@ -99,7 +103,13 @@ pub fn next(wake: Wake, done: Reconciled, newest_closed_at: Option<i64>, now: i6
 
 /// 1, 2, 4, 8, then 15 s between looks at a file that is late.
 fn backoff(attempt: u32) -> i32 {
-    (1_i64 << (attempt.min(5) - 1)).min(MAX_DELAY_SECS) as i32
+    match attempt {
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 8,
+        _ => 15,
+    }
 }
 
 /// Queues the indexer's next wake-up on its own ingest queue.
@@ -128,8 +138,8 @@ impl Pacer {
             .delay_seconds(next.delay_secs)
             .send()
             .await
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 
@@ -145,30 +155,26 @@ async fn closed_at(ch: &clickhouse::Client, sequence: i64) -> Result<i64, Handle
     Ok(closed)
 }
 
-/// Runs `reconcile` for one wake and queues the next one.
+/// Runs one reconcile for this wake and queues the next one.
 ///
 /// A reconcile failure returns the error and queues nothing: SQS redelivers
 /// the message later, and the keepalive restarts the chain meanwhile.
-pub async fn paced<F, Fut>(
+pub async fn paced(
+    state: &HandlerState,
     pacer: &Pacer,
-    ch: &clickhouse::Client,
     body: Option<&str>,
-    reconcile: F,
-) -> Result<(), HandlerError>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<Reconciled, HandlerError>>,
-{
+) -> Result<(), HandlerError> {
     let wake = Wake::parse(body);
-    let done = reconcile().await?;
+    let done = reconcile(state).await?;
     let newest_closed_at = if done.persisted > 0 {
-        Some(closed_at(ch, done.newest).await?)
+        Some(closed_at(&state.ch_client, done.newest).await?)
     } else {
         None
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+        .unwrap_or_default()
+        .as_secs() as i64;
     match next(wake, done, newest_closed_at, now) {
         Some(next) => {
             if let Err(e) = pacer.send(next).await {

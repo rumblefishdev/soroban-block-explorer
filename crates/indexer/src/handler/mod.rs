@@ -176,12 +176,7 @@ pub async fn handler(
         // second reconcile in the same batch is a cheap no-op (cursor already
         // moved).
         let result = match &state.pacer {
-            Some(pacer) => {
-                lake_pacing::paced(pacer, &state.ch_client, msg.body.as_deref(), || {
-                    reconcile(state)
-                })
-                .await
-            }
+            Some(pacer) => lake_pacing::paced(state, pacer, msg.body.as_deref()).await,
             None => reconcile(state).await.map(|_| ()),
         };
         if let Err(e) = result {
