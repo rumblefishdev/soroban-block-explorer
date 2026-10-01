@@ -41,6 +41,19 @@ one table and retire the old one.
 - Drop `pool_operation_amounts` after a deploy with no reader (replacing a
   table in `init.sql`: new CREATE under the old, then the drop).
 
+## Measured 2026-10-01 (read-only, production)
+
+- `pool_operation_amounts`: 994M rows, 52,903 pools, 6.07 GiB on disk;
+  `pool_movements` (soroban only): 12.3M unique rows, 708 pools, 123 MiB.
+- Classic volume and fees do not read `pool_operation_amounts`: they come from
+  `liquidity_pool_snapshots` (`gross_volume_*`). Only the activity feed reads
+  it. Moving classic pools here therefore changes the source of classic volume
+  too — the before/after check must cover volume, not only activity.
+- Reads on `pool_movements`, busiest soroban pool (4.1M rows): an activity
+  page of 20 events 70 ms / 4.1M rows read; 24 h volume 12 ms / 26k rows; a
+  full-history daily volume series 2.4 s / 20M rows / 1.9 GiB, almost all of
+  it the `ledgers` join — the chart's windowed read stays well under.
+
 ## Acceptance Criteria
 
 - [ ] Classic activity, volume and fees unchanged on production for sampled
