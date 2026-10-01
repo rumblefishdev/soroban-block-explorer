@@ -1,9 +1,8 @@
 //! ClickHouse implementation of `GET /v1/network/stats`.
 //!
-//! Reference SQL lives at
-//! `docs/architecture/database-schema/endpoint-queries-clickhouse/01_get_network_stats.sql`,
-//! which documents the semantics for TPS, accounts/contracts estimates, the
-//! `generated_at` ↔ cache-staleness split, and empty-cluster handling.
+//! The comment in [`fetch_stats`] documents the TPS window, the deduped
+//! accounts/contracts counts and empty-cluster handling; the `generated_at` ↔
+//! cache-staleness split is on [`NetworkStats`].
 
 use chrono::{DateTime, TimeZone, Utc};
 use clickhouse::Row;
@@ -11,8 +10,8 @@ use serde::Deserialize;
 
 use super::dto::NetworkStats;
 
-/// Single-row projection of the canonical CH network-stats statement.
-/// Field order matches the SELECT column order in `01_get_network_stats.sql`;
+/// Single-row projection of the network-stats statement in [`fetch_stats`].
+/// Field order matches its SELECT column order;
 /// `clickhouse::Row` decodes by position, not by name.
 #[derive(Debug, Row, Deserialize)]
 struct StatsRow {

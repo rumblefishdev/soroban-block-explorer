@@ -48,9 +48,6 @@ const columns: ExplorerTableColumn<TransactionListItem>[] = [
   },
 ];
 
-/** Column count — used to size the loading skeleton consistently. */
-export const LATEST_TX_COLUMN_COUNT = columns.length;
-
 /**
  * Home-page Latest Transactions table — hash, source account, operation,
  * status, net settled and time. A subset of the full Transactions list table

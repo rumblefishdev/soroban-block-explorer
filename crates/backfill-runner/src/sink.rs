@@ -45,7 +45,7 @@ impl Sink {
     }
 
     /// Switch the whole process to the **targeted write** of task 0279: parse
-    /// as usual, but persist ONLY `lp_operation_amounts`.
+    /// as usual, but persist ONLY the pool amounts (`pool_operation_amounts`).
     ///
     /// This is what makes a historical re-parse for one new derived table
     /// additive. A normal run re-emits every table, which rewrites the 12
@@ -179,10 +179,16 @@ impl PartitionWriterHandle {
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
+            // Task 0374 (W1): pool events key their tokens on the SAC map.
+            let writes_pool_movements = self
+                .only
+                .as_ref()
+                .is_none_or(|t| t.contains("pool_movements"));
             let needed = db_clickhouse::persist::sac_classic_map_needed(
                 &parsed.soroban_token_balances,
                 &parsed.events,
                 writes_balances,
+                writes_pool_movements,
             );
             let sac_classic =
                 db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;

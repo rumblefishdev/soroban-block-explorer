@@ -179,7 +179,6 @@ fn column_order_nfts() {
             "collection_name",
             "name",
             "media_url",
-            "minted_at_ledger",
             "current_owner_id",
             "current_owner_ledger",
         ],
@@ -199,7 +198,6 @@ fn column_order_nfts_pending() {
             "collection_name",
             "name",
             "media_url",
-            "minted_at_ledger",
             "current_owner_id",
             "current_owner_ledger",
         ],
@@ -287,7 +285,6 @@ fn column_order_transactions() {
     assert_columns::<TransactionRow>(
         "transactions",
         &[
-            "id",
             "hash",
             "ledger_sequence",
             "application_order",
@@ -303,38 +300,30 @@ fn column_order_transactions() {
 }
 
 #[test]
-fn column_order_transaction_hash_index() {
-    assert_columns::<TransactionHashIndexRow>(
-        "transaction_hash_index",
-        &["hash", "ledger_sequence"],
+fn column_order_transaction_hash_prefix_index() {
+    assert_columns::<TransactionHashPrefixRow>(
+        "transaction_hash_prefix_index",
+        &["hash_prefix", "ledger_sequence"],
     );
 }
 
+/// Little-endian `u64` of bytes 0..8 — ClickHouse's
+/// `reinterpretAsUInt64(substring(hash, 1, 8))` (task 0580; the e2e pins the
+/// SQL side against a real server).
 #[test]
-fn column_order_operations_appearances() {
-    assert_columns::<OperationAppearanceRow>(
-        "operations_appearances",
-        &[
-            "transaction_id",
-            "application_order",
-            "type",
-            "source_id",
-            "destination_id",
-            "contract_id",
-            "asset_code",
-            "asset_issuer_id",
-            "pool_ids",
-            "amount",
-            "ledger_sequence",
-        ],
-    );
+fn hash_prefix_is_little_endian_first_eight_bytes() {
+    let mut hash = [0xffu8; 32];
+    hash[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let row = TransactionHashPrefixRow::new(&hash, 42);
+    assert_eq!(row.hash_prefix, 0x0807_0605_0403_0201);
+    assert_eq!(row.ledger_sequence, 42);
 }
 
 #[test]
 fn column_order_transaction_participants() {
     assert_columns::<TransactionParticipantRow>(
         "transaction_participants",
-        &["account_id", "ledger_sequence", "transaction_id"],
+        &["account_id", "ledger_sequence", "application_order"],
     );
 }
 
@@ -342,15 +331,58 @@ fn column_order_transaction_participants() {
 fn column_order_operation_asset_appearances() {
     assert_columns::<OperationAssetAppearanceRow>(
         "operation_asset_appearances",
-        &["asset_id", "ledger_sequence", "transaction_id"],
+        &["asset_id", "ledger_sequence", "application_order"],
     );
 }
 
 #[test]
-fn column_order_operation_pools() {
-    assert_columns::<OperationPoolRow>(
-        "operation_pools",
-        &["pool_id", "ledger_sequence", "transaction_id"],
+fn column_order_transaction_operations() {
+    assert_columns::<TransactionOperationRow>(
+        "transaction_operations",
+        &[
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "type",
+            "source_id",
+            "destination_id",
+            "contract_id",
+            "asset_code",
+            "asset_issuer_id",
+            "pool_ids",
+        ],
+    );
+}
+
+#[test]
+fn column_order_pool_operation_amounts() {
+    assert_columns::<PoolOperationAmountRow>(
+        "pool_operation_amounts",
+        &[
+            "pool_id",
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "asset_id",
+            "amount",
+        ],
+    );
+}
+
+#[test]
+fn column_order_pool_movements() {
+    assert_columns::<PoolMovementRow>(
+        "pool_movements",
+        &[
+            "pool_id",
+            "ledger_sequence",
+            "application_order",
+            "operation_index",
+            "event_index",
+            "event_kind",
+            "asset_id",
+            "amount",
+        ],
     );
 }
 
@@ -373,62 +405,24 @@ fn column_order_soroban_events() {
     );
 }
 
+/// One struct writes both `nft_ownership_changes` and its `_pending` twin.
 #[test]
-fn column_order_soroban_invocations_appearances() {
-    assert_columns::<SorobanInvocationAppearanceRow>(
-        "soroban_invocations_appearances",
-        &[
-            "contract_id",
-            "transaction_id",
-            "ledger_sequence",
-            "caller_id",
-            "caller_contract_id",
-            "amount",
-        ],
-    );
-}
-
-#[test]
-fn column_order_contract_transactions() {
-    assert_columns::<ContractTransactionRow>(
-        "contract_transactions",
-        &["contract_id", "ledger_sequence", "application_order"],
-    );
-}
-
-#[test]
-fn column_order_nft_ownership() {
-    assert_columns::<NftOwnershipRow>(
-        "nft_ownership",
-        &[
-            "contract_id",
-            "token_id",
-            "ledger_sequence",
-            "event_order",
-            "transaction_id",
-            "owner_id",
-            "event_type",
-        ],
-    );
-}
-
-/// Task 0217 / 0220 — quarantine companion to [`NftOwnershipRow`].
-/// Column order must stay byte-for-byte in sync with `init.sql`
-/// `nft_ownership_pending` because RowBinary is positional.
-#[test]
-fn column_order_nft_ownership_pending() {
-    assert_columns::<NftOwnershipPendingRow>(
-        "nft_ownership_pending",
-        &[
-            "contract_id",
-            "token_id",
-            "ledger_sequence",
-            "event_order",
-            "transaction_id",
-            "owner_id",
-            "event_type",
-        ],
-    );
+fn column_order_nft_ownership_changes() {
+    for table in ["nft_ownership_changes", "nft_ownership_changes_pending"] {
+        assert_columns::<NftOwnershipChangeRow>(
+            table,
+            &[
+                "contract_id",
+                "token_id",
+                "ledger_sequence",
+                "application_order",
+                "operation_index",
+                "event_index",
+                "owner_id",
+                "event_type",
+            ],
+        );
+    }
 }
 
 #[test]
@@ -552,7 +546,7 @@ fn prepare_surrogate_id_fk_consistency() {
 
     assert_eq!(staged.account_rows.len(), 1);
     assert_eq!(staged.transaction_rows.len(), 1);
-    assert_eq!(staged.hash_index_rows.len(), 1);
+    assert_eq!(staged.hash_prefix_rows.len(), 1);
     assert_eq!(staged.participant_rows.len(), 1);
 
     let tx_row = &staged.transaction_rows[0];
@@ -563,10 +557,9 @@ fn prepare_surrogate_id_fk_consistency() {
     // equality.
     assert_eq!(tx_row.source_id, acc_row.id);
     assert_eq!(part_row.account_id, acc_row.id);
-    assert_eq!(part_row.transaction_id, tx_row.id);
-
-    // tx surrogate id derived from same hash bytes as `hash` column.
-    assert_eq!(tx_row.id, ids::transaction_id(&tx_row.hash));
+    // The participant locates its transaction by position (ADR 0059).
+    assert_eq!(part_row.ledger_sequence, tx_row.ledger_sequence);
+    assert_eq!(part_row.application_order, tx_row.application_order);
 }
 
 /// Fee-bump: both the outer and the inner tx hash are indexed to the same
@@ -575,8 +568,10 @@ fn prepare_surrogate_id_fk_consistency() {
 fn prepare_fee_bump_indexes_inner_hash() {
     let ledger = synthetic_ledger();
     let mut tx = synthetic_tx(0x10);
+    // The inner hash differs from the outer one in its first 8 bytes, so the
+    // two index rows are told apart by their prefix.
     let mut inner = vec![0u8; 32];
-    inner[31] = 0x20;
+    inner[0] = 0x20;
     tx.inner_tx_hash = Some(hex::encode(&inner));
 
     let staged = stage::prepare(
@@ -598,23 +593,16 @@ fn prepare_fee_bump_indexes_inner_hash() {
     .expect("prepare");
 
     // Two index rows: outer + inner, both → the tx's ledger.
-    assert_eq!(staged.hash_index_rows.len(), 2);
     let seq = staged.transaction_rows[0].ledger_sequence;
-    let mut outer = [0u8; 32];
-    outer[31] = 0x10;
-    assert!(
-        staged
-            .hash_index_rows
-            .iter()
-            .any(|r| r.hash == outer && r.ledger_sequence == seq)
-    );
+    let outer = staged.transaction_rows[0].hash;
     let mut inner_bytes = [0u8; 32];
-    inner_bytes[31] = 0x20;
-    assert!(
-        staged
-            .hash_index_rows
-            .iter()
-            .any(|r| r.hash == inner_bytes && r.ledger_sequence == seq)
+    inner_bytes[0] = 0x20;
+    assert_eq!(
+        staged.hash_prefix_rows,
+        vec![
+            TransactionHashPrefixRow::new(&outer, seq),
+            TransactionHashPrefixRow::new(&inner_bytes, seq),
+        ]
     );
 }
 
@@ -827,17 +815,20 @@ fn staged_events_carry_the_rpc_id_and_their_transaction() {
     // The contract index takes the operation event only. Paying a fee is not
     // using the SAC: tx2, which only paid one, is not in the contract's list.
     assert_eq!(
-        staged.contract_tx_rows,
-        vec![ContractTransactionRow {
+        staged.contract_activity_rows,
+        vec![ContractActivityRow {
             contract_id: ids::contract_id(&sac),
             ledger_sequence: 10,
             application_order: 1,
+            caller_id: None,
+            caller_contract_id: None,
+            invocation_count: 0,
         }]
     );
 }
 
 #[test]
-fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
+fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
     let ledger = synthetic_ledger();
     let tx1 = synthetic_tx(0x71);
     let tx2 = synthetic_tx(0x72);
@@ -888,7 +879,7 @@ fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
             tx2.hash.clone(),
             vec![ExtractedOperation {
                 transaction_hash: tx2.hash.clone(),
-                operation_index: 3,
+                operation_index: 2,
                 op_type: OperationType::InvokeHostFunction,
                 source_account: None,
                 asset_appearances: vec![],
@@ -902,7 +893,7 @@ fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
     let invocation = |contract: &str| ExtractedInvocation {
         transaction_hash: tx2.hash.clone(),
         contract_id: Some(contract.to_owned()),
-        caller_account: None,
+        caller: None,
         function_name: Some("f".into()),
         function_args: serde_json::json!([]),
         return_value: serde_json::Value::Null,
@@ -932,18 +923,21 @@ fn contract_transactions_join_every_way_a_transaction_touches_a_contract() {
     )
     .expect("prepare");
 
-    let row = |contract: &str, application_order| ContractTransactionRow {
+    let row = |contract: &str, application_order, invocation_count| ContractActivityRow {
         contract_id: ids::contract_id(contract),
         ledger_sequence: 10,
         application_order,
+        caller_id: None,
+        caller_contract_id: None,
+        invocation_count,
     };
     let mut expected = vec![
-        row(&c1, 2), // tx2's event, invocation and operation: one row
-        row(&c2, 1), // tx1's event
-        row(&c2, 2), // tx2's invocation
+        row(&c1, 2, 1), // tx2's event, invocation and operation: one row
+        row(&c2, 1, 0), // tx1's event: touched, not invoked
+        row(&c2, 2, 1), // tx2's invocation
     ];
     expected.sort();
-    assert_eq!(staged.contract_tx_rows, expected);
+    assert_eq!(staged.contract_activity_rows, expected);
 }
 
 #[test]
@@ -965,7 +959,7 @@ fn prepare_folds_identical_operations() {
             "asset": "native",
         }),
     };
-    let ops = vec![(tx.hash.clone(), vec![make_op(1), make_op(2)])];
+    let ops = vec![(tx.hash.clone(), vec![make_op(0), make_op(1)])];
 
     let staged = stage::prepare(
         &ledger,
@@ -985,10 +979,10 @@ fn prepare_folds_identical_operations() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 1);
-    let op_row = &staged.op_rows[0];
-    assert_eq!(op_row.amount, 2);
-    assert_eq!(op_row.application_order, 1);
+    // Two identical payments fold into one row at the first one's index.
+    assert_eq!(staged.tx_operation_rows.len(), 1);
+    let op_row = &staged.tx_operation_rows[0];
+    assert_eq!(op_row.operation_index, 0);
     assert_eq!(op_row.op_type, OperationType::Payment as i16);
     assert_eq!(op_row.destination_id, Some(ids::account_id(&dest)));
 }
@@ -1046,7 +1040,7 @@ fn prepare_registers_op_counterparties_as_participants() {
     let seller = "G".to_string() + &"S".repeat(55);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
         asset_appearances: vec![],
@@ -1101,7 +1095,7 @@ fn prepare_stages_operation_asset_appearances() {
     // must key as the FIRST-CLASS surrogate, not an empty sentinel.
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageSellOffer,
         source_account: None,
         asset_appearances: vec![
@@ -1144,10 +1138,10 @@ fn prepare_stages_operation_asset_appearances() {
         staged.op_asset_rows[1].asset_id,
         ids::asset_id(1, "USDC", ids::account_id(&issuer), 0)
     );
-    // Same tx as the legacy fold row — join-back key intact.
+    // Same tx as the fold row — both carry the transaction's position.
     assert_eq!(
-        staged.op_asset_rows[0].transaction_id,
-        staged.op_rows[0].transaction_id
+        staged.op_asset_rows[0].application_order,
+        staged.tx_operation_rows[0].application_order
     );
     // Task 0359 decision 1c: the credit-leg issuer is NOT a tx participant. The
     // asset's activity lives on its asset page (`op_asset_rows` above); flooding
@@ -1187,7 +1181,7 @@ fn op_asset_appearances_dedup_same_asset_across_ops_in_one_tx() {
         destination_muxed_id: None,
         details: serde_json::json!({ "selling": "native", "buying": format!("USDC:{issuer}") }),
     };
-    let ops = vec![(tx.hash.clone(), vec![mk(1), mk(2)])];
+    let ops = vec![(tx.hash.clone(), vec![mk(0), mk(1)])];
 
     let staged = stage::prepare(
         &ledger,
@@ -1245,8 +1239,8 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
     let ops = vec![(
         tx.hash.clone(),
         vec![
-            make_op(1, vec![&pool_b, &pool_a]),
-            make_op(2, vec![&pool_a]),
+            make_op(0, vec![&pool_b, &pool_a]),
+            make_op(1, vec![&pool_a]),
         ],
     )];
 
@@ -1268,17 +1262,20 @@ fn prepare_path_payment_pool_ids_split_fold_and_sort() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 2, "distinct pool sets must not fold");
-    let mut rows = staged.op_rows.clone();
-    rows.sort_by_key(|r| r.application_order);
-    assert_eq!(rows[0].application_order, 1);
-    assert_eq!(rows[0].amount, 1);
+    assert_eq!(
+        staged.tx_operation_rows.len(),
+        2,
+        "distinct pool sets must not fold"
+    );
+    let mut rows = staged.tx_operation_rows.clone();
+    rows.sort_by_key(|r| r.operation_index);
+    assert_eq!(rows[0].operation_index, 0);
     assert_eq!(
         rows[0].pool_ids,
         vec![[0x11u8; 32], [0x22u8; 32]],
         "canonical sorted order regardless of crossing order"
     );
-    assert_eq!(rows[1].application_order, 2);
+    assert_eq!(rows[1].operation_index, 1);
     assert_eq!(rows[1].pool_ids, vec![[0x11u8; 32]]);
 }
 
@@ -1293,7 +1290,7 @@ fn prepare_sets_gross_volume_a_on_traded_pool_snapshot() {
     let quiet = "bb".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::PathPaymentStrictSend,
         source_account: None,
         asset_appearances: vec![],
@@ -1364,14 +1361,23 @@ fn prepare_lp_deposit_single_element_pool_ids() {
     let pool = "ab".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::LiquidityPoolDeposit,
         source_account: None,
         asset_appearances: vec![],
         counterparties: vec![],
         source_muxed_id: None,
         destination_muxed_id: None,
-        details: serde_json::json!({ "liquidityPoolId": pool }),
+        details: serde_json::json!({
+            "liquidityPoolId": pool,
+            "poolDelta": {
+                "poolId": pool,
+                "assetA": "native",
+                "amountA": 1_000,
+                "assetB": "native",
+                "amountB": 2_000,
+            },
+        }),
     };
     let ops = vec![(tx.hash.clone(), vec![op])];
 
@@ -1393,15 +1399,23 @@ fn prepare_lp_deposit_single_element_pool_ids() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 1);
-    assert_eq!(staged.op_rows[0].pool_ids, vec![[0xABu8; 32]]);
-    // task 0365: the same crossing fans out into operation_pools (pool, tx).
-    assert_eq!(staged.op_pool_rows.len(), 1);
-    assert_eq!(staged.op_pool_rows[0].pool_id, [0xABu8; 32]);
-    assert_eq!(
-        staged.op_pool_rows[0].transaction_id,
-        staged.op_rows[0].transaction_id
-    );
+    // Task 0372: located by the transaction position (1-based) and the
+    // 0-based operation index.
+    let tx_row = &staged.transaction_rows[0];
+    let ops = &staged.tx_operation_rows;
+    assert_eq!(ops.len(), 1);
+    assert_eq!(ops[0].pool_ids, vec![[0xABu8; 32]]);
+    assert_eq!(ops[0].ledger_sequence, tx_row.ledger_sequence);
+    assert_eq!(ops[0].application_order, tx_row.application_order);
+    assert_eq!(ops[0].operation_index, 0);
+
+    assert!(!staged.pool_amount_rows.is_empty());
+    for row in &staged.pool_amount_rows {
+        assert_eq!(row.pool_id, [0xABu8; 32]);
+        assert_eq!(row.ledger_sequence, tx_row.ledger_sequence);
+        assert_eq!(row.application_order, tx_row.application_order);
+        assert_eq!(row.operation_index, 0);
+    }
 }
 
 #[test]
@@ -1414,7 +1428,7 @@ fn prepare_offer_op_pool_ids_from_details() {
     let pool = "cd".repeat(32);
     let op = ExtractedOperation {
         transaction_hash: tx.hash.clone(),
-        operation_index: 1,
+        operation_index: 0,
         op_type: OperationType::ManageBuyOffer,
         source_account: None,
         asset_appearances: vec![],
@@ -1446,15 +1460,15 @@ fn prepare_offer_op_pool_ids_from_details() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_rows.len(), 1);
-    assert_eq!(staged.op_rows[0].pool_ids, vec![[0xCDu8; 32]]);
+    assert_eq!(staged.tx_operation_rows.len(), 1);
+    assert_eq!(staged.tx_operation_rows[0].pool_ids, vec![[0xCDu8; 32]]);
 }
 
 #[test]
-fn op_pool_rows_dedup_same_pool_across_ops_in_one_tx() {
-    // Two ops in one tx crossing the SAME pool → one (pool, tx) row (the per-tx
-    // dedup, task 0365). The RMT would collapse residuals anyway; deduping at write
-    // cuts the backfilled volume up front — the pool twin of the asset fan-out.
+fn transaction_operations_fold_keeps_the_smallest_index() {
+    // Two identical ops in one tx fold into one row, which keeps the group's
+    // smallest operation index, 0-based (task 0372): operations 2 and 3
+    // (1-based) → 1.
     let ledger = synthetic_ledger();
     let tx = synthetic_tx(0x34);
     let pool = "ef".repeat(32);
@@ -1489,11 +1503,11 @@ fn op_pool_rows_dedup_same_pool_across_ops_in_one_tx() {
     )
     .expect("prepare");
 
-    assert_eq!(staged.op_pool_rows.len(), 1);
-    assert_eq!(staged.op_pool_rows[0].pool_id, [0xEFu8; 32]);
+    assert_eq!(staged.tx_operation_rows.len(), 1);
+    assert_eq!(staged.tx_operation_rows[0].operation_index, 1);
     assert_eq!(
-        staged.op_pool_rows[0].transaction_id,
-        staged.op_rows[0].transaction_id
+        staged.tx_operation_rows[0].application_order,
+        staged.transaction_rows[0].application_order
     );
 }
 
@@ -1536,7 +1550,6 @@ fn prepare_is_deterministic_across_runs() {
     )
     .expect("second run");
 
-    assert_eq!(a.transaction_rows[0].id, b.transaction_rows[0].id);
     assert_eq!(a.account_rows[0].id, b.account_rows[0].id);
     assert_eq!(a.ledger_rows[0].sequence, b.ledger_rows[0].sequence);
 }
@@ -1680,7 +1693,7 @@ fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
         contract_id: contract.to_string(),
         token_id: token.to_string(),
         collection_name: None,
-        owner_account: None,
+        owner: None,
         name: None,
         media_url: None,
         minted_at_ledger: Some(10),
@@ -1693,17 +1706,26 @@ fn synthetic_nft_event(
     tx_hash: &str,
     contract: &str,
     token: &str,
-    event_order: u16,
+    event_index: u16,
 ) -> ExtractedNftEvent {
     ExtractedNftEvent {
         transaction_hash: tx_hash.to_string(),
         contract_id: contract.to_string(),
         token_id: token.to_string(),
         event_type: NftEventType::Mint,
-        owner_account: None,
-        event_order,
+        owner: None,
         ledger_sequence: 10,
         created_at: 1_700_000_000,
+        // Operation 2's event `event_index`. `transaction_index` deliberately
+        // differs from the transaction's position (1, its only transaction)
+        // so the routing tests pin that `application_order` comes from the
+        // ledger's transaction order, as for `soroban_events`, not from the id.
+        event_id: Some(xdr_parser::EventId {
+            ledger_sequence: 10,
+            transaction_index: 7,
+            operation_index: 2,
+            event_index: u32::from(event_index),
+        }),
     }
 }
 
@@ -1791,8 +1813,21 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
         0,
         "Nft-classified contract: nothing in pending"
     );
-    assert_eq!(staged.nft_ownership_rows.len(), 1);
-    assert_eq!(staged.nft_ownership_pending_rows.len(), 0);
+    // Task 0424: the change, located by its event.
+    assert_eq!(
+        staged.nft_ownership_change_rows,
+        vec![NftOwnershipChangeRow {
+            contract_id: ids::contract_id(&contract),
+            token_id: "tk1".into(),
+            ledger_sequence: 10,
+            application_order: 1,
+            operation_index: 2,
+            event_index: 0,
+            owner_id: None,
+            event_type: NftEventType::Mint as i16,
+        }]
+    );
+    assert!(staged.nft_ownership_change_pending_rows.is_empty());
 
     // Classifier override visible on the contract row.
     let contract_row = &staged.contract_rows[0];
@@ -2297,8 +2332,8 @@ fn prepare_drops_nft_row_when_contract_classified_fungible() {
         staged.nft_pending_rows.is_empty(),
         "Fungible verdict: NFT row must drop, not route to pending"
     );
-    assert!(staged.nft_ownership_rows.is_empty());
-    assert!(staged.nft_ownership_pending_rows.is_empty());
+    assert!(staged.nft_ownership_change_rows.is_empty());
+    assert!(staged.nft_ownership_change_pending_rows.is_empty());
 }
 
 /// NFT row whose contract is NOT deployed in the same ledger (no
@@ -2341,8 +2376,40 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
         1,
         "Unclassified contract: row in pending bucket"
     );
-    assert_eq!(staged.nft_ownership_rows.len(), 0);
-    assert_eq!(staged.nft_ownership_pending_rows.len(), 1);
+    // Task 0424: the change routes the same way.
+    assert!(staged.nft_ownership_change_rows.is_empty());
+    assert_eq!(staged.nft_ownership_change_pending_rows.len(), 1);
+}
+
+/// Task 0424: an NFT change without an event id is refused, as
+/// `soroban_events` refuses one — a row with no location cannot be keyed.
+#[test]
+fn prepare_refuses_an_nft_change_without_an_event_id() {
+    let ledger = synthetic_ledger();
+    let tx = synthetic_tx(0x93);
+    let contract = "C".to_string() + &"C".repeat(55);
+    let nft = synthetic_nft(&contract, "tk1");
+    let mut ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
+    ev.event_id = None;
+
+    let err = stage::prepare(
+        &ledger,
+        std::slice::from_ref(&tx),
+        &[(tx.hash.clone(), vec![])],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        std::slice::from_ref(&nft),
+        std::slice::from_ref(&ev),
+        &[],
+    )
+    .expect_err("an NFT change needs its event id");
+    assert!(err.to_string().contains("event id"), "{err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -3197,7 +3264,7 @@ fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
         "one pool row per ledger, not one per touch"
     );
     // Legs-migration step 2: a CLASSIC row fills `legs` too — ASSET
-    // surrogates (the lp_operation_amounts join key), derived from the same
+    // surrogates (the pool_operation_amounts join key), derived from the same
     // pair the legacy columns carry, so the pair can eventually retire.
     let pr = &staged.pool_rows[0];
     assert_eq!(pr.pool_kind, 0);
@@ -3231,11 +3298,11 @@ fn same_ledger_nft_owner_flip_keeps_the_last_owner() {
         sac_asset: None,
     };
     let minted = ExtractedNft {
-        owner_account: Some("GFIRST".to_string()),
+        owner: Some("GFIRST".to_string()),
         ..synthetic_nft(&contract, "tk1")
     };
     let transferred = ExtractedNft {
-        owner_account: Some("GSECOND".to_string()),
+        owner: Some("GSECOND".to_string()),
         ..minted.clone()
     };
     let ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
@@ -3558,14 +3625,47 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &router_ledger,
+        false,
         false
     ));
     assert!(crate::persist::sac_classic_map_needed(
         &[],
         &pair_ledger,
+        false,
         false
     ));
-    assert!(!crate::persist::sac_classic_map_needed(&[], &[], true));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[],
+        true,
+        true
+    ));
+
+    // A pool's amount events key their tokens on the map too (task 0374, W1),
+    // exactly when `pool_movements` is written; other events do not.
+    let mut trade = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    trade.topics = serde_json::json!([{"type": "sym", "value": "trade"}]);
+    let trade_ledger = vec![("tx".to_string(), vec![trade])];
+    assert!(crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        true
+    ));
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &trade_ledger,
+        false,
+        false
+    ));
+    let mut other = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    other.topics = serde_json::json!([{"type": "sym", "value": "update_reserves"}]);
+    assert!(!crate::persist::sac_classic_map_needed(
+        &[],
+        &[("tx".to_string(), vec![other])],
+        false,
+        true
+    ));
 
     // A contract-held balance needs the map exactly when `balances` is written.
     let balance = [xdr_parser::ExtractedSorobanBalance {
@@ -3575,10 +3675,16 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         ledger: 1,
         closed: false,
     }];
-    assert!(crate::persist::sac_classic_map_needed(&balance, &[], true));
+    assert!(crate::persist::sac_classic_map_needed(
+        &balance,
+        &[],
+        true,
+        false
+    ));
     assert!(!crate::persist::sac_classic_map_needed(
         &balance,
         &[],
+        false,
         false
     ));
 }

@@ -23,6 +23,8 @@ All tasks by lifecycle status. Shared ID sequence (NNNN).
 
 Heavy content goes into `notes/` subdirectory. **Convert to directory when task grows beyond ~150 lines.**
 
+The pre-commit hook enforces it: `tools/scripts/check-task-file-size.sh` refuses a commit that grows a task's main file (single-file task or `README.md`, not `notes/`) past 150 lines; files already over the limit may stay or shrink.
+
 ## Note Prefixes
 
 | Prefix | Type | Use for |

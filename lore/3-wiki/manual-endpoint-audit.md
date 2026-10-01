@@ -22,9 +22,9 @@ once a regression test exists.
 
 ## Pre-reading (do once per session)
 
-1. [`docs/architecture/database-schema/endpoint-queries/`](../../docs/architecture/database-schema/endpoint-queries/) — the canonical SQL per public endpoint
-2. [`docs/architecture/database-schema/endpoint-queries/run_endpoint.sh`](../../docs/architecture/database-schema/endpoint-queries/run_endpoint.sh) — runner with per-endpoint sample inputs
-3. [`docs/architecture/database-schema/endpoint-queries/README.md`](../../docs/architecture/database-schema/endpoint-queries/README.md) — per-endpoint response-shape map
+1. `crates/api/src/<module>/queries…` — the SQL each public endpoint runs; the Rust query is the reference ([ADR 0060](../2-adrs/0060_rust-queries-are-the-endpoint-sql-reference.md))
+2. [`/compare-with-stellar-api`](../../.claude/skills/compare-with-stellar-api/SKILL.md) — runs an endpoint's query against the local ClickHouse and cross-checks sampled rows
+3. `crates/api/src/<module>/dto.rs` — the per-endpoint response shape
 4. [Task 0167](../1-tasks/archive/0167_FEATURE_endpoint-sql-query-reference-set.md) — origin of the SQL set, audit pattern, and known caveats (E5 S3 bridge, E14 archive XDR overlay, etc.)
 5. [`docs/architecture/frontend/frontend-overview.md`](../../docs/architecture/frontend/frontend-overview.md) §6 — what the frontend actually renders per page
 
@@ -44,14 +44,13 @@ Cross-check in this priority order, picking whichever has the data:
 
 For each endpoint `NN` (start at the first one not yet audited):
 
-### Step 1 — Run the endpoint SQL
+### Step 1 — Run the endpoint's query
 
-```bash
-cd docs/architecture/database-schema/endpoint-queries
-./run_endpoint.sh NN
-```
+Run the Rust query's statements against the local Docker ClickHouse as
+`/compare-with-stellar-api` Steps 1–2 describe, or call the endpoint on a
+locally running API.
 
-Confirms the SQL parses + returns rows. Capture stdout for later
+Confirms the query returns rows. Capture the output for later
 comparison. Note the row count, column shape, sample values.
 
 ### Step 2 — Compare response shape vs frontend spec

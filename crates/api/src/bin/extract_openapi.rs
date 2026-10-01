@@ -4,8 +4,10 @@
 //! `cargo run -p api --bin extract_openapi > libs/api-types/src/openapi.json`
 //!
 //! Reuses [`api::openapi::register_routes`] so the routes advertised here
-//! are exactly the routes mounted by the live Lambda app — no chance for
-//! the bin and the app to diverge on which endpoints they expose.
+//! are the routes mounted by the live Lambda app — no chance for the bin
+//! and the app to diverge on which endpoints they expose. One exception:
+//! `/auth/session` is advertised always but mounted only when the auth
+//! layer is armed (task 0510).
 
 fn main() {
     let (_, spec) = api::openapi::register_routes().split_for_parts();

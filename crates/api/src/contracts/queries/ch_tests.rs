@@ -145,3 +145,112 @@ async fn contract_detail_sql_runs_and_resolves_references() {
         .await
         .expect("drop throwaway db");
 }
+
+const DB_0592: &str = "api_test_0592_wim_dedup";
+
+/// Task 0592 — `wasm_interface_metadata` is a `ReplacingMergeTree` with no
+/// version column, so one `wasm_hash` written twice lives in two parts until a
+/// background merge collapses them. That is not hypothetical: the 0327
+/// `upgradeable-backfill` re-inserts an existing hash with different metadata
+/// (the same JSON plus an `upgradeable` key). Until the merge, a join without
+/// dedup matches both rows and `LIMIT 1` hands back whichever comes first.
+///
+/// Merges are stopped on the throwaway table, so the two parts are guaranteed
+/// to be there when the queries run — a merge would hide the defect.
+#[tokio::test]
+async fn contract_reads_dedup_wasm_metadata_written_twice() {
+    let Some(base) = crate::common::ch::test_client_from_env() else {
+        eprintln!("CH_URL unset — skipping wasm metadata dedup check");
+        return;
+    };
+    base.query(&format!("DROP DATABASE IF EXISTS {DB_0592}"))
+        .execute()
+        .await
+        .expect("drop leftover throwaway db");
+    base.query(&format!("CREATE DATABASE {DB_0592}"))
+        .execute()
+        .await
+        .expect("create throwaway db");
+    let ch = base.clone().with_database(DB_0592);
+    db_clickhouse::apply_init_sql(&ch)
+        .await
+        .expect("apply init.sql");
+    ch.query(&format!(
+        "SYSTEM STOP MERGES {DB_0592}.wasm_interface_metadata"
+    ))
+    .execute()
+    .await
+    .expect("stop merges on the throwaway table");
+
+    for sql in [
+        "INSERT INTO soroban_contracts \
+         (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, \
+          contract_type, is_sac, executable_owner_id, executable_tag) VALUES \
+         (1, 'CTWICE', unhex(repeat('ee', 32)), 100, NULL, 100, 1, false, NULL, NULL)",
+        // Two separate INSERTs = two parts. The first is what the live indexer
+        // wrote at deploy; the second is the backfill's re-write.
+        r#"INSERT INTO wasm_interface_metadata (wasm_hash, metadata) VALUES
+           (unhex(repeat('ee', 32)), '{"functions":[{"name":"first_write"}]}')"#,
+        r#"INSERT INTO wasm_interface_metadata (wasm_hash, metadata) VALUES
+           (unhex(repeat('ee', 32)), '{"functions":[{"name":"second_write"}],"upgradeable":true}')"#,
+    ] {
+        ch.query(sql).execute().await.expect("seed row");
+    }
+
+    // The precondition the test depends on: both copies are physically there.
+    let parts: u64 = ch
+        .query(&format!(
+            "SELECT count() FROM system.parts \
+             WHERE database = '{DB_0592}' AND table = 'wasm_interface_metadata' AND active"
+        ))
+        .fetch_one()
+        .await
+        .expect("count parts");
+    assert_eq!(parts, 2, "two INSERTs, merges stopped: two parts");
+    let copies: u64 = ch
+        .query("SELECT count() FROM wasm_interface_metadata")
+        .fetch_one()
+        .await
+        .expect("count physical rows");
+    assert_eq!(copies, 2, "the hash is stored twice until a merge");
+
+    // A version-less ReplacingMergeTree keeps the LAST inserted row, at merge
+    // and under FINAL alike — so the backfill's re-write is what must show.
+    //
+    // Under both analyzers: the new one (the default) carries `sc FINAL` over
+    // to a joined Replacing table on its own, so a join with no dedup of its
+    // own passes there by accident. The old one does not, and is what shows
+    // whether the query itself deduplicates.
+    for analyzer in ["1", "0"] {
+        let ch = ch.clone().with_setting("enable_analyzer", analyzer);
+
+        let detail = fetch_contract(&ch, "CTWICE")
+            .await
+            .expect("fetch_contract must execute")
+            .expect("fetch_contract must find the row");
+        assert_eq!(
+            detail.upgradeable,
+            Some(true),
+            "enable_analyzer={analyzer}: the contract detail reads the second write, not the first"
+        );
+
+        let iface = fetch_wasm_interface(&ch, "CTWICE")
+            .await
+            .expect("fetch_wasm_interface must execute")
+            .expect("fetch_wasm_interface must find the row");
+        let first_fn = iface
+            .interface_metadata
+            .as_ref()
+            .and_then(|m| m["functions"][0]["name"].as_str());
+        assert_eq!(
+            first_fn,
+            Some("second_write"),
+            "enable_analyzer={analyzer}: the interface reads the second write, not the first"
+        );
+    }
+
+    base.query(&format!("DROP DATABASE {DB_0592}"))
+        .execute()
+        .await
+        .expect("drop throwaway db");
+}

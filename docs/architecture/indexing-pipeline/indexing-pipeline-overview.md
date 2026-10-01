@@ -241,9 +241,10 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    It stages rows via
    `db_clickhouse::persist::stage::prepare_with_sac_overrides`, opens a
    one-shot `PartitionWriter`, streams the staged rows, and commits. The
-   hybrid-key strategy keeps three high-fan-out hubs (`accounts`,
-   `soroban_contracts`, `transactions`) on a deterministic surrogate
-   `Int64 id` derived from the StrKey / hash via cityhash; the other 12
+   hybrid-key strategy keeps two high-fan-out hubs (`accounts`,
+   `soroban_contracts`) on a deterministic surrogate `Int64 id` derived
+   from the StrKey via cityhash (transactions are located by position,
+   ADR 0059); the other
    tables use natural composite keys with `LowCardinality(String)`
    dictionary encoding (per
    [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md))
@@ -341,11 +342,15 @@ The live ingestion path writes directly to the explorer's owned ClickHouse
 schema on Hetzner. That write includes both:
 
 - low-level structured explorer records (`ledgers`, `transactions`,
-  `operations_appearances`, `transaction_participants`, and the appearance
-  indexes `soroban_events`, `soroban_invocations_appearances`)
+  `transaction_operations`, `pool_operation_amounts`,
+  `pool_movements` (decoded in staging from the ledger's pool events, for
+  the pools the ledger staged state for — no registry read),
+  `transaction_participants`, and the appearance indexes `soroban_events`,
+  `contract_activity`)
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
-  `wasm_interface_metadata`, `assets`, `nfts`, `nft_ownership`,
-  `nfts_pending`, `nft_ownership_pending`, `liquidity_pools`,
+  `wasm_interface_metadata`, `assets`, `nfts`, `nfts_pending`, the
+  ownership changes located by each change's source event
+  `nft_ownership_changes{,_pending}` (task 0424), `liquidity_pools`,
   `liquidity_pool_snapshots`, `lp_positions`, `account_balances_current`)
 
 The full table inventory (17 + 2 quarantine + 1 dictionary = 20 schema
@@ -359,17 +364,22 @@ the staging event loop decodes SEP-41 / CAP-67 `transfer` / `mint` / `burn` /
 `clawback` events (`derive_token_event`, see xdr-parsing overview §5.6) and
 registers their `from` / `to` as account participants plus — for SAC-wrapped
 classic/native assets — the moved asset (`"native"` → `NATIVE_ASSET_ID`).
-`transaction_participants` stays pure presence.
+`transaction_participants` stays pure presence. Both tables name the
+transaction by its position `(ledger_sequence, application_order)` (task
+0575), which staging takes from the ledger's own transaction order
+(`persist/stage/presence.rs`), not by the hash surrogate.
 
-`contract_transactions` (task 0541) is the contract-dimension presence index,
-built at staging from rows the ledger already produced: every contract that
-emitted an **operation** event in the transaction, was invoked in it, or is named
-by one of its operations — one row per (contract, transaction position). Fee
-events are skipped by the source the parser gives them: every transaction
-pays one to the native SAC, and they would put every transaction in that
-contract's list. Invocation and operation rows name the transaction by its hash
-surrogate; staging maps it to the position through the ledger's own
-`transactions` rows, and a transaction missing from them is a staging error.
+`contract_activity` (tasks 0541, 0586) is the contract-dimension index, built
+at staging from rows the ledger already produced
+(`persist/stage/contract_activity.rs`): every contract that emitted an
+**operation** event in the transaction, was invoked in it, or is named by one of
+its operations — one row per (contract, transaction position). Fee events are
+skipped by the source the parser gives them: every transaction pays one to the
+native SAC, and they would put every transaction in that contract's list. The
+invocations of a (contract, transaction) fold into its row (ADR 0034): the
+first call's caller and the number of calls. Invocations name the transaction
+by its hash; staging maps it to the position through the ledger's own
+transaction order.
 
 `operation_asset_appearances` is pure presence. The `net_settled` value column
 (task 0393) was REMOVED on 2026-09-04 — the per-(tx, asset) aggregate carried no

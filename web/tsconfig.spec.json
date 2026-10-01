@@ -2,8 +2,8 @@
   "extends": "./tsconfig.lib.json",
   "compilerOptions": {
     "rootDir": ".",
-    "outDir": "dist/spec",
-    "tsBuildInfoFile": "dist/tsconfig.spec.tsbuildinfo",
+    "outDir": "out-tsc/spec",
+    "tsBuildInfoFile": "out-tsc/tsconfig.spec.tsbuildinfo",
     "emitDeclarationOnly": false,
     "noEmit": true,
     "types": ["node", "vitest/globals", "@testing-library/jest-dom"]

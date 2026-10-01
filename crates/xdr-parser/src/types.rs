@@ -160,7 +160,7 @@ pub struct DiagnosticEvent {
 }
 
 /// Extracted Soroban invocation data, aggregated at indexer staging into
-/// `soroban_invocations_appearances` rows (ADR 0034). At read time the API
+/// `contract_activity` rows (ADR 0034). At read time the API
 /// re-extracts this structure from the public archive's XDR to render E13
 /// per-node detail (function name, caller, success, args, return value).
 ///
@@ -174,7 +174,7 @@ pub struct ExtractedInvocation {
     pub contract_id: Option<String>,
     /// Account or contract that initiated this call. For root invocations this is the
     /// transaction source account; for sub-invocations it is the parent's contract address.
-    pub caller_account: Option<String>,
+    pub caller: Option<String>,
     /// Function name invoked. `None` for contract creation invocations.
     pub function_name: Option<String>,
     /// ScVal-decoded function arguments as JSON value (typically an array; may be an object for
@@ -254,6 +254,9 @@ pub struct NftEvent {
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time.
     pub created_at: i64,
+    /// The source event's stellar-rpc id (ADR 0059) — its canonical location.
+    /// Every token a `consecutive_mint` expands to shares it.
+    pub event_id: Option<crate::event::EventId>,
 }
 
 /// Extracted ledger entry change from `TransactionMeta` V3/V4.
@@ -478,7 +481,7 @@ pub struct ExtractedNft {
     pub contract_id: String,
     pub token_id: String,
     pub collection_name: Option<String>,
-    pub owner_account: Option<String>,
+    pub owner: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
     pub minted_at_ledger: Option<u32>,
@@ -487,16 +490,14 @@ pub struct ExtractedNft {
     pub created_at: i64,
 }
 
-/// NFT ownership event carried from the parser into `nft_ownership`.
+/// NFT ownership event carried from the parser into `nft_ownership_changes`.
 ///
 /// Schema-shaped superset of `NftEvent` that resolves the NFT row identity
-/// (`contract_id`, `token_id`) and carries the ownership transition needed for
-/// `nft_ownership` rows. Not produced by the parser today — task 0118 (NFT
-/// false-positive filtering) will gate population. Until then, `process_ledger`
-/// passes an empty slice.
+/// (`contract_id`, `token_id`) and carries the ownership transition.
 #[derive(Debug, Clone)]
 pub struct ExtractedNftEvent {
-    /// Parent transaction hash, hex-encoded. Resolved to `transaction_id` at persistence time.
+    /// Parent transaction hash, hex-encoded. Resolved to the transaction's
+    /// `application_order` at persistence time.
     pub transaction_hash: String,
     /// NFT collection contract address (C... StrKey).
     pub contract_id: String,
@@ -505,13 +506,14 @@ pub struct ExtractedNftEvent {
     /// Event kind (ADR 0031). Maps to `nft_ownership.event_type SMALLINT`.
     pub event_type: NftEventType,
     /// New owner after the event. `None` for burns.
-    pub owner_account: Option<String>,
-    /// Stable order within the ledger. Maps to `nft_ownership.event_order`.
-    pub event_order: u16,
+    pub owner: Option<String>,
     /// Parent ledger sequence number.
     pub ledger_sequence: u32,
     /// Unix seconds. Matches parent transaction partitioning key.
     pub created_at: i64,
+    /// The source event's stellar-rpc id (ADR 0059): the row's location in
+    /// `nft_ownership_changes` (task 0424).
+    pub event_id: Option<crate::event::EventId>,
 }
 
 /// LP position change carried from the parser into `lp_positions`.
@@ -537,29 +539,28 @@ pub struct ExtractedLpPosition {
     pub closed: bool,
 }
 
-/// Extracted operation data. Feeds the `operations_appearances` indexer path
+/// Extracted operation data. Feeds the `transaction_operations` indexer path
 /// (task 0163) where operations of identical identity are collapsed into a
-/// single appearance row, and the API's XDR re-materialisation path
-/// (`stellar_archive::extractors`) where `operation_index` is surfaced as
-/// `application_order` in the DTO.
+/// single row, and the API's XDR re-materialisation path
+/// (`stellar_archive::extractors`), which sends `operation_index` unchanged.
 ///
 /// **Note:** field names do not directly mirror DB column names:
-/// - `transaction_hash` → resolved to `transaction_id` (BIGSERIAL) by the persistence layer
-/// - `operation_index` → not persisted in `operations_appearances` (ordering is
-///   re-derived from XDR by the API when needed); still surfaced in the
-///   `stellar_archive` DTO as `application_order`
+/// - `transaction_hash` → resolved to the transaction's position
+///   (`application_order`) by the persistence layer
+/// - `operation_index` → `transaction_operations.operation_index` as is (both
+///   0-based, ADR 0059); surfaced in the `stellar_archive` DTO as the 1-based
+///   `application_order`
 /// - `op_type` → `type` (`type` is a Rust keyword)
 /// - `source_account: None` → operation inherits the transaction source account
 #[derive(Debug, Clone)]
 pub struct ExtractedOperation {
     /// Parent transaction hash, hex-encoded (64 chars). Used to resolve the
-    /// surrogate `transaction_id` FK at persistence time.
+    /// transaction's position at persistence time.
     pub transaction_hash: String,
-    /// 1-based index of this operation within the transaction (matches Horizon
-    /// `paging_token` convention; see ADR 0028 / task 0172). Not persisted in
-    /// `operations_appearances` — the API re-derives ordering from XDR.
+    /// 0-based position of this operation in the transaction's envelope, as
+    /// stellar-rpc's `operationIndex` and the tables (ADR 0059).
     pub operation_index: u32,
-    /// Operation type (ADR 0031). Maps to `operations_appearances.type SMALLINT`.
+    /// Operation type (ADR 0031). Maps to `transaction_operations.type SMALLINT`.
     pub op_type: OperationType,
     /// Per-operation source account override. `None` if the operation inherits the transaction
     /// source.

@@ -86,14 +86,14 @@ set -euo pipefail
 PARTITIONED_TABLES=(
   ledgers
   transactions
-  transaction_hash_index
+  transaction_hash_prefix_index
   transaction_participants
-  operations_appearances
+  transaction_operations
   soroban_events
-  soroban_invocations_appearances
+  contract_activity
   liquidity_pool_snapshots
-  nft_ownership
-  nft_ownership_pending
+  nft_ownership_changes
+  nft_ownership_changes_pending
 )
 
 # Non-partitioned state tables. FREEZE without PARTITION clause.

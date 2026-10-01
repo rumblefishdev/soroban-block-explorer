@@ -319,11 +319,9 @@ async fn every_account_sums_to_its_ledger_balance() {
                            WHERE contract_id = {NATIVE_SAC_ID} AND ledger_sequence BETWEEN {lo} AND {hi} \
                              AND signature = 'fee' \
                              AND (ledger_sequence, application_order) IN ( \
-                                   SELECT t.ledger_sequence, t.application_order FROM transactions t \
-                                   WHERE t.ledger_sequence BETWEEN {lo} AND {hi} \
-                                     AND t.id IN (SELECT transaction_id FROM transaction_participants \
-                                                  WHERE account_id IN ({id_list}) \
-                                                    AND ledger_sequence BETWEEN {lo} AND {hi})) \
+                                   SELECT ledger_sequence, application_order FROM transaction_participants \
+                                   WHERE account_id IN ({id_list}) \
+                                     AND ledger_sequence BETWEEN {lo} AND {hi}) \
                            LIMIT 1 BY ledger_sequence, transaction_index, operation_index, event_index) \
                      WHERE g IN ({gs}) \
                      GROUP BY g, prior",

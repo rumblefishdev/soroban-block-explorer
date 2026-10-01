@@ -6,8 +6,8 @@
 //! ledger detail pages. CH does not store `transactions.created_at`, so
 //! the ledger `closed_at` value is joined in and used as the API timestamp.
 //! For embedded transactions, `TsIdCursor.id` carries `application_order`
-//! on the CH path: unlike PostgreSQL's `BIGSERIAL`, CH `transactions.id`
-//! is a deterministic hash surrogate and must not define in-ledger order.
+//! on the CH path — the transaction's position, which is the in-ledger
+//! order (ADR 0059).
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -146,13 +146,10 @@ impl From<LedgerDetailChRow> for LedgerDetailRow {
 
 /// One embedded-transaction page row — slim base columns only.
 /// `operation_types` is fetched separately via
-/// [`ch::fetch_tx_list_aggregates`] and merged by the surrogate tx id
-/// (CH 26.3 cannot compute it inline with a correlated subquery).
+/// [`ch::fetch_tx_list_aggregates`] and merged by position (CH 26.3 cannot
+/// compute it inline with a correlated subquery).
 #[derive(Debug, Row, Deserialize)]
 struct LedgerTxPageChRow {
-    /// `transactions.id` hash surrogate — the aggregate join key. NOT the
-    /// API cursor id (CH `id` is not apply-order; see `into_ledger_tx_row`).
-    tx_surrogate: i64,
     hash: String,
     ledger_sequence: i64,
     application_order: i16,
@@ -169,9 +166,8 @@ impl LedgerTxPageChRow {
     /// Merge this page row with its pre-fetched aggregates into `LedgerTxRow`.
     ///
     /// `LedgerTxRow.id` carries `application_order` on the CH path (the
-    /// `TsIdCursor.id` tie-break for embedded-tx pagination): CH
-    /// `transactions.id` is a deterministic hash surrogate and must not
-    /// define in-ledger order, so the cursor keys on `application_order`.
+    /// `TsIdCursor.id` tie-break for embedded-tx pagination): the
+    /// transaction's position is the in-ledger order (ADR 0059).
     fn into_ledger_tx_row(
         self,
         agg: ch::TxListAggregates,
@@ -446,6 +442,11 @@ pub async fn fetch_by_sequence(
     // aggregate's answer is thrown away.
     // Bound to a `let` because the builder is a temporary: inlined into
     // `join!` it would be dropped while the future still borrows it (E0716).
+    //
+    // prev/next bind the requested `sequence` instead of referencing the outer
+    // `l.sequence`: ClickHouse rejects a correlated subquery with ORDER BY /
+    // LIMIT that reads the outer row (`NOT_IMPLEMENTED`). The outer WHERE pins
+    // the same value, so the result is identical.
     let header_query = client
         .query(
             "SELECT \
@@ -498,11 +499,9 @@ pub async fn fetch_transactions(
     let (op, order) = keyset_sql_desc(direction);
 
     // Slim page query — base columns only, no correlated subqueries (CH 26.3
-    // rejects those). `t.id` (hash surrogate) is selected as the aggregate
-    // join key; the API cursor still keys on `application_order`.
+    // rejects those).
     let sql = format!(
         "SELECT \
-            t.id AS tx_surrogate, \
             lower(hex(t.hash)) AS hash, \
             t.ledger_sequence, \
             t.application_order, \
@@ -514,7 +513,7 @@ pub async fn fetch_transactions(
             t.has_soroban, \
             l.closed_at AS created_at \
         FROM transactions t FINAL \
-        INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+        INNER JOIN ledgers l FINAL ON l.sequence = t.ledger_sequence \
         WHERE t.ledger_sequence = ? \
           AND intDiv(t.ledger_sequence, 500000) = intDiv(?, 500000) \
           AND (isNull(?) OR (l.closed_at, toInt64(t.application_order)) {op} (fromUnixTimestamp64Milli(ifNull(?, 0)), ifNull(?, 0))) \
@@ -533,12 +532,11 @@ pub async fn fetch_transactions(
         .fetch_all::<LedgerTxPageChRow>()
         .await?;
 
-    // Second pass: aggregate operation_types for the page's (ledger_sequence,
-    // transaction_id) keys (non-correlated; CH-26-safe), then merge by the
-    // surrogate tx id.
-    let keys: Vec<(i64, i64)> = page
+    // Second pass: aggregate operation_types for the page's positions
+    // (non-correlated; CH-26-safe), then merge by position.
+    let keys: Vec<(i64, i16)> = page
         .iter()
-        .map(|r| (r.ledger_sequence, r.tx_surrogate))
+        .map(|r| (r.ledger_sequence, r.application_order))
         .collect();
     // Resolve source StrKeys by surrogate id (bloom seek) instead of a
     // whole-`accounts` `LEFT JOIN … FINAL ON src.id = t.source_id` (task 0354).
@@ -552,7 +550,9 @@ pub async fn fetch_transactions(
     Ok(page
         .into_iter()
         .map(|r| {
-            let agg = aggregates.remove(&r.tx_surrogate).unwrap_or_default();
+            let agg = aggregates
+                .remove(&(r.ledger_sequence, r.application_order))
+                .unwrap_or_default();
             let source_account = accounts
                 .get(&r.source_id)
                 .cloned()
@@ -563,116 +563,7 @@ pub async fn fetch_transactions(
 }
 
 #[cfg(test)]
-mod read_guard_tests {
-    use super::key_and_partition_lists;
-
-    #[test]
-    fn a_page_inside_one_partition_emits_that_partition_once() {
-        let (keys, partitions) = key_and_partition_lists(&[63_903_900, 63_903_901, 63_903_902]);
-
-        assert_eq!(keys, "63903900,63903901,63903902");
-        assert_eq!(
-            partitions, "127",
-            "twenty repeats of the same partition would defeat the prune's purpose"
-        );
-    }
-
-    #[test]
-    fn a_page_straddling_a_boundary_emits_both_partitions_in_order() {
-        let (_, partitions) = key_and_partition_lists(&[63_999_999, 64_000_000]);
-
-        assert_eq!(partitions, "127,128");
-    }
-
-    #[test]
-    fn one_ledger_is_the_detail_paths_shape() {
-        let (keys, partitions) = key_and_partition_lists(&[63_903_902]);
-
-        assert_eq!(keys, "63903902");
-        assert_eq!(partitions, "127");
-    }
-
-    #[test]
-    fn keys_keep_page_order_and_duplicates_are_the_callers_problem() {
-        // `fetch_list` dedups before calling, so this only pins that the key
-        // list is a faithful echo — collapsing here would silently mask a
-        // caller that stopped deduping.
-        let (keys, _) = key_and_partition_lists(&[3, 1, 3]);
-
-        assert_eq!(keys, "3,1,3");
-    }
-}
+mod read_guard_tests;
 
 #[cfg(test)]
-mod dedup_tests {
-    use super::{LedgerListRow, dedup_consecutive};
-
-    fn row(sequence: i64) -> LedgerListRow {
-        LedgerListRow {
-            sequence,
-            hash: format!("h{sequence}"),
-            closed_at: sequence * 1000,
-            protocol_version: 27,
-            transaction_count: 1,
-            base_fee: 100,
-        }
-    }
-
-    /// The lore-0420 bug: the RMT hands back each sequence 2–3× and the page
-    /// rendered them all, which also collided the frontend's `sequence` row key.
-    /// A full page must come back as DISTINCT sequences in the original order.
-    #[test]
-    fn collapses_duplicate_sequences_and_fills_the_page() {
-        // Desc page as the RMT physically returns it: every sequence doubled,
-        // one tripled — over-fetched at ×3 (limit 4 → 12 raw rows).
-        let raw = [100, 100, 99, 99, 98, 98, 98, 97, 97, 96, 96, 95]
-            .into_iter()
-            .map(row)
-            .collect();
-
-        let out = dedup_consecutive(raw, 4);
-
-        assert_eq!(
-            out.iter().map(|r| r.sequence).collect::<Vec<_>>(),
-            vec![100, 99, 98, 97],
-            "duplicates must collapse and the page must still be full"
-        );
-    }
-
-    /// Under-fill is survivable: a short page is fine, but it must never emit a
-    /// duplicate (that is what broke React reconciliation).
-    #[test]
-    fn never_emits_duplicates_even_when_underfilled() {
-        let raw = [50, 50, 50, 49, 49, 49].into_iter().map(row).collect();
-
-        let out = dedup_consecutive(raw, 4);
-
-        assert_eq!(
-            out.iter().map(|r| r.sequence).collect::<Vec<_>>(),
-            vec![50, 49]
-        );
-    }
-
-    /// Pins the precondition rather than hiding it: this collapses ADJACENT
-    /// duplicates only, so unordered input passes duplicates straight through.
-    ///
-    /// That is deliberate. Ordering is not an incidental detail of this page —
-    /// the keyset cursor is read off the last row, so losing `ORDER BY sequence`
-    /// corrupts pagination itself. A set-based dedup would keep this test green
-    /// while the page silently returned rows in the wrong order under a wrong
-    /// cursor; failing here is the cheaper outcome.
-    #[test]
-    fn unsorted_input_is_not_deduplicated() {
-        // Same three sequences as the sorted case, interleaved.
-        let raw = [100, 99, 100, 99, 98, 98].into_iter().map(row).collect();
-
-        let out = dedup_consecutive(raw, 6);
-
-        assert_eq!(
-            out.iter().map(|r| r.sequence).collect::<Vec<_>>(),
-            vec![100, 99, 100, 99, 98],
-            "only the adjacent 98/98 pair collapses — the interleaved duplicates \
-             survive, because ordering is the caller's contract"
-        );
-    }
-}
+mod dedup_tests;

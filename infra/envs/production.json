@@ -18,6 +18,13 @@
   "galexieEphemeralStorage": 100,
   "galexieDesiredCount": 1,
   "stellarNetworkPassphrase": "Public Global Stellar Network ; September 2015",
+  "ledgerSource": "galexie",
+  "sorobanRpcUrls": [
+    "https://mainnet.sorobanrpc.com",
+    "https://soroban-rpc.mainnet.stellar.gateway.fm/",
+    "https://rpc.ankr.com/stellar_soroban",
+    "https://stellar.api.onfinality.io/public"
+  ],
   "ecsLogRetentionDays": 90,
   "galexieStopTimeout": 120,
   "ecsExecEnabled": false,
@@ -38,7 +45,7 @@
   "cloudFrontCertificateArn": "arn:aws:acm:us-east-1:750702271865:certificate/93e279f2-0335-4aa9-b429-ed8a1c4716df",
   "apiCertificateArn": "arn:aws:acm:eu-central-1:750702271865:certificate/1b007d15-773a-4603-8bc6-43cebb4a60c7",
   "enableBasicAuth": false,
-  "enableApiSpaBasicAuth": true,
+  "enableApiSpaBasicAuth": false,
   "provisionCloudflareBootstrap": true,
   "provisionApiMtlsTruststore": false,
   "enableApiMtls": false,

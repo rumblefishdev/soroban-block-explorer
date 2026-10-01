@@ -1,6 +1,7 @@
-//! backfill-runner — production-grade Stellar pubnet backfill to ClickHouse.
+//! backfill-runner — production-grade Stellar ledger backfill to ClickHouse.
 //!
-//! Source: `aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` (unsigned).
+//! Source: `aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` (unsigned), or
+//! the network folder named by `PUBLIC_ARCHIVE_PREFIX` (lore-0553).
 //! Sink:   ClickHouse (ADR 0044), via the `db_clickhouse::persist`
 //!         partition-writer lifecycle.
 
@@ -18,6 +19,7 @@ mod rpc_snapshot;
 mod run;
 mod sink;
 mod snapshot;
+mod soroban_pool_amounts;
 mod status;
 mod sync;
 mod util;
@@ -26,6 +28,26 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use db_clickhouse::persist::TargetedTables;
+
+/// A ledger folder of another network parses cleanly and hashes every
+/// transaction wrong, so `run` refuses to start on a mismatch (lore-0553).
+fn refuse_foreign_ledger_folder() {
+    if let Err(e) = xdr_parser::public_archive::check_configured_archive() {
+        panic!("refusing to run: {e}");
+    }
+}
+
+/// The checkpoint seed reads the MAINNET history archive and writes what it
+/// finds, so it refuses a process configured for another network (lore-0553).
+fn refuse_non_pubnet_seed() {
+    let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_default();
+    let prefix = xdr_parser::public_archive::public_archive_prefix();
+    let foreign_passphrase =
+        !passphrase.trim().is_empty() && passphrase.trim() != xdr_parser::MAINNET_PASSPHRASE;
+    if foreign_passphrase || prefix != xdr_parser::public_archive::PUBNET_PREFIX {
+        panic!("refusing to seed: snapshot-seed reads the mainnet history archive only");
+    }
+}
 
 /// Default local scratch dir. CLI `--temp-dir` or `BACKFILL_TEMP_DIR`
 /// overrides. Single source of truth — `run` and `status` both receive
@@ -96,7 +118,7 @@ struct Cli {
     /// historical re-parse for new derived tables needs. Task 0279 introduced
     /// it as `--lp-amounts-only`; task 0540 generalised it so several tables
     /// ride one pass: `--only asset_transfers,transaction_memos`.
-    /// `--only lp_operation_amounts` is the old behaviour.
+    /// `--only pool_operation_amounts` is the old behaviour.
     ///
     /// Without it, `run --reindex` re-emits EVERY table, which rewrites the 12
     /// Tier-1 columns that cannot survive parallel `ReplacingMergeTree`
@@ -178,15 +200,10 @@ enum Command {
     },
 
     /// Tier-1 post-merge column rebuild for the Hetzner CH
-    /// (task 0228 Phase 5). Reconstructs 6 of the 12 Tier-1 columns
-    /// across 5 state tables (`accounts.first_seen_ledger`,
-    /// `lp_positions.first_deposit_ledger`,
-    /// `nfts.minted_at_ledger`, `nfts_pending.minted_at_ledger`,
-    /// `soroban_contracts.deployer_id` + `deployed_at_ledger`).
-    /// These silently corrupt under cross-machine
-    /// `ReplacingMergeTree` collapse. The remaining 6 columns
-    /// (NFT metadata: `collection_name`, `name`, `media_url` × 2
-    /// tables) are filled by Stage 2 enrichment (task 0231).
+    /// (task 0228 Phase 5). Reconstructs 2 MIN-semantics columns
+    /// across 2 state tables (`accounts.first_seen_ledger`,
+    /// `lp_positions.first_deposit_ledger`).
+    /// These silently corrupt under `ReplacingMergeTree` collapse.
     /// Per-table staging + EXCHANGE TABLES atomic swap.
     RepairTier1 {
         /// Build staging tables and log their row counts, then drop
@@ -250,11 +267,21 @@ enum Command {
     /// - Promote `nfts_pending` rows → `nfts` for contracts now
     ///   classified `Nft`.
     /// - Drop pending rows for contracts now `Fungible` or `Token`.
-    /// - Drop legacy false positives from hot `nfts` / `nft_ownership`.
+    /// - Drop legacy false positives from hot `nfts` / `nft_ownership_changes`.
     ///
     /// Uses `ALTER TABLE … DELETE` with `mutations_sync = 1` followed
     /// by `OPTIMIZE FINAL` to collapse tombstones. CH-only.
     NftReclassify {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Task 0374 (W1) — fill `pool_movements` for every registered
+    /// soroban pool from the events already in `soroban_events`, through the
+    /// live writer's own decoder. No archive re-parse; idempotent. Run after
+    /// the writer is deployed. `--dry-run` decodes and counts without writing.
+    /// CH-only.
+    SorobanPoolAmounts {
         #[arg(long)]
         dry_run: bool,
     },
@@ -301,18 +328,21 @@ async fn main() {
             start,
             end,
             reindex,
-        } => run::execute(
-            &sink,
-            &cli.temp_dir,
-            start,
-            end,
-            cli.keep_partitions,
-            cli.soroban_rpc_url.as_deref(),
-            reindex,
-            &mp,
-        )
-        .await
-        .expect("backfill run failed"),
+        } => {
+            refuse_foreign_ledger_folder();
+            run::execute(
+                &sink,
+                &cli.temp_dir,
+                start,
+                end,
+                cli.keep_partitions,
+                cli.soroban_rpc_url.as_deref(),
+                reindex,
+                &mp,
+            )
+            .await
+            .expect("backfill run failed")
+        }
         Command::Status { start, end } => status::execute(&sink, start, end)
             .await
             .expect("status failed"),
@@ -340,13 +370,8 @@ async fn main() {
                 .await
                 .expect("repair_tier1 failed");
             println!(
-                "repair_tier1 completed (dry_run={}): accounts={} lp_positions={} nfts={} nfts_pending={} soroban_contracts={}",
-                stats.dry_run,
-                stats.accounts_rows,
-                stats.lp_positions_rows,
-                stats.nfts_rows,
-                stats.nfts_pending_rows,
-                stats.soroban_contracts_rows,
+                "repair_tier1 completed (dry_run={}): accounts={} lp_positions={}",
+                stats.dry_run, stats.accounts_rows, stats.lp_positions_rows,
             );
         }
         Command::ContractTypeRebuild { dry_run } => {
@@ -362,6 +387,7 @@ async fn main() {
             );
         }
         Command::SnapshotSeed { artifacts, execute } => {
+            refuse_non_pubnet_seed();
             snapshot::seed::seed_command(&sink, &artifacts, execute)
                 .await
                 .expect("snapshot seed failed");
@@ -381,6 +407,15 @@ async fn main() {
                 stats.keys_requested,
                 stats.entries_returned,
                 stats.balances_decoded,
+            );
+        }
+        Command::SorobanPoolAmounts { dry_run } => {
+            let stats = soroban_pool_amounts::execute(&sink, dry_run)
+                .await
+                .expect("soroban_pool_amounts failed — idempotent, safe to re-run");
+            println!(
+                "soroban_pool_amounts completed (dry_run={}): pools={} events_read={} rows={}",
+                stats.dry_run, stats.pools, stats.events_read, stats.rows,
             );
         }
         Command::NftReclassify { dry_run } => {

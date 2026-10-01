@@ -283,7 +283,8 @@ multi-region failover plan.
   in task 0244.
 - holds the schema in `crates/db-clickhouse/schema/init.sql` (28 tables, 3 materialized
   views, 1 `Dictionary` as of 2026-07-22); applied idempotently by the
-  `db-clickhouse-init` sidecar after `clickhouse` reports healthy, and equally by the
+  `db-clickhouse-init` sidecar after `clickhouse` reports healthy — to mainnet's
+  `default` and testnet's `testnet` database alike (task 0553) — and equally by the
   Rust `db-clickhouse-init` CLI when iterating outside Docker
 - the ClickHouse _pilot_ framing this section used to carry is spent. ClickHouse is no
   longer a parallel store being evaluated next to RDS — per
@@ -383,7 +384,20 @@ redeploying `ApiGateway` as soon as the run ends.
   also does the basic-auth check when `enableApiSpaBasicAuth` is on,
   independent of the main site's `enableBasicAuth`/`enableOriginSecretLock`
   — sharing the KeyValueStore (not the Function itself) so there's one
-  credential to manage, not two.
+  credential to manage, not two. The KVS is provisioned even with both
+  flags off, so turning a gate off keeps its credentials for re-arming.
+  Production runs with `enableApiSpaBasicAuth=false` (the `/api` SPA is
+  public; its backend lives on a separate host).
+- since task 0576, writes standard (access) logs for every request, explorer
+  and `/api` alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
+  referrer, user agent and viewer IP, never cookies. Objects expire after 30
+  days, because the lines carry viewer IPs and the Prices portal's privacy
+  policy keeps technical logs for up to 30 days. It is the only complete
+  record of traffic to the `/api` SPA. Since Prices task 0316 (2026-09-29)
+  that SPA also loads GA4 through the explorer's GTM, but GA counts only
+  visitors who consent. The logs count page loads, not in-app navigation.
+  The bucket is `ObjectWriter`-owned because
+  legacy standard logging delivers through ACLs.
 
 **Swagger UI**
 

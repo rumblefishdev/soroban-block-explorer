@@ -32,6 +32,7 @@ pub mod pool_family;
 pub mod pool_pair_factory;
 pub mod pool_router;
 pub mod pool_state;
+pub mod public_archive;
 pub mod sac;
 pub mod scval;
 pub mod state;

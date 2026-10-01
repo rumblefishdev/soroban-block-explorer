@@ -45,9 +45,6 @@ services:
       # whitelists `log_comment` under readonly=1 for B2 correlation.
       - ./crates/db-clickhouse/config.d/access-control.xml:/etc/clickhouse-server/config.d/access-control.xml:ro
       - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
-      # `dict_reader` user definition. Required because init.sql's
-      # `transaction_hash_dict` SOURCE clause references it.
-      - ./crates/db-clickhouse/users.d/dict.xml:/etc/clickhouse-server/users.d/dict.xml:ro
       # Per-service RBAC users + profiles + quotas (task 0240).
       - ./crates/db-clickhouse/users.d/profiles.xml:/etc/clickhouse-server/users.d/profiles.xml:ro
       - ./crates/db-clickhouse/users.d/quotas.xml:/etc/clickhouse-server/users.d/quotas.xml:ro
@@ -62,8 +59,9 @@ services:
       timeout: 3s
       retries: 10
 
-  # Sidecar: applies `crates/db-clickhouse/schema/init.sql` to the
-  # ClickHouse service once it is healthy. Idempotent — every statement
+  # Sidecar: applies `crates/db-clickhouse/schema/init.sql` to every
+  # explorer database in EXPLORER_DATABASES (`apply_init.sh`, task 0553)
+  # once the ClickHouse service is healthy. Idempotent — every statement
   # is `CREATE … IF NOT EXISTS`, so re-running is a no-op. Survives
   # `docker compose down -v` cleanly because the schema is re-applied
   # on the next `up`.
@@ -79,16 +77,19 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+    # Shares the ClickHouse container's network, so 127.0.0.1:9000 in the
+    # client config is the server — in production too, where the config is
+    # the one the backup script uses inside that container.
+    network_mode: service:clickhouse
     volumes:
       - ./crates/db-clickhouse/schema/init.sql:/init.sql:ro
-    entrypoint:
-      - clickhouse-client
-      - --host=clickhouse
-      - --port=9000
-      - --user=default
-      - --password=clickhouse
-      - --multiquery
-      - --queries-file=/init.sql
+      - ./crates/db-clickhouse/schema/apply_init.sh:/apply_init.sh:ro
+      # Connection; docker-compose.prod.yml mounts production's at this path.
+      - ./crates/db-clickhouse/schema/client.local.xml:/etc/clickhouse-client/config.xml:ro
+    environment:
+      # Mainnet's database and testnet's (task 0553); same schema in both.
+      EXPLORER_DATABASES: default testnet
+    entrypoint: [sh, /apply_init.sh]
     restart: 'no'
 
 volumes:

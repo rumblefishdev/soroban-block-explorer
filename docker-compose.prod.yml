@@ -165,7 +165,6 @@ services:
       # paths have to be redeclared because !override wiped them).
       - ./crates/db-clickhouse/config.d/timeouts.xml:/etc/clickhouse-server/config.d/timeouts.xml:ro
       - ./crates/db-clickhouse/users.d/timeouts.xml:/etc/clickhouse-server/users.d/timeouts.xml:ro
-      - ./crates/db-clickhouse/users.d/dict.xml:/etc/clickhouse-server/users.d/dict.xml:ro
       # Per-service RBAC users + profiles + quotas (task 0240).
       # `services.xml` defines proxy-trust users (`dev_shared`,
       # `galexie`, `api_reader`, `ingestion_writer`, `partition_admin`,
@@ -215,8 +214,8 @@ services:
   db-clickhouse-init:
     # The sidecar reads credentials from the same host-side
     # /etc/soroban-backup/clickhouse-client.xml file the backup
-    # script uses (mounted read-only at /etc/clickhouse-backup
-    # /client.xml). This keeps the password entirely OUT of:
+    # script uses, mounted over the local one at clickhouse-client's
+    # default config path. This keeps the password entirely OUT of:
     #
     #   - The sidecar entry in Compose's rendered spec.
     #   - `docker inspect db-clickhouse-init` output.
@@ -231,28 +230,16 @@ services:
     # task; mitigated only by the host's docker-group membership
     # being limited to the deploy user.
     #
-    # `--host=clickhouse` argv overrides the config-file's
-    # `<host>127.0.0.1</host>` because the sidecar reaches CH
-    # via the Docker service name, not loopback. Other
-    # credentials come from the file.
-    #
     # `user: "101:101"` pins the sidecar to the CH UID/GID so the
     # 0400 owner=101 credentials file is readable via owner perms
     # (not via root bypass). The official `clickhouse-server`
     # image's USER directive defaults to root and the entrypoint
-    # script drops to 101 only for the server process; when we
-    # override the entrypoint to `clickhouse-client` directly the
-    # drop-priv step is skipped, so we set the user explicitly.
+    # script drops to 101 only for the server process; the base
+    # file replaces that entrypoint with `apply_init.sh`, so the
+    # drop-priv step is skipped and we set the user explicitly.
     user: '101:101'
-    entrypoint:
-      - clickhouse-client
-      - --config-file=/etc/clickhouse-backup/client.xml
-      - --host=clickhouse
-      - --port=9000
-      - --multiquery
-      - --queries-file=/init.sql
     volumes:
-      - /etc/soroban-backup/clickhouse-client.xml:/etc/clickhouse-backup/client.xml:ro
+      - /etc/soroban-backup/clickhouse-client.xml:/etc/clickhouse-client/config.xml:ro
     # `restart: 'no'` is inherited from the base. Re-runs on every
     # `docker compose up` because the sidecar exits 0 after
     # applying init.sql; CH itself does not re-trigger it.

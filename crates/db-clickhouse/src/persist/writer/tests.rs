@@ -3,13 +3,13 @@ use super::*;
 #[test]
 fn parses_a_list_of_targetable_tables_in_order() {
     let t =
-        TargetedTables::parse("asset_transfers, transaction_memos,lp_operation_amounts").unwrap();
+        TargetedTables::parse("asset_transfers, transaction_memos,pool_operation_amounts").unwrap();
     assert_eq!(
         t.iter().collect::<Vec<_>>(),
         vec![
             "asset_transfers",
             "transaction_memos",
-            "lp_operation_amounts"
+            "pool_operation_amounts"
         ]
     );
 }
@@ -23,8 +23,8 @@ fn soroban_event_ops_is_no_longer_targetable() {
 
 #[test]
 fn the_old_single_table_form_still_parses() {
-    let t = TargetedTables::parse("lp_operation_amounts").unwrap();
-    assert_eq!(t.iter().collect::<Vec<_>>(), vec!["lp_operation_amounts"]);
+    let t = TargetedTables::parse("pool_operation_amounts").unwrap();
+    assert_eq!(t.iter().collect::<Vec<_>>(), vec!["pool_operation_amounts"]);
 }
 
 #[test]

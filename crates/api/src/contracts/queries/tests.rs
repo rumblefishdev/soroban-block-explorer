@@ -249,3 +249,15 @@ fn stats_sql_bounds_window_from_data_never_a_join_or_a_constant() {
          from the data: {sql}"
     );
 }
+
+// Task 0487: a contract called only by other contracts reported 0 unique
+// callers, because the count read `caller_id` (accounts) alone. The pair
+// counts both; `coalesce` would merge two id spaces that can collide.
+#[test]
+fn stats_sql_counts_account_and_contract_callers() {
+    let sql = contract_stats_sql(7);
+    assert!(
+        sql.contains("uniqExact(tuple(ca.caller_id, ca.caller_contract_id))"),
+        "unique callers must count both caller columns: {sql}"
+    );
+}

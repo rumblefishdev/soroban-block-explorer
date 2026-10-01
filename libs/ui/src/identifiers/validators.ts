@@ -27,6 +27,44 @@ export function isPoolId(value: string): boolean {
   return STELLAR_POOL.test(value);
 }
 
+/** The pages an address can link to. */
+export type AddressType = 'account' | 'contract' | 'pool';
+
+/**
+ * Which page an address links to, read from the address itself: a StrKey's
+ * first letter says what it is (SEP-23) — `G` account, `C` contract, `L`
+ * liquidity pool. The API sends an address that can be an account or a
+ * contract in one field (task 0600), and every link takes its type from here.
+ *
+ * `null` for an address with no page of its own — a muxed account (`M…`), a
+ * claimable balance (`B…`) — or a value that is not a StrKey: show it, do
+ * not link it.
+ */
+export function addressType(value: string): AddressType | null {
+  if (isAccountId(value)) return 'account';
+  if (isContractId(value)) return 'contract';
+  if (isPoolId(value)) return 'pool';
+  return null;
+}
+
+/**
+ * Either form a POOL can be addressed by.
+ *
+ * A classic pool is a ledger entry with a CAP-38 / SEP-23 `L…` strkey; a
+ * Soroban pool IS a contract, so it is addressed by its `C…` address. The two
+ * are distinct types elsewhere — search must not send every contract to the
+ * pool page — which is why this is its own rule rather than a widened
+ * {@link isPoolId}.
+ *
+ * Mirrors the API, whose pool routes accept both (task 0374). They must agree:
+ * a stricter check here turns a live pool into a "not found" that never even
+ * reaches the network, which is exactly what it did for every Soroban pool the
+ * list itself linked to.
+ */
+export function isPoolIdentifier(value: string): boolean {
+  return isPoolId(value) || isContractId(value);
+}
+
 /**
  * Canonical asset-id token (polymorphic). Accepts the three forms the
  * `/assets/:id` route serves: the reserved `native` keyword, a contract

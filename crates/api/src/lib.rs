@@ -14,6 +14,8 @@
 
 mod accounts;
 mod assets;
+// Declared here so `ApiDoc` can list `auth::session` in the spec (task 0510).
+mod auth;
 mod cache;
 mod common;
 mod config;

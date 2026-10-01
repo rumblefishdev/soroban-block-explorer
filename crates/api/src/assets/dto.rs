@@ -29,7 +29,7 @@ pub struct ListParams {
 
 /// Asset row returned by list and detail. Surfaces both the decoded
 /// `asset_type_name` (SQL `asset_family_name()`) and the raw `asset_type`
-/// SMALLINT — canonical SQL `08_get_assets_list.sql` projection.
+/// SMALLINT.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetItem {
     /// Canonical identifier — the single token usable as `/assets/{id}`:
@@ -75,9 +75,12 @@ pub struct AssetItem {
     /// On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
     /// (use `asset_code`) and native.
     pub symbol: Option<String>,
-    /// Display decimals — on-chain `METADATA` for Soroban tokens, else 7
-    /// (Stellar classic precision). Load-bearing for amount rendering.
-    pub decimals: u32,
+    /// Display decimals — 7 for native and classic (Stellar precision), a
+    /// Soroban token's on-chain metadata. Load-bearing for amount rendering.
+    /// `null` when the token publishes none we could read: its amounts then
+    /// have no known scale, and a guessed 7 would be off by 10^11 for an
+    /// 18-decimal token.
+    pub decimals: Option<u32>,
     /// Total supply as a RAW integer string (`Int128`) — scale by `decimals` for
     /// display (task 0331 Option C: one convention for ALL asset types; classic
     /// `decimals` is 7). E.g. `"63836094715548"`. `null` = no balance data
@@ -111,8 +114,8 @@ pub struct AssetDetailResponse {
     pub home_page: Option<String>,
 }
 
-/// Transaction row for `/assets/:id/transactions`. Pure-DB; mirrors
-/// canonical SQL `10_get_assets_transactions.sql`.
+/// Transaction row for `/assets/:id/transactions`. Pure-DB; filled by
+/// `queries::fetch_transactions`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetTransactionItem {
     pub hash: String,

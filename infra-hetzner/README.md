@@ -22,7 +22,6 @@ docker-compose.prod.yml      ← Production overlay over the dev compose file
 config.d/memory.xml          ← Production memory tuning
 config.d/prometheus.xml      ← Native metrics endpoint on loopback
 config.d/system-logs.xml     ← Server log retention and levels (task 0563)
-users.d/dict.xml             ← `dict_reader` user (loopback-only)
 ```
 
 ## Operating model

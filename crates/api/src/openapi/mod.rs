@@ -3,7 +3,8 @@
 //! This module defines [`ApiDoc`] — the metadata-only root document
 //! (title, version, description, shared schema components). Endpoint
 //! paths are registered dynamically at runtime through
-//! `utoipa_axum::router::OpenApiRouter::routes`, and the runtime
+//! `utoipa_axum::router::OpenApiRouter::routes` — except `/auth/session`,
+//! listed in [`ApiDoc`]'s `paths(...)` (task 0510) — and the runtime
 //! `servers` block is stamped onto the registered spec by `main::app`
 //! so the advertised base URL can vary per deployment environment.
 
@@ -73,10 +74,14 @@ impl Modify for SecurityAddon {
 ///
 /// Paths are registered dynamically through `OpenApiRouter::routes`
 /// so handler modules don't need to be listed here explicitly — M2
-/// endpoint modules add routes without touching this file.
+/// endpoint modules add routes without touching this file. The one
+/// exception is `/auth/session` (see `paths(...)` below).
 #[derive(OpenApi)]
 #[openapi(
     modifiers(&SecurityAddon),
+    // The one path listed here instead of in `register_routes`: `main::app`
+    // mounts it only when the auth layer is armed (task 0510).
+    paths(crate::auth::session),
     info(
         title = "Soroban Block Explorer API",
         version = env!("CARGO_PKG_VERSION"),
@@ -164,9 +169,10 @@ impl Modify for SecurityAddon {
 pub struct ApiDoc;
 
 /// Build the `OpenApiRouter` carrying every endpoint advertised by the
-/// API. Shared between the live Lambda app (`main::app`) and the
-/// build-time `extract_openapi` binary so neither can quietly drop a
-/// route from the spec the frontend codegen consumes.
+/// API except `/auth/session`, which `main::app` mounts only when the auth
+/// layer is armed (task 0510). Shared between the live Lambda app
+/// (`main::app`) and the build-time `extract_openapi` binary so neither can
+/// quietly drop a route from the spec the frontend codegen consumes.
 ///
 /// Returns a router typed with `AppState` but not yet bound to a state
 /// value. Callers attach state via `.with_state(...)` (live app) or

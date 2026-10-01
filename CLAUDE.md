@@ -11,6 +11,12 @@
 
 - Production module ≤ ~800 lines. Split BY TOPIC (one concern per file),
   never by layer ("all queries of the module" is how god files grow).
+- Name each split-out file after what it serves, so a search for the
+  handler lands on its file: an endpoint's query file carries the
+  handler's name (`queries/list_pools.rs` backs `handlers::list_pools`), a
+  shared helper the concept it computes (`usd_analytics.rs`). Never a
+  generic noun (`utils`, `helpers`) or one that names less than
+  the file holds (`pricing.rs` for TVL, volume and fee revenue).
 - Tests always live in their own file, never inline, and never in the same
   directory as the code:
   - Rust: `foo.rs` declares `#[cfg(test)] mod tests;`, which resolves natively
@@ -19,12 +25,13 @@
     the file, use `#[cfg(test)] #[path = "tests/<name>_tests.rs"] mod tests;`.
   - TS/TSX: `__tests__/foo.test.ts(x)` next to `foo.ts(x)`, importing
     `../foo`.
-  - Existing `foo_tests.rs` / `foo.test.tsx` siblings move when a task touches
-    them (task 0525), never in a sweep.
 - Verification-only code (oracles, corpus checks) belongs in the crate's
   `tests/` directory, not in the production module it verifies.
-- Touching a file that exceeds the limit? Extract at least its tests in the
-  same PR. New files must not be born over the limit.
+- Touching a file with inline or sibling tests? Move them to their proper
+  place — in a structure PR when the task also edits them. New files
+  must not be born over the limit.
+- Touching a file over the limit? It must not grow: first move the topic
+  you edit into its own file, so the file ends shorter than you found it.
 - The existing stock shrinks incrementally — task 0525 tracks the backlog —
   never in a big-bang refactor.
 
@@ -78,6 +85,16 @@ followed by `openapi-ts` codegen. Stage the resulting changes (`openapi.json` +
 CI runs `nx run @rumblefish/api-types:check-generated` (a `git diff --exit-code`
 on those paths). Skipping the regen → red `API types freshness` check.
 
+## Schema — locate transactions by position, never by `transaction_id`
+
+A new table or column never carries `transaction_id` (the hash64 surrogate).
+Locate a transaction by `(ledger_sequence, application_order)`, an operation
+by `operation_index`, an event by its stellar-rpc id
+([ADR 0059](./lore/2-adrs/0059_canonical-event-identity-and-location-names.md)).
+The surrogate is a hash: it compresses at ratio 1.0 and is ~220 GiB of the
+database; task 0538 removes it table by table. Enforced by
+`crates/db-clickhouse/tests/schema_conventions.rs` — its allowlist only shrinks.
+
 ## Evergreen Architecture Docs
 
 Per [ADR 0032](./lore/2-adrs/0032_docs-architecture-evergreen-maintenance.md),
@@ -110,6 +127,20 @@ per-layer deep-dives (`infra/README.md`, `infra-hetzner/README.md`,
 These encode durable rules. Keep transient state (which task is open, which PR is
 pending) out of them — it rots and makes the guide untrustworthy.
 
+## Evidence — conclusions from the whole population, not a sample
+
+A claim that code is correct, two paths are equal, or a case "never
+happens" rests on the **whole population**: the full history in ledger
+slices, every pool, every family, every code version — read-only queries on
+production are cheap and pre-approved. A small or convenient sample hides the
+rare classes that break things (a W1 equality was first claimed from 360 rows
+in 200 ledgers containing none of the 17 Phoenix withdrawals in history; the
+full-history query, 4,405,583 of 4,405,583, was the proof).
+
+When a sample is unavoidable (archive re-parse, RPC): draw it from several
+periods, include the rare classes on purpose, and report its size, how it was
+drawn and what it cannot show — never "confirmed" or "identical" unqualified.
+
 ## GitHub Issues
 
 Issues close at **deploy**, never at merge — merged code is not shipped code.
@@ -124,9 +155,12 @@ posts to GitHub — it drafts, a human sends.
 ## Context
 
 @lore/0-session/current-user.md
-@lore/0-session/current-task.md
-@lore/0-session/next-tasks.md
 @lore/CLAUDE.md
+
+The current task is `lore/0-session/current-task.md` (a symlink to the task
+file); read it when the work concerns the task. Tasks ready to pick are listed
+in `lore/0-session/next-tasks.md`. Neither is imported: a task file can run to
+tens of kilobytes, and every session and subagent would load it up front.
 
 <!-- nx configuration start-->
 <!-- Leave the start & end comments to automatically receive updates. -->

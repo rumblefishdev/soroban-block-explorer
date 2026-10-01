@@ -317,6 +317,43 @@ they are the assets list this stage already had to touch. Items 3 and 4 are a
 larger cut (a schema column, a shared formatter) and may be split out once 1–2
 land. Items 5, 7 and 8 are small and independent.
 
+## Stage 3 proposal — filter pools by asset identity, not code text (2026-09-23)
+
+Raised while reviewing the pool-legs PR (#479), which keeps today's behaviour.
+Not decided — recorded so the question is answered here, not in a pool PR.
+
+**The problem, measured on production:** the filter matches a code as a
+substring of every asset's displayed code, so a needle names far more assets
+than the reader means.
+
+| Needle | Assets matched as substring | Assets with exactly that code |
+| ------ | --------------------------- | ----------------------------- |
+| `USDC` | 1,097                       | 513 (many issuers)            |
+| `XLM`  | 7,237                       | 787 (one is native)           |
+| `KALE` | 28                          | —                             |
+
+The pair rule ("each code on its own leg") exists only because a text needle
+can match the same asset twice: 1,843 pools hold an exact-code USDC leg, 35 hold
+two.
+
+**Options:**
+
+- **P1 — keep substring text (today).** No work; noisy, and the pair predicate
+  stays three clauses and four subqueries.
+- **P2 — exact code, still text.** Less noise; impostor issuers stay, the pair
+  rule stays, and `USD` stops matching `USDC`.
+- **P3 — pick the asset from suggestions, filter by identity.** A pair becomes
+  `hasAll(lp.legs, [id1, id2])` — one line, exact, no pair rule (two different
+  assets by definition). Costs a frontend asset picker and an id-typed API
+  parameter.
+
+**The conflict to settle first:** this task's rule (2026-08-10) is that the
+pools page and global search return the SAME pools for the same text. P3 moves
+the pools filter off text while the global box stays a text box, so it
+replaces that rule rather than refactoring under it. Deciding P3 means stating
+the new rule — e.g. text search stays in the global box, the list filters by
+identity — before any code.
+
 ## Acceptance criteria
 
 - [ ] Any query that returns pools on the pools page returns THE SAME POOLS in

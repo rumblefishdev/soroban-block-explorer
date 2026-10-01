@@ -20,11 +20,14 @@ export {
 } from './truncate.js';
 export type { EntityType, TruncationConfig } from './types.js';
 export {
+  addressType,
+  type AddressType,
   isAccountId,
   isAssetId,
   isContractId,
   isLedgerSequence,
   isPoolId,
+  isPoolIdentifier,
   isTransactionHash,
 } from './validators.js';
 export { NATIVE_ASSET_CODE, isNativeAssetString } from './native.js';

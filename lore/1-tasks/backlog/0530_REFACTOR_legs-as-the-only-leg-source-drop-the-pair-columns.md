@@ -234,12 +234,22 @@ no production reader names `asset_a_*` / `asset_b_*`.
   `pool_state_changes`, ADR 0058 §3) is a separate merge about reserves, not
   about leg identity. It can happen in either order relative to this task.
 
+## Step 3 done in the 0374 split (2026-09-23)
+
+PR #479 (0374 split, PR 3) moves every reader to `legs` and rewrites
+`asset_codes_predicate` to match through `legs` + `assets`, with no `pool_kind`
+guard: one code matches a leg whose displayed code contains it; a pair needs
+each code on its own leg (both match, and two different legs match between
+them). Classic results are unchanged and soroban pools match by their real leg
+codes. Merged 2026-09-24 (`3cebd913`); the criterion below is ticked. The
+column drop (step 4) is split PR 6.
+
 ## Acceptance Criteria
 
 - [x] `legs` populated for every classic row, spot-verified against the pair
       columns before they are dropped (52 974 checked, 0 mismatched, 2026-09-16)
 - [ ] No production reader references `asset_a_*` / `asset_b_*`
-- [ ] `asset_codes_predicate` matches through `legs`, with no `pool_kind`
+- [x] `asset_codes_predicate` matches through `legs`, with no `pool_kind`
       guard, and returns the same classic results as today plus soroban pools
       matched by their real leg codes
 - [ ] The `XLM` and `XLM/XLM` filters return no false positives for either

@@ -118,6 +118,12 @@ Per merged PR in the range: number, title, `lore-NNNN` scopes, `Refs #NNN`.
 git log <last-tag>..origin/develop --format='%s%n%b' | grep -oE 'Refs #[0-9]+' | sort -u
 ```
 
+Keep the task set as well — Step 7 closes from it:
+
+```bash
+git log <last-tag>..origin/develop --format='%s' | grep -oE 'lore-[0-9]{4}' | sort -u
+```
+
 **Then open each referenced issue and check the range actually advances it.**
 A `Refs` trailer is a claim, not evidence, and both failure modes are real:
 
@@ -228,6 +234,27 @@ Run `/issues`. Give it the Step 3 buckets so its Step 4 reads this release
 instead of asking what was deployed. It drafts the comments; a human posts
 them.
 
-Finally, close out the lore tasks whose acceptance criteria were
-deploy-gated — `/lore-framework-tasks`, and tick them against the verification
-from Step 6, not against the deploy having happened.
+Finally, **sweep the lore tasks** — nothing else closes a task that was only
+waiting for a deploy, and such tasks otherwise stay `active` across releases.
+
+1. **Candidates** (resolve on fetched `develop`, never on a feature branch):
+
+   - every `lore-NNNN` in the Step 3 task set that is still `active`;
+   - every other `active` task with no unticked criterion, or only
+     deploy-gated ones:
+
+     ```bash
+     for f in $(git ls-tree -r --name-only origin/develop lore/1-tasks/active | grep -E '/[0-9]{4}_[^/]*(\.md|/README\.md)$'); do
+       n=$(git show origin/develop:"$f" | grep -cE '^\s*- \[ \]'); [ "$n" -eq 0 ] && echo "$f"
+     done
+     ```
+
+2. **Each candidate:** check that its code is in this tag (`git merge-base
+--is-ancestor <commit> <tag>`). Then prove its criteria on production from
+   the surface that changed (Step 6 rules), and close it with
+   `/lore-framework-tasks`. The history note names the tag and the evidence,
+   not only "deployed".
+3. **Report what stays open:** list every candidate you did not close, one
+   line each: not in this tag, a criterion unproven, or a follow-up still
+   pending (e.g. a deferred scope). A shipped task left `active` must have a
+   written reason.

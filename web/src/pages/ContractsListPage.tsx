@@ -6,10 +6,7 @@ import { useCallback, useMemo } from 'react';
 import { PAGE_SIZE, useContractsList, usePagedRows } from '../api/index.js';
 
 import { ContractsFilters } from './contracts/ContractsFilters.js';
-import {
-  CONTRACT_COLUMN_COUNT,
-  ContractsTable,
-} from './contracts/ContractsTable.js';
+import { ContractsTable } from './contracts/ContractsTable.js';
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 
@@ -31,14 +28,8 @@ export default function ContractsListPage() {
     return filters;
   }, [q, type]);
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useContractsList(cursor, queryFilters);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = useContractsList(cursor, queryFilters);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   const handleSearchChange = useCallback(
     (value: string) => setFilter('q', value || null),
@@ -64,25 +55,19 @@ export default function ContractsListPage() {
             onTypeChange={handleTypeChange}
           />
         }
-        columnCount={CONTRACT_COLUMN_COUNT}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
-        rows={rows}
-        renderTable={(visibleRows) => <ContractsTable rows={visibleRows} />}
-        renderSkeleton={() => (
-          <ContractsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
+          <ContractsTable
+            rows={rows}
+            loading={loading}
+            skeletonRows={PAGE_SIZE}
+          />
         )}
         hasActiveFilters={hasFilters}
         emptyKind="contracts"
         emptyNoun="contracts"
         onClearFilters={clearFilters}
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </Stack>
   );

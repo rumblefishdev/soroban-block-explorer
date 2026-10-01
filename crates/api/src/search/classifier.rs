@@ -1,5 +1,5 @@
 //! Query classifier: maps raw `q` to the `(hash_bytes, strkey_prefix)`
-//! pair consumed by `22_get_search.sql`.
+//! pair consumed by `search::queries`.
 //!
 //! Two derived inputs only — the SQL itself decides which CTE branches
 //! fire based on which input is non-NULL. Keeping the classifier this

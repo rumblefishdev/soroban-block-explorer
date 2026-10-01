@@ -128,6 +128,19 @@ for the rest.
 - **`balances`: 25 other contract ids with no `assets` row** (23 classified
   `Other`, 2 `Nft`) — classifier coverage, not identity (NFT side: 0392).
 
+## Noted while repairing the pool legs (2026-09-22)
+
+- **Scheduling:** picked up after the #455 split finishes (decision, karolkow).
+  Nothing in that split depends on either part; PR #474 repaired the soroban
+  legs of the 138 SACs below with a map that ignores `sac_deployed`, so only a
+  NEW registration naming one of them re-orphans a leg.
+- **The map's query is the table's whole scan.** `fetch_sac_classic_map` reads
+  every `asset_sac` row (456,408 on 2026-09-22, 8 MiB) to return the 3,890 with
+  a SAC contract: 0.11 s measured per call, and the indexer calls it once per
+  ledger that needs it. Invisible live, a real cost in a full backfill. Fix it
+  in whichever change touches the map next — an `asset_sac` row carries no
+  index on `sac_contract_id`.
+
 ## Acceptance Criteria
 
 - [ ] Part 1: a classic pool whose only participant is the issuer stages an

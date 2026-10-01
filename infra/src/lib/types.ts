@@ -6,11 +6,11 @@
  * data plane lives on the Hetzner-hosted ClickHouse box reached over
  * mTLS. There is no RDS, no NAT Gateway, no private subnet.
  *
- * Production is the only supported AWS environment until product
- * explicitly asks to bring staging back (see task 0249 archive notes).
+ * One deployment per Stellar network (ADR 0052): `production` is mainnet,
+ * `testnet` is being built (task 0553).
  */
 export interface EnvironmentConfig {
-  readonly envName: 'production';
+  readonly envName: 'production' | 'testnet';
   readonly awsRegion: string;
 
   // Network (consumed by NetworkStack)
@@ -50,6 +50,32 @@ export interface EnvironmentConfig {
   readonly galexieDesiredCount: number;
   /** Stellar network passphrase. Determines which network Galexie connects to. */
   readonly stellarNetworkPassphrase: string;
+  /**
+   * Soroban RPC endpoints of this network, tried in order on failure. The API
+   * receives them as `SOROBAN_RPC_URLS`.
+   */
+  readonly sorobanRpcUrls: readonly string[];
+  /**
+   * Where the indexer reads ledger files (task 0553). `galexie`: our own
+   * Galexie writes them into this environment's ledger bucket, whose S3
+   * events ring the indexer. `public-lake`: SDF's public data lake bucket
+   * `aws-public-blockchain`, under `publicArchivePrefix` — no Galexie and no
+   * ledger bucket are deployed.
+   */
+  readonly ledgerSource: 'galexie' | 'public-lake';
+  /**
+   * Folder of this network's ledgers in the public data lake, e.g.
+   * `v1.1/stellar/ledgers/testnet/2025-12-18`. The indexer and API receive it
+   * as `PUBLIC_ARCHIVE_PREFIX` and refuse to start when its network segment
+   * disagrees with the passphrase. Unset: both read the pubnet folder.
+   * Required with `ledgerSource: 'public-lake'`.
+   */
+  readonly publicArchivePrefix?: string;
+  /**
+   * ClickHouse database of this environment, passed to all three Lambdas as
+   * `CLICKHOUSE_DATABASE`. Unset: they use `default`.
+   */
+  readonly clickhouseDatabase?: string;
   /** CloudWatch Logs retention in days for ECS log groups. */
   readonly ecsLogRetentionDays: number;
   /** Graceful shutdown timeout in seconds. ECS waits this long after SIGTERM before SIGKILL. */
@@ -138,9 +164,8 @@ export interface EnvironmentConfig {
    *
    * Shares the same CloudFront Function code and KeyValueStore as
    * `enableBasicAuth` when both are true (one construct, one set of
-   * credentials) — but the KVS/function are provisioned whenever EITHER
-   * flag is true, since `/api/*` may need the gate while the main site
-   * does not.
+   * credentials). The KVS is provisioned unconditionally so flipping
+   * both flags off never deletes the out-of-band-seeded credentials.
    */
   readonly enableApiSpaBasicAuth: boolean;
 
@@ -375,6 +400,12 @@ export interface EnvironmentConfig {
    */
   readonly chDomainName: string;
   /**
+   * Create the Route 53 record for `chDomainName` (HetznerDnsStack). False
+   * for an environment that shares another one's ClickHouse host and so
+   * must not own its record. Unset: true.
+   */
+  readonly provisionChDns?: boolean;
+  /**
    * Secret-name prefix in AWS Secrets Manager for mTLS client cert
    * bundles. Each AWS service (Lambda, Galexie) gets its own secret at
    * `${mtlsSecretNamePrefix}/<cn>` containing `{cert, key, ca}` (per
@@ -425,6 +456,16 @@ export function relativeRecordName(fqdn: string, zoneName: string): string {
  */
 export function validateConfig(config: EnvironmentConfig): void {
   const errors: string[] = [];
+
+  if (config.sorobanRpcUrls.length === 0) {
+    errors.push('sorobanRpcUrls must list at least one endpoint');
+  }
+
+  if (config.ledgerSource === 'public-lake' && !config.publicArchivePrefix) {
+    errors.push(
+      "ledgerSource 'public-lake' needs publicArchivePrefix (the network's folder in the data lake)"
+    );
+  }
 
   // CloudFront cert must be in us-east-1 regardless of awsRegion.
   if (

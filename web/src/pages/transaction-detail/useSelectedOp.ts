@@ -4,7 +4,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 const OP_HASH = /^#op-(\d+)$/;
 
 /**
- * Resolve the `#op-N` fragment (1-based) into an index that addresses an
+ * Resolve the `#op-N` fragment (0-based, the operation's position in the
+ * envelope, as stellar-rpc counts it) into an index that addresses an
  * operation this transaction actually has.
  *
  * `count` of 0 does not mean "no such operation" — it is also "still loading"
@@ -13,7 +14,7 @@ const OP_HASH = /^#op-(\d+)$/;
  * one rather than asserting anything (0377).
  *
  * Out of range resolves to the first operation WITHOUT announcing it, and that
- * is deliberate: the card labels itself from `application_order`, not from the
+ * is deliberate: the card labels itself from `operation_index`, not from the
  * fragment, so the reader sees a correctly numbered operation. Nothing is
  * hidden and nothing is mislabelled — the only way here is a hand-edited URL,
  * and a notice for that case was cut as unearned (task 0482).
@@ -23,18 +24,18 @@ export function resolveOp(hash: string, count: number): number {
   if (match == null || count <= 0) return 0;
 
   const requested = Number(match[1]);
-  return requested >= 1 && requested <= count ? requested - 1 : 0;
+  return requested < count ? requested : 0;
 }
 
 /**
- * Selected operation index, deep-linkable as `#op-N` (1-based) so a link can
+ * Selected operation index, deep-linkable as `#op-N` (0-based) so a link can
  * point at one operation of a transaction.
  *
  * The hook owns the index's validity, the way `useTableUrlState` owns
  * `sort`/`dir`: user-supplied URL state is normalised where it is read, so
  * nothing downstream defends against a value that cannot happen. It used to
  * normalise only the lower bound and let anything above the list through, which
- * left the card showing operation 1 while the picker beside it highlighted
+ * left the card showing the first operation while the picker beside it highlighted
  * nothing. Note this RESETS rather than clamps — a number past the end gives
  * the first operation, not the last; the fragment is treated as unusable, not
  * as an intent to reach the end of the list.
@@ -53,7 +54,7 @@ export function useSelectedOp(
         {
           pathname: location.pathname,
           search: location.search,
-          hash: `#op-${index + 1}`,
+          hash: `#op-${index}`,
         },
         { replace: true }
       );

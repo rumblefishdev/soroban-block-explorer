@@ -1,5 +1,5 @@
 //! Request and response DTOs for the contracts endpoints.
-//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{11..14}_*.sql`.
+//! The SQL behind these shapes is in `contracts::queries`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -153,7 +153,8 @@ pub struct InterfaceResponse {
 pub struct InvocationItem {
     pub transaction_hash: String,
     pub ledger_sequence: i64,
-    pub caller_account: Option<String>,
+    /// Who made the call: a `G…` account or a `C…` contract (task 0600).
+    pub caller: Option<String>,
     pub created_at: DateTime<Utc>,
     pub successful: bool,
 }

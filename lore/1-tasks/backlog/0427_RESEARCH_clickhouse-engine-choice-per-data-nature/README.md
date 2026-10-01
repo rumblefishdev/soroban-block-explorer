@@ -1,6 +1,6 @@
 ---
 id: '0427'
-title: 'RESEARCH: ClickHouse engine choice per data nature — stop making dedup every query job'
+title: 'RESEARCH: ClickHouse capabilities we do not use — engine choice per data nature first, then storage tiers, indexes, updates, caching'
 type: RESEARCH
 status: backlog
 related_adr: []
@@ -17,6 +17,14 @@ links:
   - https://clickhouse.com/docs/engines/table-engines/mergetree-family/replacingmergetree
   - https://clickhouse.com/docs/guides/developer/deduplication
 history:
+  - date: 2026-09-24
+    status: backlog
+    who: karolkow
+    note: >
+      Widened to a survey of ClickHouse capabilities the explorer does not use
+      (decision karolkow, 2026-09-24, from task 0580). The engine choice stays
+      the first question; the section "Widened scope" lists the rest. Each gets
+      a verdict — take / leave / when — measured on our data, not read.
   - date: 2026-07-21
     status: backlog
     who: karolkow
@@ -274,3 +282,22 @@ None of these survived verification, and all four are answerable on our own data
   AggregatingMergeTree, and cross-partition-disabled FINAL on our 14M entities is
   unknown, and no source prices the migration of live tables to a different
   engine under a continuous write stream.
+
+## Widened scope (2026-09-24)
+
+Came out of task 0580: a claim in this repository that projections cannot
+run on a ReplacingMergeTree survived in conversation although task 0395 had
+already shown it is a flippable default (`deduplicate_merge_projection_mode`).
+So the survey covers what we have not tried, not only the engines. Candidates,
+none measured here yet:
+
+| capability                                                         | what it might give us                                                                                                                        |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| tiered storage (`TTL … TO DISK`, an S3 disk)                       | old partitions on cheap object storage, the head local; ~31 GiB/month growth (2026-09-23) and backups on the same volume                     |
+| text / n-gram / token indexes (`text`, `ngrambf_v1`, `tokenbf_v1`) | search by asset code or contract name without a scan                                                                                         |
+| lightweight updates and deletes (patch parts)                      | data repairs without whole-table mutations or rebuild-and-swap                                                                               |
+| `_part_offset` index projections                                   | a second lookup key where the key column is small                                                                                            |
+| query cache                                                        | hot pages (network stats, first pages of lists) not recomputed per request                                                                   |
+| projections in general (task 0395)                                 | measured in task 0580: a projection stores its key column in full — no saving for a 32-byte key; fits only 1:1 re-sorts, not fan-out indexes |
+
+Codecs on the integer columns are task 0579, not this one.

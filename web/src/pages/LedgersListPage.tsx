@@ -9,7 +9,7 @@ import { useLedgersList, usePagedRows } from '../api/index.js';
 
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
-import { LEDGER_COLUMN_COUNT, LedgersTable } from './ledgers/LedgersTable.js';
+import { LedgersTable } from './ledgers/LedgersTable.js';
 
 export default function LedgersListPage() {
   const { state, cursor, goNext, goPrev, setSort } = useCursorPagination();
@@ -17,8 +17,7 @@ export default function LedgersListPage() {
   // `setSort`, so it survives reload / deep links and stays paired with
   // the cursor.
   const sortDir = state.sortDir;
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useLedgersList(cursor, sortDir);
+  const query = useLedgersList(cursor, sortDir);
 
   const handleSortChange = useCallback(
     // Column id comes from the table; `setSort` writes `?sort=&dir=` and
@@ -27,11 +26,7 @@ export default function LedgersListPage() {
     [setSort]
   );
 
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
     <Stack spacing={3}>
@@ -40,29 +35,18 @@ export default function LedgersListPage() {
         subtitle="All indexed ledgers on the Stellar network"
       />
       <DataListCard
-        columnCount={LEDGER_COLUMN_COUNT}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
-        rows={rows}
-        renderTable={(visibleRows) => (
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
           <LedgersTable
-            rows={visibleRows}
-            sortDir={sortDir}
-            onSortChange={handleSortChange}
+            rows={rows}
+            loading={loading}
+            skeletonRows={20}
+            // As before, the skeleton's header neither shows nor changes the sort.
+            {...(loading ? {} : { sortDir, onSortChange: handleSortChange })}
           />
         )}
-        renderSkeleton={() => (
-          <LedgersTable rows={[]} loading skeletonRows={20} />
-        )}
         emptyKind="ledgers"
-        emptyNoun="ledgers"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </Stack>
   );

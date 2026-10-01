@@ -118,3 +118,52 @@ plus the already-missed 527 — is what the drain design covers.
 - [ ] Non-token-rows question dispatched (scoped here or spawned)
 - [ ] Docs: database-schema-overview (`soroban_contract_metadata` readers /
       writers) + backfills doc if a new subcommand lands
+
+## 2026-09-24 — measured from the pool read (0374 PR 4c)
+
+605 of the 4,466 Soroban assets (14%) have no `soroban_contract_metadata`
+row, so their decimals are unknown to us — yet the three that are live pool
+legs all answer the SEP-41 interface on chain (RPC simulation):
+
+| contract    | on chain                 | pools                          |
+| ----------- | ------------------------ | ------------------------------ |
+| `CBAPZAZN…` | `HITZ` "Gravity HITZ", 7 | 2 constant, swapping this hour |
+| `CB7OOP3V…` | `XRP` "XRP", 6           | 1 concentrated                 |
+| `CBZ4DCE7…` | `USST` "STBL_USST", 18   | 1 stable, reserve 1.28e24 raw  |
+
+- The pool read (4c) refuses to scale a raw amount without a known scale,
+  so these legs show "—" rather than a wrong number.
+- **Other reads still guess.** `accounts/queries.rs` projects
+  `coalesce(m.decimals, 7)` with no flag, so a USST balance renders 10^11
+  too large. The pool path's `decimals_known` (asset resolver) is the
+  pattern the other reads need; the root fix is reading metadata by the
+  interface (`decimals()`), which is this task's question.
+
+## 2026-09-29 — local simulation without RPC: feasible, stopped at the hot archive
+
+Asked: call `decimals()` locally from indexed data, no RPC at all.
+
+- **RPC reference first.** The 127 held Soroban tokens with no decimals in
+  `soroban_contract_metadata`, simulated over RPC: 124 answer (82 × 7,
+  42 × other: 0, 6, 8, 9, 13, 18), 2 answer 43,224 (`PIKA`, not a scale),
+  1 is not a token (only `get_balance`). So these tokens do publish decimals —
+  through the SEP-41 function, not in a storage layout the parser reads.
+- **Local path, no RPC:** `stellar snapshot create --archive-url … --ledger
+64678271` (checkpoint read from the public history archive, ~6 min) plus an
+  executor on `soroban-sdk` 28 `testutils` (`Env::from_ledger_snapshot_file`,
+  `try_invoke_contract("decimals")`) — runs 127 calls in 2 s.
+- **Result: 0 of 127**, all `Error(Context, InvalidAction)`: the snapshot held
+  no `contract_code` entry at all and 106 of 127 instances. The CLI searches
+  the live bucket list only (levels 0–20); the code and 21 instances were
+  evicted to the hot archive (protocol 23+). The checkpoint's history-archive
+  state does publish `hotArchiveBuckets` (11 levels, all non-empty), so they
+  are readable without RPC — but needs our own reader (the `backfill-runner`
+  snapshot reader handles live `BucketEntry` only).
+- **Cost noted:** the CLI caches every live bucket it scans (15 GB under
+  `~/Library/Application Support/org.stellar.stellar-cli/bucket/`).
+- **Decision (karolkow): stop here** (thread 122 B) — no user sees a wrong
+  number meanwhile (0584 renders "—" for an unknown scale), and the build
+  behind it (store WASM from now on, hot-archive reader for history, the host
+  as a dependency bumped every protocol, a re-read policy) is a scope call
+  for after issue #405. The spike is resumable at any time: the archive is
+  permanent.

@@ -3,32 +3,14 @@ use crate::common::cursor::{self, CursorError, Direction};
 use chrono::TimeZone;
 
 #[test]
-fn surrogate_cursor_round_trips() {
-    // The transactions.id hash surrogate may be negative (cityhash64 as i64).
-    let c = TxListCursor::ChSurrogate {
-        ledger_sequence: 50_000,
-        transaction_id: -123,
-    };
-    let encoded = cursor::encode(&c, Direction::Prev);
-    let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
-    assert_eq!(dir, Direction::Prev);
-    assert!(matches!(
-        decoded,
-        TxListCursor::ChSurrogate {
-            ledger_sequence: 50_000,
-            transaction_id: -123
-        }
-    ));
-}
-
-#[test]
 fn position_cursor_round_trips() {
     let c = TxListCursor::ChPosition {
         ledger_sequence: 64_000_000,
         application_order: 7,
     };
     let encoded = cursor::encode(&c, Direction::Next);
-    let (_, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
+    let (dir, decoded): (Direction, TxListCursor) = cursor::decode(&encoded).unwrap();
+    assert_eq!(dir, Direction::Next);
     assert!(matches!(
         decoded,
         TxListCursor::ChPosition {
@@ -39,45 +21,29 @@ fn position_cursor_round_trips() {
 }
 
 #[test]
-fn each_statement_takes_only_its_own_keyset() {
-    let position = TxListCursor::ChPosition {
-        ledger_sequence: 64_000_000,
-        application_order: 7,
-    };
-    let surrogate = TxListCursor::ChSurrogate {
+fn surrogate_cursor_is_rejected() {
+    // Minted by the contract's Invocations tab before task 0586 (and by the
+    // operation-type filter before 0372). It no longer decodes: a 400 once
+    // instead of a page read with the wrong key (ADR 0008 clean break).
+    #[derive(serde::Serialize)]
+    struct Surrogate {
+        src: &'static str,
+        ledger_sequence: i64,
+        transaction_id: i64,
+    }
+    let old = Surrogate {
+        src: "ch_surrogate",
         ledger_sequence: 64_000_000,
         transaction_id: -123,
     };
-    // (contract filter, operation-type filter) → the statement's keyset.
-    for (contract, op_type, keyed_by_position) in [
-        (false, false, true), // A: no filter
-        (true, false, true),  // B: contract
-        (true, true, true),   // B: contract + operation type
-        (false, true, false), // C: operation type only
-    ] {
-        assert_eq!(
-            position.fits_transaction_list(contract, op_type),
-            keyed_by_position,
-            "position cursor, contract {contract}, op_type {op_type}"
-        );
-        assert_eq!(
-            surrogate.fits_transaction_list(contract, op_type),
-            !keyed_by_position,
-            "surrogate cursor, contract {contract}, op_type {op_type}"
-        );
-    }
+    let encoded = cursor::encode(&old, Direction::Next);
+    let err = cursor::decode::<TxListCursor>(&encoded).unwrap_err();
+    assert!(matches!(err, CursorError::InvalidPayload));
 }
 
 #[test]
 fn variant_carries_the_src_tag_on_the_wire() {
     let tag = |c: TxListCursor| serde_json::to_value(c).unwrap()["src"].clone();
-    assert_eq!(
-        tag(TxListCursor::ChSurrogate {
-            ledger_sequence: 1,
-            transaction_id: 2
-        }),
-        "ch_surrogate"
-    );
     assert_eq!(
         tag(TxListCursor::ChPosition {
             ledger_sequence: 1,

@@ -34,7 +34,6 @@ interface OperationCardProps {
    *  operation was applied (the summary banner states the verdict; the card
    *  dims and labels itself). */
   applied: boolean;
-  fallbackOrder: number;
   /** Ops without their own source inherit the transaction's (self-detection). */
   txSourceAccount: string | null;
   /** `heavy.operation_tree` — tx-level, safe to attach to the invoke card
@@ -72,7 +71,6 @@ export function OperationCard({
   light,
   heavy,
   applied,
-  fallbackOrder,
   txSourceAccount,
   operationTree,
   contractEvents = [],
@@ -93,9 +91,9 @@ export function OperationCard({
   }
 
   // heavy is 1:1 with the envelope; the light row is folded, so its
-  // application_order is the FIRST of the fold — wrong for later copies.
-  const order =
-    heavy?.application_order ?? light.application_order ?? fallbackOrder;
+  // operation_index is the FIRST of the fold — wrong for later copies. Shown
+  // as the chain counts it, from 0, like the `#op-N` anchor.
+  const order = heavy?.operation_index ?? light.operation_index;
   const label = formatOperationType(light.type_name);
   const soroban = isSorobanOp(light.type_name);
   const routeModel = buildRouteModel(heavy);
@@ -131,9 +129,9 @@ export function OperationCard({
   // have no trace (SAC events on a payment, say), and there this list is the
   // only per-operation view, so it stays.
   const opEvents =
-    heavy?.application_order != null && traceNodes.length === 0
+    heavy != null && traceNodes.length === 0
       ? contractEvents.filter(
-          (event) => event.operation_index === heavy.application_order - 1
+          (event) => event.operation_index === heavy.operation_index
         )
       : [];
   const detailCount = Object.keys(detailsObj(heavy) ?? {}).length;

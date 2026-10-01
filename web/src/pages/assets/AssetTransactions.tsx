@@ -5,16 +5,13 @@ import {
   ExplorerTable,
   IdentifierDisplay,
   IdentifierWithCopy,
-  PaginationControls,
-  QueryErrorState,
   StatusChip,
-  TableEmptyState,
   useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
 
 import { useAssetTransactions, usePagedRows } from '../../api/index.js';
+import { DataList } from '../detail/DataList.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { OperationCell } from '../transactions/cells.js';
 import { TransactionTime } from '../transactions/TransactionTime.js';
@@ -76,51 +73,27 @@ export function AssetTransactions({ assetId }: { assetId: string }) {
     resetKey: assetId,
   });
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useAssetTransactions(assetId, cursor);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
-
-  let body: ReactNode;
-  if (isLoading || isPlaceholderData) {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={[]}
-        rowKey={(row) => row.hash}
-        loading
-        skeletonRows={20}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  } else if (isError) {
-    body = <QueryErrorState error={error} onRetry={() => void refetch()} />;
-  } else if (rows.length === 0) {
-    body = <TableEmptyState kind="transactions" py={6} />;
-  } else {
-    body = (
-      <ExplorerTable
-        columns={columns}
-        rows={rows}
-        rowKey={(row) => row.hash}
-        rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
-      />
-    );
-  }
+  const query = useAssetTransactions(assetId, cursor);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   return (
     <SectionCard title="Latest transactions">
-      {body}
-      <PaginationControls
-        caption="Latest results"
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
+      <DataList
+        query={query}
+        pager={pager}
+        errorPy={6}
+        renderTable={(rows, { loading }) => (
+          <ExplorerTable
+            columns={columns}
+            rows={rows}
+            rowKey={(row) => row.hash}
+            loading={loading}
+            skeletonRows={20}
+            rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}
+          />
+        )}
+        emptyKind="transactions"
+        emptyPy={6}
       />
     </SectionCard>
   );

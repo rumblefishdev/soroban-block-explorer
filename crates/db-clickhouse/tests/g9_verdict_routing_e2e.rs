@@ -14,9 +14,9 @@
 //!   * `Fungible`-verdict contract → events/rows DROPPED (neither hot nor
 //!     pending),
 //!   * `Nft`-verdict contract → events/rows land HOT (`nfts` /
-//!     `nft_ownership`),
+//!     `nft_ownership_changes`),
 //!   * unclassified contract (no verdict row) → quarantine (`nfts_pending` /
-//!     `nft_ownership_pending`) — the fail-open path must stay intact.
+//!     `nft_ownership_changes_pending`) — the fail-open path must stay intact.
 //!
 //! Gated on `CLICKHOUSE_URL` (skips cleanly when unset — same pattern as
 //! `persist_e2e.rs`). Run locally:
@@ -41,7 +41,7 @@ fn contract(tag: char) -> String {
     "C".to_string() + &tag.to_string().repeat(55)
 }
 
-fn owner_account() -> String {
+fn owner() -> String {
     "G".to_string() + &"B".repeat(55)
 }
 
@@ -67,7 +67,7 @@ fn fixture_tx() -> ExtractedTransaction {
         hash: tx_hash(),
         inner_tx_hash: None,
         ledger_sequence: E2E_LEDGER,
-        source_account: owner_account(),
+        source_account: owner(),
         fee_source: None,
         fee_charged: 100,
         successful: true,
@@ -90,7 +90,7 @@ fn fixture_nft(contract_id: &str, token: &str) -> ExtractedNft {
         contract_id: contract_id.to_string(),
         token_id: token.to_string(),
         collection_name: None,
-        owner_account: Some(owner_account()),
+        owner: Some(owner()),
         name: None,
         media_url: None,
         minted_at_ledger: Some(E2E_LEDGER),
@@ -136,10 +136,15 @@ fn fixture_event(contract_id: &str, token: &str, order: u16) -> ExtractedNftEven
         contract_id: contract_id.to_string(),
         token_id: token.to_string(),
         event_type: NftEventType::Transfer,
-        owner_account: Some(owner_account()),
-        event_order: order,
+        owner: Some(owner()),
         ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
+        event_id: Some(xdr_parser::EventId {
+            ledger_sequence: E2E_LEDGER,
+            transaction_index: 1,
+            operation_index: 0,
+            event_index: u32::from(order),
+        }),
     }
 }
 
@@ -150,8 +155,8 @@ async fn cleanup(cl: &clickhouse::Client, contracts: &[&str]) {
             format!("ALTER TABLE soroban_contracts DELETE WHERE contract_id = '{c}'"),
             format!("ALTER TABLE nfts DELETE WHERE contract_id = {id}"),
             format!("ALTER TABLE nfts_pending DELETE WHERE contract_id = {id}"),
-            format!("ALTER TABLE nft_ownership DELETE WHERE contract_id = {id}"),
-            format!("ALTER TABLE nft_ownership_pending DELETE WHERE contract_id = {id}"),
+            format!("ALTER TABLE nft_ownership_changes DELETE WHERE contract_id = {id}"),
+            format!("ALTER TABLE nft_ownership_changes_pending DELETE WHERE contract_id = {id}"),
         ] {
             let _ = cl.query(&stmt).execute().await;
         }
@@ -159,13 +164,15 @@ async fn cleanup(cl: &clickhouse::Client, contracts: &[&str]) {
     for stmt in [
         format!("ALTER TABLE ledgers DELETE WHERE sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
-        format!("ALTER TABLE transaction_hash_index DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
+        format!(
+            "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence = {E2E_LEDGER}"
+        ),
         format!("ALTER TABLE transaction_participants DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
-        format!("ALTER TABLE operations_appearances DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
+        format!("ALTER TABLE transaction_operations DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!(
             "ALTER TABLE accounts DELETE WHERE account_id = '{}'",
-            owner_account()
+            owner()
         ),
     ] {
         let _ = cl.query(&stmt).execute().await;
@@ -265,8 +272,8 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
     for table in [
         "nfts",
         "nfts_pending",
-        "nft_ownership",
-        "nft_ownership_pending",
+        "nft_ownership_changes",
+        "nft_ownership_changes_pending",
     ] {
         assert_eq!(
             count(&cl, table, &fungible).await,
@@ -275,15 +282,9 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
         );
     }
 
-    // Nft verdict → HOT: rows in `nfts` + `nft_ownership`, nothing pending.
+    // Nft verdict → HOT: rows in `nfts` + `nft_ownership_changes`, nothing pending.
     assert_eq!(count(&cl, "nfts", &nft).await, 1, "nft row lands hot");
-    assert_eq!(
-        count(&cl, "nft_ownership", &nft).await,
-        1,
-        "ownership event lands hot"
-    );
     assert_eq!(count(&cl, "nfts_pending", &nft).await, 0);
-    assert_eq!(count(&cl, "nft_ownership_pending", &nft).await, 0);
 
     // No verdict → PENDING: quarantine intact for the genuinely-unknown.
     assert_eq!(
@@ -291,9 +292,31 @@ async fn g9_cross_ledger_verdict_routes_nft_events() {
         1,
         "unclassified contract quarantines"
     );
-    assert_eq!(count(&cl, "nft_ownership_pending", &unknown).await, 1);
     assert_eq!(count(&cl, "nfts", &unknown).await, 0);
-    assert_eq!(count(&cl, "nft_ownership", &unknown).await, 0);
+
+    // Task 0424: the ownership changes route the same way, and the event's
+    // location crosses the wire.
+    assert_eq!(
+        count(&cl, "nft_ownership_changes", &nft).await,
+        1,
+        "ownership event lands hot"
+    );
+    assert_eq!(count(&cl, "nft_ownership_changes_pending", &nft).await, 0);
+    assert_eq!(
+        count(&cl, "nft_ownership_changes_pending", &unknown).await,
+        1
+    );
+    assert_eq!(count(&cl, "nft_ownership_changes", &unknown).await, 0);
+    let location: Vec<(i16, u16, u32)> = cl
+        .query(
+            "SELECT application_order, operation_index, event_index \
+             FROM nft_ownership_changes WHERE contract_id = ?",
+        )
+        .bind(ids::contract_id(&nft))
+        .fetch_all()
+        .await
+        .expect("read back the location");
+    assert_eq!(location, vec![(1, 0, 1)]);
 
     // Task 0320: the prior-row prefetch must succeed (pre-fix it SELECTed the
     // dropped `name` column → Code 47 → no upgrade row ever written) and the

@@ -17,4 +17,6 @@ export { ThemeToggle } from './ThemeToggle.js';
 export { Footer } from './Footer.js';
 export type { FooterProps, FooterNavItem } from './Footer.js';
 
+export { PRIVACY_POLICY_URL } from './links.js';
+
 export { PageGridBackdrop } from './PageGridBackdrop.js';

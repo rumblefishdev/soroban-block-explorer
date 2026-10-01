@@ -25,48 +25,25 @@ pub struct ListParams {
 /// Opaque pagination payload for `GET /v1/transactions` and the other
 /// transaction lists (encoded via [`common::cursor`](crate::common::cursor)).
 ///
-/// Every list pages on `(ledger_sequence, <within-ledger key>)` inside one
-/// partition (canonical SQL 02); the variant names the within-ledger key, so a
-/// cursor carries its own keyset and a list refuses any other:
-///
-/// - `ChPosition` — the transaction's `application_order`, which is also its
-///   execution order. `/transactions` without an operation-type filter, and
-///   with a contract filter (task 0541).
-/// - `ChSurrogate` — the `transactions.id` hash surrogate. `/transactions`
-///   filtered by operation type only, and the account, asset and
-///   contract-invocation lists, until task 0538 moves them to the position.
+/// Every list pages on the transaction position
+/// `(ledger_sequence, application_order)` — `application_order` is also the
+/// execution order: `/transactions` under every filter (tasks 0541, 0372), the account and asset lists (task
+/// 0575) and the contract's invocations (task 0586).
 ///
 /// The `src` tag makes the cursor self-describing. Per ADR 0008 the wire
 /// format is opaque to clients, so the backend may change the encoding
-/// freely; the flip side is that a cursor which decodes but anchors another
-/// list's keyset MUST be rejected with `invalid_cursor` rather than silently
-/// mis-paginating. A legacy/untagged cursor (pre-0243, no `src`) fails to
-/// decode at all. Both fields are non-optional, so a keyset never binds a
-/// NULL tuple element.
+/// freely; the flip side is that a cursor of a retired keyset MUST fail with
+/// `invalid_cursor` rather than silently mis-paginate. It does so by failing
+/// to decode: the `ch_surrogate` cursor (the `transactions.id` hash surrogate,
+/// retired by task 0586) and a legacy/untagged one (pre-0243, no `src`). Both
+/// fields are non-optional, so a keyset never binds a NULL tuple element.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "src", rename_all = "snake_case")]
 pub enum TxListCursor {
-    ChSurrogate {
-        ledger_sequence: i64,
-        transaction_id: i64,
-    },
     ChPosition {
         ledger_sequence: i64,
         application_order: i16,
     },
-}
-
-impl TxListCursor {
-    /// Does this cursor anchor the keyset of the `/transactions` statement it
-    /// came back to? Only the operation-type filter without a contract filter
-    /// (statement C) keys on the surrogate.
-    pub fn fits_transaction_list(&self, contract_filter: bool, op_type_filter: bool) -> bool {
-        let keyed_by_position = contract_filter || !op_type_filter;
-        match self {
-            TxListCursor::ChPosition { .. } => keyed_by_position,
-            TxListCursor::ChSurrogate { .. } => !keyed_by_position,
-        }
-    }
 }
 
 /// Slim transaction row returned in the list endpoint.
@@ -103,7 +80,7 @@ pub struct TransactionListItem {
 // already pays for the archive XDR fetch for the full transaction view.
 // Adding memo here would require an archive fetch per ledger touched by
 // the page, which is wasteful for the list use case and inconsistent
-// with the DB-only contract advertised by canonical SQL 02.
+// with the list's DB-only contract.
 
 /// DB-sourced light slice for the transaction detail endpoint.
 ///
@@ -158,18 +135,17 @@ pub struct EventAppearanceItem {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct InvocationAppearanceItem {
     pub contract_id: String,
-    /// Root caller G-StrKey. Per ADR 0034 nested-call hierarchy is XDR-only.
-    pub caller_account: Option<String>,
+    /// Root caller: a `G…` account or a `C…` contract (task 0600). Per ADR
+    /// 0034 nested-call hierarchy is XDR-only.
+    pub caller: Option<String>,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OperationItem {
-    /// Global BIGSERIAL `operations_appearances.id`. Internal ordering
-    /// artefact only; not a within-tx index. Use `application_order`
-    /// for apply-order display and to join against
-    /// `XdrOperationDto.application_order` from the heavy overlay.
+    /// The operation's 1-based position (the table has no surrogate id since
+    /// PR #175). Join against the heavy overlay by `operation_index`.
     pub appearance_id: i64,
     /// Operation type tag in canonical SCREAMING_SNAKE_CASE
     /// (e.g. `"INVOKE_HOST_FUNCTION"`).
@@ -195,14 +171,10 @@ pub struct OperationItem {
     /// read path, which extracts pool crossings from claim atoms across
     /// path-payment, offer, and LP deposit/withdraw ops.
     pub pool_ids: Vec<String>,
-    /// 1-based per-tx apply position carrying on-chain operation order
-    /// (task 0192). For folded appearance rows (multiple identical-identity
-    /// envelope ops collapsed into one row, see task 0163) this is the
-    /// MIN of the folded ops' indices — the position of the row's first
-    /// occurrence in `tx.operations[]`. `None` for pre-task-0192 rows
-    /// where the column was not yet populated; clients fall back to
-    /// `appearance_id` order in that case.
-    pub application_order: Option<i16>,
+    /// The operation's position in its transaction's envelope, 0-based
+    /// (ADR 0059, stellar-rpc `operationIndex`); equals the heavy overlay's
+    /// `XdrOperationDto.operation_index`.
+    pub operation_index: i16,
     pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }

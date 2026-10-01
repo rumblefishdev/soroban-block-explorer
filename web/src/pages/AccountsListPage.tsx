@@ -9,10 +9,7 @@ import { useCallback, useMemo } from 'react';
 import { PAGE_SIZE, useAccountsList, usePagedRows } from '../api/index.js';
 
 import { AccountsFilters } from './accounts/AccountsFilters.js';
-import {
-  ACCOUNT_COLUMN_COUNT,
-  AccountsTable,
-} from './accounts/AccountsTable.js';
+import { AccountsTable } from './accounts/AccountsTable.js';
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
 
@@ -35,14 +32,8 @@ export default function AccountsListPage() {
     return filters;
   }, [withDomain, sortDir]);
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useAccountsList(cursor, queryFilters);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = useAccountsList(cursor, queryFilters);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   const handleWithDomainChange = useCallback(
     (value: boolean) => setFilter('domain', value ? '1' : null),
@@ -68,31 +59,21 @@ export default function AccountsListPage() {
             onWithDomainChange={handleWithDomainChange}
           />
         }
-        columnCount={ACCOUNT_COLUMN_COUNT}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
-        rows={rows}
-        renderTable={(visibleRows) => (
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
           <AccountsTable
-            rows={visibleRows}
-            sortDir={sortDir}
-            onSortChange={handleSortChange}
+            rows={rows}
+            loading={loading}
+            skeletonRows={PAGE_SIZE}
+            // As before, the skeleton's header neither shows nor changes the sort.
+            {...(loading ? {} : { sortDir, onSortChange: handleSortChange })}
           />
-        )}
-        renderSkeleton={() => (
-          <AccountsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
         )}
         hasActiveFilters={hasFilters}
         emptyKind="accounts"
         emptyNoun="accounts"
         onClearFilters={clearFilters}
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </Stack>
   );

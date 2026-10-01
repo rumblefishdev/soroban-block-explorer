@@ -20,9 +20,14 @@ history:
 
 One paragraph describing what this task accomplishes and why it matters.
 
-## Status: Active
+## Stan teraz
 
-**Current state:** [Brief description of progress]
+Current state in 3–6 bullets, rewritten in place (never appended); history
+goes to `notes/`.
+
+- Done: [what is finished]
+- Next: [the next step]
+- In force: [decisions that still hold]
 
 ## Context
 

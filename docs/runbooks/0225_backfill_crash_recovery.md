@@ -21,10 +21,10 @@ Or any other panic during parse / persist that aborts the runner before
 CH state post-crash, per `db_clickhouse::persist::writer.rs:40-48`
 (commit-marker pattern):
 
-- **18 streaming tables** (`transactions`, `operations_appearances`,
-  `soroban_events`, `transaction_participants`, `transaction_hash_index`,
-  `soroban_invocations_appearances`, `assets`, `nfts`, `nft_ownership`,
-  `nfts_pending`, `nft_ownership_pending`, `account_balances_current`,
+- **18 streaming tables** (`transactions`, `transaction_operations`,
+  `soroban_events`, `transaction_participants`, `transaction_hash_prefix_index`,
+  `contract_activity`, `assets`, `nfts`, `nft_ownership_changes`,
+  `nfts_pending`, `nft_ownership_changes_pending`, `account_balances_current`,
   `accounts`, `soroban_contracts`, `wasm_interface_metadata`,
   `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions`) —
   may have partial rows from the failed partition. Streaming inserts
@@ -93,21 +93,22 @@ the partition never committed:
 
 ```sql
 ALTER TABLE transactions                       DELETE WHERE ledger_sequence > <last_complete_ledger>;
-ALTER TABLE operations_appearances             DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE transaction_operations             DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE pool_operation_amounts             DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE soroban_events                     DELETE WHERE ledger_sequence > <last_complete_ledger>;
-ALTER TABLE soroban_invocations_appearances    DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE contract_activity                  DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE transaction_participants           DELETE WHERE ledger_sequence > <last_complete_ledger>;
-ALTER TABLE transaction_hash_index             DELETE WHERE ledger_sequence > <last_complete_ledger>;
--- accounts / soroban_contracts / assets / nfts / nft_ownership rows
+ALTER TABLE transaction_hash_prefix_index      DELETE WHERE ledger_sequence > <last_complete_ledger>;
+-- accounts / soroban_contracts / assets / nfts / nft_ownership_changes rows
 -- carry last_seen_ledger / wasm_uploaded_at_ledger / current_owner_ledger
 -- — adjust column per table; consult crates/db-clickhouse/schema/init.sql.
 ALTER TABLE accounts                           DELETE WHERE last_seen_ledger > <last_complete_ledger>;
 ALTER TABLE soroban_contracts                  DELETE WHERE wasm_uploaded_at_ledger > <last_complete_ledger>;
 ALTER TABLE account_balances_current           DELETE WHERE last_updated_ledger > <last_complete_ledger>;
 ALTER TABLE nfts                               DELETE WHERE current_owner_ledger > <last_complete_ledger>;
-ALTER TABLE nft_ownership                      DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE nft_ownership_changes              DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE nfts_pending                       DELETE WHERE current_owner_ledger > <last_complete_ledger>;
-ALTER TABLE nft_ownership_pending              DELETE WHERE ledger_sequence > <last_complete_ledger>;
+ALTER TABLE nft_ownership_changes_pending      DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE lp_positions                       DELETE WHERE last_updated_ledger > <last_complete_ledger>;
 ALTER TABLE liquidity_pools                    DELETE WHERE ledger_sequence > <last_complete_ledger>;
 ALTER TABLE liquidity_pool_snapshots           DELETE WHERE last_updated_ledger > <last_complete_ledger>;
@@ -122,11 +123,11 @@ These `ALTER … DELETE` mutations are **async on CH**. Monitor:
 ```sql
 SELECT command, is_done, latest_fail_reason, create_time
   FROM system.mutations
- WHERE table IN ('transactions','operations_appearances','soroban_events',
-                 'soroban_invocations_appearances','transaction_participants',
-                 'transaction_hash_index','accounts','soroban_contracts',
-                 'account_balances_current','nfts','nft_ownership',
-                 'nfts_pending','nft_ownership_pending','lp_positions',
+ WHERE table IN ('transactions','transaction_operations','pool_operation_amounts','soroban_events',
+                 'contract_activity','transaction_participants',
+                 'transaction_hash_prefix_index','accounts','soroban_contracts',
+                 'account_balances_current','nfts','nft_ownership_changes',
+                 'nfts_pending','nft_ownership_changes_pending','lp_positions',
                  'liquidity_pools','liquidity_pool_snapshots')
    AND create_time > now() - INTERVAL 1 HOUR
  ORDER BY create_time DESC;

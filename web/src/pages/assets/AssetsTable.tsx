@@ -156,9 +156,6 @@ const columns: ExplorerTableColumn<AssetItem>[] = [
   },
 ];
 
-/** Number of columns — used to size the loading skeleton consistently. */
-export const ASSET_COLUMN_COUNT = columns.length;
-
 interface AssetsTableProps {
   rows: readonly AssetItem[];
   loading?: boolean;

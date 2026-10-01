@@ -153,7 +153,7 @@ fn extract_payment_operation() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].op_type, OperationType::Payment);
     assert_eq!(result[0].transaction_hash, "abcd1234");
-    assert_eq!(result[0].operation_index, 1);
+    assert_eq!(result[0].operation_index, 0);
     assert!(result[0].source_account.is_none());
     assert_eq!(result[0].details["asset"], "native");
     assert_eq!(result[0].details["amount"], 10_000_000);
@@ -277,12 +277,12 @@ fn extract_multiple_operations_preserves_order() {
     let result = extract_operations(&inner, None, None, "abcd1234", 100, 0);
 
     assert_eq!(result.len(), 3);
-    assert_eq!(result[0].operation_index, 1);
+    assert_eq!(result[0].operation_index, 0);
     assert_eq!(result[0].op_type, OperationType::Inflation);
-    assert_eq!(result[1].operation_index, 2);
+    assert_eq!(result[1].operation_index, 1);
     assert_eq!(result[1].op_type, OperationType::BumpSequence);
     assert_eq!(result[1].details["bumpTo"], 42);
-    assert_eq!(result[2].operation_index, 3);
+    assert_eq!(result[2].operation_index, 2);
     assert_eq!(
         result[2].op_type,
         OperationType::EndSponsoringFutureReserves

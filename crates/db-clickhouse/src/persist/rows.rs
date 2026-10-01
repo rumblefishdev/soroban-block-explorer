@@ -1,5 +1,5 @@
 //! Row structs for the CH writer — production schema (hybrid: surrogate
-//! `id Int64` on the three high-cardinality FK hubs, natural / composite
+//! `id Int64` on the two high-cardinality FK hubs, natural / composite
 //! keys elsewhere).
 //!
 //! One `#[derive(clickhouse::Row, serde::Serialize)]` struct per table
@@ -18,8 +18,8 @@
 //! ## Natural / composite keys (everything else)
 //!
 //! `assets`, `nfts`, `liquidity_pools`, `lp_positions`,
-//! `liquidity_pool_snapshots`, `operations_appearances`,
-//! `transaction_participants`, `nft_ownership` — composite ORDER BY
+//! `liquidity_pool_snapshots`, `transaction_operations`,
+//! `transaction_participants`, `nft_ownership_changes` — composite ORDER BY
 //! over already-cheap-shape columns (FixedString(32) hashes,
 //! low-cardinality codes, Int64 FK references).
 //!
@@ -243,7 +243,9 @@ pub struct BalanceRow {
 }
 
 /// `nfts` — state, RMT(current_owner_ledger). Composite PK
-/// = (contract_id, token_id). No surrogate id.
+/// = (contract_id, token_id). No surrogate id. No mint ledger: the mint is
+/// the `nft_ownership_changes` row with `event_type = 0`, and a copy here was
+/// replaced by every later transfer (task 0497).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct NftRow {
     pub contract_id: i64,
@@ -251,7 +253,6 @@ pub struct NftRow {
     pub collection_name: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
-    pub minted_at_ledger: Option<i64>,
     pub current_owner_id: Option<i64>,
     pub current_owner_ledger: i64,
 }
@@ -271,7 +272,6 @@ pub struct NftPendingRow {
     pub collection_name: Option<String>,
     pub name: Option<String>,
     pub media_url: Option<String>,
-    pub minted_at_ledger: Option<i64>,
     pub current_owner_id: Option<i64>,
     pub current_owner_ledger: i64,
 }
@@ -312,7 +312,7 @@ pub struct LiquidityPoolRow {
     /// which): kind 1 = token-CONTRACT surrogates (`ids::contract_id`) in
     /// emission order, matching the pool's own `get_tokens()` so reserve
     /// vectors align index-for-index; kind 0 = ASSET surrogates
-    /// (`ids::pool_leg_asset_id` — the `lp_operation_amounts` join key),
+    /// (`ids::pool_leg_asset_id` — the `pool_operation_amounts` join key),
     /// legs-migration step 2 towards retiring the pair columns.
     ///
     /// NOT `assets.id` in general (an earlier comment claimed that): the two
@@ -401,11 +401,10 @@ pub struct LpPositionRow {
     pub closed_at_ledger: i64,
 }
 
-/// `transactions` — append-only fact hub, surrogate `id`,
+/// `transactions` — append-only fact hub,
 /// ORDER BY (ledger_sequence, application_order).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct TransactionRow {
-    pub id: i64,
     pub hash: [u8; 32],
     pub ledger_sequence: i64,
     pub application_order: i16,
@@ -418,21 +417,40 @@ pub struct TransactionRow {
     pub parse_error: bool,
 }
 
-/// `transaction_hash_index` — fact, backs `transaction_hash_dict`.
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct TransactionHashIndexRow {
-    pub hash: [u8; 32],
+/// `transaction_hash_prefix_index` — fact: transaction hash (outer or fee-bump
+/// inner) → ledger, keyed by an 8-byte prefix of the hash (task 0580), read by
+/// search and the transaction page; the reader checks the full hash in
+/// `transactions`.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct TransactionHashPrefixRow {
+    pub hash_prefix: u64,
     pub ledger_sequence: i64,
 }
 
-/// `operations_appearances` — fact, no surrogate id. ORDER BY
-/// (ledger_sequence, transaction_id, application_order).
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct OperationAppearanceRow {
-    pub transaction_id: i64,
+impl TransactionHashPrefixRow {
+    /// `hash_prefix` is the little-endian `u64` of the hash's first 8 bytes —
+    /// what ClickHouse computes as `reinterpretAsUInt64(substring(hash, 1, 8))`.
+    pub fn new(hash: &[u8; 32], ledger_sequence: i64) -> Self {
+        let mut prefix = [0u8; 8];
+        prefix.copy_from_slice(&hash[..8]);
+        Self {
+            hash_prefix: u64::from_le_bytes(prefix),
+            ledger_sequence,
+        }
+    }
+}
+
+/// `transaction_operations` — fact, no surrogate id: one row per operation
+/// identity in a transaction (the task 0163 fold), located by the transaction
+/// position (task 0372, ADR 0059). `application_order` is the transaction's
+/// 1-based position in its ledger, `operation_index` the operation's 0-based
+/// position in its transaction (the group's smallest). Column order matches
+/// `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct TransactionOperationRow {
+    pub ledger_sequence: i64,
     pub application_order: i16,
-    /// `type` is a Rust keyword — serde rename keeps the CH column
-    /// match clean.
+    pub operation_index: i16,
     #[serde(rename = "type")]
     pub op_type: i16,
     pub source_id: Option<i64>,
@@ -441,19 +459,17 @@ pub struct OperationAppearanceRow {
     pub asset_code: String,
     pub asset_issuer_id: Option<i64>,
     /// Crossed liquidity pools, sorted + deduped (canonical order — see the
-    /// stage fold). Empty = no pool involvement; `[]` replaces the legacy
-    /// scalar NULL (task 0261/0268).
+    /// stage fold). Empty = no pool involvement (task 0261/0268).
     pub pool_ids: Vec<[u8; 32]>,
-    pub amount: i64,
-    pub ledger_sequence: i64,
 }
 
-/// `transaction_participants` — fact.
+/// `transaction_participants` — fact. The transaction is located by its
+/// position in the ledger (ADR 0059, task 0575), not the hash surrogate.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct TransactionParticipantRow {
     pub account_id: i64,
     pub ledger_sequence: i64,
-    pub transaction_id: i64,
+    pub application_order: i16,
 }
 
 /// `operation_asset_appearances` — fact, the per-(asset, transaction) presence
@@ -461,44 +477,44 @@ pub struct TransactionParticipantRow {
 /// in place of `account_id` → a per-asset activity page is a PK-prefix seek.
 /// Native XLM is a first-class key (`ids::asset_id(0,"",0,0)`), never an empty
 /// sentinel. Pure presence: which assets a transaction touched; duplicate
-/// (asset, tx) rows collapse in the RMT.
+/// (asset, tx) rows collapse in the RMT. Keyed by the transaction's position
+/// (ADR 0059, task 0575).
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
 pub struct OperationAssetAppearanceRow {
     pub asset_id: i64,
     pub ledger_sequence: i64,
-    pub transaction_id: i64,
-}
-
-/// `operation_pools` — fact, the per-(pool, transaction) presence index
-/// (task 0365). The EXACT `transaction_participants` shape with `pool_id` in
-/// place of `account_id` → a per-pool tx-list is a PK-prefix seek. `pool_id` is
-/// the raw 32-byte pool hash (already how `operations_appearances.pool_ids`
-/// stores each crossing — no surrogate). Pure presence: which pools a
-/// transaction crossed; duplicate (pool, tx) rows collapse in the RMT.
-#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
-pub struct OperationPoolRow {
-    pub pool_id: [u8; 32],
-    pub ledger_sequence: i64,
-    pub transaction_id: i64,
-}
-
-/// `contract_transactions` — fact, the per-(contract, transaction) presence
-/// index (task 0541): the contract-dimension twin of `transaction_participants`,
-/// so a per-contract transaction list is a key seek instead of a merge over
-/// three tables. Keyed by the transaction's position (ADR 0059), not its hash
-/// surrogate. A transaction touches a contract through an operation event, an
-/// invocation or an operation naming it — never through a fee event. Pure
-/// presence; duplicate rows collapse in the RMT.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
-pub struct ContractTransactionRow {
-    pub contract_id: i64,
-    pub ledger_sequence: i64,
     pub application_order: i16,
 }
 
-/// `lp_operation_amounts` — fact, what one operation moved through one pool
-/// (task 0279). The value twin of [`OperationPoolRow`]: same pool-leading key,
-/// plus `application_order` / `asset_id` / `amount`.
+/// `contract_activity` — fact, one row per (contract, transaction) the
+/// transaction touched, located by its position (tasks 0541, 0586, ADR 0059):
+/// the contract-dimension twin of `transaction_participants`, so a
+/// per-contract transaction list is a key seek. A transaction touches a
+/// contract through an operation event, an invocation or an operation naming
+/// it — never through a fee event. If the contract was invoked, the row adds
+/// the caller of its first invocation and how many times the transaction
+/// called it. Exactly one of the two callers is set on an invoked row and
+/// neither on a touched-only one, whose `invocation_count` is 0. Duplicate
+/// rows collapse in the RMT. Column order matches `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
+pub struct ContractActivityRow {
+    pub contract_id: i64,
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub caller_id: Option<i64>,
+    pub caller_contract_id: Option<i64>,
+    /// Calls of the contract in the transaction — the execution trace's
+    /// `fn_call`s merged with the auth tree (the ADR 0034 fold count);
+    /// 0 = touched, not invoked. Not recoverable from other tables:
+    /// diagnostic events are not stored.
+    pub invocation_count: i32,
+}
+
+/// `pool_operation_amounts` — fact, what one operation moved through one pool
+/// (task 0279), located by the transaction position (task 0372, ADR 0059):
+/// `application_order` is the transaction's 1-based position,
+/// `operation_index` the operation's 0-based one. Column order matches
+/// `init.sql`.
 ///
 /// One row per (operation, pool, asset) — the op's claim atoms are SUMMED into
 /// it, never written per atom: an op can take the same pool several times
@@ -509,13 +525,33 @@ pub struct ContractTransactionRow {
 /// entered the pool, negative = it left. So one shape says trade (`+/-`),
 /// deposit (`+/+`) and withdrawal (`-/-`) without an event-type column.
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
-pub struct LpOperationAmountRow {
+pub struct PoolOperationAmountRow {
     pub pool_id: [u8; 32],
     pub ledger_sequence: i64,
-    pub transaction_id: i64,
     pub application_order: i16,
+    pub operation_index: i16,
     pub asset_id: i64,
     pub amount: i64,
+}
+
+/// `pool_movements` — fact, what one swap / deposit / withdrawal
+/// event of a registered soroban pool moved through it (task 0374, W1): one
+/// row per (event, leg), located by the event's stellar-rpc id (ADR 0059).
+/// The soroban twin of [`PoolOperationAmountRow`]: `amount` is SIGNED FROM
+/// THE POOL'S SIDE, raw token units in `Int128` (a soroban leg may carry 18
+/// decimals). `event_kind` is stored (0 trade, 1 deposit, 2 withdrawal)
+/// because a leg can be zero; every leg is written. Column order matches
+/// `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct PoolMovementRow {
+    pub pool_id: [u8; 32],
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub operation_index: u16,
+    pub event_index: u32,
+    pub event_kind: u8,
+    pub asset_id: i64,
+    pub amount: i128,
 }
 
 /// `asset_transfers` — fact, one row per token movement (task 0540). Keyed
@@ -560,7 +596,7 @@ pub struct TransactionMemoRow {
 /// sentinels included. `application_order` is the transaction the event
 /// belongs to, which a fee refund's sentinel id does not say.
 /// `signature` is the lifted first-topic Symbol. Column order = DDL.
-#[derive(Debug, Clone, Row, Serialize)]
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
 pub struct SorobanEventRow {
     pub contract_id: i64,
     pub ledger_sequence: i64,
@@ -574,42 +610,19 @@ pub struct SorobanEventRow {
     pub data_xdr: String,
 }
 
-/// `soroban_invocations_appearances` — fact (ADR 0034 fold).
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct SorobanInvocationAppearanceRow {
-    pub contract_id: i64,
-    pub transaction_id: i64,
-    pub ledger_sequence: i64,
-    pub caller_id: Option<i64>,
-    pub caller_contract_id: Option<i64>,
-    pub amount: i32,
-}
-
-/// `nft_ownership` — fact, no surrogate. ORDER BY
-/// (contract_id, token_id, ledger_sequence, event_order).
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct NftOwnershipRow {
+/// `nft_ownership_changes` and its `_pending` quarantine (one shape, so
+/// promotion is `INSERT … SELECT *`) — fact, one change of owner of one
+/// token, located by its source event's stellar-rpc id (task 0424, ADR
+/// 0059). Routed by the same per-contract classifier verdict as
+/// [`NftPendingRow`]. Column order matches `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Row, Serialize)]
+pub struct NftOwnershipChangeRow {
     pub contract_id: i64,
     pub token_id: String,
     pub ledger_sequence: i64,
-    pub event_order: i16,
-    pub transaction_id: i64,
-    pub owner_id: Option<i64>,
-    pub event_type: i16,
-}
-
-/// `nft_ownership_pending` — task 0217 quarantine companion to
-/// [`NftOwnershipRow`]. Same row shape + same partitioning as the hot
-/// `nft_ownership` table so promotion (`INSERT … SELECT FROM
-/// nft_ownership_pending`) is a clean part copy. Routed by the same
-/// per-contract classifier verdict as [`NftPendingRow`].
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct NftOwnershipPendingRow {
-    pub contract_id: i64,
-    pub token_id: String,
-    pub ledger_sequence: i64,
-    pub event_order: i16,
-    pub transaction_id: i64,
+    pub application_order: i16,
+    pub operation_index: u16,
+    pub event_index: u32,
     pub owner_id: Option<i64>,
     pub event_type: i16,
 }

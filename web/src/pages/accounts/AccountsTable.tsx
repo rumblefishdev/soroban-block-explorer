@@ -96,5 +96,3 @@ export function AccountsTable({
     />
   );
 }
-
-export const ACCOUNT_COLUMN_COUNT = 4;

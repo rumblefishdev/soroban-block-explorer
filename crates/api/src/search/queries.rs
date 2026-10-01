@@ -25,20 +25,19 @@
 //! never contain a 64-hex / 56-char needle (provably empty), and a contract /
 //! NFT *named* after a full transaction hash is not a real search intent.
 //!
-//! # CH-vs-PG / CH-vs-canonical-SQL divergences (all verified against
+//! # CH-vs-PG divergences (all verified against
 //! `crates/db-clickhouse/schema/init.sql` and the live CH read modules)
 //!
-//! - **Transaction lookup** reads `transaction_hash_index` (ORDER BY `hash`,
-//!   PK point-seek), mirroring [`crate::transactions::queries`]. The
-//!   canonical `22_get_search.sql` proposes the `transaction_hash_dict`
-//!   Dictionary hot path; that is a CH-only optimisation layerable later
-//!   without changing this contract. `successful` + `last_activity_at` are
+//! - **Transaction lookup** takes the candidate ledgers off
+//!   `transaction_hash_prefix_index` (8-byte hash prefix, PK point-seek)
+//!   through the transaction page's own `lookup_hash_ledgers`.
+//!   `successful` + `last_activity_at` are
 //!   resolved (PG parity) via a partition-pruned `transactions` seek + a
 //!   `ledgers` PK join — both single-row, so the cost is two point-seeks.
 //! - **NFT name** lives in `nft_enrichment`, NOT `nfts.name` (vestigial NULL on
 //!   CH — the live indexer rewrites whole `nfts` rows on every ownership change
-//!   with metadata NULL; task 0231). The canonical SQL's `nfts.name` predicate
-//!   would silently match nothing. We collapse the enrichment with
+//!   with metadata NULL; task 0231). A `nfts.name` predicate would
+//!   silently match nothing. We collapse the enrichment with
 //!   `argMax(_, version)` (never `FINAL`) exactly like [`crate::nfts::queries`].
 //! - **Contract name** lives in `soroban_contract_metadata` (on-chain METADATA
 //!   struct), NOT the dead `soroban_contracts.name` (no writer since task 0297).
@@ -48,7 +47,7 @@
 //!   join: the issuer surrogate → G-StrKey is a bloom-pruned
 //!   `accounts WHERE id IN (page ids)` key-seek (`idx_acc_id`), never
 //!   `LEFT JOIN accounts` (the ~23M-row hash-side build that OOMs — CH Code 241,
-//!   the 0317 trap the canonical asset CTE would have hit). `soroban_contracts`
+//!   the 0317 trap). `soroban_contracts`
 //!   (smaller) is joined in-statement, same as the live `/assets` list.
 //! - **`nullIf(...)`** maps a sentinel / JOIN miss to `None`. We do NOT use
 //!   `SETTINGS join_use_nulls = 1` — `api_reader` runs `readonly = 1` (RBAC
@@ -62,12 +61,15 @@ use std::collections::{BTreeSet, HashMap};
 use clickhouse::Row;
 use serde::Deserialize;
 
-use crate::common::ch::millis_to_utc;
+use crate::common::asset_identity::{ResolvedAsset, leg_label, resolve_asset_identities};
 use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
-use crate::common::strkey::pool_id_hex_to_strkey;
+use crate::common::strkey::{decode_pool_kind, pool_id_hex_to_strkey};
 
 use super::classifier::Classified;
 use super::dto::{EntityType, SearchHit};
+
+mod transactions;
+use transactions::search_transactions;
 
 /// Which entity buckets the `?type=` filter admits. Parsed from the query
 /// string (backend-agnostic); passed into `fetch_search` to gate the
@@ -116,11 +118,6 @@ impl IncludeFlags {
         }
     }
 }
-
-/// Mainnet ledger-partition width (`PARTITION BY intDiv(ledger_sequence,
-/// 500000)` on `transactions`). Used to prune the `transactions` seek to the
-/// single partition the `transaction_hash_index` lookup resolved.
-const LEDGER_PARTITION_SIZE: i64 = 500_000;
 
 /// `asset_type` SMALLINT → canonical label, matching the PG `asset_family_name`
 /// function (same mapping as [`crate::assets::queries`], NOT the
@@ -200,130 +197,23 @@ pub async fn fetch_search(
 }
 
 // ---------------------------------------------------------------------------
-// Transactions — exact hash → transaction_hash_index PK seek
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Row, Deserialize)]
-struct LedgerSeqRow {
-    ledger_sequence: i64,
-}
-
-#[derive(Debug, Row, Deserialize)]
-struct TxMetaRow {
-    successful: bool,
-    /// `ledgers.closed_at` (`DateTime64(3)`) decoded as raw i64 millis.
-    created_at_ms: i64,
-}
-
-/// Fires only for a hash-shaped query. Step 1 resolves `hash → ledger_sequence`
-/// off `transaction_hash_index` (ORDER BY `hash`; immutable mapping, no FINAL).
-/// Step 2 reads `successful` + the ledger `closed_at` via a single-partition,
-/// single-row seek on `transactions` (`ledger_sequence` leading PK + the
-/// `idx_tx_hash_bloom` filter) joined to `ledgers` — the PG `tx_hits`
-/// enrichment, at the cost of two point-seeks.
-async fn search_transactions(
-    client: &clickhouse::Client,
-    classified: &Classified,
-    include: &IncludeFlags,
-) -> Result<Vec<(String, SearchHit)>, clickhouse::error::Error> {
-    if !include.transaction {
-        return Ok(Vec::new());
-    }
-    let Some(bytes) = classified.hash_bytes.as_deref() else {
-        return Ok(Vec::new());
-    };
-    let hash_hex = hex::encode(bytes);
-
-    let ledger = client
-        .query(
-            "SELECT ledger_sequence FROM transaction_hash_index \
-             WHERE hash = unhex(?) LIMIT 1",
-        )
-        .bind(&hash_hex)
-        .fetch_optional::<LedgerSeqRow>()
-        .await?
-        .map(|r| r.ledger_sequence);
-    let Some(ledger) = ledger else {
-        return Ok(Vec::new());
-    };
-
-    // `ledger` is from our own index seek (i64), inlined for partition pruning —
-    // no injection surface. `hash` is bound. `successful` is immutable across
-    // re-ingest, so `LIMIT 1` (no FINAL) is correct. `closed_at` is resolved via
-    // a BOUNDED `ledgers WHERE sequence = {ledger}` sub-select (PK point seek, ~1
-    // granule) — NOT a plain `INNER JOIN ledgers`, which builds its hash side
-    // from the whole ~3.6M-row `ledgers` table on prod (measured: a scalar
-    // correlated form also de-optimised to a full scan). INNER (not LEFT): under
-    // the `api_reader` `join_use_nulls = 0` RBAC a LEFT-JOIN miss yields the
-    // column DEFAULT on a NON-nullable column (not NULL), so LEFT buys no real
-    // "missing ledger ⇒ None" semantics — it would only mask a 0-epoch. A real
-    // indexed tx always has its ledger row, so INNER is correct and simpler.
-    let partition = ledger / LEDGER_PARTITION_SIZE;
-    let sql = format!(
-        "SELECT t.successful AS successful, l.closed_at AS created_at_ms \
-         FROM transactions t \
-         INNER JOIN (SELECT sequence, closed_at FROM ledgers WHERE sequence = {ledger}) l \
-                 ON l.sequence = t.ledger_sequence \
-         WHERE t.ledger_sequence = {ledger} \
-           AND intDiv(t.ledger_sequence, {LEDGER_PARTITION_SIZE}) = {partition} \
-           AND t.hash = unhex(?) \
-         ORDER BY t.application_order \
-         LIMIT 1"
-    );
-    let Some(meta) = client
-        .query(&sql)
-        .bind(&hash_hex)
-        .fetch_optional::<TxMetaRow>()
-        .await?
-    else {
-        // Index row present but the transaction row is missing — treat as no
-        // hit rather than emit a half-populated redirect target.
-        return Ok(Vec::new());
-    };
-
-    Ok(vec![(
-        "transaction".to_string(),
-        SearchHit {
-            entity_type: EntityType::Transaction,
-            identifier: hash_hex,
-            label: String::new(),
-            route_token: None,
-            successful: Some(meta.successful),
-            last_activity_at: Some(millis_to_utc(meta.created_at_ms)),
-            contract_id: None,
-            token_id: None,
-        },
-    )])
-}
-
-// ---------------------------------------------------------------------------
 // Pools — exact pool_id (from a 64-hex or full L-StrKey) → PK point seek
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
 struct PoolRow {
     pool_hex: String,
-    label: String,
+    pool_kind: i16,
+    legs: Vec<i64>,
 }
 
-/// The pool's display name, identical in both arms — a hit found by id and the
-/// same pool found by code must not be labelled differently.
+/// The pool's display name is composed in RUST, from the same resolved leg
+/// identities the pools list renders — not from a SQL expression over the pair
+/// columns, which was a fourth copy of the "native renders as XLM" rule and
+/// could only ever name a classic pool (a soroban row's pair columns are
+/// placeholders that read as XLM/XLM).
 ///
-/// Native is detected by `asset_type = 0`, the SAME signal
-/// `common::pool_asset_codes` matches on. This used to key off the empty stored
-/// code instead, which gave the label and the predicate two different notions
-/// of "is this XLM" over one row. Two native conventions have already produced
-/// real bugs here — an empty code slips through filters that a type check
-/// catches — so the second one is gone rather than commented.
-///
-/// Byte-identical output, verified before the change: over all 75 218 rows,
-/// zero disagree on either leg. Nothing on the wire moves.
-const POOL_LABEL_SQL: &str = "concat( \
-     if(asset_a_type = 0, 'XLM', toString(asset_a_code)), ' / ', \
-     if(asset_b_type = 0, 'XLM', toString(asset_b_code)) \
- ) AS label";
-
-/// Two shapes, one entity.
+/// # Two shapes, one entity
 ///
 /// A hash-shaped query is a point seek on the primary key and stays exactly as
 /// it was. Anything else is treated as an asset code and matched with the SAME
@@ -384,14 +274,12 @@ async fn search_pools_by_asset_code(
         return Ok(Vec::new());
     };
     let sql = format!(
-        "SELECT pool_hex, {POOL_LABEL_SQL} \
+        "SELECT pool_hex, pool_kind, legs \
          FROM ( \
             SELECT \
                 lower(hex(pool_id)) AS pool_hex, \
-                argMax(asset_a_type, last_updated_ledger) AS asset_a_type, \
-                argMax(asset_a_code, last_updated_ledger) AS asset_a_code, \
-                argMax(asset_b_type, last_updated_ledger) AS asset_b_type, \
-                argMax(asset_b_code, last_updated_ledger) AS asset_b_code, \
+                toInt16(argMax(pool_kind, last_updated_ledger)) AS pool_kind, \
+                argMax(legs, last_updated_ledger) AS legs, \
                 max(last_updated_ledger) AS newest \
             FROM liquidity_pools \
             GROUP BY pool_id \
@@ -407,7 +295,12 @@ async fn search_pools_by_asset_code(
     }
     let rows = query.bind(per_group_limit).fetch_all::<PoolRow>().await?;
 
-    Ok(rows.into_iter().map(|p| pool_hit(&p)).collect())
+    let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|p| p.legs.iter().copied()).collect();
+    let identities = resolve_asset_identities(client, &leg_ids).await?;
+    Ok(rows
+        .into_iter()
+        .map(|p| pool_hit(&p, &identities))
+        .collect())
 }
 
 /// Fires only for a hash-shaped query. `pool_id` is the full ORDER BY key, so
@@ -422,13 +315,14 @@ async fn search_pool_by_id(
     let hash_hex = hex::encode(bytes);
 
     let row = client
-        .query(&format!(
-            "SELECT lower(hex(pool_id)) AS pool_hex, {POOL_LABEL_SQL} \
+        .query(
+            "SELECT lower(hex(pool_id)) AS pool_hex, \
+                    toInt16(pool_kind) AS pool_kind, legs \
              FROM liquidity_pools \
              WHERE pool_id = unhex(?) \
              ORDER BY last_updated_ledger DESC \
-             LIMIT 1"
-        ))
+             LIMIT 1",
+        )
         .bind(&hash_hex)
         .fetch_optional::<PoolRow>()
         .await?;
@@ -436,21 +330,32 @@ async fn search_pool_by_id(
         return Ok(Vec::new());
     };
 
-    Ok(vec![pool_hit(&p)])
+    let leg_ids: BTreeSet<i64> = p.legs.iter().copied().collect();
+    let identities = resolve_asset_identities(client, &leg_ids).await?;
+    Ok(vec![pool_hit(&p, &identities)])
 }
 
 /// Shared by both pool arms so an id hit and a code hit cannot describe the
 /// same pool differently.
-fn pool_hit(p: &PoolRow) -> (String, SearchHit) {
+fn pool_hit(p: &PoolRow, identities: &HashMap<i64, ResolvedAsset>) -> (String, SearchHit) {
     (
         "pool".to_string(),
         SearchHit {
             entity_type: EntityType::Pool,
-            // Wire identifier is the canonical `L…` strkey (ADR 0008 / task
-            // 0264); the column projects raw hex — convert at the boundary,
-            // same as the PG row-mapper.
-            identifier: pool_id_hex_to_strkey(&p.pool_hex),
-            label: p.label.clone(),
+            // The column projects raw hex; the wire form is chosen by the
+            // pool's KIND at the boundary, because the same 32 bytes are an
+            // `L…` strkey for a classic pool and a `C…` address for a soroban
+            // one — and the wrong encoding is well-formed, not an error.
+            identifier: pool_id_hex_to_strkey(
+                &p.pool_hex,
+                decode_pool_kind(&p.pool_hex, p.pool_kind),
+            ),
+            label: p
+                .legs
+                .iter()
+                .map(|id| leg_label(identities.get(id)))
+                .collect::<Vec<_>>()
+                .join(" / "),
             route_token: None,
             successful: None,
             last_activity_at: None,
@@ -712,10 +617,6 @@ struct IssuerRow {
 /// statement comment). Step 2 resolves the page's issuer surrogates → G-StrKey
 /// via a bloom-pruned `accounts WHERE id IN (...)` seek (NEVER a full-table
 /// `accounts` join — the Code 241 trap). `route_token` is then composed in Rust.
-/// The displayed code of an asset row — native's `XLM` standing in for its
-/// empty stored code. See the note in the function body before changing it.
-const SHOWN: &str = "lower(if(a.asset_type = 0, 'XLM', toString(a.asset_code)))";
-
 async fn search_assets(
     client: &clickhouse::Client,
     q: &str,
@@ -756,7 +657,7 @@ async fn search_assets(
     // whichever rows the scan reached first — `q=USDC` answered with ten `IUSDC`
     // rows and no USDC at all, and two identical calls could disagree.
     //
-    // `SHOWN` is the code a row DISPLAYS as, and both the match and the tier
+    // `shown` is the code a row DISPLAYS as, and both the match and the tier
     // compare it — never the stored value. Native XLM stores an EMPTY code and
     // renders as `XLM`, so comparing what is stored returned thousands of
     // impostor codes and missed the one asset everybody meant. That is also why
@@ -810,13 +711,14 @@ async fn search_assets(
         let sql = format!(
             "{ASSET_HEAD} \
              LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
-             WHERE position({SHOWN}, lower(?)) > 0 \
-             ORDER BY multiIf({SHOWN} = lower(?), 0, \
-                              startsWith({SHOWN}, lower(?)), 1, \
+             WHERE position({shown}, lower(?)) > 0 \
+             ORDER BY multiIf({shown} = lower(?), 0, \
+                              startsWith({shown}, lower(?)), 1, \
                               2) ASC, \
                  bagg.holder_count DESC NULLS LAST, \
                  a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC \
-             LIMIT {per_group_limit}"
+             LIMIT {per_group_limit}",
+            shown = crate::common::asset_identity::shown_code_sql("a."),
         );
         // One bind for the match, two for the tier — left to right, same needle.
         client
@@ -985,350 +887,7 @@ async fn search_nfts(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests;
 
-    #[test]
-    fn asset_family_name_matches_pg_function() {
-        assert_eq!(asset_family_name(0).as_deref(), Some("native"));
-        assert_eq!(asset_family_name(1).as_deref(), Some("classic_credit"));
-        // 2 (`sac`) retired — ADR 0051.
-        assert_eq!(asset_family_name(2), None);
-        assert_eq!(asset_family_name(3).as_deref(), Some("soroban"));
-        assert_eq!(asset_family_name(99), None);
-    }
-
-    #[test]
-    fn route_token_prefers_contract_strkey() {
-        assert_eq!(
-            asset_route_token(Some("CABC"), Some("USDC"), Some("GISS"), 1).as_deref(),
-            Some("CABC"),
-        );
-    }
-
-    #[test]
-    fn route_token_falls_back_to_code_issuer() {
-        assert_eq!(
-            asset_route_token(None, Some("USDC"), Some("GISS"), 1).as_deref(),
-            Some("USDC-GISS"),
-        );
-        // Empty contract strkey is treated as absent (nullIf sentinel parity).
-        assert_eq!(
-            asset_route_token(Some(""), Some("USDC"), Some("GISS"), 1).as_deref(),
-            Some("USDC-GISS"),
-        );
-    }
-
-    #[test]
-    fn route_token_native_only_when_type_zero() {
-        assert_eq!(
-            asset_route_token(None, None, None, 0).as_deref(),
-            Some("native"),
-        );
-        // Code present but issuer unresolved on a non-native row → honest None
-        // (never a mis-route to the native page).
-        assert_eq!(asset_route_token(None, Some("USDC"), None, 1), None);
-    }
-}
-
-/// Live-CH decode smoke for the search read path. The curl `FORMAT` box smokes
-/// do NOT exercise the clickhouse-rs RowBinary decoder, so a wire-type↔struct
-/// mismatch (e.g. a Nullable column decoded into a non-Option field, or a
-/// positional reorder) passes a curl check yet 500s the live endpoint. This
-/// decodes rows a real CH produced for every bucket's Row struct.
-///
-/// **Skips cleanly when `CH_URL` is unset**, so CI (no CH access) is green.
-/// Run against a reachable CH (local replica or SSH tunnel):
-///
-/// ```text
-/// CH_URL=http://127.0.0.1:8123 CH_DATABASE=default \
-///   cargo test -p api --lib search::queries::decode_smoke -- --nocapture
-/// ```
 #[cfg(test)]
-mod decode_smoke {
-    use super::super::classifier;
-    use super::*;
-
-    #[derive(Debug, Row, Deserialize)]
-    struct HashHexRow {
-        hash_hex: String,
-    }
-
-    fn client() -> Option<clickhouse::Client> {
-        let url = std::env::var("CH_URL").ok()?;
-        let mut c = clickhouse::Client::default().with_url(url);
-        if let Ok(u) = std::env::var("CH_USER") {
-            c = c.with_user(u);
-        }
-        if let Ok(p) = std::env::var("CH_PASSWORD") {
-            c = c.with_password(p);
-        }
-        if let Ok(d) = std::env::var("CH_DATABASE") {
-            c = c.with_database(d);
-        }
-        Some(c)
-    }
-
-    /// Every search bucket's Row struct must decode the rows a real CH emits.
-    /// Text / prefix modes exercise account / contract / asset / nft on any
-    /// populated CH; a bootstrapped real hash exercises transaction + pool.
-    #[tokio::test]
-    async fn search_ch_rows_decode() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping search CH decode smoke");
-            return;
-        };
-        let all = IncludeFlags::all();
-
-        // Text mode → contract(name) + asset + nft. Prefix mode → account +
-        // contract(prefix) + asset + nft. Both decode-exercise their structs
-        // regardless of whether the corpus yields rows.
-        for q in ["a", "GA", "CA"] {
-            fetch_search(&ch, q, &classifier::classify(q), &all, 5)
-                .await
-                .unwrap_or_else(|e| panic!("search decode failed for q={q:?}: {e}"));
-        }
-
-        // Bootstrap a real tx hash so the transaction + pool buckets decode.
-        let boot = ch
-            .query("SELECT lower(hex(hash)) AS hash_hex FROM transaction_hash_index LIMIT 1")
-            .fetch_optional::<HashHexRow>()
-            .await
-            .expect("bootstrap hash query must run");
-        let Some(boot) = boot else {
-            eprintln!("transaction_hash_index empty — text-mode decode ok, skipping hash mode");
-            return;
-        };
-        fetch_search(
-            &ch,
-            &boot.hash_hex,
-            &classifier::classify(&boot.hash_hex),
-            &all,
-            5,
-        )
-        .await
-        .expect("transaction/pool bucket rows must decode");
-    }
-
-    /// Task 0485. The tier ranking is only visible in the ORDER of the rows,
-    /// so the SQL-shape tests cannot see it — this runs the real read and
-    /// looks at the first asset hit. It also exercises the statement's 7
-    /// placeholders against the 7 `.bind(q)` calls; a mismatch is a runtime
-    /// failure no offline test reaches.
-    #[tokio::test]
-    async fn native_xlm_is_the_first_asset_hit_for_xlm() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping asset ranking smoke");
-            return;
-        };
-        let has_native: u64 = ch
-            .query("SELECT count() FROM assets WHERE asset_type = 0")
-            .fetch_one()
-            .await
-            .expect("native probe must run");
-        if has_native == 0 {
-            eprintln!("no native row in this CH — ranking smoke not exercised");
-            return;
-        }
-
-        let all = IncludeFlags::all();
-        let hits = fetch_search(&ch, "xlm", &classifier::classify("xlm"), &all, 20)
-            .await
-            .expect("ranked asset search decodes");
-
-        let first = hits
-            .iter()
-            .find(|(bucket, _)| bucket == "asset")
-            .map(|(_, hit)| hit)
-            .expect("a corpus with native XLM must yield an asset hit for `xlm`");
-        assert_eq!(
-            first.label, "native",
-            "`xlm` answered with {:?} first — before the ranking this bucket \
-             returned whichever look-alike codes the scan reached first and \
-             native XLM never made the page",
-            first.identifier
-        );
-    }
-
-    /// A needle longer than a Stellar asset code cannot match a pool, so the
-    /// scan must not run at all. Guards the gate that keeps every account- and
-    /// contract-shaped search off the pools table (task 0470 review).
-    #[tokio::test]
-    async fn a_strkey_shaped_query_never_scans_the_pools_table() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping pools shape-gate smoke");
-            return;
-        };
-        let all = IncludeFlags::all();
-
-        // 56 characters: an account StrKey. Classified as a prefix, not a
-        // hash, so before the gate this fell through to the code arm.
-        let q = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
-        let hits = fetch_search(&ch, q, &classifier::classify(q), &all, 20)
-            .await
-            .expect("search decodes");
-        assert!(
-            !hits.iter().any(|(bucket, _)| bucket == "pool"),
-            "a StrKey-shaped query must not reach the pools bucket"
-        );
-    }
-
-    /// Task 0470: a non-hash query used to match no pool at all, so an asset
-    /// code returned zero here while `/v1/liquidity-pools` returned dozens —
-    /// which read as the 0440 fix not working.
-    ///
-    /// This does NOT re-test the matching rule: both surfaces call
-    /// `common::pool_asset_codes::asset_codes_predicate`, so they cannot
-    /// disagree, and that module's unit tests pin the pair semantics and the
-    /// native arm. What is only testable against a real ClickHouse is the rest
-    /// of this arm — that the grouped subquery parses, that `PoolRow` decodes
-    /// it, and that a plain asset code reaches pools at all.
-    #[tokio::test]
-    async fn search_matches_pools_by_asset_code() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping search pool asset-code smoke");
-            return;
-        };
-        let all = IncludeFlags::all();
-
-        // `XLM` is the needle that separates a correct predicate from a
-        // plausible one: native legs carry an empty stored code, so a column
-        // match without the `if(type = 0, …)` arm returns credit assets minted
-        // under the code `XLM` and misses every real native pool.
-        for needle in ["XLM", "USD"] {
-            let hits = fetch_search(&ch, needle, &classifier::classify(needle), &all, 20)
-                .await
-                .expect("search decodes");
-            let pools: Vec<&SearchHit> = hits
-                .iter()
-                .filter(|(bucket, _)| bucket == "pool")
-                .map(|(_, hit)| hit)
-                .collect();
-
-            assert!(
-                !pools.is_empty(),
-                "search returned no pool for {needle:?} — the asset-code arm regressed to id-only"
-            );
-            for hit in pools {
-                assert!(
-                    hit.label.to_uppercase().contains(needle),
-                    "pool {} labelled {:?} matches neither leg of {needle:?} — filter not applied",
-                    hit.identifier,
-                    hit.label,
-                );
-                assert!(
-                    hit.identifier.starts_with('L'),
-                    "pool identifier {:?} is not an L-strkey",
-                    hit.identifier,
-                );
-            }
-        }
-    }
-
-    /// Task 0485: the canonical `CODE:ISSUER` (and our own `CODE-ISSUER` route
-    /// token) used to classify as nothing, so the asset arm hunted a 60+
-    /// character needle through <=12 character codes — provably empty — and the
-    /// most precise query a user can type answered with a blank page.
-    ///
-    /// Only testable against a real corpus: what is asserted is which row
-    /// survives, which no fixture-free unit test can observe. The target is a
-    /// code carried by SEVERAL assets, addressed by the one the scan reaches
-    /// LAST, so a hit cannot come from the substring arm returning the first row
-    /// it happened to touch.
-    #[tokio::test]
-    async fn code_issuer_resolves_to_exactly_that_asset() {
-        let Some(ch) = client() else {
-            eprintln!("CH_URL unset — skipping CODE:ISSUER smoke");
-            return;
-        };
-
-        #[derive(Debug, Row, Deserialize)]
-        struct CodeRow {
-            asset_code: String,
-        }
-
-        let probe = ch
-            .query(
-                "SELECT toString(a.asset_code) AS asset_code \
-                 FROM assets a FINAL \
-                 WHERE length(a.asset_code) > 0 AND a.issuer_id != 0 \
-                 GROUP BY a.asset_code \
-                 HAVING count() > 1 \
-                 LIMIT 1",
-            )
-            .fetch_optional::<CodeRow>()
-            .await
-            .expect("corpus probe must run");
-        let Some(CodeRow { asset_code: code }) = probe else {
-            eprintln!("no asset code shared by two issuers — skipping");
-            return;
-        };
-
-        let same_code = ch
-            .query(
-                "SELECT a.asset_type AS asset_type, \
-                        nullIf(a.asset_code, '') AS asset_code, \
-                        nullIf(sc.contract_id, '') AS contract_strkey, \
-                        a.issuer_id AS issuer_id \
-                 FROM assets a FINAL \
-                 LEFT JOIN ( \
-                     SELECT id, any(contract_id) AS contract_id \
-                     FROM soroban_contracts GROUP BY id \
-                 ) sc ON sc.id = a.contract_id \
-                 WHERE lower(toString(a.asset_code)) = lower(?) \
-                 LIMIT 16",
-            )
-            .bind(&code)
-            .fetch_all::<AssetPhase1Row>()
-            .await
-            .expect("same-code query must run");
-        let target = same_code
-            .last()
-            .unwrap_or_else(|| panic!("no asset row for probed code {code:?}"));
-
-        let Some(issuer) = ch
-            .query(
-                "SELECT id AS id, account_id AS account_id \
-                 FROM accounts WHERE id = ? LIMIT 1 BY id",
-            )
-            .bind(target.issuer_id)
-            .fetch_optional::<IssuerRow>()
-            .await
-            .expect("issuer resolve must run")
-            .map(|r| r.account_id)
-        else {
-            eprintln!("probed asset has no resolvable issuer — skipping");
-            return;
-        };
-
-        let want = asset_route_token(
-            target.contract_strkey.as_deref(),
-            target.asset_code.as_deref(),
-            Some(issuer.as_str()),
-            target.asset_type,
-        );
-
-        // Both separators: `:` is the canonical SEP / SDK form, `-` is what our
-        // own `/assets/:id` routes emit and users paste back.
-        for q in [format!("{code}:{issuer}"), format!("{code}-{issuer}")] {
-            let hits = fetch_search(&ch, &q, &classifier::classify(&q), &IncludeFlags::all(), 10)
-                .await
-                .unwrap_or_else(|e| panic!("search failed for {q:?}: {e}"));
-            let assets: Vec<&SearchHit> = hits
-                .iter()
-                .filter(|(bucket, _)| bucket == "asset")
-                .map(|(_, hit)| hit)
-                .collect();
-
-            assert_eq!(
-                assets.len(),
-                1,
-                "{q:?} must resolve to exactly one asset, got {assets:?}"
-            );
-            assert_eq!(
-                assets[0].route_token, want,
-                "{q:?} resolved to the wrong asset",
-            );
-        }
-    }
-}
+mod decode_smoke;

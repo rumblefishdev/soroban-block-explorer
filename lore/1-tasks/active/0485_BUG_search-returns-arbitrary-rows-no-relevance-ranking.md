@@ -286,3 +286,24 @@ reads the same table with the same order, so it inherits the same answer.
 A tier ranking there (exact leg beats substring leg) is still a coherent idea
 and 0485's original text asks for it, but nothing user-visible is broken
 today, so it is not being built.
+
+### Liquidity pools: the measurement no longer holds — rank them (2026-09-23)
+
+The 2026-09-03 verdict above rested on page 1 of `XLM` being 20 of 25 real
+native-leg pools. Re-measured with the same rule and order, reading the pools'
+`legs`: page 1 (20 pools) now holds **10 native-leg pools and 10 look-alikes**
+— mostly `yXLM`, plus `xLMNR` and `SSLX` — interleaved by activity; the top 25
+hold 12. Nothing in the code changed; the activity mix did, which is what an
+order-by-activity guarantee is worth.
+
+**DECIDED (karolkow, 2026-09-23):** typing `XLM` must list the pools holding
+native XLM first, look-alikes after. Rule: a leg whose displayed code EQUALS
+the needle (native reads `XLM`) outranks a leg that only CONTAINS it; within a
+tier, activity still orders. It applies to the pools list and to global
+search's pool bucket together — they share one predicate (task 0470). A
+text-box rule is needed whatever 0470 decides about an asset picker for the
+list, because the global box stays text.
+
+Scheduled as its own PR after the 0374 read-half split, PR split agreed before
+code. The earlier ranking attempt was 46 lines of SQL; aim lower. Measure page
+1 of `XLM`, `USDC` and `KALE` before and after.

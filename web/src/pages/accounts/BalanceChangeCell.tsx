@@ -9,7 +9,11 @@ import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
-import { isNativeAssetString, NATIVE_ASSET_CODE } from '../assets/assetType.js';
+import {
+  assetDisplayCode,
+  isNativeAssetString,
+  UNREGISTERED_TOKEN_LABEL,
+} from '../assets/assetType.js';
 
 /** The dimmed weight this cell uses for everything that is not a movement. */
 function Muted({
@@ -139,22 +143,29 @@ function ChangeAmount({
   // `scaleByDecimals` takes UNSIGNED raw integers (a negative returns null, by
   // its own contract), so the sign is split off here and re-attached — rather
   // than widening a shared formatter every other caller depends on.
-  const figure = nonFungible
-    ? magnitude
-    : formatAmount(scaleByDecimals(magnitude, change.decimals), 2);
+  const scaled = nonFungible
+    ? null
+    : scaleByDecimals(magnitude, change.decimals);
+  // An amount we cannot state — the token's scale is unknown (`decimals:
+  // null`) or the amount does not read — is a plain "—" (what `formatAmount`
+  // prints for `null`), with no sign or colour that would read as a movement
+  // of some size.
+  const stated = nonFungible || scaled != null;
+  const figure = nonFungible ? magnitude : formatAmount(scaled, 2);
   return (
     <Typography
       component="span"
       variant="bodySmRegular"
       sx={(theme) => ({
-        color: inverted
-          ? 'inherit'
-          : negative
-          ? theme.palette.text.error
-          : theme.palette.text.success,
+        color:
+          !stated || inverted
+            ? 'inherit'
+            : negative
+            ? theme.palette.text.error
+            : theme.palette.text.success,
       })}
     >
-      {negative ? '−' : '+'}
+      {stated && (negative ? '−' : '+')}
       {figure}
       {nonFungible && ' NFT'}
       {nonFungible && change.token_id && ` #${change.token_id}`}
@@ -236,11 +247,31 @@ function AssetLink({
 }
 
 /**
- * Display code. Native is the one asset with no `asset_code` and a fixed name;
- * a bespoke token with no on-chain symbol has none either and must NOT inherit
- * XLM's — it falls back to the unnamed marker rather than to a wrong ticker.
+ * Display code — the app-wide {@link assetDisplayCode} ladder, adapted to the
+ * shape an operation carries: the asset arrives as a STRING (`'native'` |
+ * `'CODE:ISSUER'` | a `C…` contract StrKey) rather than as an asset row, so
+ * the native rung is fed from `isNativeAssetString` instead of a family name
+ * and the contract rung from that same string.
+ *
+ * Feeding the contract rung is what makes this row agree with the asset page:
+ * a token with no classic code and no on-chain symbol reads `CB2T…3B5R` in
+ * both, instead of a marker here and its address there. 605 of 4 463 soroban
+ * assets publish no symbol (production, 2026-09-22).
+ *
+ * The marker survives for the one case that has nothing left: `asset` is EMPTY
+ * when the API refuses the link (no `assets` row, so `/assets/{id}` answers
+ * 404), and then the row carries no code, no symbol and no address — 66 tokens
+ * and 274 transfers on production, all fungible; a non-fungible row keeps its
+ * address.
+ *
  */
 function assetLabel(change: AccountBalanceChange): string {
-  if (isNativeAssetString(change.asset)) return NATIVE_ASSET_CODE;
-  return change.asset_code ?? 'Unnamed token';
+  const native = isNativeAssetString(change.asset);
+  return (
+    assetDisplayCode({
+      asset_type_name: native ? 'native' : null,
+      asset_code: change.asset_code,
+      contract_id: native ? null : change.asset,
+    }) ?? UNREGISTERED_TOKEN_LABEL
+  );
 }

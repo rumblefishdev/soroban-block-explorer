@@ -1,5 +1,5 @@
-//! Transaction-family domain types matching the `transactions`,
-//! `transaction_hash_index`, and `transaction_participants` ClickHouse tables.
+//! Transaction-family domain types matching the `transactions` and
+//! `transaction_participants` ClickHouse tables.
 //!
 //! Schema: ADR 0027 Part I §3, §4, §6.
 //! Heavy fields (memo, signatures, XDR, diagnostic events, operation tree)
@@ -22,15 +22,6 @@ pub struct Transaction {
     pub operation_count: i16,
     pub has_soroban: bool,
     pub parse_error: bool,
-    pub created_at: DateTime<Utc>,
-}
-
-/// Hash → (ledger, created_at) lookup (ADR 0027 §4).
-/// Unpartitioned, feeds `/transactions/:hash` routing preflight.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionHashIndex {
-    pub hash: Vec<u8>,
-    pub ledger_sequence: i64,
     pub created_at: DateTime<Utc>,
 }
 

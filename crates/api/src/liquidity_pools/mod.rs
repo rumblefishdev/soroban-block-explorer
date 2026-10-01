@@ -1,6 +1,6 @@
 //! Liquidity pools API module.
 //!
-//! Endpoints (canonical SQL `endpoint-queries-clickhouse/{18..21,23}_*.sql`):
+//! Endpoints (the SQL behind each is in `queries/`):
 //!   - `GET /v1/liquidity-pools`                          (task 0052)
 //!   - `GET /v1/liquidity-pools/{pool_id}`                (task 0052)
 //!   - `GET /v1/liquidity-pools/{pool_id}/activity`       (task 0491)
@@ -12,6 +12,7 @@
 
 pub mod dto;
 mod handlers;
+mod protocol_labels;
 mod queries;
 
 use utoipa_axum::router::OpenApiRouter;

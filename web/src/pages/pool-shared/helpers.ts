@@ -1,10 +1,11 @@
 import type { PoolAssetLeg } from '@rumblefish/api-types';
 
 import { assetColor } from '../assets/assetColor.js';
-import { NATIVE_ASSET_CODE } from '../assets/assetType.js';
+import {
+  assetDisplayCode,
+  UNREGISTERED_TOKEN_LABEL,
+} from '../assets/assetType.js';
 import { routes } from '../../router/routes.js';
-
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Resolve the cross-entity link target for a pool asset leg (task 0263).
@@ -13,7 +14,7 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
  * classic and SAC legs resolve to the same asset row.
  *
  * Precedence:
- *   1. `asset_type === 0` (native XLM) → `/assets/native`. The reserved
+ *   1. `asset_type_name === 'native'` (native XLM) → `/assets/native`. The reserved
  *      `native` literal IS the canonical asset token (task 0243) — the older
  *      "native has no on-chain address, so no link" rule predates it and left
  *      XLM as the only unlinkable leg in the app, while account balances,
@@ -30,7 +31,7 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
  *   4. Anything else (schema drift) → no link.
  */
 export function legHref(leg: PoolAssetLeg): string | undefined {
-  if (leg.asset_type === 0) return routes.asset('native');
+  if (leg.asset_type_name === 'native') return routes.asset('native');
   if (leg.asset_code && leg.issuer) {
     return routes.asset(`${leg.asset_code}-${leg.issuer}`);
   }
@@ -39,24 +40,26 @@ export function legHref(leg: PoolAssetLeg): string | undefined {
 }
 
 /**
- * Returns the display label for one leg of a pool's asset pair.
+ * The display label for one leg — the app-wide {@link assetDisplayCode} ladder.
+ * Native is named by its type, a classic leg by its code, a soroban leg by its
+ * symbol or, failing that, by its own contract address.
  *
- * Native (XLM) legs come back with `asset_type_name === 'native'` and
- * `null` `asset_code`. Classic, SAC, and Soroban legs all carry a code.
- *
- * **Hard-fail on schema drift.** If a leg has neither the native flag
- * nor an `asset_code` the backend contract is broken — throw rather
- * than silently render a `?` placeholder, so the bug is caught by the
- * surrounding `SectionErrorBoundary` instead of leaking into the UI.
+ * A leg none of those name is a token the registry never got a row for, not
+ * schema drift: one live pool holds one (production, 2026-09-22). Throwing
+ * here reached the root error boundary — the list and the detail header render
+ * outside any section boundary — and blanked the whole app.
  */
 export function assetLegLabel(leg: PoolAssetLeg): string {
-  if (leg.asset_type_name === 'native') return NATIVE_ASSET_CODE;
-  if (leg.asset_code != null && leg.asset_code !== '') return leg.asset_code;
-  throw new Error(
-    `assetLegLabel: non-native leg has no asset_code (asset_type_name=${
-      leg.asset_type_name ?? 'null'
-    })`
-  );
+  return assetDisplayCode(leg) ?? UNREGISTERED_TOKEN_LABEL;
+}
+
+/**
+ * The pool's name — its legs' labels, in registration order. Two for a classic
+ * pool, up to four for a soroban one, so the separator repeats rather than
+ * joining a fixed left and right.
+ */
+export function poolLabel(legs: readonly PoolAssetLeg[]): string {
+  return legs.map(assetLegLabel).join(' / ');
 }
 
 /**
@@ -66,18 +69,4 @@ export function assetLegLabel(leg: PoolAssetLeg): string {
  */
 export function reserveDotColor(leg: PoolAssetLeg): string {
   return assetColor(assetLegLabel(leg)).dot;
-}
-/**
- * A pool is "stale" when its newest snapshot is older than 7 days (matches
- * the freshness window enforced by `18_get_liquidity_pools_list.sql` and
- * the participants endpoint). Stale pools come back with `null` reserves,
- * TVL, volume, and fee revenue. `participant_count` stays accurate
- * regardless of freshness (per 0246).
- */
-export function isPoolStale(
-  latestSnapshotAt: string | null | undefined
-): boolean {
-  if (!latestSnapshotAt) return true;
-  const ageMs = Date.now() - new Date(latestSnapshotAt).getTime();
-  return Number.isNaN(ageMs) || ageMs > SEVEN_DAYS_MS;
 }

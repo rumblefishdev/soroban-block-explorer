@@ -7,7 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { PAGE_SIZE, useAssetsList, usePagedRows } from '../api/index.js';
 
 import { AssetFilters } from './assets/AssetFilters.js';
-import { ASSET_COLUMN_COUNT, AssetsTable } from './assets/AssetsTable.js';
+import { AssetsTable } from './assets/AssetsTable.js';
 import { codeIssuerRoute } from './assets/codeIssuerRoute.js';
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
@@ -37,14 +37,8 @@ export default function AssetsListPage() {
     return filters;
   }, [code, type, sac]);
 
-  const { data, isLoading, isPlaceholderData, isError, error, refetch } =
-    useAssetsList(cursor, queryFilters);
-
-  const { rows, canPrev, canNext, handlePrev, handleNext } = usePagedRows(
-    data,
-    goNext,
-    goPrev
-  );
+  const query = useAssetsList(cursor, queryFilters);
+  const pager = usePagedRows(query.data, goNext, goPrev);
 
   const navigate = useNavigate();
   // A pasted `CODE:ISSUER` names one asset: open it rather than filter by a
@@ -93,25 +87,15 @@ export default function AssetsListPage() {
             onSacChange={handleSacChange}
           />
         }
-        columnCount={ASSET_COLUMN_COUNT}
-        isLoading={isLoading}
-        isReloading={isPlaceholderData}
-        isError={isError}
-        error={error}
-        onRetry={() => void refetch()}
-        rows={rows}
-        renderTable={(visibleRows) => <AssetsTable rows={visibleRows} />}
-        renderSkeleton={() => (
-          <AssetsTable rows={[]} loading skeletonRows={PAGE_SIZE} />
+        query={query}
+        pager={pager}
+        renderTable={(rows, { loading }) => (
+          <AssetsTable rows={rows} loading={loading} skeletonRows={PAGE_SIZE} />
         )}
         hasActiveFilters={hasFilters}
         emptyKind="tokens"
         emptyNoun="assets"
         onClearFilters={clearFilters}
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={handlePrev}
-        onNext={handleNext}
       />
     </Stack>
   );

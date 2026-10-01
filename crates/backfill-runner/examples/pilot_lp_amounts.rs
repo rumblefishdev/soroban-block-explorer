@@ -1,5 +1,5 @@
 //! Task 0279 backfill pilot: how long one ledger costs and how many
-//! `lp_operation_amounts` rows it yields.
+//! pool amount rows (`pool_operation_amounts`, task 0372) it yields.
 //!
 //! Runs the REAL backfill inner loop — `parse_ledger` + `stage::prepare` — over
 //! `.xdr.zst` files already on disk, so the number it reports is the per-ledger
@@ -75,8 +75,8 @@ fn main() {
             })
             .expect("stage");
             ledgers += 1;
-            rows += staged.lp_amount_rows.len();
-            if !staged.lp_amount_rows.is_empty() {
+            rows += staged.pool_amount_rows.len();
+            if !staged.pool_amount_rows.is_empty() {
                 with_rows += 1;
             }
         }

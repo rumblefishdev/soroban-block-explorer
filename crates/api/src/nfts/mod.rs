@@ -1,8 +1,7 @@
 //! NFTs API module: list, detail, and transfer history.
 //!
-//! Wire shapes mirror canonical SQL `endpoint-queries-clickhouse/{15,16,17}_*.sql`
-//! (task 0167). Pagination, error envelopes, cursor codec, and StrKey
-//! validation come from `crate::common::*` (task 0043).
+//! The SQL behind each endpoint is in `queries`. Pagination, error
+//! envelopes, cursor codec, and StrKey validation come from `crate::common::*` (task 0043).
 
 pub mod dto;
 mod handlers;

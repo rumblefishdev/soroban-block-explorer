@@ -43,7 +43,8 @@ items surfaced by the audit; independent of the write-side re-model.
 
 - `ledgers` `LIMIT 1 BY` read-in-order check.
 - Cursor-to-filter binding.
-- Dead dictionary + `idx_tx_hash_bloom` removal.
+- ~~Dead dictionary + `idx_tx_hash_bloom` removal.~~ Moved out (2026-09-23):
+  the bloom dropped in task 0579, the dictionary removed in task 0396.
 - Muxed-id dropped in details JSON (preserve the muxed memo-id).
 - Sibling-wildcard canary tests for `emit_asset_appearances` /
   `extract_counterparties` / `claim_atoms` (guard against a silent `_` regression).

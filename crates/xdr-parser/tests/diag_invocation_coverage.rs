@@ -76,11 +76,7 @@ fn diag_walker_recovers_multi_hop_swap_invocations() {
             // tree (which would have produced 0 rows for this tx).
             let contract_callers = diag_invs
                 .iter()
-                .filter(|inv| {
-                    inv.caller_account
-                        .as_deref()
-                        .is_some_and(|s| s.starts_with('C'))
-                })
+                .filter(|inv| inv.caller.as_deref().is_some_and(|s| s.starts_with('C')))
                 .count();
             assert!(
                 contract_callers > 0,
