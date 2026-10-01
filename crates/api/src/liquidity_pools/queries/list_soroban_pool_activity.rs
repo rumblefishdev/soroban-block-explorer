@@ -38,7 +38,17 @@ impl PoolMovement {
     /// The kind the pool's own event declared — stored, because a leg can be
     /// zero and the signs alone would call a one-sided deposit a trade.
     fn event(&self) -> Option<PoolEvent> {
-        PoolEvent::try_from(self.kind).ok()
+        PoolEvent::try_from(self.kind)
+            .inspect_err(|e| {
+                tracing::error!(
+                    ls = self.ls,
+                    ao = self.ao,
+                    oi = self.oi,
+                    ei = self.ei,
+                    "{e}"
+                )
+            })
+            .ok()
     }
 }
 

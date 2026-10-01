@@ -615,7 +615,10 @@ counted once. Its `event` is the kind the pool's event declared, and
 `pools_crossed` is `null` — a Soroban route is not recorded per operation. The
 cursor carries `event_index` too. The read walks
 ledger windows back from the cursor, each twice the last, so a page touches
-only the partitions it needs. Amounts stay raw; each leg's `decimals` on the
+only the partitions it needs. `event_kind` is not in the table's sort key, so
+a filtered page reads its whole window: on the busiest pool (2.8M rows,
+2026-10-01) an unfiltered first page reads ~25k rows, a `deposit` page ~230k,
+and a kind the pool never had reads all of the pool's rows. Amounts stay raw; each leg's `decimals` on the
 pool (`legs[i].decimals`: 7 for native and classic, a Soroban token's
 published value, `null` when it publishes none) scales them.
 

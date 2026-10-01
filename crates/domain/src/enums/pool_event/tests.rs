@@ -28,12 +28,9 @@ fn zero_leg_is_not_a_deposit() {
     assert_eq!(PoolEvent::from_signs(&[0, 0]), PoolEvent::Trade);
 }
 
-/// `as_param` feeds the `allowed` list a rejection returns and
-/// `from_param` reads the caller's value back, so drift between them would
-/// advertise a value the endpoint then refuses.
 /// The stored discriminant is what the writer puts in
 /// `pool_movements.event_kind` and the reader decodes, so a kind added to the
-/// enum without a decode arm fails here.
+/// enum and to `VARIANTS` without a decode arm fails here.
 #[test]
 fn stored_kind_round_trips() {
     for v in PoolEvent::VARIANTS {
@@ -42,6 +39,9 @@ fn stored_kind_round_trips() {
     assert!(PoolEvent::try_from(3).is_err());
 }
 
+/// `as_param` feeds the `allowed` list a rejection returns and
+/// `from_param` reads the caller's value back, so drift between them would
+/// advertise a value the endpoint then refuses.
 #[test]
 fn filter_value_round_trips() {
     for &e in PoolEvent::VARIANTS {

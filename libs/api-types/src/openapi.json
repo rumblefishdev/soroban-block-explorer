@@ -4302,7 +4302,7 @@
                   "items": {
                     "type": ["string", "null"]
                   },
-                  "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban row's amounts are its\none event's.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
+                  "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban row's amounts are its\none event's.\n\nThe sign is the payload, not decoration: it is the direction (and names\na classic row's `event`), so the frontend must not take an absolute\nvalue before deciding it.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
                 },
                 "created_at": {
                   "type": "string",
@@ -4322,7 +4322,7 @@
                 "event_index": {
                   "type": ["integer", "null"],
                   "format": "int32",
-                  "description": "Soroban pool: the pool event's 0-based position in its operation (ADR\n0059) — one row per event, so an operation that traded the pool twice\nlists twice. `null` for a classic pool, whose row is the operation.",
+                  "description": "Soroban pool: the index of the pool's event among ALL the contract\nevents its operation emitted (ADR 0059) — so not consecutive per pool,\nand one row per event: an operation that traded the pool twice lists\ntwice, under one hash. `null` for a classic pool, whose row is the\noperation.",
                   "minimum": 0
                 },
                 "ledger_sequence": {
@@ -4345,7 +4345,7 @@
                 },
                 "transaction_hash": {
                   "type": "string",
-                  "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `operation_index` too."
+                  "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, and a soroban operation once per pool event, so a row\nkey needs `operation_index` and `event_index` too."
                 }
               }
             }
@@ -4561,7 +4561,7 @@
             "items": {
               "type": ["string", "null"]
             },
-            "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban row's amounts are its\none event's.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
+            "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban row's amounts are its\none event's.\n\nThe sign is the payload, not decoration: it is the direction (and names\na classic row's `event`), so the frontend must not take an absolute\nvalue before deciding it.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
           },
           "created_at": {
             "type": "string",
@@ -4581,7 +4581,7 @@
           "event_index": {
             "type": ["integer", "null"],
             "format": "int32",
-            "description": "Soroban pool: the pool event's 0-based position in its operation (ADR\n0059) — one row per event, so an operation that traded the pool twice\nlists twice. `null` for a classic pool, whose row is the operation.",
+            "description": "Soroban pool: the index of the pool's event among ALL the contract\nevents its operation emitted (ADR 0059) — so not consecutive per pool,\nand one row per event: an operation that traded the pool twice lists\ntwice, under one hash. `null` for a classic pool, whose row is the\noperation.",
             "minimum": 0
           },
           "ledger_sequence": {
@@ -4604,7 +4604,7 @@
           },
           "transaction_hash": {
             "type": "string",
-            "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `operation_index` too."
+            "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, and a soroban operation once per pool event, so a row\nkey needs `operation_index` and `event_index` too."
           }
         }
       },
@@ -4648,7 +4648,7 @@
       },
       "PoolEvent": {
         "type": "string",
-        "description": "What an operation did to the pool. A classic operation is named by the SIGN\nPAIR of its two legs and nothing else — `pool_operation_amounts.amount` is\nsigned from the pool's perspective, so `+/+` is a deposit, `-/-` a\nwithdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\nA soroban pool's row is one event, named by the kind the pool declared,\nstored in `pool_movements.event_kind` as this enum's discriminant — not\ninferred from the signs: a trade may carry a zero leg (42 on production)\nand a withdrawal may pay out nothing, which the signs alone would misread.\n\nClassified on the server rather than in the page, and by the same function\nthe `filter[event]` predicate calls: two classifiers would eventually\ndisagree, and the one the user sees must be the one the filter used. This\ndeliberately reverses the client-side policy the retired `/transactions`\nshape carried.",
+        "description": "What a row of pool activity did to the pool. A classic operation is named\nby the SIGN PAIR of its two legs and nothing else —\n`pool_operation_amounts.amount` is signed from the pool's perspective, so\n`+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\nA soroban pool's row is one event, named by the kind the pool declared,\nstored in `pool_movements.event_kind` as this enum's discriminant — not\ninferred from the signs: a trade may carry a zero leg (42 on production)\nand a withdrawal may pay out nothing, which the signs alone would misread.\n\nClassified on the server rather than in the page, and the `filter[event]`\npredicate selects on the same value — the classic signs, the soroban\nstored kind: two classifiers would eventually disagree, and the one the\nuser sees must be the one the filter used. This deliberately reverses the\nclient-side policy the retired `/transactions` shape carried.\n\n`#[repr(u8)]` rather than the `i16` of the other enums here: the column it\nis stored in, `pool_movements.event_kind`, is `UInt8`.",
         "enum": ["trade", "deposit", "withdrawal"]
       },
       "PoolItem": {

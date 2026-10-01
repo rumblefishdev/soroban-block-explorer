@@ -284,7 +284,9 @@ pub struct PoolActivityParams {
 /// Cursor payload for `GET /v1/liquidity-pools/{id}/activity`, keyed on
 /// `(ledger_sequence, application_order, operation_index)` — the sort-key
 /// prefix of `pool_operation_amounts` minus its `asset_id` tail: the
-/// transaction's position and the operation's 0-based index (ADR 0059).
+/// transaction's position and the operation's 0-based index (ADR 0059). A
+/// soroban pool's rows add `event_index`, the next component of
+/// `pool_movements`' key.
 ///
 /// A plain struct, not an enum tagged by datasource. A stale cursor fails to
 /// deserialize and the extractor answers `invalid_cursor` on its own: the
@@ -315,16 +317,19 @@ pub struct PoolActivityCursor {
 pub struct PoolActivityItem {
     /// Transaction hash (64-char lowercase hex). NOT unique across rows — a
     /// transaction running several operations against this pool appears once
-    /// per operation, so a row key needs `operation_index` too.
+    /// per operation, and a soroban operation once per pool event, so a row
+    /// key needs `operation_index` and `event_index` too.
     pub transaction_hash: String,
     pub ledger_sequence: i64,
     /// The operation's 0-based position in its transaction (ADR 0059); the
     /// transaction page's `#op-N` anchor this row links to is
     /// `operation_index + 1` (task 0482).
     pub operation_index: i16,
-    /// Soroban pool: the pool event's 0-based position in its operation (ADR
-    /// 0059) — one row per event, so an operation that traded the pool twice
-    /// lists twice. `null` for a classic pool, whose row is the operation.
+    /// Soroban pool: the index of the pool's event among ALL the contract
+    /// events its operation emitted (ADR 0059) — so not consecutive per pool,
+    /// and one row per event: an operation that traded the pool twice lists
+    /// twice, under one hash. `null` for a classic pool, whose row is the
+    /// operation.
     pub event_index: Option<u32>,
     /// Classic pool: `null` when not every leg of the pool landed in
     /// `pool_operation_amounts` for this operation. Rare but real: 350 of
@@ -344,8 +349,9 @@ pub struct PoolActivityItem {
     /// Scale each by its leg's `decimals`. A soroban row's amounts are its
     /// one event's.
     ///
-    /// The sign is the payload, not decoration: it is what names `event`, so
-    /// the frontend must not take an absolute value before deciding direction.
+    /// The sign is the payload, not decoration: it is the direction (and names
+    /// a classic row's `event`), so the frontend must not take an absolute
+    /// value before deciding it.
     /// Classic: every entry is `null` in the malformed case above. Soroban:
     /// only the leg no event named is `null` — a 4-token pool's event can name
     /// three tokens at most.

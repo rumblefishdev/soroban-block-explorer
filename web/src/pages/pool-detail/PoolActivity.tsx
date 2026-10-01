@@ -91,8 +91,9 @@ export interface AmountLegPart {
 }
 
 /**
- * What ONE operation moved through this pool, as ordered display parts — or
- * `null` when it carries no readable leg.
+ * What ONE row moved through this pool — an operation on a classic pool, a
+ * pool event on a Soroban one — as ordered display parts, or `null` when it
+ * carries no readable leg.
  *
  * `amounts[i]` is what moved in `legs[i]`, raw and **signed from the pool's side**:
  * positive = the asset entered the pool. That sign is the whole direction
@@ -107,8 +108,8 @@ export interface AmountLegPart {
  * every digit.
  *
  * Left out, never rendered as `0` or as a raw integer:
- * - a leg that is `null` — no event of the operation named it (a swap on a
- *   three-token pool names only the two tokens it moved);
+ * - a leg that is `null` — the row did not name it (a swap on a three-token
+ *   pool names only the two tokens it moved);
  * - a leg whose token publishes no decimals — its raw integer would read as a
  *   huge amount.
  *
@@ -223,9 +224,9 @@ function activityColumns(
       header: 'Event',
       width: 140,
       // Accurate by construction: the row IS one operation (one pool event on
-      // a Soroban pool), so the chip has exactly one thing to name. The mixed deposit-and-trade bundle that
-      // made the old per-transaction chip lie now renders as two rows, each
-      // correctly labelled.
+      // a Soroban pool), so the chip has exactly one thing to name. The mixed
+      // deposit-and-trade bundle that made the old per-transaction chip lie
+      // now renders as two rows, each correctly labelled.
       cell: (row) => {
         if (row.event == null) return null;
         const { label, color, Icon } = EVENT_META[row.event];
@@ -235,7 +236,7 @@ function activityColumns(
     {
       id: 'amount',
       header: 'Amount',
-      // One operation, one figure — no stack. The two-leg linked `A → B` form
+      // One row, one figure — no stack. The two-leg linked `A → B` form
       // is the widest case, which is what this width has to hold (carried over
       // from task 0490, whose line cap this row unit makes unreachable; was
       // 280 as plain text, the icons and link affordances buy 40px).

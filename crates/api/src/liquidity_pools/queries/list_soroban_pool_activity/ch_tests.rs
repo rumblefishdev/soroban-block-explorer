@@ -22,7 +22,8 @@ const TRADER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 /// - 50,000,100: a withdrawal of all three.
 ///
 /// And in a second pool, one operation that emitted 150 trade events, which
-/// pages must split mid-operation by `event_index`.
+/// pages must split mid-operation by `event_index` in both directions, and
+/// one older deposit a filtered read must widen its window to reach.
 #[tokio::test]
 async fn soroban_pool_activity() {
     let Some(base) = crate::common::ch::test_client_from_env() else {
@@ -64,13 +65,14 @@ async fn soroban_pool_activity() {
         ),
         "INSERT INTO ledgers (sequence, closed_at) VALUES \
          (50000100, '2024-03-01 00:00:00'), (51200000, '2024-05-01 00:00:00'), \
-         (52000000, '2024-07-01 00:00:00')"
+         (51000000, '2024-04-01 00:00:00'), (52000000, '2024-07-01 00:00:00')"
             .to_string(),
         "INSERT INTO transactions (hash, ledger_sequence, application_order, source_id) VALUES \
          (unhex(repeat('aa', 32)), 50000100, 1, 7), \
          (unhex(repeat('bb', 32)), 51200000, 2, 7), \
          (unhex(repeat('cc', 32)), 52000000, 1, 7), \
-         (unhex(repeat('dd', 32)), 52000000, 3, 7)"
+         (unhex(repeat('dd', 32)), 52000000, 3, 7), \
+         (unhex(repeat('ee', 32)), 51000000, 1, 7)"
             .to_string(),
         trade.clone(),
         // The same rows again, in a part of their own.
@@ -88,6 +90,11 @@ async fn soroban_pool_activity() {
              SELECT unhex('{ROUTER_POOL}'), 52000000, 3, 0, intDiv(number, 2), 0, \
                     if(number % 2 = 0, 101, 102), if(number % 2 = 0, 10, -9) \
              FROM numbers(300)"
+        ),
+        format!(
+            "INSERT INTO pool_movements (pool_id, ledger_sequence, application_order, operation_index, event_index, event_kind, asset_id, amount) VALUES \
+             (unhex('{ROUTER_POOL}'), 51000000, 1, 0, 0, 1, 101, 4), \
+             (unhex('{ROUTER_POOL}'), 51000000, 1, 0, 0, 1, 102, 5)"
         ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
@@ -196,13 +203,56 @@ async fn soroban_pool_activity() {
         event_index: last.event_index.expect("a soroban row has an event"),
     }))
     .await;
-    let events: Vec<u32> = first
+    // The 150 events of the operation, then the older deposit.
+    let events: Vec<(i64, Option<u32>)> = first
         .iter()
         .chain(&second)
-        .filter_map(|r| r.event_index)
+        .map(|r| (r.ledger_sequence, r.event_index))
         .collect();
-    assert_eq!(events, (0..150).rev().collect::<Vec<u32>>());
+    let mut want: Vec<(i64, Option<u32>)> = (0..150).rev().map(|e| (52_000_000, Some(e))).collect();
+    want.push((51_000_000, Some(0)));
+    assert_eq!(events, want);
     assert_eq!(first[0].amounts, vec![s("10"), s("-9")]);
+
+    // Back from the middle of that operation: the next ten events after
+    // event 50, oldest first, as the pagination layer reverses them.
+    let back = fetch_soroban_pool_activity(
+        &ch,
+        ROUTER_POOL,
+        &router_legs,
+        10,
+        Some(&PoolActivityCursor {
+            ledger_sequence: 52_000_000,
+            application_order: 3,
+            operation_index: 0,
+            event_index: 50,
+        }),
+        Direction::Prev,
+        None,
+    )
+    .await
+    .expect("activity query runs");
+    let events: Vec<u32> = back.iter().filter_map(|r| r.event_index).collect();
+    assert_eq!(events, (51..61).collect::<Vec<u32>>());
+
+    // A deposit 1M ledgers below the tip: the filter skips the 150 trades in
+    // the first span in SQL and widens the window until it reaches it.
+    let deposits = fetch_soroban_pool_activity(
+        &ch,
+        ROUTER_POOL,
+        &router_legs,
+        10,
+        None,
+        Direction::Next,
+        Some(PoolEvent::Deposit),
+    )
+    .await
+    .expect("activity query runs");
+    let found: Vec<(i64, Option<PoolEvent>)> = deposits
+        .iter()
+        .map(|r| (r.ledger_sequence, r.event))
+        .collect();
+    assert_eq!(found, vec![(51_000_000, Some(PoolEvent::Deposit))]);
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
         .execute()

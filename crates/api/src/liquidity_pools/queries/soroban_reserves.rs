@@ -11,8 +11,9 @@
 //! Only a leg whose scale is a fact is served: native XLM and a classic credit
 //! asset (reached through its SAC) have 7 decimals by protocol; a soroban
 //! token's scale is the `decimals` its contract publishes in its metadata
-//! (6, 7, 8, 9 and 18 occur), as the shared asset resolver reads it. A token that publishes none — 4 of 100 soroban
-//! legs on production, 2026-09-28 — keeps its leg `None`, never a raw integer
+//! (6, 7, 8, 9 and 18 occur), as the shared asset resolver reads it. A token
+//! that publishes none — 4 of 100 soroban legs on production, 2026-09-28 —
+//! keeps its leg `None`, never a raw integer
 //! that would read as a huge amount and never an assumed 7. Checked on
 //! chain: 13 of 13 published values equal the token's own `decimals()`.
 

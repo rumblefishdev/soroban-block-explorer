@@ -1824,8 +1824,9 @@ export type PaginatedPoolActivityItem = {
      * Scale each by its leg's `decimals`. A soroban row's amounts are its
      * one event's.
      *
-     * The sign is the payload, not decoration: it is what names `event`, so
-     * the frontend must not take an absolute value before deciding direction.
+     * The sign is the payload, not decoration: it is the direction (and names
+     * a classic row's `event`), so the frontend must not take an absolute
+     * value before deciding it.
      * Classic: every entry is `null` in the malformed case above. Soroban:
      * only the leg no event named is `null` — a 4-token pool's event can name
      * three tokens at most.
@@ -1834,9 +1835,11 @@ export type PaginatedPoolActivityItem = {
     created_at: string;
     event?: null | PoolEvent;
     /**
-     * Soroban pool: the pool event's 0-based position in its operation (ADR
-     * 0059) — one row per event, so an operation that traded the pool twice
-     * lists twice. `null` for a classic pool, whose row is the operation.
+     * Soroban pool: the index of the pool's event among ALL the contract
+     * events its operation emitted (ADR 0059) — so not consecutive per pool,
+     * and one row per event: an operation that traded the pool twice lists
+     * twice, under one hash. `null` for a classic pool, whose row is the
+     * operation.
      */
     event_index?: number | null;
     ledger_sequence: number;
@@ -1870,7 +1873,8 @@ export type PaginatedPoolActivityItem = {
     /**
      * Transaction hash (64-char lowercase hex). NOT unique across rows — a
      * transaction running several operations against this pool appears once
-     * per operation, so a row key needs `operation_index` too.
+     * per operation, and a soroban operation once per pool event, so a row
+     * key needs `operation_index` and `event_index` too.
      */
     transaction_hash: string;
   }>;
@@ -2076,8 +2080,9 @@ export type PoolActivityItem = {
    * Scale each by its leg's `decimals`. A soroban row's amounts are its
    * one event's.
    *
-   * The sign is the payload, not decoration: it is what names `event`, so
-   * the frontend must not take an absolute value before deciding direction.
+   * The sign is the payload, not decoration: it is the direction (and names
+   * a classic row's `event`), so the frontend must not take an absolute
+   * value before deciding it.
    * Classic: every entry is `null` in the malformed case above. Soroban:
    * only the leg no event named is `null` — a 4-token pool's event can name
    * three tokens at most.
@@ -2086,9 +2091,11 @@ export type PoolActivityItem = {
   created_at: string;
   event?: null | PoolEvent;
   /**
-   * Soroban pool: the pool event's 0-based position in its operation (ADR
-   * 0059) — one row per event, so an operation that traded the pool twice
-   * lists twice. `null` for a classic pool, whose row is the operation.
+   * Soroban pool: the index of the pool's event among ALL the contract
+   * events its operation emitted (ADR 0059) — so not consecutive per pool,
+   * and one row per event: an operation that traded the pool twice lists
+   * twice, under one hash. `null` for a classic pool, whose row is the
+   * operation.
    */
   event_index?: number | null;
   ledger_sequence: number;
@@ -2122,7 +2129,8 @@ export type PoolActivityItem = {
   /**
    * Transaction hash (64-char lowercase hex). NOT unique across rows — a
    * transaction running several operations against this pool appears once
-   * per operation, so a row key needs `operation_index` too.
+   * per operation, and a soroban operation once per pool event, so a row
+   * key needs `operation_index` and `event_index` too.
    */
   transaction_hash: string;
 };
@@ -2222,21 +2230,24 @@ export type PoolAssetLeg = {
 };
 
 /**
- * What an operation did to the pool. A classic operation is named by the SIGN
- * PAIR of its two legs and nothing else — `pool_operation_amounts.amount` is
- * signed from the pool's perspective, so `+/+` is a deposit, `-/-` a
- * withdrawal and `+/-` a trade.
+ * What a row of pool activity did to the pool. A classic operation is named
+ * by the SIGN PAIR of its two legs and nothing else —
+ * `pool_operation_amounts.amount` is signed from the pool's perspective, so
+ * `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
  * There is no operation-type column to read and no join to `operations`.
  * A soroban pool's row is one event, named by the kind the pool declared,
  * stored in `pool_movements.event_kind` as this enum's discriminant — not
  * inferred from the signs: a trade may carry a zero leg (42 on production)
  * and a withdrawal may pay out nothing, which the signs alone would misread.
  *
- * Classified on the server rather than in the page, and by the same function
- * the `filter[event]` predicate calls: two classifiers would eventually
- * disagree, and the one the user sees must be the one the filter used. This
- * deliberately reverses the client-side policy the retired `/transactions`
- * shape carried.
+ * Classified on the server rather than in the page, and the `filter[event]`
+ * predicate selects on the same value — the classic signs, the soroban
+ * stored kind: two classifiers would eventually disagree, and the one the
+ * user sees must be the one the filter used. This deliberately reverses the
+ * client-side policy the retired `/transactions` shape carried.
+ *
+ * `#[repr(u8)]` rather than the `i16` of the other enums here: the column it
+ * is stored in, `pool_movements.event_kind`, is `UInt8`.
  */
 export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 
