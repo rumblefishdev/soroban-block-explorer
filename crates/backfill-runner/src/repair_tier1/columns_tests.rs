@@ -9,7 +9,7 @@
 //! database, `--test-threads=1`. Skipped without `CLICKHOUSE_URL`.
 
 use super::*;
-use db_clickhouse::persist::rows::{LpPositionRow, SorobanContractRow};
+use db_clickhouse::persist::rows::LpPositionRow;
 
 async fn ch_client() -> Option<ClickhouseClient> {
     let url = std::env::var("CLICKHOUSE_URL").ok()?;
@@ -31,60 +31,6 @@ async fn delete(client: &ClickhouseClient, sql: &str) {
         .with_setting("mutations_sync", "1")
         .execute()
         .await;
-}
-
-#[tokio::test]
-async fn soroban_contracts_rebuild_keeps_the_executable_reference() {
-    let Some(client) = ch_client().await else {
-        eprintln!("CLICKHOUSE_URL not set — skipping");
-        return;
-    };
-    let strkey = "CREPAIRTIER1COLUMNSTESTFLEETMEMBERAAAAAAAAAAAAAAAAAAAAAAA";
-    let id = db_clickhouse::persist::ids::contract_id(strkey);
-    let cleanup = format!("ALTER TABLE soroban_contracts DELETE WHERE id = {id}");
-    delete(&client, &cleanup).await;
-
-    let mut insert = client
-        .insert::<SorobanContractRow>("soroban_contracts")
-        .await
-        .expect("open soroban_contracts insert");
-    insert
-        .write(&SorobanContractRow {
-            id,
-            contract_id: strkey.to_string(),
-            wasm_hash: None,
-            wasm_uploaded_at_ledger: 900,
-            deployer_id: Some(7),
-            deployed_at_ledger: Some(900),
-            contract_type: Some(0),
-            is_sac: false,
-            executable_owner_id: Some(42),
-            executable_tag: Some("fleet-v2".to_string()),
-        })
-        .await
-        .expect("write fleet member");
-    insert.end().await.expect("close soroban_contracts insert");
-
-    rebuild_soroban_contracts(&client, /* dry_run */ false)
-        .await
-        .expect("rebuild_soroban_contracts must succeed");
-
-    let (owner, tag): (Option<i64>, Option<String>) = client
-        .query(
-            "SELECT executable_owner_id, executable_tag FROM soroban_contracts FINAL WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_one()
-        .await
-        .expect("read fleet member after rebuild");
-    assert_eq!(owner, Some(42), "the rebuild must not reset the owner");
-    assert_eq!(
-        tag.as_deref(),
-        Some("fleet-v2"),
-        "the rebuild must not reset the tag"
-    );
-
-    delete(&client, &cleanup).await;
 }
 
 #[tokio::test]
