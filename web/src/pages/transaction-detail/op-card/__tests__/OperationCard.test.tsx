@@ -11,7 +11,6 @@ function light(
   partial: Partial<OperationItem> & { type_name: string }
 ): OperationItem {
   return {
-    appearance_id: 1,
     type: 1,
     operation_index: 1,
     ledger_sequence: 1,
