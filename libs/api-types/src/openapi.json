@@ -4257,11 +4257,6 @@
                   "type": "string",
                   "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
                 },
-                "first_deposit_ledger": {
-                  "type": ["integer", "null"],
-                  "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
-                },
                 "last_updated_ledger": {
                   "type": "integer",
                   "format": "int64",
@@ -4527,11 +4522,6 @@
           "account": {
             "type": "string",
             "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
-          },
-          "first_deposit_ledger": {
-            "type": ["integer", "null"],
-            "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
           },
           "last_updated_ledger": {
             "type": "integer",

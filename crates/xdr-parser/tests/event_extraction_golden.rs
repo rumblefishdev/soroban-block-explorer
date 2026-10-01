@@ -1,11 +1,10 @@
-//! Task 0573: event extraction on real ledgers, frozen before its rewrite.
+//! Event extraction on real ledgers, frozen (task 0573).
 //!
 //! Each fixture is one `LedgerCloseMetaBatch` object from the public archive
 //! (`s3://aws-public-blockchain/v1.1/stellar/ledgers/pubnet/…`). The expected
-//! output was written by the extraction as it stood before task 0573: per
-//! event, its transaction, where it came from, its stellar-rpc id, its type
-//! and a hash of its contract, topics and data. A rewrite must reproduce it
-//! line for line.
+//! output holds, per event, its transaction, where it came from, its
+//! stellar-rpc id, its type and a hash of its contract, topics and data. A
+//! rewrite of the extraction must reproduce it line for line.
 //!
 //! - 50,500,000 — protocol 20, refunds `AfterTx`;
 //! - 58,762,517 — the last ledger whose refunds are `AfterTx`;
