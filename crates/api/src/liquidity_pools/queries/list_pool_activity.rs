@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use crate::common::ch::{millis_to_utc, resolve_accounts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
+use crate::common::strkey::decode_pool_kind;
 
 use crate::liquidity_pools::dto::{PoolActivityCursor, PoolEvent};
 
@@ -34,12 +35,14 @@ pub struct PoolActivityRow {
 
 #[derive(Debug, Row, Deserialize)]
 struct PoolLegsChRow {
+    pool_kind: i16,
     legs: Vec<i64>,
 }
 
-/// The pool's leg surrogates — the key `pool_operation_amounts.asset_id` is
-/// written with (task 0279), so an amount row maps onto the legs the page
-/// renders. `None` when the pool does not exist, which is also this seek's
+/// The pool's kind and leg surrogates — the key `pool_operation_amounts` and
+/// `pool_movements` write `asset_id` with (task 0279), so an amount row maps
+/// onto the legs the page renders. The kind picks which of the two the page
+/// reads. `None` when the pool does not exist, which is also this seek's
 /// existence check (it replaces a separate `pool_exists` round-trip).
 ///
 /// This used to RECOMPUTE the surrogates in Rust from the pair columns, with a
@@ -52,16 +55,20 @@ struct PoolLegsChRow {
 pub async fn fetch_pool_asset_ids(
     client: &clickhouse::Client,
     pool_id_hex: &str,
-) -> Result<Option<Vec<i64>>, clickhouse::error::Error> {
+) -> Result<Option<(domain::PoolKind, Vec<i64>)>, clickhouse::error::Error> {
     let rows = client
         .query(
-            "SELECT legs FROM liquidity_pools WHERE pool_id = unhex(?) \
+            "SELECT toInt16(pool_kind) AS pool_kind, legs FROM liquidity_pools \
+             WHERE pool_id = unhex(?) \
              ORDER BY last_updated_ledger DESC LIMIT 1",
         )
         .bind(pool_id_hex)
         .fetch_all::<PoolLegsChRow>()
         .await?;
-    Ok(rows.into_iter().next().map(|r| r.legs))
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|r| (decode_pool_kind(pool_id_hex, r.pool_kind), r.legs)))
 }
 
 /// One raw leg from `pool_operation_amounts` — the table's own grain, read in

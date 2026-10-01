@@ -2,7 +2,7 @@
 
 use clickhouse::Row;
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
@@ -133,10 +133,13 @@ pub async fn fetch_pool_by_id(
     // A classic pool's legs are its two snapshot columns in order; a soroban
     // pool has no snapshot row, so its reserves come from its state rows.
     let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
-    let (reserves, total_shares) = match pool_kind {
+    let (reserves, total_shares, token_decimals) = match pool_kind {
+        // A classic pool has no soroban-token leg, so no published decimals
+        // to read: its legs are 7 by protocol.
         domain::PoolKind::Classic => (
             vec![r.reserve_a.clone(), r.reserve_b.clone()],
             r.total_shares.clone(),
+            HashMap::new(),
         ),
         domain::PoolKind::Soroban => {
             let ids = [r.pool_id_hex.as_str()];
@@ -150,6 +153,7 @@ pub async fn fetch_pool_by_id(
             (
                 leg_reserves(&r.legs, &identities, &token_decimals, raw),
                 served_total_shares(shares.get(&r.pool_id_hex), raw),
+                token_decimals,
             )
         }
     };
@@ -158,7 +162,7 @@ pub async fn fetch_pool_by_id(
         pool_kind,
         deployment_id: r.deployment_id,
         pool_id_hex: r.pool_id_hex,
-        legs: leg_rows(&r.legs, &identities, &icons, &reserves),
+        legs: leg_rows(&r.legs, &identities, &icons, &token_decimals, &reserves),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
         created_at_ledger: r.created_at_ledger,

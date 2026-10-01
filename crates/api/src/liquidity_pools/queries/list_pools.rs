@@ -464,7 +464,7 @@ pub async fn fetch_pool_list(
                 pool_kind,
                 deployment_id: r.deployment_id,
                 pool_id_hex: r.pool_id_hex,
-                legs: leg_rows(&r.legs, &identities, &icons, &reserves),
+                legs: leg_rows(&r.legs, &identities, &icons, &token_decimals, &reserves),
                 fee_bps: r.fee_bps,
                 fee_percent: fee_percent_str(r.fee_bps),
                 created_at_ledger: r.created_at_ledger,

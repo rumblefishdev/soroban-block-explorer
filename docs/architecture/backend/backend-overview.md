@@ -585,9 +585,10 @@ computed at read from the in-cluster `prices.*` views (task 0199,
 and are `null` when a leg is unpriceable. A prices-side failure degrades those
 three fields to `null` — it never fails the request.
 
-**`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
-pool. Each row carries `amounts` (task 0279): **one entry per operation**, in
-application order, each with `amounts` — one entry per pool leg, in the order
+**`GET /liquidity-pools/:id/activity`** - Deposits, withdrawals, and trades for this
+pool, newest first, filterable by `filter[event]` (task 0491; it replaced
+`/transactions`, whose row was a transaction). **One row per operation**, each
+with an `event` and `amounts` — one entry per pool leg, in the order
 of the pool's `legs` (`amounts[i]` moved in `legs[i]`), a list rather than an
 `a` / `b` pair because a Soroban pool has two to four legs — as raw decimal
 **strings** (same reason as a leg's `reserve` — a JSON number is a browser double and
@@ -602,6 +603,18 @@ payment is smaller than the deposit and can even flip sign shape, so it would
 sit under an Event chip that does not describe it. An empty list means no
 figures — never zero — for history the backfill has not reached; the frontend
 renders those rows blank.
+
+A classic pool's rows come from `pool_operation_amounts`, a Soroban pool's from
+`pool_movements` (task 0374): every event an operation made the pool emit is
+folded into the operation's row, its legs summed, and an unmerged duplicate row
+counted once. Its `event` is the kind the pool's event declared, named by the
+signs only when one operation mixes kinds; a leg no event named is `null`
+(a 4-token pool's event names three tokens at most), and `pools_crossed` is
+`null` — a Soroban route is not recorded per operation. The read walks
+ledger windows back from the cursor, each twice the last, so a page touches
+only the partitions it needs. Amounts stay raw; each leg's `decimals` on the
+pool (`legs[i].decimals`: 7 for native and classic, a Soroban token's
+published value, `null` when it publishes none) scales them.
 
 **`GET /liquidity-pools/:id/chart`** - Time-series data for TVL, volume, and fee revenue.
 Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,

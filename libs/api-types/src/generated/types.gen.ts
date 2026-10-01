@@ -1826,10 +1826,14 @@ export type PaginatedPoolActivityItem = {
      * Signed from the POOL's perspective: positive entered the pool, negative
      * left it. Raw units as a decimal string — a JSON number is a double in
      * the browser, so an amount above 2^53 would silently lose digits.
+     * Scale each by its leg's `decimals`. A soroban operation's amount is
+     * the sum over every event it made the pool emit.
      *
      * The sign is the payload, not decoration: it is what names `event`, so
      * the frontend must not take an absolute value before deciding direction.
-     * Every entry is `null` in the malformed case above.
+     * Classic: every entry is `null` in the malformed case above. Soroban:
+     * only the leg no event named is `null` — a 4-token pool's event can name
+     * three tokens at most.
      */
     amounts: Array<string | null>;
     created_at: string;
@@ -1846,8 +1850,9 @@ export type PaginatedPoolActivityItem = {
      * the same appearance seek that resolves the source account. `1` for
      * every deposit/withdrawal (an LP op declares exactly one pool) and for
      * a single-hop trade; `> 1` marks this row as one hop of a longer path
-     * payment, whose full route lives on the op's detail page. `null` only
-     * when the appearance row is missing — unknown, never guessed to `1`.
+     * payment, whose full route lives on the op's detail page. `null` when
+     * the appearance row is missing, and for every soroban pool's row, whose
+     * route the appearance row does not record — unknown, never guessed.
      */
     pools_crossed?: number | null;
     /**
@@ -2071,10 +2076,14 @@ export type PoolActivityItem = {
    * Signed from the POOL's perspective: positive entered the pool, negative
    * left it. Raw units as a decimal string — a JSON number is a double in
    * the browser, so an amount above 2^53 would silently lose digits.
+   * Scale each by its leg's `decimals`. A soroban operation's amount is
+   * the sum over every event it made the pool emit.
    *
    * The sign is the payload, not decoration: it is what names `event`, so
    * the frontend must not take an absolute value before deciding direction.
-   * Every entry is `null` in the malformed case above.
+   * Classic: every entry is `null` in the malformed case above. Soroban:
+   * only the leg no event named is `null` — a 4-token pool's event can name
+   * three tokens at most.
    */
   amounts: Array<string | null>;
   created_at: string;
@@ -2091,8 +2100,9 @@ export type PoolActivityItem = {
    * the same appearance seek that resolves the source account. `1` for
    * every deposit/withdrawal (an LP op declares exactly one pool) and for
    * a single-hop trade; `> 1` marks this row as one hop of a longer path
-   * payment, whose full route lives on the op's detail page. `null` only
-   * when the appearance row is missing — unknown, never guessed to `1`.
+   * payment, whose full route lives on the op's detail page. `null` when
+   * the appearance row is missing, and for every soroban pool's row, whose
+   * route the appearance row does not record — unknown, never guessed.
    */
   pools_crossed?: number | null;
   /**
@@ -2174,6 +2184,14 @@ export type PoolAssetLeg = {
    */
   contract_id?: string | null;
   /**
+   * How many decimals the leg's raw amounts carry: 7 for native XLM and a
+   * classic asset (by protocol), the `decimals` a soroban token publishes in
+   * its metadata. `null` when the token publishes none — its raw amounts
+   * then have no honest display. Scales the raw `amounts` of `/activity`;
+   * `reserve` above is already scaled.
+   */
+  decimals?: number | null;
+  /**
    * Asset icon URL from `asset_enrichment` (ADR 0050), so pool avatars match
    * the assets list. NOT from `assets`, whose `icon_url` column was dropped
    * in task 0310 after measuring 0 of 411,654 rows populated. `None` for an
@@ -2201,15 +2219,19 @@ export type PoolAssetLeg = {
 };
 
 /**
- * What an operation did to the pool, named by the SIGN PAIR of its two legs
- * and nothing else — `pool_operation_amounts.amount` is signed from the pool's
+ * What an operation did to the pool. A classic operation is named by the SIGN
+ * PAIR of its two legs and nothing else — `pool_operation_amounts.amount` is signed from the pool's
  * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
  * There is no operation-type column to read and no join to `operations`.
+ * A soroban pool's rows do store the kind its event declared
+ * (`pool_movements.event_kind`), and that is what names them; the signs name
+ * only an operation whose events disagree.
  *
- * Classified in SQL rather than here, because the same expression is the
- * `filter[event]` predicate: two classifiers would eventually disagree, and
- * the one the user sees must be the one the filter used. This deliberately
- * reverses the client-side policy the retired `/transactions` shape carried.
+ * Classified on the server rather than in the page, and by the same function
+ * the `filter[event]` predicate calls: two classifiers would eventually
+ * disagree, and the one the user sees must be the one the filter used. This
+ * deliberately reverses the client-side policy the retired `/transactions`
+ * shape carried.
  */
 export type PoolEvent = 'trade' | 'deposit' | 'withdrawal';
 

@@ -184,6 +184,7 @@ fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
         symbol: leg.symbol,
         icon_url: leg.icon_url,
         reserve: leg.reserve,
+        decimals: leg.decimals,
     }
 }
 
