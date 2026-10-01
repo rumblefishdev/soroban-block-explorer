@@ -1,6 +1,7 @@
 # Never commit real backend / var values or local TF state.
 backend.hcl
 terraform.tfvars
+testnet.tfvars
 *.auto.tfvars
 
 # Local Terraform working dir + state (state may carry the mTLS private key).

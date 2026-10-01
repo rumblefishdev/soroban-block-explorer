@@ -115,11 +115,30 @@ same diff-then-`yes` guard as production), `deploy-testnet-web`.
 Before the first deploy: the three Lambda certs in Secrets Manager
 (`soroban/testnet/mtls/lambda-{api,ingestion,enrichment}-testnet`) and their
 CN pairs in `CLICKHOUSE_CN_USER_MAP`; the Slack IDs under
-`/soroban-explorer/testnet/`. The API goes public in a second step, as
-production's did: an ACM certificate for `cloudflareApiDomainName`, its record
-and edge-secret rule in `rf-domains`, the testnet hostname on the Turnstile
-widget; then `enableCloudflareApiDomain`, `enableEdgeSecretLock` and
-`enableAuthLayer` flip to `true` and the SPA is rebuilt.
+`/soroban-explorer/testnet/`.
+
+The API goes public behind Cloudflare like production's, in two deploys —
+the edge secret exists only after the first, and Cloudflare must send it
+before the API demands it:
+
+1. An ACM certificate for `cloudflareApiDomainName` in `eu-central-1`, DNS
+   validation (the validation CNAME goes into the `rumblefishdev.com` zone).
+   Its ARN into `cloudflareApiCertificateArn`, `enableCloudflareApiDomain:
+true`.
+2. **Deploy 1** creates the API custom domain and the testnet secrets
+   (`soroban/testnet/cloudflare/edge-secret`, `soroban/testnet/auth/*`).
+3. The proxied API record: this repo's Terraform, workspace `testnet`
+   ([`infra/cloudflare/README.md`](../infra/cloudflare/README.md#testnet)),
+   origin target from the `CloudflareApiRegionalTarget` output of
+   `Explorer-testnet-ApiGateway`.
+4. In `rf-domains`: a Transform Rule stamping `X-Edge-Secret` on the testnet
+   API host with the **testnet** edge secret (each environment has its own),
+   and the testnet SPA hostname on the Turnstile widget.
+5. The widget's Turnstile secret key into
+   `soroban/testnet/auth/turnstile-secret` (same widget as production, so the
+   same value).
+6. `enableEdgeSecretLock` and `enableAuthLayer` to `true`, **deploy 2**, then
+   `deploy-testnet-web`.
 
 `infra/envs/testnet.json` is committed **paused** (`indexerLambdaConcurrency:
 0`, which also disables the keepalive): a new `testnet` database is empty, and

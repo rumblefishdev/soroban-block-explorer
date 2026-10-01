@@ -56,9 +56,26 @@ terraform plan      # gates default false → provisions nothing destructive
   (operator `openssl`); confirm per-host vs zone-level AOP on Free in the
   staging dry-run (Step 3).
 
+## Testnet
+
+The testnet API host (task 0553) is the same module with its own state, in
+the Terraform workspace `testnet` — same backend file, same bucket; S3 keeps
+the workspace's state under `env:/testnet/`. Production stays in `default`.
+
+```bash
+cp terraform.testnet.tfvars.example testnet.tfvars   # fill zone id + origin target
+terraform workspace select -or-create testnet
+terraform plan -var-file=testnet.tfvars
+terraform workspace select default                   # back to production
+```
+
+The origin target is the `CloudflareApiRegionalTarget` output of
+`Explorer-testnet-ApiGateway`, which exists after the testnet deploy with
+`enableCloudflareApiDomain: true` (`docs/deployment.md` § Testnet).
+
 ## Secrets / safety
 
-- **Never commit** `backend.hcl`, `terraform.tfvars`, `*.tfstate`, `certs/`
+- **Never commit** `backend.hcl`, `terraform.tfvars`, `testnet.tfvars`, `*.tfstate`, `certs/`
   (see `.gitignore`). State can carry the mTLS private key → bucket stays
   private + encrypted.
 - API token: zone-scoped, least-privilege, from Secrets Manager — never the
