@@ -75,9 +75,6 @@ pub enum SyncOutcome {
 /// The production impl is [`AwsCliS3Driver`] — wraps the existing
 /// `aws s3 sync` + `aws s3 ls` invocations. Tests use a hand-rolled
 /// mock that records calls and fabricates files / canned counts.
-// `async_trait` marks each generated method `#[must_use]` while returning a
-// boxed future, which is already must-use; clippy 1.99 flags the pair.
-#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait S3Driver: Send + Sync {
     /// Pull the partition's objects into `local`. Returns `Ok` on
