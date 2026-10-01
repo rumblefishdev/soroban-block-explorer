@@ -1653,44 +1653,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     )?;
 
     // ---- lp_positions (dedup by (pool_id, account_id)) ----
-    use std::collections::hash_map::Entry;
-    let mut lp_dedup: HashMap<([u8; 32], i64), LpPositionRow> = HashMap::new();
-    for pos in lp_positions {
-        let pool_id = decode_hash(&pos.pool_id, "lp_position.pool_id")?;
-        let acct_id = ids::account_id(&pos.account_id);
-        let last = i64::from(pos.last_updated_ledger);
-        let first = pos.first_deposit_ledger.map(i64::from).unwrap_or(last);
-        let new_row = LpPositionRow {
-            pool_id,
-            account_id: acct_id,
-            shares: decimal7_string_to_i128(&pos.shares)?,
-            first_deposit_ledger: first,
-            last_updated_ledger: last,
-            // The pool-share trustline was removed — the participant left the
-            // pool, as opposed to withdrawing to zero and staying. ADR 0055.
-            closed_at_ledger: if pos.closed { last } else { 0 },
-        };
-        match lp_dedup.entry((pool_id, acct_id)) {
-            Entry::Occupied(mut occ) => {
-                let existing = occ.get_mut();
-                if new_row.last_updated_ledger >= existing.last_updated_ledger {
-                    let preserved_first = existing
-                        .first_deposit_ledger
-                        .min(new_row.first_deposit_ledger);
-                    *existing = new_row;
-                    existing.first_deposit_ledger = preserved_first;
-                } else {
-                    existing.first_deposit_ledger = existing
-                        .first_deposit_ledger
-                        .min(new_row.first_deposit_ledger);
-                }
-            }
-            Entry::Vacant(vac) => {
-                vac.insert(new_row);
-            }
-        }
-    }
-    out.lp_position_rows.extend(lp_dedup.into_values());
+    out.lp_position_rows
+        .extend(lp_positions::lp_position_rows(lp_positions)?);
 
     operations::operation_rows(
         &mut out,
@@ -2705,6 +2669,7 @@ pub fn ledger_deltas_net_settled(
 }
 
 mod contract_activity;
+mod lp_positions;
 mod nfts;
 mod operations;
 mod presence;
