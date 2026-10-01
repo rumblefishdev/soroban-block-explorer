@@ -1720,12 +1720,12 @@ fn synthetic_nft_event(
         // differs from the transaction's position (1, its only transaction)
         // so the routing tests pin that `application_order` comes from the
         // ledger's transaction order, as for `soroban_events`, not from the id.
-        event_id: Some(xdr_parser::EventId {
+        event_id: xdr_parser::EventId {
             ledger_sequence: 10,
             transaction_index: 7,
             operation_index: 2,
             event_index: u32::from(event_index),
-        }),
+        },
     }
 }
 
@@ -2379,37 +2379,6 @@ fn prepare_routes_unclassified_contract_nft_to_pending_bucket() {
     // Task 0424: the change routes the same way.
     assert!(staged.nft_ownership_change_rows.is_empty());
     assert_eq!(staged.nft_ownership_change_pending_rows.len(), 1);
-}
-
-/// Task 0424: an NFT change without an event id is refused, as
-/// `soroban_events` refuses one — a row with no location cannot be keyed.
-#[test]
-fn prepare_refuses_an_nft_change_without_an_event_id() {
-    let ledger = synthetic_ledger();
-    let tx = synthetic_tx(0x93);
-    let contract = "C".to_string() + &"C".repeat(55);
-    let nft = synthetic_nft(&contract, "tk1");
-    let mut ev = synthetic_nft_event(&tx.hash, &contract, "tk1", 0);
-    ev.event_id = None;
-
-    let err = stage::prepare(
-        &ledger,
-        std::slice::from_ref(&tx),
-        &[(tx.hash.clone(), vec![])],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        std::slice::from_ref(&nft),
-        std::slice::from_ref(&ev),
-        &[],
-    )
-    .expect_err("an NFT change needs its event id");
-    assert!(err.to_string().contains("event id"), "{err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -3643,7 +3612,8 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
 
     // A pool's amount events key their tokens on the map too (task 0374, W1),
     // exactly when `pool_movements` is written; other events do not.
-    let mut trade = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    let mut trade = add_pool_event("tx", pool, pool);
+    trade.origin = EventOrigin::Operation(0);
     trade.topics = serde_json::json!([{"type": "sym", "value": "trade"}]);
     let trade_ledger = vec![("tx".to_string(), vec![trade])];
     assert!(crate::persist::sac_classic_map_needed(
@@ -3658,7 +3628,8 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         false,
         false
     ));
-    let mut other = add_pool_event("tx", pool, pool, EventSource::PerOp);
+    let mut other = add_pool_event("tx", pool, pool);
+    other.origin = EventOrigin::Operation(0);
     other.topics = serde_json::json!([{"type": "sym", "value": "update_reserves"}]);
     assert!(!crate::persist::sac_classic_map_needed(
         &[],

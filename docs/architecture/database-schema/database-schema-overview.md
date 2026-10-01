@@ -1467,8 +1467,8 @@ ORDER BY (contract_id, token_id, ledger_sequence, application_order, operation_i
   `owner_id` is the recipient's account surrogate, NULL for a burn.
 - **`token_id` stays in the key:** one `consecutive_mint` event mints many
   tokens under a single event id.
-- **Staging refuses a change without an event id**, as `soroban_events` does;
-  NFT events are per-operation contract events, which always carry one.
+- **Every change has its event id:** the parser gives each consensus event
+  one, and an NFT event carries its source event's.
 - The API reads it alone: the NFT transfers tab (keyset on the location),
   the mint ledger, and the pieces an account's balance change names (by
   transaction position). Promotion from `_pending` is `nft-reclassify`.

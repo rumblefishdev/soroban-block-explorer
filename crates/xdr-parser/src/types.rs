@@ -256,7 +256,7 @@ pub struct NftEvent {
     pub created_at: i64,
     /// The source event's stellar-rpc id (ADR 0059) — its canonical location.
     /// Every token a `consecutive_mint` expands to shares it.
-    pub event_id: Option<crate::event::EventId>,
+    pub event_id: crate::event::EventId,
 }
 
 /// Extracted ledger entry change from `TransactionMeta` V3/V4.
@@ -513,7 +513,7 @@ pub struct ExtractedNftEvent {
     pub created_at: i64,
     /// The source event's stellar-rpc id (ADR 0059): the row's location in
     /// `nft_ownership_changes` (task 0424).
-    pub event_id: Option<crate::event::EventId>,
+    pub event_id: crate::event::EventId,
 }
 
 /// LP position change carried from the parser into `lp_positions`.

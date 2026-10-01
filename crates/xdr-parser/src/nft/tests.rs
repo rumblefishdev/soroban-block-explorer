@@ -639,17 +639,13 @@ fn nft_events_carry_the_source_event_id() {
         .collect();
     assert_eq!(
         ids,
-        vec![
-            ("mint", Some(id(0))),
-            ("mint", Some(id(0))),
-            ("transfer", Some(id(1))),
-        ]
+        vec![("mint", id(0)), ("mint", id(0)), ("transfer", id(1)),]
     );
     // …and the ownership rows keep it.
     let rows = crate::state::extract_nft_ownership_events(&nft);
     assert_eq!(
         rows.iter().map(|r| r.event_id).collect::<Vec<_>>(),
-        vec![Some(id(0)), Some(id(0)), Some(id(1))]
+        vec![id(0), id(0), id(1)]
     );
 }
 

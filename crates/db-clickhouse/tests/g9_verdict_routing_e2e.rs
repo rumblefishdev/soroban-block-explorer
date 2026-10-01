@@ -139,12 +139,12 @@ fn fixture_event(contract_id: &str, token: &str, order: u16) -> ExtractedNftEven
         owner: Some(owner()),
         ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
-        event_id: Some(xdr_parser::EventId {
+        event_id: xdr_parser::EventId {
             ledger_sequence: E2E_LEDGER,
             transaction_index: 1,
             operation_index: 0,
             event_index: u32::from(order),
-        }),
+        },
     }
 }
 
