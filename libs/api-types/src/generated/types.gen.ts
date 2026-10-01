@@ -2227,8 +2227,10 @@ export type PoolAssetLeg = {
  * signed from the pool's perspective, so `+/+` is a deposit, `-/-` a
  * withdrawal and `+/-` a trade.
  * There is no operation-type column to read and no join to `operations`.
- * A soroban pool's row is one event, named by the kind the pool declared
- * (`pool_movements.event_kind`), never by its signs.
+ * A soroban pool's row is one event, named by the kind the pool declared,
+ * stored in `pool_movements.event_kind` as this enum's discriminant — not
+ * inferred from the signs: a trade may carry a zero leg (42 on production)
+ * and a withdrawal may pay out nothing, which the signs alone would misread.
  *
  * Classified on the server rather than in the page, and by the same function
  * the `filter[event]` predicate calls: two classifiers would eventually

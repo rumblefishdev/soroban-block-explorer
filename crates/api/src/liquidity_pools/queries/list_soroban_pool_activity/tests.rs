@@ -136,10 +136,3 @@ fn a_truncated_read_drops_its_last_event() {
     assert_eq!(grouped.len(), 1);
     assert_eq!(grouped[0].ls, 11);
 }
-
-#[test]
-fn a_filter_selects_the_stored_kind() {
-    assert_eq!(stored_kind(PoolEvent::Trade), 0);
-    assert_eq!(stored_kind(PoolEvent::Deposit), 1);
-    assert_eq!(stored_kind(PoolEvent::Withdrawal), 2);
-}

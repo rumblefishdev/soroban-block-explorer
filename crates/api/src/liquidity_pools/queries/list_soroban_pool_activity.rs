@@ -2,7 +2,6 @@
 //! event the pool emitted, read from `pool_movements`.
 
 use clickhouse::Row;
-use db_clickhouse::persist::stage::soroban_pool_amounts::PoolEventKind;
 use serde::Deserialize;
 
 use crate::common::cursor::{Direction, keyset_sql_desc};
@@ -39,20 +38,7 @@ impl PoolMovement {
     /// The kind the pool's own event declared — stored, because a leg can be
     /// zero and the signs alone would call a one-sided deposit a trade.
     fn event(&self) -> Option<PoolEvent> {
-        Some(match PoolEventKind::from_stored(self.kind)? {
-            PoolEventKind::Trade => PoolEvent::Trade,
-            PoolEventKind::Deposit => PoolEvent::Deposit,
-            PoolEventKind::Withdrawal => PoolEvent::Withdrawal,
-        })
-    }
-}
-
-/// The stored `event_kind` a `filter[event]` value selects.
-fn stored_kind(event: PoolEvent) -> u8 {
-    match event {
-        PoolEvent::Trade => PoolEventKind::Trade as u8,
-        PoolEvent::Deposit => PoolEventKind::Deposit as u8,
-        PoolEvent::Withdrawal => PoolEventKind::Withdrawal as u8,
+        PoolEvent::try_from(self.kind).ok()
     }
 }
 
@@ -181,7 +167,7 @@ pub async fn fetch_soroban_pool_activity(
     let legs_per_event = legs.len().max(1) as i64;
     let mut row_cap = (limit * legs_per_event * 2).max(256);
     let kind_filter = match event {
-        Some(want) => format!(" AND event_kind = {}", stored_kind(want)),
+        Some(want) => format!(" AND event_kind = {}", want as u8),
         None => String::new(),
     };
     let mut movements: Vec<PoolMovement> = Vec::new();
