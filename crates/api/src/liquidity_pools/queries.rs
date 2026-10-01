@@ -97,10 +97,9 @@ fn leg_rows(
     leg_ids: &[i64],
     identities: &HashMap<i64, ResolvedAsset>,
     icons: &HashMap<i64, String>,
-    token_decimals: &HashMap<String, u32>,
     reserves: &[Option<String>],
 ) -> Vec<PoolLegRow> {
-    let decimals = soroban_reserves::leg_decimals(leg_ids, identities, token_decimals);
+    let decimals = soroban_reserves::leg_decimals(leg_ids, identities);
     leg_ids
         .iter()
         .enumerate()

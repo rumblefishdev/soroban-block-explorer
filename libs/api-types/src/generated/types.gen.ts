@@ -2220,8 +2220,9 @@ export type PoolAssetLeg = {
 
 /**
  * What an operation did to the pool. A classic operation is named by the SIGN
- * PAIR of its two legs and nothing else — `pool_operation_amounts.amount` is signed from the pool's
- * perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
+ * PAIR of its two legs and nothing else — `pool_operation_amounts.amount` is
+ * signed from the pool's perspective, so `+/+` is a deposit, `-/-` a
+ * withdrawal and `+/-` a trade.
  * There is no operation-type column to read and no join to `operations`.
  * A soroban pool's rows do store the kind its event declared
  * (`pool_movements.event_kind`), and that is what names them; the signs name

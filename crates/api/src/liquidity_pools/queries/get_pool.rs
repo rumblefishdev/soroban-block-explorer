@@ -2,15 +2,13 @@
 
 use clickhouse::Row;
 use serde::Deserialize;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
-use super::soroban_reserves::{
-    fetch_raw_reserves, fetch_token_decimals, leg_reserves, soroban_token_contracts,
-};
+use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
 use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
@@ -133,27 +131,21 @@ pub async fn fetch_pool_by_id(
     // A classic pool's legs are its two snapshot columns in order; a soroban
     // pool has no snapshot row, so its reserves come from its state rows.
     let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
-    let (reserves, total_shares, token_decimals) = match pool_kind {
-        // A classic pool has no soroban-token leg, so no published decimals
-        // to read: its legs are 7 by protocol.
+    let (reserves, total_shares) = match pool_kind {
         domain::PoolKind::Classic => (
             vec![r.reserve_a.clone(), r.reserve_b.clone()],
             r.total_shares.clone(),
-            HashMap::new(),
         ),
         domain::PoolKind::Soroban => {
             let ids = [r.pool_id_hex.as_str()];
-            let tokens = soroban_token_contracts(&r.legs, &identities);
-            let (raw, shares, token_decimals) = futures::try_join!(
+            let (raw, shares) = futures::try_join!(
                 fetch_raw_reserves(client, &ids),
                 fetch_total_shares(client, &ids),
-                fetch_token_decimals(client, &tokens),
             )?;
             let raw = raw.get(&r.pool_id_hex).map_or(&[][..], Vec::as_slice);
             (
-                leg_reserves(&r.legs, &identities, &token_decimals, raw),
+                leg_reserves(&r.legs, &identities, raw),
                 served_total_shares(shares.get(&r.pool_id_hex), raw),
-                token_decimals,
             )
         }
     };
@@ -162,7 +154,7 @@ pub async fn fetch_pool_by_id(
         pool_kind,
         deployment_id: r.deployment_id,
         pool_id_hex: r.pool_id_hex,
-        legs: leg_rows(&r.legs, &identities, &icons, &token_decimals, &reserves),
+        legs: leg_rows(&r.legs, &identities, &icons, &reserves),
         fee_bps: r.fee_bps,
         fee_percent: fee_percent_str(r.fee_bps),
         created_at_ledger: r.created_at_ledger,

@@ -3,6 +3,7 @@
 //! classic pool's activity has.
 
 use clickhouse::Row;
+use db_clickhouse::persist::stage::soroban_pool_amounts::PoolEventKind;
 use serde::Deserialize;
 
 use crate::common::cursor::{Direction, keyset_sql_desc};
@@ -44,10 +45,11 @@ impl SorobanOp {
     /// is; with a leg missing it has no event.
     fn event(&self) -> Option<PoolEvent> {
         match self.kind {
-            Some(0) => Some(PoolEvent::Trade),
-            Some(1) => Some(PoolEvent::Deposit),
-            Some(2) => Some(PoolEvent::Withdrawal),
-            Some(_) => None,
+            Some(stored) => match PoolEventKind::from_stored(stored)? {
+                PoolEventKind::Trade => Some(PoolEvent::Trade),
+                PoolEventKind::Deposit => Some(PoolEvent::Deposit),
+                PoolEventKind::Withdrawal => Some(PoolEvent::Withdrawal),
+            },
             None => {
                 let signs: Vec<i64> = self
                     .sums
@@ -79,7 +81,10 @@ fn fold_movements(rows: Vec<MovementChRow>, legs: &[i64], truncated: bool) -> Ve
             continue;
         }
         prev_key = Some(key);
+        // `toString(Int128)` always parses; a row that does not is a decode
+        // fault worth seeing, not an amount to guess.
         let Ok(amount) = r.amount.parse::<i128>() else {
+            tracing::error!(ls = r.ls, ao = r.ao, oi = r.oi, amount = %r.amount, "unparseable pool_movements amount");
             continue;
         };
 

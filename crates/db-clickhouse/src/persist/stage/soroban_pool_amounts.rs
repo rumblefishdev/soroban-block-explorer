@@ -126,6 +126,19 @@ pub enum PoolEventKind {
     Withdrawal = 2,
 }
 
+impl PoolEventKind {
+    /// The kind a stored `pool_movements.event_kind` names; `None` for a value
+    /// this writer never stores.
+    pub fn from_stored(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Trade),
+            1 => Some(Self::Deposit),
+            2 => Some(Self::Withdrawal),
+            _ => None,
+        }
+    }
+}
+
 /// An amount event, with its legs when they could be read.
 type Decoded = (PoolEventKind, Option<Vec<(i64, i128)>>);
 

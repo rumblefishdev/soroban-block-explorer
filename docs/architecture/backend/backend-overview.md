@@ -341,7 +341,7 @@ filter, and had to be corrected — the exception looked like the rule.
 | Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                                                                    |
 | Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/decompiled`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
 | NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                             |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                              |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/activity`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                                  |
 | Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                          |
 
 ### 6.4 Resource Details
@@ -625,8 +625,9 @@ aggregation bounded. Bucket aggregation policy in
 `crates/api/src/liquidity_pools/queries/get_pool_chart.rs`.
 A Soroban pool's series comes from its reserve history (`pool_state_changes`,
 raw per leg, scaled by each leg's own decimals) on the same buckets and price
-rules — TVL only; `volume` and `fee_revenue` are `null` until its trades are
-indexed, and the frontend's Volume and Fees tabs say "not indexed".
+rules — TVL only; `volume` and `fee_revenue` are `null` until they are read
+from its movements (`pool_movements`), and the frontend's Volume and Fees tabs
+say "not indexed".
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, first deposit ledger, and last
