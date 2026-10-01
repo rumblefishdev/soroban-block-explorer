@@ -12,6 +12,7 @@ use crate::liquidity_pools::queries::{fetch_pool_asset_ids, fetch_soroban_pool_a
 const DB: &str = "api_test_0374_soroban_activity";
 
 const POOL: &str = "5656565656565656565656565656565656565656565656565656565656565656";
+const ROUTER_POOL: &str = "5757575757575757575757575757575757575757575757575757575757575757";
 const TRADER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
 /// Three operations, each in its own ledger span from the tip, so the read has
@@ -19,6 +20,9 @@ const TRADER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 /// - 52,000,000: a trade, written twice (the live writer and the backfill);
 /// - 51,200,000: a deposit naming two of the pool's three legs;
 /// - 50,000,100: a withdrawal of all three.
+///
+/// And in a second pool, one operation that emitted 150 trade events, which
+/// pages must split mid-operation by `event_index`.
 #[tokio::test]
 async fn soroban_pool_activity() {
     let Some(base) = crate::common::ch::test_client_from_env() else {
@@ -46,13 +50,13 @@ async fn soroban_pool_activity() {
     let trade = format!(
         "INSERT INTO pool_movements (pool_id, ledger_sequence, application_order, operation_index, event_index, event_kind, asset_id, amount) VALUES \
          (unhex('{POOL}'), 52000000, 1, 0, 3, 0, 101, 500), \
-         (unhex('{POOL}'), 52000000, 1, 0, 3, 0, 102, -499), \
-         (unhex('{POOL}'), 52000000, 1, 0, 3, 0, 103, 0)"
+         (unhex('{POOL}'), 52000000, 1, 0, 3, 0, 102, -499)"
     );
     for sql in [
         format!(
             "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs) VALUES \
-             (unhex('{POOL}'), 30, 100, 1, [101, 102, 103])"
+             (unhex('{POOL}'), 30, 100, 1, [101, 102, 103]), \
+             (unhex('{ROUTER_POOL}'), 30, 100, 1, [101, 102])"
         ),
         format!(
             "INSERT INTO accounts (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number) VALUES \
@@ -65,7 +69,8 @@ async fn soroban_pool_activity() {
         "INSERT INTO transactions (hash, ledger_sequence, application_order, source_id) VALUES \
          (unhex(repeat('aa', 32)), 50000100, 1, 7), \
          (unhex(repeat('bb', 32)), 51200000, 2, 7), \
-         (unhex(repeat('cc', 32)), 52000000, 1, 7)"
+         (unhex(repeat('cc', 32)), 52000000, 1, 7), \
+         (unhex(repeat('dd', 32)), 52000000, 3, 7)"
             .to_string(),
         trade.clone(),
         // The same rows again, in a part of their own.
@@ -77,6 +82,12 @@ async fn soroban_pool_activity() {
              (unhex('{POOL}'), 50000100, 1, 0, 0, 2, 101, -1), \
              (unhex('{POOL}'), 50000100, 1, 0, 0, 2, 102, -2), \
              (unhex('{POOL}'), 50000100, 1, 0, 0, 2, 103, -3)"
+        ),
+        format!(
+            "INSERT INTO pool_movements (pool_id, ledger_sequence, application_order, operation_index, event_index, event_kind, asset_id, amount) \
+             SELECT unhex('{ROUTER_POOL}'), 52000000, 3, 0, intDiv(number, 2), 0, \
+                    if(number % 2 = 0, 101, 102), if(number % 2 = 0, 10, -9) \
+             FROM numbers(300)"
         ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
@@ -105,7 +116,9 @@ async fn soroban_pool_activity() {
 
     // The duplicated trade is counted once.
     assert_eq!(all[0].event, Some(PoolEvent::Trade));
-    assert_eq!(all[0].amounts, vec![s("500"), s("-499"), s("0")]);
+    // A swap names the two tokens it moved; the third leg is not a zero.
+    assert_eq!(all[0].amounts, vec![s("500"), s("-499"), None]);
+    assert_eq!(all[0].event_index, Some(3));
     assert_eq!(all[0].transaction_hash, "cc".repeat(32));
     assert_eq!(all[0].source_account, TRADER);
     // A soroban route is not in `transaction_operations`: unknown, not 0.
@@ -125,6 +138,7 @@ async fn soroban_pool_activity() {
         ledger_sequence: 52_000_000,
         application_order: 1,
         operation_index: 0,
+        event_index: 3,
     };
     let older = page(10, Some(after_trade), Direction::Next, None).await;
     let ledgers: Vec<i64> = older.iter().map(|r| r.ledger_sequence).collect();
@@ -135,6 +149,7 @@ async fn soroban_pool_activity() {
         ledger_sequence: 50_000_100,
         application_order: 1,
         operation_index: 0,
+        event_index: 0,
     };
     let newer = page(10, Some(before_withdrawal), Direction::Prev, None).await;
     let ledgers: Vec<i64> = newer.iter().map(|r| r.ledger_sequence).collect();
@@ -149,6 +164,45 @@ async fn soroban_pool_activity() {
     let one = page(1, None, Direction::Next, None).await;
     assert_eq!(one.len(), 1);
     assert_eq!(one[0].ledger_sequence, 52_000_000);
+
+    // One operation, 150 events: two pages of 100 and 50, newest event
+    // first, none repeated and none lost across the page edge.
+    let (_, router_legs) = fetch_pool_asset_ids(&ch, ROUTER_POOL)
+        .await
+        .expect("legs query runs")
+        .expect("router pool exists");
+    let router_page = |cursor: Option<PoolActivityCursor>| {
+        let (ch, legs) = (ch.clone(), router_legs.clone());
+        async move {
+            fetch_soroban_pool_activity(
+                &ch,
+                ROUTER_POOL,
+                &legs,
+                100,
+                cursor.as_ref(),
+                Direction::Next,
+                None,
+            )
+            .await
+            .expect("activity query runs")
+        }
+    };
+    let first = router_page(None).await;
+    let last = first.last().expect("a full first page");
+    let second = router_page(Some(PoolActivityCursor {
+        ledger_sequence: last.ledger_sequence,
+        application_order: last.application_order,
+        operation_index: last.operation_index,
+        event_index: last.event_index.expect("a soroban row has an event"),
+    }))
+    .await;
+    let events: Vec<u32> = first
+        .iter()
+        .chain(&second)
+        .filter_map(|r| r.event_index)
+        .collect();
+    assert_eq!(events, (0..150).rev().collect::<Vec<u32>>());
+    assert_eq!(first[0].amounts, vec![s("10"), s("-9")]);
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
         .execute()

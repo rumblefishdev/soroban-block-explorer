@@ -150,6 +150,17 @@ describe('activityRowKey', () => {
   });
 });
 
+describe('activityRowKey on a soroban pool', () => {
+  /** A Soroban row is one pool event: an operation that swaps twice through
+   *  the pool lists two rows under one hash and one operation index. */
+  it('separates two events of one operation', () => {
+    const base = { transaction_hash: 'a'.repeat(64), operation_index: 0 };
+    expect(
+      activityRowKey({ ...base, event_index: 0 } as PoolActivityItem)
+    ).not.toBe(activityRowKey({ ...base, event_index: 1 } as PoolActivityItem));
+  });
+});
+
 describe('PoolActivity table', () => {
   // `asset_type_name` matters: `legHref` keys native routing off it, so a
   // fixture without it renders a plain unlinked code and the link test passes

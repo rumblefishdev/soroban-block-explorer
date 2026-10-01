@@ -206,9 +206,12 @@ function assetCodeNode(leg: PoolAssetLeg): ReactNode {
 }
 
 /** Stable identity for a row. The hash is NOT unique here — a transaction
- *  running several operations against one pool appears once per operation. */
+ *  running several operations against one pool appears once per operation,
+ *  and a Soroban operation once per pool event. */
 export function activityRowKey(row: PoolActivityItem): string {
-  return `${row.transaction_hash}-${row.operation_index}`;
+  return `${row.transaction_hash}-${row.operation_index}-${
+    row.event_index ?? ''
+  }`;
 }
 
 function activityColumns(
@@ -219,8 +222,8 @@ function activityColumns(
       id: 'event',
       header: 'Event',
       width: 140,
-      // Accurate by construction: the row IS one operation, so the chip has
-      // exactly one thing to name. The mixed deposit-and-trade bundle that
+      // Accurate by construction: the row IS one operation (one pool event on
+      // a Soroban pool), so the chip has exactly one thing to name. The mixed deposit-and-trade bundle that
       // made the old per-transaction chip lie now renders as two rows, each
       // correctly labelled.
       cell: (row) => {
@@ -356,8 +359,8 @@ interface PoolActivityProps {
 
 /**
  * "Recent activity" section on the LP detail page — one row per OPERATION
- * against this pool, with a trade / deposit / withdrawal filter (task 0491,
- * issue #371).
+ * against a classic pool, one per pool EVENT of a Soroban pool, with a
+ * trade / deposit / withdrawal filter (task 0491, issue #371; task 0374).
  *
  * The row used to be a transaction, which could not carry an honest Event
  * chip (a bundled deposit + trade collapsed to one label), forced the Amount

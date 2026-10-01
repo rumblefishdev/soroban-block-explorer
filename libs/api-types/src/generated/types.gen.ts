@@ -1826,8 +1826,8 @@ export type PaginatedPoolActivityItem = {
      * Signed from the POOL's perspective: positive entered the pool, negative
      * left it. Raw units as a decimal string — a JSON number is a double in
      * the browser, so an amount above 2^53 would silently lose digits.
-     * Scale each by its leg's `decimals`. A soroban operation's amount is
-     * the sum over every event it made the pool emit.
+     * Scale each by its leg's `decimals`. A soroban row's amounts are its
+     * one event's.
      *
      * The sign is the payload, not decoration: it is what names `event`, so
      * the frontend must not take an absolute value before deciding direction.
@@ -1838,6 +1838,12 @@ export type PaginatedPoolActivityItem = {
     amounts: Array<string | null>;
     created_at: string;
     event?: null | PoolEvent;
+    /**
+     * Soroban pool: the pool event's 0-based position in its operation (ADR
+     * 0059) — one row per event, so an operation that traded the pool twice
+     * lists twice. `null` for a classic pool, whose row is the operation.
+     */
+    event_index?: number | null;
     ledger_sequence: number;
     /**
      * The operation's 0-based position in its transaction (ADR 0059); the
@@ -2058,7 +2064,8 @@ export type ParticipantItem = {
 
 /**
  * One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
- * against this pool**, not one transaction (task 0491, issue #371).
+ * against a classic pool, one event of a soroban pool**, never one
+ * transaction (task 0491, issue #371; task 0374).
  *
  * The transaction-level fields the retired `/transactions` shape carried
  * (`fee_charged`, `operation_count`, `has_soroban`, `successful`,
@@ -2076,8 +2083,8 @@ export type PoolActivityItem = {
    * Signed from the POOL's perspective: positive entered the pool, negative
    * left it. Raw units as a decimal string — a JSON number is a double in
    * the browser, so an amount above 2^53 would silently lose digits.
-   * Scale each by its leg's `decimals`. A soroban operation's amount is
-   * the sum over every event it made the pool emit.
+   * Scale each by its leg's `decimals`. A soroban row's amounts are its
+   * one event's.
    *
    * The sign is the payload, not decoration: it is what names `event`, so
    * the frontend must not take an absolute value before deciding direction.
@@ -2088,6 +2095,12 @@ export type PoolActivityItem = {
   amounts: Array<string | null>;
   created_at: string;
   event?: null | PoolEvent;
+  /**
+   * Soroban pool: the pool event's 0-based position in its operation (ADR
+   * 0059) — one row per event, so an operation that traded the pool twice
+   * lists twice. `null` for a classic pool, whose row is the operation.
+   */
+  event_index?: number | null;
   ledger_sequence: number;
   /**
    * The operation's 0-based position in its transaction (ADR 0059); the
@@ -2224,9 +2237,8 @@ export type PoolAssetLeg = {
  * signed from the pool's perspective, so `+/+` is a deposit, `-/-` a
  * withdrawal and `+/-` a trade.
  * There is no operation-type column to read and no join to `operations`.
- * A soroban pool's rows do store the kind its event declared
- * (`pool_movements.event_kind`), and that is what names them; the signs name
- * only an operation whose events disagree.
+ * A soroban pool's row is one event, named by the kind the pool declared
+ * (`pool_movements.event_kind`), never by its signs.
  *
  * Classified on the server rather than in the page, and by the same function
  * the `filter[event]` predicate calls: two classifiers would eventually
@@ -3488,7 +3500,7 @@ export type ListPoolActivityError =
 
 export type ListPoolActivityResponses = {
   /**
-   * Paginated pool activity, one row per operation
+   * Paginated pool activity, one row per operation (classic) or pool event (soroban)
    */
   200: PaginatedPoolActivityItem;
 };

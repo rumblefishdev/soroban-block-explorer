@@ -268,9 +268,8 @@ pub struct PoolItem {
 /// signed from the pool's perspective, so `+/+` is a deposit, `-/-` a
 /// withdrawal and `+/-` a trade.
 /// There is no operation-type column to read and no join to `operations`.
-/// A soroban pool's rows do store the kind its event declared
-/// (`pool_movements.event_kind`), and that is what names them; the signs name
-/// only an operation whose events disagree.
+/// A soroban pool's row is one event, named by the kind the pool declared
+/// (`pool_movements.event_kind`), never by its signs.
 ///
 /// Classified on the server rather than in the page, and by the same function
 /// the `filter[event]` predicate calls: two classifiers would eventually
@@ -364,10 +363,15 @@ pub struct PoolActivityCursor {
     pub ledger_sequence: i64,
     pub application_order: i16,
     pub operation_index: i16,
+    /// The last soroban row's event; `0` and unread for a classic pool, and
+    /// absent from a cursor minted before soroban rows existed.
+    #[serde(default)]
+    pub event_index: u32,
 }
 
 /// One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
-/// against this pool**, not one transaction (task 0491, issue #371).
+/// against a classic pool, one event of a soroban pool**, never one
+/// transaction (task 0491, issue #371; task 0374).
 ///
 /// The transaction-level fields the retired `/transactions` shape carried
 /// (`fee_charged`, `operation_count`, `has_soroban`, `successful`,
@@ -386,15 +390,17 @@ pub struct PoolActivityItem {
     /// transaction page's `#op-N` anchor this row links to is
     /// `operation_index + 1` (task 0482).
     pub operation_index: i16,
+    /// Soroban pool: the pool event's 0-based position in its operation (ADR
+    /// 0059) — one row per event, so an operation that traded the pool twice
+    /// lists twice. `null` for a classic pool, whose row is the operation.
+    pub event_index: Option<u32>,
     /// Classic pool: `null` when not every leg of the pool landed in
     /// `pool_operation_amounts` for this operation. Rare but real: 350 of
     /// 6.09M operations in the 100k ledgers to 64,576,995 carry one leg only.
     /// The read stays total rather than classifying a half-row.
     ///
     /// Soroban pool: the kind the pool's own event declared, which a missing
-    /// leg does not change. An operation whose events disagree (a deposit and
-    /// a swap in one call) is named by the signs of its summed legs, and is
-    /// `null` if a leg is missing.
+    /// leg does not change.
     pub event: Option<PoolEvent>,
     /// One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
     /// what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
@@ -403,8 +409,8 @@ pub struct PoolActivityItem {
     /// Signed from the POOL's perspective: positive entered the pool, negative
     /// left it. Raw units as a decimal string — a JSON number is a double in
     /// the browser, so an amount above 2^53 would silently lose digits.
-    /// Scale each by its leg's `decimals`. A soroban operation's amount is
-    /// the sum over every event it made the pool emit.
+    /// Scale each by its leg's `decimals`. A soroban row's amounts are its
+    /// one event's.
     ///
     /// The sign is the payload, not decoration: it is what names `event`, so
     /// the frontend must not take an absolute value before deciding direction.

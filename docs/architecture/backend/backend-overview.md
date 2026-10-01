@@ -605,12 +605,15 @@ figures — never zero — for history the backfill has not reached; the fronten
 renders those rows blank.
 
 A classic pool's rows come from `pool_operation_amounts`, a Soroban pool's from
-`pool_movements` (task 0374): every event an operation made the pool emit is
-folded into the operation's row, its legs summed, and an unmerged duplicate row
-counted once. Its `event` is the kind the pool's event declared, named by the
-signs only when one operation mixes kinds; a leg no event named is `null`
-(a 4-token pool's event names three tokens at most), and `pools_crossed` is
-`null` — a Soroban route is not recorded per operation. The read walks
+`pool_movements` (task 0374), **one row per event the pool emitted**
+(`event_index`, its position in the operation; `null` on a classic row): an
+operation that withdraws and re-deposits, or swaps twice, lists each event, as
+summing them produced rows that described none. An unmerged duplicate row is
+counted once. Its `event` is the kind the pool's event declared, and
+`filter[event]` selects on that stored kind; a leg the event did not name is
+`null` (a 4-token pool's event names three tokens at most), and
+`pools_crossed` is `null` — a Soroban route is not recorded per operation. The
+cursor carries `event_index` too. The read walks
 ledger windows back from the cursor, each twice the last, so a page touches
 only the partitions it needs. Amounts stay raw; each leg's `decimals` on the
 pool (`legs[i].decimals`: 7 for native and classic, a Soroban token's

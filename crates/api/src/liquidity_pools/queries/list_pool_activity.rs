@@ -22,6 +22,8 @@ pub struct PoolActivityRow {
     pub application_order: i16,
     /// The operation's 0-based position in its transaction (ADR 0059).
     pub operation_index: i16,
+    /// The pool event's position in its operation — a soroban row only.
+    pub event_index: Option<u32>,
     pub event: Option<PoolEvent>,
     /// One per leg, in `legs` order — see `PoolActivityItem::amounts`.
     pub amounts: Vec<Option<String>>,
@@ -274,6 +276,7 @@ pub async fn fetch_pool_activity(
                 ls: o.ls,
                 ao: o.ao,
                 oi: o.oi,
+                event_index: None,
                 event,
                 amounts: o
                     .amounts
@@ -286,12 +289,15 @@ pub async fn fetch_pool_activity(
     enrich_activity(client, ops).await
 }
 
-/// One operation of a pool, before its transaction's details are joined on:
-/// its position, its event and one amount per leg, as the page renders them.
+/// One row of a pool's activity, before its transaction's details are joined
+/// on: its position, its event and one amount per leg, as the page renders
+/// them. A classic row is an operation; a soroban row is one event of one
+/// (`event_index`).
 pub(super) struct ActivityOp {
     pub ls: i64,
     pub ao: i16,
     pub oi: i16,
+    pub event_index: Option<u32>,
     pub event: Option<PoolEvent>,
     pub amounts: Vec<Option<String>>,
 }
@@ -421,6 +427,7 @@ pub(super) async fn enrich_activity(
                 ledger_sequence: o.ls,
                 application_order: o.ao,
                 operation_index: o.oi,
+                event_index: o.event_index,
                 event: o.event,
                 amounts: o.amounts,
                 source_account,

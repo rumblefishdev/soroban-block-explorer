@@ -53,7 +53,7 @@ const ALLOWED_EVENTS: [&str; 3] = [
          description = "Restrict to `trade`, `deposit` or `withdrawal`."),
     ),
     responses(
-        (status = 200, description = "Paginated pool activity, one row per operation",
+        (status = 200, description = "Paginated pool activity, one row per operation (classic) or pool event (soroban)",
          body = Paginated<PoolActivityItem>),
         (status = 400, description = "Invalid pool_id, limit, cursor, or event", body = ErrorEnvelope),
         (status = 404, description = "Pool not found",  body = ErrorEnvelope),
@@ -162,6 +162,7 @@ pub async fn list_pool_activity(
                     ledger_sequence: r.ledger_sequence,
                     application_order: r.application_order,
                     operation_index: r.operation_index,
+                    event_index: r.event_index.unwrap_or(0),
                 },
                 dir,
             )
@@ -173,6 +174,7 @@ pub async fn list_pool_activity(
             transaction_hash: r.transaction_hash,
             ledger_sequence: r.ledger_sequence,
             operation_index: r.operation_index,
+            event_index: r.event_index,
             event: r.event,
             amounts: r.amounts,
             source_account: r.source_account,

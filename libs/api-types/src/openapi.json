@@ -1328,7 +1328,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Paginated pool activity, one row per operation",
+            "description": "Paginated pool activity, one row per operation (classic) or pool event (soroban)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4292,7 +4292,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst this pool**, not one transaction (task 0491, issue #371).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
+              "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst a classic pool, one event of a soroban pool**, never one\ntransaction (task 0491, issue #371; task 0374).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
@@ -4307,7 +4307,7 @@
                   "items": {
                     "type": ["string", "null"]
                   },
-                  "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban operation's amount is\nthe sum over every event it made the pool emit.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
+                  "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban row's amounts are its\none event's.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
                 },
                 "created_at": {
                   "type": "string",
@@ -4320,9 +4320,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/PoolEvent",
-                      "description": "Classic pool: `null` when not every leg of the pool landed in\n`pool_operation_amounts` for this operation. Rare but real: 350 of\n6.09M operations in the 100k ledgers to 64,576,995 carry one leg only.\nThe read stays total rather than classifying a half-row.\n\nSoroban pool: the kind the pool's own event declared, which a missing\nleg does not change. An operation whose events disagree (a deposit and\na swap in one call) is named by the signs of its summed legs, and is\n`null` if a leg is missing."
+                      "description": "Classic pool: `null` when not every leg of the pool landed in\n`pool_operation_amounts` for this operation. Rare but real: 350 of\n6.09M operations in the 100k ledgers to 64,576,995 carry one leg only.\nThe read stays total rather than classifying a half-row.\n\nSoroban pool: the kind the pool's own event declared, which a missing\nleg does not change."
                     }
                   ]
+                },
+                "event_index": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "description": "Soroban pool: the pool event's 0-based position in its operation (ADR\n0059) — one row per event, so an operation that traded the pool twice\nlists twice. `null` for a classic pool, whose row is the operation.",
+                  "minimum": 0
                 },
                 "ledger_sequence": {
                   "type": "integer",
@@ -4550,7 +4556,7 @@
       },
       "PoolActivityItem": {
         "type": "object",
-        "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst this pool**, not one transaction (task 0491, issue #371).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
+        "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst a classic pool, one event of a soroban pool**, never one\ntransaction (task 0491, issue #371; task 0374).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
         "required": [
           "transaction_hash",
           "ledger_sequence",
@@ -4565,7 +4571,7 @@
             "items": {
               "type": ["string", "null"]
             },
-            "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban operation's amount is\nthe sum over every event it made the pool emit.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
+            "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban row's amounts are its\none event's.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
           },
           "created_at": {
             "type": "string",
@@ -4578,9 +4584,15 @@
               },
               {
                 "$ref": "#/components/schemas/PoolEvent",
-                "description": "Classic pool: `null` when not every leg of the pool landed in\n`pool_operation_amounts` for this operation. Rare but real: 350 of\n6.09M operations in the 100k ledgers to 64,576,995 carry one leg only.\nThe read stays total rather than classifying a half-row.\n\nSoroban pool: the kind the pool's own event declared, which a missing\nleg does not change. An operation whose events disagree (a deposit and\na swap in one call) is named by the signs of its summed legs, and is\n`null` if a leg is missing."
+                "description": "Classic pool: `null` when not every leg of the pool landed in\n`pool_operation_amounts` for this operation. Rare but real: 350 of\n6.09M operations in the 100k ledgers to 64,576,995 carry one leg only.\nThe read stays total rather than classifying a half-row.\n\nSoroban pool: the kind the pool's own event declared, which a missing\nleg does not change."
               }
             ]
+          },
+          "event_index": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Soroban pool: the pool event's 0-based position in its operation (ADR\n0059) — one row per event, so an operation that traded the pool twice\nlists twice. `null` for a classic pool, whose row is the operation.",
+            "minimum": 0
           },
           "ledger_sequence": {
             "type": "integer",
@@ -4646,7 +4658,7 @@
       },
       "PoolEvent": {
         "type": "string",
-        "description": "What an operation did to the pool. A classic operation is named by the SIGN\nPAIR of its two legs and nothing else — `pool_operation_amounts.amount` is\nsigned from the pool's perspective, so `+/+` is a deposit, `-/-` a\nwithdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\nA soroban pool's rows do store the kind its event declared\n(`pool_movements.event_kind`), and that is what names them; the signs name\nonly an operation whose events disagree.\n\nClassified on the server rather than in the page, and by the same function\nthe `filter[event]` predicate calls: two classifiers would eventually\ndisagree, and the one the user sees must be the one the filter used. This\ndeliberately reverses the client-side policy the retired `/transactions`\nshape carried.",
+        "description": "What an operation did to the pool. A classic operation is named by the SIGN\nPAIR of its two legs and nothing else — `pool_operation_amounts.amount` is\nsigned from the pool's perspective, so `+/+` is a deposit, `-/-` a\nwithdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\nA soroban pool's row is one event, named by the kind the pool declared\n(`pool_movements.event_kind`), never by its signs.\n\nClassified on the server rather than in the page, and by the same function\nthe `filter[event]` predicate calls: two classifiers would eventually\ndisagree, and the one the user sees must be the one the filter used. This\ndeliberately reverses the client-side policy the retired `/transactions`\nshape carried.",
         "enum": ["trade", "deposit", "withdrawal"]
       },
       "PoolItem": {
