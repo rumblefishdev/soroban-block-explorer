@@ -8,7 +8,7 @@ fn validate_uri_accepts_https() {
 
 #[test]
 fn validate_uri_accepts_ipfs() {
-    assert!(validate_uri("ipfs://QmXyZ...").is_ok());
+    assert!(validate_uri("ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG").is_ok());
 }
 
 #[test]
@@ -123,4 +123,32 @@ fn validate_uri_rejects_no_dot_host() {
         validate_uri("https://localhost/1.json"),
         Err(NftTokenUriError::MalformedUri { .. })
     ));
+}
+
+#[test]
+fn validate_uri_rejects_a_cid_that_cannot_decode() {
+    // Production, token 15 of CAMOZBTH…N67X: the contract glued the token id
+    // onto the CID, so no gateway can ever serve it.
+    assert!(matches!(
+        validate_uri("ipfs://bafkreib4534l4wdqxysgj5rrqtqtzwawkqfhfmoopwmvdvmkepnh5lnffi15"),
+        Err(NftTokenUriError::MalformedUri { .. })
+    ));
+    // CIDv0 is always `Qm` + 44 base58 characters.
+    assert!(matches!(
+        validate_uri("ipfs://QmShort/1.json"),
+        Err(NftTokenUriError::MalformedUri { .. })
+    ));
+}
+
+#[test]
+fn validate_uri_accepts_real_cids_with_and_without_a_path() {
+    for uri in [
+        "ipfs://bafkreib4534l4wdqxysgj5rrqtqtzwawkqfhfmoopwmvdvmkepnh5lnffi",
+        "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/15.json",
+        "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/readme",
+        // Encodings this check does not decode are left to the gateway.
+        "ipfs://zdj7WWeQ43G6JJvLWQWZpyHuAMq6uYWRjkBXFad11vE2LHhQ7",
+    ] {
+        assert!(validate_uri(uri).is_ok(), "{uri}");
+    }
 }
