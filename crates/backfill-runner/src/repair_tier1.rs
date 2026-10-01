@@ -23,32 +23,32 @@
 //! cleanup, never a guarantee. Task 0497 retires the compromise itself,
 //! one entry at a time as each column stops being read from its RMT copy.
 //!
-//! ### Scope — 4 columns × 3 tables
+//! ### Scope — 1 column × 1 table
 //!
 //! | Table | Column | Correct rebuild |
 //! |-------|--------|-----------------|
 //! | `accounts` | `first_seen_ledger` | `MIN(ledger_sequence) FROM transaction_participants` |
-//! | `lp_positions` | `first_deposit_ledger` | `MIN(ledger_sequence) FROM transaction_operations WHERE type = 22 (LiquidityPoolDeposit)` |
-//! | `soroban_contracts` | `deployer_id` + `deployed_at_ledger` | `argMin(deployer_id, wasm_uploaded_at_ledger)` + `MIN(wasm_uploaded_at_ledger)` over rows where `deployer_id IS NOT NULL` |
 //!
 //! **Retired entries.** `nfts.minted_at_ledger` and
 //! `nfts_pending.minted_at_ledger`: both columns are dropped (task 0497) —
 //! the mint is the `nft_ownership_changes` row with `event_type = 0`, which every NFT
 //! read derives it from.
+//! `soroban_contracts.{deployer_id, deployed_at_ledger}`: written once, from
+//! the ledger change that creates the contract instance — a contract is
+//! created exactly once, so no batch or worker can write a later value — and
+//! carried forward unchanged by every upgrade row. The rebuild assumed the
+//! deployment is the row with the smallest `wasm_uploaded_at_ledger`; once
+//! that row has merged away only upgrade rows remain, and it moved the
+//! deployment to the first surviving upgrade (1,652 of 154,331 contracts on
+//! 2026-10-01, while the stored values agree across all rows of every
+//! contract). Task 0497.
+//! `lp_positions.first_deposit_ledger`: dropped (task 0468) — the pool
+//! participants list no longer shows a first deposit.
 //!
 //! **Source selection rule**: state-shaped tables under
 //! `ReplacingMergeTree` collapse history on `OPTIMIZE FINAL`, so the
 //! historic MIN must come from append-only fact tables
-//! (`transaction_participants`, `transaction_operations`). The one
-//! exception is `soroban_contracts`: deployer
-//! info is only stored on `soroban_contracts` itself (no dedicated fact
-//! table exists for deployments), so the rebuild reads the raw
-//! pre-FINAL table and filters non-NULL rows — fragile if a full
-//! `OPTIMIZE soroban_contracts FINAL` runs before this pass and the
-//! kept row has NULL deployer fields. Run Tier-1 **before** any
-//! `OPTIMIZE FINAL` on `soroban_contracts` (the Phase 5 plan
-//! Step 2 lists only `wasm_interface_metadata` + `ledgers` for the
-//! pre-repair OPTIMIZE, so this is fine in the documented sequence).
+//! (`transaction_participants`).
 //!
 //! ## Pattern
 //!
@@ -82,8 +82,6 @@ use crate::sink::Sink;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RepairTier1Stats {
     pub accounts_rows: u64,
-    pub lp_positions_rows: u64,
-    pub soroban_contracts_rows: u64,
     pub dry_run: bool,
 }
 
@@ -102,15 +100,10 @@ pub async fn execute(sink: &Sink, dry_run: bool) -> Result<RepairTier1Stats, Bac
     };
 
     stats.accounts_rows = rebuild_accounts(client, dry_run).await?;
-    stats.lp_positions_rows = rebuild_lp_positions(client, dry_run).await?;
-    stats.soroban_contracts_rows = rebuild_soroban_contracts(client, dry_run).await?;
 
     info!(
         accounts = stats.accounts_rows,
-        lp_positions = stats.lp_positions_rows,
-        soroban_contracts = stats.soroban_contracts_rows,
-        dry_run,
-        "repair_tier1: completed"
+        dry_run, "repair_tier1: completed"
     );
     Ok(stats)
 }
@@ -159,129 +152,5 @@ async fn rebuild_accounts(client: &ClickhouseClient, dry_run: bool) -> Result<u6
     Ok(rows)
 }
 
-/// `lp_positions.first_deposit_ledger` ← `MIN(ledger_sequence)` over
-/// `transaction_operations` filtered to `LiquidityPoolDeposit` (op
-/// type 22), joined by `(pool_id, source_id)`. The fact table
-/// `transaction_operations` does not collapse under RMT in a way that
-/// loses history (ORDER BY is `ledger_sequence`, `application_order`,
-/// `operation_index` — distinct deposits stay distinct), so the MIN
-/// there is the authoritative earliest deposit.
-///
-/// We deliberately do NOT read MIN from `lp_positions` itself: under
-/// `RMT(last_updated_ledger)` collapse, only the latest version of the
-/// `(pool, account)` row survives — MIN would then equal MAX and the
-/// rebuild would no-op (or worse, overwrite a correct value with the
-/// withdrawal/last-touched ledger).
-///
-/// `isNotNull(source_id)` + `isNotNull(pool_id)` is defensive — type
-/// 22 ops should always carry both, but the schema makes both columns
-/// `Nullable(…)` so an out-of-spec row would otherwise NULL the JOIN
-/// key and skip a position.
-async fn rebuild_lp_positions(
-    client: &ClickhouseClient,
-    dry_run: bool,
-) -> Result<u64, BackfillError> {
-    let staging = "lp_positions_staging_repair_tier1";
-    drop_if_exists(client, staging).await?;
-    create_staging_like(client, "lp_positions", staging).await?;
-
-    // OperationType::LiquidityPoolDeposit = 22 (see
-    // crates/domain/src/enums/operation_type.rs).
-    // `lp.* REPLACE`, not a column list: the staging table is a copy of the live
-    // one, and a hand-typed list silently resets every column added after it
-    // was written (`closed_at_ledger`, ADR 0055) before the EXCHANGE.
-    let insert_sql = format!(
-        "INSERT INTO {staging}
-         SELECT lp.* REPLACE (ifNull(m.min_ledger, lp.first_deposit_ledger) AS first_deposit_ledger)
-           FROM lp_positions AS lp FINAL
-           LEFT JOIN (
-             SELECT
-                 arrayJoin(pool_ids) AS pool_id,
-                 source_id AS account_id,
-                 min(ledger_sequence) AS min_ledger
-               FROM transaction_operations
-              WHERE type = 22 AND isNotNull(source_id) AND notEmpty(pool_ids)
-              GROUP BY pool_id, source_id
-           ) AS m ON m.pool_id = lp.pool_id AND m.account_id = lp.account_id"
-    );
-    client
-        .query(&insert_sql)
-        .execute()
-        .await
-        .map_err(BackfillError::Ch)?;
-
-    let rows = staging_row_count(client, staging).await?;
-    info!(staging, rows, "repair_tier1: lp_positions staging built");
-
-    finalize(client, "lp_positions", staging, dry_run).await?;
-    Ok(rows)
-}
-
-/// `soroban_contracts.{deployer_id, deployed_at_ledger}` ← rebuild from
-/// the row with the smallest `wasm_uploaded_at_ledger` across the
-/// un-FINAL union where `deployer_id IS NOT NULL`. Per
-/// `crates/db-clickhouse/src/persist/stage.rs`, every real deployment
-/// row carries `wasm_uploaded_at_ledger = deployed_at_ledger` and a
-/// non-NULL deployer; stub/SAC-override rows carry NULL deployer.
-/// So `MIN(wasm_uploaded_at_ledger) WHERE deployer_id IS NOT NULL`
-/// is the original deployment ledger, and `argMin(deployer_id,
-/// wasm_uploaded_at_ledger)` is the original deployer.
-///
-/// Reads the raw (non-FINAL) table — see module-level docstring for
-/// the caveat about running this before any aggressive
-/// `OPTIMIZE soroban_contracts FINAL`.
-async fn rebuild_soroban_contracts(
-    client: &ClickhouseClient,
-    dry_run: bool,
-) -> Result<u64, BackfillError> {
-    let staging = "soroban_contracts_staging_repair_tier1";
-    drop_if_exists(client, staging).await?;
-    create_staging_like(client, "soroban_contracts", staging).await?;
-
-    // Subquery aliases use a distinct suffix (`_rebuilt`) to avoid
-    // CH 26.3 rejecting `WHERE isNotNull(deployer_id)` as
-    // ILLEGAL_AGGREGATION when the projected alias shadows the raw
-    // column name (the parser resolves the WHERE reference against
-    // the projection list and sees an aggregate there).
-    //
-    // `sc.* REPLACE`, not a column list — same reason as `rebuild_lp_positions`:
-    // a hand-typed list silently NULLed `executable_owner_id` / `executable_tag`
-    // (task 0548) before the EXCHANGE.
-    let insert_sql = format!(
-        "INSERT INTO {staging}
-         SELECT sc.* REPLACE (
-                    ifNull(d.deployer_id_rebuilt, sc.deployer_id) AS deployer_id,
-                    ifNull(d.deployed_at_ledger_rebuilt, sc.deployed_at_ledger) AS deployed_at_ledger
-                )
-           FROM soroban_contracts AS sc FINAL
-           LEFT JOIN (
-             SELECT
-                 contract_id,
-                 argMin(deployer_id, wasm_uploaded_at_ledger) AS deployer_id_rebuilt,
-                 min(wasm_uploaded_at_ledger) AS deployed_at_ledger_rebuilt
-               FROM soroban_contracts
-              WHERE isNotNull(deployer_id)
-              GROUP BY contract_id
-           ) AS d ON d.contract_id = sc.contract_id"
-    );
-    client
-        .query(&insert_sql)
-        .execute()
-        .await
-        .map_err(BackfillError::Ch)?;
-
-    let rows = staging_row_count(client, staging).await?;
-    info!(
-        staging,
-        rows, "repair_tier1: soroban_contracts staging built"
-    );
-
-    finalize(client, "soroban_contracts", staging, dry_run).await?;
-    Ok(rows)
-}
-
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod columns_tests;

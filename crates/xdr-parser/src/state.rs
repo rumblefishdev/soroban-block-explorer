@@ -867,11 +867,8 @@ pub fn dedup_final_pool_snapshots(
 ///
 /// Change-type semantics:
 ///
-/// - `created` → emit with `first_deposit_ledger = Some(ledger_sequence)`;
-///   staging layer COALESCEs to keep the original on subsequent updates.
-/// - `updated` / `restored` → emit with `first_deposit_ledger = None`.
-/// - `removed` → emit with `shares = "0.0000000"` and
-///   `first_deposit_ledger = None`. Persist layer (task 0126) decides
+/// - `created` / `updated` / `restored` → emit the trustline's balance.
+/// - `removed` → emit with `shares = "0.0000000"`. Persist layer (task 0126) decides
 ///   whether zero-share rows are pruned or kept as historical
 ///   participant records — this fn just reports the data.
 ///
@@ -888,7 +885,7 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
         // The pool-share trustline is gone (participant left) versus withdrawn
         // to zero but still open — both write `shares = 0`. ADR 0055.
         let closed = change.change_type == "removed";
-        let (asset_holder, account_id, shares, first_deposit) = match change.change_type.as_str() {
+        let (asset_holder, account_id, shares) = match change.change_type.as_str() {
             "created" | "updated" | "restored" => {
                 let Some(ref data) = change.data else {
                     continue;
@@ -900,16 +897,10 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
                     continue;
                 };
                 let balance = data.get("balance").and_then(|v| v.as_i64()).unwrap_or(0);
-                let first_deposit = if change.change_type == "created" {
-                    Some(change.ledger_sequence)
-                } else {
-                    None
-                };
                 (
                     asset.clone(),
                     account_id.to_string(),
                     format_stroops(balance),
-                    first_deposit,
                 )
             }
             "removed" => {
@@ -919,12 +910,7 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
                 let Some(asset) = change.key.get("asset") else {
                     continue;
                 };
-                (
-                    asset.clone(),
-                    account_id.to_string(),
-                    format_stroops(0),
-                    None,
-                )
+                (asset.clone(), account_id.to_string(), format_stroops(0))
             }
             _ => continue,
         };
@@ -943,7 +929,6 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
             pool_id: pool_id.to_string(),
             account_id,
             shares,
-            first_deposit_ledger: first_deposit,
             last_updated_ledger: change.ledger_sequence,
             closed,
         });

@@ -149,12 +149,15 @@ accounts**.
 > - `accounts.first_seen_ledger` — **14 of 400 sampled rows diverge (3.5%)**, all
 >   of them later than the true first appearance. Still wrong today, and it is
 >   rendered on the account page and the account list.
-> - `soroban_contracts.deployed_at_ledger` — **1 597 of 146 397 diverge (1.1%)**.
-> - `lp_positions.first_deposit_ledger` — **the repair itself is broken for this
->   column** (task 0468). It matches deposits on the operation's source, which is
->   NULL for 42% of deposits, and a miss writes `0`: its 2026-07-16 run zeroed
->   102 693 positions, and every run zeroes them again while the rebuild keeps
->   that join.
+> - `soroban_contracts.deployed_at_ledger` — **not corrupt; no longer rebuilt**
+>   (task 0497, 2026-10-01). It is written once, when the contract instance is
+>   created, and carried by every upgrade: all 154 331 contracts agree across
+>   their rows. The earlier "1 597 diverge" compared it with the rebuild's own
+>   formula, which took the first surviving upgrade for 1 652 contracts.
+> - `lp_positions.first_deposit_ledger` — **dropped** (task 0468, decision 399 B).
+>   3.8% of 110 066 positions held the true first deposit, and the repair zeroed
+>   most of the rest; the pool page's Activity section already shows each
+>   provider's deposits, so the column was removed rather than repaired.
 >
 > So a clean `repair-tier1` after a backfill does **not** mean the Tier-1 columns
 > stay correct: they start drifting again immediately. Treat the pass as

@@ -566,9 +566,6 @@ pub struct ExtractedLpPosition {
     pub account_id: String,
     /// Pool-share balance as decimal string (NUMERIC(28,7) in schema).
     pub shares: String,
-    /// Ledger where this participant first deposited. Set only on the first
-    /// appearance of `(pool_id, account_id)`; `None` on subsequent updates.
-    pub first_deposit_ledger: Option<u32>,
     /// Ledger of the change. Watermark column — older values must not overwrite newer.
     pub last_updated_ledger: u32,
     /// `true` when the pool-share trustline was REMOVED — the participant left

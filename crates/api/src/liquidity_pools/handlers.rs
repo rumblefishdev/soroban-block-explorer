@@ -153,7 +153,6 @@ pub async fn list_participants(
             account: r.account,
             shares: r.shares,
             share_percentage: r.share_percentage,
-            first_deposit_ledger: r.first_deposit_ledger,
             last_updated_ledger: r.last_updated_ledger,
         })
         .collect();

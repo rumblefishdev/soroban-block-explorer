@@ -633,15 +633,14 @@ from its movements (`pool_movements`), and the frontend's Volume and Fees tabs
 say "not indexed".
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
-with their share size, share percentage of the pool, first deposit ledger, and last
-update ledger. Powers the "Pool participants" table on the LP detail page
+with their share size, share percentage of the pool, and last update ledger
+(no first deposit: dropped by task 0468). Powers the "Pool participants" table on the LP detail page
 (frontend §6.14). Backed by `lp_positions` (ADR 0037 §16). Added during task 0167
 to close a doc-drift gap between the frontend page and the original endpoint
 inventory. A soroban pool (`C…` id) lists the holders of its share token
 (`pool_instance_state.share_token_id`) from `balances` instead — accounts and
 contracts, scaled by the token's decimals, percentages over the pool's own
-stored total (the holders' sum where it keeps none), `first_deposit_ledger =
-null`. The pool's own contract is left out: it holds the minimum liquidity
+stored total (the holders' sum where it keeps none). The pool's own contract is left out: it holds the minimum liquidity
 locked at its first deposit, not a provider's position. A pool with no share token (concentrated) answers
 400 `not_indexed`; the detail endpoint's `participant_count` counts the same
 holders.

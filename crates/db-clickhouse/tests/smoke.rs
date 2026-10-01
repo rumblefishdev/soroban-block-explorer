@@ -400,10 +400,9 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- lp_positions (state) -----
     client
         .query(
-            "INSERT INTO lp_positions (pool_id, account_id, shares, first_deposit_ledger, last_updated_ledger) \
-             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000bb'), ?, toDecimal128('50.0', 7), ?, ?)",
+            "INSERT INTO lp_positions (pool_id, account_id, shares, last_updated_ledger) \
+             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000bb'), ?, toDecimal128('50.0', 7), ?)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
