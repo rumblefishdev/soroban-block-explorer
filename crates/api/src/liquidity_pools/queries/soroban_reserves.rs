@@ -156,27 +156,39 @@ pub(super) fn leg_reserves(
     token_decimals: &HashMap<String, u32>,
     raw: &[String],
 ) -> Vec<Option<String>> {
+    leg_decimals(leg_ids, identities, token_decimals)
+        .into_iter()
+        .enumerate()
+        .map(|(i, decimals)| raw.get(i).and_then(|v| scale_raw(v, decimals?)))
+        .collect()
+}
+
+/// Each leg's decimals where they are a fact: 7 for native XLM and a classic
+/// asset, the token's published decimals for a soroban token, `None` for a
+/// token that publishes none and for a leg the asset dimension does not know.
+pub(super) fn leg_decimals(
+    leg_ids: &[i64],
+    identities: &HashMap<i64, ResolvedAsset>,
+    token_decimals: &HashMap<String, u32>,
+) -> Vec<Option<u32>> {
     leg_ids
         .iter()
-        .enumerate()
-        .map(|(i, id)| {
-            let decimals =
-                identities
-                    .get(id)
-                    .filter(|r| r.known)
-                    .and_then(|r| match r.asset_type {
-                        t if t == domain::AssetFamily::Native as i16
-                            || t == domain::AssetFamily::ClassicCredit as i16 =>
-                        {
-                            Some(7)
-                        }
-                        t if t == domain::AssetFamily::Soroban as i16 => r
-                            .contract_strkey
-                            .as_deref()
-                            .and_then(|c| token_decimals.get(c).copied()),
-                        _ => None,
-                    })?;
-            raw.get(i).and_then(|v| scale_raw(v, decimals))
+        .map(|id| {
+            identities
+                .get(id)
+                .filter(|r| r.known)
+                .and_then(|r| match r.asset_type {
+                    t if t == domain::AssetFamily::Native as i16
+                        || t == domain::AssetFamily::ClassicCredit as i16 =>
+                    {
+                        Some(7)
+                    }
+                    t if t == domain::AssetFamily::Soroban as i16 => r
+                        .contract_strkey
+                        .as_deref()
+                        .and_then(|c| token_decimals.get(c).copied()),
+                    _ => None,
+                })
         })
         .collect()
 }

@@ -259,6 +259,42 @@ pub async fn fetch_pool_activity(
         window *= 2;
     }
     ops.truncate(limit as usize);
+    let ops = ops
+        .into_iter()
+        .map(|o| {
+            let event = o.event();
+            ActivityOp {
+                ls: o.ls,
+                ao: o.ao,
+                oi: o.oi,
+                event,
+                amounts: o
+                    .amounts
+                    .iter()
+                    .map(|a| event.and(*a).map(|v| v.to_string()))
+                    .collect(),
+            }
+        })
+        .collect();
+    enrich_activity(client, ops).await
+}
+
+/// One operation of a pool, before its transaction's details are joined on:
+/// its position, its event and one amount per leg, as the page renders them.
+pub(super) struct ActivityOp {
+    pub ls: i64,
+    pub ao: i16,
+    pub oi: i16,
+    pub event: Option<PoolEvent>,
+    pub amounts: Vec<Option<String>>,
+}
+
+/// Join a page of operations onto their transactions: hash, time, the
+/// operation's own source account and how many pools it crossed.
+pub(super) async fn enrich_activity(
+    client: &clickhouse::Client,
+    ops: Vec<ActivityOp>,
+) -> Result<Vec<PoolActivityRow>, clickhouse::error::Error> {
     if ops.is_empty() {
         return Ok(Vec::new());
     }
@@ -373,18 +409,13 @@ pub async fn fetch_pool_activity(
                 .map_or((None, None), |(src, n)| (src, Some(n as i64)));
             let source_id = op_source.unwrap_or(tx.source_id);
             let source_account = accounts.get(&source_id)?.clone();
-            let event = o.event();
             Some(PoolActivityRow {
                 transaction_hash: tx.hash.clone(),
                 ledger_sequence: o.ls,
                 application_order: o.ao,
                 operation_index: o.oi,
-                event,
-                amounts: o
-                    .amounts
-                    .iter()
-                    .map(|a| event.and(*a).map(|v| v.to_string()))
-                    .collect(),
+                event: o.event,
+                amounts: o.amounts,
                 source_account,
                 pools_crossed,
                 created_at: millis_to_utc(tx.created_at_ms),
