@@ -387,7 +387,6 @@ fn db_operations(op_rows: &[OpRow]) -> Vec<OperationItem> {
     op_rows
         .iter()
         .map(|op| OperationItem {
-            appearance_id: op.appearance_id,
             type_name: op.type_name.clone(),
             op_type: op.op_type,
             source_account: op.source_account.clone(),

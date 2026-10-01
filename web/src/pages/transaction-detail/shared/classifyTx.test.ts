@@ -11,7 +11,6 @@ function tx(typeNames: string[]): E3ResponseTransactionDetailLight {
     operation_count: typeNames.length,
     created_at: '2026-01-01T00:00:00Z',
     operations: typeNames.map((type_name, i) => ({
-      appearance_id: i,
       type: 0,
       type_name,
       operation_index: i,

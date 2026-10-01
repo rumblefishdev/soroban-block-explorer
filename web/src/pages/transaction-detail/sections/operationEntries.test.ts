@@ -9,7 +9,6 @@ import { buildOperationEntries } from './operationEntries.js';
 
 function light(partial: Partial<OperationItem>): OperationItem {
   return {
-    appearance_id: 1,
     created_at: '2026-01-01T00:00:00Z',
     ledger_sequence: 100,
     operation_index: 0,
@@ -43,7 +42,6 @@ describe('buildOperationEntries', () => {
       tx(
         [
           light({
-            appearance_id: 7,
             operation_index: 0,
             type_name: 'MANAGE_BUY_OFFER',
           }),
@@ -54,9 +52,9 @@ describe('buildOperationEntries', () => {
     expect(entries).toHaveLength(4);
     // every entry resolves to the shared light identity but carries its own heavy op
     expect(entries.map((e) => e.heavy?.operation_index)).toEqual([0, 1, 2, 3]);
-    expect(entries.every((e) => e.light?.appearance_id === 7)).toBe(true);
-    // picker keys (row.appearance_id) are unique
-    const keys = entries.map((e) => e.row.appearance_id);
+    expect(entries.every((e) => e.light?.operation_index === 0)).toBe(true);
+    // picker keys (row.operation_index) are unique
+    const keys = entries.map((e) => e.row.operation_index);
     expect(new Set(keys).size).toBe(4);
   });
 
@@ -65,12 +63,10 @@ describe('buildOperationEntries', () => {
       tx(
         [
           light({
-            appearance_id: 1,
             operation_index: 0,
             type_name: 'PAYMENT',
           }),
           light({
-            appearance_id: 2,
             operation_index: 1,
             type_name: 'CREATE_ACCOUNT',
           }),
@@ -99,7 +95,7 @@ describe('buildOperationEntries', () => {
   // archive miss instead of standing in a shape the user reads as the truth
   // (0377 F7).
   it('yields nothing when heavy is absent, rather than the folded light rows', () => {
-    const ops = [light({ appearance_id: 5, operation_index: 0 })];
+    const ops = [light({ operation_index: 0 })];
     expect(buildOperationEntries(tx(ops, null))).toHaveLength(0);
   });
 });

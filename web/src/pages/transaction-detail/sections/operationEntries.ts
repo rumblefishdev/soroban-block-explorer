@@ -50,7 +50,6 @@ export function buildOperationEntries(
   return heavyOps.map((heavy) => {
     const light = matchLight(heavy, lightOps);
     const base: OperationItem = light ?? {
-      appearance_id: heavy.operation_index + 1,
       created_at: tx.created_at,
       ledger_sequence: tx.ledger_sequence,
       operation_index: heavy.operation_index,
@@ -58,12 +57,11 @@ export function buildOperationEntries(
       type: 0,
       type_name: heavy.op_type.toUpperCase(),
     };
-    // appearance_id keys the picker list; override so folded entries sharing
-    // one light row still get unique, stable keys (the real appearance_id
-    // lives on `light`, which the panels use).
+    // operation_index keys the picker list; override so folded entries
+    // sharing one light row still get unique, stable keys (the light row's
+    // own operation_index lives on `light`, which the panels use).
     const row: OperationItem = {
       ...base,
-      appearance_id: heavy.operation_index + 1,
       operation_index: heavy.operation_index,
     };
     return { row, light, heavy };

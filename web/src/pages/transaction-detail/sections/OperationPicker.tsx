@@ -61,7 +61,7 @@ export function OperationPicker({
               : sentence;
           return (
             <Box
-              key={op.appearance_id}
+              key={op.operation_index}
               component="li"
               sx={(theme) => ({
                 display: 'flex',

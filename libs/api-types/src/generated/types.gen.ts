@@ -1217,11 +1217,6 @@ export type NftTransferItem = {
 
 export type OperationItem = {
   /**
-   * The operation's 1-based position (the table has no surrogate id since
-   * PR #175). Join against the heavy overlay by `operation_index`.
-   */
-  appearance_id: number;
-  /**
    * Asset code (≤12 chars) for classic asset operations.
    */
   asset_code?: string | null;
