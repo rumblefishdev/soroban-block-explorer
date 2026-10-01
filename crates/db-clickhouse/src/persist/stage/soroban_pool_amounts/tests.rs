@@ -212,6 +212,30 @@ fn phoenix_liquidity_in_either_format() {
     );
 }
 
+/// A Phoenix withdrawal of staked shares opens with `auto unbonded` (shares
+/// and a timestamp, no token amount) before its `sender` group: it adds no
+/// row, and the group after it is the withdrawal.
+#[test]
+fn phoenix_auto_unbonded_is_not_an_amount() {
+    let field = |i: u32, name: &str, value: String| {
+        event(i, &[string("withdraw_liquidity"), string(name)], value)
+    };
+    let evs = vec![
+        field(
+            4,
+            "auto unbonded",
+            vec_of(&[i128v(10), i128v(1_754_039_548)]),
+        ),
+        field(9, "sender", addr(ROUTER)),
+        field(10, "shares_amount", i128v(10)),
+        field(11, "return_amount_a", i128v(7)),
+        field(12, "return_amount_b", i128v(8)),
+    ];
+    let rows = soroban_pool_amount_rows(&evs, &pools(), &sac());
+    let pyusd = ids::contract_id(PYUSD);
+    assert_eq!(legs(&rows), vec![(9, pyusd, -7), (9, USDC, -8)]);
+}
+
 #[test]
 fn only_registered_pools_and_their_own_tokens_are_read() {
     let mut stranger = event(

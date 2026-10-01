@@ -181,6 +181,12 @@ pub fn soroban_pool_amount_rows(
         // Phoenix, older format: one event per field, `("swap", "sender")`
         // opening each group. Gather the group's fields, then decode it once.
         if let Some(name) = phoenix_field_event_name(topics) {
+            // A withdrawal of staked shares first reports them unbonded, before
+            // its `sender` group: the shares and the stake's timestamp, no
+            // token amount. The group after it carries the withdrawal.
+            if topics.get(1).and_then(str_value) == Some("auto unbonded") {
+                continue;
+            }
             if topics.get(1).and_then(str_value) != Some("sender") {
                 unreadable(ev, "per-field pool event outside a `sender` group");
                 continue;
