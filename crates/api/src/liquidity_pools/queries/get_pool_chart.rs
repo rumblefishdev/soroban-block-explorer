@@ -398,12 +398,13 @@ struct SorobanVolumeChRow {
 /// own ledger, as the classic chart prices `gross_volume_a`.
 ///
 /// - Leg A is `legs[1]` of the registry row, the leg the classic snapshot
-///   counts; only a two-leg pool prices it ([`priced_pair`]), so a three- or
-///   four-leg pool's buckets are `NULL`, as its TVL is.
+///   counts. Volume is priced only for a two-leg pool ([`priced_pair`]): a
+///   three- or four-leg pool, a leg A with no price identity and a leg A
+///   without published decimals all get no rows — every bucket's volume is
+///   `NULL` — and the query is not run. A multi-leg pool's TVL can still
+///   price, so `NULL` volume does not imply `NULL` TVL.
 /// - A bucket with any trade that has no leg-A price is `NULL` — an honest
 ///   hole, never a partial sum, the classic chart's rule.
-/// - Leg A without published decimals: no rows, so every bucket's volume is
-///   `NULL` rather than a raw integer priced as units.
 /// - Rows are deduped on the table's full sort key: the live writer and the
 ///   backfill write the same rows on purpose.
 async fn fetch_soroban_volume_series(
@@ -417,9 +418,26 @@ async fn fetch_soroban_volume_series(
     let Some(decimals) = ctx.leg_decimals.first().copied().flatten() else {
         return Ok(Vec::new());
     };
+    let Some(leg_a) = priced_pair(&ctx.price)
+        .map(|(a, _)| a.clone())
+        .filter(|a| !a.kind.is_empty())
+    else {
+        return Ok(Vec::new());
+    };
     let (bucket_fn, series_view, price_bucket_fn) = chart_grain(interval);
     let sql = format!(
-        "SELECT \
+        "WITH m AS ( \
+             SELECT ledger_sequence, amount \
+             FROM pool_movements \
+             WHERE pool_id = toFixedString(unhex(?), 32) \
+               AND event_kind = ? \
+               AND asset_id = (SELECT legs[1] FROM liquidity_pools \
+                               WHERE pool_id = unhex(?) LIMIT 1) \
+               AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
+             LIMIT 1 BY ledger_sequence, application_order, operation_index, event_index, asset_id \
+         ) \
+         SELECT \
             bucket_ms, \
             if(countIf(isNull(usd)) > 0, NULL, sum(usd)) AS volume \
          FROM ( \
@@ -428,22 +446,12 @@ async fn fetch_soroban_volume_series(
                 abs(toFloat64(m.amount)) / pow(10, ?) \
                     * if(dateDiff('second', p.bucket, l.price_bucket) <= {carry}, \
                          nullIf(toFloat64(p.close_usd), 0), NULL) AS usd \
-             FROM ( \
-                 SELECT ledger_sequence, amount \
-                 FROM pool_movements \
-                 WHERE pool_id = toFixedString(unhex(?), 32) \
-                   AND event_kind = ? \
-                   AND asset_id = (SELECT legs[1] FROM liquidity_pools \
-                                   WHERE pool_id = unhex(?) LIMIT 1) \
-                   AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
-                   AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
-                 LIMIT 1 BY ledger_sequence, application_order, operation_index, event_index, asset_id \
-             ) m \
+             FROM m \
              JOIN ( \
                  SELECT 1 AS k, sequence, {price_bucket_fn}(closed_at) AS price_bucket, \
                         toUnixTimestamp64Milli(toDateTime64({bucket_fn}(closed_at), 3, 'UTC')) AS bucket_ms \
                  FROM ledgers \
-                 WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?) \
+                 WHERE sequence IN (SELECT ledger_sequence FROM m) \
                  LIMIT 1 BY sequence \
              ) l ON l.sequence = m.ledger_sequence \
              ASOF LEFT JOIN ( \
@@ -458,21 +466,18 @@ async fn fetch_soroban_volume_series(
          GROUP BY bucket_ms",
         carry = MAX_PRICE_CARRY_SECONDS,
     );
-    let leg_a = match priced_pair(&ctx.price) {
-        Some((a, _)) => a.clone(),
-        None => price_leg(-1, None, None),
-    };
+    // The window's ledgers are read only where the pool traded: the trades
+    // already carry the window, and a whole-window `ledgers` read was most
+    // of this query's cost (1Y: 6.1M rows of 31.4M, 2026-10-01).
     client
         .query(&sql)
-        .bind(decimals)
         .bind(pool_id_hex)
         .bind(domain::PoolEvent::Trade as u8)
         .bind(pool_id_hex)
         .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
         .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
         .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
-        .bind(from.timestamp_millis()) // ledgers: closed_at >= from
-        .bind(to.timestamp_millis()) // ledgers: closed_at <  to
+        .bind(decimals)
         .bind(leg_a.kind) // leg-A price identity
         .bind(leg_a.code.as_str())
         .bind(leg_a.issuer.as_str())
@@ -509,3 +514,6 @@ fn chart_grain(interval: &str) -> (&'static str, &'static str, &'static str) {
         ),
     }
 }
+
+#[cfg(test)]
+mod ch_tests;

@@ -268,9 +268,9 @@ pub(super) async fn fetch_pool_volume_24h(
     pool_kind: domain::PoolKind,
     leg_a_decimals: Option<u32>,
 ) -> Result<Option<f64>, clickhouse::error::Error> {
-    let raw = match pool_kind {
+    match pool_kind {
         domain::PoolKind::Classic => {
-            client
+            let raw = client
                 .query(
                     "SELECT toString(sum(gross_volume_a)) AS vol24_a_units FROM ( \
                          SELECT ledger_sequence, gross_volume_a \
@@ -289,12 +289,24 @@ pub(super) async fn fetch_pool_volume_24h(
                 .bind(pool_id_hex)
                 .fetch_one::<Vol24ChRow>()
                 .await?
-                .vol24_a_units
+                .vol24_a_units;
+            // SQL NULL (no snapshot rows in the window, or no swaps among
+            // them) is a genuine zero-volume day. A row that IS present but
+            // unparseable is NOT — it is an unknown, and must not be reported
+            // as "$0.00 traded".
+            Ok(match raw.as_deref() {
+                None => Some(0.0),
+                Some(raw) => parse_f64(raw),
+            })
         }
         domain::PoolKind::Soroban => {
             let Some(decimals) = leg_a_decimals else {
                 return Ok(None);
             };
+            // `legs[1]` reads the registry without `FINAL`: a pool's legs are
+            // fixed at registration, and no pool has two versions that differ
+            // (0 on production, 2026-10-01). A day with no trades sums to "0",
+            // a genuine zero.
             let raw = client
                 .query(
                     "SELECT toNullable(toString(sum(abs(amount)))) AS vol24_a_units FROM ( \
@@ -320,19 +332,12 @@ pub(super) async fn fetch_pool_volume_24h(
                 .fetch_one::<Vol24ChRow>()
                 .await?
                 .vol24_a_units;
-            return Ok(raw
+            Ok(raw
                 .as_deref()
                 .and_then(parse_f64)
-                .map(|units| units / 10f64.powi(decimals as i32)));
+                .map(|units| units / 10f64.powi(decimals as i32)))
         }
-    };
-    // SQL NULL (no snapshot rows in the window, or no swaps among them) is a
-    // genuine zero-volume day. A row that IS present but unparseable is NOT —
-    // it is an unknown, and must not be reported as "$0.00 traded".
-    Ok(match raw.as_deref() {
-        None => Some(0.0),
-        Some(raw) => parse_f64(raw),
-    })
+    }
 }
 
 /// Fetch last hourly closes + 24h gross volume, compute the detail USD
