@@ -122,7 +122,9 @@ the edge secret exists only after the first, and Cloudflare must send it
 before the API demands it:
 
 1. An ACM certificate for `cloudflareApiDomainName` in `eu-central-1`, DNS
-   validation (the validation CNAME goes into the `rumblefishdev.com` zone).
+   validation (the validation CNAME goes into the `rumblefishdev.com` zone
+   and **stays there**: ACM renews the certificate yearly through the same
+   record, as it does production's).
    Its ARN into `cloudflareApiCertificateArn`, `enableCloudflareApiDomain:
 true`.
 2. **Deploy 1** creates the API custom domain and the testnet secrets
