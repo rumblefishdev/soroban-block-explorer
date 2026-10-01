@@ -121,6 +121,10 @@ network check that assumes pubnet for an own bucket.
 - [ ] Patch sweep done: every item of the patch register rebuilt or
       explicitly kept with its reason.
 - [ ] The reset runbook was exercised once end to end.
+- [ ] The API is public like mainnet's (`docs/deployment.md` § Testnet, steps
+      1–6): ACM cert, Terraform record (workspace `testnet`), rf-domains Transform
+      Rule + Turnstile hostname, `enableCloudflareApiDomain`, `enableEdgeSecretLock`,
+      `enableAuthLayer` all `true`; direct execute-api and lockless calls refused.
 - [ ] **Docs updated** —
       `docs/architecture/infrastructure/infrastructure-overview.md` §7.1
       (environment model), `docs/architecture/security/clickhouse-rbac.md`
