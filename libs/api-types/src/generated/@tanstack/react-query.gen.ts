@@ -1173,7 +1173,7 @@ export const listPoolActivityQueryKey = (
 
 /**
  * `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
- * (task 0491, issue #371).
+ * (task 0491, issue #371), for classic and soroban pools alike (task 0374).
  *
  * Supersedes `/transactions`, whose row was a transaction. That unit could
  * not carry an honest `Event` chip (a bundled deposit + trade collapsed to
@@ -1211,7 +1211,7 @@ export const listPoolActivityInfiniteQueryKey = (
 
 /**
  * `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
- * (task 0491, issue #371).
+ * (task 0491, issue #371), for classic and soroban pools alike (task 0374).
  *
  * Supersedes `/transactions`, whose row was a transaction. That unit could
  * not carry an honest `Event` chip (a bundled deposit + trade collapsed to

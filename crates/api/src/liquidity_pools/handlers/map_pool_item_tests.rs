@@ -10,6 +10,7 @@ fn native_leg() -> PoolLegRow {
         symbol: None,
         icon_url: None,
         reserve: None,
+        decimals: Some(7),
     }
 }
 
@@ -22,6 +23,7 @@ fn usdc_leg() -> PoolLegRow {
         symbol: None,
         icon_url: None,
         reserve: None,
+        decimals: Some(7),
     }
 }
 
@@ -72,6 +74,7 @@ fn a_soroban_leg_carries_its_symbol() {
         symbol: Some("USDx".into()),
         icon_url: None,
         reserve: None,
+        decimals: Some(6),
     };
     let item = map_pool_item(row);
     assert_eq!(item.legs[1].symbol.as_deref(), Some("USDx"));
@@ -104,6 +107,7 @@ fn a_three_leg_pool_renders_all_three() {
         symbol: None,
         icon_url: None,
         reserve: None,
+        decimals: None,
     });
     let item = map_pool_item(row);
     assert_eq!(item.legs.len(), 3);
@@ -150,4 +154,19 @@ fn a_pool_names_its_protocol_only_from_a_claimed_deployment() {
     unclaimed.pool_kind = domain::PoolKind::Soroban;
     unclaimed.deployment_id = 7;
     assert_eq!(map_pool_item(unclaimed).protocol, None);
+}
+
+/// The page scales a leg's raw activity amounts by this, so it must reach the
+/// wire unchanged — including `None`, a token that publishes no decimals.
+#[test]
+fn decimals_propagate_per_leg() {
+    let mut row = base_row();
+    row.legs[1].decimals = Some(18);
+    row.legs.push(PoolLegRow {
+        decimals: None,
+        ..native_leg()
+    });
+    let item = map_pool_item(row);
+    let decimals: Vec<Option<u32>> = item.legs.iter().map(|l| l.decimals).collect();
+    assert_eq!(decimals, vec![Some(7), Some(18), None]);
 }

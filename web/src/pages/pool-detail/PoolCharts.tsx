@@ -238,8 +238,8 @@ export function toChartPoints(
 interface PoolChartsProps {
   poolId: string;
   /**
-   * `false` for a soroban pool: its trades are not indexed yet, so the
-   * Volume and Fees tabs say so instead of reading as "no activity".
+   * `false` for a soroban pool: its volume and fees are not served yet, so
+   * the Volume and Fees tabs say so instead of reading as "no activity".
    */
   volumeIndexed?: boolean;
 }
