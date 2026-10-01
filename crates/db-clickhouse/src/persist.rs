@@ -36,7 +36,7 @@ use domain::{ContractEventType, ContractType};
 // ClassificationCache` stays a valid path for callers + integration tests that
 // don't depend on `domain` directly (task 0283).
 pub use domain::ClassificationCache;
-use xdr_parser::event::extract_executable_update;
+use xdr_parser::executable_update::extract_executable_update;
 use xdr_parser::types::{
     ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
     ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
