@@ -76,7 +76,7 @@ async fn persist(cl: &clickhouse::Client, sequence: u32, successful: bool) {
     persist_ledger_clickhouse(
         cl,
         &ledger(sequence),
-        &[tx.clone()],
+        std::slice::from_ref(&tx),
         &[(tx.hash.clone(), vec![op])],
         &[],
         &[],
