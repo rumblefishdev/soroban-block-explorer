@@ -841,8 +841,8 @@ Expanded behavior:
 - Pool participants - table of liquidity providers and their share
 - Recent activity - deposits, withdrawals, and trades through this pool, one
   row per operation, for classic and Soroban pools alike. Each leg's raw
-  amount is scaled by that leg's `decimals`; a leg with no amount, an unknown
-  scale or a zero is left out rather than shown as `0`.
+  amount is scaled by that leg's `decimals`; a leg with no amount or an unknown
+  scale is left out rather than shown as `0`.
 
 Expanded behavior:
 

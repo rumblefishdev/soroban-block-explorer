@@ -107,11 +107,13 @@ export interface AmountLegPart {
  * every digit.
  *
  * Left out, never rendered as `0` or as a raw integer:
- * - a leg that is `null` — no event of the operation named it;
+ * - a leg that is `null` — no event of the operation named it (a swap on a
+ *   three-token pool names only the two tokens it moved);
  * - a leg whose token publishes no decimals — its raw integer would read as a
- *   huge amount;
- * - a leg that moved nothing — a three-token pool's swap writes `0` for the
- *   token it did not touch.
+ *   huge amount.
+ *
+ * A leg that moved exactly `0` IS shown: the amount is known, and a swap
+ * that paid out nothing or a one-sided deposit says so.
  */
 export function poolAmountLegs(
   op: Pick<PoolActivityItem, 'amounts'>,
@@ -123,7 +125,7 @@ export function poolAmountLegs(
     if (amount == null || amount === '' || leg == null) return [];
     // The sign is carried by the ordering and the separator, not the digits.
     const value = scaleByDecimals(amount.replace(/^-/, ''), leg.decimals);
-    if (value == null || value === '0') return [];
+    if (value == null) return [];
     return [
       {
         amount: formatAmount(value),

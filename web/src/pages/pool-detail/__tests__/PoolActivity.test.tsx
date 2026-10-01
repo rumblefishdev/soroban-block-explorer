@@ -78,15 +78,15 @@ describe('formatPoolAmount on a soroban pool', () => {
     ).toBe('1.5 WETH → 2.5 USDx');
   });
 
-  it('reads a three-token swap by the two legs that moved', () => {
+  it('reads a swap on a three-token pool by the two legs it names', () => {
     const parts = poolAmountLegs(
-      { amounts: ['10000000', '0', '-1000000', null] },
+      { amounts: ['10000000', null, '-1000000', null] },
       sorobanPool
     );
     expect(parts?.swap).toBe(true);
     expect(
       formatPoolAmount(
-        { amounts: ['10000000', '0', '-1000000', null] },
+        { amounts: ['10000000', null, '-1000000', null] },
         sorobanPool
       )
     ).toBe('1 XLM → 1 USDx');
@@ -101,6 +101,16 @@ describe('formatPoolAmount on a soroban pool', () => {
         sorobanPool
       )
     ).toBe('1 XLM');
+  });
+});
+
+describe('formatPoolAmount with a zero leg', () => {
+  /** A zero is a known amount, not an absent one: a one-sided deposit into
+   *  a stable pool and a swap that paid out nothing both say so. */
+  it('shows a leg that moved exactly zero', () => {
+    expect(formatPoolAmount({ amounts: ['50000000', '0'] }, pool)).toBe(
+      '5 XLM + 0 USDC'
+    );
   });
 });
 
