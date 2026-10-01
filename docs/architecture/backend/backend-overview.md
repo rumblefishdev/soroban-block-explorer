@@ -631,9 +631,12 @@ aggregation bounded. Bucket aggregation policy in
 `crates/api/src/liquidity_pools/queries/get_pool_chart.rs`.
 A Soroban pool's series comes from its reserve history (`pool_state_changes`,
 raw per leg, scaled by each leg's own decimals) on the same buckets and price
-rules — TVL only; `volume` and `fee_revenue` are `null` until they are read
-from its movements (`pool_movements`), and the frontend's Volume and Fees tabs
-say "not indexed".
+rules. Its `volume` is the classic definition on its trades: the absolute
+leg-A amount of every trade event in `pool_movements` (deduped on the full
+key), scaled by leg A's decimals and priced at the trade's own ledger;
+`fee_revenue` follows from it. A pool that is not two-legged, or whose leg A
+publishes no decimals, has `null` volume, as it has `null` TVL. The detail
+endpoint's 24h `volume` / `fee_revenue` read the same trades.
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, and last update ledger

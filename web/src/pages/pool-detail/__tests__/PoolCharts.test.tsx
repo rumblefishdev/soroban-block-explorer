@@ -94,14 +94,16 @@ describe('PoolCharts', () => {
     refetch: vi.fn(),
   };
 
-  it('says volume is not indexed for a pool whose trades are not read', () => {
+  /** A soroban pool's volume is read from its trades now, so its tabs
+   *  behave like a classic pool's: no "not indexed" state is left. */
+  it('gives a soroban pool the same volume states as a classic one', () => {
     hookMock.usePoolChart.mockReturnValue(chart);
-    renderWithProviders(<PoolCharts poolId="CDMH" volumeIndexed={false} />);
+    renderWithProviders(<PoolCharts poolId="CDMH" />);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Volume' }));
 
-    expect(screen.getByText('Not indexed yet')).toBeInTheDocument();
-    expect(screen.queryByText('No activity in this period')).toBeNull();
+    expect(screen.queryByText('Not indexed yet')).toBeNull();
+    expect(screen.getByText('No activity in this period')).toBeInTheDocument();
   });
 
   it('keeps the no-activity state where volume is indexed', () => {

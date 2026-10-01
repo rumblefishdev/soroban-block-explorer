@@ -247,8 +247,10 @@ pub struct PoolItem {
     /// untracked assets and stale pools read `null`.
     pub tvl: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
-    /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-    /// at the leg-A last hourly close; `null` when the pool is unpriceable.
+    /// Gross trade volume over the last 24h — every trade's leg-A amount,
+    /// whichever way it went (a classic pool's `gross_volume_a`, a soroban
+    /// pool's trade events) — priced at the leg-A last hourly close; `null`
+    /// when the pool is unpriceable or its leg A has no known decimals.
     pub volume: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.

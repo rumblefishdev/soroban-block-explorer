@@ -4426,7 +4426,7 @@
                 },
                 "volume": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h — every trade's leg-A amount,\nwhichever way it went (a classic pool's `gross_volume_a`, a soroban\npool's trade events) — priced at the leg-A last hourly close; `null`\nwhen the pool is unpriceable or its leg A has no known decimals."
                 }
               }
             }
@@ -4715,7 +4715,7 @@
           },
           "volume": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h — every trade's leg-A amount,\nwhichever way it went (a classic pool's `gross_volume_a`, a soroban\npool's trade events) — priced at the leg-A last hourly close; `null`\nwhen the pool is unpriceable or its leg A has no known decimals."
           }
         }
       },
