@@ -3523,7 +3523,6 @@
       "OperationItem": {
         "type": "object",
         "required": [
-          "appearance_id",
           "type_name",
           "type",
           "pool_ids",
@@ -3532,11 +3531,6 @@
           "created_at"
         ],
         "properties": {
-          "appearance_id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "The operation's 1-based position (the table has no surrogate id since\nPR #175). Join against the heavy overlay by `operation_index`."
-          },
           "asset_code": {
             "type": ["string", "null"],
             "description": "Asset code (≤12 chars) for classic asset operations."
