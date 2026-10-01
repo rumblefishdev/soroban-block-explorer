@@ -372,7 +372,11 @@ jobs:
       - name: Install cargo-lambda
         run: pip3 install cargo-lambda
 
-      - run: cargo lambda build --release --arm64
+      # Only the three binaries the Compute stack deploys
+      # (infra/src/lib/stacks/compute-stack.ts, `binaryName`). Building the
+      # whole workspace in release also linked backfill-runner, enrich, local
+      # and the other tools, which nothing ships; clippy still checks them.
+      - run: cargo lambda build --release --arm64 --bin api --bin indexer --bin enrichment-worker
 
       - name: Verify Lambda artifacts
         shell: bash
