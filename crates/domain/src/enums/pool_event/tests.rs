@@ -1,4 +1,4 @@
-use super::PoolEvent;
+use super::*;
 
 /// The classifier itself. It used to live in SQL as a `multiIf` and could
 /// only be checked against a live ClickHouse; in Rust it is the one thing

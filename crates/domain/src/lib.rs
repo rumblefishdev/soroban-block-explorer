@@ -18,5 +18,5 @@ pub mod transaction;
 pub use classification_cache::ClassificationCache;
 pub use enums::{
     AssetFamily, AssetType, ContractEventType, ContractType, EnumDecodeError, NftEventType,
-    OperationType, PoolKind,
+    OperationType, PoolEvent, PoolKind,
 };
