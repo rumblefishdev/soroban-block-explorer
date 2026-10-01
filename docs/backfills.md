@@ -154,11 +154,10 @@ accounts**.
 >   created, and carried by every upgrade: all 154 331 contracts agree across
 >   their rows. The earlier "1 597 diverge" compared it with the rebuild's own
 >   formula, which took the first surviving upgrade for 1 652 contracts.
-> - `lp_positions.first_deposit_ledger` — **the repair itself is broken for this
->   column** (task 0468). It matches deposits on the operation's source, which is
->   NULL for 42% of deposits, and a miss writes `0`: its 2026-07-16 run zeroed
->   102 693 positions, and every run zeroes them again while the rebuild keeps
->   that join.
+> - `lp_positions.first_deposit_ledger` — **dropped** (task 0468, decision 399 B).
+>   3.8% of 110 066 positions held the true first deposit, and the repair zeroed
+>   most of the rest; the pool page's Activity section already shows each
+>   provider's deposits, so the column was removed rather than repaired.
 >
 > So a clean `repair-tier1` after a backfill does **not** mean the Tier-1 columns
 > stay correct: they start drifting again immediately. Treat the pass as

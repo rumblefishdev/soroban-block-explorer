@@ -30,8 +30,6 @@ pub struct ParticipantRow {
     /// Soroban: over the pool's stored total (else the holders' sum), never
     /// NULL.
     pub share_percentage: Option<String>,
-    /// `None` for a soroban pool: `balances` keeps no first-deposit ledger.
-    pub first_deposit_ledger: Option<i64>,
     pub last_updated_ledger: i64,
 }
 
@@ -73,7 +71,6 @@ struct ParticipantChRow {
     account_id_surrogate: i64,
     shares: String,
     share_percentage: Option<String>,
-    first_deposit_ledger: i64,
     last_updated_ledger: i64,
 }
 
@@ -121,7 +118,6 @@ pub async fn fetch_participants(
             toString(lpp.shares)                 AS shares, \
             if(snap.ts IS NULL OR snap.ts = toDecimal128(0, 7), NULL, \
                toString(lpp.shares * 100 / snap.ts)) AS share_percentage, \
-            lpp.first_deposit_ledger             AS first_deposit_ledger, \
             lpp.last_updated_ledger              AS last_updated_ledger \
          FROM lp_positions lpp FINAL \
          CROSS JOIN ( \
@@ -194,7 +190,6 @@ pub async fn fetch_participants(
                 cursor_shares: r.shares.clone(),
                 shares: r.shares,
                 share_percentage: r.share_percentage,
-                first_deposit_ledger: Some(r.first_deposit_ledger),
                 last_updated_ledger: r.last_updated_ledger,
             })
         })
@@ -345,7 +340,6 @@ pub async fn fetch_soroban_participants(
                     shares,
                     cursor_shares: r.raw_shares,
                     share_percentage: Some(r.share_percentage),
-                    first_deposit_ledger: None,
                     last_updated_ledger: r.last_updated_ledger,
                 })
             })

@@ -273,7 +273,6 @@ fn column_order_lp_positions() {
             "pool_id",
             "account_id",
             "shares",
-            "first_deposit_ledger",
             "last_updated_ledger",
             "closed_at_ledger",
         ],
@@ -3254,7 +3253,6 @@ fn soroban_removal_stamps_closed_at_ledger_but_a_spent_down_holder_does_not() {
 #[test]
 fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
     let ledger = synthetic_ledger();
-    let seq = i64::from(ledger.sequence);
 
     // -- accounts: sequence bump then home_domain set, same ledger --
     let first = ExtractedAccountState {
@@ -3283,13 +3281,11 @@ fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
         pool_id: pool_hex.clone(),
         account_id: "GFOLD".to_string(),
         shares: "2.0000000".to_string(),
-        first_deposit_ledger: Some(ledger.sequence),
         last_updated_ledger: ledger.sequence,
         closed: false,
     };
     let withdraw = ExtractedLpPosition {
         shares: "1.0000000".to_string(),
-        first_deposit_ledger: None,
         ..deposit.clone()
     };
 
@@ -3350,10 +3346,6 @@ fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
     assert_eq!(
         staged.lp_position_rows[0].shares, 10_000_000,
         "the withdraw (last in order) is the surviving share count"
-    );
-    assert_eq!(
-        staged.lp_position_rows[0].first_deposit_ledger, seq,
-        "first_deposit survives the overwrite via min-preservation"
     );
 
     assert_eq!(
