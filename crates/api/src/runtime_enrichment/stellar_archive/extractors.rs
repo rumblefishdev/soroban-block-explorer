@@ -226,8 +226,7 @@ fn event_dtos(tx: xdr_parser::TxEvents) -> (Vec<XdrEventDto>, Vec<XdrEventDto>) 
                 topics: topics_to_vec(e.topics),
                 data: e.data,
                 id: Some(e.event_id.to_rpc_string()),
-                // From the origin, not the id: a fee event's id names operation
-                // 0 or 4095, and the operation cards would take it as their own.
+                // The operation that emitted the event; a fee event has none.
                 operation_index,
                 event_index: Some(e.event_id.event_index),
                 stage,

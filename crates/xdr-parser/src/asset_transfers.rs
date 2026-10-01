@@ -225,8 +225,9 @@ impl AssetTransferExtraction {
 
 /// Decode every token movement in one transaction's events.
 ///
-/// Events that are not token events are skipped silently. Everything that *is* a token verb either becomes a transfer or a
-/// reject; nothing with a token verb is dropped without a trace.
+/// Events that are not token events are skipped silently. Everything that
+/// *is* a token verb either becomes a transfer or a reject; nothing with a
+/// token verb is dropped without a trace.
 pub fn extract_asset_transfers(
     events: &[ExtractedEvent],
     net_id: &[u8; 32],

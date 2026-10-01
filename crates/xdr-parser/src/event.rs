@@ -191,7 +191,8 @@ struct Containers<'a> {
 
 /// stellar-go's `GetTransactionEvents`: V4 as it is; V3 holds a Soroban
 /// transaction's single operation and no transaction-level events; earlier
-/// metas hold no events.
+/// metas hold no events. Every version is named, so a new one fails to
+/// compile here instead of losing its events.
 fn containers(meta: &TransactionMeta) -> Containers<'_> {
     match meta {
         TransactionMeta::V3(v3) => match &v3.soroban_meta {
@@ -207,7 +208,9 @@ fn containers(meta: &TransactionMeta) -> Containers<'_> {
             operations: v4.operations.iter().map(|op| &op.events[..]).collect(),
             diagnostic: &v4.diagnostic_events[..],
         },
-        _ => Containers::default(),
+        TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_) => {
+            Containers::default()
+        }
     }
 }
 
