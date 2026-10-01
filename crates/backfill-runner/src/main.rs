@@ -200,9 +200,8 @@ enum Command {
     },
 
     /// Tier-1 post-merge column rebuild for the Hetzner CH
-    /// (task 0228 Phase 5). Reconstructs 3 MIN-semantics columns
-    /// across 2 state tables (`accounts.first_seen_ledger`,
-    /// `soroban_contracts.deployer_id` + `deployed_at_ledger`).
+    /// (task 0228 Phase 5). Reconstructs one MIN-semantics column,
+    /// `accounts.first_seen_ledger`.
     /// These silently corrupt under `ReplacingMergeTree` collapse.
     /// Per-table staging + EXCHANGE TABLES atomic swap.
     RepairTier1 {
@@ -370,8 +369,8 @@ async fn main() {
                 .await
                 .expect("repair_tier1 failed");
             println!(
-                "repair_tier1 completed (dry_run={}): accounts={} soroban_contracts={}",
-                stats.dry_run, stats.accounts_rows, stats.soroban_contracts_rows,
+                "repair_tier1 completed (dry_run={}): accounts={}",
+                stats.dry_run, stats.accounts_rows,
             );
         }
         Command::ContractTypeRebuild { dry_run } => {

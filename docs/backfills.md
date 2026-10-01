@@ -149,7 +149,11 @@ accounts**.
 > - `accounts.first_seen_ledger` — **14 of 400 sampled rows diverge (3.5%)**, all
 >   of them later than the true first appearance. Still wrong today, and it is
 >   rendered on the account page and the account list.
-> - `soroban_contracts.deployed_at_ledger` — **1 597 of 146 397 diverge (1.1%)**.
+> - `soroban_contracts.deployed_at_ledger` — **not corrupt; no longer rebuilt**
+>   (task 0497, 2026-10-01). It is written once, when the contract instance is
+>   created, and carried by every upgrade: all 154 331 contracts agree across
+>   their rows. The earlier "1 597 diverge" compared it with the rebuild's own
+>   formula, which took the first surviving upgrade for 1 652 contracts.
 > - `lp_positions.first_deposit_ledger` — **dropped** (task 0468, decision 399 B).
 >   3.8% of 110 066 positions held the true first deposit, and the repair zeroed
 >   most of the rest; the pool page's Activity section already shows each

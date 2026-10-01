@@ -1,30 +1,6 @@
----
-id: '0468'
-title: 'BUG: pool participants show "Since ledger 0" and link to a ledger that does not exist'
-type: BUG
-status: active
-related_adr: []
-related_tasks: ['0377']
-tags: [frontend, liquidity-pools, data-quality, priority-medium, effort-small]
-links: []
-history:
-  - date: '2026-08-10'
-    status: backlog
-    who: karolkow
-    note: >
-      Found by the regression sweep over pages outside the 2026-07-25 →
-      2026-08-07 release window. Measured on production after deduplication:
-      102 693 of 108 304 liquidity-pool positions carry
-      `first_deposit_ledger = 0` — 94.8 %. The column renders the value as a
-      clickable ledger identifier, so it links to `/ledgers/0`, which answers
-      "Ledger not found".
-  - date: '2026-09-25'
-    status: active
-    who: karolkow
-    note: >
-      Activated. UI half first (explicit absence, no dead link), then the
-      root cause of the zeros, read-only.
----
+# Task 0468 — root cause and the 2026-09-25 record
+
+Moved from the task file when it became a directory (2026-10-01).
 
 # BUG: pool participants show "Since ledger 0"
 
