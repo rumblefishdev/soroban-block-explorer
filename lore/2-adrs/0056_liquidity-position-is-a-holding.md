@@ -16,6 +16,7 @@ related_tasks:
     '0331',
     '0339',
     '0210',
+    '0468',
   ]
 related_adrs: ['0055', '0051', '0027', '0057']
 tags: [clickhouse, data-model, balances, liquidity-pools, assets, read-path]
