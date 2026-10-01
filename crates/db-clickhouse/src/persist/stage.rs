@@ -59,7 +59,7 @@ use xdr_parser::types::{
 use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
 
-use xdr_parser::event::{ExecutableUpdate, extract_executable_update};
+use xdr_parser::executable_update::{ExecutableUpdate, extract_executable_update};
 use xdr_parser::pool_config_factory::PoolConfig;
 use xdr_parser::pool_family::PoolFamilyWrite;
 
