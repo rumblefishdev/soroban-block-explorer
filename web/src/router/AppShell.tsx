@@ -17,6 +17,14 @@ import { HomeHeroGlow } from '../pages/home/HomeHeroGlow.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { NAV_LINKS, routes } from './routes.js';
+import {
+  PrototypeSwitcher,
+  usePrototypeVariant,
+  VariantABanner,
+  VariantBLogo,
+  VariantCFrame,
+  VariantCNetworkStat,
+} from './TestnetMarkerPrototype.js';
 
 const NAV_ITEMS: NavItem[] = NAV_LINKS.map((link) => ({
   label: link.label,
@@ -111,6 +119,7 @@ export function AppShell() {
   const enterHandlerRef = useRef<() => boolean>(() => false);
 
   const isHome = pathname === routes.home;
+  const variant = usePrototypeVariant();
 
   // Scroll back to the top whenever the PATH changes (navigating to another
   // page / detail). Keyed on `pathname` only — table pagination and filters
@@ -202,8 +211,12 @@ export function AppShell() {
           zIndex: theme.zIndex.topNav,
         })}
       >
+        {variant === 'A' && <VariantABanner />}
         {!isHome && (
           <TopNav
+            leadingStatSlot={
+              variant === 'C' ? <VariantCNetworkStat /> : undefined
+            }
             stats={stats}
             searchValue={searchValue}
             onSearchChange={handleSearchChange}
@@ -224,7 +237,15 @@ export function AppShell() {
           />
         )}
         <SecondaryNav
-          logo={<HomeLogo height={24} onClick={handleHomeClick} />}
+          logo={
+            variant === 'B' ? (
+              <VariantBLogo
+                logo={<HomeLogo height={24} onClick={handleHomeClick} />}
+              />
+            ) : (
+              <HomeLogo height={24} onClick={handleHomeClick} />
+            )
+          }
           navItems={NAV_ITEMS}
           activePage={activePage}
           onNavClick={handleNavClick}
@@ -263,6 +284,8 @@ export function AppShell() {
         }
         navItems={FOOTER_NAV_ITEMS}
       />
+      {variant === 'C' && <VariantCFrame />}
+      <PrototypeSwitcher current={variant} />
     </Box>
   );
 }

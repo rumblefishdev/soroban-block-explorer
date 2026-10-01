@@ -33,6 +33,8 @@ export interface TopNavProps {
   onSearchClear?: () => void;
   onSearchFocus?: () => void;
   searchOverlaySlot?: ReactNode;
+  /** PROTOTYPE (0553): rendered before the first stat. */
+  leadingStatSlot?: ReactNode;
 }
 
 function StatDivider() {
@@ -102,6 +104,7 @@ export function TopNav({
   onSearchClear,
   onSearchFocus,
   searchOverlaySlot,
+  leadingStatSlot,
 }: TopNavProps) {
   return (
     <Box
@@ -154,6 +157,7 @@ export function TopNav({
               '&::-webkit-scrollbar': { display: 'none' },
             }}
           >
+            {leadingStatSlot}
             <Stat
               label="TPS"
               value={
