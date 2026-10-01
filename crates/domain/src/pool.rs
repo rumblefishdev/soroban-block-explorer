@@ -45,6 +45,5 @@ pub struct LpPosition {
     pub account_id: i64,
     /// NUMERIC(28,7) as decimal string.
     pub shares: String,
-    pub first_deposit_ledger: i64,
     pub last_updated_ledger: i64,
 }

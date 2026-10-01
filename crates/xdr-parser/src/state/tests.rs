@@ -1102,12 +1102,11 @@ fn lp_position_extracted_from_created_pool_share_trustline() {
     assert_eq!(positions[0].pool_id, "aabb");
     assert_eq!(positions[0].account_id, "GABC");
     assert_eq!(positions[0].shares, "42.0000000");
-    assert_eq!(positions[0].first_deposit_ledger, Some(100));
     assert_eq!(positions[0].last_updated_ledger, 100);
 }
 
 #[test]
-fn lp_position_updated_drops_first_deposit_ledger() {
+fn lp_position_updated_emits_the_new_balance() {
     let changes = vec![make_change(
         "trustline",
         "updated",
@@ -1127,9 +1126,6 @@ fn lp_position_updated_drops_first_deposit_ledger() {
     let positions = extract_lp_positions(&changes);
     assert_eq!(positions.len(), 1);
     assert_eq!(positions[0].shares, "5.0000000");
-    // updated → preserve original first_deposit_ledger via NULL +
-    // staging COALESCE, not overwrite from this change.
-    assert!(positions[0].first_deposit_ledger.is_none());
 }
 
 #[test]
@@ -1148,7 +1144,6 @@ fn lp_position_removed_emits_zero_shares_from_key() {
     let positions = extract_lp_positions(&changes);
     assert_eq!(positions.len(), 1);
     assert_eq!(positions[0].shares, "0.0000000");
-    assert!(positions[0].first_deposit_ledger.is_none());
     assert_eq!(positions[0].last_updated_ledger, 100);
 }
 

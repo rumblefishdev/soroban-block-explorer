@@ -45,9 +45,6 @@ pub struct ParticipantItem {
     /// sum where it keeps none), always present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
-    /// Ledger of the first deposit by this account into this pool. `null` for
-    /// a soroban pool, whose share-token balances record no first deposit.
-    pub first_deposit_ledger: Option<i64>,
     /// Ledger of the most recent change to this position.
     pub last_updated_ledger: i64,
 }

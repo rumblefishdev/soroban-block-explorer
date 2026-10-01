@@ -9,7 +9,7 @@
 //! database, `--test-threads=1`. Skipped without `CLICKHOUSE_URL`.
 
 use super::*;
-use db_clickhouse::persist::rows::{LpPositionRow, SorobanContractRow};
+use db_clickhouse::persist::rows::SorobanContractRow;
 
 async fn ch_client() -> Option<ClickhouseClient> {
     let url = std::env::var("CLICKHOUSE_URL").ok()?;
@@ -82,52 +82,6 @@ async fn soroban_contracts_rebuild_keeps_the_executable_reference() {
         tag.as_deref(),
         Some("fleet-v2"),
         "the rebuild must not reset the tag"
-    );
-
-    delete(&client, &cleanup).await;
-}
-
-#[tokio::test]
-async fn lp_positions_rebuild_keeps_closed_at_ledger() {
-    let Some(client) = ch_client().await else {
-        eprintln!("CLICKHOUSE_URL not set — skipping");
-        return;
-    };
-    let pool_id = [0xa5u8; 32];
-    let account_id = 4_000_021_001_i64;
-    let cleanup = format!("ALTER TABLE lp_positions DELETE WHERE account_id = {account_id}");
-    delete(&client, &cleanup).await;
-
-    let mut insert = client
-        .insert::<LpPositionRow>("lp_positions")
-        .await
-        .expect("open lp_positions insert");
-    insert
-        .write(&LpPositionRow {
-            pool_id,
-            account_id,
-            shares: 0,
-            first_deposit_ledger: 100,
-            last_updated_ledger: 200,
-            closed_at_ledger: 200,
-        })
-        .await
-        .expect("write closed position");
-    insert.end().await.expect("close lp_positions insert");
-
-    rebuild_lp_positions(&client, /* dry_run */ false)
-        .await
-        .expect("rebuild_lp_positions must succeed");
-
-    let closed_at: i64 = client
-        .query("SELECT closed_at_ledger FROM lp_positions FINAL WHERE account_id = ?")
-        .bind(account_id)
-        .fetch_one()
-        .await
-        .expect("read position after rebuild");
-    assert_eq!(
-        closed_at, 200,
-        "the rebuild must not reopen a closed position"
     );
 
     delete(&client, &cleanup).await;

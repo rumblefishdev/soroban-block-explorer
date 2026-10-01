@@ -1780,11 +1780,6 @@ export type PaginatedParticipantItem = {
      */
     account: string;
     /**
-     * Ledger of the first deposit by this account into this pool. `null` for
-     * a soroban pool, whose share-token balances record no first deposit.
-     */
-    first_deposit_ledger?: number | null;
-    /**
      * Ledger of the most recent change to this position.
      */
     last_updated_ledger: number;
@@ -2025,11 +2020,6 @@ export type ParticipantItem = {
    * contract holding the share token (a gauge, a vault).
    */
   account: string;
-  /**
-   * Ledger of the first deposit by this account into this pool. `null` for
-   * a soroban pool, whose share-token balances record no first deposit.
-   */
-  first_deposit_ledger?: number | null;
   /**
    * Ledger of the most recent change to this position.
    */

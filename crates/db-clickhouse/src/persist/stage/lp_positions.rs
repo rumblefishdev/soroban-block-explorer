@@ -21,12 +21,10 @@ pub(super) fn lp_position_rows(
         let pool_id = decode_hash(&pos.pool_id, "lp_position.pool_id")?;
         let acct_id = ids::account_id(&pos.account_id);
         let last = i64::from(pos.last_updated_ledger);
-        let first = pos.first_deposit_ledger.map(i64::from).unwrap_or(last);
         let new_row = LpPositionRow {
             pool_id,
             account_id: acct_id,
             shares: decimal7_string_to_i128(&pos.shares)?,
-            first_deposit_ledger: first,
             last_updated_ledger: last,
             // The pool-share trustline was removed — the participant left the
             // pool, as opposed to withdrawing to zero and staying. ADR 0055.
@@ -36,15 +34,7 @@ pub(super) fn lp_position_rows(
             Entry::Occupied(mut occ) => {
                 let existing = occ.get_mut();
                 if new_row.last_updated_ledger >= existing.last_updated_ledger {
-                    let preserved_first = existing
-                        .first_deposit_ledger
-                        .min(new_row.first_deposit_ledger);
                     *existing = new_row;
-                    existing.first_deposit_ledger = preserved_first;
-                } else {
-                    existing.first_deposit_ledger = existing
-                        .first_deposit_ledger
-                        .min(new_row.first_deposit_ledger);
                 }
             }
             Entry::Vacant(vac) => {
