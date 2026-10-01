@@ -401,6 +401,16 @@ pub struct LpPositionRow {
     pub closed_at_ledger: i64,
 }
 
+/// `lp_first_deposits` — AggregatingMergeTree, `min(first_deposit_ledger)` per
+/// (pool, depositor), task 0468. The insert side writes the deposit's ledger;
+/// the engine keeps the minimum on merge.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct LpFirstDepositRow {
+    pub pool_id: [u8; 32],
+    pub account_id: i64,
+    pub first_deposit_ledger: i64,
+}
+
 /// `transactions` — append-only fact hub,
 /// ORDER BY (ledger_sequence, application_order).
 #[derive(Debug, Clone, Row, Serialize)]

@@ -204,7 +204,8 @@ Derived explorer entities:
 - `nfts`, `nft_ownership_changes` — NFT registry plus partitioned ownership
   history, each change located by its event (task 0424, §4.13)
 - `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions` — classic LP state +
-  time-series snapshots + per-account share positions
+  time-series snapshots + per-account share positions; `lp_first_deposits` — each
+  account's first deposit into a classic pool, a `min` the engine keeps (task 0468)
 - `liquidity_pools` is also the dimension for **Soroban AMM pools** (ADR 0058,
   task 0374): `pool_kind = 1` rows discovered from router `add_pool` events,
   carrying `legs Array(Int64)` (ASSET surrogates, 2–4 legs — one id space with
@@ -297,6 +298,7 @@ soroban_contracts                           # contracts OBSERVED being deployed 
 liquidity_pools                       # classic (pool_kind=0) + soroban AMM (pool_kind=1)
   ├─ liquidity_pool_snapshots (partitioned)   # classic only
   ├─ lp_positions                             # classic only
+  ├─ lp_first_deposits                        # classic only: min deposit ledger per (pool, depositor)
   ├─ pool_state_changes (partitioned)         # soroban reserves, one row per (pool, ledger)
   ├─ pool_instance_state                      # soroban pool's own declaration: plane + share token
   └─ pool_activity (refreshable MV)           # soroban pool's last reserve change — list order key
@@ -1688,6 +1690,35 @@ Design notes:
 - unpartitioned current-state table — partial index on `shares > 0` for hot
   listings; closed positions retain a zero-shares row for history lookup
 - `pool_id` is `BYTEA(32)` (ADR 0024); `account_id` is the surrogate FK (ADR 0026)
+- `first_deposit_ledger` here is NOT the first deposit: the table keeps the
+  latest row per key, so every later change overwrote it (measured 2026-10-01:
+  3.8% of 110,066 positions correct). The first deposit lives in
+  `lp_first_deposits` (below); this column is retired with task 0468
+
+### 4.16a LP First Deposits (task 0468)
+
+```sql
+CREATE TABLE lp_first_deposits (
+    pool_id              FixedString(32),
+    account_id           Int64,
+    first_deposit_ledger SimpleAggregateFunction(min, Int64)
+)
+ENGINE = AggregatingMergeTree
+ORDER BY (pool_id, account_id);
+```
+
+- one row per deposit is appended by the indexer — only for successful
+  transactions (a failed one keeps its operations in `transaction_operations`,
+  18.4% of all deposits); the depositor is the op's source, else the
+  transaction's (41% of deposits carry no source of their own)
+- the engine keeps the minimum per key on merge, so a later deposit or a
+  parallel backfill cannot move it — read with
+  `min(first_deposit_ledger) … GROUP BY pool_id, account_id`
+- history from ledger 50,457,424 is filled once from `transaction_operations`
+  - `transactions`; a position whose first deposit predates that ledger has no
+    row (18.0% on 2026-10-01) and is shown as unknown
+- replaces ADR 0056 §4's refreshable MV, whose full recompute reads 16.0 bn
+  rows / 152 GiB
 
 ### 4.17 Account Balances (Current)
 

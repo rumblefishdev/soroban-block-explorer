@@ -100,6 +100,7 @@ struct TableInserts {
     pool_state_changes: Option<Insert<PoolStateChangeRow>>,
     snapshots: Option<Insert<LiquidityPoolSnapshotRow>>,
     lp_positions: Option<Insert<LpPositionRow>>,
+    lp_first_deposits: Option<Insert<LpFirstDepositRow>>,
     tx_operations: Option<Insert<TransactionOperationRow>>,
     events: Option<Insert<SorobanEventRow>>,
     contract_activity: Option<Insert<ContractActivityRow>>,
@@ -283,6 +284,7 @@ impl PartitionWriter {
             pool_state_change_rows,
             snapshot_rows,
             lp_position_rows,
+            lp_first_deposit_rows,
             tx_operation_rows,
             op_asset_rows,
             pool_amount_rows,
@@ -418,6 +420,13 @@ impl PartitionWriter {
             &mut self.inserts.lp_positions,
             "lp_positions",
             &lp_position_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.lp_first_deposits,
+            "lp_first_deposits",
+            &lp_first_deposit_rows,
         )
         .await?;
         write_rows(
@@ -558,6 +567,7 @@ impl PartitionWriter {
             pool_state_changes,
             snapshots,
             lp_positions,
+            lp_first_deposits,
             tx_operations,
             events,
             contract_activity,
@@ -589,6 +599,7 @@ impl PartitionWriter {
         end(pool_state_changes).await?;
         end(snapshots).await?;
         end(lp_positions).await?;
+        end(lp_first_deposits).await?;
         end(tx_operations).await?;
         end(events).await?;
         end(contract_activity).await?;

@@ -236,6 +236,8 @@ pub struct StagedLedger {
     pub pool_state_change_rows: Vec<PoolStateChangeRow>,
     pub snapshot_rows: Vec<LiquidityPoolSnapshotRow>,
     pub lp_position_rows: Vec<LpPositionRow>,
+    /// Deposits of this ledger's successful transactions → `lp_first_deposits`.
+    pub lp_first_deposit_rows: Vec<LpFirstDepositRow>,
     /// Operations folded by identity (task 0163), located by transaction
     /// position (task 0372) → `transaction_operations`.
     pub tx_operation_rows: Vec<TransactionOperationRow>,
@@ -1655,6 +1657,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // ---- lp_positions (dedup by (pool_id, account_id)) ----
     out.lp_position_rows
         .extend(lp_positions::lp_position_rows(lp_positions)?);
+    out.lp_first_deposit_rows =
+        lp_positions::lp_first_deposit_rows(transactions, operations, ledger_sequence_i64)?;
 
     operations::operation_rows(
         &mut out,

@@ -281,6 +281,14 @@ fn column_order_lp_positions() {
 }
 
 #[test]
+fn column_order_lp_first_deposits() {
+    assert_columns::<LpFirstDepositRow>(
+        "lp_first_deposits",
+        &["pool_id", "account_id", "first_deposit_ledger"],
+    );
+}
+
+#[test]
 fn column_order_transactions() {
     assert_columns::<TransactionRow>(
         "transactions",

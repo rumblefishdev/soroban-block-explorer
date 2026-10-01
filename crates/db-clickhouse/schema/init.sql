@@ -888,6 +888,26 @@ CREATE TABLE IF NOT EXISTS lp_positions (
 ENGINE = ReplacingMergeTree(last_updated_ledger)
 ORDER BY (pool_id, account_id);
 
+-- lp_first_deposits: the ledger of each account's first deposit into a classic
+-- pool (task 0468). A historical MIN, so it cannot live on `lp_positions`: that
+-- table keeps the LATEST row per key, and every later change overwrote the
+-- first deposit with its own ledger (measured 2026-10-01: 4.3% of 110,066
+-- positions correct). Here every deposit of a SUCCESSFUL transaction appends
+-- (pool, depositor, ledger) — the depositor is the op's source, else the
+-- transaction's — and AggregatingMergeTree keeps the minimum per key on merge,
+-- so neither a later deposit nor a parallel backfill can move it (the
+-- `asset_sac` pattern with `min` for `max`). Read with
+-- `min(first_deposit_ledger) … GROUP BY pool_id, account_id`, never raw rows.
+-- ADR 0056 §4 planned a refreshable MV over the operations instead; a full
+-- recompute reads 16.0 bn rows / 152 GiB, so the value is kept as it is written.
+CREATE TABLE IF NOT EXISTS lp_first_deposits (
+    pool_id              FixedString(32),
+    account_id           Int64,
+    first_deposit_ledger SimpleAggregateFunction(min, Int64)
+)
+ENGINE = AggregatingMergeTree
+ORDER BY (pool_id, account_id);
+
 ----------------------------------------------------------------------
 -- Append-only fact tables (ReplacingMergeTree, partitioned)
 ----------------------------------------------------------------------

@@ -148,6 +148,17 @@ rows only. The safety net that the repair process used to provide must be
 replaced explicitly: a test on the companion's query plus the comparison
 probe — a derived value with neither is risk moved, not removed.
 
+**Amended 2026-10-01 (task 0468, decision 394 A).** The measurement gate
+failed: a full recompute of the first deposit over the operations reads
+16.0 bn rows / 152 GiB (sliced into 15 ledger ranges; the type is not in the
+operations' sort key). The value is instead kept as written, in its own
+`lp_first_deposits` (AggregatingMergeTree, `SimpleAggregateFunction(min)` per
+(pool, depositor)) — the indexer appends every deposit of a successful
+transaction, and the merge keeps the minimum, which no backfill can corrupt.
+Not the sparse `balances` column either: it needs the merge this ADR plans,
+and a `min` kept by the engine is the shape the column would have needed
+anyway. The companion reads it when it exists.
+
 ### 5. Blast-radius exclusions, written down
 
 The assets list and search would newly see **52,555** pool rows. Both get an
