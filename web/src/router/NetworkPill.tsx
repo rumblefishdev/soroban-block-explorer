@@ -10,8 +10,8 @@ import { NETWORK_SITES, type Network } from '../network.js';
 /**
  * The network this site shows, beside the logo, and the way to the other one
  * (task 0553). On testnet it is a filled brand-yellow pill, so no testnet page
- * passes for mainnet; on mainnet it is a quiet outline. Its menu names each
- * network with one line on what it is and links to the other deployment.
+ * passes for mainnet; on mainnet it is a quiet outline. Its menu lists both
+ * networks and links to each deployment.
  */
 export function NetworkPill({ current }: { current: Network }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -49,7 +49,7 @@ export function NetworkPill({ current }: { current: Network }) {
         open={anchor !== null}
         onClose={() => setAnchor(null)}
         slotProps={{
-          paper: { sx: { mt: 1, width: 300, borderRadius: '12px', p: 0.5 } },
+          paper: { sx: { mt: 1, width: 200, borderRadius: '12px', p: 0.5 } },
           list: { sx: { py: 0 } },
         }}
       >
@@ -69,20 +69,12 @@ export function NetworkPill({ current }: { current: Network }) {
               href={site.url}
               selected={isCurrent}
               aria-current={isCurrent ? 'page' : undefined}
-              sx={{
-                alignItems: 'flex-start',
-                gap: 1.25,
-                borderRadius: '8px',
-                py: 1,
-                px: 1.5,
-                whiteSpace: 'normal',
-              }}
+              sx={{ gap: 1.25, borderRadius: '8px', py: 1, px: 1.5 }}
             >
               <Box
                 component="span"
                 aria-hidden
                 sx={(theme) => ({
-                  mt: '6px',
                   width: 10,
                   height: 10,
                   borderRadius: '50%',
@@ -93,18 +85,13 @@ export function NetworkPill({ current }: { current: Network }) {
                       : theme.palette.stroke.success,
                 })}
               />
-              <Box sx={{ flex: 1 }}>
-                <Typography variant="bodySmSemiBold" component="div">
-                  {site.name}
-                </Typography>
-                <Typography
-                  variant="bodySmRegular"
-                  color="text.secondary"
-                  component="div"
-                >
-                  {site.about}
-                </Typography>
-              </Box>
+              <Typography
+                variant="bodySmSemiBold"
+                component="span"
+                sx={{ flex: 1 }}
+              >
+                {site.name}
+              </Typography>
               {isCurrent && (
                 <Box component="span" aria-hidden sx={{ fontWeight: 700 }}>
                   ✓

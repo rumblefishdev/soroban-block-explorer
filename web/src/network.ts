@@ -7,7 +7,6 @@ export type Network = 'mainnet' | 'testnet';
 export interface NetworkSite {
   key: Network;
   name: string;
-  about: string;
   url: string;
 }
 
@@ -17,13 +16,11 @@ export const NETWORK_SITES: NetworkSite[] = [
   {
     key: 'mainnet',
     name: 'Mainnet',
-    about: 'The live Stellar network. Real assets.',
     url: 'https://sorobanscan.rumblefish.dev',
   },
   {
     key: 'testnet',
     name: 'Testnet',
-    about: 'Test data for developers. No value; reset a few times a year.',
     url: 'https://testnet.sorobanscan.rumblefish.dev',
   },
 ];
