@@ -20,6 +20,7 @@
 //! The indexer drives ClickHouse only and contains no PG / sqlx code.
 
 pub mod enrichment_publish;
+pub mod lake_pacing;
 pub mod process;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
@@ -51,11 +52,13 @@ pub struct SqsEvent {
 
 #[derive(Debug, Deserialize)]
 pub struct SqsMessage {
-    // Doorbell body is ignored (see module docs) — we only keep `messageId`
-    // to name a batch-item-failure on a failed reconcile. Serde ignores the
-    // unmapped `body` field in the SQS event JSON.
+    // `messageId` names a batch-item-failure on a failed reconcile. The body
+    // is ignored on mainnet (see module docs); reading the public data lake,
+    // the indexer paces itself through it (`lake_pacing`, task 0553).
     #[serde(rename = "messageId")]
     pub message_id: String,
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 /// Partial-batch-failure response read by the SQS event-source-mapping.
@@ -134,6 +137,9 @@ pub struct HandlerState {
     /// batched query per first sighting of a contract. Cloning shares the inner
     /// `Arc`, so all invocations on a warm container share the memo.
     pub classification_cache: ClassificationCache,
+    /// Present only when reading the public data lake (task 0553): the lake
+    /// sends no events, so the indexer queues its own next wake-up.
+    pub pacer: Option<lake_pacing::Pacer>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,10 +171,15 @@ pub async fn handler(
     let mut batch_item_failures = Vec::new();
 
     for msg in &payload.records {
-        // Body irrelevant — every doorbell triggers the same reconcile.
-        // batchSize is 1, so this loops once; if it ever isn't, a second
-        // reconcile in the same batch is a cheap no-op (cursor already moved).
-        if let Err(e) = reconcile(state).await {
+        // On mainnet the body is irrelevant — every doorbell triggers the same
+        // reconcile. batchSize is 1, so this loops once; if it ever isn't, a
+        // second reconcile in the same batch is a cheap no-op (cursor already
+        // moved).
+        let result = match &state.pacer {
+            Some(pacer) => lake_pacing::paced(state, pacer, msg.body.as_deref()).await,
+            None => reconcile(state).await,
+        };
+        if let Err(e) = result {
             // Full error Display on purpose (policy reversed 2026-08-10,
             // lore-0455): the old sanitizer reduced the 0454 outage to the
             // undiagnosable label "ClickHouse error". Everything ClickHouse
@@ -208,6 +219,15 @@ pub async fn handler(
     })
 }
 
+/// What one reconcile did: how many ledgers it stored, and the newest stored
+/// ledger after it (0 while the table is empty). Mainnet ignores it; reading
+/// the data lake, the indexer paces itself by it (`lake_pacing`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reconciled {
+    pub persisted: u64,
+    pub newest: i64,
+}
+
 /// Persist the contiguous run of ledgers from `max(sequence) + 1` upward, in
 /// strict ascending order, until either:
 ///   * the next ledger is **not yet on S3** (a gap) — return Ok and wait for a
@@ -218,7 +238,7 @@ pub async fn handler(
 /// Returns Err only on a hard CH/S3 failure, which fails the doorbell so SQS
 /// redelivers it. Already-persisted ledgers stay committed (the `ledgers` row
 /// is written last per ledger), so a resume never reprocesses them.
-async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
+async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
     let start = Instant::now();
 
     let max_seq: i64 = state
@@ -234,7 +254,10 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
     // the live tail runs, so this is a guard, not a normal path.
     if max_seq <= 0 {
         warn!("ledgers table is empty (max=0) — no cursor to advance from; no-op");
-        return Ok(());
+        return Ok(Reconciled {
+            persisted: 0,
+            newest: 0,
+        });
     }
 
     let mut next = max_seq + 1;
@@ -248,7 +271,10 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
                 next,
                 persisted, "reconcile hit time budget — stopping; next doorbell resumes"
             );
-            return Ok(());
+            return Ok(Reconciled {
+                persisted,
+                newest: next - 1,
+            });
         }
 
         let key = ledger_s3_key(&state.key_prefix, next);
@@ -260,7 +286,10 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
             } else {
                 info!(next, persisted, "reached gap on S3 — contiguous run done");
             }
-            return Ok(());
+            return Ok(Reconciled {
+                persisted,
+                newest: next - 1,
+            });
         }
 
         info!(ledger = next, key = key.as_str(), "processing ledger");
