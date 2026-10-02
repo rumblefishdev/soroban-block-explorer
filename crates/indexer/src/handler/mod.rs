@@ -1,11 +1,13 @@
 //! Lambda handler for the Ledger Processor — SQS "doorbell" sequencer.
 //!
-//! The SQS message is a **content-free trigger** ("a file landed on S3, go
-//! work"); its body is ignored. On each invocation the handler reconciles the
-//! durable cursor — `max(sequence)` in ClickHouse — with what is contiguously
-//! available on S3, and persists forward **oldest-first** starting at
-//! `max + 1`, stopping at the first gap (next ledger not yet on S3) or when a
-//! per-invocation time budget is reached. Each ledger is persisted via
+//! The SQS message is a trigger ("a file landed on S3, go work"); on mainnet
+//! its body is ignored, and reading the public data lake it names the ledger
+//! the indexer expects (`lake_pacing`). On each invocation the handler
+//! reconciles the durable cursor — `max(sequence)` in ClickHouse — with what
+//! is contiguously available on S3, and persists forward **oldest-first**
+//! starting at `max + 1` (an empty database reading the lake: at the first
+//! closed ledger), stopping at the first gap (next ledger not yet on S3) or
+//! when a per-invocation time budget is reached. Each ledger is persisted via
 //! [`db_clickhouse::persist::persist_ledger_clickhouse`] (open
 //! `PartitionWriter` → write_ledger → commit), with the `ledgers` row written
 //! last so a crash/timeout resumes cleanly from the new `max`.
@@ -227,8 +229,9 @@ pub struct Reconciled {
     pub newest: i64,
 }
 
-/// Persist the contiguous run of ledgers from `max(sequence) + 1` upward, in
-/// strict ascending order, until either:
+/// Persist the contiguous run of ledgers from `max(sequence) + 1` upward (an
+/// empty database reading the lake: from the first closed ledger), in strict
+/// ascending order, until either:
 ///   * the next ledger is **not yet on S3** (a gap) — return Ok and wait for a
 ///     future doorbell (this is the ordering barrier), or
 ///   * the **time budget** ([`RECONCILE_DEADLINE`]) is reached — return Ok;
@@ -247,20 +250,29 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
         .await
         .map_err(|e| HandlerError::ClickHouse(db_clickhouse::SchemaError::Query(e)))?;
 
-    // Empty CH → `max()` is 0. Without a seeded baseline there is no floor to
-    // start from (HEAD-probing up from ledger 1 would be millions of misses),
-    // so no-op. Operationally CH is always seeded (snapshot / backfill) before
-    // the live tail runs, so this is a guard, not a normal path.
-    if max_seq <= 0 {
+    // Empty CH → `max()` is 0. The public data lake holds every ledger from
+    // the network's first closed one, so testnet starts there and rebuilds
+    // itself after a reset. Our own bucket holds ledgers only from where our
+    // Galexie started, so an empty mainnet database waits for a seeding
+    // backfill: no-op.
+    let empty = max_seq <= 0;
+    let mut next = if !empty {
+        max_seq + 1
+    } else if let Some(first) = state.source.first_ledger() {
+        info!(
+            first,
+            "ledgers table is empty — reading the lake from its first closed ledger"
+        );
+        first
+    } else {
         warn!("ledgers table is empty (max=0) — no cursor to advance from; no-op");
         return Ok(Reconciled {
             persisted: 0,
             newest: 0,
         });
-    }
-
-    let mut next = max_seq + 1;
+    };
     let mut persisted = 0u64;
+    let mut newest = max_seq.max(0);
 
     loop {
         // Check the budget BEFORE starting a ledger so we never begin one we
@@ -270,30 +282,33 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
                 next,
                 persisted, "reconcile hit time budget — stopping; next doorbell resumes"
             );
-            return Ok(Reconciled {
-                persisted,
-                newest: next - 1,
-            });
+            return Ok(Reconciled { persisted, newest });
         }
 
         let key = ledger_s3_key(state.source.key_prefix(), next);
         if !s3_object_exists(state, &key).await? {
             // `next` is not on S3 yet — stop. A future doorbell (when the file
             // lands) resumes here. This gate is what guarantees no gaps.
-            if persisted == 0 {
+            if persisted == 0 && empty {
+                // An empty lake database whose first ledger is missing reads
+                // the wrong folder: a network's genesis is never late.
+                warn!(
+                    next,
+                    key = key.as_str(),
+                    "empty database and its first ledger is not in the lake — wrong folder?"
+                );
+            } else if persisted == 0 {
                 info!(next, "no new contiguous ledger on S3 — nothing to do");
             } else {
                 info!(next, persisted, "reached gap on S3 — contiguous run done");
             }
-            return Ok(Reconciled {
-                persisted,
-                newest: next - 1,
-            });
+            return Ok(Reconciled { persisted, newest });
         }
 
         info!(ledger = next, key = key.as_str(), "processing ledger");
         process_s3_object(state, state.source.bucket(), &key).await?;
         persisted += 1;
+        newest = next;
         next += 1;
     }
 }

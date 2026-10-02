@@ -15,6 +15,8 @@ fn our_own_bucket_reads_its_root() {
     );
     assert_eq!(source.bucket(), OWN_BUCKET);
     assert_eq!(source.key_prefix(), "");
+    // An empty mainnet database is seeded by a backfill first.
+    assert_eq!(source.first_ledger(), None);
 }
 
 #[test]
@@ -34,6 +36,8 @@ fn the_lake_reads_the_network_folder() {
     .unwrap();
     assert_eq!(source.bucket(), PUBLIC_BUCKET);
     assert_eq!(source.key_prefix(), format!("{TESTNET_FOLDER}/"));
+    // An empty testnet database reads the lake from the first closed ledger.
+    assert_eq!(source.first_ledger(), Some(2));
 }
 
 #[test]

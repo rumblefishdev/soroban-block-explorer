@@ -6,7 +6,8 @@
 //! `PUBLIC_ARCHIVE_PREFIX` are read once, here, into one of the two.
 
 use xdr_parser::public_archive::{
-    PUBLIC_BUCKET, PUBNET_PREFIX, check_archive_network, configured_archive_prefix,
+    FIRST_CLOSED_LEDGER, PUBLIC_BUCKET, PUBNET_PREFIX, check_archive_network,
+    configured_archive_prefix,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +75,18 @@ impl LedgerSource {
         match self {
             LedgerSource::OwnBucket { .. } => "",
             LedgerSource::PublicLake { key_prefix } => key_prefix,
+        }
+    }
+
+    /// The ledger an empty database starts from. The lake holds every ledger
+    /// from the network's first closed one, so testnet rebuilds itself after a
+    /// reset. Our own bucket holds ledgers only from where our Galexie
+    /// started, so an empty mainnet database is seeded by a backfill first:
+    /// none.
+    pub fn first_ledger(&self) -> Option<i64> {
+        match self {
+            LedgerSource::OwnBucket { .. } => None,
+            LedgerSource::PublicLake { .. } => Some(i64::from(FIRST_CLOSED_LEDGER)),
         }
     }
 }
