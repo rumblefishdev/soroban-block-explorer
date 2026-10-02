@@ -19,10 +19,14 @@ const redirect = (uri: string, querystring: Query = {}) =>
 
 describe('api-path-redirect', () => {
   it.each([
-    ['/api', '/pricing-api/'],
-    ['/api/', '/pricing-api/'],
-    ['/api/dashboard', '/pricing-api/dashboard'],
-    ['/api/assets/index-abc.js', '/pricing-api/assets/index-abc.js'],
+    ['/api', '/prices-api/'],
+    ['/api/', '/prices-api/'],
+    ['/api/dashboard', '/prices-api/dashboard'],
+    ['/api/assets/index-abc.js', '/prices-api/assets/index-abc.js'],
+    // The name the portal had for a few hours on 2026-10-02.
+    ['/pricing-api', '/prices-api/'],
+    ['/pricing-api/', '/prices-api/'],
+    ['/pricing-api/docs', '/prices-api/docs'],
   ])('%s → 301 %s', (uri, location) => {
     const response = redirect(uri);
 
@@ -43,7 +47,7 @@ describe('api-path-redirect', () => {
     });
 
     expect(response.headers.location.value).toBe(
-      '/pricing-api/?issue=too_young&wait_secs=3600&tag=a&tag=b'
+      '/prices-api/?issue=too_young&wait_secs=3600&tag=a&tag=b'
     );
   });
 });
