@@ -156,11 +156,12 @@ export interface EnvironmentConfig {
   readonly enableBasicAuth: boolean;
 
   /**
-   * Enable CloudFront Function basic auth on the `/api/*` behavior only
-   * (task 0519) — the separate API SPA served from its own S3 bucket
-   * (`apiSpaBucket`) on the same distribution. Independent of
-   * `enableBasicAuth`: flipping this on does NOT gate the main site's
-   * behaviors, and flipping `enableBasicAuth` on does NOT gate `/api/*`.
+   * Enable CloudFront Function basic auth on the `/pricing-api/*` behavior
+   * only (task 0519; `/api/*` until task 0608) — the separate Prices portal
+   * SPA served from its own S3 bucket (`apiSpaBucket`) on the same
+   * distribution. Independent of `enableBasicAuth`: flipping this on does NOT
+   * gate the main site's behaviors, and flipping `enableBasicAuth` on does
+   * NOT gate `/pricing-api/*`.
    *
    * Shares the same CloudFront Function code and KeyValueStore as
    * `enableBasicAuth` when both are true (one construct, one set of

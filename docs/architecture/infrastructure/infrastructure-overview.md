@@ -371,14 +371,16 @@ redeploying `ApiGateway` as soon as the run ends.
 - serves the React frontend
 - caches static assets and documentation assets; API responses are not assumed to traverse
   CloudFront in the initial topology
-- since task 0519, also serves a second, independently-built SPA from its
-  own S3 bucket (`${envName}-soroban-explorer-api-spa`) under `/api` +
-  `/api/*` on the same distribution (two behaviors: `/api/*` requires the
-  literal trailing slash and doesn't match bare `/api`, so that gets its
-  own exact-match behavior). Both point at one CloudFront Function
-  (`api-spa-routing.ts`) that always rewrites extensionless paths to
-  `/api/index.html` (SPA routing fallback, including the bucket root) and
-  redirects bare `/api` to `/api/` — the main behaviors' `errorResponses`
+- since task 0519, also serves a second, independently-built SPA (the
+  Stellar Prices portal) from its own S3 bucket
+  (`${envName}-soroban-explorer-api-spa`, key prefix `pricing-api/`) under
+  `/pricing-api` + `/pricing-api/*` on the same distribution (two behaviors:
+  `/pricing-api/*` requires the literal trailing slash and doesn't match bare
+  `/pricing-api`, so that gets its own exact-match behavior). Both point at
+  one CloudFront Function (`api-spa-routing.ts`) that always rewrites
+  extensionless paths to `/pricing-api/index.html` (SPA routing fallback,
+  including the bucket root) and redirects bare `/pricing-api` to
+  `/pricing-api/` — the main behaviors' `errorResponses`
   can't cover this because custom error pages resolve through the
   _default_ behavior's origin, not the originating one. The same function
   also does the basic-auth check when `enableApiSpaBasicAuth` is on,
@@ -386,14 +388,19 @@ redeploying `ApiGateway` as soon as the run ends.
   — sharing the KeyValueStore (not the Function itself) so there's one
   credential to manage, not two. The KVS is provisioned even with both
   flags off, so turning a gate off keeps its credentials for re-arming.
-  Production runs with `enableApiSpaBasicAuth=false` (the `/api` SPA is
+  Production runs with `enableApiSpaBasicAuth=false` (the portal is
   public; its backend lives on a separate host).
+- `/api` + `/api/*`, the portal's home until task 0608, keep two behaviors on
+  the same origin, but their function (`api-path-redirect.ts`) answers every
+  request with a `301` to the same path under `/pricing-api`, query string
+  kept (bare `/api` → `/pricing-api/`), so links shared before the move
+  still land on the portal.
 - since task 0576, writes standard (access) logs for every request, explorer
-  and `/api` alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
+  and portal alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
   referrer, user agent and viewer IP, never cookies. Objects expire after 30
   days, because the lines carry viewer IPs and the Prices portal's privacy
   policy keeps technical logs for up to 30 days. It is the only complete
-  record of traffic to the `/api` SPA. Since Prices task 0316 (2026-09-29)
+  record of traffic to the portal. Since Prices task 0316 (2026-09-29)
   that SPA also loads GA4 through the explorer's GTM, but GA counts only
   visitors who consent. The logs count page loads, not in-app navigation.
   The bucket is `ObjectWriter`-owned because

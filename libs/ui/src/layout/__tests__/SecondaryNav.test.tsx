@@ -7,7 +7,7 @@ import { SecondaryNav } from '../SecondaryNav.js';
 
 describe('SecondaryNav', () => {
   // The portal is its own SPA: through `navItems` the click would reach the
-  // router, which renders `/api/` as a 404. Rendering with no `navItems`
+  // router, which renders `/pricing-api/` as a 404. Rendering with no `navItems`
   // proves the link lives outside them.
   it('links the Prices API portal with a plain anchor', () => {
     render(
@@ -18,7 +18,7 @@ describe('SecondaryNav', () => {
 
     expect(screen.getByRole('link', { name: 'Prices API' })).toHaveAttribute(
       'href',
-      '/api/'
+      '/pricing-api/'
     );
   });
 });
