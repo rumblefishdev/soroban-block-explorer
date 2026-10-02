@@ -22,6 +22,12 @@ each one in the shape we would build from scratch.
   that this is the design, not debt — testnet reads the lake and will not run
   its own Galexie, so our own bucket is mainnet's only. Kept as the start-up
   refusal of any other passphrase there (`LedgerSource`, #595).
+- **Site URLs written twice** (E, #600): `NETWORK_SITES` in
+  `web/src/network.ts` repeats `domainName` of `infra/envs/*.json` (a third
+  copy of the mainnet host is the report link in `ContractCode.tsx`). From
+  scratch: the web build recipes pass both hosts as build variables, one
+  source. Kept for now: the hosts change rarely and two more build variables
+  cost more than they save today.
 
 ## Kept on purpose
 

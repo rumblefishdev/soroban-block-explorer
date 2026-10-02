@@ -80,12 +80,12 @@ fixed the shape; this task builds it.
 
 ## Status — 2026-10-02
 
-| Step                                       | Scope                                                                                                                                                        | State                                                                             |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| A #543, B #550, C #553                     | ledger source and database from env; RPC pool in env config; `testnet_*` ClickHouse users and quotas                                                         | merged                                                                            |
-| D1 #558, D2 #559, D3 #562, D4 #566, F #567 | CDK ledger source; genesis from ledger 2; sidecar applies `init.sql` to both databases; `testnet.json`, keepalive, stall alarm, runbook; self-pacing indexer | merged                                                                            |
-| #592, #594 `[structure only]`, P2 #597     | moves; an empty lake database starts at ledger 2                                                                                                             | merged                                                                            |
-| E                                          | TESTNET marker: a brand-yellow "TESTNET ▾" pill beside the logo that is also the network menu; tab title "Testnet · …"                                       | in progress (look chosen from a prototype, branch `proto/0553-testnet-marker-v2`) |
+| Step                                       | Scope                                                                                                                                                        | State  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| A #543, B #550, C #553                     | ledger source and database from env; RPC pool in env config; `testnet_*` ClickHouse users and quotas                                                         | merged |
+| D1 #558, D2 #559, D3 #562, D4 #566, F #567 | CDK ledger source; genesis from ledger 2; sidecar applies `init.sql` to both databases; `testnet.json`, keepalive, stall alarm, runbook; self-pacing indexer | merged |
+| #592, #594 `[structure only]`, P2 #597     | moves; an empty lake database starts at ledger 2                                                                                                             | merged |
+| E #600                                     | TESTNET marker: a "TESTNET ▾" pill beside the logo that is also the network menu; testnet tab title and icons                                                | merged |
 
 **Operator session** — done 2026-10-02:
 [notes/S-operator-session-2026-10-02.md](notes/S-operator-session-2026-10-02.md).
