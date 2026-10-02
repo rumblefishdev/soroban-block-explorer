@@ -9,10 +9,10 @@
 
 use std::path::{Path, PathBuf};
 
+use xdr_parser::public_archive::FIRST_CLOSED_LEDGER;
+
 pub const BUCKET: &str = xdr_parser::public_archive::PUBLIC_BUCKET;
 pub const PARTITION_SIZE: u32 = 64_000;
-/// Ledgers 0 and 1 have no close meta on any network, so no archive holds them.
-pub const FIRST_CLOSED_LEDGER: u32 = 2;
 
 /// S3 partition folder covering a given ledger sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
