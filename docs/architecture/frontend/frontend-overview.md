@@ -984,6 +984,14 @@ local dev. Staging and production builds receive the URL from the deployment
 pipeline (CI/CDK) — no staging/production URL is committed to the repo; if the
 variable is missing, `config.ts` throws a clear error at first page load.
 
+`VITE_STELLAR_NETWORK` (`mainnet` | `testnet`; unset means `mainnet`) tells a
+build which network it shows — the same SPA is deployed once per network (task
+0553). `web/src/network.ts` reads it and throws on any other value; the shell
+renders it as `router/NetworkPill.tsx` beside the logo (a filled brand-yellow
+pill on testnet, an outline on mainnet, with a menu linking both deployments),
+and a testnet build prefixes the tab title with "Testnet ·" and swaps in
+`favicon-testnet.svg`. The infra Makefile's web build recipes set it.
+
 ## 9. Performance and Error Handling
 
 - **Pagination** - all list views use cursor-based pagination backed by the block

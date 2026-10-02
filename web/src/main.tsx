@@ -5,7 +5,10 @@ import { ExplorerThemeProvider } from '@rumblefish/soroban-block-explorer-ui';
 
 import { QueryProvider } from './api/index.js';
 import { App } from './app.js';
+import { markTestnetTab } from './network.js';
 import './styles/fonts.css';
+
+markTestnetTab();
 
 const rootElement = document.getElementById('root');
 
