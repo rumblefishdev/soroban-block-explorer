@@ -87,18 +87,14 @@ export default function LiquidityPoolDetailPage() {
       {/* Gate the sub-sections on resolved parent data so their queries never
           fire while the pool is still loading — a parent 404 then produces
           zero sub-section 404s. */}
-      {/* A soroban pool's chart plots TVL from its reserve history; its
-          volume and fees say "not indexed" until they are read from its
-          movements. Its providers are its share token's holders, and its
-          activity is its movements, one row per operation — both read by the
-          same endpoints a classic pool uses. */}
+      {/* A soroban pool's chart plots TVL from its reserve history and
+          volume and fees from its trades; its providers are its share token's
+          holders, and its activity is its movements, one row per pool event —
+          all read by the same endpoints a classic pool uses. */}
       {detail.data != null && (
         <>
           <SectionErrorBoundary sectionName="pool-charts">
-            <PoolCharts
-              poolId={poolId}
-              volumeIndexed={detail.data.pool_kind !== 'soroban'}
-            />
+            <PoolCharts poolId={poolId} />
           </SectionErrorBoundary>
           <SectionErrorBoundary sectionName="pool-participants">
             <PoolParticipants poolId={poolId} />

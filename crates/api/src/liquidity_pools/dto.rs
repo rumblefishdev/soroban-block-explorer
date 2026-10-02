@@ -247,8 +247,12 @@ pub struct PoolItem {
     /// untracked assets and stale pools read `null`.
     pub tvl: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
-    /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-    /// at the leg-A last hourly close; `null` when the pool is unpriceable.
+    /// Gross trade volume over the last 24h — every trade's leg-A amount,
+    /// whichever way it went (a classic pool's `gross_volume_a`, a soroban
+    /// pool's trade events) — priced at the leg-A last hourly close; `null`
+    /// when leg A is unpriceable, when it has no known decimals, and for a
+    /// pool with three or four legs, whose volume is not priced (its `tvl`
+    /// can still be).
     pub volume: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.
@@ -422,8 +426,10 @@ pub struct ChartParams {
 ///   pre-listing history, or a provider-side gap such as the
 ///   2026-07-21..08-03 freeze).
 /// - `volume` — SUM over the bucket of per-ledger gross trade volume ×
-///   the leg-A price at that ledger's time. `null` for no-swap buckets and
-///   for buckets where a swap couldn't be priced (never a partial sum).
+///   the leg-A price at that ledger's time. `null` for no-swap buckets, for
+///   buckets where a swap couldn't be priced (never a partial sum), and in
+///   every bucket of a pool whose volume is not priced (three or four legs,
+///   or a leg A with no known decimals).
 /// - `fee_revenue` — `volume × fee_bps / 10000`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartDataPoint {
