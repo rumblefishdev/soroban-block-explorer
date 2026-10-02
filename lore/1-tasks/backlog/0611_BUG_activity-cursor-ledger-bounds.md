@@ -1,5 +1,5 @@
 ---
-id: '0605'
+id: '0611'
 title: 'Soroban pool activity: bound the cursor ledger before the window arithmetic'
 type: BUG
 status: backlog
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0374 review of list_soroban_pool_activity.rs.'
+  - date: 2026-10-02
+    status: backlog
+    who: karolkow
+    note: 'Renumbered from 0605: the id collided with another task opened the same day.'
 ---
 
 # Soroban pool activity: bound the cursor ledger before the window arithmetic

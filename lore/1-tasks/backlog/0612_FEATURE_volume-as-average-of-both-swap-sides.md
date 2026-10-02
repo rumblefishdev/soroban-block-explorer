@@ -1,5 +1,5 @@
 ---
-id: '0608'
+id: '0612'
 title: 'Review the liquidity-pool module, then price swap volume as the average of both sides'
 type: FEATURE
 status: backlog
@@ -16,6 +16,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Scope widened: a review of the whole liquidity-pool module (classic and Soroban) comes first; its findings shape the volume change.'
+  - date: 2026-10-02
+    status: backlog
+    who: karolkow
+    note: 'Renumbered from 0608: the id collided with another task opened the same day.'
 ---
 
 # Review the liquidity-pool module, then price swap volume as the average of both sides
