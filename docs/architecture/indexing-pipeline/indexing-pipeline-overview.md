@@ -127,7 +127,9 @@ as "process this object":
   message whose ledger another chain already stored is dropped, so two chains
   merge. About one wake per ledger; per wake one extra ClickHouse read, a
   primary-key lookup of the newest close time. On mainnet the body stays
-  ignored.
+  ignored. An empty database reading the lake starts at the network's first
+  closed ledger (2), so testnet rebuilds itself after a reset; an empty
+  database reading our own bucket (mainnet) waits for a seeding backfill.
 
 A backlog drains across the stream of doorbells (one per S3 file ≫ the handful
 of time-budget stops needed); the next doorbell always resumes from the
