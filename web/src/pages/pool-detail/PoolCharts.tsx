@@ -237,9 +237,24 @@ export function toChartPoints(
 
 interface PoolChartsProps {
   poolId: string;
+  // PROTOTYPE W211 — throwaway: what the pool page knows about the pool.
+  legCount?: number;
+  poolKind?: 'classic' | 'soroban';
 }
 
-function PoolChartsContent({ poolId }: PoolChartsProps) {
+// PROTOTYPE W211 — throwaway variants of the Volume/Fees empty state.
+//   now: #589 as it is — a multi-leg pool's unpriced volume reads "No activity".
+//   A:   the page counts the legs (rule duplicated in the frontend).
+//   B:   the API says `volume_priced: false` (rule in one place, the API);
+//        the "USD values unavailable" hint also names token scale only for
+//        soroban pools.
+function prototypeVariant(): 'now' | 'A' | 'B' {
+  const v = new URLSearchParams(window.location.search).get('variant');
+  return v === 'A' || v === 'B' ? v : 'now';
+}
+
+function PoolChartsContent({ poolId, legCount, poolKind }: PoolChartsProps) {
+  const variant = prototypeVariant();
   const [metric, setMetric] = useState<ChartMetric>('tvl');
   const [period, setPeriod] = useState<ChartPeriod>('1D');
 
@@ -353,10 +368,22 @@ function PoolChartsContent({ poolId }: PoolChartsProps) {
             intervals={[]}
             loading={isLoading}
             emptyState={
-              unpriceable ? (
+              variant !== 'now' &&
+              metric !== 'tvl' &&
+              legCount != null &&
+              legCount !== 2 ? (
+                <ChartEmptyState
+                  title="Volume not priced"
+                  hint={`Volume and fees are priced for pools with two assets; this pool has ${legCount}. Its trades are listed under Recent activity.`}
+                />
+              ) : unpriceable ? (
                 <ChartEmptyState
                   title="USD values unavailable"
-                  hint="We have no price data or no token scale for one of this pool's assets in this period, so its activity can't be shown in USD."
+                  hint={
+                    variant === 'B' && poolKind === 'classic'
+                      ? "We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
+                      : "We have no price data or no token scale for one of this pool's assets in this period, so its activity can't be shown in USD."
+                  }
                 />
               ) : (
                 <ChartEmptyState
@@ -383,14 +410,68 @@ function PoolChartsContent({ poolId }: PoolChartsProps) {
  * series (task 0199 compute-at-read). An unpriceable pool gets its own
  * empty state saying so — see `unpriceable`.
  */
-export function PoolCharts({ poolId }: PoolChartsProps) {
+export function PoolCharts({ poolId, legCount, poolKind }: PoolChartsProps) {
   return (
     <LazySection
       placeholder={<CardSkeleton />}
       minHeight={420}
       rootMargin="200px"
     >
-      <PoolChartsContent poolId={poolId} />
+      <PoolChartsContent
+        poolId={poolId}
+        legCount={legCount}
+        poolKind={poolKind}
+      />
+      <PrototypeSwitcher />
     </LazySection>
+  );
+}
+
+// PROTOTYPE W211 — floating variant switcher (dev builds only).
+const PROTOTYPE_VARIANTS = [
+  ['now', 'now — #589 as is'],
+  ['A', 'A — page counts legs'],
+  ['B', 'B — API volume_priced + classic hint'],
+] as const;
+function PrototypeSwitcher() {
+  if (import.meta.env.PROD) return null;
+  const current = prototypeVariant();
+  const i = PROTOTYPE_VARIANTS.findIndex(([k]) => k === current);
+  const go = (d: number) => {
+    const [k] =
+      PROTOTYPE_VARIANTS[
+        (i + d + PROTOTYPE_VARIANTS.length) % PROTOTYPE_VARIANTS.length
+      ];
+    const url = new URL(window.location.href);
+    url.searchParams.set('variant', k);
+    window.location.href = url.toString();
+  };
+  return (
+    <Box
+      sx={{
+        position: 'fixed',
+        bottom: 16,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 2000,
+        bgcolor: '#ff0',
+        color: '#000',
+        px: 2,
+        py: 1,
+        borderRadius: 4,
+        boxShadow: 3,
+        display: 'flex',
+        gap: 2,
+        fontWeight: 700,
+      }}
+    >
+      <span style={{ cursor: 'pointer' }} onClick={() => go(-1)}>
+        ◀
+      </span>
+      <span data-testid="variant">{PROTOTYPE_VARIANTS[i][1]}</span>
+      <span style={{ cursor: 'pointer' }} onClick={() => go(1)}>
+        ▶
+      </span>
+    </Box>
   );
 }
