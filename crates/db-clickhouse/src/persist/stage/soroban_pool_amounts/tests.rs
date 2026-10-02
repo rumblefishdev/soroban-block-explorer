@@ -267,10 +267,7 @@ fn a_trade_with_a_zero_leg_stays_a_trade() {
         legs(&rows),
         vec![(0, ids::contract_id(PYUSD), 500), (0, USDC, 0)]
     );
-    assert!(
-        rows.iter()
-            .all(|r| r.event_kind == PoolEventKind::Trade as u8)
-    );
+    assert!(rows.iter().all(|r| r.event_kind == PoolEvent::Trade as u8));
 }
 
 /// The map-form Phoenix deposit names its amounts `actual_received_{a,b}`
@@ -295,7 +292,7 @@ fn phoenix_map_deposit_reads_actual_received() {
     );
     assert!(
         rows.iter()
-            .all(|r| r.event_kind == PoolEventKind::Deposit as u8)
+            .all(|r| r.event_kind == PoolEvent::Deposit as u8)
     );
 }
 

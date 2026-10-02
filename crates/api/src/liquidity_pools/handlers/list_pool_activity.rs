@@ -28,7 +28,7 @@ const ALLOWED_EVENTS: [&str; 3] = [
 ];
 
 /// `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
-/// (task 0491, issue #371).
+/// (task 0491, issue #371), for classic and soroban pools alike (task 0374).
 ///
 /// Supersedes `/transactions`, whose row was a transaction. That unit could
 /// not carry an honest `Event` chip (a bundled deposit + trade collapsed to
@@ -53,7 +53,7 @@ const ALLOWED_EVENTS: [&str; 3] = [
          description = "Restrict to `trade`, `deposit` or `withdrawal`."),
     ),
     responses(
-        (status = 200, description = "Paginated pool activity, one row per operation",
+        (status = 200, description = "Paginated pool activity, one row per operation (classic) or pool event (soroban)",
          body = Paginated<PoolActivityItem>),
         (status = 400, description = "Invalid pool_id, limit, cursor, or event", body = ErrorEnvelope),
         (status = 404, description = "Pool not found",  body = ErrorEnvelope),
@@ -71,15 +71,15 @@ pub async fn list_pool_activity(
         Err(resp) => return resp,
     };
 
-    // The pool's leg surrogates, which double as this path's existence
-    // check: the driver pivots `pool_operation_amounts.asset_id` onto them, so
+    // The pool's kind and leg surrogates, which double as this path's
+    // existence check: the driver pivots its rows' `asset_id` onto them, so
     // the read cannot run without them and a missing pool is one seek away
     // (task 0279's pairing, kept).
     let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
         .await
         .map_err(|e| e.to_string());
-    let leg_ids = match legs {
-        Ok(Some(ids)) => ids,
+    let (pool_kind, leg_ids) = match legs {
+        Ok(Some(found)) => found,
         Ok(None) => return errors::not_found("liquidity pool not found"),
         Err(e) => {
             tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_asset_ids");
@@ -108,16 +108,40 @@ pub async fn list_pool_activity(
         None => None,
     };
 
-    let fetched = queries::fetch_pool_activity(
-        &state.ch(),
-        &pool_id_hex,
-        &leg_ids,
+    // A classic pool's amounts are in `pool_operation_amounts`, a soroban
+    // pool's in `pool_movements`; both come back as the same rows.
+    let (ch, limit, cursor, direction) = (
+        state.ch(),
         pagination.fetch_limit(),
         pagination.cursor.as_ref(),
         pagination.direction,
-        event,
-    )
-    .await
+    );
+    let fetched = match pool_kind {
+        domain::PoolKind::Classic => {
+            queries::fetch_pool_activity(
+                &ch,
+                &pool_id_hex,
+                &leg_ids,
+                limit,
+                cursor,
+                direction,
+                event,
+            )
+            .await
+        }
+        domain::PoolKind::Soroban => {
+            queries::fetch_soroban_pool_activity(
+                &ch,
+                &pool_id_hex,
+                &leg_ids,
+                limit,
+                cursor,
+                direction,
+                event,
+            )
+            .await
+        }
+    }
     .map_err(|e| e.to_string());
     let mut rows = match fetched {
         Ok(r) => r,
@@ -138,6 +162,7 @@ pub async fn list_pool_activity(
                     ledger_sequence: r.ledger_sequence,
                     application_order: r.application_order,
                     operation_index: r.operation_index,
+                    event_index: r.event_index.unwrap_or(0),
                 },
                 dir,
             )
@@ -149,6 +174,7 @@ pub async fn list_pool_activity(
             transaction_hash: r.transaction_hash,
             ledger_sequence: r.ledger_sequence,
             operation_index: r.operation_index,
+            event_index: r.event_index,
             event: r.event,
             amounts: r.amounts,
             source_account: r.source_account,

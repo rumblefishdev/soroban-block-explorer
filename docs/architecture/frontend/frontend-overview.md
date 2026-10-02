@@ -841,7 +841,11 @@ Expanded behavior:
   from the composition.
 - Charts - TVL over time, volume over time, fee revenue
 - Pool participants - table of liquidity providers and their share
-- Recent transactions - deposits, withdrawals, and trades involving this pool
+- Recent activity - deposits, withdrawals, and trades through this pool, one
+  row per operation (classic) or per pool event (Soroban) — a router
+  operation that crossed the pool many times can fill a page under one hash. Each leg's raw
+  amount is scaled by that leg's `decimals`; a leg with no amount or an unknown
+  scale is left out rather than shown as `0`.
 
 Expanded behavior:
 

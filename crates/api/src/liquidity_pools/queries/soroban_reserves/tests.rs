@@ -31,53 +31,29 @@ fn stroops_scale_like_a_classic_decimal() {
     assert_eq!(scale_raw("not a number", 7), None);
 }
 
-/// A leg gets a value only when its scale is a fact: 7 for native and classic
-/// credit, the published `decimals` for a soroban token. A token with none
-/// and an asset the dimension does not know stay `None`, never a raw integer.
+/// A leg gets a value only when the resolver knows its scale, and its raw
+/// value parses; never a raw integer.
 #[test]
 fn legs_scale_by_their_known_decimals_only() {
-    let mut token = asset(domain::AssetFamily::Soroban as i16, true);
-    token.contract_strkey = Some("CTOKEN18".to_string());
-    let mut unpublished = asset(domain::AssetFamily::Soroban as i16, true);
-    unpublished.contract_strkey = Some("CNOMETA".to_string());
+    let with = |d: Option<u32>| ResolvedAsset {
+        decimals: d,
+        ..asset(domain::AssetFamily::Soroban as i16, true)
+    };
     let identities = HashMap::from([
         (1, asset(domain::AssetFamily::Native as i16, true)),
-        (2, asset(domain::AssetFamily::ClassicCredit as i16, true)),
-        (3, token),
-        (4, unpublished),
-        (5, asset(domain::AssetFamily::ClassicCredit as i16, false)),
+        (2, with(Some(18))),
+        (3, with(None)),
     ]);
-    let decimals = HashMap::from([("CTOKEN18".to_string(), 18)]);
-    let raw: Vec<String> = ["10", "20", "1282501540990846914271528", "40", "50"]
+    let raw: Vec<String> = ["10", "1282501540990846914271528", "30"]
         .map(String::from)
         .to_vec();
     assert_eq!(
-        leg_reserves(&[1, 2, 3, 4, 5, 6], &identities, &decimals, &raw),
+        leg_reserves(&[1, 2, 3, 4], &identities, &raw),
         vec![
             Some("0.000001".to_string()),
-            Some("0.000002".to_string()),
             Some("1282501.540990846914271528".to_string()),
-            None, // soroban token that publishes no decimals
-            None, // unknown to the dimension
+            None, // a token that publishes no decimals
             None, // no identity AND no raw value
         ]
-    );
-}
-
-#[test]
-fn soroban_token_contracts_are_the_known_soroban_legs_deduplicated() {
-    let mut a = asset(domain::AssetFamily::Soroban as i16, true);
-    a.contract_strkey = Some("CA".to_string());
-    let mut b = asset(domain::AssetFamily::Soroban as i16, false);
-    b.contract_strkey = Some("CB".to_string());
-    let identities = HashMap::from([
-        (1, a.clone()),
-        (2, a),
-        (3, b),
-        (4, asset(domain::AssetFamily::Native as i16, true)),
-    ]);
-    assert_eq!(
-        soroban_token_contracts(&[1, 2, 3, 4], &identities),
-        vec!["CA"]
     );
 }

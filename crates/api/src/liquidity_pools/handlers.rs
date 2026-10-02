@@ -183,6 +183,7 @@ fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
         symbol: leg.symbol,
         icon_url: leg.icon_url,
         reserve: leg.reserve,
+        decimals: leg.decimals,
     }
 }
 
@@ -382,7 +383,14 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     let soroban = row.pool_kind == domain::PoolKind::Soroban;
     let ch = state.ch();
     let (analytics, soroban_count) = tokio::join!(
-        queries::fetch_pool_usd_analytics(&ch, &pool_id_hex, &ctx, &reserves),
+        queries::fetch_pool_usd_analytics(
+            &ch,
+            &pool_id_hex,
+            row.pool_kind,
+            &ctx,
+            &reserves,
+            row.legs.first().and_then(|l| l.decimals),
+        ),
         async {
             if soroban {
                 queries::count_soroban_participants(&ch, &pool_id_hex).await
@@ -394,14 +402,8 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
     match analytics {
         Ok(analytics) => {
             row.tvl = analytics.tvl;
-            // The analytics read "no snapshot in the window" as a zero-volume
-            // day. True for a classic pool, whose every trade writes a
-            // snapshot; a soroban pool writes none, so its `0.00` would be a
-            // claim, not a measurement — nothing records its trades yet.
-            if row.pool_kind == domain::PoolKind::Classic {
-                row.volume = analytics.volume;
-                row.fee_revenue = analytics.fee_revenue;
-            }
+            row.volume = analytics.volume;
+            row.fee_revenue = analytics.fee_revenue;
         }
         Err(e) => {
             tracing::error!("DB error in fetch_pool_usd_analytics({pool_id}): {e}");

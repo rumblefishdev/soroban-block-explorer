@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 
+use domain::PoolEvent;
 use serde_json::Value;
 
 use super::{StagedLedger, contract_token_asset_id};
@@ -115,19 +116,8 @@ pub fn carries_pool_amounts(events: &[(String, Vec<xdr_parser::ExtractedEvent>)]
     })
 }
 
-/// What an event did to the pool — stored, not inferred from the signs: a
-/// trade may carry a zero leg (42 on production) and a withdrawal may pay out
-/// nothing, which the signs alone would misread.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum PoolEventKind {
-    Trade = 0,
-    Deposit = 1,
-    Withdrawal = 2,
-}
-
 /// An amount event, with its legs when they could be read.
-type Decoded = (PoolEventKind, Option<Vec<(i64, i128)>>);
+type Decoded = (PoolEvent, Option<Vec<(i64, i128)>>);
 
 /// Amount rows for every pool event in `events`. `events` may span many
 /// contracts and transactions; per-field Phoenix events are grouped within
@@ -229,29 +219,27 @@ pub fn soroban_pool_amount_rows(
                 phoenix_legs(name, &map_fields(&data), pool, op_of(ev), sac_classic)
             }
             // Router family (Aquarius): tokens in the topics, amounts in a vec.
-            (Some("trade"), _) => Some((
-                PoolEventKind::Trade,
-                aquarius_trade(topics, &data, sac_classic),
-            )),
+            (Some("trade"), _) => {
+                Some((PoolEvent::Trade, aquarius_trade(topics, &data, sac_classic)))
+            }
             (Some("deposit_liquidity"), _) => Some((
-                PoolEventKind::Deposit,
+                PoolEvent::Deposit,
                 aquarius_liquidity(topics, &data, 1, sac_classic),
             )),
             (Some("withdraw_liquidity"), _) => Some((
-                PoolEventKind::Withdrawal,
+                PoolEvent::Withdrawal,
                 aquarius_liquidity(topics, &data, -1, sac_classic),
             )),
             // Pair family (Soroswap): `["SoroswapPair", name]`, amounts by leg position.
             (Some("SoroswapPair"), Some("swap")) => {
-                Some((PoolEventKind::Trade, soroswap_swap(&data, pool)))
+                Some((PoolEvent::Trade, soroswap_swap(&data, pool)))
             }
             (Some("SoroswapPair"), Some("deposit")) => {
-                Some((PoolEventKind::Deposit, soroswap_liquidity(&data, pool, 1)))
+                Some((PoolEvent::Deposit, soroswap_liquidity(&data, pool, 1)))
             }
-            (Some("SoroswapPair"), Some("withdraw")) => Some((
-                PoolEventKind::Withdrawal,
-                soroswap_liquidity(&data, pool, -1),
-            )),
+            (Some("SoroswapPair"), Some("withdraw")) => {
+                Some((PoolEvent::Withdrawal, soroswap_liquidity(&data, pool, -1)))
+            }
             (Some("SoroswapPair"), Some("sync" | "skim")) => None,
             (Some(name), _) if NON_AMOUNT_EVENTS.contains(&name) => None,
             (name, _) => {
@@ -448,7 +436,7 @@ fn phoenix_legs(
     let either = |k: &str, alt: &str| amount(k).or_else(|| amount(alt));
     Some(match name {
         "swap" => (
-            PoolEventKind::Trade,
+            PoolEvent::Trade,
             (|| {
                 Some(vec![
                     (token("sell_token")?, amount("offer_amount")?),
@@ -457,7 +445,7 @@ fn phoenix_legs(
             })(),
         ),
         "provide_liquidity" => (
-            PoolEventKind::Deposit,
+            PoolEvent::Deposit,
             (|| {
                 Some(vec![
                     (
@@ -472,7 +460,7 @@ fn phoenix_legs(
             })(),
         ),
         "withdraw_liquidity" => (
-            PoolEventKind::Withdrawal,
+            PoolEvent::Withdrawal,
             (|| {
                 let (a, b) = (amount("return_amount_a")?, amount("return_amount_b")?);
                 if pool.legs.len() == 2 {

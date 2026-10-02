@@ -89,7 +89,8 @@ Decided 2026-09-30: Lambdas use their own certs mapped to the `testnet_*`
 users — one project, but a misconfigured testnet cannot touch mainnet data,
 and cert names already carry the environment. API host
 `api-testnet-sorobanscan.rumblefishdev.com` behind Cloudflare with the same
-edge secret and Turnstile as mainnet; testnet alarms in their own Slack
+Turnstile widget as mainnet and its own edge secret (each environment
+generates one; corrected 2026-10-02); testnet alarms in their own Slack
 channel.
 
 ## Patch register — sweep at the end of the epic
@@ -105,7 +106,7 @@ network check that assumes pubnet for an own bucket.
 - [ ] `Explorer-testnet-*` deploys from `infra/envs/testnet.json` with no code
       branching by network, and `cdk diff` on production is empty after the
       refactor — the parameterisation must not move prod.
-- [ ] Ledgers flow Galexie → S3 → indexer → `testnet` database; a testnet
+- [ ] Ledgers flow data lake → indexer → `testnet` database; a testnet
       transaction resolves on the testnet SPA under the hash Stellar RPC
       reports for it (passphrase → `network_id` is right).
 - [ ] `testnet_*` users cannot read `default.*`, and `testnet_writer` cannot
@@ -116,8 +117,11 @@ network check that assumes pubnet for an own bucket.
 - [ ] `backfill-runner` reads the testnet data lake and archive when run
       for testnet (items 8–9), and the `testnet` database holds the full
       history from the current genesis.
-- [ ] The stall alarm fires on a simulated stall (doorbell paused, or the
-      prefix pointed at a folder that no longer grows), items 10–11.
+- [ ] `testnet-ingestion-stall` exists in CloudWatch
+      (`aws cloudwatch describe-alarms`), is OK once the indexer runs, fires
+      on a simulated stall (indexer paused, or the prefix pointed at a folder
+      that no longer grows), and both state changes reach the testnet Slack
+      channel.
 - [ ] Patch sweep done: every item of the patch register rebuilt or
       explicitly kept with its reason.
 - [ ] The reset runbook was exercised once end to end.

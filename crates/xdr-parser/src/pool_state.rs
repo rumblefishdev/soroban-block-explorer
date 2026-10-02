@@ -147,10 +147,10 @@ pub fn parse_pool_instance(pool: &str, storage: &Value) -> Option<PoolInstanceSt
     }
     Some(PoolInstanceState {
         pool: pool.to_string(),
-        token_share: get("TokenShare").and_then(&addr),
+        token_share: get("TokenShare").and_then(addr),
         total_shares: get("TotalShares").and_then(u128s),
         plane: addr(plane),
-        router: router.and_then(&addr),
+        router: router.and_then(addr),
         reserves,
     })
 }
