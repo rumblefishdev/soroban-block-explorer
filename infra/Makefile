@@ -107,7 +107,8 @@ destroy-production-cloudflare-bootstrap: build
 # through the Cloudflare-fronted host (task 0277), NOT the legacy apiDomainName.
 
 build-production-web:
-	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
+	cd .. && VITE_STELLAR_NETWORK=mainnet \
+		VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json) \
 		pnpm nx build @rumblefish/soroban-block-explorer-web
 	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json); \
@@ -164,7 +165,8 @@ deploy-testnet: build
 	pnpm exec cdk --app "$(TESTNET_APP)" deploy --all --require-approval broadening
 
 build-testnet-web:
-	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/testnet.json) \
+	cd .. && VITE_STELLAR_NETWORK=testnet \
+		VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/testnet.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json) \
 		pnpm nx build @rumblefish/soroban-block-explorer-web
 	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json); \

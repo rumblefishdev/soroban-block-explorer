@@ -838,7 +838,9 @@ Bump procedure — **pull → tag → push → sha**:
 `Delivery` provisions the CloudFront distribution and the SPA bucket. The
 **content** is a separate step that builds the SPA (baking `VITE_API_BASE_URL`
 from `cloudflareApiDomainName` and `VITE_TURNSTILE_SITE_KEY` from
-`turnstileSiteKey`, both read out of `production.json` — no shell env needed),
+`turnstileSiteKey`, both read out of `production.json` — no shell env needed —
+and `VITE_STELLAR_NETWORK=mainnet`; the testnet recipe sets `testnet`, which
+turns the network pill beside the logo yellow and marks the browser tab),
 syncs to S3, and invalidates CloudFront:
 
 ```bash
