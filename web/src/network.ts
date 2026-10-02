@@ -11,7 +11,8 @@ export interface NetworkSite {
   url: string;
 }
 
-// Both deployments, in the order the network menu lists them.
+// Both deployments, in the order the network menu lists them. The hosts are
+// the `domainName` of infra/envs/production.json and testnet.json.
 export const NETWORK_SITES: NetworkSite[] = [
   {
     key: 'mainnet',
@@ -44,10 +45,15 @@ export const network: Network = networkFrom(
 );
 
 /** On testnet, the browser tab says so too: "Testnet · …" in the title and a
- *  yellow dot on the icon, so a testnet tab is told apart among others. */
-export function markTestnetTab() {
-  if (network !== 'testnet') return;
+ *  yellow dot on the icon, so a testnet tab is told apart among others. Every
+ *  icon file has a testnet twin (`favicon.svg` → `favicon-testnet.svg`,
+ *  `favicon-32.png` → `favicon-testnet-32.png`, …): browsers that skip the SVG
+ *  icon, Safari among them, take a PNG. */
+export function markTestnetTab(current: Network) {
+  if (current !== 'testnet') return;
   document.title = `Testnet · ${document.title}`;
-  const icon = document.querySelector('link[rel="icon"][type="image/svg+xml"]');
-  if (icon) icon.setAttribute('href', '/favicon-testnet.svg');
+  for (const icon of document.querySelectorAll('link[rel="icon"]')) {
+    const href = icon.getAttribute('href') ?? '';
+    icon.setAttribute('href', href.replace('/favicon', '/favicon-testnet'));
+  }
 }

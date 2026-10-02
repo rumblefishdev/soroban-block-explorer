@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { networkFrom } from '../network.js';
+import { markTestnetTab, networkFrom } from '../network.js';
 
 describe('networkFrom', () => {
   it('reads mainnet when the build sets nothing, as production always has', () => {
@@ -16,5 +16,35 @@ describe('networkFrom', () => {
   it('refuses a misspelt name instead of showing mainnet', () => {
     expect(() => networkFrom('tesnet')).toThrow(/tesnet/);
     expect(() => networkFrom('Testnet')).toThrow();
+  });
+});
+
+describe('markTestnetTab', () => {
+  it('prefixes the title and points every icon at its testnet twin', () => {
+    document.head.innerHTML =
+      '<link rel="icon" type="image/svg+xml" href="/favicon.svg" />' +
+      '<link rel="icon" type="image/png" href="/favicon-32.png" />';
+    document.title = 'Soroban Block Explorer';
+
+    markTestnetTab('testnet');
+
+    expect(document.title).toBe('Testnet · Soroban Block Explorer');
+    const hrefs = [...document.querySelectorAll('link[rel="icon"]')].map((l) =>
+      l.getAttribute('href')
+    );
+    expect(hrefs).toEqual(['/favicon-testnet.svg', '/favicon-testnet-32.png']);
+  });
+
+  it('leaves a mainnet tab as it is', () => {
+    document.head.innerHTML =
+      '<link rel="icon" type="image/svg+xml" href="/favicon.svg" />';
+    document.title = 'Soroban Block Explorer';
+
+    markTestnetTab('mainnet');
+
+    expect(document.title).toBe('Soroban Block Explorer');
+    expect(document.querySelector('link')?.getAttribute('href')).toBe(
+      '/favicon.svg'
+    );
   });
 });

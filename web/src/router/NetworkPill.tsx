@@ -3,6 +3,7 @@ import Box from '@mui/material/Box';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
+import type { Theme } from '@mui/material/styles';
 
 import { NETWORK_SITES, type Network } from '../network.js';
 
@@ -14,7 +15,8 @@ import { NETWORK_SITES, type Network } from '../network.js';
  */
 export function NetworkPill({ current }: { current: Network }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const isTestnet = current === 'testnet';
+  const label = current === 'testnet' ? 'Testnet' : 'Mainnet';
+  const look = current === 'testnet' ? testnetLook : mainnetLook;
 
   return (
     <>
@@ -23,45 +25,13 @@ export function NetworkPill({ current }: { current: Network }) {
         type="button"
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
-        aria-label={`Network: ${isTestnet ? 'Testnet' : 'Mainnet'}`}
+        aria-label={`Network: ${label}`}
         onClick={(e: React.MouseEvent<HTMLElement>) =>
           setAnchor(e.currentTarget)
         }
-        sx={(theme) => ({
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 0.75,
-          height: 28,
-          px: 1.25,
-          borderRadius: '8px',
-          cursor: 'pointer',
-          font: 'inherit',
-          fontSize: 12,
-          fontWeight: 700,
-          letterSpacing: '0.06em',
-          textTransform: 'uppercase',
-          '&:focus-visible': {
-            outline: `2px solid ${theme.palette.stroke.action}`,
-            outlineOffset: 2,
-          },
-          ...(isTestnet
-            ? {
-                border: 'none',
-                backgroundColor: theme.palette.surface.primaryMain,
-                color: theme.palette.common.black,
-                '&:hover': {
-                  backgroundColor: theme.palette.surface.primaryHover,
-                },
-              }
-            : {
-                border: `1px solid ${theme.palette.stroke.default}`,
-                backgroundColor: 'transparent',
-                color: theme.palette.text.secondary,
-                '&:hover': { borderColor: theme.palette.stroke.defaultHover },
-              }),
-        })}
+        sx={[pillShape, look]}
       >
-        {isTestnet ? 'Testnet' : 'Mainnet'}
+        {label}
         <Box
           component="span"
           aria-hidden
@@ -147,3 +117,39 @@ export function NetworkPill({ current }: { current: Network }) {
     </>
   );
 }
+
+// The pill's shape, shared by both networks.
+const pillShape = (theme: Theme) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 0.75,
+  height: 28,
+  px: 1.25,
+  borderRadius: '8px',
+  cursor: 'pointer',
+  font: 'inherit',
+  fontSize: 12,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  '&:focus-visible': {
+    outline: `2px solid ${theme.palette.stroke.action}`,
+    outlineOffset: 2,
+  },
+});
+
+// Testnet: filled brand yellow, the strongest colour in the header.
+const testnetLook = (theme: Theme) => ({
+  border: 'none',
+  backgroundColor: theme.palette.surface.primaryMain,
+  color: theme.palette.common.black,
+  '&:hover': { backgroundColor: theme.palette.surface.primaryHover },
+});
+
+// Mainnet: a quiet outline, so the brand stays the logo.
+const mainnetLook = (theme: Theme) => ({
+  border: `1px solid ${theme.palette.stroke.default}`,
+  backgroundColor: 'transparent',
+  color: theme.palette.text.secondary,
+  '&:hover': { borderColor: theme.palette.stroke.defaultHover },
+});
