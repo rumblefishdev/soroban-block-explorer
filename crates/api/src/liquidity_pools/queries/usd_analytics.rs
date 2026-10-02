@@ -201,8 +201,8 @@ pub async fn fetch_pool_chart_context(
 ///   (`price_usd_series_1h`, [`MAX_PRICE_CARRY_SECONDS`] lookback); NULL
 ///   unless BOTH legs price (a one-leg TVL would silently halve the pool —
 ///   no-misleading-fallbacks rule).
-/// - `volume` — last-24h gross leg-A volume × the same leg-A close: a
-///   classic pool's `gross_volume_a`, a soroban pool's traded leg-A amounts
+/// - `volume` — last-24h gross volume of each traded leg × that leg's close:
+///   a classic pool's `gross_volume_a`, a soroban pool's traded-leg amounts
 ///   (see [`fetch_pool_volume_24h`]). One price for the whole day, not
 ///   per-trade (upgrade path: per-ledger join as in the chart, if product
 ///   needs it).
@@ -235,21 +235,33 @@ struct Vol24ChRow {
     vol24_a_units: Option<String>,
 }
 
-/// Last-24h gross trade volume for one pool, in leg-A units: the sum of
-/// every trade's leg-A amount, whichever way it went. `None` when it is not
-/// knowable — an unparseable sum, or a soroban leg A whose token publishes
-/// no decimals.
+/// SELECT column order MUST match this struct (clickhouse positional decode).
+#[derive(Debug, Row, Deserialize)]
+struct LegVol24ChRow {
+    traded_leg: u64,
+    raw_units: String,
+}
+
+/// Last-24h gross trade volume for one pool, as `(leg, units)`: how much of
+/// each leg was traded, in that leg's own units (`leg` is 0-based, in pool
+/// order). `None` when it is not knowable — an unparseable sum, or a
+/// soroban leg that traded but whose token publishes no decimals.
+///
+/// A day with no trades is `[(0, 0.0)]`, not `[]`: a zero is reported in
+/// leg A, so it still needs leg A's price to read "$0.00", as it always did.
 ///
 /// - **Classic:** `liquidity_pool_snapshots.gross_volume_a`, which the
-///   indexer already sums per ledger. Deduped with `LIMIT 1 BY
-///   ledger_sequence` — same idiom as the chart — because RMT duplicate
+///   indexer already sums per ledger — always leg A. Deduped with `LIMIT 1
+///   BY ledger_sequence` — same idiom as the chart — because RMT duplicate
 ///   versions of one `(pool, ledger)` row would double the sum.
-/// - **Soroban:** `pool_movements`, the absolute leg-A amount of every
-///   trade event, scaled by leg A's decimals. Leg A is `legs[1]` of the
-///   pool's registry row, the same leg the classic pool's snapshot counts.
-///   Deduped on the table's full sort key: the live writer and the backfill
-///   write the same rows on purpose. Only trade events count, as only claim
-///   atoms count in `gross_volume_a`.
+/// - **Soroban:** `pool_movements`, the absolute amount of every trade's
+///   **traded leg** — the lowest-index leg the trade moved — scaled by that
+///   leg's decimals. In a two-leg pool every trade moves leg A, so this is
+///   the leg the classic snapshot counts. In a three- or four-leg pool a
+///   trade moves two of the legs, often not leg A, and is counted on the
+///   first of the two. Deduped on the table's full sort key: the live writer
+///   and the backfill write the same rows on purpose. Only trade events
+///   count, as only claim atoms count in `gross_volume_a`.
 ///
 /// **Both ledger bounds are required, and the upper one is not redundant.**
 /// `min()`/`max()` over an empty set return the type DEFAULT (`0`), not
@@ -266,8 +278,8 @@ pub(super) async fn fetch_pool_volume_24h(
     client: &clickhouse::Client,
     pool_id_hex: &str,
     pool_kind: domain::PoolKind,
-    leg_a_decimals: Option<u32>,
-) -> Result<Option<f64>, clickhouse::error::Error> {
+    leg_decimals: &[Option<u32>],
+) -> Result<Option<Vec<(usize, f64)>>, clickhouse::error::Error> {
     match pool_kind {
         domain::PoolKind::Classic => {
             let raw = client
@@ -294,50 +306,82 @@ pub(super) async fn fetch_pool_volume_24h(
             // them) is a genuine zero-volume day. A row that IS present but
             // unparseable is NOT — it is an unknown, and must not be reported
             // as "$0.00 traded".
-            Ok(match raw.as_deref() {
+            let units = match raw.as_deref() {
                 None => Some(0.0),
                 Some(raw) => parse_f64(raw),
-            })
+            };
+            Ok(units.map(|units| vec![(0, units)]))
         }
         domain::PoolKind::Soroban => {
-            let Some(decimals) = leg_a_decimals else {
-                return Ok(None);
-            };
-            // `legs[1]` reads the registry without `FINAL`: a pool's legs are
+            // The registry's `legs` is read without `FINAL`: a pool's legs are
             // fixed at registration, and no pool has two versions that differ
-            // (0 on production, 2026-10-01). A day with no trades sums to "0",
-            // a genuine zero.
-            let raw = client
+            // (0 on production, 2026-10-01). A trade's rows carry one row per
+            // leg it moved; `min(leg)` picks the traded leg and `argMin` its
+            // amount.
+            let rows = client
                 .query(
-                    "SELECT toNullable(toString(sum(abs(amount)))) AS vol24_a_units FROM ( \
-                         SELECT amount \
-                         FROM pool_movements \
-                         WHERE pool_id = toFixedString(unhex(?), 32) \
-                           AND event_kind = ? \
-                           AND asset_id = (SELECT legs[1] FROM liquidity_pools \
-                                           WHERE pool_id = unhex(?) LIMIT 1) \
-                           AND ledger_sequence >= ( \
-                               SELECT min(sequence) FROM ledgers \
-                               WHERE closed_at >= now() - INTERVAL 24 HOUR) \
-                           AND ledger_sequence <= ( \
-                               SELECT max(sequence) FROM ledgers \
-                               WHERE closed_at >= now() - INTERVAL 24 HOUR) \
-                         LIMIT 1 BY ledger_sequence, application_order, operation_index, \
-                                    event_index, asset_id \
-                     )",
+                    "SELECT traded_leg, toString(sum(abs(amount))) AS raw_units FROM ( \
+                         SELECT min(leg) AS traded_leg, argMin(amount, leg) AS amount FROM ( \
+                             SELECT ledger_sequence, application_order, operation_index, event_index, \
+                                    indexOf((SELECT legs FROM liquidity_pools \
+                                             WHERE pool_id = unhex(?) LIMIT 1), asset_id) AS leg, \
+                                    amount \
+                             FROM pool_movements \
+                             WHERE pool_id = toFixedString(unhex(?), 32) \
+                               AND event_kind = ? \
+                               AND ledger_sequence >= ( \
+                                   SELECT min(sequence) FROM ledgers \
+                                   WHERE closed_at >= now() - INTERVAL 24 HOUR) \
+                               AND ledger_sequence <= ( \
+                                   SELECT max(sequence) FROM ledgers \
+                                   WHERE closed_at >= now() - INTERVAL 24 HOUR) \
+                             LIMIT 1 BY ledger_sequence, application_order, operation_index, \
+                                        event_index, asset_id \
+                         ) \
+                         WHERE leg > 0 \
+                         GROUP BY ledger_sequence, application_order, operation_index, event_index \
+                     ) \
+                     GROUP BY traded_leg \
+                     ORDER BY traded_leg",
                 )
                 .bind(pool_id_hex)
-                .bind(domain::PoolEvent::Trade as u8)
                 .bind(pool_id_hex)
-                .fetch_one::<Vol24ChRow>()
-                .await?
-                .vol24_a_units;
-            Ok(raw
-                .as_deref()
-                .and_then(parse_f64)
-                .map(|units| units / 10f64.powi(decimals as i32)))
+                .bind(domain::PoolEvent::Trade as u8)
+                .fetch_all::<LegVol24ChRow>()
+                .await?;
+            if rows.is_empty() {
+                return Ok(Some(vec![(0, 0.0)]));
+            }
+            let mut per_leg = Vec::with_capacity(rows.len());
+            for row in rows {
+                let leg = row.traded_leg as usize - 1;
+                let Some(Some(decimals)) = leg_decimals.get(leg) else {
+                    return Ok(None);
+                };
+                let Some(raw) = parse_f64(&row.raw_units) else {
+                    return Ok(None);
+                };
+                per_leg.push((leg, raw / 10f64.powi(*decimals as i32)));
+            }
+            Ok(Some(per_leg))
         }
     }
+}
+
+/// Traded units per leg × that leg's close, summed. `None` unless every leg
+/// that traded has a price — a partial sum understates the volume while
+/// looking like a real number.
+fn volume_usd(
+    per_leg: &[(usize, f64)],
+    legs: &[PriceLeg],
+    closes: &HashMap<PriceLeg, f64>,
+) -> Option<f64> {
+    let mut usd = 0.0;
+    for (leg, units) in per_leg {
+        let close = closes.get(legs.get(*leg)?)?;
+        usd += units * close;
+    }
+    Some(usd)
 }
 
 /// Fetch last hourly closes + 24h gross volume, compute the detail USD
@@ -354,23 +398,20 @@ pub async fn fetch_pool_usd_analytics(
     pool_kind: domain::PoolKind,
     ctx: &PoolPriceContext,
     reserves: &[Option<&str>],
-    leg_a_decimals: Option<u32>,
+    leg_decimals: &[Option<u32>],
 ) -> Result<PoolUsdAnalytics, clickhouse::error::Error> {
     let legs = priceable_legs(ctx);
-    let (closes, vol24_units) = tokio::join!(
+    let (closes, vol24) = tokio::join!(
         fetch_last_closes(client, &legs),
-        fetch_pool_volume_24h(client, pool_id_hex, pool_kind, leg_a_decimals),
+        fetch_pool_volume_24h(client, pool_id_hex, pool_kind, leg_decimals),
     );
     let closes = closes?;
-    // Volume is leg-A-only for both kinds: the snapshot counts it on one leg,
-    // and a soroban pool's volume is read the same way.
-    let spot_a = priced_pair(ctx).and_then(|(a, _)| closes.get(a).copied());
-    let vol24_units = vol24_units?;
+    let vol24 = vol24?;
 
     let tvl = tvl_usd(reserves, &ctx.legs, &closes);
-    let volume = match (spot_a, vol24_units) {
-        (Some(pa), Some(units)) => Some(units * pa),
-        _ => None,
+    let volume = match vol24 {
+        Some(per_leg) => volume_usd(&per_leg, &ctx.legs, &closes),
+        None => None,
     };
     let fee_revenue = volume.map(|v| fee_revenue_usd(v, ctx.fee_bps));
 
@@ -467,8 +508,8 @@ pub(super) async fn fetch_last_closes(
 /// answer an untracked asset gets.
 ///
 /// This is the property [`PoolPriceContext`] promises ("a pool prices only when
-/// ALL of them do"), so it lives on the context rather than at each of the
-/// three call sites. It used to be a per-index accessor whose own doc claimed
+/// ALL of them do"), so it lives on the context rather than at its caller, the
+/// classic chart. It used to be a per-index accessor whose own doc claimed
 /// this guarantee while `get(0)` / `get(1)` quietly provided the opposite.
 pub(super) fn priced_pair(ctx: &PoolPriceContext) -> Option<(&PriceLeg, &PriceLeg)> {
     match ctx.legs.as_slice() {

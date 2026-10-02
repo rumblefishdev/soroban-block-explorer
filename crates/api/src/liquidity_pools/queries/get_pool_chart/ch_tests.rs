@@ -16,14 +16,21 @@ use crate::liquidity_pools::queries::usd_analytics::{
 
 const DB: &str = "api_test_0374_soroban_volume_series";
 const POOL: &str = "5959595959595959595959595959595959595959595959595959595959595959";
+/// A three-leg pool: legs 101 (A), 103 (B) and 104 (C, no price).
+const POOL3: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
 /// Leg A's price identity: a code no real feed uses, so the rows this test
 /// adds to a shared `prices` table cannot be confused with anything.
 const CODE: &str = "TST0374";
+/// The three-leg pool's leg B, priced at 2.0 on day A.
+const CODE_B: &str = "TST0374B";
 const ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
 /// Day A (six days back) has a leg-A close of 0.5; day B (two days back) has
 /// none within the 48 h carry. On day A: a trade selling 2 A, written twice;
 /// a trade buying 1 A; a deposit of 100 A. On day B: a trade of 4 A.
+///
+/// The three-leg pool trades on day A: 3 B for C (a trade that never touches
+/// leg A), 1 A for C, and 2 A for B — each counted once, on its lowest leg.
 #[tokio::test]
 async fn soroban_volume_series() {
     let Some(base) = crate::common::ch::test_client_from_env() else {
@@ -74,7 +81,14 @@ async fn soroban_volume_series() {
     for sql in [
         format!(
             "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs) VALUES \
-             (unhex('{POOL}'), 30, 1, 1, [101, 102])"
+             (unhex('{POOL}'), 30, 1, 1, [101, 102]), \
+             (unhex('{POOL3}'), 30, 1, 1, [101, 103, 104])"
+        ),
+        format!(
+            "INSERT INTO pool_movements (pool_id, ledger_sequence, application_order, operation_index, event_index, event_kind, asset_id, amount) VALUES \
+             (unhex('{POOL3}'), 100, 3, 0, 0, 0, 103, 30000000), (unhex('{POOL3}'), 100, 3, 0, 0, 0, 104, -29000000), \
+             (unhex('{POOL3}'), 101, 3, 0, 0, 0, 101, -10000000), (unhex('{POOL3}'), 101, 3, 0, 0, 0, 104, 11000000), \
+             (unhex('{POOL3}'), 101, 4, 0, 0, 0, 101, 20000000), (unhex('{POOL3}'), 101, 4, 0, 0, 0, 103, -900000)"
         ),
         format!(
             "INSERT INTO ledgers (sequence, closed_at) VALUES \
@@ -90,7 +104,8 @@ async fn soroban_volume_series() {
              (unhex('{POOL}'), 200, 1, 0, 0, 0, 101, 40000000)"
         ),
         format!(
-            "INSERT INTO prices.price_usd_series VALUES ('credit', '{CODE}', '{ISSUER}', {day_a}, 0.5)"
+            "INSERT INTO prices.price_usd_series VALUES ('credit', '{CODE}', '{ISSUER}', {day_a}, 0.5), \
+             ('credit', '{CODE_B}', '{ISSUER}', {day_a}, 2.0)"
         ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
@@ -129,13 +144,34 @@ async fn soroban_volume_series() {
     // Day B: a trade with no price in reach — a hole, never a partial sum.
     assert_eq!(volumes, vec![Some(1.5), None]);
 
-    // A three-leg pool's volume is not priced, and a leg A without decimals
-    // has no honest volume: no series either way.
-    let three = ctx(vec![leg_a.clone(), xlm.clone(), xlm], vec![Some(7); 3]);
-    let none = fetch_soroban_volume_series(&ch, POOL, &three, "1d", from, to)
+    // A three-leg pool: 3 B × 2.0 for the trade that never touches leg A, then
+    // (1 + 2) A × 0.5 — the A-for-B trade counted on A only, once.
+    let leg_b = PriceLeg {
+        kind: "credit",
+        code: CODE_B.to_string(),
+        issuer: ISSUER.to_string(),
+    };
+    let three = ctx(
+        vec![leg_a.clone(), leg_b.clone(), xlm.clone()],
+        vec![Some(7); 3],
+    );
+    let buckets = fetch_soroban_volume_series(&ch, POOL3, &three, "1d", from, to)
         .await
         .expect("volume series runs");
-    assert!(none.is_empty());
+    let volumes: Vec<Option<f64>> = buckets.iter().map(|b| b.volume).collect();
+    assert_eq!(volumes, vec![Some(7.5)]);
+
+    // A traded leg without published decimals has no honest volume: the
+    // bucket is a hole, never a partial sum.
+    let b_unscaled = ctx(
+        vec![leg_a.clone(), leg_b, xlm],
+        vec![Some(7), None, Some(7)],
+    );
+    let buckets = fetch_soroban_volume_series(&ch, POOL3, &b_unscaled, "1d", from, to)
+        .await
+        .expect("volume series runs");
+    let volumes: Vec<Option<f64>> = buckets.iter().map(|b| b.volume).collect();
+    assert_eq!(volumes, vec![None]);
     let no_scale = ctx(
         vec![
             leg_a,
@@ -147,10 +183,12 @@ async fn soroban_volume_series() {
         ],
         vec![None, Some(7)],
     );
-    let none = fetch_soroban_volume_series(&ch, POOL, &no_scale, "1d", from, to)
+    let mut buckets = fetch_soroban_volume_series(&ch, POOL, &no_scale, "1d", from, to)
         .await
         .expect("volume series runs");
-    assert!(none.is_empty());
+    buckets.sort_by_key(|b| b.bucket_ms);
+    let volumes: Vec<Option<f64>> = buckets.iter().map(|b| b.volume).collect();
+    assert_eq!(volumes, vec![None, None]);
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
         .execute()
@@ -163,7 +201,7 @@ async fn soroban_volume_series() {
             .expect("drop test prices table");
     } else {
         base.query(&format!(
-            "ALTER TABLE prices.price_usd_series DELETE WHERE asset_code = '{CODE}'"
+            "ALTER TABLE prices.price_usd_series DELETE WHERE asset_code IN ('{CODE}', '{CODE_B}')"
         ))
         .execute()
         .await

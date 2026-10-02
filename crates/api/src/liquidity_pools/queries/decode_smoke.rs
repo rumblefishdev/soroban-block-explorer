@@ -157,7 +157,7 @@ async fn lp_ch_rows_decode() {
         ctx.pool_kind,
         &ctx.price,
         &[None, None],
-        Some(7),
+        &[Some(7), Some(7)],
     )
     .await
     .expect("usd-analytics rows decode");
