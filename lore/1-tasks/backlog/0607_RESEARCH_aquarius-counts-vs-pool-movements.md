@@ -59,3 +59,14 @@ commission, surplus).
 
 - [ ] The count gap is classified (ours missing vs theirs extra), with numbers.
 - [ ] The volume gap is attributed to a method difference or a data gap.
+
+## Lead (2026-10-02)
+
+The lifetime `total_volume` may be the wrong yardstick. The protocol also
+serves hourly per-pool statistics, `amm-api.aqua.network/statistics/pool/<address>/`
+(`volume_usd`, scaled by 1e7), and every pool event with amounts,
+`/events/pool/<address>/`. On the five three-leg pools, our trades priced
+with our hourly closes came within 0.3–0.4 % of the hourly `volume_usd`, and the
+swap counts per pool were equal over the same window (13,498 / 13,498). The
+same comparison on the two-leg pools of this task, window by window, should
+separate a method difference from missing events.
