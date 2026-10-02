@@ -177,7 +177,7 @@ pub async fn handler(
         // moved).
         let result = match &state.pacer {
             Some(pacer) => lake_pacing::paced(state, pacer, msg.body.as_deref()).await,
-            None => reconcile(state).await.map(|_| ()),
+            None => reconcile(state).await,
         };
         if let Err(e) = result {
             // Full error Display on purpose (policy reversed 2026-08-10,

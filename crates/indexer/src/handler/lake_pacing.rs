@@ -155,7 +155,8 @@ async fn closed_at(ch: &clickhouse::Client, sequence: i64) -> Result<i64, Handle
     Ok(closed)
 }
 
-/// Runs one reconcile for this wake and queues the next one.
+/// Runs one reconcile for this wake, queues the next one, and returns what
+/// the reconcile did.
 ///
 /// A reconcile failure returns the error and queues nothing: SQS redelivers
 /// the message later, and the keepalive restarts the chain meanwhile.
@@ -163,7 +164,7 @@ pub async fn paced(
     state: &HandlerState,
     pacer: &Pacer,
     body: Option<&str>,
-) -> Result<(), HandlerError> {
+) -> Result<Reconciled, HandlerError> {
     let wake = Wake::parse(body);
     let done = reconcile(state).await?;
     let newest_closed_at = if done.persisted > 0 {
@@ -183,7 +184,7 @@ pub async fn paced(
         }
         None => info!(?wake, newest = done.newest, "no next wake-up queued"),
     }
-    Ok(())
+    Ok(done)
 }
 
 #[cfg(test)]
