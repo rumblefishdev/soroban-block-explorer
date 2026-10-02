@@ -427,7 +427,7 @@ fn decode_call_target(topic: &ScVal) -> Option<String> {
 /// Pull `diagnostic_events` from V3 (`soroban_meta.diagnostic_events`) or
 /// V4 (`v4.diagnostic_events`) meta. Galexie's captive-core enables
 /// diagnostic mode by default, so the V4 stream is reliably populated;
-/// the V3 path is kept for parity with `extract_events`.
+/// the V3 path is kept for parity with `event::LedgerEvents`.
 fn collect_diagnostic_events(meta: &TransactionMeta) -> Vec<&DiagnosticEvent> {
     match meta {
         TransactionMeta::V3(v3) => v3

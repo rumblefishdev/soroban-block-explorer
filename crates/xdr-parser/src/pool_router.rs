@@ -72,7 +72,7 @@
 use serde_json::Value;
 
 use crate::scval::{address, raw_scalar, symbol, vec_elements};
-use crate::types::{EventSource, ExtractedEvent};
+use crate::types::ExtractedEvent;
 
 /// One pool registration, tied to the router that emitted it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,14 +95,6 @@ pub fn detect_pool_registrations(
     let mut out = Vec::new();
     for (_tx, evs) in events {
         for ev in evs {
-            // The diagnostic container carries byte-identical copies of
-            // consensus events AND events from FAILED transactions (task
-            // 0182). Indexing it would register pools whose registration
-            // never applied. Every sibling detector filters it; this one is
-            // the guard review #438 found missing.
-            if matches!(ev.source, EventSource::Diagnostic) {
-                continue;
-            }
             // `as_deref`, not `clone`: this runs for EVERY event on the
             // chain, and the overwhelming majority are not registrations —
             // the allocation belongs in the match arm that keeps one.
@@ -116,7 +108,7 @@ pub fn detect_pool_registrations(
                 }),
                 Err(AddPoolReject::NotAddPool) => {}
                 Err(reason) => tracing::warn!(
-                    ledger_sequence = ev.ledger_sequence,
+                    ledger_sequence = ev.event_id.ledger_sequence,
                     router = %router,
                     ?reason,
                     "add_pool claimed to be a registration and could not be read — a pool is missing"
