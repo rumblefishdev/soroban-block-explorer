@@ -235,6 +235,14 @@ struct Vol24ChRow {
     vol24_a_units: Option<String>,
 }
 
+/// How much of one leg a pool traded over a window, in that leg's own units.
+/// `leg` is 0-based, in the pool's leg order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct LegVolume {
+    pub leg: usize,
+    pub units: f64,
+}
+
 /// SELECT column order MUST match this struct (clickhouse positional decode).
 #[derive(Debug, Row, Deserialize)]
 struct LegVol24ChRow {
@@ -242,24 +250,26 @@ struct LegVol24ChRow {
     raw_units: String,
 }
 
-/// Last-24h gross trade volume for one pool, as `(leg, units)`: how much of
-/// each leg was traded, in that leg's own units (`leg` is 0-based, in pool
-/// order). `None` when it is not knowable — an unparseable sum, or a
-/// soroban leg that traded but whose token publishes no decimals.
+/// Last-24h gross trade volume for one pool, one [`LegVolume`] per leg that
+/// traded. `None` when it is not knowable — an unparseable sum, or a soroban
+/// leg that traded but whose token publishes no decimals.
 ///
-/// A day with no trades is `[(0, 0.0)]`, not `[]`: a zero is reported in
-/// leg A, so it still needs leg A's price to read "$0.00", as it always did.
+/// A day with no trades is a zero in leg A, not an empty list: it still needs
+/// leg A's price — and, on a soroban pool, leg A's decimals — to read
+/// "$0.00", as it always did.
 ///
 /// - **Classic:** `liquidity_pool_snapshots.gross_volume_a`, which the
 ///   indexer already sums per ledger — always leg A. Deduped with `LIMIT 1
 ///   BY ledger_sequence` — same idiom as the chart — because RMT duplicate
 ///   versions of one `(pool, ledger)` row would double the sum.
 /// - **Soroban:** `pool_movements`, the absolute amount of every trade's
-///   **traded leg** — the lowest-index leg the trade moved — scaled by that
-///   leg's decimals. In a two-leg pool every trade moves leg A, so this is
-///   the leg the classic snapshot counts. In a three- or four-leg pool a
-///   trade moves two of the legs, often not leg A, and is counted on the
-///   first of the two. Deduped on the table's full sort key: the live writer
+///   **traded leg** — the lowest-index leg the trade wrote a row for —
+///   scaled by that leg's decimals. A two-leg trade writes both legs, so this
+///   is leg A, the leg the classic snapshot counts (a leg A left at zero
+///   counts zero, as it always did). A three- or four-leg trade writes only
+///   the two legs it moved, often not leg A, and is counted on the first of
+///   the two. The chart reads the same rule, in `fetch_soroban_volume_series`
+///   (`get_pool_chart.rs`). Deduped on the table's full sort key: the live writer
 ///   and the backfill write the same rows on purpose. Only trade events
 ///   count, as only claim atoms count in `gross_volume_a`.
 ///
@@ -279,7 +289,7 @@ pub(super) async fn fetch_pool_volume_24h(
     pool_id_hex: &str,
     pool_kind: domain::PoolKind,
     leg_decimals: &[Option<u32>],
-) -> Result<Option<Vec<(usize, f64)>>, clickhouse::error::Error> {
+) -> Result<Option<Vec<LegVolume>>, clickhouse::error::Error> {
     match pool_kind {
         domain::PoolKind::Classic => {
             let raw = client
@@ -310,14 +320,13 @@ pub(super) async fn fetch_pool_volume_24h(
                 None => Some(0.0),
                 Some(raw) => parse_f64(raw),
             };
-            Ok(units.map(|units| vec![(0, units)]))
+            Ok(units.map(|units| vec![LegVolume { leg: 0, units }]))
         }
         domain::PoolKind::Soroban => {
             // The registry's `legs` is read without `FINAL`: a pool's legs are
             // fixed at registration, and no pool has two versions that differ
-            // (0 on production, 2026-10-01). A trade's rows carry one row per
-            // leg it moved; `min(leg)` picks the traded leg and `argMin` its
-            // amount.
+            // (0 on production, 2026-10-01). A trade writes one row per leg;
+            // `min(leg)` picks the traded leg and `argMin` its amount.
             let rows = client
                 .query(
                     "SELECT traded_leg, toString(sum(abs(amount))) AS raw_units FROM ( \
@@ -350,7 +359,10 @@ pub(super) async fn fetch_pool_volume_24h(
                 .fetch_all::<LegVol24ChRow>()
                 .await?;
             if rows.is_empty() {
-                return Ok(Some(vec![(0, 0.0)]));
+                return match leg_decimals.first() {
+                    Some(Some(_)) => Ok(Some(vec![LegVolume { leg: 0, units: 0.0 }])),
+                    _ => Ok(None),
+                };
             }
             let mut per_leg = Vec::with_capacity(rows.len());
             for row in rows {
@@ -361,7 +373,10 @@ pub(super) async fn fetch_pool_volume_24h(
                 let Some(raw) = parse_f64(&row.raw_units) else {
                     return Ok(None);
                 };
-                per_leg.push((leg, raw / 10f64.powi(*decimals as i32)));
+                per_leg.push(LegVolume {
+                    leg,
+                    units: raw / 10f64.powi(*decimals as i32),
+                });
             }
             Ok(Some(per_leg))
         }
@@ -372,14 +387,15 @@ pub(super) async fn fetch_pool_volume_24h(
 /// that traded has a price — a partial sum understates the volume while
 /// looking like a real number.
 fn volume_usd(
-    per_leg: &[(usize, f64)],
+    per_leg: &[LegVolume],
     legs: &[PriceLeg],
     closes: &HashMap<PriceLeg, f64>,
 ) -> Option<f64> {
     let mut usd = 0.0;
-    for (leg, units) in per_leg {
-        let close = closes.get(legs.get(*leg)?)?;
-        usd += units * close;
+    for traded in per_leg {
+        let leg = legs.get(traded.leg)?;
+        let close = closes.get(leg)?;
+        usd += traded.units * close;
     }
     Some(usd)
 }

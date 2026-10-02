@@ -398,11 +398,12 @@ struct SorobanVolumeChRow {
 /// trade's traded leg, scaled by that leg's decimals and priced at the
 /// trade's own ledger, as the classic chart prices `gross_volume_a`.
 ///
-/// - The **traded leg** is the lowest-index leg the trade moved (legs in the
-///   registry row's order). In a two-leg pool every trade moves leg A, so it
-///   is the leg the classic snapshot counts. In a three- or four-leg pool a
-///   trade moves two of the legs, often not leg A, and is counted on the
-///   first of the two.
+/// - The **traded leg** is the lowest-index leg the trade wrote a row for
+///   (legs in the registry row's order). A two-leg trade writes both legs, so
+///   it is leg A, the leg the classic snapshot counts. A three- or four-leg
+///   trade writes only the two legs it moved, often not leg A, and is counted
+///   on the first of the two. The detail endpoint's 24h volume reads the same
+///   rule, in `fetch_pool_volume_24h` (`usd_analytics.rs`).
 /// - A bucket with any trade whose traded leg has no price or no published
 ///   decimals is `NULL` — an honest hole, never a partial sum, the classic
 ///   chart's rule. An unpriceable leg (empty kind) matches no price row; an
@@ -442,8 +443,9 @@ async fn fetch_soroban_volume_series(
          FROM ( \
              SELECT \
                 l.bucket_ms AS bucket_ms, \
-                if(dateDiff('second', p.bucket, l.price_bucket) <= {carry} AND arrayElement(?, t.traded_leg) >= 0, \
-                   abs(toFloat64(t.amount)) / pow(10, arrayElement(?, t.traded_leg)) \
+                arrayElement(?, t.traded_leg) AS scale, \
+                if(dateDiff('second', p.bucket, l.price_bucket) <= {carry} AND scale >= 0, \
+                   abs(toFloat64(t.amount)) / pow(10, scale) \
                        * nullIf(toFloat64(p.close_usd), 0), NULL) AS usd \
              FROM t \
              JOIN ( \
@@ -483,8 +485,7 @@ async fn fetch_soroban_volume_series(
         .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
         .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
         .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
-        .bind(scales.clone()) // traded leg's scale: known?
-        .bind(scales) // traded leg's scale: divisor
+        .bind(scales) // each leg's scale, -1 where unknown
         .bind(legs.iter().map(|l| l.kind).collect::<Vec<_>>()) // leg identities
         .bind(legs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>())
         .bind(legs.iter().map(|l| l.issuer.as_str()).collect::<Vec<_>>())

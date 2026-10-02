@@ -635,8 +635,9 @@ rules. Its `volume` is the classic definition on its trades: the absolute
 amount of every trade's **traded leg** in `pool_movements` (deduped on the
 full key), scaled by that leg's decimals and priced at the trade's own ledger;
 `fee_revenue` follows from it. The traded leg is the lowest-index leg the trade
-moved: always leg A in a two-leg pool, the leg the classic snapshot counts; in
-a three- or four-leg pool a trade moves two legs and is counted on the first.
+wrote a row for: a two-leg trade writes both legs, so it is always leg A, the
+leg the classic snapshot counts; a three- or four-leg trade writes only the two
+legs it moved and is counted on the first.
 A bucket holding a trade whose traded leg has no price or no published
 decimals has `null` volume — a hole, never a partial sum. The detail
 endpoint's 24h `volume` / `fee_revenue` read the same trades, each leg's

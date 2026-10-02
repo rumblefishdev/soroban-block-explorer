@@ -6,7 +6,7 @@
 //!   CH_URL=http://localhost:8123 CH_USER=default CH_PASSWORD=… \
 //!     cargo test -p api soroban_volume_24h
 
-use super::fetch_pool_volume_24h;
+use super::{LegVolume, fetch_pool_volume_24h};
 
 const DB: &str = "api_test_0374_soroban_volume";
 const POOL: &str = "5858585858585858585858585858585858585858585858585858585858585858";
@@ -84,7 +84,7 @@ async fn soroban_volume_24h() {
         .expect("volume query runs");
     assert_eq!(
         units,
-        Some(vec![(0, 4.0)]),
+        Some(vec![LegVolume { leg: 0, units: 4.0 }]),
         "2.5 sold + 1.5 bought, once each, on leg A"
     );
 
@@ -99,13 +99,26 @@ async fn soroban_volume_24h() {
     let three = fetch_pool_volume_24h(&ch, POOL3, soroban, &[Some(7); 3])
         .await
         .expect("volume query runs");
-    assert_eq!(three, Some(vec![(0, 1.0), (1, 3.0)]));
+    assert_eq!(
+        three,
+        Some(vec![
+            LegVolume { leg: 0, units: 1.0 },
+            LegVolume { leg: 1, units: 3.0 },
+        ])
+    );
 
     // A pool with no trades in the window is a genuine zero, still in leg A.
     let idle = fetch_pool_volume_24h(&ch, IDLE, soroban, &[Some(7); 2])
         .await
         .expect("volume query runs");
-    assert_eq!(idle, Some(vec![(0, 0.0)]));
+    assert_eq!(idle, Some(vec![LegVolume { leg: 0, units: 0.0 }]));
+
+    // An idle pool whose leg A publishes no decimals: no honest zero either,
+    // exactly as before multi-leg pools were priced.
+    let idle_unscaled = fetch_pool_volume_24h(&ch, IDLE, soroban, &[None, Some(7)])
+        .await
+        .expect("volume query runs");
+    assert_eq!(idle_unscaled, None);
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
         .execute()
