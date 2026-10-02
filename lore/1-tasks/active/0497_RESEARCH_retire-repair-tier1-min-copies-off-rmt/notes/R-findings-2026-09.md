@@ -1,46 +1,6 @@
----
-id: '0497'
-title: 'RESEARCH: retire repair-tier1 — move every MIN-semantics copy off RMT state tables'
-type: RESEARCH
-status: active
-related_adr: ['0055']
-related_tasks: ['0464', '0463', '0420', '0492']
-tags:
-  [
-    backend,
-    clickhouse,
-    backfill-runner,
-    data-integrity,
-    priority-high,
-    effort-medium,
-  ]
-links: []
-history:
-  - date: '2026-08-17'
-    status: backlog
-    who: karolkow
-    note: >
-      Spawned from the LP-holdings decision session. The direction is decided
-      there: repair-tier1 is a compensating process for MIN-semantics columns
-      copied onto ReplacingMergeTree state tables, and it should die as a
-      class — one entry at a time, as each copy moves to a fact-derived or
-      history-derived read. The LP entry already dies with that session's
-      design. This task is the per-column investigation for the rest.
-  - date: '2026-09-25'
-    status: active
-    who: karolkow
-    note: >
-      Activated to retire the two NFT entries, whose columns no reader uses
-      since 0528. The LP entry stays until task 0468's storage fix; accounts
-      and soroban_contracts stay until their routes land.
-  - date: '2026-09-25'
-    status: active
-    who: karolkow
-    note: >
-      Priority raised low → high (decision 38 A): the MIN copies hold false
-      values in production today — ~570k account first-seen ledgers, ~1.6k
-      contract deploy ledgers, ~100k zeroed LP first deposits (0468).
----
+# Task 0497 — findings and progress, 2026-08-17 → 2026-09-25
+
+Moved from the task file when it became a directory (2026-10-01).
 
 # RESEARCH: retire repair-tier1
 
@@ -299,9 +259,9 @@ the unused `domain::Nft` type still lists the field; the Hot/Pending merge in
 **Merged 2026-09-25.** Split after review (owner: a move never shares a PR
 with logic): #503 carried the three pure moves (merged 13:19 UTC), #501 the
 logic only — 0 moved lines in its final diff (merged 13:42 UTC, `d91a2890`).
-Rollout step 2 (indexer deploy) ships with the next release; step 3 (DROP on
-both tables) follows once every old indexer container is gone. Until step 3
-the table keeps the column with `DEFAULT NULL`, a state safe for both writers.
+Step 2 live (no write of the column after 2026-09-25 15:41 UTC). Step 3 done
+2026-10-01 07:37 UTC, `DROP COLUMN` on `nfts` + `nfts_pending` (decision 391 A:
+derive from the events; a `min` MV only if reads grow). Ingest unaffected.
 
 **Correction (2026-09-25):** the "two CH-gated `accounts` tests race" finding
 above is not a defect. The CI job runs every ClickHouse-gated suite with

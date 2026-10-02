@@ -394,7 +394,6 @@ pub struct LpPositionRow {
     pub pool_id: [u8; 32],
     pub account_id: i64,
     pub shares: i128,
-    pub first_deposit_ledger: i64,
     pub last_updated_ledger: i64,
     /// ADR 0055 — see [`BalanceRow::closed_at_ledger`]. A withdrawn position
     /// and a position still open at zero shares both wrote `shares = 0`.

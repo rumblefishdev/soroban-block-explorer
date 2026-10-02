@@ -151,9 +151,16 @@ async fn lp_ch_rows_decode() {
     }
 
     // detail USD analytics — `Vol24ChRow` + `LastCloseChRow`.
-    fetch_pool_usd_analytics(&ch, &pool, &ctx.price, &[None, None])
-        .await
-        .expect("usd-analytics rows decode");
+    fetch_pool_usd_analytics(
+        &ch,
+        &pool,
+        ctx.pool_kind,
+        &ctx.price,
+        &[None, None],
+        &[Some(7), Some(7)],
+    )
+    .await
+    .expect("usd-analytics rows decode");
 
     // chart — `ChartChRow`, incl. the `samples_in_bucket` UInt64.
     let to = chrono::Utc::now();

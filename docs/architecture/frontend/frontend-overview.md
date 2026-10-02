@@ -277,10 +277,13 @@ Navigation rules:
 - exact search hits should resolve directly to the detail page when confidence is high
 - broad or ambiguous matches should remain on a grouped search results page
 - list routes should preserve filters and cursor state in the URL when practical
-- `/api` and `/api/*` are not explorer routes: CloudFront serves the Stellar Prices
-  API portal there, a separate SPA. The navbar and the footer link it with a plain
-  anchor (`PRICES_API_URL`), never through the router, and no explorer route may live
-  under `/api`
+- `/prices-api` and `/prices-api/*` are not explorer routes: CloudFront serves the
+  Stellar Prices API portal there, a separate SPA. The navbar and the footer link it
+  with a plain anchor (`PRICES_API_URL`), never through the router, and no explorer
+  route may live under `/prices-api`
+- `/api`, `/api/*`, `/pricing-api` and `/pricing-api/*` are not explorer routes
+  either: the portal's old homes, which CloudFront answers with a `301` to the same
+  path under `/prices-api` (task 0608)
 
 ## 6. Routes and Pages
 
@@ -839,7 +842,11 @@ Expanded behavior:
   from the composition.
 - Charts - TVL over time, volume over time, fee revenue
 - Pool participants - table of liquidity providers and their share
-- Recent transactions - deposits, withdrawals, and trades involving this pool
+- Recent activity - deposits, withdrawals, and trades through this pool, one
+  row per operation (classic) or per pool event (Soroban) — a router
+  operation that crossed the pool many times can fill a page under one hash. Each leg's raw
+  amount is scaled by that leg's `decimals`; a leg with no amount or an unknown
+  scale is left out rather than shown as `0`.
 
 Expanded behavior:
 
@@ -976,6 +983,15 @@ wrappers from this folder — they do not call `fetch` or the generated SDK dire
 local dev. Staging and production builds receive the URL from the deployment
 pipeline (CI/CDK) — no staging/production URL is committed to the repo; if the
 variable is missing, `config.ts` throws a clear error at first page load.
+
+`VITE_STELLAR_NETWORK` (`mainnet` | `testnet`; unset means `mainnet`) tells a
+build which network it shows — the same SPA is deployed once per network (task
+0553). `web/src/network.ts` reads it and throws on any other value; the shell
+renders it as `router/NetworkPill.tsx` beside the logo (a filled brand-yellow
+pill on testnet, an outline on mainnet, with a menu linking both deployments),
+and a testnet build prefixes the tab title with "Testnet ·" and points every
+icon (SVG, PNGs, iOS touch icon) at its testnet twin with a yellow dot. The
+infra Makefile's web build recipes set it.
 
 ## 9. Performance and Error Handling
 

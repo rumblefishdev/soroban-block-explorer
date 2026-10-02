@@ -283,7 +283,8 @@ multi-region failover plan.
   in task 0244.
 - holds the schema in `crates/db-clickhouse/schema/init.sql` (28 tables, 3 materialized
   views, 1 `Dictionary` as of 2026-07-22); applied idempotently by the
-  `db-clickhouse-init` sidecar after `clickhouse` reports healthy, and equally by the
+  `db-clickhouse-init` sidecar after `clickhouse` reports healthy — to mainnet's
+  `default` and testnet's `testnet` database alike (task 0553) — and equally by the
   Rust `db-clickhouse-init` CLI when iterating outside Docker
 - the ClickHouse _pilot_ framing this section used to carry is spent. ClickHouse is no
   longer a parallel store being evaluated next to RDS — per
@@ -370,14 +371,16 @@ redeploying `ApiGateway` as soon as the run ends.
 - serves the React frontend
 - caches static assets and documentation assets; API responses are not assumed to traverse
   CloudFront in the initial topology
-- since task 0519, also serves a second, independently-built SPA from its
-  own S3 bucket (`${envName}-soroban-explorer-api-spa`) under `/api` +
-  `/api/*` on the same distribution (two behaviors: `/api/*` requires the
-  literal trailing slash and doesn't match bare `/api`, so that gets its
-  own exact-match behavior). Both point at one CloudFront Function
-  (`api-spa-routing.ts`) that always rewrites extensionless paths to
-  `/api/index.html` (SPA routing fallback, including the bucket root) and
-  redirects bare `/api` to `/api/` — the main behaviors' `errorResponses`
+- since task 0519, also serves a second, independently-built SPA (the
+  Stellar Prices portal) from its own S3 bucket
+  (`${envName}-soroban-explorer-api-spa`, key prefix `prices-api/`) under
+  `/prices-api` + `/prices-api/*` on the same distribution (two behaviors:
+  `/prices-api/*` requires the literal trailing slash and doesn't match bare
+  `/prices-api`, so that gets its own exact-match behavior). Both point at
+  one CloudFront Function (`api-spa-routing.ts`) that always rewrites
+  extensionless paths to `/prices-api/index.html` (SPA routing fallback,
+  including the bucket root) and redirects bare `/prices-api` to
+  `/prices-api/` — the main behaviors' `errorResponses`
   can't cover this because custom error pages resolve through the
   _default_ behavior's origin, not the originating one. The same function
   also does the basic-auth check when `enableApiSpaBasicAuth` is on,
@@ -385,14 +388,20 @@ redeploying `ApiGateway` as soon as the run ends.
   — sharing the KeyValueStore (not the Function itself) so there's one
   credential to manage, not two. The KVS is provisioned even with both
   flags off, so turning a gate off keeps its credentials for re-arming.
-  Production runs with `enableApiSpaBasicAuth=false` (the `/api` SPA is
+  Production runs with `enableApiSpaBasicAuth=false` (the portal is
   public; its backend lives on a separate host).
+- `/api` + `/api/*`, the portal's home until task 0608, and `/pricing-api` +
+  `/pricing-api/*`, its name for a few hours on 2026-10-02, keep behaviors on
+  the same origin, but their function (`api-path-redirect.ts`) answers every
+  request with a `301` to the same path under `/prices-api`, query string
+  kept (bare `/api` → `/prices-api/`), so links shared before the move
+  still land on the portal.
 - since task 0576, writes standard (access) logs for every request, explorer
-  and `/api` alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
+  and portal alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
   referrer, user agent and viewer IP, never cookies. Objects expire after 30
   days, because the lines carry viewer IPs and the Prices portal's privacy
   policy keeps technical logs for up to 30 days. It is the only complete
-  record of traffic to the `/api` SPA. Since Prices task 0316 (2026-09-29)
+  record of traffic to the portal. Since Prices task 0316 (2026-09-29)
   that SPA also loads GA4 through the explorer's GTM, but GA counts only
   visitors who consent. The logs count page loads, not in-app navigation.
   The bucket is `ObjectWriter`-owned because
@@ -612,13 +621,18 @@ Current environments (post-task-0249):
 - **Production** — mainnet data; AWS workloads in `eu-central-1`
   (Lambdas out-of-VPC, Galexie public-subnet ECS Fargate) reaching
   the Hetzner-hosted ClickHouse data plane over mTLS.
+- **Testnet** (task 0553, ADR 0052) — the same code against Stellar
+  Testnet, `Explorer-testnet-*` stacks from `envs/testnet.json`. No Galexie,
+  ledger bucket or VPC: the indexer reads SDF's public data lake and paces
+  itself, one delayed SQS message per ledger it expects, with a
+  once-a-minute Scheduler keepalive. Data in a `testnet` database on the same
+  ClickHouse box, under its own users and quotas.
 
 AWS-side staging was retired by task 0249 and is not redeployed in
-`eu-central-1`. Pre-production validation now happens in the dev
-environment (local CH/PG) and via canary / smoke runs against
-production on cert-restricted endpoints; if product re-opens the
-need for a staging tier later, it would be reintroduced as a
-separate task.
+`eu-central-1`; testnet takes its functional role. It is not a performance
+tier — its data is a fraction of mainnet's — so performance is still
+validated against production (canary / smoke runs on cert-restricted
+endpoints).
 
 ### 7.2 Scaling Model
 

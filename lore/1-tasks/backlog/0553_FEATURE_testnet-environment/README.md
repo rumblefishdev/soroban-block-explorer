@@ -59,6 +59,12 @@ history:
       users; the reader reads prices. Doorbell every 2 s from a one-hour lake
       measurement. Patches listed for a from-scratch sweep at the epic's end.
       Task turned into a directory.
+  - date: '2026-10-02'
+    status: backlog
+    who: karolkow
+    note: >
+      Code merged except E (TESTNET marker); operator session done (certs,
+      Slack, ClickHouse users, testnet database). Status rewritten.
 ---
 
 # Testnet environment
@@ -72,40 +78,36 @@ ledgers from SDF's public data lake, not from a Galexie of its own.
 [ADR 0052](../../../2-adrs/0052_testnet-as-second-environment-and-staging.md)
 fixed the shape; this task builds it.
 
-## Status — 2026-09-30
+## Status — 2026-10-02
 
-| PR                         | Scope                                                                                                                                                                                                                                                             | State                                                                                            |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| A #543                     | ledger source, prefix, database from env; network guard                                                                                                                                                                                                           | merged                                                                                           |
-| B #550                     | RPC pool into env config, `envName` widened                                                                                                                                                                                                                       | merged (Makefile `ENV=` and Galexie `START` not moved — not needed while testnet has no Galexie) |
-| C #553                     | `testnet_reader` (SELECT `testnet.*`, `prices.*`) and `testnet_writer` (SELECT, INSERT `testnet.*`), quotas copied from `prices_read` / `prices_write`, existing profiles; `dev_read` reads `testnet.*`; no testnet admin — backfill uses the operator write cert | merged; needs a ClickHouse recreate                                                              |
-| D1 #558 `[structure only]` | `ledgerSource: galexie \| public-lake`, optional prefix / database / `provisionChDns`; no VPC, bucket, Galexie or Galexie alarms with `public-lake`; test move in backfill-runner                                                                                 | open                                                                                             |
-| D2 #559                    | genesis partition counted from ledger 2; indexer refuses a lake folder beside its own bucket; passphrase trimmed once (API and local server)                                                                                                                      | draft on D1                                                                                      |
-| D3                         | sidecar applies `init.sql` to `default` and `testnet`; migration runbooks repeat each step on `testnet`                                                                                                                                                           | to do                                                                                            |
-| D4                         | `testnet.json`, `bin/testnet.ts`, doorbell, stall alarm, low API Gateway throttle, docs, ADR 0052                                                                                                                                                                 | to do                                                                                            |
-| E                          | TESTNET marker in the SPA                                                                                                                                                                                                                                         | later                                                                                            |
+| Step                                       | Scope                                                                                                                                                        | State  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| A #543, B #550, C #553                     | ledger source and database from env; RPC pool in env config; `testnet_*` ClickHouse users and quotas                                                         | merged |
+| D1 #558, D2 #559, D3 #562, D4 #566, F #567 | CDK ledger source; genesis from ledger 2; sidecar applies `init.sql` to both databases; `testnet.json`, keepalive, stall alarm, runbook; self-pacing indexer | merged |
+| #592, #594 `[structure only]`, P2 #597     | moves; an empty lake database starts at ledger 2                                                                                                             | merged |
+| E #600                                     | TESTNET marker: a "TESTNET ▾" pill beside the logo that is also the network menu; testnet tab title and icons                                                | merged |
 
-Decided 2026-09-30: Lambdas use their own certs mapped to the `testnet_*`
-users — one project, but a misconfigured testnet cannot touch mainnet data,
-and cert names already carry the environment. API host
-`api-testnet-sorobanscan.rumblefishdev.com` behind Cloudflare with the same
-edge secret and Turnstile as mainnet; testnet alarms in their own Slack
-channel.
+**Operator session** — done 2026-10-02:
+[notes/S-operator-session-2026-10-02.md](notes/S-operator-session-2026-10-02.md).
+
+**Launch** — from 2026-10-06: backfill → deploy 1 → Terraform API record →
+rf-domains rule + Turnstile → deploy 2 and web → resume indexer → checks.
+Then P1–P5, tasks 0603 and 0609, the patch sweep, ADR 0052 → accepted.
+
+Certs, API host and alarm channel decisions (2026-09-30):
+[notes/S-address-and-pr-split.md](notes/S-address-and-pr-split.md).
 
 ## Patch register — sweep at the end of the epic
 
-The epic ships with patches; its last step rebuilds each one in the shape we
-would build from scratch — [notes/S-patch-register.md](notes/S-patch-register.md):
-ledger source as scattered ifs in three infra files; optional config fields that
-only make sense together; two env vars that can contradict plus a guard; a
-network check that assumes pubnet for an own bucket.
+Each patch is rebuilt in its from-scratch shape at the end:
+[notes/S-patch-register.md](notes/S-patch-register.md).
 
 ## Acceptance Criteria
 
 - [ ] `Explorer-testnet-*` deploys from `infra/envs/testnet.json` with no code
       branching by network, and `cdk diff` on production is empty after the
       refactor — the parameterisation must not move prod.
-- [ ] Ledgers flow Galexie → S3 → indexer → `testnet` database; a testnet
+- [ ] Ledgers flow data lake → indexer → `testnet` database; a testnet
       transaction resolves on the testnet SPA under the hash Stellar RPC
       reports for it (passphrase → `network_id` is right).
 - [ ] `testnet_*` users cannot read `default.*`, and `testnet_writer` cannot
@@ -116,11 +118,18 @@ network check that assumes pubnet for an own bucket.
 - [ ] `backfill-runner` reads the testnet data lake and archive when run
       for testnet (items 8–9), and the `testnet` database holds the full
       history from the current genesis.
-- [ ] The stall alarm fires on a simulated stall (doorbell paused, or the
-      prefix pointed at a folder that no longer grows), items 10–11.
+- [ ] `testnet-ingestion-stall` exists in CloudWatch
+      (`aws cloudwatch describe-alarms`), is OK once the indexer runs, fires
+      on a simulated stall (indexer paused, or the prefix pointed at a folder
+      that no longer grows), and both state changes reach the testnet Slack
+      channel.
 - [ ] Patch sweep done: every item of the patch register rebuilt or
       explicitly kept with its reason.
 - [ ] The reset runbook was exercised once end to end.
+- [ ] The API is public like mainnet's (`docs/deployment.md` § Testnet, steps
+      1–6): ACM cert, Terraform record (workspace `testnet`), rf-domains Transform
+      Rule + Turnstile hostname, `enableCloudflareApiDomain`, `enableEdgeSecretLock`,
+      `enableAuthLayer` all `true`; direct execute-api and lockless calls refused.
 - [ ] **Docs updated** —
       `docs/architecture/infrastructure/infrastructure-overview.md` §7.1
       (environment model), `docs/architecture/security/clickhouse-rbac.md`
@@ -138,3 +147,4 @@ network check that assumes pubnet for an own bucket.
 - [S-pr-a-verification-and-review](notes/S-pr-a-verification-and-review.md) — local testnet run, post-merge review of #543
 - [I-implementation-phases](notes/I-implementation-phases.md) — ADR phases, protocol lead, notes
 - [S-patch-register](notes/S-patch-register.md)
+- [S-operator-session-2026-10-02](notes/S-operator-session-2026-10-02.md) — what the operator session changed, and its lessons

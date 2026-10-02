@@ -23,6 +23,9 @@
           },
           {
             "env": "VITE_TURNSTILE_SITE_KEY"
+          },
+          {
+            "env": "VITE_STELLAR_NETWORK"
           }
         ]
       },

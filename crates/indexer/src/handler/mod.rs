@@ -1,11 +1,13 @@
 //! Lambda handler for the Ledger Processor — SQS "doorbell" sequencer.
 //!
-//! The SQS message is a **content-free trigger** ("a file landed on S3, go
-//! work"); its body is ignored. On each invocation the handler reconciles the
-//! durable cursor — `max(sequence)` in ClickHouse — with what is contiguously
-//! available on S3, and persists forward **oldest-first** starting at
-//! `max + 1`, stopping at the first gap (next ledger not yet on S3) or when a
-//! per-invocation time budget is reached. Each ledger is persisted via
+//! The SQS message is a trigger ("a file landed on S3, go work"); on mainnet
+//! its body is ignored, and reading the public data lake it names the ledger
+//! the indexer expects (`lake_pacing`). On each invocation the handler
+//! reconciles the durable cursor — `max(sequence)` in ClickHouse — with what
+//! is contiguously available on S3, and persists forward **oldest-first**
+//! starting at `max + 1` (an empty database reading the lake: at the first
+//! closed ledger), stopping at the first gap (next ledger not yet on S3) or
+//! when a per-invocation time budget is reached. Each ledger is persisted via
 //! [`db_clickhouse::persist::persist_ledger_clickhouse`] (open
 //! `PartitionWriter` → write_ledger → commit), with the `ledgers` row written
 //! last so a crash/timeout resumes cleanly from the new `max`.
@@ -20,6 +22,7 @@
 //! The indexer drives ClickHouse only and contains no PG / sqlx code.
 
 pub mod enrichment_publish;
+pub mod lake_pacing;
 pub mod process;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
@@ -51,11 +54,13 @@ pub struct SqsEvent {
 
 #[derive(Debug, Deserialize)]
 pub struct SqsMessage {
-    // Doorbell body is ignored (see module docs) — we only keep `messageId`
-    // to name a batch-item-failure on a failed reconcile. Serde ignores the
-    // unmapped `body` field in the SQS event JSON.
+    // `messageId` names a batch-item-failure on a failed reconcile. The body
+    // is ignored on mainnet (see module docs); reading the public data lake,
+    // the indexer paces itself through it (`lake_pacing`, task 0553).
     #[serde(rename = "messageId")]
     pub message_id: String,
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 /// Partial-batch-failure response read by the SQS event-source-mapping.
@@ -134,6 +139,9 @@ pub struct HandlerState {
     /// batched query per first sighting of a contract. Cloning shares the inner
     /// `Arc`, so all invocations on a warm container share the memo.
     pub classification_cache: ClassificationCache,
+    /// Present only when reading the public data lake (task 0553): the lake
+    /// sends no events, so the indexer queues its own next wake-up.
+    pub pacer: Option<lake_pacing::Pacer>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,10 +173,15 @@ pub async fn handler(
     let mut batch_item_failures = Vec::new();
 
     for msg in &payload.records {
-        // Body irrelevant — every doorbell triggers the same reconcile.
-        // batchSize is 1, so this loops once; if it ever isn't, a second
-        // reconcile in the same batch is a cheap no-op (cursor already moved).
-        if let Err(e) = reconcile(state).await {
+        // On mainnet the body is irrelevant — every doorbell triggers the same
+        // reconcile. batchSize is 1, so this loops once; if it ever isn't, a
+        // second reconcile in the same batch is a cheap no-op (cursor already
+        // moved).
+        let result = match &state.pacer {
+            Some(pacer) => lake_pacing::paced(state, pacer, msg.body.as_deref()).await,
+            None => reconcile(state).await,
+        };
+        if let Err(e) = result {
             // Full error Display on purpose (policy reversed 2026-08-10,
             // lore-0455): the old sanitizer reduced the 0454 outage to the
             // undiagnosable label "ClickHouse error". Everything ClickHouse
@@ -208,8 +221,18 @@ pub async fn handler(
     })
 }
 
-/// Persist the contiguous run of ledgers from `max(sequence) + 1` upward, in
-/// strict ascending order, until either:
+/// What one reconcile did: how many ledgers it stored, and the newest stored
+/// ledger after it (0 while the table is empty). Mainnet ignores it; reading
+/// the data lake, the indexer paces itself by it (`lake_pacing`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reconciled {
+    pub persisted: u64,
+    pub newest: i64,
+}
+
+/// Persist the contiguous run of ledgers from `max(sequence) + 1` upward (an
+/// empty database reading the lake: from the first closed ledger), in strict
+/// ascending order, until either:
 ///   * the next ledger is **not yet on S3** (a gap) — return Ok and wait for a
 ///     future doorbell (this is the ordering barrier), or
 ///   * the **time budget** ([`RECONCILE_DEADLINE`]) is reached — return Ok;
@@ -218,7 +241,7 @@ pub async fn handler(
 /// Returns Err only on a hard CH/S3 failure, which fails the doorbell so SQS
 /// redelivers it. Already-persisted ledgers stay committed (the `ledgers` row
 /// is written last per ledger), so a resume never reprocesses them.
-async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
+async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
     let start = Instant::now();
 
     let max_seq: i64 = state
@@ -228,17 +251,15 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
         .await
         .map_err(|e| HandlerError::ClickHouse(db_clickhouse::SchemaError::Query(e)))?;
 
-    // Empty CH → `max()` is 0. Without a seeded baseline there is no floor to
-    // start from (HEAD-probing up from ledger 1 would be millions of misses),
-    // so no-op. Operationally CH is always seeded (snapshot / backfill) before
-    // the live tail runs, so this is a guard, not a normal path.
-    if max_seq <= 0 {
+    let Some(mut next) = first_ledger_to_read(max_seq, &state.bucket) else {
         warn!("ledgers table is empty (max=0) — no cursor to advance from; no-op");
-        return Ok(());
-    }
-
-    let mut next = max_seq + 1;
+        return Ok(Reconciled {
+            persisted: 0,
+            newest: 0,
+        });
+    };
     let mut persisted = 0u64;
+    let mut newest = max_seq;
 
     loop {
         // Check the budget BEFORE starting a ledger so we never begin one we
@@ -248,26 +269,51 @@ async fn reconcile(state: &HandlerState) -> Result<(), HandlerError> {
                 next,
                 persisted, "reconcile hit time budget — stopping; next doorbell resumes"
             );
-            return Ok(());
+            return Ok(Reconciled { persisted, newest });
         }
 
         let key = ledger_s3_key(&state.key_prefix, next);
         if !s3_object_exists(state, &key).await? {
             // `next` is not on S3 yet — stop. A future doorbell (when the file
             // lands) resumes here. This gate is what guarantees no gaps.
-            if persisted == 0 {
+            if persisted == 0 && max_seq <= 0 {
+                // A network's first ledger is never late: an empty lake
+                // database that cannot find it reads the wrong folder.
+                warn!(
+                    next,
+                    key = key.as_str(),
+                    "empty database and its first ledger is not in the lake — wrong folder?"
+                );
+            } else if persisted == 0 {
                 info!(next, "no new contiguous ledger on S3 — nothing to do");
             } else {
                 info!(next, persisted, "reached gap on S3 — contiguous run done");
             }
-            return Ok(());
+            return Ok(Reconciled { persisted, newest });
         }
 
         info!(ledger = next, key = key.as_str(), "processing ledger");
         process_s3_object(state, &state.bucket, &key).await?;
         persisted += 1;
+        newest = next;
         next += 1;
     }
+}
+
+/// The first ledger a reconcile reads: the one after the newest stored. With
+/// an empty table, the public data lake starts at the network's first closed
+/// ledger, so testnet rebuilds itself after a reset; our own bucket
+/// (mainnet) holds ledgers only from where our Galexie started, so an empty
+/// mainnet table waits for a seeding backfill (`None`). Only testnet reads the
+/// lake; a mainnet indexer pointed at it would start ~64M ledgers back.
+fn first_ledger_to_read(max_seq: i64, bucket: &str) -> Option<i64> {
+    if max_seq > 0 {
+        return Some(max_seq + 1);
+    }
+    if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
+        return Some(xdr_parser::public_archive::FIRST_CLOSED_LEDGER as i64);
+    }
+    None
 }
 
 /// Derive the S3 object key for a ledger from Galexie's datastore naming
@@ -572,7 +618,7 @@ async fn publish_indexer_metrics(
 }
 
 #[cfg(test)]
-#[path = "lag_tests.rs"]
+#[path = "tests/lag_tests.rs"]
 mod lag_tests;
 
 /// Classify a `HandlerError` as transient (eligible for the retry
@@ -711,5 +757,5 @@ async fn download_s3_object(
 }
 
 #[cfg(test)]
-#[path = "handler_tests.rs"]
+#[path = "tests/handler_tests.rs"]
 mod tests;

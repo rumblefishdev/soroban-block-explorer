@@ -5,7 +5,8 @@
 //! `soroban_contracts.contract_type`) guarded by a `CHECK` range.
 //! The Rust enum pins on-disk layout via `#[repr(i16)]`, decodes/encodes
 //! as SMALLINT, and renders the canonical string at the API boundary
-//! through serde.
+//! through serde. `PoolEvent` is `#[repr(u8)]`: its ClickHouse column is
+//! `UInt8`.
 //!
 //! Readable SQL labels for psql / BI live in the
 //! `20260422000000_enum_label_functions` migration (one IMMUTABLE helper
@@ -21,6 +22,7 @@ mod contract_event_type;
 mod contract_type;
 mod nft_event_type;
 mod operation_type;
+mod pool_event;
 mod pool_kind;
 
 pub use asset_family::AssetFamily;
@@ -29,6 +31,7 @@ pub use contract_event_type::ContractEventType;
 pub use contract_type::ContractType;
 pub use nft_event_type::NftEventType;
 pub use operation_type::OperationType;
+pub use pool_event::PoolEvent;
 pub use pool_kind::PoolKind;
 
 /// Error returned when a SMALLINT value read from the database (or a

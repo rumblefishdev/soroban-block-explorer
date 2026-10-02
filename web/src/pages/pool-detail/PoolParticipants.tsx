@@ -6,7 +6,6 @@ import {
   addressType,
   EmptyState,
   ExplorerTable,
-  IdentifierDisplay,
   IdentifierWithCopy,
   PaginationControls,
   QueryErrorState,
@@ -69,22 +68,6 @@ const columns: ExplorerTableColumn<ParticipantItem>[] = [
           : '—'}
       </Typography>
     ),
-  },
-  {
-    id: 'first_deposit_ledger',
-    header: 'Since ledger',
-    align: 'right',
-    width: 120,
-    // `null` for a soroban pool: its share-token balances keep no first deposit.
-    cell: (row) =>
-      row.first_deposit_ledger == null ? (
-        '—'
-      ) : (
-        <IdentifierDisplay
-          value={String(row.first_deposit_ledger)}
-          type="ledger"
-        />
-      ),
   },
 ];
 

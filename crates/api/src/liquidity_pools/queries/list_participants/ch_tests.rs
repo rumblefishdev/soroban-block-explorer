@@ -48,8 +48,8 @@ async fn quiet_pool_participants_keep_their_share() {
              (unhex('{POOL}'), 1000, 10, 10, 400)"
         ),
         format!(
-            "INSERT INTO lp_positions (pool_id, account_id, shares, first_deposit_ledger, last_updated_ledger) VALUES \
-             (unhex('{POOL}'), 42, 100, 1000, 1000)"
+            "INSERT INTO lp_positions (pool_id, account_id, shares, last_updated_ledger) VALUES \
+             (unhex('{POOL}'), 42, 100, 1000)"
         ),
         format!(
             "INSERT INTO accounts (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number) VALUES \
@@ -166,7 +166,6 @@ async fn soroban_participants_are_share_token_holders() {
         "newest balance, scaled by 7 decimals"
     );
     assert_eq!(first[0].share_percentage.as_deref(), Some("75"));
-    assert_eq!(first[0].first_deposit_ledger, None);
 
     // The next page keys on the raw amount and still divides by the whole.
     let cursor = SharesCursor {

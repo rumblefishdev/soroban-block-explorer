@@ -237,20 +237,9 @@ export function toChartPoints(
 
 interface PoolChartsProps {
   poolId: string;
-  /**
-   * `false` for a soroban pool: its trades are not indexed yet, so the
-   * Volume and Fees tabs say so instead of reading as "no activity".
-   */
-  volumeIndexed?: boolean;
 }
 
-function PoolChartsContent({
-  poolId,
-  volumeIndexed = true,
-}: {
-  poolId: string;
-  volumeIndexed?: boolean;
-}) {
+function PoolChartsContent({ poolId }: PoolChartsProps) {
   const [metric, setMetric] = useState<ChartMetric>('tvl');
   const [period, setPeriod] = useState<ChartPeriod>('1D');
 
@@ -291,7 +280,6 @@ function PoolChartsContent({
    * 12-day hole in otherwise healthy series), and so does an asset whose
    * feed simply starts later than the window.
    */
-  const notIndexed = !volumeIndexed && metric !== 'tvl';
   const unpriceable = useMemo(() => {
     if (!data || data.data_points.length === 0) return false;
     if (points.length > 0) return false;
@@ -349,7 +337,7 @@ function PoolChartsContent({
           />
         ) : (
           <TimeSeriesChart
-            data={notIndexed ? [] : points}
+            data={points}
             // Per-metric rendering — see METRIC_RENDERING. This departs
             // from Figma node `325:24354` (flat line, a hollow mark on
             // every bucket): static marks are gone entirely (task 0505 —
@@ -365,19 +353,10 @@ function PoolChartsContent({
             intervals={[]}
             loading={isLoading}
             emptyState={
-              notIndexed ? (
-                <ChartEmptyState
-                  title="Not indexed yet"
-                  hint={`${METRIC_LABELS[metric]} for Soroban pools is not indexed yet.`}
-                />
-              ) : unpriceable ? (
+              unpriceable ? (
                 <ChartEmptyState
                   title="USD values unavailable"
-                  hint={
-                    volumeIndexed
-                      ? "We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
-                      : "We have no price data or no token scale for one of this pool's assets in this period, so its value can't be shown in USD."
-                  }
+                  hint="We have no price data or no token scale for one of this pool's assets in this period, so its activity can't be shown in USD."
                 />
               ) : (
                 <ChartEmptyState
@@ -404,14 +383,14 @@ function PoolChartsContent({
  * series (task 0199 compute-at-read). An unpriceable pool gets its own
  * empty state saying so — see `unpriceable`.
  */
-export function PoolCharts({ poolId, volumeIndexed }: PoolChartsProps) {
+export function PoolCharts({ poolId }: PoolChartsProps) {
   return (
     <LazySection
       placeholder={<CardSkeleton />}
       minHeight={420}
       rootMargin="200px"
     >
-      <PoolChartsContent poolId={poolId} volumeIndexed={volumeIndexed} />
+      <PoolChartsContent poolId={poolId} />
     </LazySection>
   );
 }

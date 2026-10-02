@@ -513,7 +513,7 @@ pub async fn fetch_transactions(
             t.has_soroban, \
             l.closed_at AS created_at \
         FROM transactions t FINAL \
-        INNER JOIN ledgers l ON l.sequence = t.ledger_sequence \
+        INNER JOIN ledgers l FINAL ON l.sequence = t.ledger_sequence \
         WHERE t.ledger_sequence = ? \
           AND intDiv(t.ledger_sequence, 500000) = intDiv(?, 500000) \
           AND (isNull(?) OR (l.closed_at, toInt64(t.application_order)) {op} (fromUnixTimestamp64Milli(ifNull(?, 0)), ifNull(?, 0))) \

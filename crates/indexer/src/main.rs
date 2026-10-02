@@ -77,7 +77,7 @@ async fn main() -> Result<(), Error> {
     let sqs_client = SqsClient::new(&aws_config);
 
     let enrichment_publisher =
-        handler::enrichment_publish::Publisher::from_env(sqs_client, ch_client.clone())?;
+        handler::enrichment_publish::Publisher::from_env(sqs_client.clone(), ch_client.clone())?;
 
     // The doorbell handler derives S3 keys from ledger numbers and reads them
     // from this bucket (it does not parse the S3 event). CDK always injects
@@ -96,7 +96,9 @@ async fn main() -> Result<(), Error> {
         &bucket,
         xdr_parser::public_archive::configured_archive_prefix().as_deref(),
     )?;
-    let (s3_client, key_prefix) = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
+    // The lake sends no events: reading it, the indexer also queues its own
+    // next wake-up (`Pacer`).
+    let (s3_client, key_prefix, pacer) = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
         let public = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .no_credentials()
             .region(aws_sdk_s3::config::Region::new(
@@ -105,9 +107,10 @@ async fn main() -> Result<(), Error> {
             .load()
             .await;
         let prefix = format!("{}/", xdr_parser::public_archive::public_archive_prefix());
-        (S3Client::new(&public), prefix)
+        let pacer = handler::lake_pacing::Pacer::from_env(sqs_client)?;
+        (S3Client::new(&public), prefix, Some(pacer))
     } else {
-        (S3Client::new(&aws_config), String::new())
+        (S3Client::new(&aws_config), String::new(), None)
     };
 
     let state = handler::HandlerState {
@@ -119,6 +122,7 @@ async fn main() -> Result<(), Error> {
         enrichment_publisher,
         // Task 0283 live G9 — fresh per cold start; warms across invocations.
         classification_cache: domain::ClassificationCache::new(),
+        pacer,
     };
 
     info!("indexer ready — starting Lambda runtime");

@@ -50,6 +50,13 @@ on the same ~5 s cadence, so S3 request and Lambda invocation counts barely
 fall; only object sizes do. Do not re-estimate it from "testnet has few
 transactions".
 
+Superseded 2026-10-02: that estimate assumed a testnet Galexie, which the
+data-lake decision removed. The synthesized testnet stacks hold no ECS
+service, VPC, NAT, public IP, ledger bucket, KMS key or API cache; what is left
+is small and mostly per-ledger: indexer invocations, X-Ray traces (the
+1/s reservoir catches every 5 s invocation), one dashboard, seven secrets,
+log ingestion and eight alarms.
+
 ### Notes
 
 - Testnet is **functional** staging, not performance staging (ADR caveat): a

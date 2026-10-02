@@ -130,8 +130,9 @@ mainnet data.
   `testnet_write` are copies of `prices_read` / `prices_write`, each under
   its own name so testnet never spends a mainnet user's budget.
 - **No testnet admin user.** Operator work on testnet runs as it does on
-  mainnet: creating the database, applying `init.sql` and the reset's
-  `DROP DATABASE` box-side as `default`; `backfill-runner` with the operator
+  mainnet: the `db-clickhouse-init` sidecar creates the database and applies
+  `init.sql` to it as `default` on every `docker compose up`; the reset's
+  `DROP DATABASE` runs box-side as `default`; `backfill-runner` with the operator
   write cert (`dev_shared`) and `CLICKHOUSE_DATABASE=testnet`. A backfill
   that forgets the variable lands in `default`, but cannot overwrite
   mainnet: testnet ledgers sit far below mainnet's first stored ledger

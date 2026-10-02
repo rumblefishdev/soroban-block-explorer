@@ -2,6 +2,35 @@ use super::*;
 use std::cell::RefCell;
 
 // -------------------------------------------------------------------
+// first_ledger_to_read — where a reconcile starts (task 0553)
+// -------------------------------------------------------------------
+
+#[test]
+fn a_reconcile_continues_after_the_newest_stored_ledger() {
+    assert_eq!(
+        first_ledger_to_read(100, "production-stellar-ledger-data"),
+        Some(101)
+    );
+    assert_eq!(
+        first_ledger_to_read(100, "aws-public-blockchain"),
+        Some(101)
+    );
+}
+
+#[test]
+fn an_empty_lake_table_starts_at_the_first_closed_ledger() {
+    assert_eq!(first_ledger_to_read(0, "aws-public-blockchain"), Some(2));
+}
+
+#[test]
+fn an_empty_table_reading_our_own_bucket_waits_for_a_backfill() {
+    assert_eq!(
+        first_ledger_to_read(0, "production-stellar-ledger-data"),
+        None
+    );
+}
+
+// -------------------------------------------------------------------
 // ledger_s3_key — Galexie datastore key derivation (correctness-critical:
 // a wrong key reads as a gap and stalls the tail)
 // -------------------------------------------------------------------
