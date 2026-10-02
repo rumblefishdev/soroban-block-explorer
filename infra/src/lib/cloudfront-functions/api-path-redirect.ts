@@ -1,16 +1,17 @@
 /**
- * CloudFront Function source for the `/api` and `/api/*` behaviors: the
- * Prices portal's old home (task 0519), moved to `/pricing-api` by task 0608.
- * Every request answers `301` to the same path under `/pricing-api`, query
- * string kept — the Prices backend still sends the OAuth popup back to
- * `/api/?signin=…` until its own deploy, and a link shared before the move
- * keeps working. Bare `/api` goes straight to `/pricing-api/`, one hop rather
- * than two. No auth check: the target is gated by its own behavior.
+ * CloudFront Function source for the Prices portal's old homes: `/api` +
+ * `/api/*` (task 0519 until task 0608) and `/pricing-api` + `/pricing-api/*`
+ * (live for a few hours on 2026-10-02, before the name settled on
+ * `/prices-api`). Every request answers `301` to the same path under
+ * `/prices-api`, query string kept — the Prices backend still sends the OAuth
+ * popup back to `/api/?signin=…` until its own deploy, and a link shared
+ * before either move keeps working. A bare old prefix goes straight to
+ * `/prices-api/`, one hop rather than two. No auth check: the target is gated
+ * by its own behavior.
  *
- * ponytail: query values are re-joined as the event hands them over, with no
- * re-encoding — exact for what the portal sends (`signin=failed`,
- * `issue=…`); if a percent-encoded value ever arrives decoded, wrap
- * `v.value` in `encodeURIComponent`.
+ * Query values are re-joined as the event hands them over. CloudFront hands
+ * them over still percent-encoded (checked on production 2026-10-02:
+ * `?x=a%26b&y=%C3%A9` came back as `a%26b` and `%C3%A9`), so that is exact.
  */
 export const API_PATH_REDIRECT_FUNCTION_CODE = `
 function handler(event) {
@@ -28,7 +29,8 @@ function handler(event) {
     statusDescription: 'Moved Permanently',
     headers: {
       location: {
-        value: '/pricing-api' + (request.uri.slice(4) || '/') +
+        value: '/prices-api' +
+          (request.uri.replace(/^\\/(api|pricing-api)/, '') || '/') +
           (query.length ? '?' + query.join('&') : '')
       }
     }

@@ -33,12 +33,12 @@ describe('Footer', () => {
     expect(window._hsp).toEqual([['showBanner']]);
   });
 
-  it('links the Prices API portal under /pricing-api/', () => {
+  it('links the Prices API portal under /prices-api/', () => {
     render(withTheme(<Footer logo={<span>logo</span>} navItems={[]} />));
 
     expect(screen.getByRole('link', { name: 'Prices API' })).toHaveAttribute(
       'href',
-      '/pricing-api/'
+      '/prices-api/'
     );
   });
 
