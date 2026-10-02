@@ -109,8 +109,9 @@ and region. What differs from production:
 - **No ClickHouse DNS record and no cost monitor** — both belong to
   production (`provisionChDns`, `provisionCostAnomalyMonitor`).
 
-Targets in `infra/Makefile`: `diff-testnet`, `deploy-testnet` (all stacks,
-same diff-then-`yes` guard as production), `deploy-testnet-web`.
+Targets in `infra/Makefile`: `synth-testnet`, `diff-testnet`,
+`deploy-testnet` (all stacks, same diff-then-`yes` guard as production),
+`build-testnet-web`, `deploy-testnet-web`.
 
 Before the first deploy: the three Lambda certs in Secrets Manager
 (`soroban/testnet/mtls/lambda-{api,ingestion,enrichment}-testnet`) and their

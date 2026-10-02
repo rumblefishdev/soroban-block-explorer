@@ -19,11 +19,9 @@ export interface PublicLakeKeepaliveProps {
  * Wakes the indexer once a minute for an environment that reads SDF's public
  * data lake, which publishes no notifications (task 0553).
  *
- * A minute is the finest EventBridge Scheduler goes, and it fires anywhere
- * inside that minute, so this cannot pace the indexer ledger by ledger: the
- * indexer paces itself, sending one delayed message per ledger it expects.
- * This keepalive only restarts that chain when it has died — a failed
- * message, a lake outage — and wakes the indexer until the chain exists.
+ * The indexer paces itself, one delayed message per ledger it expects
+ * (`crates/indexer/src/handler/lake_pacing.rs`). This keepalive starts that
+ * chain, and restarts it when it has died — a failed message, a lake outage.
  */
 export class PublicLakeKeepalive extends Construct {
   constructor(scope: Construct, id: string, props: PublicLakeKeepaliveProps) {

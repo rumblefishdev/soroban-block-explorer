@@ -435,10 +435,8 @@ export class CloudWatchStack extends cdk.Stack {
     } else {
       // ---------------------
       // Alarm 1c: public-lake stall (task 0553)
-      // With the public data lake the indexer rings itself and a keepalive
-      // rings every minute whether or not a ledger landed, so the doorbell
-      // count proves nothing. What does:
-      // how old the newest indexed ledger is. One alarm covers a lake outage,
+      // Reading the public data lake, ingestion is healthy while the newest
+      // indexed ledger stays young. One alarm covers a lake outage,
       // a testnet reset (the old genesis folder stops growing; the sequence
       // never goes backwards) and a protocol upgrade the parser cannot decode.
       // Simulated 2026-09-30 on an hour of measured testnet arrivals: with the
