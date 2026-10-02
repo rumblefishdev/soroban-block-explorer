@@ -16,8 +16,9 @@ export interface IngestionAlarmsProps {
 }
 
 /**
- * Alarms on getting ledgers in: is our Galexie producing them (1, 1b), and
- * is the indexer consuming them (1a). Part of `CloudWatchStack`; created in
+ * Alarms on getting ledgers in: is our Galexie producing them (1, 1b) or, with
+ * the public data lake, is the newest indexed ledger young (1c); and is the
+ * indexer consuming them (1a). Part of `CloudWatchStack`; created in
  * its scope, so the alarms keep their construct ids.
  */
 export function addIngestionAlarms(
@@ -182,6 +183,38 @@ export function addIngestionAlarms(
         // Galexie already pages via the lag alarm's BREACHING above.
         // Paging here too would double-page one incident.
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+  } else {
+    // ---------------------
+    // Alarm 1c: public-lake stall (task 0553)
+    // Reading the public data lake, ingestion is healthy while the newest
+    // indexed ledger stays young. One alarm covers a lake outage,
+    // a testnet reset (the old genesis folder stops growing; the sequence
+    // never goes backwards) and a protocol upgrade the parser cannot decode.
+    // Simulated 2026-09-30 on an hour of measured testnet arrivals: with the
+    // indexer pacing itself the lag peaks near 10 s, so 60 s for 3 minutes
+    // never pages on a healthy lake. BREACHING: a stalled indexer publishes
+    // no datapoint.
+    // ---------------------
+    withActions(
+      new cloudwatch.Alarm(scope, 'LakeStallAlarm', {
+        alarmName: `${config.envName}-ingestion-stall`,
+        alarmDescription:
+          'The newest indexed ledger is over 60 s old for 3 minutes, or none was indexed. Lake outage, testnet reset or an undecodable protocol upgrade. Runbook: docs/runbooks/testnet-reset.md.',
+        metric: new cloudwatch.Metric({
+          namespace: 'SorobanBlockExplorer/Indexer',
+          metricName: 'IngestionLagSeconds',
+          dimensionsMap: { Environment: config.envName },
+          period: cdk.Duration.minutes(1),
+          statistic: cloudwatch.Stats.MAXIMUM,
+        }),
+        threshold: 60,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
       })
     );
   }

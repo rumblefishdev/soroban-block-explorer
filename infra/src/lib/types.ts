@@ -384,6 +384,12 @@ export interface EnvironmentConfig {
    * service's spend that previously went unnoticed for three weeks.
    */
   readonly costAnomalyAlertThresholdUsd: number;
+  /**
+   * Create the AWS-services cost anomaly monitor and its subscription. An
+   * account holds one such monitor, so a second environment in the same
+   * account sets false. Unset: true.
+   */
+  readonly provisionCostAnomalyMonitor?: boolean;
   // Slack workspace + channel IDs are NOT in env config — they are
   // deployment-specific identifiers kept out of the (public) repo and sourced
   // at deploy time from SSM Parameter Store (see CloudWatchStack).
@@ -459,6 +465,14 @@ export function validateConfig(config: EnvironmentConfig): void {
 
   if (config.sorobanRpcUrls.length === 0) {
     errors.push('sorobanRpcUrls must list at least one endpoint');
+  }
+
+  // With our own bucket the indexer refuses a lake folder at start, so the
+  // pair would deploy and then stall ingestion (task 0553).
+  if (config.ledgerSource === 'galexie' && config.publicArchivePrefix) {
+    errors.push(
+      "publicArchivePrefix is read only with ledgerSource 'public-lake'; the indexer refuses it next to our own bucket"
+    );
   }
 
   if (config.ledgerSource === 'public-lake' && !config.publicArchivePrefix) {

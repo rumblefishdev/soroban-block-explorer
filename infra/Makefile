@@ -1,4 +1,5 @@
 PRODUCTION_APP := node dist/bin/production.js
+TESTNET_APP := node dist/bin/testnet.js
 CICD_APP := node dist/bin/cicd.js
 
 build:
@@ -134,6 +135,45 @@ deploy-production-web: build-production-web
 		--query "Stacks[0].Outputs[?OutputKey=='SpaBucketName'].OutputValue" --output text); \
 	DIST=$$(aws cloudformation describe-stacks --region eu-central-1 \
 		--stack-name Explorer-production-Delivery \
+		--query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text); \
+	echo "SPA bucket=$$BUCKET  distribution=$$DIST"; \
+	cd .. && \
+	aws s3 sync web/dist/ "s3://$$BUCKET/" --exclude '*' --include 'assets/*' \
+		--cache-control 'public, max-age=31536000, immutable' && \
+	aws s3 sync web/dist/ "s3://$$BUCKET/" --exclude 'assets/*' --delete \
+		--cache-control 'public, max-age=0, s-maxage=60, must-revalidate' && \
+	aws cloudfront create-invalidation --distribution-id "$$DIST" --paths "/*"
+
+# --- Testnet (task 0553) ---
+# Same recipes as production against envs/testnet.json. The SPA calls the
+# API through its Cloudflare host, so build-testnet-web needs
+# enableCloudflareApiDomain=true there first.
+
+synth-testnet: build
+	pnpm exec cdk --app "$(TESTNET_APP)" synth
+
+diff-testnet: build
+	pnpm exec cdk --app "$(TESTNET_APP)" diff --strict
+
+deploy-testnet: build
+	pnpm exec cdk --app "$(TESTNET_APP)" diff --strict
+	@if [ "$(FORCE)" != "1" ]; then \
+		printf '\nThe deploy is --all: EVERY delta above ships now, parked or not.\nType yes to continue: '; \
+		read ans; [ "$$ans" = "yes" ] || { echo "aborted — nothing deployed"; exit 1; }; \
+	fi
+	pnpm exec cdk --app "$(TESTNET_APP)" deploy --all --require-approval broadening
+
+build-testnet-web:
+	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/testnet.json) \
+		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json) \
+		pnpm nx build @rumblefish/soroban-block-explorer-web --skip-nx-cache
+
+deploy-testnet-web: build-testnet-web
+	@BUCKET=$$(aws cloudformation describe-stacks --region eu-central-1 \
+		--stack-name Explorer-testnet-Delivery \
+		--query "Stacks[0].Outputs[?OutputKey=='SpaBucketName'].OutputValue" --output text); \
+	DIST=$$(aws cloudformation describe-stacks --region eu-central-1 \
+		--stack-name Explorer-testnet-Delivery \
 		--query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text); \
 	echo "SPA bucket=$$BUCKET  distribution=$$DIST"; \
 	cd .. && \

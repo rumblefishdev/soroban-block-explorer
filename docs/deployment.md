@@ -7,7 +7,9 @@ Deep-dives live in the per-layer READMEs (linked below). This file does
 **not** duplicate them — it ties them together and is the source of truth
 for _which_ command ships _what_.
 
-> **Important — there is no staging environment.** Production is the only one.
+> **Important — there is no staging environment.** Production serves mainnet;
+> the only other environment is **testnet** ([§ Testnet](#testnet), task 0553),
+> the same code against Stellar Testnet.
 > A release is a `production-*` tag, which runs the CI deploy
 > (`.github/workflows/deploy-production.yml`); the same ships can also be run
 > **manually from an operator laptop**, which is the path for surgical,
@@ -77,12 +79,78 @@ environment (`eu-central-1`). Its leftovers were removed by task 0390:
 target **do not exist** and error immediately.
 
 If you find a `staging` command in an old README or your shell history, it is
-stale. A real pre-mainnet tier is proposed as the **testnet** environment
-(ADR 0052) — not as a revived `staging`.
+stale. The pre-mainnet tier is the **testnet** environment below (ADR 0052) —
+not a revived `staging`.
 
 > The GitHub **environment** named `staging` is a different thing. It is a
 > leftover from April 2026, superseded by `production` (below), and nothing
 > reads it.
+
+---
+
+## Testnet
+
+The same code against Stellar Testnet (task 0553, ADR 0052), from
+`infra/envs/testnet.json`, as `Explorer-testnet-*` stacks in the same account
+and region. What differs from production:
+
+- **No Galexie, no ledger bucket, no VPC.** `ledgerSource: public-lake`: the
+  indexer reads SDF's public data lake (`aws-public-blockchain`, folder in
+  `publicArchivePrefix`). The lake publishes no events, so the indexer paces
+  itself: after each ledger it queues one message delayed to when the next
+  file should have landed. A once-a-minute EventBridge Scheduler keepalive
+  (`public-lake-keepalive.ts`) restarts that chain if it stops.
+- **Its own ClickHouse database**, `testnet` on the production box, reached as
+  `testnet_reader` / `testnet_writer` through certs under
+  `soroban/testnet/mtls/*` (`docs/architecture/security/clickhouse-rbac.md`).
+- **One ingestion alarm**, `testnet-ingestion-stall`: the newest indexed
+  ledger older than 60 s for 3 minutes. It is also how a testnet reset shows
+  up — then follow [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md).
+- **No ClickHouse DNS record and no cost monitor** — both belong to
+  production (`provisionChDns`, `provisionCostAnomalyMonitor`).
+
+Targets in `infra/Makefile`: `synth-testnet`, `diff-testnet`,
+`deploy-testnet` (all stacks, same diff-then-`yes` guard as production),
+`build-testnet-web`, `deploy-testnet-web`.
+
+Before the first deploy: the three Lambda certs in Secrets Manager
+(`soroban/testnet/mtls/lambda-{api,ingestion,enrichment}-testnet`) and their
+CN pairs in `CLICKHOUSE_CN_USER_MAP`; the Slack IDs under
+`/soroban-explorer/testnet/`.
+
+The API goes public behind Cloudflare like production's, in two deploys —
+the edge secret exists only after the first, and Cloudflare must send it
+before the API demands it:
+
+1. An ACM certificate for `cloudflareApiDomainName` in `eu-central-1`, DNS
+   validation (the validation CNAME goes into the `rumblefishdev.com` zone
+   and **stays there**: ACM renews the certificate yearly through the same
+   record, as it does production's).
+   Its ARN into `cloudflareApiCertificateArn`, `enableCloudflareApiDomain:
+true`.
+2. **Deploy 1** creates the API custom domain and the testnet secrets
+   (`soroban/testnet/cloudflare/edge-secret`, `soroban/testnet/auth/*`).
+3. The proxied API record: this repo's Terraform, workspace `testnet`
+   ([`infra/cloudflare/README.md`](../infra/cloudflare/README.md#testnet)),
+   origin target from the `CloudflareApiRegionalTarget` output of
+   `Explorer-testnet-ApiGateway`.
+4. In `rf-domains`: a Transform Rule stamping `X-Edge-Secret` on the testnet
+   API host with the **testnet** edge secret (each environment has its own),
+   and the testnet SPA hostname on the Turnstile widget.
+5. The widget's Turnstile secret key into
+   `soroban/testnet/auth/turnstile-secret` (same widget as production, so the
+   same value).
+6. `enableEdgeSecretLock` and `enableAuthLayer` to `true`, **deploy 2**, then
+   `deploy-testnet-web`. Run deploy 2 the same day as deploy 1: until then the
+   testnet API answers on its `execute-api` address without the edge lock or
+   Turnstile.
+
+`infra/envs/testnet.json` is committed **paused** (`indexerLambdaConcurrency:
+0`, which also disables the keepalive): a new `testnet` database is empty, and
+an indexer with nothing to continue from would only keep the stall alarm
+firing. The first deploy therefore starts nothing; backfill from genesis, then
+resume ([`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md), steps
+4–7).
 
 ---
 

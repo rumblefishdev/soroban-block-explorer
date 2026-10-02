@@ -613,13 +613,18 @@ Current environments (post-task-0249):
 - **Production** — mainnet data; AWS workloads in `eu-central-1`
   (Lambdas out-of-VPC, Galexie public-subnet ECS Fargate) reaching
   the Hetzner-hosted ClickHouse data plane over mTLS.
+- **Testnet** (task 0553, ADR 0052) — the same code against Stellar
+  Testnet, `Explorer-testnet-*` stacks from `envs/testnet.json`. No Galexie,
+  ledger bucket or VPC: the indexer reads SDF's public data lake and paces
+  itself, one delayed SQS message per ledger it expects, with a
+  once-a-minute Scheduler keepalive. Data in a `testnet` database on the same
+  ClickHouse box, under its own users and quotas.
 
 AWS-side staging was retired by task 0249 and is not redeployed in
-`eu-central-1`. Pre-production validation now happens in the dev
-environment (local CH/PG) and via canary / smoke runs against
-production on cert-restricted endpoints; if product re-opens the
-need for a staging tier later, it would be reintroduced as a
-separate task.
+`eu-central-1`; testnet takes its functional role. It is not a performance
+tier — its data is a fraction of mainnet's — so performance is still
+validated against production (canary / smoke runs on cert-restricted
+endpoints).
 
 ### 7.2 Scaling Model
 

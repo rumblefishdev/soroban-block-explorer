@@ -233,35 +233,39 @@ export class CloudWatchStack extends cdk.Stack {
         },
       })
     );
-    const costAnomalyMonitor = new ce.CfnAnomalyMonitor(
-      this,
-      'CostAnomalyMonitor',
-      {
-        monitorName: `${config.envName}-cost-anomaly-by-service`,
-        monitorType: 'DIMENSIONAL',
-        monitorDimension: 'SERVICE',
-      }
-    );
-    new ce.CfnAnomalySubscription(this, 'CostAnomalySubscription', {
-      subscriptionName: `${config.envName}-cost-anomaly-to-alarm-topic`,
-      monitorArnList: [costAnomalyMonitor.attrMonitorArn],
-      // IMMEDIATE = notify as soon as the anomaly is detected (cost data
-      // refreshes a few times a day, so "immediate" means hours, not
-      // minutes — still ~20x faster than the July discovery). SNS
-      // subscribers require IMMEDIATE; DAILY/WEEKLY are email-only.
-      frequency: 'IMMEDIATE',
-      subscribers: [{ type: 'SNS', address: alarmTopic.topicArn }],
-      // Only anomalies whose total impact reaches this many USD notify —
-      // keeps single-cent blips out of Slack while the July shape (a
-      // service's spend stepping up day after day) clears it easily.
-      thresholdExpression: JSON.stringify({
-        Dimensions: {
-          Key: 'ANOMALY_TOTAL_IMPACT_ABSOLUTE',
-          MatchOptions: ['GREATER_THAN_OR_EQUAL'],
-          Values: [String(config.costAnomalyAlertThresholdUsd)],
-        },
-      }),
-    });
+    // An account holds one AWS-services cost monitor, so only the environment
+    // that owns the account's cost watch creates it (task 0553).
+    if (config.provisionCostAnomalyMonitor !== false) {
+      const costAnomalyMonitor = new ce.CfnAnomalyMonitor(
+        this,
+        'CostAnomalyMonitor',
+        {
+          monitorName: `${config.envName}-cost-anomaly-by-service`,
+          monitorType: 'DIMENSIONAL',
+          monitorDimension: 'SERVICE',
+        }
+      );
+      new ce.CfnAnomalySubscription(this, 'CostAnomalySubscription', {
+        subscriptionName: `${config.envName}-cost-anomaly-to-alarm-topic`,
+        monitorArnList: [costAnomalyMonitor.attrMonitorArn],
+        // IMMEDIATE = notify as soon as the anomaly is detected (cost data
+        // refreshes a few times a day, so "immediate" means hours, not
+        // minutes — still ~20x faster than the July discovery). SNS
+        // subscribers require IMMEDIATE; DAILY/WEEKLY are email-only.
+        frequency: 'IMMEDIATE',
+        subscribers: [{ type: 'SNS', address: alarmTopic.topicArn }],
+        // Only anomalies whose total impact reaches this many USD notify —
+        // keeps single-cent blips out of Slack while the July shape (a
+        // service's spend stepping up day after day) clears it easily.
+        thresholdExpression: JSON.stringify({
+          Dimensions: {
+            Key: 'ANOMALY_TOTAL_IMPACT_ABSOLUTE',
+            MatchOptions: ['GREATER_THAN_OR_EQUAL'],
+            Values: [String(config.costAnomalyAlertThresholdUsd)],
+          },
+        }),
+      });
+    }
 
     const alarmAction = new cloudwatchActions.SnsAction(alarmTopic);
 
