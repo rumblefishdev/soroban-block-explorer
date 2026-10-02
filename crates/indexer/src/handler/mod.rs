@@ -21,6 +21,7 @@
 
 pub mod enrichment_publish;
 pub mod lake_pacing;
+pub mod ledger_source;
 pub mod process;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
@@ -112,14 +113,11 @@ const RETRY_BACKOFF_MS: [u64; 3] = [50, 200, 800];
 #[derive(Clone)]
 pub struct HandlerState {
     pub s3_client: S3Client,
-    /// Ledger bucket name (`BUCKET_NAME` env, set by `compute-stack.ts`).
-    /// The doorbell handler derives object keys from ledger numbers and
-    /// HEAD/GETs them against this bucket — it does not read the S3 event.
-    pub bucket: String,
-    /// Key prefix inside [`Self::bucket`], ending in `/`. Empty on mainnet,
-    /// whose Galexie writes at the bucket root; the network's folder when the
-    /// bucket is the public data lake (testnet).
-    pub key_prefix: String,
+    /// Where ledger files are read (task 0553): our own Galexie bucket, or
+    /// the public data lake in the network's folder. The doorbell handler
+    /// derives object keys from ledger numbers and HEAD/GETs them there — it
+    /// does not read the S3 event.
+    pub source: ledger_source::LedgerSource,
     pub cw_client: CloudWatchClient,
     /// ClickHouse client (mTLS to Hetzner via Caddy). Construction lives
     /// in `main.rs` cold start; cloning is cheap (the underlying
@@ -248,20 +246,28 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
         .await
         .map_err(|e| HandlerError::ClickHouse(db_clickhouse::SchemaError::Query(e)))?;
 
-    // Empty CH → `max()` is 0. Without a seeded baseline there is no floor to
-    // start from (HEAD-probing up from ledger 1 would be millions of misses),
-    // so no-op. Operationally CH is always seeded (snapshot / backfill) before
-    // the live tail runs, so this is a guard, not a normal path.
-    if max_seq <= 0 {
+    // Empty CH → `max()` is 0. The public data lake holds every ledger from
+    // the network's first closed one, so testnet starts there (after a reset
+    // it rebuilds itself). Our own bucket holds ledgers only from where our
+    // Galexie started, so an empty mainnet database waits for a seeding
+    // backfill: no-op.
+    let mut next = if max_seq > 0 {
+        max_seq + 1
+    } else if let Some(first) = state.source.first_ledger() {
+        info!(
+            first,
+            "ledgers table is empty — reading the lake from its first closed ledger"
+        );
+        first
+    } else {
         warn!("ledgers table is empty (max=0) — no cursor to advance from; no-op");
         return Ok(Reconciled {
             persisted: 0,
             newest: 0,
         });
-    }
-
-    let mut next = max_seq + 1;
+    };
     let mut persisted = 0u64;
+    let mut newest = max_seq.max(0);
 
     loop {
         // Check the budget BEFORE starting a ledger so we never begin one we
@@ -271,13 +277,10 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
                 next,
                 persisted, "reconcile hit time budget — stopping; next doorbell resumes"
             );
-            return Ok(Reconciled {
-                persisted,
-                newest: next - 1,
-            });
+            return Ok(Reconciled { persisted, newest });
         }
 
-        let key = ledger_s3_key(&state.key_prefix, next);
+        let key = ledger_s3_key(&state.source.key_prefix(), next);
         if !s3_object_exists(state, &key).await? {
             // `next` is not on S3 yet — stop. A future doorbell (when the file
             // lands) resumes here. This gate is what guarantees no gaps.
@@ -286,15 +289,13 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
             } else {
                 info!(next, persisted, "reached gap on S3 — contiguous run done");
             }
-            return Ok(Reconciled {
-                persisted,
-                newest: next - 1,
-            });
+            return Ok(Reconciled { persisted, newest });
         }
 
         info!(ledger = next, key = key.as_str(), "processing ledger");
-        process_s3_object(state, &state.bucket, &key).await?;
+        process_s3_object(state, state.source.bucket(), &key).await?;
         persisted += 1;
+        newest = next;
         next += 1;
     }
 }
@@ -327,7 +328,7 @@ async fn s3_object_exists(state: &HandlerState, key: &str) -> Result<bool, Handl
     match state
         .s3_client
         .head_object()
-        .bucket(&state.bucket)
+        .bucket(state.source.bucket())
         .key(key)
         .send()
         .await

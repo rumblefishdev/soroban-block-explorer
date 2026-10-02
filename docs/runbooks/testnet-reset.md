@@ -8,7 +8,14 @@ so the new chain's ledger N would overwrite the old one's.
 
 The same steps build the database the first time (steps 4–7):
 `infra/envs/testnet.json` is committed paused (`indexerLambdaConcurrency: 0`),
-so the first deploy starts nothing until the backfill is in.
+so the first deploy starts nothing until the database is ready.
+
+An empty `testnet` database needs no seed: the indexer reads the lake from
+the network's first closed ledger (2) on its own, about five times faster
+than the network closes ledgers (~0.9 s per ledger against ~5 s). A chain a
+day old (~17,000 ledgers) is caught up in about 4 hours, so a reset handled
+within a day skips step 6. The first build — a chain months old — and a
+reset noticed late take the backfill.
 
 ## How it shows up
 
@@ -47,7 +54,9 @@ Not a reset — the RPC tip is close to the last indexed ledger:
 **2. Pause the testnet indexer:** `indexerLambdaConcurrency: 0` in
 `infra/envs/testnet.json`, then `make -C infra deploy-testnet`. The same
 setting disables the once-a-minute keepalive, so nothing queues while paused;
-`testnet-ingestion-stall` stays in alarm until step 7.
+`testnet-ingestion-stall` stays in alarm until step 7. Pause before step 3:
+a running indexer would refill the emptied database from the OLD folder,
+starting at ledger 2.
 
 **3. Drop the database** (production ClickHouse box, as `default`; irreversible,
 testnet data only):
@@ -69,7 +78,8 @@ Its log must end with `init.sql applied to testnet`.
 `infra/envs/testnet.json` to `v1.1/stellar/ledgers/testnet/<new folder>`,
 merge, `make -C infra deploy-testnet` (still paused).
 
-**6. Backfill from genesis** with the operator write cert
+**6. Backfill from genesis** — only for the first build or a reset more
+than about a day old (see the top) — with the operator write cert
 ([`docs/backfills.md`](../backfills.md)). The environment names the database,
 the network and the folder; forgetting `CLICKHOUSE_DATABASE` writes into
 mainnet's `default`, where the rows sit below its first ledger (50,457,424)
@@ -89,7 +99,7 @@ Ranges run in parallel as separate processes; after a parallel run,
 
 **7. Resume:** `indexerLambdaConcurrency: 1`, `make -C infra deploy-testnet`.
 This also enables the keepalive; its first wake continues from
-`max(sequence) + 1`.
+`max(sequence) + 1`, or from ledger 2 when step 6 was skipped.
 
 ## Done when
 
