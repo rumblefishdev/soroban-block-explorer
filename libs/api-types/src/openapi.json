@@ -1282,7 +1282,7 @@
     "/v1/liquidity-pools/{pool_id}/activity": {
       "get": {
         "tags": ["liquidity-pools"],
-        "summary": "`GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations\n(task 0491, issue #371).",
+        "summary": "`GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations\n(task 0491, issue #371), for classic and soroban pools alike (task 0374).",
         "description": "Supersedes `/transactions`, whose row was a transaction. That unit could\nnot carry an honest `Event` chip (a bundled deposit + trade collapsed to\none label), forced the Amount cell to stack figures that must not be\nsummed, and made a trades filter inexpressible — \"trades only\" has no\ntruthful answer for a transaction that deposits *and* trades. The old path\nstays mounted until the frontend moves to this one (task 0491 step 3),\nwhich is also when its handler, DTO and query go.",
         "operationId": "list_pool_activity",
         "parameters": [
@@ -1328,7 +1328,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Paginated pool activity, one row per operation",
+            "description": "Paginated pool activity, one row per operation (classic) or pool event (soroban)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2549,7 +2549,7 @@
       },
       "ChartDataPoint": {
         "type": "object",
-        "description": "One row from the chart endpoint. All money fields are **USD decimal\nstrings with exactly two decimals**, computed at read from on-chain\nquantities × the in-cluster price series (task 0199, ADR 0053):\n- `tvl` — \"TVL at close of bucket\": last priceable snapshot's\n  `reserve_a·price_a + reserve_b·price_b`. A leg with no candle in its\n  own bucket falls back to its most recent close within 48 h, so a\n  pool whose second leg has not traded today still reports; `null`\n  when either leg has no price within that window (untracked asset,\n  pre-listing history, or a provider-side gap such as the\n  2026-07-21..08-03 freeze).\n- `volume` — SUM over the bucket of per-ledger gross trade volume ×\n  the leg-A price at that ledger's time. `null` for no-swap buckets and\n  for buckets where a swap couldn't be priced (never a partial sum).\n- `fee_revenue` — `volume × fee_bps / 10000`.",
+        "description": "One row from the chart endpoint. All money fields are **USD decimal\nstrings with exactly two decimals**, computed at read from on-chain\nquantities × the in-cluster price series (task 0199, ADR 0053):\n- `tvl` — \"TVL at close of bucket\": last priceable snapshot's\n  `reserve_a·price_a + reserve_b·price_b`. A leg with no candle in its\n  own bucket falls back to its most recent close within 48 h, so a\n  pool whose second leg has not traded today still reports; `null`\n  when either leg has no price within that window (untracked asset,\n  pre-listing history, or a provider-side gap such as the\n  2026-07-21..08-03 freeze).\n- `volume` — SUM over the bucket of per-ledger gross trade volume ×\n  the leg-A price at that ledger's time. `null` for no-swap buckets, for\n  buckets where a swap couldn't be priced (never a partial sum), and in\n  every bucket of a pool whose volume is not priced (three or four legs,\n  or a leg A with no known decimals).\n- `fee_revenue` — `volume × fee_bps / 10000`.",
         "required": ["bucket", "samples_in_bucket"],
         "properties": {
           "bucket": {
@@ -3523,7 +3523,6 @@
       "OperationItem": {
         "type": "object",
         "required": [
-          "appearance_id",
           "type_name",
           "type",
           "pool_ids",
@@ -3532,11 +3531,6 @@
           "created_at"
         ],
         "properties": {
-          "appearance_id": {
-            "type": "integer",
-            "format": "int64",
-            "description": "The operation's 1-based position (the table has no surrogate id since\nPR #175). Join against the heavy overlay by `operation_index`."
-          },
           "asset_code": {
             "type": ["string", "null"],
             "description": "Asset code (≤12 chars) for classic asset operations."
@@ -4257,11 +4251,6 @@
                   "type": "string",
                   "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
                 },
-                "first_deposit_ledger": {
-                  "type": ["integer", "null"],
-                  "format": "int64",
-                  "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
-                },
                 "last_updated_ledger": {
                   "type": "integer",
                   "format": "int64",
@@ -4292,7 +4281,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst this pool**, not one transaction (task 0491, issue #371).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
+              "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst a classic pool, one event of a soroban pool**, never one\ntransaction (task 0491, issue #371; task 0374).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
               "required": [
                 "transaction_hash",
                 "ledger_sequence",
@@ -4307,7 +4296,7 @@
                   "items": {
                     "type": ["string", "null"]
                   },
-                  "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nEvery entry is `null` in the malformed case above."
+                  "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban row's amounts are its\none event's.\n\nThe sign is the payload, not decoration: it is the direction (and names\na classic row's `event`), so the frontend must not take an absolute\nvalue before deciding it.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
                 },
                 "created_at": {
                   "type": "string",
@@ -4320,9 +4309,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/PoolEvent",
-                      "description": "`null` when not every leg of the pool landed in `pool_operation_amounts`\nfor this operation. Rare but real: 350 of 6.09M operations in the\n100k ledgers to 64,576,995 carry one leg only. The read stays total\nrather than classifying a half-row."
+                      "description": "Classic pool: `null` when not every leg of the pool landed in\n`pool_operation_amounts` for this operation. Rare but real: 350 of\n6.09M operations in the 100k ledgers to 64,576,995 carry one leg only.\nThe read stays total rather than classifying a half-row.\n\nSoroban pool: the kind the pool's own event declared, which a missing\nleg does not change."
                     }
                   ]
+                },
+                "event_index": {
+                  "type": ["integer", "null"],
+                  "format": "int32",
+                  "description": "Soroban pool: the index of the pool's event among ALL the contract\nevents its operation emitted (ADR 0059) — so not consecutive per pool,\nand one row per event: an operation that traded the pool twice lists\ntwice, under one hash. `null` for a classic pool, whose row is the\noperation.",
+                  "minimum": 0
                 },
                 "ledger_sequence": {
                   "type": "integer",
@@ -4336,7 +4331,7 @@
                 "pools_crossed": {
                   "type": ["integer", "null"],
                   "format": "int64",
-                  "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`."
+                  "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` when\nthe appearance row is missing, and for every soroban pool's row, whose\nroute the appearance row does not record — unknown, never guessed."
                 },
                 "source_account": {
                   "type": "string",
@@ -4344,7 +4339,7 @@
                 },
                 "transaction_hash": {
                   "type": "string",
-                  "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `operation_index` too."
+                  "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, and a soroban operation once per pool event, so a row\nkey needs `operation_index` and `event_index` too."
                 }
               }
             }
@@ -4431,7 +4426,7 @@
                 },
                 "volume": {
                   "type": ["string", "null"],
-                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+                  "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h — every trade's leg-A amount,\nwhichever way it went (a classic pool's `gross_volume_a`, a soroban\npool's trade events) — priced at the leg-A last hourly close; `null`\nwhen leg A is unpriceable, when it has no known decimals, and for a\npool with three or four legs, whose volume is not priced (its `tvl`\ncan still be)."
                 }
               }
             }
@@ -4528,11 +4523,6 @@
             "type": "string",
             "description": "Provider StrKey: a `G…` account, or for a soroban pool also a `C…`\ncontract holding the share token (a gauge, a vault)."
           },
-          "first_deposit_ledger": {
-            "type": ["integer", "null"],
-            "format": "int64",
-            "description": "Ledger of the first deposit by this account into this pool. `null` for\na soroban pool, whose share-token balances record no first deposit."
-          },
           "last_updated_ledger": {
             "type": "integer",
             "format": "int64",
@@ -4550,7 +4540,7 @@
       },
       "PoolActivityItem": {
         "type": "object",
-        "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst this pool**, not one transaction (task 0491, issue #371).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
+        "description": "One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation\nagainst a classic pool, one event of a soroban pool**, never one\ntransaction (task 0491, issue #371; task 0374).\n\nThe transaction-level fields the retired `/transactions` shape carried\n(`fee_charged`, `operation_count`, `has_soroban`, `successful`,\n`operation_types`) are gone: the first three describe the transaction, not\nthis row, and repeating them per operation invites reading a transaction\nfee as an operation fee. `operation_types` is replaced by `event`, which is\nwhat it was approximating.",
         "required": [
           "transaction_hash",
           "ledger_sequence",
@@ -4565,7 +4555,7 @@
             "items": {
               "type": ["string", "null"]
             },
-            "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\n\nThe sign is the payload, not decoration: it is what names `event`, so\nthe frontend must not take an absolute value before deciding direction.\nEvery entry is `null` in the malformed case above."
+            "description": "One amount per leg, in the order of the pool's `legs`: `amounts[i]` is\nwhat moved in `legs[i]`. A list, not an `a` / `b` pair, for the same\nreason the pool's legs are one: a Soroban pool has two to four.\n\nSigned from the POOL's perspective: positive entered the pool, negative\nleft it. Raw units as a decimal string — a JSON number is a double in\nthe browser, so an amount above 2^53 would silently lose digits.\nScale each by its leg's `decimals`. A soroban row's amounts are its\none event's.\n\nThe sign is the payload, not decoration: it is the direction (and names\na classic row's `event`), so the frontend must not take an absolute\nvalue before deciding it.\nClassic: every entry is `null` in the malformed case above. Soroban:\nonly the leg no event named is `null` — a 4-token pool's event can name\nthree tokens at most."
           },
           "created_at": {
             "type": "string",
@@ -4578,9 +4568,15 @@
               },
               {
                 "$ref": "#/components/schemas/PoolEvent",
-                "description": "`null` when not every leg of the pool landed in `pool_operation_amounts`\nfor this operation. Rare but real: 350 of 6.09M operations in the\n100k ledgers to 64,576,995 carry one leg only. The read stays total\nrather than classifying a half-row."
+                "description": "Classic pool: `null` when not every leg of the pool landed in\n`pool_operation_amounts` for this operation. Rare but real: 350 of\n6.09M operations in the 100k ledgers to 64,576,995 carry one leg only.\nThe read stays total rather than classifying a half-row.\n\nSoroban pool: the kind the pool's own event declared, which a missing\nleg does not change."
               }
             ]
+          },
+          "event_index": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "Soroban pool: the index of the pool's event among ALL the contract\nevents its operation emitted (ADR 0059) — so not consecutive per pool,\nand one row per event: an operation that traded the pool twice lists\ntwice, under one hash. `null` for a classic pool, whose row is the\noperation.",
+            "minimum": 0
           },
           "ledger_sequence": {
             "type": "integer",
@@ -4594,7 +4590,7 @@
           "pools_crossed": {
             "type": ["integer", "null"],
             "format": "int64",
-            "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` only\nwhen the appearance row is missing — unknown, never guessed to `1`."
+            "description": "How many pools the WHOLE operation crossed — `length(pool_ids)` from\nthe same appearance seek that resolves the source account. `1` for\nevery deposit/withdrawal (an LP op declares exactly one pool) and for\na single-hop trade; `> 1` marks this row as one hop of a longer path\npayment, whose full route lives on the op's detail page. `null` when\nthe appearance row is missing, and for every soroban pool's row, whose\nroute the appearance row does not record — unknown, never guessed."
           },
           "source_account": {
             "type": "string",
@@ -4602,7 +4598,7 @@
           },
           "transaction_hash": {
             "type": "string",
-            "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, so a row key needs `operation_index` too."
+            "description": "Transaction hash (64-char lowercase hex). NOT unique across rows — a\ntransaction running several operations against this pool appears once\nper operation, and a soroban operation once per pool event, so a row\nkey needs `operation_index` and `event_index` too."
           }
         }
       },
@@ -4620,6 +4616,12 @@
           "contract_id": {
             "type": ["string", "null"],
             "description": "The token's own contract, set ONLY for a `soroban` leg. `None` for\nnative and classic credit."
+          },
+          "decimals": {
+            "type": ["integer", "null"],
+            "format": "int32",
+            "description": "How many decimals the leg's raw amounts carry: 7 for native XLM and a\nclassic asset (by protocol), the `decimals` a soroban token publishes in\nits metadata. `null` when the token publishes none — its raw amounts\nthen have no honest display. Scales the raw `amounts` of `/activity`;\n`reserve` above is already scaled.",
+            "minimum": 0
           },
           "icon_url": {
             "type": ["string", "null"],
@@ -4640,7 +4642,7 @@
       },
       "PoolEvent": {
         "type": "string",
-        "description": "What an operation did to the pool, named by the SIGN PAIR of its two legs\nand nothing else — `pool_operation_amounts.amount` is signed from the pool's\nperspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\n\nClassified in SQL rather than here, because the same expression is the\n`filter[event]` predicate: two classifiers would eventually disagree, and\nthe one the user sees must be the one the filter used. This deliberately\nreverses the client-side policy the retired `/transactions` shape carried.",
+        "description": "What a row of pool activity did to the pool. A classic operation is named\nby the SIGN PAIR of its two legs and nothing else —\n`pool_operation_amounts.amount` is signed from the pool's perspective, so\n`+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.\nThere is no operation-type column to read and no join to `operations`.\nA soroban pool's row is one event, named by the kind the pool declared,\nstored in `pool_movements.event_kind` as this enum's discriminant — not\ninferred from the signs: a trade may carry a zero leg (42 on production)\nand a withdrawal may pay out nothing, which the signs alone would misread.\n\nClassified on the server rather than in the page, and the `filter[event]`\npredicate selects on the same value — the classic signs, the soroban\nstored kind: two classifiers would eventually disagree, and the one the\nuser sees must be the one the filter used. This deliberately reverses the\nclient-side policy the retired `/transactions` shape carried.\n\n`#[repr(u8)]` rather than the `i16` of the other enums here: the column it\nis stored in, `pool_movements.event_kind`, is `UInt8`.",
         "enum": ["trade", "deposit", "withdrawal"]
       },
       "PoolItem": {
@@ -4713,7 +4715,7 @@
           },
           "volume": {
             "type": ["string", "null"],
-            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h (`gross_volume_a` sum) priced\nat the leg-A last hourly close; `null` when the pool is unpriceable."
+            "description": "USD, decimal string rounded to cents. **Detail endpoint only.**\nGross trade volume over the last 24h — every trade's leg-A amount,\nwhichever way it went (a classic pool's `gross_volume_a`, a soroban\npool's trade events) — priced at the leg-A last hourly close; `null`\nwhen leg A is unpriceable, when it has no known decimals, and for a\npool with three or four legs, whose volume is not priced (its `tvl`\ncan still be)."
           }
         }
       },

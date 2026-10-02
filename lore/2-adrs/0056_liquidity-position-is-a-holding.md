@@ -16,6 +16,7 @@ related_tasks:
     '0331',
     '0339',
     '0210',
+    '0468',
   ]
 related_adrs: ['0055', '0051', '0027', '0057']
 tags: [clickhouse, data-model, balances, liquidity-pools, assets, read-path]
@@ -147,6 +148,16 @@ a sparse `first_deposit_ledger` column on `balances`, meaningful for pool
 rows only. The safety net that the repair process used to provide must be
 replaced explicitly: a test on the companion's query plus the comparison
 probe — a derived value with neither is risk moved, not removed.
+
+**Amended 2026-10-01 (task 0468, decision 399 B): dropped, not derived.**
+Measured on all 110,066 positions, 3.8% held the true first deposit, and both
+routes to a correct value lost: the companion's full recompute reads 16.0 bn
+rows / 152 GiB, and a per-pool read without an index reads 14.75 bn rows /
+107 GiB per page view. A stored `min` in its own table was judged not worth a
+table for one column; the pool page's Activity section already lists each
+provider's deposits. The column leaves `lp_positions`, the API and the UI, and
+the `lp_positions` entry in `repair-tier1` goes with it. The merge (task 0499)
+no longer carries a first deposit.
 
 ### 5. Blast-radius exclusions, written down
 

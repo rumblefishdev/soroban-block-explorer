@@ -1,25 +1,6 @@
----
-id: '0548'
-title: 'Protocol 28 (Adapter) readiness: Galexie 28.0.1 pin + stellar-xdr 27→28 before the 2026-09-16 pubnet vote'
-type: OPS
-status: active
-related_adr: []
-related_tasks: ['0367', '0368']
-tags: [indexer, xdr, infra, galexie, protocol-28, priority-high]
-links:
-  - 'https://stellar.org/blog/developers/adapter-protocol-28-upgrade-guide'
-  - 'https://stellar.org/blog/developers/introducing-adapter-protocol-28-on-stellar'
-  - 'https://hub.docker.com/r/stellar/stellar-galexie/tags'
-history:
-  - date: 2026-09-08
-    status: active
-    who: karolkow
-    note: >
-      Created 8 days before the mainnet vote, from the SDF upgrade
-      announcement. First PLANNED execution of the protocol-upgrade bump —
-      0367/0368 were both reactive (16 h silent ingestion stall, then a
-      7.5k-message DLQ). 0367's own future-work list called for exactly this.
----
+# Task 0548 — full record until 2026-10-01
+
+Moved from the task file when it outgrew the 150-line limit.
 
 # Protocol 28 (Adapter) readiness
 

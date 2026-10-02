@@ -53,10 +53,10 @@ async fn detail_created_at_falls_back_without_a_snapshot() {
         // pool must not count: its providers are share-token holders, which
         // the handler reads, never `lp_positions`.
         format!(
-            "INSERT INTO lp_positions (pool_id, account_id, shares, first_deposit_ledger, last_updated_ledger) VALUES \
-             (unhex('{CLASSIC}'), 1, 5, 1000, 1000), \
-             (unhex('{CLASSIC}'), 2, 0, 1000, 2000), \
-             (unhex('{SOROBAN}'), 3, 5, 1000, 1000)"
+            "INSERT INTO lp_positions (pool_id, account_id, shares, last_updated_ledger) VALUES \
+             (unhex('{CLASSIC}'), 1, 5, 1000), \
+             (unhex('{CLASSIC}'), 2, 0, 2000), \
+             (unhex('{SOROBAN}'), 3, 5, 1000)"
         ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");

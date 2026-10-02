@@ -1,4 +1,4 @@
-use super::PoolEvent;
+use super::*;
 
 /// The classifier itself. It used to live in SQL as a `multiIf` and could
 /// only be checked against a live ClickHouse; in Rust it is the one thing
@@ -28,12 +28,23 @@ fn zero_leg_is_not_a_deposit() {
     assert_eq!(PoolEvent::from_signs(&[0, 0]), PoolEvent::Trade);
 }
 
+/// The stored discriminant is what the writer puts in
+/// `pool_movements.event_kind` and the reader decodes, so a kind added to the
+/// enum and to `VARIANTS` without a decode arm fails here.
+#[test]
+fn stored_kind_round_trips() {
+    for v in PoolEvent::VARIANTS {
+        assert_eq!(PoolEvent::try_from(*v as u8).unwrap(), *v);
+    }
+    assert!(PoolEvent::try_from(3).is_err());
+}
+
 /// `as_param` feeds the `allowed` list a rejection returns and
 /// `from_param` reads the caller's value back, so drift between them would
 /// advertise a value the endpoint then refuses.
 #[test]
 fn filter_value_round_trips() {
-    for e in [PoolEvent::Trade, PoolEvent::Deposit, PoolEvent::Withdrawal] {
+    for &e in PoolEvent::VARIANTS {
         assert_eq!(PoolEvent::from_param(e.as_param()), Some(e), "{e:?}");
     }
     assert_eq!(PoolEvent::from_param("swap"), None);

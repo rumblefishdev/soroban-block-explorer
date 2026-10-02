@@ -19,3 +19,13 @@ each one in the shape we would build from scratch.
   parsed once.
 - **Network check assumes pubnet for an own bucket** (A): a future testnet with
   its own Galexie would be refused at start. Falls out of the item above.
+
+## Kept on purpose
+
+- **API certificates requested by hand, ARN in `envs/*.json`** (D4,
+  2026-10-01). From scratch: `acm.Certificate` in the ApiGateway stack for
+  both environments. Kept: it saves one command per environment for its
+  whole life, and moving production's certificate changes the public API
+  edge. Production's validation record still resolves (checked with `dig`
+  2026-10-01), so the move would not hang; the interruption question was
+  never checked.

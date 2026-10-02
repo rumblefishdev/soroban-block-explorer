@@ -141,7 +141,9 @@ true`.
    `soroban/testnet/auth/turnstile-secret` (same widget as production, so the
    same value).
 6. `enableEdgeSecretLock` and `enableAuthLayer` to `true`, **deploy 2**, then
-   `deploy-testnet-web`.
+   `deploy-testnet-web`. Run deploy 2 the same day as deploy 1: until then the
+   testnet API answers on its `execute-api` address without the edge lock or
+   Turnstile.
 
 `infra/envs/testnet.json` is committed **paused** (`indexerLambdaConcurrency:
 0`, which also disables the keepalive): a new `testnet` database is empty, and

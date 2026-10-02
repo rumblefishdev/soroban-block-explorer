@@ -89,7 +89,8 @@ Decided 2026-09-30: Lambdas use their own certs mapped to the `testnet_*`
 users — one project, but a misconfigured testnet cannot touch mainnet data,
 and cert names already carry the environment. API host
 `api-testnet-sorobanscan.rumblefishdev.com` behind Cloudflare with the same
-edge secret and Turnstile as mainnet; testnet alarms in their own Slack
+Turnstile widget as mainnet and its own edge secret (each environment
+generates one; corrected 2026-10-02); testnet alarms in their own Slack
 channel.
 
 ## Patch register — sweep at the end of the epic
@@ -105,7 +106,7 @@ network check that assumes pubnet for an own bucket.
 - [ ] `Explorer-testnet-*` deploys from `infra/envs/testnet.json` with no code
       branching by network, and `cdk diff` on production is empty after the
       refactor — the parameterisation must not move prod.
-- [ ] Ledgers flow Galexie → S3 → indexer → `testnet` database; a testnet
+- [ ] Ledgers flow data lake → indexer → `testnet` database; a testnet
       transaction resolves on the testnet SPA under the hash Stellar RPC
       reports for it (passphrase → `network_id` is right).
 - [ ] `testnet_*` users cannot read `default.*`, and `testnet_writer` cannot
@@ -121,6 +122,10 @@ network check that assumes pubnet for an own bucket.
 - [ ] Patch sweep done: every item of the patch register rebuilt or
       explicitly kept with its reason.
 - [ ] The reset runbook was exercised once end to end.
+- [ ] The API is public like mainnet's (`docs/deployment.md` § Testnet, steps
+      1–6): ACM cert, Terraform record (workspace `testnet`), rf-domains Transform
+      Rule + Turnstile hostname, `enableCloudflareApiDomain`, `enableEdgeSecretLock`,
+      `enableAuthLayer` all `true`; direct execute-api and lockless calls refused.
 - [ ] **Docs updated** —
       `docs/architecture/infrastructure/infrastructure-overview.md` §7.1
       (environment model), `docs/architecture/security/clickhouse-rbac.md`

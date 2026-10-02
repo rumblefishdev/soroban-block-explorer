@@ -83,6 +83,8 @@ pub struct PoolLegRow {
     pub icon_url: Option<String>,
     /// What the pool holds of this leg, raw units — see `PoolAssetLeg::reserve`.
     pub reserve: Option<String>,
+    /// The leg's scale where it is a fact — see `PoolAssetLeg::decimals`.
+    pub decimals: Option<u32>,
 }
 
 /// Turn one pool's stored leg surrogates into the rows the handler finishes.
@@ -97,11 +99,13 @@ fn leg_rows(
     icons: &HashMap<i64, String>,
     reserves: &[Option<String>],
 ) -> Vec<PoolLegRow> {
+    let decimals = soroban_reserves::leg_decimals(leg_ids, identities);
     leg_ids
         .iter()
         .enumerate()
         .map(|(i, id)| {
             let reserve = reserves.get(i).cloned().flatten();
+            let decimals = decimals[i];
             match identities.get(id) {
                 Some(r) if r.known => PoolLegRow {
                     family: r.asset_type,
@@ -116,6 +120,7 @@ fn leg_rows(
                     symbol: r.symbol.clone(),
                     icon_url: icons.get(id).cloned(),
                     reserve,
+                    decimals,
                 },
                 // Unknown to `assets`: no family, no code — only the contract
                 // and its symbol, which `soroban_contracts` and its metadata
@@ -128,6 +133,7 @@ fn leg_rows(
                     symbol: other.and_then(|r| r.symbol.clone()),
                     icon_url: None,
                     reserve,
+                    decimals,
                 },
             }
         })
@@ -139,6 +145,7 @@ mod get_pool_chart;
 mod list_participants;
 mod list_pool_activity;
 mod list_pools;
+mod list_soroban_pool_activity;
 mod soroban_reserves;
 mod soroban_total_shares;
 mod usd_analytics;
@@ -150,6 +157,7 @@ pub use list_participants::{
 };
 pub use list_pool_activity::{fetch_pool_activity, fetch_pool_asset_ids};
 pub use list_pools::{ResolvedPoolListParams, fetch_pool_list};
+pub use list_soroban_pool_activity::fetch_soroban_pool_activity;
 pub use usd_analytics::{
     PoolPriceContext, fetch_pool_chart_context, fetch_pool_usd_analytics, price_leg,
 };

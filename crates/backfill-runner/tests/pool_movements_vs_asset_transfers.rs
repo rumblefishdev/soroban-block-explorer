@@ -14,12 +14,21 @@
 //!   of the output side: the event reports what the trader got;
 //! - a surplus: more moved through the pool's balance than its reserves
 //!   count (an exhausted swap keeps its whole input; a router sends a token
-//!   beyond the traded amount) — the reserves side with the event.
+//!   beyond the traded amount) — the reserves side with the event;
+//! - a burn out of the pool's balance in the same operation (a token that
+//!   burns on transfer, or the pool burning a leg it holds): the transfers
+//!   minus the burns equal the event;
+//! - a pair deposit whose tokens reached the pool in an earlier transaction:
+//!   no leg moves in the operation, and the reserves side with the event;
+//! - a four-token pool whose event names only three tokens (a topic holds at
+//!   most four values): the named legs agree, the fourth has no amount;
+//! - the ledgers where a pair pool was restored from a stale copy, listed in
+//!   the reconciliation test too.
 //!
-//! Measured 2026-09-30 over 200k ledgers: pair 100%; every compared router
-//! and config movement equal or in a known class. ~2% of movements are not
-//! compared (several amount events or a payout in one operation). Skips
-//! without a client certificate.
+//! Measured 2026-09-30 over the whole history (50.6M to the tip, 1M-ledger
+//! windows): every compared movement equal or in a known class. ~0.5% of
+//! movements are not compared (several amount events or a payout in one
+//! operation). Skips without a client certificate.
 //!
 //!   POOL_FROM=… POOL_TO=… cargo test -p backfill-runner \
 //!     --test pool_movements_vs_asset_transfers -- --nocapture
@@ -34,6 +43,11 @@ type Op = (i64, i64, i16, u16);
 /// Decoded movements by (operation, event index): amount per leg asset.
 type Movements = BTreeMap<(Op, u32), BTreeMap<i64, i128>>;
 
+/// Ledgers where a pair pool's instance was restored from a stale copy after
+/// protocol 23: its reserves jump back with no pool event (the same list as
+/// the reconciliation test's).
+const RESTORED_STALE: [i64; 3] = [58_774_376, 58_779_504, 58_779_518];
+
 #[derive(clickhouse::Row, serde::Deserialize, Debug)]
 struct TransferRow {
     ledger_sequence: i64,
@@ -43,6 +57,7 @@ struct TransferRow {
     amount: String,
     from_pool: i64,
     to_pool: i64,
+    burn: bool,
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -140,7 +155,8 @@ async fn movements_match_attributed_transfers() {
                 "SELECT ledger_sequence, application_order, op_index, asset_id, \
                         toString(ifNull(amount, 0)) AS amount, \
                         if(from_kind = 'C', ifNull(from_id, 0), 0) AS from_pool, \
-                        if(to_kind = 'C', ifNull(to_id, 0), 0) AS to_pool \
+                        if(to_kind = 'C', ifNull(to_id, 0), 0) AS to_pool, \
+                        verb = 'burn' AS burn \
                  FROM asset_transfers \
                  WHERE ledger_sequence > {lo} AND ledger_sequence <= {hi} \
                    AND ((from_kind = 'C' AND from_id IN ({ids})) OR (to_kind = 'C' AND to_id IN ({ids}))) \
@@ -210,6 +226,8 @@ async fn movements_match_attributed_transfers() {
         }
     }
     let mut attributed: HashMap<(Op, u32), BTreeMap<i64, i128>> = HashMap::new();
+    // The same flows without the burns out of the pool's balance.
+    let mut unburnt: HashMap<(Op, u32), BTreeMap<i64, i128>> = HashMap::new();
     for t in &transfers {
         let amount: i128 = t.amount.parse().unwrap();
         for (pool, sign) in [(t.to_pool, 1i128), (t.from_pool, -1i128)] {
@@ -228,6 +246,13 @@ async fn movements_match_attributed_transfers() {
                     .or_default()
                     .entry(t.asset_id)
                     .or_default() += sign * amount;
+                if !t.burn {
+                    *unburnt
+                        .entry((op, *e))
+                        .or_default()
+                        .entry(t.asset_id)
+                        .or_default() += sign * amount;
+                }
             }
         }
     }
@@ -257,6 +282,16 @@ async fn movements_match_attributed_transfers() {
         /// change of the pool's own reserves: on every leg where the two
         /// differ, the event must be the closer of the two.
         Surplus,
+        /// Burns out of the pool's balance in the same operation; without
+        /// them the transfers equal the event.
+        Burn,
+        /// A pair deposit paid in an earlier transaction: no leg moves in the
+        /// operation, and the pool's reserves side with the event.
+        PaidEarlier,
+        /// A four-token pool's event names three tokens; those agree.
+        LegNotInEvent,
+        /// A pair pool restored from a stale copy in this ledger.
+        RestoredStale,
         Other,
     }
     let mut stats: BTreeMap<(String, u8), BTreeMap<Verdict, u64>> = BTreeMap::new();
@@ -288,8 +323,31 @@ async fn movements_match_attributed_transfers() {
                     .filter(|(a, m)| pred(a, m))
                     .all(|(a, m)| flow(a) == *m)
         };
+        let unburnt_flow = |a: &i64| {
+            unburnt
+                .get(&(*op, *e))
+                .and_then(|g| g.get(a))
+                .copied()
+                .unwrap_or(0)
+        };
         let verdict = if equal_on(&|_, _| true) {
             Verdict::Equal
+        } else if RESTORED_STALE.contains(&op.1) {
+            Verdict::RestoredStale
+        } else if !extra_leg
+            && unburnt.get(&(*op, *e)) != attributed.get(&(*op, *e))
+            && legs.iter().all(|(a, m)| unburnt_flow(a) == *m)
+        {
+            Verdict::Burn
+        } else if fam == "pair"
+            && kind == 1
+            && legs.keys().all(|a| flow(a) == 0)
+            && reserves_side_with_event(&ch, &decoded, pool, *op, legs, &flow).await
+        {
+            Verdict::PaidEarlier
+        } else if pool.legs.len() == 4 && legs.len() == 3 && legs.iter().all(|(a, m)| flow(a) == *m)
+        {
+            Verdict::LegNotInEvent
         } else if legs.keys().any(|a| !seen.contains(a)) && equal_on(&|a, _| seen.contains(a)) {
             Verdict::NonStandardToken
         } else if fam == "config"

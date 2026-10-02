@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 use crate::common::ch::millis_to_utc;
 
@@ -249,8 +250,11 @@ pub async fn fetch_pool_chart(
 ///   unless EVERY leg has a known scale and a price — a partial sum
 ///   understates the pool while looking real. A bucket shows its last row
 ///   that prices, as the classic chart does.
-/// - **Volume and fee revenue are `NULL`**: soroban pool trades are not read
-///   here yet, and an absent figure must not read as a zero-volume bucket.
+/// - **Volume** is the classic definition on the pool's trades: the absolute
+///   leg-A amount of every trade event in `pool_movements` (deduped on the
+///   full key), scaled by leg A's decimals and priced at its own ledger's
+///   price bucket — see [`fetch_soroban_volume_series`]. Fee revenue is
+///   derived from it as on the classic chart.
 ///
 /// The price rows carry the leg they price (`indexOf` of their identity in the
 /// pool's leg list), so one `ASOF` join prices every leg, however many.
@@ -323,6 +327,7 @@ pub async fn fetch_soroban_pool_chart(
         carry = MAX_PRICE_CARRY_SECONDS,
     );
 
+    let volumes = fetch_soroban_volume_series(client, pool_id_hex, ctx, interval, from, to);
     let legs = &ctx.price.legs;
     let scales: Vec<i32> = ctx
         .leg_decimals
@@ -344,19 +349,142 @@ pub async fn fetch_soroban_pool_chart(
         .bind(legs.iter().map(|l| l.issuer.as_str()).collect::<Vec<_>>())
         .bind(from.timestamp_millis()) // prices: bucket >= floor(from)
         .bind(to.timestamp_millis()) // prices: bucket < to
-        .fetch_all::<SorobanChartChRow>()
-        .await?;
+        .fetch_all::<SorobanChartChRow>();
+    let (rows, volumes) = futures::try_join!(rows, volumes)?;
 
-    Ok(rows
+    // Every trade changes the reserves, so a bucket with volume has a state
+    // row too; a volume bucket without one still gets its point, with no TVL.
+    let mut volume_by_bucket: BTreeMap<i64, Option<f64>> = volumes
         .into_iter()
-        .map(|r| ChartDataPoint {
-            bucket: millis_to_utc(r.bucket_ms),
-            tvl: r.tvl.map(usd_str),
-            volume: None,
-            fee_revenue: None,
-            samples_in_bucket: r.samples_in_bucket as i64,
+        .map(|v| (v.bucket_ms, v.volume))
+        .collect();
+    let mut points: Vec<ChartDataPoint> = rows
+        .into_iter()
+        .map(|r| {
+            let volume = volume_by_bucket.remove(&r.bucket_ms).flatten();
+            ChartDataPoint {
+                bucket: millis_to_utc(r.bucket_ms),
+                tvl: r.tvl.map(usd_str),
+                volume: volume.map(usd_str),
+                fee_revenue: volume.map(|v| usd_str(fee_revenue_usd(v, ctx.price.fee_bps))),
+                samples_in_bucket: r.samples_in_bucket as i64,
+            }
         })
-        .collect())
+        .collect();
+    points.extend(
+        volume_by_bucket
+            .into_iter()
+            .map(|(bucket_ms, volume)| ChartDataPoint {
+                bucket: millis_to_utc(bucket_ms),
+                tvl: None,
+                volume: volume.map(usd_str),
+                fee_revenue: volume.map(|v| usd_str(fee_revenue_usd(v, ctx.price.fee_bps))),
+                samples_in_bucket: 0,
+            }),
+    );
+    points.sort_by_key(|p| p.bucket);
+    Ok(points)
+}
+
+/// One bucket of a soroban pool's traded volume, USD.
+#[derive(Debug, Row, Deserialize)]
+struct SorobanVolumeChRow {
+    bucket_ms: i64,
+    volume: Option<f64>,
+}
+
+/// A soroban pool's volume per chart bucket: the absolute leg-A amount of
+/// every trade event, scaled by leg A's decimals and priced at the trade's
+/// own ledger, as the classic chart prices `gross_volume_a`.
+///
+/// - Leg A is `legs[1]` of the registry row, the leg the classic snapshot
+///   counts. Volume is priced only for a two-leg pool ([`priced_pair`]): a
+///   three- or four-leg pool, a leg A with no price identity and a leg A
+///   without published decimals all get no rows — every bucket's volume is
+///   `NULL` — and the query is not run. A multi-leg pool's TVL can still
+///   price, so `NULL` volume does not imply `NULL` TVL.
+/// - A bucket with any trade that has no leg-A price is `NULL` — an honest
+///   hole, never a partial sum, the classic chart's rule.
+/// - Rows are deduped on the table's full sort key: the live writer and the
+///   backfill write the same rows on purpose.
+async fn fetch_soroban_volume_series(
+    client: &clickhouse::Client,
+    pool_id_hex: &str,
+    ctx: &PoolChartContext,
+    interval: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<SorobanVolumeChRow>, clickhouse::error::Error> {
+    let Some(decimals) = ctx.leg_decimals.first().copied().flatten() else {
+        return Ok(Vec::new());
+    };
+    let Some(leg_a) = priced_pair(&ctx.price)
+        .map(|(a, _)| a.clone())
+        .filter(|a| !a.kind.is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+    let (bucket_fn, series_view, price_bucket_fn) = chart_grain(interval);
+    let sql = format!(
+        "WITH m AS ( \
+             SELECT ledger_sequence, amount \
+             FROM pool_movements \
+             WHERE pool_id = toFixedString(unhex(?), 32) \
+               AND event_kind = ? \
+               AND asset_id = (SELECT legs[1] FROM liquidity_pools \
+                               WHERE pool_id = unhex(?) LIMIT 1) \
+               AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
+               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
+             LIMIT 1 BY ledger_sequence, application_order, operation_index, event_index, asset_id \
+         ) \
+         SELECT \
+            bucket_ms, \
+            if(countIf(isNull(usd)) > 0, NULL, sum(usd)) AS volume \
+         FROM ( \
+             SELECT \
+                l.bucket_ms AS bucket_ms, \
+                abs(toFloat64(m.amount)) / pow(10, ?) \
+                    * if(dateDiff('second', p.bucket, l.price_bucket) <= {carry}, \
+                         nullIf(toFloat64(p.close_usd), 0), NULL) AS usd \
+             FROM m \
+             JOIN ( \
+                 SELECT 1 AS k, sequence, {price_bucket_fn}(closed_at) AS price_bucket, \
+                        toUnixTimestamp64Milli(toDateTime64({bucket_fn}(closed_at), 3, 'UTC')) AS bucket_ms \
+                 FROM ledgers \
+                 WHERE sequence IN (SELECT ledger_sequence FROM m) \
+                 LIMIT 1 BY sequence \
+             ) l ON l.sequence = m.ledger_sequence \
+             ASOF LEFT JOIN ( \
+                 SELECT 1 AS k, bucket, close_usd \
+                 FROM {series_view} \
+                 WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
+                   AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
+                   AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
+                   AND close_usd > 0 \
+             ) p ON p.k = l.k AND p.bucket <= l.price_bucket \
+         ) \
+         GROUP BY bucket_ms",
+        carry = MAX_PRICE_CARRY_SECONDS,
+    );
+    // The window's ledgers are read only where the pool traded: the trades
+    // already carry the window, and a whole-window `ledgers` read was most
+    // of this query's cost (1Y: 6.1M rows of 31.4M, 2026-10-01).
+    client
+        .query(&sql)
+        .bind(pool_id_hex)
+        .bind(domain::PoolEvent::Trade as u8)
+        .bind(pool_id_hex)
+        .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
+        .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
+        .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
+        .bind(decimals)
+        .bind(leg_a.kind) // leg-A price identity
+        .bind(leg_a.code.as_str())
+        .bind(leg_a.issuer.as_str())
+        .bind(from.timestamp_millis()) // prices: bucket >= floor(from)
+        .bind(to.timestamp_millis()) // prices: bucket < to
+        .fetch_all::<SorobanVolumeChRow>()
+        .await
 }
 
 /// SELECT column order MUST match this struct (clickhouse positional decode).
@@ -386,3 +514,6 @@ fn chart_grain(interval: &str) -> (&'static str, &'static str, &'static str) {
         ),
     }
 }
+
+#[cfg(test)]
+mod ch_tests;

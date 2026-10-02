@@ -1669,7 +1669,6 @@ CREATE TABLE lp_positions (
     pool_id              BYTEA         NOT NULL REFERENCES liquidity_pools(pool_id), -- ADR 0024
     account_id           BIGINT        NOT NULL REFERENCES accounts(id),             -- ADR 0026
     shares               NUMERIC(28,7) NOT NULL,
-    first_deposit_ledger BIGINT        NOT NULL,
     last_updated_ledger  BIGINT        NOT NULL,
     PRIMARY KEY (pool_id, account_id),
     CONSTRAINT ck_lpp_pool_id_len CHECK (octet_length(pool_id) = 32)

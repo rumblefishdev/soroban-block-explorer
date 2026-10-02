@@ -16,6 +16,12 @@ const EMPTY: &str = "62626262626262626262626262626262626262626262626262626262626
 const NO_KEY: &str = "6363636363636363636363636363636363636363636363636363636363636363";
 const NO_SCALE: &str = "6464646464646464646464646464646464646464646464646464646464646464";
 
+// Share tokens 901 and 904. Real `C…` addresses (32 bytes of 0x09 and 0x0a):
+// the list query decodes every contract address, as production holds only
+// valid ones, so a made-up id fails it.
+const TOKEN_901: &str = "CAEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQTD2L";
+const TOKEN_904: &str = "CAFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUTSM";
+
 #[tokio::test]
 async fn soroban_total_shares_follow_the_measured_rule() {
     let Some(base) = crate::common::ch::test_client_from_env() else {
@@ -60,12 +66,14 @@ async fn soroban_total_shares_follow_the_measured_rule() {
              (unhex('{NO_KEY}'), 1, 0, 0, 200), \
              (unhex('{NO_SCALE}'), 1, 904, 4622, 200)"
         ),
-        "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
-         (901, 'CSHARETOKEN901', false), (904, 'CSHARETOKEN904', false)"
-            .to_string(),
-        "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
-         ('CSHARETOKEN901', 7, 1)"
-            .to_string(),
+        format!(
+            "INSERT INTO soroban_contracts (id, contract_id, is_sac) VALUES \
+             (901, '{TOKEN_901}', false), (904, '{TOKEN_904}', false)"
+        ),
+        format!(
+            "INSERT INTO soroban_contract_metadata (contract_id, decimals, version) VALUES \
+             ('{TOKEN_901}', 7, 1)"
+        ),
     ] {
         ch.query(&sql).execute().await.expect("seed rows");
     }

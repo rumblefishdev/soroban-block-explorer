@@ -69,6 +69,12 @@ terraform plan -var-file=testnet.tfvars
 terraform workspace select default                   # back to production
 ```
 
+`workspace-guard.tf` stops a plan whose host does not belong to the selected
+workspace (a testnet host outside `testnet`, or production's inside it), so a
+forgotten `workspace select` cannot touch production's API record. Its
+`terraform_data` resource shows up once as "1 to add" in each workspace; it
+creates nothing in Cloudflare.
+
 The origin target is the `CloudflareApiRegionalTarget` output of
 `Explorer-testnet-ApiGateway`, which exists after the testnet deploy with
 `enableCloudflareApiDomain: true` (`docs/deployment.md` § Testnet).

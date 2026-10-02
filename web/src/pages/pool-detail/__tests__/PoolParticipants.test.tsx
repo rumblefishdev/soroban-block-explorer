@@ -41,21 +41,19 @@ describe('PoolParticipants', () => {
     expect(screen.queryByText('No participants yet')).not.toBeInTheDocument();
   });
 
-  it('shows a soroban provider with no first deposit and links a contract holder', () => {
+  it('links an account holder and a contract holder', () => {
     mockQuery({
       rows: [
         {
           account: ACCOUNT,
           shares: '300',
           share_percentage: '75',
-          first_deposit_ledger: null,
           last_updated_ledger: 20,
         },
         {
           account: GAUGE,
           shares: '100',
           share_percentage: '25',
-          first_deposit_ledger: null,
           last_updated_ledger: 30,
         },
       ],
@@ -63,9 +61,6 @@ describe('PoolParticipants', () => {
     renderWithProviders(<PoolParticipants poolId="CPOOL" />);
 
     const table = within(screen.getByRole('table'));
-    // Share-token balances record no first deposit: a dash, never a ledger 0.
-    expect(table.getAllByText('—')).toHaveLength(2);
-    expect(table.queryByText('0')).not.toBeInTheDocument();
     // A gauge or vault holding the share token links to its contract page.
     const hrefs = table.getAllByRole('link').map((a) => a.getAttribute('href'));
     expect(hrefs).toContain(`/contracts/${GAUGE}`);

@@ -144,9 +144,6 @@ pub struct InvocationAppearanceItem {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OperationItem {
-    /// The operation's 1-based position (the table has no surrogate id since
-    /// PR #175). Join against the heavy overlay by `operation_index`.
-    pub appearance_id: i64,
     /// Operation type tag in canonical SCREAMING_SNAKE_CASE
     /// (e.g. `"INVOKE_HOST_FUNCTION"`).
     pub type_name: String,

@@ -201,9 +201,11 @@ pub async fn fetch_pool_chart_context(
 ///   (`price_usd_series_1h`, [`MAX_PRICE_CARRY_SECONDS`] lookback); NULL
 ///   unless BOTH legs price (a one-leg TVL would silently halve the pool —
 ///   no-misleading-fallbacks rule).
-/// - `volume` — last-24h `gross_volume_a` × the same leg-A close. One
-///   price for the whole day, not per-trade (upgrade path: per-ledger join
-///   as in the chart, if product needs it).
+/// - `volume` — last-24h gross leg-A volume × the same leg-A close: a
+///   classic pool's `gross_volume_a`, a soroban pool's traded leg-A amounts
+///   (see [`fetch_pool_volume_24h`]). One price for the whole day, not
+///   per-trade (upgrade path: per-ledger join as in the chart, if product
+///   needs it).
 /// - `fee_revenue` — [`fee_revenue_usd`].
 ///
 /// Why the 1h series and NOT `prices.current_price_usd`: box-measured
@@ -233,11 +235,21 @@ struct Vol24ChRow {
     vol24_a_units: Option<String>,
 }
 
-/// Last-24h gross trade volume for one pool, in asset-A units.
+/// Last-24h gross trade volume for one pool, in leg-A units: the sum of
+/// every trade's leg-A amount, whichever way it went. `None` when it is not
+/// knowable — an unparseable sum, or a soroban leg A whose token publishes
+/// no decimals.
 ///
-/// Deduped with `LIMIT 1 BY ledger_sequence` — same idiom as the chart —
-/// because RMT duplicate versions of one `(pool, ledger)` row would double
-/// the sum.
+/// - **Classic:** `liquidity_pool_snapshots.gross_volume_a`, which the
+///   indexer already sums per ledger. Deduped with `LIMIT 1 BY
+///   ledger_sequence` — same idiom as the chart — because RMT duplicate
+///   versions of one `(pool, ledger)` row would double the sum.
+/// - **Soroban:** `pool_movements`, the absolute leg-A amount of every
+///   trade event, scaled by leg A's decimals. Leg A is `legs[1]` of the
+///   pool's registry row, the same leg the classic pool's snapshot counts.
+///   Deduped on the table's full sort key: the live writer and the backfill
+///   write the same rows on purpose. Only trade events count, as only claim
+///   atoms count in `gross_volume_a`.
 ///
 /// **Both ledger bounds are required, and the upper one is not redundant.**
 /// `min()`/`max()` over an empty set return the type DEFAULT (`0`), not
@@ -250,30 +262,82 @@ struct Vol24ChRow {
 /// number would render as real. Pairing the bounds makes the empty window
 /// self-cancelling (`>= 0 AND <= 0` matches nothing), which is exactly why
 /// the chart's equivalent floor was safe.
-async fn fetch_pool_volume_24h(
+pub(super) async fn fetch_pool_volume_24h(
     client: &clickhouse::Client,
     pool_id_hex: &str,
-) -> Result<Option<String>, clickhouse::error::Error> {
-    let row = client
-        .query(
-            "SELECT toString(sum(gross_volume_a)) AS vol24_a_units FROM ( \
-                 SELECT ledger_sequence, gross_volume_a \
-                 FROM liquidity_pool_snapshots \
-                 WHERE pool_id = unhex(?) \
-                   AND ledger_sequence >= ( \
-                       SELECT min(sequence) FROM ledgers \
-                       WHERE closed_at >= now() - INTERVAL 24 HOUR) \
-                   AND ledger_sequence <= ( \
-                       SELECT max(sequence) FROM ledgers \
-                       WHERE closed_at >= now() - INTERVAL 24 HOUR) \
-                 ORDER BY ledger_sequence DESC \
-                 LIMIT 1 BY ledger_sequence \
-             )",
-        )
-        .bind(pool_id_hex)
-        .fetch_one::<Vol24ChRow>()
-        .await?;
-    Ok(row.vol24_a_units)
+    pool_kind: domain::PoolKind,
+    leg_a_decimals: Option<u32>,
+) -> Result<Option<f64>, clickhouse::error::Error> {
+    match pool_kind {
+        domain::PoolKind::Classic => {
+            let raw = client
+                .query(
+                    "SELECT toString(sum(gross_volume_a)) AS vol24_a_units FROM ( \
+                         SELECT ledger_sequence, gross_volume_a \
+                         FROM liquidity_pool_snapshots \
+                         WHERE pool_id = unhex(?) \
+                           AND ledger_sequence >= ( \
+                               SELECT min(sequence) FROM ledgers \
+                               WHERE closed_at >= now() - INTERVAL 24 HOUR) \
+                           AND ledger_sequence <= ( \
+                               SELECT max(sequence) FROM ledgers \
+                               WHERE closed_at >= now() - INTERVAL 24 HOUR) \
+                         ORDER BY ledger_sequence DESC \
+                         LIMIT 1 BY ledger_sequence \
+                     )",
+                )
+                .bind(pool_id_hex)
+                .fetch_one::<Vol24ChRow>()
+                .await?
+                .vol24_a_units;
+            // SQL NULL (no snapshot rows in the window, or no swaps among
+            // them) is a genuine zero-volume day. A row that IS present but
+            // unparseable is NOT — it is an unknown, and must not be reported
+            // as "$0.00 traded".
+            Ok(match raw.as_deref() {
+                None => Some(0.0),
+                Some(raw) => parse_f64(raw),
+            })
+        }
+        domain::PoolKind::Soroban => {
+            let Some(decimals) = leg_a_decimals else {
+                return Ok(None);
+            };
+            // `legs[1]` reads the registry without `FINAL`: a pool's legs are
+            // fixed at registration, and no pool has two versions that differ
+            // (0 on production, 2026-10-01). A day with no trades sums to "0",
+            // a genuine zero.
+            let raw = client
+                .query(
+                    "SELECT toNullable(toString(sum(abs(amount)))) AS vol24_a_units FROM ( \
+                         SELECT amount \
+                         FROM pool_movements \
+                         WHERE pool_id = toFixedString(unhex(?), 32) \
+                           AND event_kind = ? \
+                           AND asset_id = (SELECT legs[1] FROM liquidity_pools \
+                                           WHERE pool_id = unhex(?) LIMIT 1) \
+                           AND ledger_sequence >= ( \
+                               SELECT min(sequence) FROM ledgers \
+                               WHERE closed_at >= now() - INTERVAL 24 HOUR) \
+                           AND ledger_sequence <= ( \
+                               SELECT max(sequence) FROM ledgers \
+                               WHERE closed_at >= now() - INTERVAL 24 HOUR) \
+                         LIMIT 1 BY ledger_sequence, application_order, operation_index, \
+                                    event_index, asset_id \
+                     )",
+                )
+                .bind(pool_id_hex)
+                .bind(domain::PoolEvent::Trade as u8)
+                .bind(pool_id_hex)
+                .fetch_one::<Vol24ChRow>()
+                .await?
+                .vol24_a_units;
+            Ok(raw
+                .as_deref()
+                .and_then(parse_f64)
+                .map(|units| units / 10f64.powi(decimals as i32)))
+        }
+    }
 }
 
 /// Fetch last hourly closes + 24h gross volume, compute the detail USD
@@ -287,24 +351,21 @@ async fn fetch_pool_volume_24h(
 pub async fn fetch_pool_usd_analytics(
     client: &clickhouse::Client,
     pool_id_hex: &str,
+    pool_kind: domain::PoolKind,
     ctx: &PoolPriceContext,
     reserves: &[Option<&str>],
+    leg_a_decimals: Option<u32>,
 ) -> Result<PoolUsdAnalytics, clickhouse::error::Error> {
     let legs = priceable_legs(ctx);
-    let (closes, vol24_raw) = tokio::join!(
+    let (closes, vol24_units) = tokio::join!(
         fetch_last_closes(client, &legs),
-        fetch_pool_volume_24h(client, pool_id_hex),
+        fetch_pool_volume_24h(client, pool_id_hex, pool_kind, leg_a_decimals),
     );
     let closes = closes?;
-    // Volume is still leg-A-only: the snapshot counts it on one leg.
+    // Volume is leg-A-only for both kinds: the snapshot counts it on one leg,
+    // and a soroban pool's volume is read the same way.
     let spot_a = priced_pair(ctx).and_then(|(a, _)| closes.get(a).copied());
-    // SQL NULL (no snapshot rows in the window, or no swaps among them) is a
-    // genuine zero-volume day. A row that IS present but unparseable is NOT —
-    // it is an unknown, and must not be reported as "$0.00 traded".
-    let vol24_units = match vol24_raw?.as_deref() {
-        None => Some(0.0),
-        Some(raw) => parse_f64(raw),
-    };
+    let vol24_units = vol24_units?;
 
     let tvl = tvl_usd(reserves, &ctx.legs, &closes);
     let volume = match (spot_a, vol24_units) {
@@ -476,3 +537,6 @@ pub(super) fn fee_revenue_usd(volume_usd: f64, fee_bps: i32) -> f64 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod ch_tests;
