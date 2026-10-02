@@ -152,7 +152,7 @@ export class CicdStack extends cdk.Stack {
         })
       );
 
-      // S3 sync for the second, independently-built SPA served at `/api`
+      // S3 sync for the second, independently-built SPA served at `/pricing-api`
       // (task 0519) — same bucket-level/object-level split as above.
       role.addToPolicy(
         new iam.PolicyStatement({
