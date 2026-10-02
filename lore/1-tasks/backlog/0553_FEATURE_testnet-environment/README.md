@@ -117,10 +117,11 @@ network check that assumes pubnet for an own bucket.
 - [ ] `backfill-runner` reads the testnet data lake and archive when run
       for testnet (items 8–9), and the `testnet` database holds the full
       history from the current genesis.
-- [ ] `testnet-ingestion-stall` exists in CloudWatch (`aws cloudwatch
-    describe-alarms`), is OK once the indexer runs, fires on a simulated
-      stall (indexer paused, or the prefix pointed at a folder that no longer
-      grows), and both state changes reach the testnet Slack channel.
+- [ ] `testnet-ingestion-stall` exists in CloudWatch
+      (`aws cloudwatch describe-alarms`), is OK once the indexer runs, fires
+      on a simulated stall (indexer paused, or the prefix pointed at a folder
+      that no longer grows), and both state changes reach the testnet Slack
+      channel.
 - [ ] Patch sweep done: every item of the patch register rebuilt or
       explicitly kept with its reason.
 - [ ] The reset runbook was exercised once end to end.
