@@ -70,3 +70,27 @@ with our hourly closes came within 0.3–0.4 % of the hourly `volume_usd`, and t
 swap counts per pool were equal over the same window (13,498 / 13,498). The
 same comparison on the two-leg pools of this task, window by window, should
 separate a method difference from missing events.
+
+## Measured (2026-10-02)
+
+Our API on production data (branch of #598) against the protocol's per-pool
+hourly `volume_usd`, all 356 Aquarius pools, 2026-09-03 → 2026-10-01 16:00
+UTC (688 hours): $98,430,530 ours vs $98,396,948 theirs over the hours we
+price (+0.034 %); the hours we leave `null` hold 0.79 % of their volume, all
+in pools with a leg our prices service does not price (pure Soroban tokens,
+e.g. `CCNXGPE4…`, $768k) or without published decimals. Per pool, 68 of 86
+pools with ≥ $1,000 are within 0.5 %, 14 within 2 %; the outlier `CD2ZV2IM…`
+(BTC/XLM, +7.5 %) is a leg-price difference. We report no volume in any hour
+they report none.
+
+The protocol's own daily total (`statistics/totals`, also what DefiLlama
+publishes) is 5.9 % BELOW the sum of its per-pool hourly statistics over
+2026-09-03..30 ($90.79M vs $96.54M); ours, at daily grain, is −0.41 % against
+the per-pool sum. So the lifetime-volume gap this task started from likely
+sits between the protocol's own two figures (a routed swap counted once in
+the total and per hop in the pools is one hypothesis, unverified), not in
+`pool_movements`.
+
+Soroswap against DefiLlama (a Dune query; zero from 2026-05 on, so
+2025-10..2026-04 only): +1.78 % over 212 days, monthly −2.1 %..−0.2 % except
+2025-10 at +11.9 % (unexplained).
