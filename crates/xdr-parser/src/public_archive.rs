@@ -16,6 +16,9 @@ pub const PUBLIC_BUCKET_REGION: &str = "us-east-2";
 /// Mainnet's folder inside [`PUBLIC_BUCKET`].
 pub const PUBNET_PREFIX: &str = "v1.1/stellar/ledgers/pubnet";
 
+/// Ledgers 0 and 1 have no close meta on any network, so no archive holds them.
+pub const FIRST_CLOSED_LEDGER: u32 = 2;
+
 /// `PUBLIC_ARCHIVE_PREFIX` when it names a folder; `None` when unset or blank.
 /// No trailing slash.
 pub fn configured_archive_prefix() -> Option<String> {

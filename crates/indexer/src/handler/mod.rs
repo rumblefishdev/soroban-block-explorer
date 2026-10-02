@@ -601,7 +601,7 @@ async fn publish_indexer_metrics(
 }
 
 #[cfg(test)]
-#[path = "lag_tests.rs"]
+#[path = "tests/lag_tests.rs"]
 mod lag_tests;
 
 /// Classify a `HandlerError` as transient (eligible for the retry
@@ -740,5 +740,5 @@ async fn download_s3_object(
 }
 
 #[cfg(test)]
-#[path = "handler_tests.rs"]
+#[path = "tests/handler_tests.rs"]
 mod tests;
