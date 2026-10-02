@@ -18,10 +18,12 @@ so the first deploy starts nothing until the database is ready.
 
 An empty `testnet` database needs no seed: the indexer reads the lake from
 the network's first closed ledger (2) on its own. It stores a ledger in
-~0.9 s (mainnet's median indexer run, measured 2026-09-30) while the network
-closes one every ~5 s, so it gains ~0.9 ledgers a second, and catching up
-takes about 22% of the time since the reset: ~5 h for a day, ~1.5 days for a
-week. Skip step 6 when that wait is acceptable. The first build — a chain
+~0.9 s (mainnet's median indexer run against our own bucket, measured
+2026-09-30 — an estimate here: the lake sits in another region, which slows
+each read, and early testnet ledgers are light, which speeds it) while the
+network closes one every ~5 s, so it gains ~0.9 ledgers a second, and
+catching up takes about 22% of the time since the reset: ~5 h for a day,
+~1.5 days for a week. Skip step 6 when that wait is acceptable. The first build — a chain
 months old — takes the backfill.
 
 ## How it shows up

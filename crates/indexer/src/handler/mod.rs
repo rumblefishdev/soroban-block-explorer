@@ -304,7 +304,8 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
 /// an empty table, the public data lake starts at the network's first closed
 /// ledger, so testnet rebuilds itself after a reset; our own bucket
 /// (mainnet) holds ledgers only from where our Galexie started, so an empty
-/// mainnet table waits for a seeding backfill (`None`).
+/// mainnet table waits for a seeding backfill (`None`). Only testnet reads the
+/// lake; a mainnet indexer pointed at it would start ~64M ledgers back.
 fn first_ledger_to_read(max_seq: i64, bucket: &str) -> Option<i64> {
     if max_seq > 0 {
         return Some(max_seq + 1);
