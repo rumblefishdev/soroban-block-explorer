@@ -25,6 +25,13 @@ history:
       product, the repo and the API host prices-api.sorobanscan…, and
       "pricing" reads as a price list or a valuation engine. /pricing-api…
       joins /api… in the 301.
+  - date: 2026-10-02
+    status: active
+    who: stkrolikiewicz
+    note: >
+      /prices-api/ live ~10:55 UTC: prices bundle synced under prices-api/
+      (#385), then Delivery deployed from develop (#599; cdk diff showed only
+      this change). Every 301 and the portal verified on production.
 ---
 
 # Serve the Prices portal at /prices-api/, 301 from /api
@@ -39,12 +46,12 @@ already shared breaks.
 
 ## Stan teraz
 
-- Done: `/pricing-api/` live since 2026-10-02 ~10:00 UTC (#593, Delivery
-  deploy). Rename to `/prices-api/` in code + docs; Prices half on
-  `feat/0326_prices-api-path` in stellar-prices-api.
-- Next: merge both PRs, then the deploy order below.
-- In force: Delivery does not go out before the bundle is in the bucket under
-  `prices-api/`.
+- Done: `/prices-api/` live on production since 2026-10-02 ~10:55 UTC;
+  `/api…` and `/pricing-api…` answer `301` there, query string kept.
+- Next: SPA deploy (footer / nav link) with the next regular release — not
+  before Prices' asset_id migration ends (no AWS deploys meanwhile, Adam,
+  2026-10-02); then drop the `api/` and `pricing-api/` bucket prefixes.
+- In force: the `301` covers the old link until the SPA ships.
 
 ## Context
 
@@ -81,15 +88,16 @@ the explorer half is the hosting and the redirect.
 
 ## Acceptance Criteria
 
-- [ ] `/prices-api/`, `/prices-api/dashboard`, `/prices-api/docs` answer
+- [x] `/prices-api/`, `/prices-api/dashboard`, `/prices-api/docs` answer
       `200` with the portal's `index.html`; bare `/prices-api` → `301`
       `/prices-api/`
-- [ ] `/api`, `/api/`, `/api/dashboard?signin=failed`, `/pricing-api/docs`
+- [x] `/api`, `/api/`, `/api/dashboard?signin=failed`, `/pricing-api/docs`
       → `301` to `/prices-api/`, `/prices-api/`,
       `/prices-api/dashboard?signin=failed`, `/prices-api/docs`
-- [ ] Explorer footer / nav link points at `/prices-api/`
-- [ ] **Docs updated** — infrastructure-overview.md, frontend-overview.md
-- [ ] **API types regenerated** — N/A — no change under `crates/api/**`,
+- [ ] Explorer footer / nav link points at `/prices-api/` (merged in #599,
+      ships with the next SPA deploy)
+- [x] **Docs updated** — infrastructure-overview.md, frontend-overview.md
+- [x] **API types regenerated** — N/A — no change under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**`
 
 ## Design Decisions
