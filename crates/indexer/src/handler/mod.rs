@@ -21,6 +21,7 @@
 
 pub mod enrichment_publish;
 pub mod lake_pacing;
+pub mod ledger_source;
 pub mod process;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
@@ -112,14 +113,11 @@ const RETRY_BACKOFF_MS: [u64; 3] = [50, 200, 800];
 #[derive(Clone)]
 pub struct HandlerState {
     pub s3_client: S3Client,
-    /// Ledger bucket name (`BUCKET_NAME` env, set by `compute-stack.ts`).
-    /// The doorbell handler derives object keys from ledger numbers and
-    /// HEAD/GETs them against this bucket — it does not read the S3 event.
-    pub bucket: String,
-    /// Key prefix inside [`Self::bucket`], ending in `/`. Empty on mainnet,
-    /// whose Galexie writes at the bucket root; the network's folder when the
-    /// bucket is the public data lake (testnet).
-    pub key_prefix: String,
+    /// Where ledger files are read (task 0553): our own Galexie bucket, or
+    /// the public data lake in the network's folder. The doorbell handler
+    /// derives object keys from ledger numbers and HEAD/GETs them there — it
+    /// does not read the S3 event.
+    pub source: ledger_source::LedgerSource,
     pub cw_client: CloudWatchClient,
     /// ClickHouse client (mTLS to Hetzner via Caddy). Construction lives
     /// in `main.rs` cold start; cloning is cheap (the underlying
@@ -137,8 +135,9 @@ pub struct HandlerState {
     /// batched query per first sighting of a contract. Cloning shares the inner
     /// `Arc`, so all invocations on a warm container share the memo.
     pub classification_cache: ClassificationCache,
-    /// Present only when reading the public data lake (task 0553): the lake
-    /// sends no events, so the indexer queues its own next wake-up.
+    /// Present exactly when [`Self::source`] is the public data lake (built
+    /// in `main.rs`, task 0553): the lake sends no events, so the indexer
+    /// queues its own next wake-up.
     pub pacer: Option<lake_pacing::Pacer>,
 }
 
@@ -277,7 +276,7 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
             });
         }
 
-        let key = ledger_s3_key(&state.key_prefix, next);
+        let key = ledger_s3_key(state.source.key_prefix(), next);
         if !s3_object_exists(state, &key).await? {
             // `next` is not on S3 yet — stop. A future doorbell (when the file
             // lands) resumes here. This gate is what guarantees no gaps.
@@ -293,7 +292,7 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
         }
 
         info!(ledger = next, key = key.as_str(), "processing ledger");
-        process_s3_object(state, &state.bucket, &key).await?;
+        process_s3_object(state, state.source.bucket(), &key).await?;
         persisted += 1;
         next += 1;
     }
@@ -327,7 +326,7 @@ async fn s3_object_exists(state: &HandlerState, key: &str) -> Result<bool, Handl
     match state
         .s3_client
         .head_object()
-        .bucket(&state.bucket)
+        .bucket(state.source.bucket())
         .key(key)
         .send()
         .await
