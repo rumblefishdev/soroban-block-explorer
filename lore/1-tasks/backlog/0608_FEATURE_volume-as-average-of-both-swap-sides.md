@@ -1,6 +1,6 @@
 ---
 id: '0608'
-title: 'Price swap volume as the average of both sides, for every pool'
+title: 'Review the liquidity-pool module, then price swap volume as the average of both sides'
 type: FEATURE
 status: backlog
 related_adr: []
@@ -12,9 +12,13 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from 0374: the multi-leg volume decision took the lowest traded leg now and left the industry definition for later.'
+  - date: 2026-10-02
+    status: backlog
+    who: karolkow
+    note: 'Scope widened: a review of the whole liquidity-pool module (classic and Soroban) comes first; its findings shape the volume change.'
 ---
 
-# Price swap volume as the average of both sides, for every pool
+# Review the liquidity-pool module, then price swap volume as the average of both sides
 
 ## Summary
 
@@ -24,6 +28,37 @@ Soroban pools, the lowest-index traded leg for three- and four-leg pools
 and what came out, or at the one side that has a price. Move every pool, both
 kinds, to that definition, so volume no longer depends on the order of a
 pool's legs.
+
+Before that change, review the whole liquidity-pool module, classic and
+Soroban: how it is built, how TVL, volume, fees and participants are computed
+and shown, and whether the two kinds are consistent and well organised. The
+review lists technical debt and other problems; its findings decide where the
+volume change lands and become their own tasks.
+
+## Review scope (phase 1)
+
+- **Architecture.** `crates/api/src/liquidity_pools/**`, the indexer and
+  ClickHouse tables it reads (`liquidity_pool_snapshots`, `pool_movements`,
+  `pool_state_changes`, `liquidity_pools`, `lp_positions`), and
+  `web/src/pages/pool-detail/**` + the list page. Which file owns which
+  concept; where two paths answer the same question (classic vs Soroban
+  branches, list vs detail, 24h vs chart).
+- **Computation.** TVL, volume, fees, participants, share %, activity: the
+  definition each path uses, whether classic and Soroban agree, whether list,
+  detail and chart agree for one pool (measured on production, whole
+  population, read-only).
+- **Display.** Empty and unknown states ("not indexed", "USD values
+  unavailable", `null` vs `0`), units and decimals, naming of legs, the
+  hints a user sees.
+- **Known leads.** The traded-leg SQL is written twice (24h and chart,
+  #598 review S1); `Vol24ChRow` still says "leg A" next to `LegVol24ChRow`
+  (S2); the chart's TVL query is the heaviest read of the module (~2.5 TiB
+  over one 779-pool comparison run, 2026-10-02); pools whose leg is a pure
+  Soroban token get no price (`CCNXGPE4…`, $768k/month unpriced); Soroswap
+  2025-10 is +11.9 % against DefiLlama, unexplained (0607).
+- **Output.** A findings list in `notes/`, each with severity, evidence and
+  the task it becomes (or "won't fix" with the reason). Convert this task to
+  a directory when the notes start.
 
 ## Context
 
@@ -48,6 +83,8 @@ kinds measure differently.
 
 ## Implementation Plan
 
+Phase 2, after the review:
+
 - Measure first: for the two-leg pools of both kinds, the change in 24h and
   chart volume between leg A and the average (full population, read-only).
 - Classic: a `gross_volume_b` column next to `gross_volume_a`, written by the
@@ -58,6 +95,8 @@ kinds measure differently.
 
 ## Acceptance Criteria
 
+- [ ] Review done: findings list with evidence, each finding filed as a task
+      or closed with a reason.
 - [ ] The two-leg change is measured and reported before the switch.
 - [ ] Classic and Soroban volume use the same definition, on the detail
       endpoint and the chart.
