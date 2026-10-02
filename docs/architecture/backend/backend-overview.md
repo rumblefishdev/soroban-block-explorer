@@ -632,12 +632,16 @@ aggregation bounded. Bucket aggregation policy in
 A Soroban pool's series comes from its reserve history (`pool_state_changes`,
 raw per leg, scaled by each leg's own decimals) on the same buckets and price
 rules. Its `volume` is the classic definition on its trades: the absolute
-leg-A amount of every trade event in `pool_movements` (deduped on the full
-key), scaled by leg A's decimals and priced at the trade's own ledger;
-`fee_revenue` follows from it. A pool that is not two-legged, or whose leg A
-publishes no decimals, has `null` volume in every bucket; a multi-leg pool's
-TVL can still be priced, so a `null` volume does not mean no trades. The detail
-endpoint's 24h `volume` / `fee_revenue` read the same trades.
+amount of every trade's **traded leg** in `pool_movements` (deduped on the
+full key), scaled by that leg's decimals and priced at the trade's own ledger;
+`fee_revenue` follows from it. The traded leg is the lowest-index leg the trade
+wrote a row for: a two-leg trade writes both legs, so it is always leg A, the
+leg the classic snapshot counts; a three- or four-leg trade writes only the two
+legs it moved and is counted on the first.
+A bucket holding a trade whose traded leg has no price or no published
+decimals has `null` volume — a hole, never a partial sum. The detail
+endpoint's 24h `volume` / `fee_revenue` read the same trades, each leg's
+amount priced at that leg's last close.
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, and last update ledger

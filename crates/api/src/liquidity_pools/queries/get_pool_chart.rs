@@ -251,10 +251,11 @@ pub async fn fetch_pool_chart(
 ///   understates the pool while looking real. A bucket shows its last row
 ///   that prices, as the classic chart does.
 /// - **Volume** is the classic definition on the pool's trades: the absolute
-///   leg-A amount of every trade event in `pool_movements` (deduped on the
-///   full key), scaled by leg A's decimals and priced at its own ledger's
-///   price bucket — see [`fetch_soroban_volume_series`]. Fee revenue is
-///   derived from it as on the classic chart.
+///   amount of every trade's traded leg in `pool_movements` (deduped on the
+///   full key) — leg A in a two-leg pool — scaled by that leg's decimals and
+///   priced at its own ledger's price bucket — see
+///   [`fetch_soroban_volume_series`]. Fee revenue is derived from it as on
+///   the classic chart.
 ///
 /// The price rows carry the leg they price (`indexOf` of their identity in the
 /// pool's leg list), so one `ASOF` join prices every leg, however many.
@@ -393,18 +394,20 @@ struct SorobanVolumeChRow {
     volume: Option<f64>,
 }
 
-/// A soroban pool's volume per chart bucket: the absolute leg-A amount of
-/// every trade event, scaled by leg A's decimals and priced at the trade's
-/// own ledger, as the classic chart prices `gross_volume_a`.
+/// A soroban pool's volume per chart bucket: the absolute amount of every
+/// trade's traded leg, scaled by that leg's decimals and priced at the
+/// trade's own ledger, as the classic chart prices `gross_volume_a`.
 ///
-/// - Leg A is `legs[1]` of the registry row, the leg the classic snapshot
-///   counts. Volume is priced only for a two-leg pool ([`priced_pair`]): a
-///   three- or four-leg pool, a leg A with no price identity and a leg A
-///   without published decimals all get no rows — every bucket's volume is
-///   `NULL` — and the query is not run. A multi-leg pool's TVL can still
-///   price, so `NULL` volume does not imply `NULL` TVL.
-/// - A bucket with any trade that has no leg-A price is `NULL` — an honest
-///   hole, never a partial sum, the classic chart's rule.
+/// - The **traded leg** is the lowest-index leg the trade wrote a row for
+///   (legs in the registry row's order). A two-leg trade writes both legs, so
+///   it is leg A, the leg the classic snapshot counts. A three- or four-leg
+///   trade writes only the two legs it moved, often not leg A, and is counted
+///   on the first of the two. The detail endpoint's 24h volume reads the same
+///   rule, in `fetch_pool_volume_24h` (`usd_analytics.rs`).
+/// - A bucket with any trade whose traded leg has no price or no published
+///   decimals is `NULL` — an honest hole, never a partial sum, the classic
+///   chart's rule. An unpriceable leg (empty kind) matches no price row; an
+///   unknown scale is bound as -1.
 /// - Rows are deduped on the table's full sort key: the live writer and the
 ///   backfill write the same rows on purpose.
 async fn fetch_soroban_volume_series(
@@ -415,27 +418,24 @@ async fn fetch_soroban_volume_series(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<Vec<SorobanVolumeChRow>, clickhouse::error::Error> {
-    let Some(decimals) = ctx.leg_decimals.first().copied().flatten() else {
-        return Ok(Vec::new());
-    };
-    let Some(leg_a) = priced_pair(&ctx.price)
-        .map(|(a, _)| a.clone())
-        .filter(|a| !a.kind.is_empty())
-    else {
-        return Ok(Vec::new());
-    };
     let (bucket_fn, series_view, price_bucket_fn) = chart_grain(interval);
     let sql = format!(
-        "WITH m AS ( \
-             SELECT ledger_sequence, amount \
-             FROM pool_movements \
-             WHERE pool_id = toFixedString(unhex(?), 32) \
-               AND event_kind = ? \
-               AND asset_id = (SELECT legs[1] FROM liquidity_pools \
-                               WHERE pool_id = unhex(?) LIMIT 1) \
-               AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
-               AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
-             LIMIT 1 BY ledger_sequence, application_order, operation_index, event_index, asset_id \
+        "WITH t AS ( \
+             SELECT ledger_sequence, min(leg) AS traded_leg, argMin(amount, leg) AS amount \
+             FROM ( \
+                 SELECT ledger_sequence, application_order, operation_index, event_index, \
+                        indexOf((SELECT legs FROM liquidity_pools \
+                                 WHERE pool_id = unhex(?) LIMIT 1), asset_id) AS leg, \
+                        amount \
+                 FROM pool_movements \
+                 WHERE pool_id = toFixedString(unhex(?), 32) \
+                   AND event_kind = ? \
+                   AND ledger_sequence >= (SELECT min(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?)) \
+                   AND ledger_sequence <= (SELECT max(sequence) FROM ledgers WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?)) \
+                 LIMIT 1 BY ledger_sequence, application_order, operation_index, event_index, asset_id \
+             ) \
+             WHERE leg > 0 \
+             GROUP BY ledger_sequence, application_order, operation_index, event_index \
          ) \
          SELECT \
             bucket_ms, \
@@ -443,44 +443,52 @@ async fn fetch_soroban_volume_series(
          FROM ( \
              SELECT \
                 l.bucket_ms AS bucket_ms, \
-                abs(toFloat64(m.amount)) / pow(10, ?) \
-                    * if(dateDiff('second', p.bucket, l.price_bucket) <= {carry}, \
-                         nullIf(toFloat64(p.close_usd), 0), NULL) AS usd \
-             FROM m \
+                arrayElement(?, t.traded_leg) AS scale, \
+                if(dateDiff('second', p.bucket, l.price_bucket) <= {carry} AND scale >= 0, \
+                   abs(toFloat64(t.amount)) / pow(10, scale) \
+                       * nullIf(toFloat64(p.close_usd), 0), NULL) AS usd \
+             FROM t \
              JOIN ( \
-                 SELECT 1 AS k, sequence, {price_bucket_fn}(closed_at) AS price_bucket, \
+                 SELECT sequence, {price_bucket_fn}(closed_at) AS price_bucket, \
                         toUnixTimestamp64Milli(toDateTime64({bucket_fn}(closed_at), 3, 'UTC')) AS bucket_ms \
                  FROM ledgers \
-                 WHERE sequence IN (SELECT ledger_sequence FROM m) \
+                 WHERE sequence IN (SELECT ledger_sequence FROM t) \
                  LIMIT 1 BY sequence \
-             ) l ON l.sequence = m.ledger_sequence \
+             ) l ON l.sequence = t.ledger_sequence \
              ASOF LEFT JOIN ( \
-                 SELECT 1 AS k, bucket, close_usd \
+                 SELECT toUInt64(indexOf(arrayZip(?, ?, ?), (asset_kind, asset_code, issuer_address))) AS leg, \
+                        bucket, close_usd \
                  FROM {series_view} \
-                 WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
+                 WHERE leg > 0 \
                    AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
                    AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
                    AND close_usd > 0 \
-             ) p ON p.k = l.k AND p.bucket <= l.price_bucket \
+             ) p ON p.leg = t.traded_leg AND p.bucket <= l.price_bucket \
          ) \
          GROUP BY bucket_ms",
         carry = MAX_PRICE_CARRY_SECONDS,
     );
+    let legs = &ctx.price.legs;
+    let scales: Vec<i32> = ctx
+        .leg_decimals
+        .iter()
+        .map(|d| d.map_or(-1, |d| d as i32))
+        .collect();
     // The window's ledgers are read only where the pool traded: the trades
     // already carry the window, and a whole-window `ledgers` read was most
     // of this query's cost (1Y: 6.1M rows of 31.4M, 2026-10-01).
     client
         .query(&sql)
+        .bind(pool_id_hex) // registry legs
         .bind(pool_id_hex)
         .bind(domain::PoolEvent::Trade as u8)
-        .bind(pool_id_hex)
         .bind(from.timestamp_millis()) // min(sequence): closed_at >= from
         .bind(from.timestamp_millis()) // max(sequence): closed_at >= from
         .bind(to.timestamp_millis()) // max(sequence): closed_at <  to
-        .bind(decimals)
-        .bind(leg_a.kind) // leg-A price identity
-        .bind(leg_a.code.as_str())
-        .bind(leg_a.issuer.as_str())
+        .bind(scales) // each leg's scale, -1 where unknown
+        .bind(legs.iter().map(|l| l.kind).collect::<Vec<_>>()) // leg identities
+        .bind(legs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>())
+        .bind(legs.iter().map(|l| l.issuer.as_str()).collect::<Vec<_>>())
         .bind(from.timestamp_millis()) // prices: bucket >= floor(from)
         .bind(to.timestamp_millis()) // prices: bucket < to
         .fetch_all::<SorobanVolumeChRow>()

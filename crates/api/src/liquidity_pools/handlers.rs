@@ -380,6 +380,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         fee_bps: row.fee_bps,
     };
     let reserves: Vec<Option<&str>> = row.legs.iter().map(|l| l.reserve.as_deref()).collect();
+    let leg_decimals: Vec<Option<u32>> = row.legs.iter().map(|l| l.decimals).collect();
     let soroban = row.pool_kind == domain::PoolKind::Soroban;
     let ch = state.ch();
     let (analytics, soroban_count) = tokio::join!(
@@ -389,7 +390,7 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
             row.pool_kind,
             &ctx,
             &reserves,
-            row.legs.first().and_then(|l| l.decimals),
+            &leg_decimals,
         ),
         async {
             if soroban {
