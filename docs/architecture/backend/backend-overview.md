@@ -636,7 +636,8 @@ leg-A amount of every trade event in `pool_movements` (deduped on the full
 key), scaled by leg A's decimals and priced at the trade's own ledger;
 `fee_revenue` follows from it. A pool that is not two-legged, or whose leg A
 publishes no decimals, has `null` volume in every bucket; a multi-leg pool's
-TVL can still be priced, so a `null` volume does not mean no trades. The detail
+TVL can still be priced, so a `null` volume does not mean no trades — the pool
+says so in `volume_priceable` (list and detail), which the page reads. The detail
 endpoint's 24h `volume` / `fee_revenue` read the same trades.
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers

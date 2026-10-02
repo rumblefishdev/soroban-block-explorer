@@ -94,11 +94,17 @@ describe('PoolCharts', () => {
     refetch: vi.fn(),
   };
 
-  /** A soroban pool's volume is read from its trades now, so its tabs
-   *  behave like a classic pool's: no "not indexed" state is left. */
-  it('gives a soroban pool the same volume states as a classic one', () => {
+  const twoLegs = {
+    legs: [{}, {}],
+    pool_kind: 'soroban',
+    volume_priceable: true,
+  } as Parameters<typeof PoolCharts>[0]['pool'];
+
+  /** A two-leg pool with no trades in the window has no activity to plot,
+   *  soroban or classic alike. */
+  it('says no activity for a priceable pool with no trades', () => {
     hookMock.usePoolChart.mockReturnValue(chart);
-    renderWithProviders(<PoolCharts poolId="CDMH" />);
+    renderWithProviders(<PoolCharts poolId="CDMH" pool={twoLegs} />);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Volume' }));
 
@@ -106,12 +112,21 @@ describe('PoolCharts', () => {
     expect(screen.getByText('No activity in this period')).toBeInTheDocument();
   });
 
-  it('keeps the no-activity state where volume is indexed', () => {
+  /** A three-leg pool trades, but its volume is never priced: the tab must
+   *  say so, not claim the pool was idle (W211). */
+  it('says volume is not priced for a pool the API cannot price', () => {
     hookMock.usePoolChart.mockReturnValue(chart);
-    renderWithProviders(<PoolCharts poolId="LABC" />);
+    const threeLegs = {
+      ...twoLegs,
+      legs: [{}, {}, {}],
+      volume_priceable: false,
+    };
+    renderWithProviders(<PoolCharts poolId="CJAQ" pool={threeLegs} />);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Volume' }));
 
-    expect(screen.getByText('No activity in this period')).toBeInTheDocument();
+    expect(screen.getByText('Volume not priced')).toBeInTheDocument();
+    expect(screen.getByText(/this pool has 3/)).toBeInTheDocument();
+    expect(screen.queryByText('No activity in this period')).toBeNull();
   });
 });

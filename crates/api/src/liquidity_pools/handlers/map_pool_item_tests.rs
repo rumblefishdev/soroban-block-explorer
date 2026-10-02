@@ -170,3 +170,13 @@ fn decimals_propagate_per_leg() {
     let decimals: Vec<Option<u32>> = item.legs.iter().map(|l| l.decimals).collect();
     assert_eq!(decimals, vec![Some(7), Some(18), None]);
 }
+
+/// The page reads this to tell "not priced" from "no trades" on the Volume
+/// tab: a two-leg pool's volume can be priced, a three-leg pool's cannot.
+#[test]
+fn volume_priceable_follows_the_leg_count() {
+    assert!(map_pool_item(base_row()).volume_priceable);
+    let mut row = base_row();
+    row.legs.push(native_leg());
+    assert!(!map_pool_item(row).volume_priceable);
+}

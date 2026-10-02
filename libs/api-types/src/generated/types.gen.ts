@@ -1970,6 +1970,15 @@ export type PaginatedPoolItem = {
      * can still be).
      */
     volume?: string | null;
+    /**
+     * Whether `volume` and `fee_revenue` — here and on the chart — can be
+     * priced for this pool at all. `false` for a pool with three or four
+     * legs: its volume is always `null` while its `tvl` may still be priced,
+     * so a `null` volume there means "not priced", not "no trades". A
+     * two-leg pool is `true` and can still read `null` where a price is
+     * missing.
+     */
+    volume_priceable: boolean;
   }>;
   page: PageInfo;
 };
@@ -2341,6 +2350,15 @@ export type PoolItem = {
    * can still be).
    */
   volume?: string | null;
+  /**
+   * Whether `volume` and `fee_revenue` — here and on the chart — can be
+   * priced for this pool at all. `false` for a pool with three or four
+   * legs: its volume is always `null` while its `tvl` may still be priced,
+   * so a `null` volume there means "not priced", not "no trades". A
+   * two-leg pool is `true` and can still read `null` where a price is
+   * missing.
+   */
+  volume_priceable: boolean;
 };
 
 export type PoolKind = 'classic' | 'soroban';

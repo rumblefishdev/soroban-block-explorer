@@ -1,5 +1,5 @@
 import { Box, Card, Stack, Typography } from '@mui/material';
-import type { ChartDataPoint } from '@rumblefish/api-types';
+import type { ChartDataPoint, PoolItem } from '@rumblefish/api-types';
 import {
   CardSkeleton,
   LazySection,
@@ -237,9 +237,12 @@ export function toChartPoints(
 
 interface PoolChartsProps {
   poolId: string;
+  /** What the chart's empty states need to tell "not priced" apart from
+   *  "nothing happened" — see `volumeNotPriced` and `unpriceable`. */
+  pool: Pick<PoolItem, 'legs' | 'pool_kind' | 'volume_priceable'>;
 }
 
-function PoolChartsContent({ poolId }: PoolChartsProps) {
+function PoolChartsContent({ poolId, pool }: PoolChartsProps) {
   const [metric, setMetric] = useState<ChartMetric>('tvl');
   const [period, setPeriod] = useState<ChartPeriod>('1D');
 
@@ -280,6 +283,13 @@ function PoolChartsContent({ poolId }: PoolChartsProps) {
    * 12-day hole in otherwise healthy series), and so does an asset whose
    * feed simply starts later than the window.
    */
+  /**
+   * A pool with three or four legs has no priced volume at all — the API says
+   * so in `volume_priceable` — while its TVL can still be priced. Its Volume
+   * and Fees tabs say "not priced"; read as "no activity" they would deny the
+   * trades the Recent activity table lists right below.
+   */
+  const volumeNotPriced = metric !== 'tvl' && !pool.volume_priceable;
   const unpriceable = useMemo(() => {
     if (!data || data.data_points.length === 0) return false;
     if (points.length > 0) return false;
@@ -353,10 +363,19 @@ function PoolChartsContent({ poolId }: PoolChartsProps) {
             intervals={[]}
             loading={isLoading}
             emptyState={
-              unpriceable ? (
+              volumeNotPriced ? (
+                <ChartEmptyState
+                  title="Volume not priced"
+                  hint={`Volume and fees are priced for pools with two assets; this pool has ${pool.legs.length}. Its trades are listed under Recent activity.`}
+                />
+              ) : unpriceable ? (
                 <ChartEmptyState
                   title="USD values unavailable"
-                  hint="We have no price data or no token scale for one of this pool's assets in this period, so its activity can't be shown in USD."
+                  hint={
+                    pool.pool_kind === 'classic'
+                      ? "We have no price data for this pool's assets in this period, so its activity can't be shown in USD."
+                      : "We have no price data or no token scale for one of this pool's assets in this period, so its activity can't be shown in USD."
+                  }
                 />
               ) : (
                 <ChartEmptyState
@@ -383,14 +402,14 @@ function PoolChartsContent({ poolId }: PoolChartsProps) {
  * series (task 0199 compute-at-read). An unpriceable pool gets its own
  * empty state saying so — see `unpriceable`.
  */
-export function PoolCharts({ poolId }: PoolChartsProps) {
+export function PoolCharts({ poolId, pool }: PoolChartsProps) {
   return (
     <LazySection
       placeholder={<CardSkeleton />}
       minHeight={420}
       rootMargin="200px"
     >
-      <PoolChartsContent poolId={poolId} />
+      <PoolChartsContent poolId={poolId} pool={pool} />
     </LazySection>
   );
 }

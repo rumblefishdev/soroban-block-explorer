@@ -458,6 +458,15 @@ pub(super) async fn fetch_last_closes(
         .collect())
 }
 
+/// Whether a pool's volume and fees can be priced at all: only a two-leg
+/// pool has the pair the price join is built on ([`priced_pair`]). A pool
+/// with three or four legs gets `false` here and `null` volume always, while
+/// its TVL — every leg's reserve × price — can still be priced; the page
+/// reads this to say so instead of reading the `null` as "no trades".
+pub fn volume_priceable(leg_count: usize) -> bool {
+    leg_count == 2
+}
+
 /// The pool's two legs, or `None` for a pool that does not have exactly two.
 ///
 /// The price join is CLASSIC-shaped: two reserves, two closes, summed. A pool
@@ -471,6 +480,9 @@ pub(super) async fn fetch_last_closes(
 /// three call sites. It used to be a per-index accessor whose own doc claimed
 /// this guarantee while `get(0)` / `get(1)` quietly provided the opposite.
 pub(super) fn priced_pair(ctx: &PoolPriceContext) -> Option<(&PriceLeg, &PriceLeg)> {
+    if !volume_priceable(ctx.legs.len()) {
+        return None;
+    }
     match ctx.legs.as_slice() {
         [a, b] => Some((a, b)),
         _ => None,

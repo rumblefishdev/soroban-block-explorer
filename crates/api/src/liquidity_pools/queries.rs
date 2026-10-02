@@ -160,6 +160,7 @@ pub use list_pools::{ResolvedPoolListParams, fetch_pool_list};
 pub use list_soroban_pool_activity::fetch_soroban_pool_activity;
 pub use usd_analytics::{
     PoolPriceContext, fetch_pool_chart_context, fetch_pool_usd_analytics, price_leg,
+    volume_priceable,
 };
 
 /// `fee_bps / 100` as a decimal string (e.g. 30 → "0.3", 25 → "0.25",

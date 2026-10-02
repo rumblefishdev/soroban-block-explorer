@@ -188,6 +188,7 @@ fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
 }
 
 fn map_pool_item(row: PoolRow) -> PoolItem {
+    let leg_count = row.legs.len();
     PoolItem {
         // The same 32 bytes are an `L…` strkey for a classic pool and a `C…`
         // address for a soroban one, and the wrong form is well-formed rather
@@ -205,6 +206,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         tvl: row.tvl,
         volume: row.volume,
         fee_revenue: row.fee_revenue,
+        volume_priceable: queries::volume_priceable(leg_count),
         latest_snapshot_at: row.latest_snapshot_at,
     }
 }

@@ -837,7 +837,9 @@ Expanded behavior:
   total shares, reserves per leg (`legs[i].reserve`), participant count (task
   0246). A leg with no known reserve lists with "—" rather than disappearing
   from the composition.
-- Charts - TVL over time, volume over time, fee revenue
+- Charts - TVL over time, volume over time, fee revenue. A pool whose volume
+  is never priced (`volume_priceable: false`, three or four legs) says
+  "Volume not priced" on the Volume and Fees tabs rather than "No activity".
 - Pool participants - table of liquidity providers and their share
 - Recent activity - deposits, withdrawals, and trades through this pool, one
   row per operation (classic) or per pool event (Soroban) — a router

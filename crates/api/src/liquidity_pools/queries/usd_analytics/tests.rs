@@ -98,3 +98,16 @@ fn tvl_needs_every_leg_priced_and_reserved() {
         None
     );
 }
+
+/// The field the page reads and the pair the price join uses are one rule:
+/// a pool is priceable exactly when `priced_pair` finds its pair.
+#[test]
+fn volume_priceable_matches_priced_pair() {
+    for n in 1..=4 {
+        let ctx = PoolPriceContext {
+            legs: (0..n).map(|_| price_leg(0, None, None)).collect(),
+            fee_bps: 30,
+        };
+        assert_eq!(volume_priceable(n), priced_pair(&ctx).is_some(), "{n} legs");
+    }
+}

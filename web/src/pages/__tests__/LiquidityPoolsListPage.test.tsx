@@ -43,6 +43,7 @@ function makePool(overrides: Partial<PoolItem> = {}): PoolItem {
     legs: [NATIVE_LEG, creditLeg('USDC')],
     fee_bps: 30,
     fee_percent: '0.30',
+    volume_priceable: true,
     created_at_ledger: 50_000_000,
     participant_count: 12,
     latest_snapshot_ledger: 63_000_000,

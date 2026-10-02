@@ -257,6 +257,13 @@ pub struct PoolItem {
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.
     pub fee_revenue: Option<String>,
+    /// Whether `volume` and `fee_revenue` — here and on the chart — can be
+    /// priced for this pool at all. `false` for a pool with three or four
+    /// legs: its volume is always `null` while its `tvl` may still be priced,
+    /// so a `null` volume there means "not priced", not "no trades". A
+    /// two-leg pool is `true` and can still read `null` where a price is
+    /// missing.
+    pub volume_priceable: bool,
     pub latest_snapshot_at: Option<DateTime<Utc>>,
 }
 
