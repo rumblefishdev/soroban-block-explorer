@@ -13,10 +13,11 @@ each one in the shape we would build from scratch.
   required even for a lake environment; `publicArchivePrefix?`,
   `clickhouseDatabase?` as conditional env. From scratch: `ledgerSource` as
   a discriminated union carrying its own fields; the database always explicit.
-- **Two env vars that can contradict, plus a guard** (A, D2 fix 2):
-  `BUCKET_NAME` + `PUBLIC_ARCHIVE_PREFIX`, and a start-up refusal of the bad
-  pair. From scratch: one `LedgerSource { OwnBucket | PublicLake(prefix) }`
-  parsed once.
+- **Two env vars that can contradict, plus a guard** (A, D2 fix 2): kept on
+  purpose (2026-10-02). A `LedgerSource` type (#595) was built and dropped:
+  two plain fields and two start-up checks read more simply than a new type
+  with five methods. The empty-lake start (#597) adds one more
+  `bucket == PUBLIC_BUCKET` check, in `first_ledger_to_read`.
 - **Network check assumes pubnet for an own bucket** (A): decided 2026-10-02
   that this is the design, not debt — testnet reads the lake and will not run
   its own Galexie, so our own bucket is mainnet's only. Kept as the start-up
