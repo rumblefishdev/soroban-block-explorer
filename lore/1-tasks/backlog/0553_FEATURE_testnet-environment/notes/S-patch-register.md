@@ -17,8 +17,10 @@ each one in the shape we would build from scratch.
   `BUCKET_NAME` + `PUBLIC_ARCHIVE_PREFIX`, and a start-up refusal of the bad
   pair. From scratch: one `LedgerSource { OwnBucket | PublicLake(prefix) }`
   parsed once.
-- **Network check assumes pubnet for an own bucket** (A): a future testnet with
-  its own Galexie would be refused at start. Falls out of the item above.
+- **Network check assumes pubnet for an own bucket** (A): decided 2026-10-02
+  that this is the design, not debt — testnet reads the lake and will not run
+  its own Galexie, so our own bucket is mainnet's only. Kept as the start-up
+  refusal of any other passphrase there (`LedgerSource`, #595).
 
 ## Kept on purpose
 
