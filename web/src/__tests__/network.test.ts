@@ -23,16 +23,23 @@ describe('markTestnetTab', () => {
   it('prefixes the title and points every icon at its testnet twin', () => {
     document.head.innerHTML =
       '<link rel="icon" type="image/svg+xml" href="/favicon.svg" />' +
-      '<link rel="icon" type="image/png" href="/favicon-32.png" />';
+      '<link rel="icon" type="image/png" href="/favicon-32.png" />' +
+      '<link rel="apple-touch-icon" href="/apple-touch-icon.png" />' +
+      '<link rel="stylesheet" href="/fonts.css" />';
     document.title = 'Soroban Block Explorer';
 
     markTestnetTab('testnet');
 
     expect(document.title).toBe('Testnet · Soroban Block Explorer');
-    const hrefs = [...document.querySelectorAll('link[rel="icon"]')].map((l) =>
+    const hrefs = [...document.querySelectorAll('link')].map((l) =>
       l.getAttribute('href')
     );
-    expect(hrefs).toEqual(['/favicon-testnet.svg', '/favicon-testnet-32.png']);
+    expect(hrefs).toEqual([
+      '/favicon-testnet.svg',
+      '/favicon-testnet-32.png',
+      '/apple-touch-icon-testnet.png',
+      '/fonts.css',
+    ]);
   });
 
   it('leaves a mainnet tab as it is', () => {

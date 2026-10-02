@@ -44,16 +44,23 @@ export const network: Network = networkFrom(
   import.meta.env.VITE_STELLAR_NETWORK
 );
 
+// Each icon index.html declares, and its testnet twin with a yellow dot. All
+// of them: Safari skips the SVG for a PNG, and iOS uses the touch icon for a
+// home-screen shortcut.
+const TESTNET_ICONS: Record<string, string> = {
+  '/favicon.svg': '/favicon-testnet.svg',
+  '/favicon-32.png': '/favicon-testnet-32.png',
+  '/favicon-16.png': '/favicon-testnet-16.png',
+  '/apple-touch-icon.png': '/apple-touch-icon-testnet.png',
+};
+
 /** On testnet, the browser tab says so too: "Testnet · …" in the title and a
- *  yellow dot on the icon, so a testnet tab is told apart among others. Every
- *  icon file has a testnet twin (`favicon.svg` → `favicon-testnet.svg`,
- *  `favicon-32.png` → `favicon-testnet-32.png`, …): browsers that skip the SVG
- *  icon, Safari among them, take a PNG. */
+ *  yellow dot on the icon, so a testnet tab is told apart among others. */
 export function markTestnetTab(current: Network) {
   if (current !== 'testnet') return;
   document.title = `Testnet · ${document.title}`;
-  for (const icon of document.querySelectorAll('link[rel="icon"]')) {
-    const href = icon.getAttribute('href') ?? '';
-    icon.setAttribute('href', href.replace('/favicon', '/favicon-testnet'));
+  for (const link of document.querySelectorAll('link[href]')) {
+    const testnetIcon = TESTNET_ICONS[link.getAttribute('href') ?? ''];
+    if (testnetIcon) link.setAttribute('href', testnetIcon);
   }
 }

@@ -989,8 +989,9 @@ build which network it shows — the same SPA is deployed once per network (task
 0553). `web/src/network.ts` reads it and throws on any other value; the shell
 renders it as `router/NetworkPill.tsx` beside the logo (a filled brand-yellow
 pill on testnet, an outline on mainnet, with a menu linking both deployments),
-and a testnet build prefixes the tab title with "Testnet ·" and points each
-favicon at its `favicon-testnet*` twin (SVG and PNGs, so Safari shows it too). The infra Makefile's web build recipes set it.
+and a testnet build prefixes the tab title with "Testnet ·" and points every
+icon (SVG, PNGs, iOS touch icon) at its testnet twin with a yellow dot. The
+infra Makefile's web build recipes set it.
 
 ## 9. Performance and Error Handling
 
