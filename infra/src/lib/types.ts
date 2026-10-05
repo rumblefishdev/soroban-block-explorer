@@ -189,7 +189,7 @@ export interface EnvironmentConfig {
    * Scope note (task 0277 D9/D11): this is the bucket for the **sorobanscan**
    * slice only (api DNS record + AOP origin lock). The Cloudflare zone, company
    * DNS, zone-level rulesets and a SEPARATE state bucket live in the private
-   * `rf-domains` repo. Default false.
+   * `dns-cloudformation` repo. Default false.
    */
   readonly provisionCloudflareBootstrap: boolean;
 
@@ -261,7 +261,7 @@ export interface EnvironmentConfig {
    * Phase 1 of the secret-header origin lock (task 0277 / ADR 0048): provision
    * the CDK-generated `EdgeSecret` in Secrets Manager (and only that). Split from
    * `enableEdgeSecretLock` so the value can be copied into the Cloudflare
-   * Transform Rule (rf-domains) BEFORE the Lambda starts requiring the header.
+   * Transform Rule (dns-cloudformation) BEFORE the Lambda starts requiring the header.
    * Default false.
    */
   readonly provisionEdgeSecret: boolean;
@@ -273,7 +273,7 @@ export interface EnvironmentConfig {
    * `X-Edge-Secret` — i.e. any request that did not pass through Cloudflare.
    *
    * REQUIRES `provisionEdgeSecret=true` AND the Cloudflare Transform Rule
-   * already injecting the matching value (rf-domains `enable_edge_secret`).
+   * already injecting the matching value (dns-cloudformation `enable_edge_secret`).
    * Arming before the edge stamps the header would 403 even legitimate
    * Cloudflare traffic. Default false.
    */
@@ -629,7 +629,7 @@ export function validateConfig(config: EnvironmentConfig): void {
     errors.push(
       `enableEdgeSecretLock=true requires provisionEdgeSecret=true: provision ` +
         `the EdgeSecret and copy its value into the Cloudflare Transform Rule ` +
-        `(rf-domains) before arming the Lambda.`
+        `(dns-cloudformation) before arming the Lambda.`
     );
   }
 

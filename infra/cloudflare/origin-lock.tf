@@ -7,7 +7,7 @@
 #
 # Why mTLS and not a secret header under the repo split (D12): a secret-header
 # lock would put the injecting Transform Rule into a zone-level ruleset (owned
-# by rf-domains, D10) AND require the secret to be shared across two repos/states.
+# by dns-cloudformation, D10) AND require the secret to be shared across two repos/states.
 # mTLS keeps the whole lock self-contained in this repo: the client cert here +
 # the API GW truststore in CDK.
 #
@@ -35,7 +35,7 @@ resource "cloudflare_authenticated_origin_pulls_certificate" "client" {
 # affects our origin and never touches other (future) proxied hosts in the
 # shared zone. VERIFY in the staging dry-run (Step 3): per-host AOP availability
 # on Free and the exact v5 `config` shape (hostname + cert_id + enabled). If
-# per-host proves unavailable on Free, zone-level AOP moves to rf-domains (the
+# per-host proves unavailable on Free, zone-level AOP moves to dns-cloudformation (the
 # zone owner) and this module just supplies the cert.
 resource "cloudflare_authenticated_origin_pulls" "api" {
   count = var.enable_api_mtls_aop ? 1 : 0

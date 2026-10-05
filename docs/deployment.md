@@ -134,9 +134,11 @@ true`.
    ([`infra/cloudflare/README.md`](../infra/cloudflare/README.md#testnet)),
    origin target from the `CloudflareApiRegionalTarget` output of
    `Explorer-testnet-ApiGateway`.
-4. In `rf-domains`: a Transform Rule stamping `X-Edge-Secret` on the testnet
-   API host with the **testnet** edge secret (each environment has its own),
-   and the testnet SPA hostname on the Turnstile widget.
+4. In `dns-cloudformation` (`cloudflare/`, Terraform, applied by the zone's
+   owner): `enable_testnet_edge_secret = true` with the **testnet** edge secret
+   in `testnet_edge_secret` (each environment has its own), which adds the
+   testnet rule stamping `X-Edge-Secret` on the testnet API host; the testnet
+   SPA hostname in `turnstile_domains`.
 5. The widget's Turnstile secret key into
    `soroban/testnet/auth/turnstile-secret` (same widget as production, so the
    same value).
