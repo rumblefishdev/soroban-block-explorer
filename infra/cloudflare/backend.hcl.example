@@ -3,7 +3,7 @@
 #
 # Bucket = the CDK-provisioned state bucket (CloudflareBootstrapStack output
 # CloudflareTfStateBucketName), e.g. production-soroban-explorer-cf-tfstate.
-# This is THIS repo's own bucket (D11) — separate from rf-domains' bucket.
+# This is THIS repo's own bucket (D11) — separate from dns-cloudformation's bucket.
 
 bucket       = "production-soroban-explorer-cf-tfstate"
 key          = "sorobanscan-api.tfstate"
