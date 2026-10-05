@@ -18,23 +18,23 @@ use super::usd_analytics::{
 use crate::liquidity_pools::dto::ChartDataPoint;
 
 /// What the database says about one pool over the window, in display units —
-/// the input of [`assemble_chart`]. A type rather than four arguments because
-/// both pool kinds fill it and the tests build it by hand.
+/// the input of [`assemble_chart`].
 #[derive(Debug, Default)]
-pub(super) struct ChartInputs {
+struct ChartInputs {
     /// Each leg's reserve in the last state before the window, if the pool
     /// existed then. `None` inside: that leg's reserve is not known.
-    pub(super) seed: Option<Vec<Option<f64>>>,
+    seed: Option<Vec<Option<f64>>>,
     /// Each bucket in which the pool's state changed: the last state's
-    /// reserves, and how many state rows the bucket holds. Keyed by bucket
-    /// start, epoch millis.
-    pub(super) states: BTreeMap<i64, (Vec<Option<f64>>, u64)>,
+    /// reserves. Keyed by bucket start, epoch millis, as the next two maps.
+    states: BTreeMap<i64, Vec<Option<f64>>>,
+    /// How many state rows each of those buckets holds.
+    samples: BTreeMap<i64, u64>,
     /// Traded volume per bucket, USD; `None` where a trade could not be
     /// priced. A bucket without trades is absent.
-    pub(super) volumes: BTreeMap<i64, Option<f64>>,
+    volumes: BTreeMap<i64, Option<f64>>,
     /// Each leg's closes, `(price bucket start in epoch seconds, USD)`,
     /// ascending; the outer index is the leg, in pool order.
-    pub(super) prices: Vec<Vec<(i64, f64)>>,
+    prices: Vec<Vec<(i64, f64)>>,
 }
 
 /// `GET /v1/liquidity-pools/:id/chart` — TVL, volume and fee revenue per
@@ -83,7 +83,7 @@ pub async fn fetch_pool_chart(
 /// The chart's points: one per bucket of `[from, to)` from the pool's first
 /// known state on, plus any bucket with volume before it. See
 /// [`fetch_pool_chart`] for what each field means.
-pub(super) fn assemble_chart(
+fn assemble_chart(
     interval: &str,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
@@ -91,21 +91,22 @@ pub(super) fn assemble_chart(
     inputs: &ChartInputs,
     fee_bps: i32,
 ) -> Vec<ChartDataPoint> {
+    // Nothing is drawn past now: a future `to` has no state to carry into.
+    let end = to.min(now);
     let mut points = Vec::new();
     let mut carried: Option<&Vec<Option<f64>>> = inputs.seed.as_ref();
     let mut bucket = bucket_start(interval, from);
-    while bucket < to {
+    while bucket < end {
         let ms = bucket.timestamp_millis();
-        let mut samples = 0;
-        if let Some((reserves, rows)) = inputs.states.get(&ms) {
+        if let Some(reserves) = inputs.states.get(&ms) {
             carried = Some(reserves);
-            samples = *rows;
         }
+        let samples = inputs.samples.get(&ms).copied().unwrap_or(0);
         let traded = inputs.volumes.get(&ms);
         if carried.is_some() || traded.is_some() {
             let tvl = match carried {
                 Some(reserves) => {
-                    tvl_usd(reserves, &inputs.prices, price_ref(interval, bucket, now))
+                    tvl_usd(reserves, &inputs.prices, price_ref(interval, bucket, end))
                 }
                 None => None,
             };
@@ -123,8 +124,12 @@ pub(super) fn assemble_chart(
     points
 }
 
-/// Σ reserve × close over the legs, or `None` when any leg lacks either.
+/// Σ reserve × close over the legs, or `None` when any leg lacks either — or
+/// when the pool has no legs to value.
 fn tvl_usd(reserves: &[Option<f64>], prices: &[Vec<(i64, f64)>], at: i64) -> Option<f64> {
+    if prices.is_empty() {
+        return None;
+    }
     let mut usd = 0.0;
     for (leg, closes) in prices.iter().enumerate() {
         let reserve = reserves.get(leg).copied().flatten()?;
@@ -177,15 +182,16 @@ fn bucket_width(interval: &str) -> Duration {
 }
 
 /// The price bucket a chart bucket is priced at, epoch seconds: its own for
-/// `1h` and `1d`; for `1w`, its last day — or today, for the week still
-/// running, since weekly candles are not provided.
-fn price_ref(interval: &str, bucket: DateTime<Utc>, now: DateTime<Utc>) -> i64 {
+/// `1h` and `1d`; for `1w`, its last day — or the window's last day, for a
+/// week the window cuts short (the running week, or a range ending
+/// mid-week), since weekly candles are not provided.
+fn price_ref(interval: &str, bucket: DateTime<Utc>, end: DateTime<Utc>) -> i64 {
     match interval {
         "1w" => {
-            let today = now
+            let last_day = end
                 .duration_trunc(Duration::days(1))
                 .expect("a UTC day truncates");
-            (bucket + Duration::days(6)).min(today).timestamp()
+            (bucket + Duration::days(6)).min(last_day).timestamp()
         }
         _ => bucket.timestamp(),
     }
@@ -372,9 +378,8 @@ async fn fetch_classic_series(
         ..ChartInputs::default()
     };
     for row in buckets {
-        inputs
-            .states
-            .insert(row.bucket_ms, (row.reserves, row.samples_in_bucket));
+        inputs.samples.insert(row.bucket_ms, row.samples_in_bucket);
+        inputs.states.insert(row.bucket_ms, row.reserves);
         inputs.volumes.insert(row.bucket_ms, row.volume);
     }
     Ok(inputs)
@@ -463,9 +468,8 @@ async fn fetch_soroban_series(
     };
     for row in buckets {
         let reserves = scale_reserves(&row.reserves, &ctx.leg_decimals);
-        inputs
-            .states
-            .insert(row.bucket_ms, (reserves, row.samples_in_bucket));
+        inputs.samples.insert(row.bucket_ms, row.samples_in_bucket);
+        inputs.states.insert(row.bucket_ms, reserves);
     }
     for row in volumes {
         inputs.volumes.insert(row.bucket_ms, row.volume);

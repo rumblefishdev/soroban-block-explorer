@@ -43,7 +43,7 @@ fn client() -> Option<clickhouse::Client> {
 /// Needs no schema, so any ClickHouse will do:
 /// `docker run -d --rm -p 8123:8123 -e CLICKHOUSE_PASSWORD=probe clickhouse/clickhouse-server:26.3`
 #[tokio::test]
-async fn chart_row_decodes_nullable_floats() {
+async fn chart_row_decodes_nullable_values() {
     let Some(ch) = client() else {
         eprintln!("CH_URL unset — skipping chart row decode smoke");
         return;

@@ -636,7 +636,8 @@ bucket's price bucket (`1w`: its last day), a close at most 48 h old, `null`
 unless every leg has both. A bucket the state was carried into has
 `samples_in_bucket = 0` and no `volume`. One assembly serves both pool kinds;
 a classic pool's state is its snapshots, a Soroban pool's its reserve history
-(`pool_state_changes`, raw per leg, scaled by each leg's own decimals). Its `volume` is the classic definition on its trades: the absolute
+(`pool_state_changes`, raw per leg, scaled by each leg's own decimals).
+A Soroban pool's `volume` is the classic definition on its trades: the absolute
 amount of every trade's **traded leg** in `pool_movements` (deduped on the
 full key), scaled by that leg's decimals and priced at the trade's own ledger;
 `fee_revenue` follows from it. The traded leg is the lowest-index leg the trade

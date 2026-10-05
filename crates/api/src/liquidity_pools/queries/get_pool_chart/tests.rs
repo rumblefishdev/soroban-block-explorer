@@ -97,7 +97,8 @@ fn a_pool_born_in_the_window_starts_at_its_first_state() {
     let day2 = at(2026, 9, 2, 0);
     let inputs = ChartInputs {
         seed: None,
-        states: [(ms(day2), (vec![Some(4.0)], 3))].into_iter().collect(),
+        states: [(ms(day2), vec![Some(4.0)])].into_iter().collect(),
+        samples: [(ms(day2), 3)].into_iter().collect(),
         volumes: [(ms(day2), Some(7.0))].into_iter().collect(),
         prices: vec![vec![(secs(at(2026, 9, 1, 0)), 1.0)]],
     };
@@ -234,5 +235,69 @@ fn hourly_buckets_follow_the_hour() {
     assert_eq!(
         tvls(&points),
         vec![Some("2.00".into()), Some("4.00".into())]
+    );
+}
+
+#[test]
+fn a_weekly_range_ending_mid_week_prices_its_last_week_at_its_end() {
+    // The range ends Thursday 2026-09-10, long ago; closes stop the day
+    // before. The week must price at Wednesday, not at its Sunday (which
+    // would be past the 48 h cap from Wednesday's close).
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(1.0)]),
+        prices: vec![vec![(secs(at(2026, 9, 9, 0)), 4.0)]],
+        ..ChartInputs::default()
+    };
+    let points = assemble_chart(
+        "1w",
+        at(2026, 9, 7, 0),
+        at(2026, 9, 10, 0),
+        later(),
+        &inputs,
+        30,
+    );
+
+    assert_eq!(tvls(&points), vec![Some("4.00".into())]);
+}
+
+#[test]
+fn nothing_is_drawn_past_now() {
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(1.0)]),
+        prices: vec![vec![(secs(at(2026, 9, 1, 0)), 1.0)]],
+        ..ChartInputs::default()
+    };
+    // `to` a day ahead of `now` (noon on day 1): only day 1 exists.
+    let points = assemble_chart(
+        "1d",
+        at(2026, 9, 1, 0),
+        at(2026, 9, 3, 0),
+        at(2026, 9, 1, 12),
+        &inputs,
+        30,
+    );
+
+    assert_eq!(points.len(), 1);
+}
+
+#[test]
+fn a_pool_with_no_legs_has_no_tvl() {
+    let inputs = ChartInputs {
+        seed: Some(Vec::new()),
+        ..ChartInputs::default()
+    };
+    let points = assemble_chart(
+        "1d",
+        at(2026, 9, 1, 0),
+        at(2026, 9, 2, 0),
+        later(),
+        &inputs,
+        30,
+    );
+
+    assert_eq!(
+        tvls(&points),
+        vec![None],
+        "never $0.00 for an unvalued pool"
     );
 }
