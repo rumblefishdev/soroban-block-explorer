@@ -45,18 +45,20 @@ tokens in total.
   ($9.1M).
 - **The views' contract prices are off by 10^(7 − decimals).** Decimals read
   from each contract's own `decimals()` (read-only simulation), prices
-  cross-checked against CoinGecko on 2026-10-05:
+  cross-checked against an external market-price source on 2026-10-05:
 
-  | token               | decimals | views close | CoinGecko | ratio  |
-  | ------------------- | -------- | ----------- | --------- | ------ |
-  | SolvBTC `CBIJBDNZ…` | 8        | 8,537.05    | 86,055    | 0.099  |
-  | XAUM `CC2RBGYN…`    | 9        | 41.92       | 4,152.45  | 0.0101 |
-  | XRP `CB7OOP3V…`     | 6        | 14.78       | 1.52      | 9.7    |
+  | token               | decimals | views close | external | ratio  |
+  | ------------------- | -------- | ----------- | -------- | ------ |
+  | SolvBTC `CBIJBDNZ…` | 8        | 8,537.05    | 86,055   | 0.099  |
+  | XAUM `CC2RBGYN…`    | 9        | 41.92       | 4,152.45 | 0.0101 |
+  | XRP `CB7OOP3V…`     | 6        | 14.78       | 1.52     | 9.7    |
 
-  Our own reserves agree with CoinGecko: the XLM side of `CD2O2B6P…` implies
-  SolvBTC at $85,980. So the views scale every contract token as if it had 7
-  decimals. Owned by the prices service; reported there. Shipping this task
-  before that fix would print TVL 10–100× wrong for non-7-decimal tokens.
+  Our own reserves agree with the external figure: the XLM side of
+  `CD2O2B6P…` implies SolvBTC at $85,980. The views scale every contract token
+  as if it had 7 decimals; they keep no decimals for contract tokens
+  (`prices.assets` has no such column) and read none from our tables. Shipping
+  this task before the views are rescaled would print TVL 10–100× wrong for
+  non-7-decimal tokens.
 
 ## Implementation Plan
 
