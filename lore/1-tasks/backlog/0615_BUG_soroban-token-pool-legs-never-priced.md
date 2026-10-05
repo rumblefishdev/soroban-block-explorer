@@ -36,6 +36,28 @@ Measured on production 2026-10-04: 40 pool legs are Soroban tokens; 3 of them
 are priced in the views; 10 pools carry such a leg. The views price 6 Soroban
 tokens in total.
 
+## Measured (2026-10-05): impact, and the prices are mis-scaled
+
+- **Impact.** 261 of 779 Soroban pools read TVL null and 124 volume null
+  (production API, every pool). Among Aquarius pools, those with a null TVL
+  hold $27.8M of the protocol's $57.9M TVL by its own per-pool figures
+  (48 %); the largest are Soroban-token pools, e.g. `CD2O2B6P…` XLM/SolvBTC
+  ($9.1M).
+- **The views' contract prices are off by 10^(7 − decimals).** Decimals read
+  from each contract's own `decimals()` (read-only simulation), prices
+  cross-checked against CoinGecko on 2026-10-05:
+
+  | token               | decimals | views close | CoinGecko | ratio  |
+  | ------------------- | -------- | ----------- | --------- | ------ |
+  | SolvBTC `CBIJBDNZ…` | 8        | 8,537.05    | 86,055    | 0.099  |
+  | XAUM `CC2RBGYN…`    | 9        | 41.92       | 4,152.45  | 0.0101 |
+  | XRP `CB7OOP3V…`     | 6        | 14.78       | 1.52      | 9.7    |
+
+  Our own reserves agree with CoinGecko: the XLM side of `CD2O2B6P…` implies
+  SolvBTC at $85,980. So the views scale every contract token as if it had 7
+  decimals. Owned by the prices service; reported there. Shipping this task
+  before that fix would print TVL 10–100× wrong for non-7-decimal tokens.
+
 ## Implementation Plan
 
 - Extend the price identity with the contract address; family 3 maps to
@@ -50,6 +72,8 @@ tokens in total.
 
 - [ ] The 10 measured pools serve TVL / volume where every leg is priced;
       pools with an unpriced leg still read null (no partial sums).
+- [ ] The prices view's contract prices match an external source within a few %
+      for every priced Soroban leg before release (the 2026-10-05 table, re-run).
 - [ ] Classic pools unchanged (compare list + detail responses before/after).
 - [ ] CH-gated test pins a Soroban-token leg priced by contract address.
 - [ ] Docs updated — `docs/architecture/**` frontend/API contract for pool USD
