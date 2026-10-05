@@ -2,7 +2,7 @@
 id: '0616'
 title: 'Name the protocol of every Soroban pool whose deployer is known'
 type: FEATURE
-status: backlog
+status: canceled
 related_adr: []
 related_tasks: ['0374', '0599', '0613']
 tags: ['effort-small', 'priority-medium', 'liquidity-pools']
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned while closing #405: 195 of 779 Soroban pools show no protocol.'
+  - date: 2026-10-05
+    status: canceled
+    who: karolkow
+    note: 'Canceled by decision 236 B: the label rule in protocol_labels.rs stays strict (a protocol names the contract itself); no deployment qualifies.'
 ---
 
 # Name the protocol of every Soroban pool whose deployer is known
@@ -54,3 +58,22 @@ Production 2026-10-05, deployments grouped by deployer account and WASM:
       none.
 - [ ] **Docs updated** — `docs/architecture/backend/backend-overview.md`
       (protocol label), or `N/A — reason`.
+
+## Outcome (2026-10-05) — canceled
+
+`protocol_labels.rs` admits a deployment only when the protocol's own
+publications name that contract. Searched for each deployment above: the
+protocols' developer docs and repositories, a public index of contract
+instances (lists them by WASM only), web search, the StellarExpert account
+directory, and each deployer's `home_domain` / `stellar.toml`.
+
+- Older Aquarius routers and Phoenix factories: named nowhere by the protocol;
+  only the deployer account matches the named contract's deployer.
+- `CCPHUHQY…`: the operator's `stellar.toml` lists its deployer account
+  (`GAOATRJG…`, "deployer & issuer"), but not the contract.
+- The rest: no trace of an operator.
+
+Widening the rule to "deployed by an account the protocol claims" was offered
+and declined (236 B): the rule stays strict, and these 195 pools keep
+`protocol: null`. Value at stake, production 2026-10-05: the older Aquarius
+routers' 74 pools hold ~$6.4M TVL with no 24h volume; the others hold ~$150.
