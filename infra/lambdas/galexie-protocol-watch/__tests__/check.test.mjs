@@ -25,7 +25,7 @@ function fakeRegistry(images) {
   return {
     async manifest(reference) {
       if (!manifests[reference])
-        throw new Error(`manifest unknown: ${reference}`);
+        throw new Error(`cannot determine: ${reference} is not in ECR`);
       return manifests[reference];
     },
     async blob(digest) {
@@ -54,7 +54,7 @@ describe('coreVersion', () => {
 
   it('cannot determine an image the registry does not hold', async () => {
     await expect(coreVersion(registry, 'sha256:unknown')).rejects.toThrow(
-      'manifest unknown'
+      'cannot determine'
     );
   });
 

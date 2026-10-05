@@ -52,26 +52,31 @@ export async function coreVersion(registry, reference) {
   return { version, major };
 }
 
+/** Our core applies both what the network runs and what it is ready to vote. */
+export function coreIsReady({ network, ours }) {
+  return ours.major >= network.supported && ours.major >= network.current;
+}
+
 /**
  * OK, LAGGING (the vote is ahead, bump now) or BEHIND (the network already
  * runs a protocol our core cannot apply). `newest` is the newest image on
- * Docker Hub, or `{ error }` when Hub could not be read; it matters only
- * when the answer is not OK, where it says whether the bump is possible
- * today. A Hub outage alone never fails the check.
+ * Docker Hub, or `{ error }` when Hub could not be read; it is read only when
+ * the core is not ready, and says whether the bump is possible today. A Hub
+ * outage alone never fails the check.
  */
 export function verdict({ network, ours, newest }) {
   const summary =
-    `our Galexie core ${ours.version} | pubnet runs protocol ${network.current}` +
-    ` | network core supports ${network.supported}`;
+    `our Galexie core ${ours.version} | the network runs protocol ${network.current}` +
+    ` | its core supports ${network.supported}`;
 
-  if (ours.major >= network.supported && ours.major >= network.current) {
+  if (coreIsReady({ network, ours })) {
     return { ok: true, message: `OK: ${summary}` };
   }
 
   const needed = Math.max(network.supported, network.current);
   const tier =
     ours.major < network.current
-      ? `BEHIND: pubnet already runs protocol ${network.current} - Galexie cannot apply its ledgers.`
+      ? `BEHIND: the network already runs protocol ${network.current} - Galexie cannot apply its ledgers.`
       : `LAGGING: the network core supports protocol ${network.supported} before the vote - bump Galexie now.`;
 
   let hub;

@@ -759,8 +759,8 @@ The deployed alarms (production; authoritative definitions in
   captive-core version of the image the Galexie service runs (from its ECR
   image config) and Horizon's current and core-supported protocols; it
   throws when our core is older than either, or when it cannot read them.
-  Alarm on the function's `Errors` in two consecutive hours, missing data
-  breaching. Warns before a pubnet vote (task 0610); runbook
+  Alarm when both runs of an hour fail (the function's `Errors`), missing
+  data breaching. Warns before a pubnet vote (task 0610); runbook
   [`docs/runbooks/galexie-protocol-watch.md`](../../runbooks/galexie-protocol-watch.md)
 - Ingest backlog age above 120 s for 3 consecutive minutes (set by
   `ingestionBacklogAgeSeconds` in `infra/envs/production.json`) — the consumer-side

@@ -13,6 +13,13 @@ The alarm only says "the watch failed". The function's log says why:
 aws logs tail /aws/lambda/production-galexie-protocol-watch --region eu-central-1 --since 2h
 ```
 
+To run it now instead of waiting up to 30 min (after a bump, say), invoke
+the function — this runs the check, it changes nothing:
+
+```bash
+aws lambda invoke --region eu-central-1 --function-name production-galexie-protocol-watch /dev/stdout
+```
+
 Every run logs one line starting with `OK:`, `LAGGING:`, `BEHIND:` or an
 error that starts with `cannot determine` / `cannot read`.
 
@@ -45,8 +52,8 @@ continuity query in [`health.md`](health.md)).
 
 Nothing was compared. Read the error:
 
-- `cannot read https://horizon.stellar.org/…` — Horizon was down for two
-  runs in a row. If the next run is OK, nothing to do.
+- `cannot read https://horizon.stellar.org/…` — Horizon was down for both
+  runs of an hour. If the next run is OK, nothing to do.
 - `… is not in ECR` / `no Galexie container` / `no service` — the running
   task definition no longer matches what the watch expects (a renamed
   container or service, an image outside the `production-galexie` repo).

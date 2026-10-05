@@ -68,10 +68,12 @@ export function addGalexieProtocolWatch(
     runtime: lambda.Runtime.NODEJS_22_X,
     handler: 'index.handler',
     code: lambda.Code.fromAsset(HANDLER_DIR, { exclude: ['__tests__'] }),
-    timeout: cdk.Duration.minutes(1),
+    // Every HTTP read gives up after 10 s, and the slowest path makes seven
+    // of them in a row (Horizon, the ECR blob, five to Docker Hub): a timeout here
+    // would page with no reason in the log.
+    timeout: cdk.Duration.minutes(3),
     memorySize: 128,
-    // One run is one answer; the next run asks again. Retries would only
-    // multiply a single failure in the Errors metric.
+    // The next scheduled run, 30 minutes later, is the retry.
     retryAttempts: 0,
     environment: {
       HORIZON_URL: horizonUrl,
@@ -121,10 +123,11 @@ export function addGalexieProtocolWatch(
     target: new targets.LambdaInvoke(fn, { retryAttempts: 0 }),
   });
 
-  // Two failing hours in a row, so one bad minute at Horizon pages nobody;
+  // Both runs of an hour failed, so one bad minute at Horizon pages nobody;
   // the vote is days away when this first turns red. BREACHING: a function
-  // that stopped running publishes no datapoint, and a watch that checks
-  // nothing must not look green.
+  // that stopped running publishes no datapoint (a run that succeeds
+  // publishes Errors = 0), and a watch that checks nothing must not look
+  // green.
   withActions(
     new cloudwatch.Alarm(scope, 'GalexieProtocolWatchAlarm', {
       alarmName: `${config.envName}-galexie-protocol-watch`,
@@ -134,11 +137,10 @@ export function addGalexieProtocolWatch(
         period: cdk.Duration.hours(1),
         statistic: cloudwatch.Stats.SUM,
       }),
-      threshold: 1,
+      threshold: 2,
       comparisonOperator:
         cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-      evaluationPeriods: 2,
-      datapointsToAlarm: 2,
+      evaluationPeriods: 1,
       treatMissingData: cloudwatch.TreatMissingData.BREACHING,
     })
   );

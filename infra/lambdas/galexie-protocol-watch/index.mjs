@@ -15,7 +15,7 @@ import {
   DescribeTaskDefinitionCommand,
 } from '@aws-sdk/client-ecs';
 
-import { coreVersion, verdict } from './check.mjs';
+import { coreIsReady, coreVersion, verdict } from './check.mjs';
 
 const MANIFEST_TYPES = [
   'application/vnd.docker.distribution.manifest.list.v2+json',
@@ -31,7 +31,7 @@ const ecr = new ECRClient({});
 async function getJson(url, headers = {}) {
   const response = await fetch(url, {
     headers: { accept: 'application/json', ...headers },
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(10000),
   });
   if (!response.ok) {
     throw new Error(`cannot read ${url}: HTTP ${response.status}`);
@@ -82,11 +82,18 @@ async function runningImage() {
   }
 
   // <account>.dkr.ecr.<region>.amazonaws.com/<repository>@sha256:<digest>, or :<tag>
-  const match = container.image.match(/^[^/]+\/([^@:]+)[@:](.+)$/);
-  if (!match) {
-    throw new Error(`cannot determine: unexpected image ${container.image}`);
+  // <registry>/<repository>@sha256:…, <repository>:<tag>@sha256:… or
+  // <repository>:<tag>; a digest, when present, is what runs.
+  const path = container.image.slice(container.image.indexOf('/') + 1);
+  const at = path.indexOf('@');
+  if (at >= 0) {
+    return {
+      repository: path.slice(0, at).split(':')[0],
+      reference: path.slice(at + 1),
+    };
   }
-  return { repository: match[1], reference: match[2] };
+  const [repository, tag] = path.split(':');
+  return { repository, reference: tag ?? 'latest' };
 }
 
 function ecrRegistry(repository) {
@@ -131,12 +138,15 @@ async function hubRegistry() {
   const base = `https://registry-1.docker.io/v2/${HUB_REPO}`;
   const auth = { authorization: `Bearer ${token}` };
   return {
-    manifest: (reference) =>
-      getJson(`${base}/manifests/${reference}`, {
+    async manifest(reference) {
+      return getJson(`${base}/manifests/${reference}`, {
         ...auth,
         accept: MANIFEST_TYPES.join(', '),
-      }),
-    blob: (digest) => getJson(`${base}/blobs/${digest}`, auth),
+      });
+    },
+    async blob(digest) {
+      return getJson(`${base}/blobs/${digest}`, auth);
+    },
   };
 }
 
@@ -164,7 +174,10 @@ export async function handler() {
     ecrRegistry(image.repository),
     image.reference
   );
-  const result = verdict({ network, ours, newest: await newestOnHub() });
+  // Docker Hub limits anonymous pulls per IP, shared with every Lambda on
+  // AWS's egress: ask it only on the days the answer depends on it.
+  const newest = coreIsReady({ network, ours }) ? null : await newestOnHub();
+  const result = verdict({ network, ours, newest });
 
   console.log(result.message);
   if (!result.ok) {
