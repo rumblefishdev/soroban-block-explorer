@@ -4,14 +4,18 @@ title: 'Index liquidity positions of concentrated Soroban pools'
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0374', '0516', '0612']
-tags: ['effort-large', 'priority-low', 'liquidity-pools']
+related_tasks: ['0374', '0516', '0612', '0618']
+tags: ['effort-small', 'priority-low', 'liquidity-pools']
 links: ['https://github.com/rumblefishdev/soroban-block-explorer/issues/405']
 history:
   - date: 2026-10-05
     status: backlog
     who: karolkow
     note: 'Spawned from 0516 (the "Aquarius concentrated positions" item, 0374 deferred step 23): concentrated pools show their providers as not indexed.'
+  - date: 2026-10-05
+    status: backlog
+    who: karolkow
+    note: 'Plan rewritten to the read-time aggregation the measurement allows (no table, no backfill); effort-large → effort-small. Phoenix staking, the same shape, spawned as 0618.'
 ---
 
 # Index liquidity positions of concentrated Soroban pools
@@ -55,18 +59,22 @@ checked against contract state on chain.
 
 ## Implementation Plan
 
+- Read path only: a query that sums `position_update` deltas per
+  `(pool, owner, tick_lower, tick_upper)`, deduped on the event key; the
+  participants handler sends a pool without a share token to it instead of
+  answering `not_indexed`. The count follows the same query.
+- What a row shows (owner, range, liquidity; a share of the pool or not) is
+  settled by a prototype before the API shape is written.
+- Spot-check a sample of positions against the position storage in ledger
+  entries (raw XDR is the arbiter), including pools from both deployments.
 - Identify `CA7RQDMM…` (protocol, router) and label it, or record why not.
-- Index from the `position_update` events, as decided on 2026-08-27 (0374
-  worklog); check them against the position storage in ledger entries (raw
-  XDR is the arbiter). Table shape: one row per position change, located by
-  its event, no `transaction_id`.
-- Write path + backfill; read path for the participants list and count;
-  remove the `not_indexed` answer for pools whose positions are indexed.
 
 ## Acceptance Criteria
 
 - [ ] The participants list and count of every concentrated pool come from
-      indexed positions; spot-checked against contract state on chain.
+      its `position_update` events; spot-checked against contract state on
+      chain.
 - [ ] `CA7RQDMM…` named or explained.
 - [ ] **Docs updated** — `docs/architecture/backend/backend-overview.md`
-      (participants), `docs/architecture/database-schema/**` (new table).
+      (participants); `docs/architecture/database-schema/**` N/A — no schema
+      change.
