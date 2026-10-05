@@ -38,6 +38,9 @@ describe('PoolParticipants', () => {
     renderWithProviders(<PoolParticipants poolId="CPOOL" />);
 
     expect(screen.getByText('Not indexed yet')).toBeInTheDocument();
+    expect(
+      screen.getByText(/holds a position inside the pool contract/)
+    ).toBeInTheDocument();
     expect(screen.queryByText('No participants yet')).not.toBeInTheDocument();
   });
 

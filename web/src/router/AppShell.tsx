@@ -17,7 +17,7 @@ import { HomeHeroGlow } from '../pages/home/HomeHeroGlow.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
 import { network } from '../network.js';
-import { NetworkPill } from './NetworkPill.js';
+import { NetworkSwitcher } from './NetworkSwitcher.js';
 import { NAV_LINKS, routes } from './routes.js';
 
 const NAV_ITEMS: NavItem[] = NAV_LINKS.map((link) => ({
@@ -231,7 +231,7 @@ export function AppShell() {
               sx={{ display: 'inline-flex', alignItems: 'center', gap: 1.5 }}
             >
               <HomeLogo height={24} onClick={handleHomeClick} />
-              <NetworkPill current={network} />
+              <NetworkSwitcher current={network} />
             </Box>
           }
           navItems={NAV_ITEMS}
