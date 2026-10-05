@@ -6,9 +6,9 @@ network starts again from ledger 1, under the same passphrase. Nothing in the
 `testnet` database survives it: every table is keyed on the ledger sequence,
 so the new chain's ledger N would overwrite the old one's.
 
-The same steps build the database the first time (steps 4–7):
-`infra/envs/testnet.json` is committed paused (`indexerLambdaConcurrency: 0`),
-so the first deploy starts nothing until the database is ready.
+The same steps build the database the first time (steps 2 and 4–7): pause
+first (`indexerLambdaConcurrency: 0`), so the deploy starts nothing until the
+database is ready.
 
 > **Pause the indexer (step 2) before dropping the database (step 3).** An
 > empty `testnet` database makes a running indexer start over from ledger 2

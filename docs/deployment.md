@@ -147,12 +147,12 @@ true`.
    testnet API answers on its `execute-api` address without the edge lock or
    Turnstile.
 
-`infra/envs/testnet.json` is committed **paused** (`indexerLambdaConcurrency:
-0`, which also disables the keepalive): a new `testnet` database is empty, and
-an indexer with nothing to continue from would only keep the stall alarm
-firing. The first deploy therefore starts nothing; backfill from genesis, then
-resume ([`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md), steps
-4–7).
+An empty `testnet` database needs the indexer **paused**
+(`indexerLambdaConcurrency: 0` in `infra/envs/testnet.json`, which also
+disables the keepalive): an indexer with nothing to continue from would only
+keep the stall alarm firing. Build it with
+[`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md), steps 2 and
+4–7: pause, backfill from genesis, resume.
 
 ---
 
