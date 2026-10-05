@@ -4,7 +4,7 @@ title: 'Soroban pools with a leg that has no decimals or no reserve'
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0374', '0571']
+related_tasks: ['0374', '0571', '0619', '0620', '0325']
 tags: ['effort-small', 'priority-medium', 'liquidity-pools']
 links: ['https://github.com/rumblefishdev/soroban-block-explorer/issues/405']
 history:
@@ -75,6 +75,9 @@ reserves. Left to 0325, which stores the "no longer a pool" verdict.
 
 **`CCH6A2JC…`.** `token_a` is an account (the USDC issuer), not a contract;
 reserves 0/0 are true on chain. Split to 0619.
+
+**Decided 2026-10-05:** the decimals part is solved at the source by 0620
+(execute `decimals()` locally, ADR 0061), not by more storage layouts.
 
 ## Acceptance Criteria
 
