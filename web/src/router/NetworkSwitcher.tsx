@@ -1,13 +1,15 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
+import type { Theme } from '@mui/material/styles';
 
 import { NETWORK_SITES, type Network } from '../network.js';
 
 /**
  * The network this site shows, and the way to the other one (task 0553): a
  * segmented control with one tab per network. The current network's tab is
- * highlighted; the other tab links to its deployment, since each network is
- * its own build on its own host.
+ * highlighted — blue for mainnet, amber for testnet, so no testnet page
+ * passes for mainnet; the other tab links to its deployment, since each
+ * network is its own build on its own host.
  */
 export function NetworkSwitcher({ current }: { current: Network }) {
   return (
@@ -40,15 +42,19 @@ export function NetworkSwitcher({ current }: { current: Network }) {
               borderRadius: `${theme.shape.radius.s}px`,
               textDecoration: 'none',
               border: '1px solid',
-              borderColor: isCurrent ? theme.palette.blue[600] : 'transparent',
+              borderColor: isCurrent
+                ? tabColors(theme, site.key).border
+                : 'transparent',
               backgroundColor: isCurrent
-                ? theme.palette.blue[100]
+                ? tabColors(theme, site.key).fill
                 : 'transparent',
               color: isCurrent
-                ? theme.palette.blue[600]
+                ? tabColors(theme, site.key).text
                 : theme.palette.text.secondary,
-              transition: 'color 0.15s',
-              '&:hover': isCurrent ? {} : { color: theme.palette.text.primary },
+              transition: 'background-color 0.15s',
+              '&:hover': isCurrent
+                ? {}
+                : { backgroundColor: tabColors(theme, site.key).fill },
               '&:focus-visible': {
                 outline: `2px solid ${theme.palette.stroke.action}`,
                 outlineOffset: 2,
@@ -63,4 +69,22 @@ export function NetworkSwitcher({ current }: { current: Network }) {
       })}
     </Box>
   );
+}
+
+// Each network's colours, from the design's "Mainnet / Testnet tabs"
+// component: the current tab takes all three, a hovered other tab only the
+// fill.
+function tabColors(theme: Theme, key: Network) {
+  if (key === 'testnet') {
+    return {
+      fill: theme.palette.yellow[100],
+      border: theme.palette.yellow[500],
+      text: theme.palette.yellow[700],
+    };
+  }
+  return {
+    fill: theme.palette.blue[100],
+    border: theme.palette.blue[600],
+    text: theme.palette.blue[600],
+  };
 }
