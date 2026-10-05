@@ -987,12 +987,13 @@ variable is missing, `config.ts` throws a clear error at first page load.
 `VITE_STELLAR_NETWORK` (`mainnet` | `testnet`; unset means `mainnet`) tells a
 build which network it shows — the same SPA is deployed once per network (task
 0553). `web/src/network.ts` reads it and throws on any other value; the shell
-renders it as `router/NetworkSwitcher.tsx` beside the logo, a Mainnet |
-Testnet segmented control whose current tab is highlighted (blue on mainnet,
-amber on testnet, the same pastel chip in both themes) and is not a link.
-The other tab links to its deployment, at the list of the
-section you are in (`/transactions/<hash>` → `/transactions`) or at home — a
-hash or sequence names another record, or none, on the other network. A
+renders it as `router/NetworkSwitcher.tsx` beside the logo: both network
+names side by side, the current one highlighted (blue on mainnet, amber on
+testnet, the same pastel chip in both themes). The whole control is one link
+to the other deployment; a click slides the highlight across (220 ms, none
+under reduced motion) and then opens it, at the list of the section you are
+in (`/transactions/<hash>` → `/transactions`) or at home — a hash or sequence
+names another record, or none, on the other network. A
 testnet build prefixes the tab title with "Testnet ·" and points every
 icon (SVG, PNGs, iOS touch icon) at its testnet twin with a yellow dot. The
 infra Makefile's web build recipes set it.
