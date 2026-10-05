@@ -6,6 +6,6 @@ export default defineConfig({
   root: dirname(fileURLToPath(import.meta.url)),
   test: {
     environment: 'node',
-    include: ['src/**/*.{test,spec}.ts'],
+    include: ['src/**/*.{test,spec}.ts', 'lambdas/**/*.test.mjs'],
   },
 });

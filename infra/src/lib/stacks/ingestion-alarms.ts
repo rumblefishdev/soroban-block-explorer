@@ -5,6 +5,7 @@ import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
+import { addGalexieProtocolWatch } from './galexie-protocol-watch.js';
 
 export interface IngestionAlarmsProps {
   readonly config: EnvironmentConfig;
@@ -16,10 +17,11 @@ export interface IngestionAlarmsProps {
 }
 
 /**
- * Alarms on getting ledgers in: is our Galexie producing them (1, 1b) or, with
- * the public data lake, is the newest indexed ledger young (1c); and is the
- * indexer consuming them (1a). Part of `CloudWatchStack`; created in
- * its scope, so the alarms keep their construct ids.
+ * Alarms on getting ledgers in: is our Galexie producing them (1, 1b) and
+ * ready for the next protocol (1d) or, with the public data lake, is the
+ * newest indexed ledger young (1c); and is the indexer consuming them (1a).
+ * Part of `CloudWatchStack`; created in its scope, so the alarms keep their
+ * construct ids.
  */
 export function addIngestionAlarms(
   scope: Construct,
@@ -78,6 +80,14 @@ export function addIngestionAlarms(
         treatMissingData: cloudwatch.TreatMissingData.BREACHING,
       })
     );
+
+    // Alarm 1d: is its captive core ready for the next protocol vote?
+    addGalexieProtocolWatch(scope, {
+      config,
+      galexieCluster,
+      galexieService,
+      withActions,
+    });
   }
 
   // ---------------------
