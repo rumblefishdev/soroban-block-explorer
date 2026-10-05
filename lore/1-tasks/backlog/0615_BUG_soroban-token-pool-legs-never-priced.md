@@ -23,6 +23,11 @@ maps only native (0) and classic credit (1|2); a Soroban-token leg (family 3)
 gets the empty key, so its pool's TVL, volume and fees read null even when the
 prices views carry a price for that token.
 
+## Start after (checked 2026-10-05)
+
+`feat/0374-volume-priceable` edits `usd_analytics.rs` and its tests; start
+once it has merged into `develop` (or is dropped).
+
 ## Context
 
 The prices views key a Soroban token by `contract_address`, with

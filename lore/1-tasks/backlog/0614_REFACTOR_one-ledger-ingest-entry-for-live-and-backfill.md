@@ -30,6 +30,16 @@ new parser output stops costing ~30 edits.
 - In force: behaviour stays exactly as today, including backfill's empty
   prior-state maps (see "Prior-state reads").
 
+## Start after (checked 2026-10-05)
+
+Other open work edits the same files; start only once these have merged into
+`develop`, then re-measure the counts above:
+
+- `refactor/0573_event-extraction` — `persist.rs`, `stage.rs`, `tests_cross.rs`;
+- `feat/0468-lp-first-deposits` — `stage.rs`, `rows.rs`;
+- `feat/0553-ledger-source` — `indexer/src/handler/mod.rs` (and the 0553
+  ledger-source work in `backfill-runner`).
+
 ## Context
 
 Measured on develop 2026-10-04:
