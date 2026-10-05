@@ -8,7 +8,7 @@
   "apiLambdaTimeout": 30,
   "indexerLambdaMemory": 512,
   "indexerLambdaTimeout": 600,
-  "indexerLambdaConcurrency": 0,
+  "indexerLambdaConcurrency": 1,
   "indexerLambdaRetryAttempts": 0,
   "enrichmentWorkerLambdaMemory": 256,
   "enrichmentWorkerLambdaTimeout": 30,
