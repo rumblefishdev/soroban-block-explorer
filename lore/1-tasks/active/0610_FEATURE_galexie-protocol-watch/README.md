@@ -67,10 +67,13 @@ dropped: [notes/R-github-workflow-plan-superseded.md](notes/R-github-workflow-pl
 - Our core older than either, or any read that fails → the function throws;
   the log line says LAGGING (vote ahead, bump now), BEHIND (voted) or why it
   could not check, plus whether Docker Hub's newest tag already has the core.
-- The alarm watches the function's built-in `Errors` (no custom metric), two
-  failing hours in a row, missing data breaching → the existing SNS → Slack.
+- The alarm watches the function's built-in `Errors` (no custom metric):
+  both runs of an hour failed, missing data breaching → the existing
+  SNS → Slack. Docker Hub is asked only when the core is not ready (anonymous
+  pull limits per IP).
 - One alarm, no tiers: BEHIND is also paged within minutes by
-  `galexie-ingestion-lag`.
+  `galexie-ingestion-lag`. It posts to the alarm channel; nobody is
+  @-mentioned (the filed plan's assignee went with the GitHub issue).
 - Code: `infra/lambdas/galexie-protocol-watch/` (plain `.mjs`, AWS SDK from
   the Node 22 runtime), wired in `infra/src/lib/stacks/galexie-protocol-watch.ts`
   from `addIngestionAlarms` — only where our own Galexie runs.
@@ -78,8 +81,9 @@ dropped: [notes/R-github-workflow-plan-superseded.md](notes/R-github-workflow-pl
 ## Acceptance Criteria
 
 - [x] A scheduled Lambda compares Horizon's current and core-supported
-      protocols with the captive-core major of the RUNNING Galexie image,
-      read from the image config in ECR, not from tags
+      protocols with the captive-core major of the image in the Galexie
+      service's current task definition, read from its config in ECR, not
+      from tags
 - [x] Not OK, or not checkable, is a failed run; never green
 - [x] A test replays the P29 timeline with fake registries: core 28 with the
       network core at 29 → LAGGING; voted → BEHIND; core 29 → OK; unknown
