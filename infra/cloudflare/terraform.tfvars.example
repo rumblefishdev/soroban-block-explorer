@@ -2,7 +2,7 @@
 # Cloudflare API token comes from CLOUDFLARE_API_TOKEN (see providers.tf), the
 # mTLS cert/key from ./certs/ (see origin-lock.tf).
 
-# Zone id of rumblefishdev.com — from rf-domains' `zone_id` output (D9/D11).
+# Zone id of rumblefishdev.com — from dns-cloudformation's `zone_id` output (D9/D11).
 cloudflare_zone_id = "REPLACE_WITH_RUMBLEFISHDEV_ZONE_ID"
 
 api_hostname = "api-sorobanscan.rumblefishdev.com"

@@ -20,5 +20,5 @@ certs/
 # hashes for reproducible installs. The old (multi-provider) lockfile was
 # removed with the module reshape; `terraform init` regenerates it and the
 # negation below ensures the new one gets committed (keep it in lockstep with
-# rf-domains' provider version, D10).
+# dns-cloudformation's provider version, D10).
 !.terraform.lock.hcl

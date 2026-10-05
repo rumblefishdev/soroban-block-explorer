@@ -1,13 +1,13 @@
 # The sorobanscan API DNS record — the ONE record this repo owns in the
 # rumblefishdev.com zone (D9). A single cloudflare_dns_record is its own
-# resource, so it never conflicts with the company records owned by rf-domains.
+# resource, so it never conflicts with the company records owned by dns-cloudformation.
 #
 # Gated by var.create_dns_record so the AOP origin lock can be provisioned
 # WITHOUT cutting over traffic. Flip create_dns_record=true only at the actual
 # cutover (task 0277 Step 4).
 #
 # proxied=true (orange) routes the API through the Cloudflare edge — this is
-# what puts the WAF/DDoS/rate-limit/challenge rules (owned by rf-domains,
+# what puts the WAF/DDoS/rate-limit/challenge rules (owned by dns-cloudformation,
 # http.host-scoped to this hostname) in the request path. proxied=true requires
 # ttl=1 (automatic). v5: resource is cloudflare_dns_record, value attr `content`.
 resource "cloudflare_dns_record" "api" {

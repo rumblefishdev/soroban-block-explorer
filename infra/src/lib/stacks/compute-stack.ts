@@ -208,7 +208,7 @@ export class ComputeStack extends cdk.Stack {
     // (to be copied into the Cloudflare Transform Rule) BEFORE the Lambda starts
     // requiring the header:
     //   phase 1  provisionEdgeSecret  → create the secret (Lambda NOT yet armed)
-    //   (then)   copy value → rf-domains Transform Rule injects X-Edge-Secret
+    //   (then)   copy value → dns-cloudformation Transform Rule injects X-Edge-Secret
     //   phase 2  enableEdgeSecretLock → set EDGE_SECRET env → middleware enforces
     // RETAIN so rotation is deliberate.
     const edgeSecret = config.provisionEdgeSecret
