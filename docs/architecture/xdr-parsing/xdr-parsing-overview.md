@@ -306,7 +306,8 @@ entities:
   lives nested in the metadata struct in instance storage, which
   `scval_to_typed_json` used to drop.
 - WASM upload → `wasm_interface_metadata` row (SEP-48-derived JSONB, keyed by
-  wasm_hash BYTEA)
+  wasm_hash BYTEA) and a `wasm_code` row with the program bytes
+  ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
 - account state → `accounts` row + `account_balances_current` entries per
   trustline / native (balances are typed `NUMERIC(28,7)` per-asset rows, not a
   JSONB blob on `accounts`)

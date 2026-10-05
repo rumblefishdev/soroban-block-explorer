@@ -21,7 +21,7 @@ use stellar_xdr::{Hash, LedgerEntryData, LedgerKey, LedgerKeyContractCode};
 use tracing::{info, warn};
 
 use crate::error::BackfillError;
-use crate::rpc_snapshot::{RpcClient, RpcError};
+use crate::rpc_snapshot::{LedgerEntryRecord, RpcClient, RpcError};
 use crate::sink::Sink;
 use crate::util::insert_rows;
 
@@ -29,9 +29,8 @@ use crate::util::insert_rows;
 /// keep one response under ~3 MB.
 const PROGRAMS_PER_CALL: usize = 20;
 
-/// Attempts per call when the RPC answers 429 (rate limit), waiting 5 s,
-/// 10 s, 15 s… between them.
-const ATTEMPTS: u64 = 6;
+/// Seconds to wait before each retry when the RPC answers 429 (rate limit).
+const RETRY_WAITS_SECS: [u64; 5] = [5, 10, 15, 20, 25];
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct WasmCodeBackfillStats {
@@ -39,6 +38,8 @@ pub struct WasmCodeBackfillStats {
     pub missing: u64,
     /// Programs the RPC returned.
     pub fetched: u64,
+    /// Asked for but not returned — still missing after the run.
+    pub not_returned: u64,
     /// Returned programs whose sha256 differs from their hash (not stored).
     pub hash_mismatch: u64,
     /// Rows written (0 on a dry run).
@@ -126,21 +127,33 @@ pub async fn execute(
         );
     }
 
+    stats.not_returned = stats.missing - stats.fetched;
+    if stats.not_returned > 0 {
+        warn!(
+            not_returned = stats.not_returned,
+            "wasm_code_backfill: some programs were not returned by the RPC — re-run to retry them"
+        );
+    }
     Ok(stats)
 }
 
+/// One `getLedgerEntries` call, retried on 429 after each wait in
+/// [`RETRY_WAITS_SECS`]; any other error ends the run (a re-run resumes).
 async fn fetch_with_retry(
     rpc: &RpcClient,
     keys: &[LedgerKey],
-) -> Result<Vec<crate::rpc_snapshot::LedgerEntryRecord>, BackfillError> {
-    let mut attempt = 1;
-    loop {
+) -> Result<Vec<LedgerEntryRecord>, BackfillError> {
+    for wait in RETRY_WAITS_SECS {
         match rpc.get_ledger_entries(keys).await {
-            Err(RpcError::HttpStatus { status: 429, .. }) if attempt < ATTEMPTS => {
-                tokio::time::sleep(Duration::from_secs(5 * attempt)).await;
-                attempt += 1;
+            Err(RpcError::HttpStatus { status: 429, .. }) => {
+                warn!(
+                    wait_secs = wait,
+                    "wasm_code_backfill: RPC rate limit, waiting"
+                );
+                tokio::time::sleep(Duration::from_secs(wait)).await;
             }
-            other => return Ok(other?),
+            result => return Ok(result?),
         }
     }
+    Ok(rpc.get_ledger_entries(keys).await?)
 }

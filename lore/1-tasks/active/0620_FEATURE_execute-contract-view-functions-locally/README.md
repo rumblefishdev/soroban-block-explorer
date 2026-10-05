@@ -110,7 +110,11 @@ is the deploy/upgrade ledger despite its name).
    protocol): `call_view(contract, fn) -> Result<ScVal, …>` over a snapshot
    source fed by the current ledger's changes, `wasm_code`, and — only for
    entries the pipeline does not hold (cross-contract proxies, persistent
-   data) — a ledger-entry read.
+   data) — a ledger-entry read. A program with no `wasm_code` row is read
+   the same way (`ContractCode` by hash, checked against it) and stored:
+   PR 1 writes bytes only for uploads whose spec parses (6 deployed
+   programs in history have none) and skips `Restored` entries, so this
+   read closes both gaps.
 3. On token deploy, instance change and WASM upgrade: run `decimals`, `name`,
    `symbol`; write `soroban_contract_metadata` with the ledger. Remove the
    `METADATA` storage read once the backfilled values match.

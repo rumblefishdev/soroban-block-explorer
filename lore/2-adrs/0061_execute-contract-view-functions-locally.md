@@ -114,7 +114,7 @@ database); fetching ties every execution to an external service.
 ## Delivery Checklist
 
 - [ ] `docs/architecture/technical-design-general-overview.md` — N/A until 0620 lands
-- [ ] `docs/architecture/database-schema/database-schema-overview.md` — `wasm_code` (0620)
+- [x] `docs/architecture/database-schema/database-schema-overview.md` — `wasm_code` (0620 PR 1)
 - [ ] `docs/architecture/backend/backend-overview.md` — N/A — API unchanged
 - [ ] `docs/architecture/frontend/frontend-overview.md` — N/A — no frontend change
 - [ ] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` — executor step (0620)

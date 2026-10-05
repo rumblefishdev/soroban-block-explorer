@@ -425,8 +425,13 @@ async fn main() {
                 .expect("wasm_code_backfill failed — idempotent, safe to re-run");
             println!(
                 "wasm_code_backfill completed (dry_run={}): missing={} fetched={} \
-                 hash_mismatch={} written={}",
-                stats.dry_run, stats.missing, stats.fetched, stats.hash_mismatch, stats.written,
+                 not_returned={} hash_mismatch={} written={}",
+                stats.dry_run,
+                stats.missing,
+                stats.fetched,
+                stats.not_returned,
+                stats.hash_mismatch,
+                stats.written,
             );
         }
         Command::SorobanPoolAmounts { dry_run } => {
