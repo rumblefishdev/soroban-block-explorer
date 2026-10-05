@@ -30,54 +30,52 @@ export function NetworkSwitcher({ current }: { current: Network }) {
       })}
     >
       {NETWORK_SITES.map((site) => {
-        const isCurrent = site.key === current;
+        // The current network is where you already are, so its tab is a
+        // label, not a link; only the other network's tab goes somewhere.
+        if (site.key === current) {
+          return (
+            <Box
+              key={site.key}
+              component="span"
+              aria-current="true"
+              sx={[tabShape, currentLook(site.key)]}
+            >
+              <TabLabel name={site.name} />
+            </Box>
+          );
+        }
         return (
           <Box
             key={site.key}
             component="a"
             href={`${site.url}${section}`}
-            aria-current={isCurrent ? 'page' : undefined}
-            sx={(theme) => ({
-              display: 'inline-flex',
-              alignItems: 'center',
-              // Narrower on phones, so logo, switcher, theme toggle and menu
-              // fit one row at 360px.
-              px: { xs: 0.75, sm: 1.5 },
-              py: 0.25,
-              borderRadius: `${theme.shape.radius.s}px`,
-              textDecoration: 'none',
-              border: '1px solid',
-              borderColor: isCurrent
-                ? tabColors(theme, site.key).border
-                : 'transparent',
-              backgroundColor: isCurrent
-                ? tabColors(theme, site.key).fill
-                : 'transparent',
-              color: isCurrent
-                ? tabColors(theme, site.key).text
-                : theme.palette.text.secondary,
-              transition: 'background-color 0.15s',
-              '&:hover': isCurrent
-                ? {}
-                : { backgroundColor: tabColors(theme, site.key).fill },
-              '&:focus-visible': {
-                outline: `2px solid ${theme.palette.stroke.action}`,
-                outlineOffset: 2,
-              },
-            })}
+            sx={[tabShape, otherLook(site.key)]}
           >
-            <Typography
-              variant="bodySmMedium"
-              color="inherit"
-              noWrap
-              sx={{ fontSize: { xs: 12, sm: 14 } }}
-            >
-              {site.name}
-            </Typography>
+            <TabLabel name={site.name} />
           </Box>
         );
       })}
     </Box>
+  );
+}
+
+function TabLabel({ name }: { name: string }) {
+  return (
+    <Typography
+      variant="bodySmMedium"
+      color="inherit"
+      noWrap
+      sx={(theme) => ({
+        // Smaller on phones, so logo, switcher, theme toggle and menu fit
+        // one row at 360px.
+        fontSize: {
+          xs: theme.typography.bodyXsMedium.fontSize,
+          sm: theme.typography.bodySmMedium.fontSize,
+        },
+      })}
+    >
+      {name}
+    </Typography>
   );
 }
 
@@ -94,8 +92,9 @@ export function sectionOf(pathname: string): string {
 }
 
 // Each network's colours, from the design's "Mainnet / Testnet tabs"
-// component: the current tab takes all three, a hovered other tab only the
-// fill.
+// component. They come from the colour scales, which are the same in both
+// themes: the tab is a pastel chip on either background, so its ink must
+// stay dark too.
 function tabColors(theme: Theme, key: Network) {
   if (key === 'testnet') {
     return {
@@ -110,3 +109,40 @@ function tabColors(theme: Theme, key: Network) {
     text: theme.palette.blue[600],
   };
 }
+
+// The tab's shape, shared by both states. The border is always there,
+// transparent when off, so selecting a tab does not shift the row.
+const tabShape = (theme: Theme) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  px: { xs: 0.75, sm: 1.5 },
+  py: 0.25,
+  borderRadius: `${theme.shape.radius.s}px`,
+  border: '1px solid transparent',
+  textDecoration: 'none',
+});
+
+// The network you are on: filled in its colours.
+const currentLook = (key: Network) => (theme: Theme) => {
+  const colors = tabColors(theme, key);
+  return {
+    borderColor: colors.border,
+    backgroundColor: colors.fill,
+    color: colors.text,
+  };
+};
+
+// The other network: plain until hovered, then its fill with the design's
+// dark grey label — dark in both themes, because the fill is pastel in both.
+const otherLook = (key: Network) => (theme: Theme) => ({
+  color: theme.palette.text.secondary,
+  transition: 'background-color 0.15s',
+  '&:hover': {
+    backgroundColor: tabColors(theme, key).fill,
+    color: theme.palette.gray[600],
+  },
+  '&:focus-visible': {
+    outline: `2px solid ${theme.palette.stroke.action}`,
+    outlineOffset: 2,
+  },
+});
