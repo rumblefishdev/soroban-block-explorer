@@ -27,9 +27,6 @@ export interface TopNavProps {
    *  fallback so callers don't ship visually-misleading hard-coded
    *  zeros. */
   stats?: NetworkStats;
-  /** Rendered before the counters — the shell puts the network switcher
-   *  here. */
-  leading?: ReactNode;
   searchValue: string;
   onSearchChange: (value: string) => void;
   onSearchSubmit?: () => void;
@@ -99,7 +96,6 @@ function countFormat(n: number): Format {
 
 export function TopNav({
   stats,
-  leading,
   searchValue,
   onSearchChange,
   onSearchSubmit,
@@ -147,7 +143,6 @@ export function TopNav({
           minWidth={0}
           overflow="hidden"
         >
-          {leading}
           <Box
             sx={{
               display: 'flex',

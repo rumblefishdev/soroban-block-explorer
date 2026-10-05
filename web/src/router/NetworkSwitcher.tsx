@@ -1,8 +1,10 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { Theme } from '@mui/material/styles';
+import { useLocation } from 'react-router-dom';
 
 import { NETWORK_SITES, type Network } from '../network.js';
+import { NAV_LINKS } from './routes.js';
 
 /**
  * The network this site shows, and the way to the other one (task 0553): a
@@ -12,6 +14,7 @@ import { NETWORK_SITES, type Network } from '../network.js';
  * network is its own build on its own host.
  */
 export function NetworkSwitcher({ current }: { current: Network }) {
+  const section = sectionOf(useLocation().pathname);
   return (
     <Box
       component="nav"
@@ -32,12 +35,14 @@ export function NetworkSwitcher({ current }: { current: Network }) {
           <Box
             key={site.key}
             component="a"
-            href={site.url}
+            href={`${site.url}${section}`}
             aria-current={isCurrent ? 'page' : undefined}
             sx={(theme) => ({
               display: 'inline-flex',
               alignItems: 'center',
-              px: 1.5,
+              // Narrower on phones, so logo, switcher, theme toggle and menu
+              // fit one row at 360px.
+              px: { xs: 0.75, sm: 1.5 },
               py: 0.25,
               borderRadius: `${theme.shape.radius.s}px`,
               textDecoration: 'none',
@@ -61,7 +66,12 @@ export function NetworkSwitcher({ current }: { current: Network }) {
               },
             })}
           >
-            <Typography variant="bodySmMedium" color="inherit" noWrap>
+            <Typography
+              variant="bodySmMedium"
+              color="inherit"
+              noWrap
+              sx={{ fontSize: { xs: 12, sm: 14 } }}
+            >
               {site.name}
             </Typography>
           </Box>
@@ -69,6 +79,18 @@ export function NetworkSwitcher({ current }: { current: Network }) {
       })}
     </Box>
   );
+}
+
+/** Where a switch lands on the other network: the list of the section you
+ *  are in, or home. A transaction, a ledger or a contract is not the same
+ *  thing on two networks — the same hash or sequence there is another record
+ *  or none at all — so a detail page lands on its section's list, and search
+ *  and other pages on home. */
+export function sectionOf(pathname: string): string {
+  const link = NAV_LINKS.find(
+    (l) => pathname === l.to || pathname.startsWith(`${l.to}/`)
+  );
+  return link ? link.to : '';
 }
 
 // Each network's colours, from the design's "Mainnet / Testnet tabs"

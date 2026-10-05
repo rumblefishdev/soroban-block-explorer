@@ -207,7 +207,6 @@ export function AppShell() {
         {!isHome && (
           <TopNav
             stats={stats}
-            leading={<NetworkSwitcher current={network} />}
             searchValue={searchValue}
             onSearchChange={handleSearchChange}
             onSearchSubmit={handleSearchSubmit}
@@ -232,8 +231,7 @@ export function AppShell() {
               sx={{ display: 'inline-flex', alignItems: 'center', gap: 1.5 }}
             >
               <HomeLogo height={24} onClick={handleHomeClick} />
-              {/* Home has no TopNav, so its switcher sits beside the logo. */}
-              {isHome && <NetworkSwitcher current={network} />}
+              <NetworkSwitcher current={network} />
             </Box>
           }
           navItems={NAV_ITEMS}

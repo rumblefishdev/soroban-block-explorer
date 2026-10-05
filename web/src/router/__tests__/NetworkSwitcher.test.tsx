@@ -2,7 +2,7 @@ import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '../../test-utils.js';
-import { NetworkSwitcher } from '../NetworkSwitcher.js';
+import { NetworkSwitcher, sectionOf } from '../NetworkSwitcher.js';
 
 describe('NetworkSwitcher', () => {
   it('links to both deployments', () => {
@@ -38,5 +38,30 @@ describe('NetworkSwitcher', () => {
     expect(screen.getByRole('link', { name: 'Testnet' })).not.toHaveAttribute(
       'aria-current'
     );
+  });
+
+  it('lands a detail page on its section list of the other network', () => {
+    renderWithProviders(<NetworkSwitcher current="mainnet" />, {
+      initialEntries: ['/transactions/abc123'],
+    });
+    expect(screen.getByRole('link', { name: 'Testnet' })).toHaveAttribute(
+      'href',
+      'https://testnet.sorobanscan.rumblefish.dev/transactions'
+    );
+  });
+});
+
+describe('sectionOf', () => {
+  it.each([
+    ['/', ''],
+    ['/transactions', '/transactions'],
+    ['/transactions/abc123', '/transactions'],
+    ['/ledgers/64780770', '/ledgers'],
+    ['/nfts/CABC/token-1', '/nfts'],
+    ['/search', ''],
+    ['/transactionsx', ''],
+    ['/no-such-page', ''],
+  ])('%s → "%s"', (pathname, section) => {
+    expect(sectionOf(pathname)).toBe(section);
   });
 });
