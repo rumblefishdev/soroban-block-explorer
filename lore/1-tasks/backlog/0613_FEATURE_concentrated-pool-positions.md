@@ -40,6 +40,19 @@ The 0374 worklog has the earlier findings: concentrated reserves ride the
 pool instance after the legs (T4), and positions are not NFTs (2026-09-02
 correction).
 
+## Measured (2026-10-05)
+
+The data is already indexed: `soroban_events` holds every `position_update`
+of these pools (25,090 in the 37 Aquarius pools, 194 in the 14 `CA7RQDMM…`
+pools, which emit the same event set), and its topic and data columns are
+stored as JSON, so SQL reads them directly: topic 2 the owner, data
+`[tick_lower, tick_upper, liquidity delta]`. Summed per
+`(pool, owner, tick_lower, tick_upper)` over the whole history (deduped on the
+event key): 993 open positions, 332 providers, in 48 of the 51 pools; no
+position sums below zero, which is what a delta should give. So no new table
+and no backfill — a read-time aggregation, as decided on 2026-08-26. Not yet
+checked against contract state on chain.
+
 ## Implementation Plan
 
 - Identify `CA7RQDMM…` (protocol, router) and label it, or record why not.
