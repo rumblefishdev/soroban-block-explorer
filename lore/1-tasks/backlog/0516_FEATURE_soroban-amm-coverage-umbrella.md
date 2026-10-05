@@ -184,7 +184,7 @@ Copy into each adapter task:
       registry that produced it
 - [ ] reserves compared to the contract's own answer, across every pool type
 - [ ] positions: coverage measured, unresolvable cases render "not indexed"
-- [ ] Aquarius concentrated positions (0374's deferred step 23): index from
+- [ ] Aquarius concentrated positions (task 0613, ex-0374 step 23): index from
       `position_update` per the decision recorded in 0374's notes
       (2026-08-27), then lift the participants endpoint's explicit 400 for
       concentrated pools
