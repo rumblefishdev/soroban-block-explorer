@@ -249,6 +249,9 @@ pub struct ExtractedContractInterface {
     /// path). See `wasm_imports_upgrade_fn` for how, and the API
     /// `ContractDetailResponse::upgradeable` for the user-facing 3-state.
     pub upgradeable: bool,
+    /// The program itself, stored once per hash in `wasm_code` so its
+    /// functions can be executed later (task 0620).
+    pub code: Vec<u8>,
 }
 
 /// A single public function signature extracted from a contract's WASM spec.

@@ -23,6 +23,7 @@ mod soroban_pool_amounts;
 mod status;
 mod sync;
 mod util;
+mod wasm_code_backfill;
 
 use std::path::{Path, PathBuf};
 
@@ -259,6 +260,16 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Task 0620 — one-shot fill of `wasm_code` with the bytes of every known
+    /// program that has none yet, read from Soroban RPC (`getLedgerEntries`,
+    /// `ContractCode` by hash) and stored only when sha256 matches the hash.
+    /// Requires `--soroban-rpc-url`. Idempotent. `--dry-run` fetches and
+    /// verifies without writing.
+    WasmCodeBackfill {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -406,6 +417,16 @@ async fn main() {
                 stats.keys_requested,
                 stats.entries_returned,
                 stats.balances_decoded,
+            );
+        }
+        Command::WasmCodeBackfill { dry_run } => {
+            let stats = wasm_code_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
+                .await
+                .expect("wasm_code_backfill failed — idempotent, safe to re-run");
+            println!(
+                "wasm_code_backfill completed (dry_run={}): missing={} fetched={} \
+                 hash_mismatch={} written={}",
+                stats.dry_run, stats.missing, stats.fetched, stats.hash_mismatch, stats.written,
             );
         }
         Command::SorobanPoolAmounts { dry_run } => {

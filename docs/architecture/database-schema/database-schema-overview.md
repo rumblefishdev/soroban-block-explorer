@@ -147,6 +147,9 @@ Stellar archive, not stored in the DB):
 
 - `soroban_contracts` — deployed contracts (`BIGSERIAL id` + `VARCHAR(56)` natural `contract_id`)
 - `wasm_interface_metadata` — WASM ABI keyed by `wasm_hash`
+- `wasm_code` — the bytes of each WASM program keyed by `wasm_hash`, written
+  at upload, so a contract's own functions can be executed
+  ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
 - `soroban_events_appearances` — contract-event appearance index (partitioned)
 - contract invocations — folded into `contract_activity` (task 0586)
 

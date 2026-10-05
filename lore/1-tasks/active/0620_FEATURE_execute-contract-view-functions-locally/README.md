@@ -2,7 +2,7 @@
 id: '0620'
 title: 'Execute contract view functions locally: token decimals, name and symbol from the standard, not from storage keys'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0061']
 related_tasks: ['0617', '0621', '0473', '0340', '0297', '0325']
 tags: ['effort-large', 'priority-high', 'soroban', 'tokens', 'liquidity-pools']
@@ -15,6 +15,12 @@ history:
       Spawned from 0617. Spike: local decimals() on all 4,207 token contracts
       equals RPC simulation (4,151 same value, 56 same failure, 0 different).
       Decided: store WASM bytes (W248 C), execute locally (W240 A).
+  - date: 2026-10-05
+    status: active
+    who: karolkow
+    note: >
+      PR split agreed: 1 `wasm_code` + live write + backfill command;
+      2 executor + metadata from functions; 3 remove the METADATA reader.
 ---
 
 # Execute contract view functions locally

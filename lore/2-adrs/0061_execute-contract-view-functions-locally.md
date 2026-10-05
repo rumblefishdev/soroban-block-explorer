@@ -18,7 +18,7 @@ history:
 
 **Related:**
 
-- [Task 0620: Execute contract view functions locally](../1-tasks/backlog/0620_FEATURE_execute-contract-view-functions-locally/README.md)
+- [Task 0620: Execute contract view functions locally](../1-tasks/active/0620_FEATURE_execute-contract-view-functions-locally/README.md)
 - [Task 0621: Classify fungible tokens by exact SEP-41 signatures](../1-tasks/backlog/0621_REFACTOR_classify-tokens-by-sep41-signatures.md)
 
 ---

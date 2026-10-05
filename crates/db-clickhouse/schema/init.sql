@@ -142,6 +142,19 @@ CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
 ENGINE = ReplacingMergeTree
 ORDER BY (wasm_hash);
 
+-- The bytes of every WASM program, one row per hash, so a contract's own
+-- functions can be executed (task 0620, ADR 0061). Written by the indexer from
+-- the upload's `ContractCode` entry; programs uploaded before it were filled
+-- once by `backfill-runner wasm-code-backfill`. A program never changes (the
+-- hash is the sha256 of its bytes), so a re-insert is the same row. Bytes are
+-- a binary `String`; ~5.2k programs measured 112 MB raw, ~35 MB under ZSTD(3).
+CREATE TABLE IF NOT EXISTS wasm_code (
+    wasm_hash FixedString(32),
+    code      String CODEC(ZSTD(3))
+)
+ENGINE = ReplacingMergeTree
+ORDER BY (wasm_hash);
+
 ----------------------------------------------------------------------
 -- State tables — surrogate-id hubs (accounts, soroban_contracts)
 ----------------------------------------------------------------------
