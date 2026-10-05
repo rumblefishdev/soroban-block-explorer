@@ -3,7 +3,7 @@ id: '0061'
 title: 'Read contract facts by executing their standard view functions locally'
 status: proposed
 deciders: [karolkow]
-related_tasks: ['0620', '0621', '0617']
+related_tasks: ['0620', '0621', '0622', '0623', '0617']
 related_adrs: []
 tags: ['soroban', 'tokens', 'classification', 'indexing']
 links: []
@@ -51,8 +51,14 @@ RPC simulation, p50 0.7 ms per call.
    persistent data — 106 of 4,207 `decimals()` calls) are read as ledger
    entries, never simulated remotely.
 4. Facts a standard defines as **events** (transfers, NFT ownership) keep
-   coming from events. Facts with no standard (AMM reserves, registries) stay
-   per-protocol and are out of scope here.
+   coming from events.
+5. Facts with no standard but a protocol's public function (AMM reserves,
+   total shares) are read through that function, per protocol (0622), not
+   through its storage keys.
+6. Every area moved onto execution removes its storage-key or name-based
+   reader in the same task — no second path stays behind. Order: token
+   metadata (0620), classification (0621), pool state (0622), bespoke
+   balances after measurement (0623).
 
 ---
 

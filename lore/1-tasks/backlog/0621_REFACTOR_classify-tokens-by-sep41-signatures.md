@@ -49,4 +49,7 @@ Measured 2026-10-05 on `wasm_interface_metadata` (all programs):
 
 - [ ] Type decided by exact core SEP-41 signatures; the 44 + 281 contracts
       reviewed and their rows moved deliberately.
+- [ ] A program is a token when its signatures match AND a local
+      `decimals()` call (0620) succeeds on the contract; the name-only rule
+      is removed.
 - [ ] **Docs updated** — `xdr-parsing-overview.md` or `N/A — reason`.
