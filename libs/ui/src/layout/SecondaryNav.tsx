@@ -81,6 +81,9 @@ export interface SecondaryNavProps {
   navItems: NavItem[];
   activePage?: string;
   onNavClick?: (item: NavItem) => void;
+  /** Shown at the bottom of the drawer, under the external links. The caller
+   *  draws its own top border and decides at which widths it shows. */
+  drawerFooter?: ReactNode;
 }
 
 export function SecondaryNav({
@@ -88,6 +91,7 @@ export function SecondaryNav({
   navItems,
   activePage,
   onNavClick,
+  drawerFooter,
 }: SecondaryNavProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -273,6 +277,8 @@ export function SecondaryNav({
               size="lg"
             />
           </Box>
+
+          {drawerFooter}
         </Box>
       </Drawer>
     </Box>
