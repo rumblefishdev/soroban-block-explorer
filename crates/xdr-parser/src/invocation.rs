@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use stellar_xdr::*;
 
 use crate::envelope::{InnerTxRef, muxed_to_g_strkey};
+use crate::meta::soroban_return_value;
 use crate::scval::scval_to_typed_json;
 use crate::types::ExtractedInvocation;
 
@@ -78,7 +79,7 @@ pub fn extract_invocations(
     };
 
     let root_return_value = tx_meta
-        .and_then(crate::meta::soroban_return_value)
+        .and_then(soroban_return_value)
         .map(|v| scval_to_typed_json(&v))
         .unwrap_or(Value::Null);
 
