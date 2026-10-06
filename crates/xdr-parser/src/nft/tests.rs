@@ -793,13 +793,13 @@ fn detect_real_mainnet_consecutive_mint_range() {
             event_type: ContractEventType::Contract,
             contract_id: Some("CAKSC7JHQFBJ4LIYOJQGJX2URGGWABX2WM6OZ5WQVK57VNRUG4DUYK7F".into()),
             topics: serde_json::from_str(
-            r#"[{"type":"sym","value":"consecutive_mint"},{"type":"address","value":"GBWHGYD5DFPQMJSUEEA77IT7YJ75PYQQFOCMP7HT5OIF2ULKJK22N4J4"}]"#,
-        )
-        .unwrap(),
+                r#"[{"type":"sym","value":"consecutive_mint"},{"type":"address","value":"GBWHGYD5DFPQMJSUEEA77IT7YJ75PYQQFOCMP7HT5OIF2ULKJK22N4J4"}]"#,
+            )
+            .unwrap(),
             data: serde_json::from_str(
-            r#"{"type":"vec","value":[{"type":"u32","value":4},{"type":"u32","value":149}]}"#,
-        )
-        .unwrap(),
+                r#"{"type":"vec","value":[{"type":"u32","value":4},{"type":"u32","value":149}]}"#,
+            )
+            .unwrap(),
         },
         created_at: 1700000000,
     };

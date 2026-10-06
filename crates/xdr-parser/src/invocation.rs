@@ -533,7 +533,7 @@ fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
             .soroban_meta
             .as_ref()
             .and_then(|m| m.return_value.clone()),
-        _ => None,
+        TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_) => None,
     }
 }
 

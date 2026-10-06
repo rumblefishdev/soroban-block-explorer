@@ -221,15 +221,12 @@ fn event_dtos(tx: xdr_parser::TxEvents) -> (Vec<XdrEventDto>, Vec<XdrEventDto>) 
                 EventOrigin::Transaction(stage) => (None, Some(stage_name(stage))),
             };
             XdrEventDto {
-                event_type: e.body.event_type.to_string(),
-                contract_id: e.body.contract_id,
-                topics: topics_to_vec(e.body.topics),
-                data: e.body.data,
                 id: Some(e.event_id.to_rpc_string()),
                 // The operation that emitted the event; a fee event has none.
                 operation_index,
                 event_index: Some(e.event_id.event_index),
                 stage,
+                ..body_dto(e.body)
             }
         })
         .collect();
@@ -237,21 +234,23 @@ fn event_dtos(tx: xdr_parser::TxEvents) -> (Vec<XdrEventDto>, Vec<XdrEventDto>) 
     // numeric order.
     contract.sort_by(|a, b| a.id.cmp(&b.id));
     // The debug channel keeps its container order and has no id.
-    let diagnostic = tx
-        .diagnostic
-        .into_iter()
-        .map(|e| XdrEventDto {
-            event_type: e.event_type.to_string(),
-            contract_id: e.contract_id,
-            topics: topics_to_vec(e.topics),
-            data: e.data,
-            id: None,
-            operation_index: None,
-            event_index: None,
-            stage: None,
-        })
-        .collect();
+    let diagnostic = tx.diagnostic.into_iter().map(body_dto).collect();
     (contract, diagnostic)
+}
+
+/// What an event says, without a location: a diagnostic event as it is
+/// shown, and the base a consensus event adds its id and origin to.
+fn body_dto(body: xdr_parser::EventBody) -> XdrEventDto {
+    XdrEventDto {
+        event_type: body.event_type.to_string(),
+        contract_id: body.contract_id,
+        topics: topics_to_vec(body.topics),
+        data: body.data,
+        id: None,
+        operation_index: None,
+        event_index: None,
+        stage: None,
+    }
 }
 
 fn topics_to_vec(topics: serde_json::Value) -> Vec<serde_json::Value> {
