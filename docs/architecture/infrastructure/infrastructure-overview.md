@@ -756,11 +756,11 @@ The deployed alarms (production; authoritative definitions in
   the alarm signal, S3 listing is only a diagnostic cross-check), missing data
   treated as breaching
 - Galexie ephemeral storage above 60% sustained 3×5 min
-- Galexie protocol watch — a scheduled Lambda (every 6 h) reads the
+- Galexie protocol watch — a scheduled Lambda (every 3 h) reads the
   captive-core version of the image the Galexie service runs (from its ECR
   image config) and of the newest `stellar/stellar-galexie` image on Docker
   Hub; it throws when Docker Hub's core major is newer than ours, or when it
-  cannot read either. Alarm when two runs in a row fail (the function's
+  cannot read either. Alarm when both runs of a 6 h period fail (the function's
   `Errors`), missing data breaching. Pages when the Galexie for the next
   protocol is out, before the pubnet vote (task 0610); runbook
   [`docs/runbooks/galexie-protocol-watch.md`](../../runbooks/galexie-protocol-watch.md)

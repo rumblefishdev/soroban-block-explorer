@@ -1,4 +1,4 @@
-// Galexie protocol watch (task 0610): every 6 hours, compare the captive-core
+// Galexie protocol watch (task 0610): every 3 hours, compare the captive-core
 // version of the Galexie that runs with the newest Galexie on Docker Hub. A
 // newer core there — and any read that fails — throws, and the alarm on this
 // function's Errors goes to Slack. The reason is in the log.
@@ -29,12 +29,19 @@ const ecs = new ECSClient({});
 const ecr = new ECRClient({});
 
 async function getJson(url, headers = {}) {
-  const response = await fetch(url, {
-    headers: { accept: 'application/json', ...headers },
-    signal: AbortSignal.timeout(10000),
-  });
+  // Without the query string: an ECR download URL carries its signature there.
+  const where = url.split('?')[0];
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { accept: 'application/json', ...headers },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (error) {
+    throw new Error(`cannot read ${where}: ${error.message}`);
+  }
   if (!response.ok) {
-    throw new Error(`cannot read ${url}: HTTP ${response.status}`);
+    throw new Error(`cannot read ${where}: HTTP ${response.status}`);
   }
   return response.json();
 }
@@ -64,7 +71,6 @@ async function runningImage() {
     );
   }
 
-  // <account>.dkr.ecr.<region>.amazonaws.com/<repository>@sha256:<digest>, or :<tag>
   // <registry>/<repository>@sha256:…, <repository>:<tag>@sha256:… or
   // <repository>:<tag>; a digest, when present, is what runs.
   const path = container.image.slice(container.image.indexOf('/') + 1);

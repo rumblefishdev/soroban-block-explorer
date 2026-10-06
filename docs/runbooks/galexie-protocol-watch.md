@@ -11,10 +11,10 @@ image that fixed it had been on Docker Hub for a week (task 0610).
 The alarm only says "the watch failed". The function's log says why:
 
 ```bash
-aws logs tail /aws/lambda/production-galexie-protocol-watch --region eu-central-1 --since 13h
+aws logs tail /aws/lambda/production-galexie-protocol-watch --region eu-central-1 --since 7h
 ```
 
-To run it now instead of waiting up to 6 h (after a deploy, say), invoke
+To run it now instead of waiting up to 3 h (after a deploy, say), invoke
 the function — this runs the check, it changes nothing:
 
 ```bash
@@ -23,6 +23,13 @@ aws lambda invoke --region eu-central-1 --function-name production-galexie-proto
 
 Every run logs one line starting with `OK:` or `NEW CORE:`, or an error that
 starts with `cannot determine` / `cannot read`.
+
+## Right after the first deploy
+
+The alarm has no data until the first run, and no data counts as failed, so
+it may page once and clear after the first 6-hour period with runs. That
+message is the check that the alarm reaches Slack. Invoke the function once
+after the deploy to see the first `OK:` in the log.
 
 ## NEW CORE — deploy the new Galexie before the vote
 
@@ -42,7 +49,8 @@ deploying early is safe.
 3. Deploy with the Galexie recipe in
    [`docs/deployment.md`](../deployment.md#galexie-live-ingestion--ingestion-stack)
    — mirror to ECR, pin the **ECR** digest, deploy the Ingestion stack.
-4. Invoke the function (above): it logs `OK:`, and the alarm clears.
+4. Invoke the function (above): it logs `OK:`. The alarm clears when its
+   6-hour period ends, within 6 h.
 
 If the vote has already happened, Galexie has stopped at the vote ledger and
 `galexie-ingestion-lag` has paged too. Same deploy, now as an incident — then
@@ -51,7 +59,9 @@ check that no ledgers are missing (the continuity query in
 
 ## cannot determine / cannot read — the watch could not check
 
-Nothing was compared, two runs in a row. Read the error:
+Nothing was compared, in both runs of a 6-hour period. Read the error;
+anything without one of these prefixes is an AWS error (access, throttling)
+and reads as itself:
 
 - `cannot read https://hub.docker.com/…` or `…registry-1.docker.io…` —
   Docker Hub was down or rate-limited. If the next run is OK, nothing to do.

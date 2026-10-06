@@ -33,7 +33,7 @@ export interface GalexieProtocolWatchProps {
  * the new protocol — P29 stopped ours for ~14 h on 2026-10-01, though the
  * image that fixed it had been on Docker Hub for a week.
  *
- * A Lambda reads, every 6 hours, the captive-core version of the image the
+ * A Lambda reads, every 3 hours, the captive-core version of the image the
  * Galexie service runs (from ECR, not from tags) and of the newest image on
  * Docker Hub; a newer core there, or a read that fails, throws. The alarm
  * watches the function's built-in Errors metric, so there is no custom metric
@@ -60,7 +60,7 @@ export function addGalexieProtocolWatch(
     // no reason in the log.
     timeout: cdk.Duration.minutes(3),
     memorySize: 128,
-    // The next scheduled run, 6 hours later, is the retry.
+    // The next scheduled run, 3 hours later, is the retry.
     retryAttempts: 0,
     environment: {
       CLUSTER_NAME: galexieCluster.clusterName,
@@ -102,12 +102,15 @@ export function addGalexieProtocolWatch(
 
   new scheduler.Schedule(scope, 'GalexieProtocolWatchSchedule', {
     scheduleName: functionName,
-    description: 'Runs the Galexie protocol watch every 6 hours (task 0610)',
-    schedule: scheduler.ScheduleExpression.rate(cdk.Duration.hours(6)),
+    description: 'Runs the Galexie protocol watch every 3 hours (task 0610)',
+    // Twice per alarm period, so a run landing a few seconds late never
+    // leaves a period without a datapoint.
+    schedule: scheduler.ScheduleExpression.rate(cdk.Duration.hours(3)),
     target: new targets.LambdaInvoke(fn, { retryAttempts: 0 }),
   });
 
-  // Two runs in a row failed, so one bad minute at Docker Hub pages nobody;
+  // Both runs of a 6-hour period failed, so one bad minute at Docker Hub
+  // pages nobody;
   // the vote is a week or more away when this first turns red. BREACHING: a
   // function that stopped running publishes no datapoint (a run that
   // succeeds publishes Errors = 0), and a watch that checks nothing must not
@@ -121,11 +124,10 @@ export function addGalexieProtocolWatch(
         period: cdk.Duration.hours(6),
         statistic: cloudwatch.Stats.SUM,
       }),
-      threshold: 1,
+      threshold: 2,
       comparisonOperator:
         cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-      evaluationPeriods: 2,
-      datapointsToAlarm: 2,
+      evaluationPeriods: 1,
       treatMissingData: cloudwatch.TreatMissingData.BREACHING,
     })
   );
