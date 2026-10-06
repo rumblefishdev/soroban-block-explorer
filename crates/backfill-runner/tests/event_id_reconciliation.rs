@@ -313,11 +313,22 @@ async fn parsed_event_ids(http: &reqwest::Client, archive: &str, ledger: u32) ->
         .expect("archive body");
     let xdr = xdr_parser::decompress_zstd(&bytes).expect("zstd");
     let batch = xdr_parser::deserialize_batch(&xdr).expect("LedgerCloseMetaBatch");
-    batch
+    let events: Vec<_> = batch
         .ledger_close_metas
         .iter()
         .flat_map(|meta| indexer::handler::process::parse_ledger(meta).events)
         .flat_map(|(_, events)| events)
+        .collect();
+    // Every id names one event: a repeat would merge two rows in the table,
+    // and the sets compared below would hide it.
+    let distinct: BTreeSet<_> = events.iter().map(|e| e.event_id).collect();
+    assert_eq!(
+        distinct.len(),
+        events.len(),
+        "ledger {ledger}: two parsed events share an id"
+    );
+    events
+        .iter()
         // `getEvents` reports contract-scoped events only.
         .filter(|e| e.contract_id.is_some())
         .map(|e| e.event_id.to_rpc_string())
