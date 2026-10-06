@@ -1377,11 +1377,13 @@ Design notes:
   §4.17). `accounts::fetch_list` read-in-order SEEKs it (~page rows) instead of the
   old `accounts FINAL` whole-dimension scan+sort (~24M). Freshness = the refresh
   interval — a shared, server-side origin, ≤interval-stale, fine for a browse list.
+  The copy holds no `account_id` (task 0447): the StrKey was 82 % of the bytes each
+  refresh rewrites, so the list resolves it for its page from `accounts` by `id`
+  (`idx_acc_id`), alongside the native-balance seek.
 
   ```sql
   CREATE TABLE accounts_recent (
       id                Int64,
-      account_id        String,
       last_seen_ledger  Int64,
       first_seen_ledger Int64,
       home_domain       LowCardinality(Nullable(String))
@@ -1391,7 +1393,7 @@ Design notes:
   CREATE MATERIALIZED VIEW accounts_recent_mv
   REFRESH EVERY 2 MINUTE
   TO accounts_recent AS
-  SELECT id, account_id, last_seen_ledger, first_seen_ledger, home_domain
+  SELECT id, last_seen_ledger, first_seen_ledger, home_domain
   FROM accounts FINAL;
   ```
 

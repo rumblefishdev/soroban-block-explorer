@@ -209,9 +209,11 @@ ORDER BY (account_id);
 -- alternate ordering lives in this separate plain-MergeTree table, filled by a
 -- refreshable MV (full recompute + atomic EXCHANGE → reads need no FINAL; mirrors
 -- `balance_aggregates_mv`). `accounts::fetch_list` then read-in-order SEEKs it.
+-- No `account_id` (task 0447): the StrKey was 82 % of the bytes every refresh
+-- rewrites, and the list needs it for one page only — it resolves it from
+-- `accounts` by `id` (`idx_acc_id`).
 CREATE TABLE IF NOT EXISTS accounts_recent (
     id                Int64,
-    account_id        String,
     last_seen_ledger  Int64,
     first_seen_ledger Int64,
     home_domain       LowCardinality(Nullable(String))
@@ -227,7 +229,7 @@ ORDER BY (last_seen_ledger, id);
 CREATE MATERIALIZED VIEW IF NOT EXISTS accounts_recent_mv
 REFRESH EVERY 2 MINUTE
 TO accounts_recent AS
-SELECT id, account_id, last_seen_ledger, first_seen_ledger, home_domain
+SELECT id, last_seen_ledger, first_seen_ledger, home_domain
 FROM accounts FINAL;
 
 -- soroban_contracts: same hybrid pattern as accounts.

@@ -127,7 +127,6 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 #[derive(Debug, Row, Deserialize)]
 struct AccountListChRow {
     id: i64,
-    account_id: String,
     last_seen_ledger: i64,
     first_seen_ledger: i64,
     home_domain: Option<String>,
@@ -150,7 +149,9 @@ struct AccountListBalanceRow {
 ///
 /// - **No `accounts FINAL`** (task 0385): Step 1 pages `accounts_recent`, a
 ///   refreshable-MV copy already deduped to one row per account and ordered by
-///   `(last_seen_ledger, id)`, so it seeks instead of scanning. The native-balance
+///   `(last_seen_ledger, id)`, so it seeks instead of scanning. The copy holds
+///   no `account_id` (task 0447: it was 82 % of the bytes the MV rewrites every
+///   refresh); Step 2 resolves it by `id` for the page only. The native-balance
 ///   seek (Step 2) is `FINAL` on `balances`/`assets` to collapse re-ingest versions.
 /// - **Native balance** is the `asset_type = 0` row of
 ///   `account_balances_current`, mirroring the PG partial-index join. A
@@ -206,7 +207,6 @@ pub async fn fetch_list(
     let page_sql = format!(
         "SELECT \
             a.id                AS id, \
-            a.account_id        AS account_id, \
             a.last_seen_ledger  AS last_seen_ledger, \
             a.first_seen_ledger AS first_seen_ledger, \
             a.home_domain       AS home_domain \
@@ -225,10 +225,11 @@ pub async fn fetch_list(
         return Ok(Vec::new());
     }
 
-    // Step 2: resolve each page account's native (XLM) balance from the unified
-    // `balances` table by a PK-prefix key-seek. `balances` is ORDER BY
-    // (holder_id, asset_id), so `holder_id IN (…)` seeks the prefix; `FINAL` is
-    // bounded to the ≤limit page keys. The IN-list is i64 surrogates (no injection
+    // Step 2: resolve each page account's StrKey and native (XLM) balance. The
+    // StrKey comes from `accounts` by `id` (bloom seek, shared resolver). The
+    // balance comes from the unified `balances` table by a PK-prefix key-seek:
+    // `balances` is ORDER BY (holder_id, asset_id), so `holder_id IN (…)` seeks
+    // the prefix; `FINAL` is bounded to the ≤limit page keys. The IN-list is i64 surrogates (no injection
     // surface), bounded by the page limit.
     let ids = {
         let mut v: Vec<i64> = rows.iter().map(|r| r.id).collect();
@@ -236,42 +237,52 @@ pub async fn fetch_list(
         v.dedup();
         v.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
     };
-    let balances: HashMap<i64, String> = client
-        .query(&format!(
-            // task 0331 read-cutover: native (XLM) balance now from the unified
-            // `balances` table (RAW Int128 = stroops). The frontend scales by
-            // `decimals` (7 for native) — same raw-amount contract as the
-            // account-detail balances. Resolve native via `assets.asset_type = 0`
-            // (the native asset_id is a Rust cityhash, which CH `cityHash64`
-            // cannot recompute, so we join rather than hardcode a literal).
-            //
-            // `closed_at_ledger = 0` for the same reason the detail read uses
-            // it (ADR 0055): without it a merged account keeps printing `0 XLM`
-            // here while the detail page — which now hides closed rows — shows
-            // no XLM at all. The two disagreed before task 0463 in the other
-            // direction; the point of the flip is that they agree. A filtered
-            // row leaves `xlm_balance` null, which the table renders as a dash.
-            "SELECT b.holder_id AS account_id, toString(b.amount) AS balance \
-             FROM balances b FINAL \
-             INNER JOIN assets a FINAL ON a.id = b.asset_id \
-             WHERE b.holder_id IN ({ids}) AND a.asset_type = 0 \
-               AND b.closed_at_ledger = 0"
-        ))
-        .fetch_all::<AccountListBalanceRow>()
-        .await?
+    let balances_sql = format!(
+        // task 0331 read-cutover: native (XLM) balance now from the unified
+        // `balances` table (RAW Int128 = stroops). The frontend scales by
+        // `decimals` (7 for native) — same raw-amount contract as the
+        // account-detail balances. Resolve native via `assets.asset_type = 0`
+        // (the native asset_id is a Rust cityhash, which CH `cityHash64`
+        // cannot recompute, so we join rather than hardcode a literal).
+        //
+        // `closed_at_ledger = 0` for the same reason the detail read uses
+        // it (ADR 0055): without it a merged account keeps printing `0 XLM`
+        // here while the detail page — which now hides closed rows — shows
+        // no XLM at all. The two disagreed before task 0463 in the other
+        // direction; the point of the flip is that they agree. A filtered
+        // row leaves `xlm_balance` null, which the table renders as a dash.
+        "SELECT b.holder_id AS account_id, toString(b.amount) AS balance \
+         FROM balances b FINAL \
+         INNER JOIN assets a FINAL ON a.id = b.asset_id \
+         WHERE b.holder_id IN ({ids}) AND a.asset_type = 0 \
+           AND b.closed_at_ledger = 0"
+    );
+    // Both seeks key off the page ids alone, so they go out together.
+    let (strkeys, balance_rows) = tokio::join!(
+        resolve_accounts(client, rows.iter().map(|r| r.id).collect()),
+        client
+            .query(&balances_sql)
+            .fetch_all::<AccountListBalanceRow>(),
+    );
+    let strkeys = strkeys?;
+    let balances: HashMap<i64, String> = balance_rows?
         .into_iter()
         .map(|r| (r.account_id, r.balance))
         .collect();
 
+    // Every row of the copy comes from `accounts`, so its StrKey is always
+    // there; a row without one is skipped rather than shown with no address.
     Ok(rows
         .into_iter()
-        .map(|r| AccountListRow {
-            xlm_balance: balances.get(&r.id).cloned(),
-            id: r.id,
-            account_id: r.account_id,
-            last_seen_ledger: r.last_seen_ledger,
-            first_seen_ledger: r.first_seen_ledger,
-            home_domain: r.home_domain,
+        .filter_map(|r| {
+            Some(AccountListRow {
+                account_id: strkeys.get(&r.id)?.clone(),
+                xlm_balance: balances.get(&r.id).cloned(),
+                id: r.id,
+                last_seen_ledger: r.last_seen_ledger,
+                first_seen_ledger: r.first_seen_ledger,
+                home_domain: r.home_domain,
+            })
         })
         .collect())
 }
