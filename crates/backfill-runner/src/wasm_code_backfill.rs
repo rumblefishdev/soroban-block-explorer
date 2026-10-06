@@ -34,7 +34,7 @@ const RETRY_WAITS_SECS: [u64; 5] = [5, 10, 15, 20, 25];
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct WasmCodeBackfillStats {
-    /// Known program hashes with no `wasm_code` row.
+    /// Known program hashes whose `wasm_programs` row has no bytes yet.
     pub missing: u64,
     /// Programs the RPC returned.
     pub fetched: u64,
@@ -71,6 +71,8 @@ pub async fn execute(
                  UNION DISTINCT \
                  SELECT assumeNotNull(wasm_hash) AS wasm_hash FROM soroban_contracts \
                  WHERE wasm_hash IS NOT NULL \
+                 UNION DISTINCT \
+                 SELECT wasm_hash FROM contract_executable_refs \
              ) \
              WHERE wasm_hash NOT IN (SELECT wasm_hash FROM wasm_programs WHERE code != '') \
              ORDER BY wasm_hash",

@@ -979,21 +979,18 @@ pub fn detect_assets(
     deployments: &[ExtractedContractDeployment],
     interfaces: &[ExtractedWasmProgram],
 ) -> Vec<ExtractedAsset> {
-    // Pre-index interfaces by wasm_hash so the inner loop is O(1) per
-    // deployment. Classification itself is O(|functions|) but amortised
-    // across all deployments sharing that wasm_hash (shared-library
-    // contracts are common on Stellar), so cache the verdict too.
+    // Verdict per wasm_hash, computed once and shared by every deployment of
+    // that program (shared-library contracts are common on Stellar). A
+    // program without an interface section gives no verdict.
     use std::collections::HashMap;
     let mut verdict_by_hash: HashMap<&str, ContractClassification> =
         HashMap::with_capacity(interfaces.len());
     for iface in interfaces {
-        // A program without an interface section gives no verdict.
-        let Some(functions) = &iface.functions else {
-            continue;
-        };
-        verdict_by_hash
-            .entry(iface.wasm_hash.as_str())
-            .or_insert_with(|| classify_contract_from_wasm_spec(functions));
+        if let Some(functions) = &iface.functions {
+            verdict_by_hash
+                .entry(iface.wasm_hash.as_str())
+                .or_insert_with(|| classify_contract_from_wasm_spec(functions));
+        }
     }
 
     let mut assets = Vec::new();

@@ -691,7 +691,7 @@ struct InterfaceChRow {
     contract_id: String,
     wasm_hash: Option<String>,
     /// Raw JSON text from `wasm_programs.metadata` (empty when the
-    /// contract has no WASM metadata row).
+    /// contract has no program row, or its program has no interface).
     metadata: String,
 }
 

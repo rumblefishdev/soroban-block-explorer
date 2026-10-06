@@ -68,7 +68,7 @@
 -- - **`LowCardinality(String)`** on bounded-cardinality columns:
 --   asset codes, event signatures, home_domain.
 -- - **`ZSTD(3)` codecs** on JSON-ish columns: `soroban_events.topics_xdr`,
---   `soroban_events.data_xdr`, `wasm_programs.metadata`.
+--   `soroban_events.data_xdr`, `wasm_programs.metadata`, `wasm_programs.code`.
 -- - **Empty-string sentinel** for composite-PK "no value" slots
 --   (`assets.asset_code = ''` for native, etc.). CH `ORDER BY` on
 --   plain `String` is significantly faster than `Nullable(String)`.
@@ -147,7 +147,8 @@ ORDER BY (sequence);
 -- whole, bytes and metadata together, so a later write never blanks the other
 -- half. Programs uploaded before `code` existed were filled once by
 -- `backfill-runner wasm-code-backfill`. ~5.2k programs measured 112 MB raw,
--- ~35 MB under ZSTD(3).
+-- ~35 MB under ZSTD(3). (A separate `wasm_code` table held the bytes for a
+-- while in development; it never reached production, so nothing to drop.)
 -- PROD: `ALTER TABLE wasm_programs ADD COLUMN IF NOT EXISTS code String DEFAULT '' CODEC(ZSTD(3))`.
 CREATE TABLE IF NOT EXISTS wasm_programs (
     wasm_hash FixedString(32),

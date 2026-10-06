@@ -103,18 +103,22 @@ is the deploy/upgrade ledger despite its name).
 
 ## Implementation
 
-1. `wasm_code` table: `wasm_hash` → bytes. The indexer writes it from the
-   upload's `ContractCode` entry; a one-off backfill fills the 5,235 known
-   programs (from the ledger archive or `getLedgerEntries`, verified by hash).
+1. Program bytes in `wasm_programs.code` (the table renamed from
+   `wasm_interface_metadata`; a separate `wasm_code` table was folded in
+   before reaching production). The indexer writes the whole row from every
+   `ContractCode` change, `Restored` and spec-less programs included; a
+   one-off backfill fills the 5,235 known programs from `getLedgerEntries`,
+   verified by hash. Production order: `RENAME TABLE` (+ a compatibility
+   view for the old name), `ALTER TABLE wasm_programs ADD COLUMN IF NOT
+EXISTS code String DEFAULT '' CODEC(ZSTD(3))` — both BEFORE the deploy,
+   or the indexer's typed insert fails — then deploy, drop the view, run
+   the backfill. The backfill rewrites every existing row with metadata
+   recomputed by today's parser (old rows gain `upgradeable`).
 2. Executor module wrapping `soroban-env-host` (pinned to the network's
    protocol): `call_view(contract, fn) -> Result<ScVal, …>` over a snapshot
-   source fed by the current ledger's changes, `wasm_code`, and — only for
-   entries the pipeline does not hold (cross-contract proxies, persistent
-   data) — a ledger-entry read. A program with no `wasm_code` row is read
-   the same way (`ContractCode` by hash, checked against it) and stored:
-   PR 1 writes bytes only for uploads whose spec parses (6 deployed
-   programs in history have none) and skips `Restored` entries, so this
-   read closes both gaps.
+   source fed by the current ledger's changes, `wasm_programs.code` and the
+   contract-instance table (decided 2026-10-06: execution runs in the
+   indexer, ADR 0043 — no network round trip).
 3. On token deploy, instance change and WASM upgrade: run `decimals`, `name`,
    `symbol`; write `soroban_contract_metadata` with the ledger. Remove the
    `METADATA` storage read once the backfilled values match.
@@ -129,5 +133,5 @@ is the deploy/upgrade ledger despite its name).
 - [ ] The four Aquarius pools of 0617 show TVL.
 - [ ] `token_metadata.rs` storage-key reading removed.
 - [ ] Program bytes stored for every known program; new uploads written live.
-- [ ] **Docs updated** — `database-schema-overview.md` (`wasm_code`),
+- [ ] **Docs updated** — `database-schema-overview.md` (`wasm_programs.code`),
       `indexing-pipeline-overview.md`, `xdr-parsing-overview.md`.

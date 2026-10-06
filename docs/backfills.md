@@ -416,7 +416,7 @@ Gotchas, all recorded:
 
 **Subcommands:** `run`, `status`, `bootstrap`, `repair-tier1`,
 `contract-type-rebuild`, `balance-seed`, `nft-reclassify`,
-`soroban-pool-amounts`, `wasm-code-backfill` (program bytes for `wasm_code`,
+`soroban-pool-amounts`, `wasm-code-backfill` (program bytes for `wasm_programs.code`,
 read from RPC and checked against their hash). Most one-shot ops
 subcommands take `--dry-run`. No separate bins remain.
 
