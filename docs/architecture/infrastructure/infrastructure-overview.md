@@ -607,7 +607,8 @@ External runtime dependencies are limited to read-only canonical Stellar data so
   layer per [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)
 
 No other external API is required. Horizon, Soroban RPC, and third-party
-indexers are explicitly not in the trust boundary.
+indexers are explicitly not in the trust boundary. Docker Hub is read by the
+Galexie protocol watch (§8.2) only, for an alarm; no data path depends on it.
 
 ## 7. Environments and Scalability
 
@@ -733,8 +734,9 @@ for why each was adopted and what it cost:
    the steady state to zero (the DLQs, the 5xx count), because it can be
    drained and re-armed.
 3. **Absence is `breaching` only where nothing else witnesses the same thing.**
-   One alarm in the set uses it — Galexie ingestion lag, where "no ledgers
-   landed" has no other witness.
+   Galexie ingestion lag uses it, where "no ledgers landed" has no other
+   witness; so does the Galexie protocol watch, where a function that stopped
+   running has none.
 4. **A page caused by planned work the operator just performed is cheap.**
    Pauses are not machine-readable; one knowing page per pause is the accepted
    design rather than a suppression mechanism.
@@ -754,6 +756,14 @@ The deployed alarms (production; authoritative definitions in
   the alarm signal, S3 listing is only a diagnostic cross-check), missing data
   treated as breaching
 - Galexie ephemeral storage above 60% sustained 3×5 min
+- Galexie protocol watch — a scheduled Lambda (every 3 h) reads the
+  captive-core version of the image the Galexie service runs (from its ECR
+  image config) and of the newest `stellar/stellar-galexie` image on Docker
+  Hub; it throws when Docker Hub's core major is newer than ours, or when it
+  cannot read either. Alarm when both runs of a 6 h period fail (the function's
+  `Errors`), missing data breaching. Pages when the Galexie for the next
+  protocol is out, before the pubnet vote (task 0610); runbook
+  [`docs/runbooks/galexie-protocol-watch.md`](../../runbooks/galexie-protocol-watch.md)
 - Ingest backlog age above 120 s for 3 consecutive minutes (set by
   `ingestionBacklogAgeSeconds` in `infra/envs/production.json`) — the consumer-side
   counterpart to the lag alarm (a planned indexer pause pages once, knowingly)
@@ -785,7 +795,8 @@ The source design documents specific operational recovery assumptions:
 - protocol upgrades are handled by bumping the pinned `stellar-xdr` Rust crate
   (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md)) **and** the
   pinned Galexie image, whose captive core is tied to a protocol and stops
-  exporting to S3 without erroring if it is left behind; the frontend consumes
+  exporting to S3 without erroring if it is left behind — the Galexie
+  protocol watch (§8.2) pages when the new image is out; the frontend consumes
   typed API responses via OpenAPI-generated TS client (task 0096).
 
 These assumptions connect runtime infrastructure directly to safe ingestion operations.
