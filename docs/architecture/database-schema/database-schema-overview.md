@@ -178,7 +178,9 @@ Derived explorer entities:
   ledger, meaning "closed at or before"
 - `account_entry_state` — signers + thresholds per account (task 0463, issue #377): one row per
   account, the FULL signer set as parallel arrays (`signer_keys/weights/types`), plus
-  `master_weight` + `threshold_low/med/high` + account `flags`; RMT(`last_updated_ledger`) keyed on
+  `master_weight` + `threshold_low/med/high` + account `flags` + the CAP-33 counters
+  `num_sponsoring` / `num_sponsored` (reserves paid for others / by others, copied from the
+  entry's V2 extension, 0 when it has none — task 0629, issue #454); RMT(`last_updated_ledger`) keyed on
   `account_id` — whole-set replacement so removed signers cannot ghost. Raw-XDR truth: the master
   key is NOT in the signer list (its weight is thresholds byte 0); Horizon synthesizes a master
   entry, we must not. A row-less account does NOT mean thin coverage: the checkpoint seed wrote

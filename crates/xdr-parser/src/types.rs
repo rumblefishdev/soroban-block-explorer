@@ -401,6 +401,11 @@ pub struct ExtractedAccountState {
     pub thresholds: Option<String>,
     /// `AccountEntry.flags`. Same Some/None semantics as `signers`.
     pub flags: Option<u32>,
+    /// CAP-33 counters from the `AccountEntry`: reserves this account pays for
+    /// others, and reserves of this account paid by others. Same Some/None
+    /// semantics as `signers`. lore-0629.
+    pub num_sponsoring: Option<u32>,
+    pub num_sponsored: Option<u32>,
     /// `true` when the ACCOUNT ENTRY itself was removed in this change set —
     /// an `account_merge`, the only way an account is deleted. The native
     /// balance is emitted as 0 either way, so without this flag the merge

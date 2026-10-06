@@ -1,5 +1,6 @@
 //! The `account_entry_state` row staged from one observed `AccountEntry`:
-//! signers, thresholds and flags, whole-set per account (lore-0463).
+//! signers, thresholds, flags and the sponsorship counters, whole-set per
+//! account (lore-0463, lore-0629).
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
@@ -65,6 +66,8 @@ pub(super) fn entry_state_row(
                 threshold_med,
                 threshold_high,
                 flags: st.flags.unwrap_or(0),
+                num_sponsoring: st.num_sponsoring.unwrap_or(0),
+                num_sponsored: st.num_sponsored.unwrap_or(0),
                 last_updated_ledger: watermark,
             })
         }
@@ -85,3 +88,6 @@ fn parse_thresholds(hex_str: &str) -> Option<[u8; 4]> {
     let bytes = hex::decode(hex_str).ok()?;
     <[u8; 4]>::try_from(bytes.as_slice()).ok()
 }
+
+#[cfg(test)]
+mod tests;

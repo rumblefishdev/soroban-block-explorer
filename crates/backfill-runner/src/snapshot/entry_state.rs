@@ -109,6 +109,8 @@ fn corrections(state: &NetworkState, ours: &HashMap<i64, i64>) -> EntryStateCorr
             threshold_med: d.thresholds[2],
             threshold_high: d.thresholds[3],
             flags: d.flags,
+            num_sponsoring: d.num_sponsoring,
+            num_sponsored: d.num_sponsored,
             last_updated_ledger: i64::from(e.ledger),
         });
     }

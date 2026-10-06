@@ -351,7 +351,29 @@ pub fn signer_type_name(key: &SignerKey) -> &'static str {
     }
 }
 
+/// `(num_sponsoring, num_sponsored)` — the CAP-33 counters the network keeps on
+/// the account itself: reserves this account pays for others, and reserves of
+/// this account paid by others. Copied as the ledger states them, never
+/// counted by us.
+///
+/// An entry without the V2 extension has never taken part in sponsorship, and
+/// the network treats both counters as 0 — so 0 here is the chain's value, not
+/// a missing one.
+///
+/// `pub` for the same reason as [`signer_type_name`]: the checkpoint seed
+/// writes the same `account_entry_state` columns from the same entry.
+pub fn sponsorship_counts(a: &AccountEntry) -> (u32, u32) {
+    match &a.ext {
+        AccountEntryExt::V1(v1) => match &v1.ext {
+            AccountEntryExtensionV1Ext::V2(v2) => (v2.num_sponsoring, v2.num_sponsored),
+            AccountEntryExtensionV1Ext::V0 => (0, 0),
+        },
+        AccountEntryExt::V0 => (0, 0),
+    }
+}
+
 fn account_data(a: &AccountEntry) -> Value {
+    let (num_sponsoring, num_sponsored) = sponsorship_counts(a);
     json!({
         "account_id": a.account_id.to_string(),
         "balance": a.balance,
@@ -360,6 +382,8 @@ fn account_data(a: &AccountEntry) -> Value {
         "home_domain": String::from_utf8_lossy(a.home_domain.as_slice()).to_string(),
         "thresholds": hex::encode(a.thresholds.0),
         "flags": a.flags,
+        "num_sponsoring": num_sponsoring,
+        "num_sponsored": num_sponsored,
         // Raw XDR truth: the master key is NOT in this list — its weight is
         // thresholds byte 0. Horizon SYNTHESIZES a master entry into its
         // signers array; comparing against Horizon therefore reads off-by-one
