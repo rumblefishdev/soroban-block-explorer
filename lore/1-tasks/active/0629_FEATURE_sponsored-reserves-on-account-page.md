@@ -39,7 +39,8 @@ needs a new table.
 
 - Done: scope measured; decided 2026-10-06 — the literal ask (counts, then
   the list), counts stored by the indexer, not read live from RPC.
-- Next: PR 1a — the two counters into `account_entry_state`.
+- Done: #625 (structure, merged), #626 (1a, in review).
+- Next: production ALTER + indexer deploy, then PR 1b — the refill mode.
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
@@ -80,11 +81,11 @@ Each PR is one production step. Stage 2 starts only after stage 1 ships.
 
 ### Stage 1 — counts (certain: the data and both writers exist)
 
-| PR  | Scope                                                                                                                          | Production acts after merge                                 |
-| --- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| 1a  | Parser reads `num_sponsoring` / `num_sponsored`; `account_entry_state` gains two columns (`DEFAULT 0`); live writer fills them | `ALTER TABLE … ADD COLUMN` ×2, then indexer deploy          |
-| 1b  | Seed: the same two fields, plus a one-off mode that rewrites accounts whose newest row predates 1a                             | `snapshot-seed --execute` in that mode; check counts vs RPC |
-| 1c  | API `account` detail exposes both counts; the page shows them (two rows in Summary, prototype variant A)                       | API + SPA deploy                                            |
+| PR  | Scope                                                                                                                                         | Production acts after merge                                 |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 1a  | Parser reads `num_sponsoring` / `num_sponsored`; `account_entry_state` gains two columns (`DEFAULT 0`); live writer and seed fill them — #626 | `ALTER TABLE … ADD COLUMN` ×2, then indexer deploy          |
+| 1b  | Seed: a one-off mode that rewrites accounts whose newest row predates 1a                                                                      | `snapshot-seed --execute` in that mode; check counts vs RPC |
+| 1c  | API `account` detail exposes both counts; the page shows them (two rows in Summary, prototype variant A)                                      | API + SPA deploy                                            |
 
 1c waits until one `chq` count says no row older than 1a's go-live is left
 without a newer version: shipped earlier, the page would show 0 for accounts
