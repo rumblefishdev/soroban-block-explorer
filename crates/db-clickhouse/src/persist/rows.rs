@@ -52,17 +52,12 @@ pub struct LedgerRow {
     pub base_fee: i64,
 }
 
-/// `wasm_programs` — immutable lookup, MergeTree.
+/// `wasm_programs` — one row per WASM program: its bytes and the metadata
+/// read from them.
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct WasmProgramRow {
     pub wasm_hash: [u8; 32],
     pub metadata: String,
-}
-
-/// `wasm_code` — the bytes of each WASM program, one row per hash (task 0620).
-#[derive(Debug, Clone, Row, Serialize)]
-pub struct WasmCodeRow {
-    pub wasm_hash: [u8; 32],
     #[serde(with = "serde_bytes")]
     pub code: Vec<u8>,
 }

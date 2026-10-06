@@ -1,6 +1,6 @@
-//! WASM programs uploaded in this ledger: one `wasm_programs` row
-//! and one `wasm_code` row per hash, and the per-hash contract-type verdict
-//! the deploys use.
+//! WASM programs seen in this ledger: one `wasm_programs` row per hash (the
+//! bytes and the metadata read from them), and the per-hash contract-type
+//! verdict the deploys use.
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
@@ -11,7 +11,7 @@ use xdr_parser::types::ExtractedWasmProgram;
 
 use super::{StagedLedger, decode_hash, staging_err};
 use crate::SchemaError;
-use crate::persist::rows::{WasmCodeRow, WasmProgramRow};
+use crate::persist::rows::WasmProgramRow;
 
 pub(super) fn wasm_rows(
     out: &mut StagedLedger,
@@ -28,38 +28,48 @@ pub(super) fn wasm_rows(
     //   * NFT-candidate routing (`nft_rows` / `nft_pending_rows`,
     //     task 0217 / 0220) — `Other`/NULL verdict routes to
     //     quarantine; `Fungible` / `Token` drops the row entirely.
+    // A program without an interface section gives no verdict.
     let mut wasm_seen: HashSet<[u8; 32]> = HashSet::new();
     let mut wasm_classification: HashMap<[u8; 32], ContractType> =
         HashMap::with_capacity(programs.len());
-    for iface in programs {
-        let hash = decode_hash(&iface.wasm_hash, "wasm_hash")?;
-        if !wasm_seen.insert(hash) {
+    for program in programs {
+        let row = program_row(program)?;
+        if !wasm_seen.insert(row.wasm_hash) {
             continue;
         }
-        let classification = xdr_parser::classify_contract_from_wasm_spec(&iface.functions);
-        wasm_classification.insert(hash, classification.into());
-
-        // Task 0327: persist the mutability bit so the API can surface the
-        // Upgradeable/Immutable badge. Read back via
-        // `JSONExtractBool(metadata,'upgradeable')`; rows written before this
-        // (no key) read as Unknown → chip renders nothing.
-        let metadata = serde_json::json!({
-            "functions": iface.functions,
-            "wasm_byte_len": iface.wasm_byte_len,
-            "upgradeable": iface.upgradeable,
-        });
-        out.wasm_rows.push(WasmProgramRow {
-            wasm_hash: hash,
-            metadata: serde_json::to_string(&metadata)
-                .map_err(|e| staging_err(&format!("wasm metadata serialize: {e}")))?,
-        });
-        out.wasm_code_rows.push(WasmCodeRow {
-            wasm_hash: hash,
-            code: iface.code.clone(),
-        });
+        if let Some(functions) = &program.functions {
+            let classification = xdr_parser::classify_contract_from_wasm_spec(functions);
+            wasm_classification.insert(row.wasm_hash, classification.into());
+        }
+        out.wasm_rows.push(row);
     }
 
     Ok(wasm_classification)
+}
+
+/// The `wasm_programs` row for one program: its bytes and the metadata read
+/// from them. Shared with `backfill-runner wasm-code-backfill`, so a program
+/// filled from RPC is written exactly like one the indexer saw uploaded.
+pub fn program_row(program: &ExtractedWasmProgram) -> Result<WasmProgramRow, SchemaError> {
+    // Task 0327: persist the mutability bit so the API can surface the
+    // Upgradeable/Immutable badge. Read back via
+    // `JSONExtractBool(metadata,'upgradeable')`; rows written before this
+    // (no key) read as Unknown → chip renders nothing. A program without an
+    // interface section gets empty metadata, which readers treat like no row.
+    let metadata = match &program.functions {
+        Some(functions) => serde_json::to_string(&serde_json::json!({
+            "functions": functions,
+            "wasm_byte_len": program.wasm_byte_len,
+            "upgradeable": program.upgradeable,
+        }))
+        .map_err(|e| staging_err(&format!("wasm metadata serialize: {e}")))?,
+        None => String::new(),
+    };
+    Ok(WasmProgramRow {
+        wasm_hash: decode_hash(&program.wasm_hash, "wasm_hash")?,
+        metadata,
+        code: program.code.clone(),
+    })
 }
 
 #[cfg(test)]

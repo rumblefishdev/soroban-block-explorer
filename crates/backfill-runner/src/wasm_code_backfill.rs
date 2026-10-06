@@ -1,12 +1,12 @@
-//! Task 0620 — one-shot fill of `wasm_code` with the bytes of every program
-//! uploaded before the indexer started writing them.
+//! Task 0620 — one-shot fill of `wasm_programs.code` for every program the
+//! indexer saw before it started storing bytes.
 //!
-//! The indexer stores a program's bytes when it sees the upload. Older
-//! programs are known only by hash (`wasm_programs`,
-//! `soroban_contracts.wasm_hash`). This pass reads each missing program from
+//! Older programs are known only by hash (`wasm_programs` rows without
+//! `code`, `soroban_contracts.wasm_hash`). This pass reads each one from
 //! Soroban RPC `getLedgerEntries` (`ContractCode` by hash — archived programs
-//! are returned too) and keeps it only when its sha256 equals the hash, so a
-//! wrong or tampered answer is never stored.
+//! are returned too), keeps it only when its sha256 equals the hash, so a
+//! wrong or tampered answer is never stored, and writes the whole row through
+//! the indexer's own `program_row`: bytes and the metadata read from them.
 //!
 //! Idempotent: a re-run fetches only hashes still missing. `--dry-run`
 //! fetches and verifies without writing.
@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use clickhouse::Row;
-use db_clickhouse::persist::rows::WasmCodeRow;
+use db_clickhouse::persist::stage::wasm_programs::program_row;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use stellar_xdr::{Hash, LedgerEntryData, LedgerKey, LedgerKeyContractCode};
@@ -34,7 +34,7 @@ const RETRY_WAITS_SECS: [u64; 5] = [5, 10, 15, 20, 25];
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct WasmCodeBackfillStats {
-    /// Known program hashes with no `wasm_code` row.
+    /// Known program hashes whose `wasm_programs` row has no bytes yet.
     pub missing: u64,
     /// Programs the RPC returned.
     pub fetched: u64,
@@ -71,8 +71,10 @@ pub async fn execute(
                  UNION DISTINCT \
                  SELECT assumeNotNull(wasm_hash) AS wasm_hash FROM soroban_contracts \
                  WHERE wasm_hash IS NOT NULL \
+                 UNION DISTINCT \
+                 SELECT wasm_hash FROM contract_executable_refs \
              ) \
-             WHERE wasm_hash NOT IN (SELECT wasm_hash FROM wasm_code) \
+             WHERE wasm_hash NOT IN (SELECT wasm_hash FROM wasm_programs WHERE code != '') \
              ORDER BY wasm_hash",
         )
         .fetch_all::<MissingHash>()
@@ -104,20 +106,16 @@ pub async fn execute(
                 continue;
             };
             stats.fetched += 1;
-            let code = entry.code.to_vec();
-            if Sha256::digest(&code).as_slice() != entry.hash.0.as_slice() {
+            if Sha256::digest(entry.code.as_slice()).as_slice() != entry.hash.0.as_slice() {
                 warn!(wasm_hash = %hex::encode(entry.hash.0), "program bytes do not match their hash — skipped");
                 stats.hash_mismatch += 1;
                 continue;
             }
-            rows.push(WasmCodeRow {
-                wasm_hash: entry.hash.0,
-                code,
-            });
+            rows.push(program_row(&xdr_parser::parse_wasm_program(&entry))?);
         }
 
         if !dry_run {
-            insert_rows(client, "wasm_code", &rows).await?;
+            insert_rows(client, "wasm_programs", &rows).await?;
             stats.written += rows.len() as u64;
         }
         info!(

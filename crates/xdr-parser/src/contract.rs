@@ -1,55 +1,54 @@
-//! Contract interface extraction from WASM bytecode in LedgerEntryChanges.
+//! WASM programs from `ContractCodeEntry` items in LedgerEntryChanges.
 //!
-//! When a contract is deployed, `ContractCodeEntry` appears in ledger entry changes.
-//! This module extracts the WASM `contractspecv0` custom section, deserializes
-//! `ScSpecEntry` values, and produces `ExtractedWasmProgram` with function
-//! signatures for storage in `soroban_contracts.metadata`.
+//! Each program keeps its bytes; its `contractspecv0` custom section, when
+//! present, is deserialized into function signatures. Both are stored in one
+//! `wasm_programs` row.
 
 use stellar_xdr::*;
 
 use crate::types::{ContractFunction, ExtractedWasmProgram, FunctionParam};
 
-/// Extract contract interfaces from all `ContractCodeEntry` items found in
-/// the transaction meta's ledger entry changes.
-///
-/// Returns one `ExtractedWasmProgram` per new WASM deployment found.
-/// Non-Soroban transactions and transactions without new code produce an empty vec.
+/// Extract every WASM program found in the transaction meta's ledger entry
+/// changes: uploaded (`Created`), rewritten (`Updated`) or brought back from
+/// the archive (`Restored`). Non-Soroban transactions and transactions without
+/// code produce an empty vec.
 pub fn extract_wasm_programs(tx_meta: &TransactionMeta) -> Vec<ExtractedWasmProgram> {
     let changes = crate::meta::ledger_changes(tx_meta);
-    let mut interfaces = Vec::new();
+    let mut programs = Vec::new();
 
     for change in changes {
         let entry = match change {
-            LedgerEntryChange::Created(e) | LedgerEntryChange::Updated(e) => e,
-            _ => continue,
+            LedgerEntryChange::Created(e)
+            | LedgerEntryChange::Updated(e)
+            | LedgerEntryChange::Restored(e) => e,
+            // `State` is the entry as it was before this change (its new
+            // value, if any, comes as `Updated`); `Removed` carries only the
+            // key, no bytes.
+            LedgerEntryChange::State(_) | LedgerEntryChange::Removed(_) => continue,
         };
-        if let LedgerEntryData::ContractCode(ref code_entry) = entry.data
-            && let Some(iface) = parse_contract_code(code_entry)
-        {
-            interfaces.push(iface);
+        if let LedgerEntryData::ContractCode(ref code_entry) = entry.data {
+            programs.push(parse_wasm_program(code_entry));
         }
     }
 
-    interfaces
+    programs
 }
 
-/// Parse a single ContractCodeEntry into an ExtractedWasmProgram.
-fn parse_contract_code(code_entry: &ContractCodeEntry) -> Option<ExtractedWasmProgram> {
+/// Parse one `ContractCodeEntry`: the bytes always, the interface when the
+/// program carries a `contractspecv0` section (a few hand-written programs
+/// do not).
+pub fn parse_wasm_program(code_entry: &ContractCodeEntry) -> ExtractedWasmProgram {
     let wasm_bytes = code_entry.code.as_slice();
-    let wasm_hash = hex::encode(code_entry.hash.0);
-    let wasm_byte_len = wasm_bytes.len();
+    let functions = extract_custom_section(wasm_bytes, "contractspecv0")
+        .map(|spec_bytes| parse_spec_entries(&spec_bytes));
 
-    let spec_bytes = extract_custom_section(wasm_bytes, "contractspecv0")?;
-    let functions = parse_spec_entries(&spec_bytes);
-    let upgradeable = wasm_imports_upgrade_fn(wasm_bytes);
-
-    Some(ExtractedWasmProgram {
-        wasm_hash,
+    ExtractedWasmProgram {
+        wasm_hash: hex::encode(code_entry.hash.0),
         functions,
-        wasm_byte_len,
-        upgradeable,
+        wasm_byte_len: wasm_bytes.len(),
+        upgradeable: wasm_imports_upgrade_fn(wasm_bytes),
         code: wasm_bytes.to_vec(),
-    })
+    }
 }
 
 /// Extract a named custom section from WASM binary.

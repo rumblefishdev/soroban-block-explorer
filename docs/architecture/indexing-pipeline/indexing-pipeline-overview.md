@@ -361,7 +361,7 @@ schema on Hetzner. That write includes both:
   `transaction_participants`, and the appearance indexes `soroban_events`,
   `contract_activity`)
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
-  `wasm_programs`, `wasm_code` (the program bytes,
+  `wasm_programs` (each program's bytes and interface,
   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)),
   `assets`, `nfts`, `nfts_pending`, the
   ownership changes located by each change's source event

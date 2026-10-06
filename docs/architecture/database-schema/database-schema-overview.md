@@ -146,10 +146,9 @@ contract-event and invocation-tree payloads are fetched at read time from the pu
 Stellar archive, not stored in the DB):
 
 - `soroban_contracts` — deployed contracts (`BIGSERIAL id` + `VARCHAR(56)` natural `contract_id`)
-- `wasm_programs` — WASM ABI keyed by `wasm_hash`
-- `wasm_code` — the bytes of each WASM program keyed by `wasm_hash`, written
-  at upload, so a contract's own functions can be executed
-  ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
+- `wasm_programs` — one row per WASM program keyed by `wasm_hash`: its bytes
+  (`code`, so a contract's own functions can be executed,
+  [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)) and the interface read from them (`metadata`)
 - `soroban_events_appearances` — contract-event appearance index (partitioned)
 - contract invocations — folded into `contract_activity` (task 0586)
 

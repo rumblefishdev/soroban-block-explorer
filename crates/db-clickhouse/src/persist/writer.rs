@@ -86,7 +86,6 @@ struct TableInserts {
     accounts: Option<Insert<AccountRow>>,
     account_entry_state: Option<Insert<AccountEntryStateRow>>,
     wasm: Option<Insert<WasmProgramRow>>,
-    wasm_code: Option<Insert<WasmCodeRow>>,
     contracts: Option<Insert<SorobanContractRow>>,
     metadata: Option<Insert<SorobanContractMetadataRow>>,
     executable_refs: Option<Insert<ContractExecutableRefRow>>,
@@ -273,7 +272,6 @@ impl PartitionWriter {
             account_rows,
             account_entry_state_rows,
             wasm_rows,
-            wasm_code_rows,
             contract_rows,
             metadata_rows,
             executable_ref_rows,
@@ -322,13 +320,6 @@ impl PartitionWriter {
             &mut self.inserts.wasm,
             "wasm_programs",
             &wasm_rows,
-        )
-        .await?;
-        write_rows(
-            &self.client,
-            &mut self.inserts.wasm_code,
-            "wasm_code",
-            &wasm_code_rows,
         )
         .await?;
         write_rows(
@@ -553,7 +544,6 @@ impl PartitionWriter {
             accounts,
             account_entry_state,
             wasm,
-            wasm_code,
             contracts,
             metadata,
             executable_refs,
@@ -585,7 +575,6 @@ impl PartitionWriter {
         end(accounts).await?;
         end(account_entry_state).await?;
         end(wasm).await?;
-        end(wasm_code).await?;
         end(contracts).await?;
         end(metadata).await?;
         end(executable_refs).await?;

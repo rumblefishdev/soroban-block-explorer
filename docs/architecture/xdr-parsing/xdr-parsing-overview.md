@@ -305,8 +305,9 @@ entities:
   `Symbol("name")` entry — they are not (that path matched 0 contracts); the name
   lives nested in the metadata struct in instance storage, which
   `scval_to_typed_json` used to drop.
-- WASM upload → `wasm_programs` row (SEP-48-derived JSONB, keyed by
-  wasm_hash BYTEA) and a `wasm_code` row with the program bytes
+- WASM program (uploaded, rewritten or restored) → `wasm_programs` row keyed
+  by wasm_hash: the program bytes and the SEP-48-derived interface JSON,
+  empty when the program has no `contractspecv0` section
   ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
 - account state → `accounts` row + `account_balances_current` entries per
   trustline / native (balances are typed `NUMERIC(28,7)` per-asset rows, not a

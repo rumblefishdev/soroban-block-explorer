@@ -218,8 +218,6 @@ pub struct StagedLedger {
     /// never emit one). lore-0463.
     pub account_entry_state_rows: Vec<AccountEntryStateRow>,
     pub wasm_rows: Vec<WasmProgramRow>,
-    /// `wasm_code` — the bytes of each program uploaded in this ledger.
-    pub wasm_code_rows: Vec<WasmCodeRow>,
     pub contract_rows: Vec<SorobanContractRow>,
     /// On-chain Soroban token metadata side table (task 0297). Populated inside
     /// [`prepare_with_sac_overrides`] via [`build_metadata_rows`] from the
@@ -2455,7 +2453,7 @@ mod presence;
 mod soroban_events;
 pub mod soroban_pool_amounts;
 mod soroban_pools;
-mod wasm_programs;
+pub mod wasm_programs;
 
 use account_entry_state::entry_state_row;
 pub use soroban_pools::registers_soroban_pools;
