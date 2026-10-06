@@ -2,7 +2,7 @@
 id: '0604'
 title: 'REFACTOR: one EventBody type for consensus and diagnostic events [structure only]'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0059']
 related_tasks: ['0573']
 tags: ['xdr-parsing', 'effort-small', 'priority-low']
@@ -25,6 +25,13 @@ history:
       invocation wildcard, and two proof gaps (duplicate ids). Not purely
       structural any more: the staging check is a guard, so the PR splits into
       a structure part and a small test-and-guard part.
+  - date: 2026-10-06
+    status: active
+    who: claude
+    note: >
+      Started on request. Two PRs: `[refactor]` (EventBody, one match over
+      meta versions, NFT ledger only in the id), then a small behaviour PR
+      (duplicate-id refusal in staging, count check in the reconciliation).
 ---
 
 # One EventBody type for consensus and diagnostic events
