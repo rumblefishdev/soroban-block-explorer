@@ -17,6 +17,14 @@ history:
       Spawned from 0573 future work: its step 2 asked for a shared body type,
       and the review of the logic PR found the four body fields copied in three
       places.
+  - date: 2026-10-06
+    status: backlog
+    who: claude
+    note: >
+      Scope widened by the independent review of the 0573 logic PR: the
+      invocation wildcard, and two proof gaps (duplicate ids). Not purely
+      structural any more: the staging check is a guard, so the PR splits into
+      a structure part and a small test-and-guard part.
 ---
 
 # One EventBody type for consensus and diagnostic events
@@ -51,11 +59,24 @@ Two smaller leftovers sit next to it:
 - Remove `ledger_sequence` from `NftEvent` and `ExtractedNftEvent`, and read it
   from `event_id`.
 - Name the `(before_all, after_all)` start pair as a two-field struct.
+- `invocation.rs`'s `collect_diagnostic_events` ends in `_ => Vec::new()`,
+  the silent wildcard `containers()` dropped: a future meta version would lose
+  every invocation tree. Take the diagnostic container from `containers()`
+  (`pub(crate)`), so one match over meta versions serves the whole parser.
+
+Proof gaps from the 0573 review, for the same PR's tests:
+
+- `event_id_reconciliation` compares `BTreeSet`s, so a duplicated id cannot
+  fail it; compare the counts before the sets.
+- Staging writes `soroban_events` keyed by the id; check the ids of one ledger
+  are unique before the write, since a collision silently merges two rows.
 
 ## Acceptance Criteria
 
 - [ ] `EventBody` is the only place the four body fields are declared.
 - [ ] NFT events carry their ledger only inside `event_id`.
+- [ ] One match over `TransactionMeta` versions in the parser, no wildcard.
+- [ ] Reconciliation compares counts; staging refuses a duplicated id.
 - [ ] Golden test `event_extraction_golden` passes with its expected files
       untouched; no assertion changes beyond the field paths.
 - [ ] API types regenerate with no diff.
