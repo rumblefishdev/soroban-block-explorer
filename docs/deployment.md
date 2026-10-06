@@ -405,55 +405,6 @@ Old hashed assets pile up at about 1.3 MB per build. Nothing prunes them.
   3. **Then the catch-up backfills and the window-closure check** — see
      "Soroban-AMM pool passes" in [backfills.md](./backfills.md).
 
-- **Canonical event location (task 0541): no `production-*` tag between the
-  merge and the window.** The task-0541 writer keys `soroban_events` by the
-  stellar-rpc event id (`transaction_index`, `operation_index`, `event_index`,
-  `application_order`) and no longer names `transaction_id`; it stops writing
-  `asset_transfers.event_index`; and it writes a new table,
-  `contract_transactions`. Against the tables as they stand before the window,
-  the clickhouse-rs 0.15 client refuses all three inserts — the 0310 outage
-  class, on every ledger. `EXCHANGE TABLES` renames `soroban_events` only; it
-  does nothing for the other two. So once the task-0541 code is on `master`,
-  nothing ships until its window runs, in this order (the task's rollout plan,
-  phase 4, carries the gates and the rollback):
-
-  0. **`contract_transactions` exists and its history is filled** through the
-     partitions filled before the window. Created verbatim from `init.sql`;
-     filled in-DB, slice by slice after the `soroban_events` rekey of the same
-     slice ([backfills.md](./backfills.md), "Canonical event location fill").
-     An empty table is a working indexer and a contract transaction list with
-     no past — fill it, do not just create it. This must return `1`:
-     ```bash
-     chq "EXISTS TABLE default.contract_transactions"
-     ```
-  1. **`asset_transfers.event_index` has a DEFAULT — read it, do not assume
-     it.** This must return `DEFAULT`:
-     ```bash
-     chq "SELECT default_kind FROM system.columns WHERE database = 'default' AND table = 'asset_transfers' AND name = 'event_index'"
-     ```
-     If it does not, the operator runs
-     `ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0` — a
-     metadata change, safe under the running writer, which still names the
-     column.
-  2. **Pause durably:** `indexerLambdaConcurrency = 0`, deployed from a
-     checkout at the last `production-*` tag (a disabled trigger alone is
-     re-enabled by the next Compute deploy).
-  3. **Fill the tail** up to the paused head — `soroban_events_staging_canonical`
-     first, then `contract_transactions` for the same slices — and gate both.
-  4. **Deploy the new code, still at concurrency 0.**
-  5. **Swap:** `EXCHANGE TABLES soroban_events AND soroban_events_staging_canonical`.
-  6. **Resume:** concurrency back to `1` — the value production runs, not the
-     unset default — then deploy Compute and Web.
-
-  **After the swap the hold turns around:** only code that carries task 0541
-  may deploy Compute. The earlier writer still names `transaction_id`, which the
-  new `soroban_events` does not have, so a Compute deploy from `master` or a
-  `production-*` tag that predates the change stops ingest on its first ledger —
-  a hotfix included. The window deploys from `develop`; the hold lasts until
-  `master` carries the change and a `production-*` tag is cut from it.
-
-  Remove this item once that tag exists.
-
 - **Change a table's shape as a parallel change, not a swap window**
   (decided in task 0580). The clickhouse-rs 0.15 client checks every insert
   against `DESCRIBE`, so a writer and the table it names must change together;
