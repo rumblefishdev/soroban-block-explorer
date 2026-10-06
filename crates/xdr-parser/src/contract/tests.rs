@@ -231,3 +231,30 @@ fn a_program_without_a_spec_section_keeps_its_bytes() {
     assert_eq!(program.wasm_byte_len, wasm.len());
     assert!(program.upgradeable);
 }
+
+#[test]
+fn a_program_restored_from_the_archive_is_extracted() {
+    let wasm = wasm_with_imports(&[]);
+    let restored = LedgerEntryChange::Restored(LedgerEntry {
+        last_modified_ledger_seq: 1,
+        data: LedgerEntryData::ContractCode(ContractCodeEntry {
+            ext: ContractCodeEntryExt::V0,
+            hash: Hash([9; 32]),
+            code: wasm.clone().try_into().unwrap(),
+        }),
+        ext: LedgerEntryExt::V0,
+    });
+    let tx_meta = TransactionMeta::V3(TransactionMetaV3 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: vec![restored].try_into().unwrap(),
+        operations: VecM::default(),
+        tx_changes_after: LedgerEntryChanges::default(),
+        soroban_meta: None,
+    });
+
+    let programs = extract_wasm_programs(&tx_meta);
+
+    assert_eq!(programs.len(), 1);
+    assert_eq!(programs[0].wasm_hash, hex::encode([9; 32]));
+    assert_eq!(programs[0].code, wasm);
+}
