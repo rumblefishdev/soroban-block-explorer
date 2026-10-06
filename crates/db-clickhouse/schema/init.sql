@@ -448,7 +448,9 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- us; an entry without the V2 extension reads 0 on chain and 0 here. `DEFAULT
 -- 0` lets the ALTER land before the writer deploys (see `balances` below).
 -- PROD: an existing table needs, BEFORE the indexer that writes them deploys
--- (the struct is positional against this column order, hence AFTER):
+-- and before any `backfill-runner` built from this code runs a seed (both
+-- insert the same row struct, positional against this column order, hence
+-- AFTER):
 --     ALTER TABLE account_entry_state ADD COLUMN IF NOT EXISTS num_sponsoring UInt32 DEFAULT 0 AFTER flags;
 --     ALTER TABLE account_entry_state ADD COLUMN IF NOT EXISTS num_sponsored  UInt32 DEFAULT 0 AFTER num_sponsoring;
 -- Rows written before then read 0 until the checkpoint seed rewrites them.
