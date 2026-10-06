@@ -496,6 +496,9 @@ shaped like its two upstream sources (task 0573):
 Which operation emitted an event is read from `origin`, never from the id: a
 fee event's id names operation 0 or 4095.
 
+The id is `soroban_events`' row key, so staging refuses a ledger in which two
+events share one: in the table they would merge into one row without a trace.
+
 Per-operation events carry the bulk of post-Protocol 23 Soroban traffic.
 Missing them leaves every Protocol ≥ 23 ledger silently incomplete — the
 canonical symptom is a Soroban transaction with exactly two events, both
