@@ -80,6 +80,8 @@ manual deploy from `develop`).
   otherwise every schema release stalls testnet ingestion.
 - **Smoke** on the testnet hosts after its job, like production's.
 - Manual dispatch from `develop` stays, for testnet ahead of production.
+- Drop `galexieImageTag` from `infra/envs/testnet.json`: testnet runs no
+  Galexie (`ledgerSource: public-lake`), and the stale copied tag misleads.
 
 ## Acceptance Criteria
 

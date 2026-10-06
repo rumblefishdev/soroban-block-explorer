@@ -65,6 +65,10 @@ history:
     note: >
       Code merged except E (TESTNET marker); operator session done (certs,
       Slack, ClickHouse users, testnet database). Status rewritten.
+  - date: '2026-10-06'
+    status: backlog
+    who: karolkow
+    note: 'Launched (notes/S-launch-2026-10-05.md). Spawned 0624, 0625; 0603 widened.'
 ---
 
 # Testnet environment
@@ -78,24 +82,19 @@ ledgers from SDF's public data lake, not from a Galexie of its own.
 [ADR 0052](../../../2-adrs/0052_testnet-as-second-environment-and-staging.md)
 fixed the shape; this task builds it.
 
-## Status — 2026-10-02
+## Status — 2026-10-06
 
-| Step                                       | Scope                                                                                                                                                                      | State   |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| A #543, B #550, C #553                     | ledger source and database from env; RPC pool in env config; `testnet_*` ClickHouse users and quotas                                                                       | merged  |
-| D1 #558, D2 #559, D3 #562, D4 #566, F #567 | CDK ledger source; genesis from ledger 2; sidecar applies `init.sql` to both databases; `testnet.json`, keepalive, stall alarm, runbook; self-pacing indexer               | merged  |
-| #592, #594 `[structure only]`, P2 #597     | moves; an empty lake database starts at ledger 2                                                                                                                           | merged  |
-| E #600, E2                                 | TESTNET marker and tab icons; E2 swaps the pill for the design's Mainnet / Testnet tabs ([notes/S-network-switcher-2026-10-05.md](notes/S-network-switcher-2026-10-05.md)) | E2 open |
+| Step                                       | Scope                                                                                                                                                                      | State         |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| A #543, B #550, C #553                     | ledger source and database from env; RPC pool in env config; `testnet_*` ClickHouse users and quotas                                                                       | merged        |
+| D1 #558, D2 #559, D3 #562, D4 #566, F #567 | CDK ledger source; genesis from ledger 2; sidecar applies `init.sql` to both databases; `testnet.json`, keepalive, stall alarm, runbook; self-pacing indexer               | merged        |
+| #592, #594 `[structure only]`, P2 #597     | moves; an empty lake database starts at ledger 2                                                                                                                           | merged        |
+| E #600, E2                                 | TESTNET marker and tab icons; E2 swaps the pill for the design's Mainnet / Testnet tabs ([notes/S-network-switcher-2026-10-05.md](notes/S-network-switcher-2026-10-05.md)) | merged (#603) |
 
-**Operator session** — done 2026-10-02:
-[notes/S-operator-session-2026-10-02.md](notes/S-operator-session-2026-10-02.md).
-
-**Launch** — from 2026-10-06: backfill → deploy 1 → Terraform API record →
-rf-domains rule + Turnstile → deploy 2 and web → resume indexer → checks.
-Then P1–P5, tasks 0603 and 0609, the patch sweep, ADR 0052 → accepted.
-
-Certs, API host and alarm channel decisions (2026-09-30):
-[notes/S-address-and-pr-split.md](notes/S-address-and-pr-split.md).
+- **Operator session** — done 2026-10-02 ([notes](notes/S-operator-session-2026-10-02.md)).
+- **Launch** — done 2026-10-05/06 ([notes](notes/S-launch-2026-10-05.md)); final checks
+  after the indexer catch-up. Then P1–P5, 0603, 0609, patch sweep, ADR 0052.
+- Certs, API host, alarm channel (2026-09-30): [notes](notes/S-address-and-pr-split.md).
 
 ## Patch register — sweep at the end of the epic
 
@@ -115,9 +114,9 @@ Each patch is rebuilt in its from-scratch shape at the end:
       quotas.
 - [ ] No testnet Lambda consults a mainnet RPC or archive (env audit of all
       three functions), and the SPA is visibly marked TESTNET.
-- [ ] `backfill-runner` reads the testnet data lake and archive when run
+- [x] `backfill-runner` reads the testnet data lake and archive when run
       for testnet (items 8–9), and the `testnet` database holds the full
-      history from the current genesis.
+      history from the current genesis. — 2026-10-05, no holes.
 - [ ] `testnet-ingestion-stall` exists in CloudWatch
       (`aws cloudwatch describe-alarms`), is OK once the indexer runs, fires
       on a simulated stall (indexer paused, or the prefix pointed at a folder
@@ -126,10 +125,11 @@ Each patch is rebuilt in its from-scratch shape at the end:
 - [ ] Patch sweep done: every item of the patch register rebuilt or
       explicitly kept with its reason.
 - [ ] The reset runbook was exercised once end to end.
-- [ ] The API is public like mainnet's (`docs/deployment.md` § Testnet, steps
-      1–6): ACM cert, Terraform record (workspace `testnet`), rf-domains Transform
-      Rule + Turnstile hostname, `enableCloudflareApiDomain`, `enableEdgeSecretLock`,
-      `enableAuthLayer` all `true`; direct execute-api and lockless calls refused.
+- [x] The API is public like mainnet's (`docs/deployment.md` § Testnet, steps
+      1–6): ACM cert, Terraform record (workspace `testnet`), the zone's
+      edge-secret rule + Turnstile hostname, `enableCloudflareApiDomain`,
+      `enableEdgeSecretLock`, `enableAuthLayer` all `true`; direct execute-api
+      and lockless calls refused. — 2026-10-05 (#609).
 - [ ] **Docs updated** —
       `docs/architecture/infrastructure/infrastructure-overview.md` §7.1
       (environment model), `docs/architecture/security/clickhouse-rbac.md`
