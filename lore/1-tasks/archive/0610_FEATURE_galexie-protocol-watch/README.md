@@ -1,8 +1,8 @@
 ---
 id: '0610'
-title: 'Galexie protocol watch: warn days before a pubnet vote that the pinned captive core cannot apply the protocol core already supports'
+title: 'Galexie protocol watch: page when a Galexie with a newer captive core is on Docker Hub and ours is not on it'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0367', '0605', '0548', '0560']
 tags: [galexie, ingestion, ci, resilience, priority-high, effort-small]
@@ -26,6 +26,15 @@ history:
     status: active
     who: karolkow
     note: 'Activated; building v1 (scheduled workflow + tracking issue).'
+  - date: '2026-10-06'
+    status: completed
+    who: karolkow
+    note: >
+      Shipped in PR #605 and deployed: a Lambda every 3 h compares the
+      running Galexie's captive core (ECR image config) with the newest
+      Galexie on Docker Hub; alarm on its Errors to Slack. Test 7/7 (new),
+      infra suite 33/33. First alarm message reached Slack 11:19 UTC; first
+      invoke answered OK (core 29 = Hub 29).
 ---
 
 # Galexie protocol watch
@@ -41,10 +50,8 @@ of an overnight outage.
 
 ## Stan teraz
 
-- Done: the Lambda (ECR core vs Docker Hub core), its alarm, test and
-  runbook in PR #605; reshaped 2026-10-06 (see Shape).
-- Next: merge, deploy `Explorer-production-CloudWatch`, one test message
-  through Slack.
+- Done: deployed 2026-10-06 (Ingestion stack: one added export;
+  CloudWatch stack: the watch). Alarm message seen in Slack; first run OK.
 - In force: for a captive core the major version is the exact signal — a
   core that does not support the voted protocol always stalls.
 
@@ -73,19 +80,9 @@ dropped: [notes/R-github-workflow-plan-superseded.md](notes/R-github-workflow-pl
   the Node 22 runtime), wired in `infra/src/lib/stacks/galexie-protocol-watch.ts`
   from `addIngestionAlarms` — only where our own Galexie runs.
 
-**Why the image, not the network's readiness (2026-10-06).** The first
-version compared our core with Horizon's `core_supported_protocol_version`.
-A review found its one page said "the network is ready" while the moment
-someone can act — the image appearing — reached no one. The image date is
-that moment, and it led every measured vote (first image with the new core
-on Docker Hub, read from the registry 2026-10-06):
-
-| Protocol | First image with the new core                       | Pubnet vote              | Lead       |
-| -------- | --------------------------------------------------- | ------------------------ | ---------- |
-| 27       | 2026-06-10 (`c97d648`, `27.0.0`)                    | 2026-07-08               | ~4 weeks   |
-| 28       | 2026-08-03 (`e746a5b`, pre-release; `28.0.0` 08-14) | mid-September (estimate) | ~4–6 weeks |
-| 29       | 2026-09-24 (`c927ffc`, later tagged `29.0.0`)       | 2026-10-01               | 7 days     |
-
+**Why the image, not the network's readiness:** the first image with the
+new core led every measured vote (P27 ~4 weeks, P28 ~4–6, P29 7 days) —
+[notes/R-image-lead-time-p27-p29.md](notes/R-image-lead-time-p27-p29.md).
 It also drops Horizon, which SDF is retiring in favour of Stellar RPC.
 Rejected: two alarms ("bump available" / "cannot check"), judged not worth
 the second signal for a page that comes weeks ahead.
@@ -101,14 +98,45 @@ the second signal for a page that comes weeks ahead.
       image or no `STELLAR_CORE_VERSION` → cannot determine
 - [x] A run against production (read-only) answers OK, and the 27.0.0 image,
       absent from Docker Hub, reads as core 27 from ECR
-- [ ] Deployed; one alarm message seen in Slack (ADR 0054 rule 5)
+- [x] Deployed; one alarm message seen in Slack (ADR 0054 rule 5)
 - [x] A runbook says what to do per answer: `docs/runbooks/galexie-protocol-watch.md`
 - [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
       §6 (external dependencies), §8.2, §8.3; `docs/runbooks/health.md`
 - [x] **API types regenerated** — N/A: nothing under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**`
 
+## Design Decisions
+
+### From Plan
+
+1. **Core version from the image config, not tags** — the pinned ECR digest
+   is not on Docker Hub for 26.1.0 and 27.0.0.
+
+### Emerged
+
+2. **Lambda + alarm on its built-in `Errors`, not a GitHub workflow** — no
+   master-branch copy, no cron delay, the existing Slack path, no metric.
+3. **Docker Hub image instead of Horizon's core-supported protocol** — see
+   Shape; the release tag and GitHub release of Galexie 29 came 3.5 h after
+   the vote, so only the image contents (commit tag) gave a lead.
+4. **Every 3 h, alarm when both runs of a 6 h period fail** — one run per
+   period could leave a period empty, which counts as failed.
+5. **Node `.mjs` Lambda, not Rust** — ~150 lines of HTTP reads; the repo
+   already runs Node in the origin-lock canary.
+
+## Issues Encountered
+
+- **Missing export on deploy**: the watch's IAM statement imports the
+  Galexie service ARN, which the Ingestion stack did not export yet; a
+  CloudWatch-only deploy would have failed. Deployed Ingestion first
+  (output only, no resource change), then CloudWatch, both with `-e`.
+
 ## Notes
+
+- Known limits, not tasks: the container name `Galexie` and repo
+  `<env>-galexie` are literals shared with `ingestion-stack.ts`; only the
+  newest Docker Hub tag is read, so a later push of an older core hides a
+  newer one until the next push; the check assumes core major = protocol.
 
 - Not in scope: 0367's other open candidate, a ledger-advance healthcheck in
   place of `pgrep -x stellar-core`, which stayed green through this stall.
