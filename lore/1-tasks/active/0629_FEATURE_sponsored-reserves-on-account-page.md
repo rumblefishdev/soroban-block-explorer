@@ -2,7 +2,7 @@
 id: '0629'
 title: 'Sponsored reserves on the account page: counts first, then what each sponsor pays for'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0055']
 related_tasks: ['0463', '0521']
 tags:
@@ -16,6 +16,10 @@ history:
     note: >
       Spawned from issue #454. Split into small PRs, the certain part first:
       the two reserve counters the ledger already stores on every AccountEntry.
+  - date: '2026-10-06'
+    status: active
+    who: karolkow
+    note: 'Started stage 1, PR 1a.'
 ---
 
 # Sponsored reserves on the account page
