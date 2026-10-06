@@ -1901,67 +1901,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         // observed (`thresholds.is_some()`); a trustline-only accum must not
         // touch the set. Deleted accounts (`account_removed`) emit nothing:
         // the page gates on `deleted`, and a merge cannot change signers.
-        if let (Some(th_hex), false) = (&st.thresholds, st.account_removed) {
-            match parse_thresholds(th_hex) {
-                Some([master_weight, threshold_low, threshold_med, threshold_high]) => {
-                    let signers = st.signers.as_deref().unwrap_or_default();
-                    let mut signer_keys = Vec::with_capacity(signers.len());
-                    let mut signer_weights = Vec::with_capacity(signers.len());
-                    let mut signer_types = Vec::with_capacity(signers.len());
-                    for sg in signers {
-                        let key = sg.get("key").and_then(Value::as_str).unwrap_or("");
-                        let weight = sg.get("weight").and_then(Value::as_u64).unwrap_or(0) as u32;
-                        let typ = sg.get("type").and_then(Value::as_str).unwrap_or("unknown");
-                        // A keyless signer would silently shrink the set — a
-                        // 3-of-5 stored as 3-of-4, which reads as a real
-                        // threshold rather than as missing data. Cannot happen
-                        // from `account_data` (the key is always emitted), so
-                        // reaching this means the producer changed shape.
-                        if key.is_empty() {
-                            tracing::warn!(
-                                account = %st.account_id,
-                                "signer entry carries no key — DROPPED from the set; \
-                                 the stored signer count is now lower than the chain's"
-                            );
-                            continue;
-                        }
-                        // The protocol constrains non-master weights to 1-255
-                        // (SetOptions deletes at 0). Store what the chain
-                        // carried; out-of-range is an anomaly worth a trace,
-                        // never a silent clamp.
-                        if weight == 0 || weight > 255 {
-                            tracing::warn!(
-                                account = %st.account_id,
-                                weight,
-                                "signer weight outside protocol range 1-255 — stored as carried"
-                            );
-                        }
-                        signer_keys.push(key.to_string());
-                        signer_weights.push(weight);
-                        signer_types.push(typ.to_string());
-                    }
-                    entry_state_dedup.insert(
-                        account_id_int,
-                        AccountEntryStateRow {
-                            account_id: account_id_int,
-                            signer_keys,
-                            signer_weights,
-                            signer_types,
-                            master_weight,
-                            threshold_low,
-                            threshold_med,
-                            threshold_high,
-                            flags: st.flags.unwrap_or(0),
-                            last_updated_ledger: watermark,
-                        },
-                    );
-                }
-                None => tracing::warn!(
-                    account = %st.account_id,
-                    thresholds = %th_hex,
-                    "unparseable thresholds hex — signers row skipped, not fabricated"
-                ),
-            }
+        if let (Some(th_hex), false) = (&st.thresholds, st.account_removed)
+            && let Some(row) = entry_state_row(st, th_hex, account_id_int, watermark)
+        {
+            entry_state_dedup.insert(account_id_int, row);
         }
 
         for rm in &st.removed_trustlines {
@@ -2049,13 +1992,6 @@ pub(crate) fn decode_hash(hex_str: &str, field: &'static str) -> Result<[u8; 32]
 
 fn staging_err(msg: &str) -> SchemaError {
     SchemaError::Staging(msg.to_string())
-}
-
-/// 4-byte `Thresholds` hex → [master_weight, low, med, high]. `None` on any
-/// malformation — the caller skips the row rather than fabricating zeros.
-fn parse_thresholds(hex_str: &str) -> Option<[u8; 4]> {
-    let bytes = hex::decode(hex_str).ok()?;
-    <[u8; 4]>::try_from(bytes.as_slice()).ok()
 }
 
 /// Upsert a `BalanceRow` into the per-`(holder_id, asset_id)` dedup map, keeping
@@ -2510,6 +2446,7 @@ pub fn ledger_deltas_net_settled(
     xdr_parser::net_settled(&resolved)
 }
 
+mod account_entry_state;
 mod contract_activity;
 mod lp_positions;
 mod nfts;
@@ -2520,6 +2457,7 @@ pub mod soroban_pool_amounts;
 mod soroban_pools;
 mod wasm_programs;
 
+use account_entry_state::entry_state_row;
 pub use soroban_pools::registers_soroban_pools;
 use soroban_pools::{
     config_pool_registry_row, contract_token_asset_id, factory_pair_registry_row,
