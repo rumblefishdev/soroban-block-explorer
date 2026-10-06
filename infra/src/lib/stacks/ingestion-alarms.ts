@@ -17,8 +17,8 @@ export interface IngestionAlarmsProps {
 }
 
 /**
- * Alarms on getting ledgers in: is our Galexie producing them (1, 1b) and
- * ready for the next protocol (1d) or, with the public data lake, is the
+ * Alarms on getting ledgers in: is our Galexie producing them (1, 1b) and is
+ * a Galexie with a newer core out (1d) or, with the public data lake, is the
  * newest indexed ledger young (1c); and is the indexer consuming them (1a).
  * Part of `CloudWatchStack`; created in its scope, so the alarms keep their
  * construct ids.
@@ -81,7 +81,7 @@ export function addIngestionAlarms(
       })
     );
 
-    // Alarm 1d: is its captive core ready for the next protocol vote?
+    // Alarm 1d: is a Galexie with a newer captive core out, ours not on it?
     addGalexieProtocolWatch(scope, {
       config,
       galexieCluster,
