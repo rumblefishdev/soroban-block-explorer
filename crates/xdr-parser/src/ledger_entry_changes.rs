@@ -97,7 +97,7 @@ pub fn extract_ledger_entry_changes(
                 &mut results,
             );
         }
-        _ => {}
+        TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_) => {}
     }
 
     results

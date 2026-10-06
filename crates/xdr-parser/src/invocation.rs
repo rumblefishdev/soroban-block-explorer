@@ -78,7 +78,7 @@ pub fn extract_invocations(
     };
 
     let root_return_value = tx_meta
-        .and_then(soroban_return_value)
+        .and_then(crate::meta::soroban_return_value)
         .map(|v| scval_to_typed_json(&v))
         .unwrap_or(Value::Null);
 
@@ -522,18 +522,6 @@ fn decode_authorized_function(
                 }),
             )
         }
-    }
-}
-
-/// Extract the Soroban return value from transaction metadata, if present.
-fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
-    match meta {
-        TransactionMeta::V3(v3) => v3.soroban_meta.as_ref().map(|m| m.return_value.clone()),
-        TransactionMeta::V4(v4) => v4
-            .soroban_meta
-            .as_ref()
-            .and_then(|m| m.return_value.clone()),
-        TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_) => None,
     }
 }
 
