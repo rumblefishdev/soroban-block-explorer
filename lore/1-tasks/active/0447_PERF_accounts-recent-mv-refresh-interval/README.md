@@ -60,8 +60,13 @@ Measurements: [notes/R-write-volume-2026-07-and-09.md](notes/R-write-volume-2026
 
 ## Stan teraz
 
-- Done: measurements and the decision below; projection spike (→ 0627).
-- Next: PR — copy without `account_id`, list resolves it by `id`.
+- Done: measurements and the decision below; projection spike (→ 0627);
+  PR #619 merged 2026-10-06 (copy without `account_id`, list resolves it by
+  `id`); migration and rollback rehearsed on a local 26.3.
+- Next: after the next Compute deploy, per database (`default`, `testnet`):
+  `DROP VIEW accounts_recent_mv` → `ALTER TABLE accounts_recent DROP COLUMN
+account_id` → `CREATE MATERIALIZED VIEW` as in `init.sql`. Then a day of
+  `part_log`.
 - In force: no `REFRESH EVERY` change (rejected 2026-09-25).
 
 ## Context
@@ -96,10 +101,16 @@ sorted by `last_seen_ledger`) seeks an ordered table instead of paying
 
 ## Acceptance Criteria
 
-- [ ] `/v1/accounts` responses identical before and after (same fields, same
-      values, same cursor)
-- [ ] Rows read and latency of the list measured before and after
+- [x] `/v1/accounts` responses identical before and after (same fields, same
+      values, same cursor) — local API on production ClickHouse vs the old
+      query, 6 pages / 600 rows: first page both directions,
+      `filter[with_domain]`, cursor pages both directions, a deep cursor.
+      `xlm_balance` and cursors come from unchanged code.
+- [x] Rows read and latency of the list measured before and after — the
+      added StrKey seek reads 0.8–3.4M rows in 18–60 ms per page, beside the
+      unchanged balance seek (~164 ms). `id` has no collisions across all
+      14,987,092 accounts (2026-10-06).
 - [ ] `part_log` `NewPart` for the MV inner tables measured for a day after
       the ALTERs, on both databases
-- [ ] Docs updated — `docs/architecture/database-schema/database-schema-overview.md`
+- [x] Docs updated — `docs/architecture/database-schema/database-schema-overview.md`
 - [ ] 0403's memory question either answered here or explicitly left with 0403
