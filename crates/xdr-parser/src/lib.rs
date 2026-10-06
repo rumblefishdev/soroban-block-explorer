@@ -49,7 +49,7 @@ pub use asset_transfers::{
     TransferReject, extract_asset_transfers, token_event_amount,
 };
 pub use classification::{ContractClassification, classify_contract_from_wasm_spec};
-pub use contract::extract_contract_interfaces;
+pub use contract::extract_wasm_programs;
 pub use envelope::InnerTxRef;
 pub use error::{ParseError, ParseErrorKind};
 pub use event::{EventId, LedgerEvents, TxEvents};
@@ -78,11 +78,11 @@ pub use token_metadata::TokenMetadata;
 pub use transaction::{collect_tx_results, extract_transactions};
 pub use types::{
     ContractFunction, DiagnosticEvent, EventOrigin, ExtractedAccountState, ExtractedAsset,
-    ExtractedContractDeployment, ExtractedContractInterface, ExtractedContractMetadata,
-    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLedgerEntryChange,
-    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
-    ExtractedNftEvent, ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction, NftEvent,
-    SacAssetIdentity,
+    ExtractedContractDeployment, ExtractedContractMetadata, ExtractedEvent, ExtractedInvocation,
+    ExtractedLedger, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction, ExtractedWasmProgram,
+    NftEvent, SacAssetIdentity,
 };
 
 use stellar_xdr::{LedgerCloseMetaBatch, ReadXdr};

@@ -1,4 +1,4 @@
-//! WASM programs uploaded in this ledger: one `wasm_interface_metadata` row
+//! WASM programs uploaded in this ledger: one `wasm_programs` row
 //! and one `wasm_code` row per hash, and the per-hash contract-type verdict
 //! the deploys use.
 //!
@@ -7,17 +7,17 @@
 use std::collections::{HashMap, HashSet};
 
 use domain::ContractType;
-use xdr_parser::types::ExtractedContractInterface;
+use xdr_parser::types::ExtractedWasmProgram;
 
 use super::{StagedLedger, decode_hash, staging_err};
 use crate::SchemaError;
-use crate::persist::rows::{WasmCodeRow, WasmInterfaceMetadataRow};
+use crate::persist::rows::{WasmCodeRow, WasmProgramRow};
 
 pub(super) fn wasm_rows(
     out: &mut StagedLedger,
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
 ) -> Result<HashMap<[u8; 32], ContractType>, SchemaError> {
-    // ---- wasm_interface_metadata (deduped by wasm_hash) ----
+    // ---- wasm_programs (deduped by wasm_hash) ----
     //
     // Task 0118 Phase 2 (PG-side mirror) — run the wasm-spec classifier
     // alongside the metadata dedup. The resulting per-hash verdict
@@ -30,8 +30,8 @@ pub(super) fn wasm_rows(
     //     quarantine; `Fungible` / `Token` drops the row entirely.
     let mut wasm_seen: HashSet<[u8; 32]> = HashSet::new();
     let mut wasm_classification: HashMap<[u8; 32], ContractType> =
-        HashMap::with_capacity(contract_interfaces.len());
-    for iface in contract_interfaces {
+        HashMap::with_capacity(programs.len());
+    for iface in programs {
         let hash = decode_hash(&iface.wasm_hash, "wasm_hash")?;
         if !wasm_seen.insert(hash) {
             continue;
@@ -48,7 +48,7 @@ pub(super) fn wasm_rows(
             "wasm_byte_len": iface.wasm_byte_len,
             "upgradeable": iface.upgradeable,
         });
-        out.wasm_rows.push(WasmInterfaceMetadataRow {
+        out.wasm_rows.push(WasmProgramRow {
             wasm_hash: hash,
             metadata: serde_json::to_string(&metadata)
                 .map_err(|e| staging_err(&format!("wasm metadata serialize: {e}")))?,

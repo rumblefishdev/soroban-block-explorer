@@ -228,7 +228,7 @@ on a ClickHouse 26.3 server (lore 0425), in the shapes that actually occur:
 This also holds structurally: every version-less table is either **keyed by
 ledger** — so a re-parse of ledger N only ever competes with its own earlier
 parse of ledger N — or a **pure function of an immutable input**
-(`wasm_interface_metadata` by `wasm_hash`; `assets`, whose mutable columns are
+(`wasm_programs` by `wasm_hash`; `assets`, whose mutable columns are
 DEAD and now live in `balance_aggregates` / `asset_enrichment`).
 
 **The real hazard is two rows for one key inside a single insert.** Then "last"

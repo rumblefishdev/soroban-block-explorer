@@ -1,12 +1,12 @@
 //! The program rows staged for one ledger.
 
-use xdr_parser::types::ExtractedContractInterface;
+use xdr_parser::types::ExtractedWasmProgram;
 
 use super::wasm_rows;
 use crate::persist::stage::StagedLedger;
 
-fn program(hash_byte: u8, code: &[u8]) -> ExtractedContractInterface {
-    ExtractedContractInterface {
+fn program(hash_byte: u8, code: &[u8]) -> ExtractedWasmProgram {
+    ExtractedWasmProgram {
         wasm_hash: hex::encode([hash_byte; 32]),
         functions: Vec::new(),
         wasm_byte_len: code.len(),

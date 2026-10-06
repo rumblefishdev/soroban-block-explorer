@@ -1357,8 +1357,8 @@ fn extract_pool_produces_state_and_snapshot() {
 
 use crate::types::ContractFunction;
 
-fn iface(wasm_hash: &str, fn_names: &[&str]) -> ExtractedContractInterface {
-    ExtractedContractInterface {
+fn iface(wasm_hash: &str, fn_names: &[&str]) -> ExtractedWasmProgram {
+    ExtractedWasmProgram {
         wasm_hash: wasm_hash.to_string(),
         functions: fn_names
             .iter()

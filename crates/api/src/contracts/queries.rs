@@ -444,12 +444,12 @@ pub async fn fetch_contract(
     contract_id: &str,
 ) -> Result<Option<ContractRow>, clickhouse::error::Error> {
     // Three pitfalls in this query; each one broke it once:
-    //   1. (task 0592) `wasm_interface_metadata` is a `ReplacingMergeTree
+    //   1. (task 0592) `wasm_programs` is a `ReplacingMergeTree
     //      ORDER BY wasm_hash` with no version column. One hash written twice
     //      (the 0327 `upgradeable-backfill` re-writes existing hashes with an
     //      extra `upgradeable` key) sits in two parts until a merge, and a plain
     //      join matches both, so `LIMIT 1` returns either copy. The join reads
-    //      it through `(SELECT … FROM wasm_interface_metadata FINAL)`, which
+    //      it through `(SELECT … FROM wasm_programs FINAL)`, which
     //      keeps the last inserted row, as the merge will. A subquery rather
     //      than `wim FINAL`: the old analyzer ignores FINAL on a joined table,
     //      and the new one already carries `sc FINAL` over to a joined
@@ -492,7 +492,7 @@ pub async fn fetch_contract(
                 lower(hex(ref.wasm_hash)) AS referenced_wasm_hash \
              FROM soroban_contracts sc FINAL \
              LEFT JOIN ( \
-                SELECT wasm_hash, metadata FROM wasm_interface_metadata FINAL \
+                SELECT wasm_hash, metadata FROM wasm_programs FINAL \
              ) wim ON wim.wasm_hash = sc.wasm_hash \
              LEFT JOIN ( \
                 SELECT owner_id, tag, toNullable(argMax(wasm_hash, ledger)) AS wasm_hash \
@@ -690,7 +690,7 @@ fn contract_stats_sql(days: i64) -> String {
 struct InterfaceChRow {
     contract_id: String,
     wasm_hash: Option<String>,
-    /// Raw JSON text from `wasm_interface_metadata.metadata` (empty when the
+    /// Raw JSON text from `wasm_programs.metadata` (empty when the
     /// contract has no WASM metadata row).
     metadata: String,
 }
@@ -724,7 +724,7 @@ pub async fn fetch_wasm_interface(
                 FROM contract_executable_refs GROUP BY owner_id, tag \
              ) ref ON ref.owner_id = sc.executable_owner_id AND ref.tag = sc.executable_tag \
              LEFT JOIN ( \
-                SELECT wasm_hash, metadata FROM wasm_interface_metadata FINAL \
+                SELECT wasm_hash, metadata FROM wasm_programs FINAL \
              ) wim ON wim.wasm_hash = coalesce(sc.wasm_hash, ref.wasm_hash) \
              WHERE sc.contract_id = ? \
              LIMIT 1",
