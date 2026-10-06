@@ -59,6 +59,14 @@ pub struct WasmInterfaceMetadataRow {
     pub metadata: String,
 }
 
+/// `wasm_code` — the bytes of each WASM program, one row per hash (task 0620).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct WasmCodeRow {
+    pub wasm_hash: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    pub code: Vec<u8>,
+}
+
 /// `accounts` — state hub, RMT(last_seen_ledger). Surrogate `id` for
 /// FK joins; ORDER BY natural key `account_id` for direct lookups.
 #[derive(Debug, Clone, Row, Serialize)]

@@ -65,7 +65,9 @@ Two smaller leftovers sit next to it:
   modules, staging, API extractors, tests).
 - Remove `ledger_sequence` from `NftEvent` and `ExtractedNftEvent`, and read it
   from `event_id`.
-- Name the `(before_all, after_all)` start pair as a two-field struct.
+- ~~Name the `(before_all, after_all)` start pair as a two-field struct~~ —
+  dropped: a private pair destructured into named locals in one file; a type
+  would add a definition to open, not clarity.
 - `invocation.rs`'s `collect_diagnostic_events` ends in `_ => Vec::new()`,
   the silent wildcard `containers()` dropped: a future meta version would lose
   every invocation tree. Take the diagnostic container from `containers()`
@@ -82,11 +84,15 @@ Proof gaps from the 0573 review, for the same PR's tests:
 
 - [ ] `EventBody` is the only place the four body fields are declared.
 - [ ] NFT events carry their ledger only inside `event_id`.
-- [ ] One match over `TransactionMeta` versions in the parser, no wildcard.
+- [ ] No wildcard over `TransactionMeta` versions in the event model and the
+      invocation tree (`operation.rs` and `ledger_entry_changes.rs` keep theirs:
+      outside the event model).
 - [ ] Reconciliation compares counts; staging refuses a duplicated id.
 - [ ] Golden test `event_extraction_golden` passes with its expected files
       untouched; no assertion changes beyond the field paths.
 - [ ] API types regenerate with no diff.
-- [ ] PR title ends with `[structure only]`.
+- [ ] PRs by basket: #612 `[refactor]`; #613 `[structure only]` (the
+      `soroban_events` staging move `stage.rs` needed first); #614 the
+      duplicate-id guard (behaviour); a `[low risk]` reconciliation count.
 - [ ] Docs updated: `docs/architecture/xdr-parsing/xdr-parsing-overview.md`
       (event model), or N/A with reason.
