@@ -503,6 +503,10 @@ match.
 Which operation emitted an event is read from `origin`, never from the id: a
 fee event's id names operation 0 or 4095.
 
+Staging refuses a ledger in which two events share an id: the id is the
+event's public identity, so a repeat is a parser defect, and with the contract
+it keys the `soroban_events` row, where two such events would merge silently.
+
 Per-operation events carry the bulk of post-Protocol 23 Soroban traffic.
 Missing them leaves every Protocol ≥ 23 ledger silently incomplete — the
 canonical symptom is a Soroban transaction with exactly two events, both
