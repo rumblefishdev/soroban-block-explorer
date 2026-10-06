@@ -21,7 +21,10 @@ pub fn extract_wasm_programs(tx_meta: &TransactionMeta) -> Vec<ExtractedWasmProg
             LedgerEntryChange::Created(e)
             | LedgerEntryChange::Updated(e)
             | LedgerEntryChange::Restored(e) => e,
-            _ => continue,
+            // `State` is the entry as it was before this change (its new
+            // value, if any, comes as `Updated`); `Removed` carries only the
+            // key, no bytes.
+            LedgerEntryChange::State(_) | LedgerEntryChange::Removed(_) => continue,
         };
         if let LedgerEntryData::ContractCode(ref code_entry) = entry.data {
             programs.push(parse_wasm_program(code_entry));
