@@ -987,9 +987,13 @@ pub fn detect_assets(
     let mut verdict_by_hash: HashMap<&str, ContractClassification> =
         HashMap::with_capacity(interfaces.len());
     for iface in interfaces {
+        // A program without an interface section gives no verdict.
+        let Some(functions) = &iface.functions else {
+            continue;
+        };
         verdict_by_hash
             .entry(iface.wasm_hash.as_str())
-            .or_insert_with(|| classify_contract_from_wasm_spec(&iface.functions));
+            .or_insert_with(|| classify_contract_from_wasm_spec(functions));
     }
 
     let mut assets = Vec::new();

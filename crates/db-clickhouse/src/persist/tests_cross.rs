@@ -40,7 +40,7 @@ fn column_order_ledgers() {
 
 #[test]
 fn column_order_wasm_programs() {
-    assert_columns::<WasmProgramRow>("wasm_programs", &["wasm_hash", "metadata"]);
+    assert_columns::<WasmProgramRow>("wasm_programs", &["wasm_hash", "metadata", "code"]);
 }
 
 #[test]
@@ -1730,12 +1730,12 @@ fn synthetic_nft_event(
 fn nft_classified_interface(wasm_hash_hex: &str) -> ExtractedWasmProgram {
     ExtractedWasmProgram {
         wasm_hash: wasm_hash_hex.to_string(),
-        functions: vec![ContractFunction {
+        functions: Some(vec![ContractFunction {
             name: "owner_of".into(),
             doc: String::new(),
             inputs: vec![],
             outputs: vec!["Address".into()],
-        }],
+        }]),
         wasm_byte_len: 256,
         upgradeable: false,
         code: Vec::new(),
@@ -1747,12 +1747,12 @@ fn nft_classified_interface(wasm_hash_hex: &str) -> ExtractedWasmProgram {
 fn fungible_classified_interface(wasm_hash_hex: &str) -> ExtractedWasmProgram {
     ExtractedWasmProgram {
         wasm_hash: wasm_hash_hex.to_string(),
-        functions: vec![ContractFunction {
+        functions: Some(vec![ContractFunction {
             name: "decimals".into(),
             doc: String::new(),
             inputs: vec![],
             outputs: vec!["u32".into()],
-        }],
+        }]),
         wasm_byte_len: 256,
         upgradeable: false,
         code: Vec::new(),

@@ -260,9 +260,10 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Task 0620 — one-shot fill of `wasm_code` with the bytes of every known
+    /// Task 0620 — one-shot fill of `wasm_programs.code` for every known
     /// program that has none yet, read from Soroban RPC (`getLedgerEntries`,
-    /// `ContractCode` by hash) and stored only when sha256 matches the hash.
+    /// `ContractCode` by hash), stored only when sha256 matches the hash, and
+    /// written as a whole row (bytes + metadata read from them).
     /// Requires `--soroban-rpc-url`. Idempotent. `--dry-run` fetches and
     /// verifies without writing.
     WasmCodeBackfill {

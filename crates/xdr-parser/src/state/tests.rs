@@ -1360,15 +1360,17 @@ use crate::types::ContractFunction;
 fn iface(wasm_hash: &str, fn_names: &[&str]) -> ExtractedWasmProgram {
     ExtractedWasmProgram {
         wasm_hash: wasm_hash.to_string(),
-        functions: fn_names
-            .iter()
-            .map(|n| ContractFunction {
-                name: (*n).to_string(),
-                doc: String::new(),
-                inputs: Vec::new(),
-                outputs: Vec::new(),
-            })
-            .collect(),
+        functions: Some(
+            fn_names
+                .iter()
+                .map(|n| ContractFunction {
+                    name: (*n).to_string(),
+                    doc: String::new(),
+                    inputs: Vec::new(),
+                    outputs: Vec::new(),
+                })
+                .collect(),
+        ),
         wasm_byte_len: 0,
         upgradeable: false,
         code: Vec::new(),

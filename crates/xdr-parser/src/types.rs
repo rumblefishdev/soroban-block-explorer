@@ -203,16 +203,17 @@ pub struct ExtractedInvocation {
 pub struct ExtractedWasmProgram {
     /// SHA-256 hash of the WASM bytecode, hex-encoded (64 chars).
     pub wasm_hash: String,
-    /// Extracted public function signatures.
-    pub functions: Vec<ContractFunction>,
+    /// Public function signatures from the `contractspecv0` section; `None`
+    /// when the program has no such section.
+    pub functions: Option<Vec<ContractFunction>>,
     /// Raw WASM byte length (informational).
     pub wasm_byte_len: usize,
     /// Task 0327: the WASM imports `update_current_contract_wasm` (a self-upgrade
     /// path). See `wasm_imports_upgrade_fn` for how, and the API
     /// `ContractDetailResponse::upgradeable` for the user-facing 3-state.
     pub upgradeable: bool,
-    /// The program itself, stored once per hash in `wasm_code` so its
-    /// functions can be executed later (task 0620).
+    /// The program itself, stored in `wasm_programs.code` so its functions
+    /// can be executed (task 0620, ADR 0061).
     pub code: Vec<u8>,
 }
 

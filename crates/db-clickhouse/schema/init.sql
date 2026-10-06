@@ -139,22 +139,20 @@ ORDER BY (sequence);
 -- which renamed it on production with
 -- `RENAME TABLE wasm_interface_metadata TO wasm_programs` — the table holds
 -- the program, not only its interface.
+--
+-- `code` is the program itself (a binary `String`), so a contract's own
+-- functions can be executed (task 0620, ADR 0061); `metadata` is what the
+-- parser reads from those bytes (functions, byte length, upgradeable), empty
+-- for a program without a `contractspecv0` section. A row is always written
+-- whole, bytes and metadata together, so a later write never blanks the other
+-- half. Programs uploaded before `code` existed were filled once by
+-- `backfill-runner wasm-code-backfill`. ~5.2k programs measured 112 MB raw,
+-- ~35 MB under ZSTD(3).
+-- PROD: `ALTER TABLE wasm_programs ADD COLUMN IF NOT EXISTS code String DEFAULT '' CODEC(ZSTD(3))`.
 CREATE TABLE IF NOT EXISTS wasm_programs (
     wasm_hash FixedString(32),
-    metadata  String CODEC(ZSTD(3))
-)
-ENGINE = ReplacingMergeTree
-ORDER BY (wasm_hash);
-
--- The bytes of every WASM program, one row per hash, so a contract's own
--- functions can be executed (task 0620, ADR 0061). Written by the indexer from
--- the upload's `ContractCode` entry; programs uploaded before it were filled
--- once by `backfill-runner wasm-code-backfill`. A program never changes (the
--- hash is the sha256 of its bytes), so a re-insert is the same row. Bytes are
--- a binary `String`; ~5.2k programs measured 112 MB raw, ~35 MB under ZSTD(3).
-CREATE TABLE IF NOT EXISTS wasm_code (
-    wasm_hash FixedString(32),
-    code      String CODEC(ZSTD(3))
+    metadata  String CODEC(ZSTD(3)),
+    code      String DEFAULT '' CODEC(ZSTD(3))
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (wasm_hash);

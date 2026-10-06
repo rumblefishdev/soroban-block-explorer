@@ -215,3 +215,19 @@ fn spec_type_to_string_compound() {
     }));
     assert_eq!(spec_type_to_string(&map), "map<symbol, i128>");
 }
+
+#[test]
+fn a_program_without_a_spec_section_keeps_its_bytes() {
+    let wasm = wasm_with_imports(&[(b"l", b"6")]);
+    let entry = ContractCodeEntry {
+        ext: ContractCodeEntryExt::V0,
+        hash: Hash([7; 32]),
+        code: wasm.clone().try_into().unwrap(),
+    };
+    let program = parse_wasm_program(&entry);
+
+    assert!(program.functions.is_none());
+    assert_eq!(program.code, wasm);
+    assert_eq!(program.wasm_byte_len, wasm.len());
+    assert!(program.upgradeable);
+}
