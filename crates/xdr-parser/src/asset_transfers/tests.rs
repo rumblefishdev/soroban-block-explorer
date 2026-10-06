@@ -33,27 +33,39 @@ fn map(entries: Vec<(&str, Value)>) -> Value {
     })
 }
 
+/// An event of operation `op.0` at position `op.1`, or with `None` the fee
+/// charge — a transaction-level event.
 fn event(
     emitter: Option<&str>,
     topics: Vec<Value>,
     data: Value,
-    source: EventSource,
-    op: Option<(u32, u32)>,
+    op: Option<(u16, u32)>,
 ) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: "ab".repeat(32),
+        event_id: event_id(op),
+        origin: match op {
+            Some((op, _)) => EventOrigin::Operation(op),
+            None => EventOrigin::Transaction(stellar_xdr::TransactionEventStage::BeforeAllTxs),
+        },
         event_type: ContractEventType::Contract,
-        source,
         contract_id: emitter.map(str::to_string),
         topics: Value::Array(topics),
         data,
-        position_in_tx: 3,
-        op_index: op.map(|o| o.0),
-        event_pos_in_op: op.map(|o| o.1),
-        stage: None,
-        event_id: None,
-        ledger_sequence: 64_259_660,
         created_at: 0,
+    }
+}
+
+fn event_id(op: Option<(u16, u32)>) -> EventId {
+    let (transaction_index, (operation_index, event_index)) = match op {
+        Some(op) => (1, op),
+        None => (EventId::BEFORE_ALL_TXS, (0, 0)),
+    };
+    EventId {
+        ledger_sequence: 64_259_660,
+        transaction_index,
+        operation_index,
+        event_index,
     }
 }
 
@@ -117,7 +129,6 @@ fn sep50_mint_cannot_credit_the_token_number_as_an_amount() {
             hi: 0,
             lo: 1_000_000_000,
         })),
-        EventSource::PerOp,
         Some((0, 0)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -214,7 +225,6 @@ fn native_transfer_from_the_real_xlm_sac_is_a_row() {
                 json!({ "type": "u64", "value": 3539365402u64 }),
             ),
         ]),
-        EventSource::PerOp,
         Some((0, 0)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -246,7 +256,6 @@ fn credit_asset_from_its_own_sac_passes_the_gate() {
             string(&format!("KALE:{KALE_ISSUER}")),
         ],
         i128v("39298327"),
-        EventSource::PerOp,
         Some((0, 0)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -277,7 +286,6 @@ fn a_foreign_contract_claiming_a_labelled_asset_is_rejected_not_stored() {
             string(&format!("KALE:{KALE_ISSUER}")),
         ],
         i128v("1"),
-        EventSource::PerOp,
         Some((0, 0)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -286,7 +294,7 @@ fn a_foreign_contract_claiming_a_labelled_asset_is_rejected_not_stored() {
         out.rejects,
         vec![TransferReject {
             transaction_hash: "ab".repeat(32),
-            position_in_tx: 3,
+            event_id: event_id(Some((0, 0))),
             emitter: Some(OTHER_CONTRACT.into()),
             kind: RejectKind::EmitterNotSac {
                 asset: format!("KALE:{KALE_ISSUER}"),
@@ -301,7 +309,6 @@ fn bespoke_token_is_its_own_asset_and_needs_no_gate() {
         Some(OTHER_CONTRACT),
         vec![sym("transfer"), addr(G1), addr(G2)],
         i128v("500"),
-        EventSource::PerOp,
         Some((2, 5)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -318,7 +325,6 @@ fn non_fungible_movement_is_a_row_with_no_amount() {
         Some(OTHER_CONTRACT),
         vec![sym("burn"), addr(G1)],
         map(vec![("token_id", json!({ "type": "u32", "value": 942 }))]),
-        EventSource::PerOp,
         Some((0, 1)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -340,7 +346,6 @@ fn restated_mint_is_rejected_and_counted_never_a_phantom_row() {
             ),
             ("mint_tokens", json!({ "type": "u128", "value": "1" })),
         ]),
-        EventSource::PerOp,
         Some((0, 13)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -353,22 +358,14 @@ fn restated_mint_is_rejected_and_counted_never_a_phantom_row() {
 }
 
 #[test]
-fn diagnostic_and_non_token_events_are_skipped_silently() {
-    let diag = event(
-        Some(OTHER_CONTRACT),
-        vec![sym("transfer"), addr(G1), addr(G2)],
-        i128v("500"),
-        EventSource::Diagnostic,
-        None,
-    );
+fn non_token_events_are_skipped_silently() {
     let fn_call = event(
         Some(OTHER_CONTRACT),
         vec![sym("fn_call"), addr(G1)],
         json!({ "type": "void" }),
-        EventSource::PerOp,
         Some((0, 0)),
     );
-    let out = extract_asset_transfers(&[diag, fn_call], &net());
+    let out = extract_asset_transfers(&[fn_call], &net());
     assert!(out.transfers.is_empty());
     assert!(out.rejects.is_empty());
 }
@@ -379,7 +376,6 @@ fn a_token_verb_outside_an_operation_is_a_reject() {
         Some(OTHER_CONTRACT),
         vec![sym("transfer"), addr(G1), addr(G2)],
         i128v("500"),
-        EventSource::TxLevel,
         None,
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -387,7 +383,10 @@ fn a_token_verb_outside_an_operation_is_a_reject() {
     assert!(matches!(
         out.rejects.as_slice(),
         [TransferReject {
-            position_in_tx: 3,
+            event_id: EventId {
+                transaction_index: EventId::BEFORE_ALL_TXS,
+                ..
+            },
             kind: RejectKind::NoOperation,
             ..
         }]
@@ -406,7 +405,6 @@ fn sep41_mint_with_admin_credits_the_recipient_not_the_admin() {
         Some(OTHER_CONTRACT),
         vec![sym("mint"), addr(OTHER_CONTRACT), addr(G1)],
         i128v("11368693905"),
-        EventSource::PerOp,
         Some((0, 3)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -431,7 +429,6 @@ fn a_token_verb_in_an_unknown_topic_shape_is_a_reject_not_silence() {
         Some(OTHER_CONTRACT),
         vec![sym("mint")],
         map(vec![("amount", i128v("5")), ("amount0", i128v("1"))]),
-        EventSource::PerOp,
         Some((0, 0)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -458,7 +455,6 @@ fn a_token_verb_without_an_emitter_is_a_reject() {
         None,
         vec![sym("transfer"), addr(G1), addr(G2)],
         i128v("500"),
-        EventSource::PerOp,
         Some((0, 0)),
     );
     let out = extract_asset_transfers(&[ev], &net());
@@ -466,7 +462,6 @@ fn a_token_verb_without_an_emitter_is_a_reject() {
     assert!(matches!(
         out.rejects.as_slice(),
         [TransferReject {
-            position_in_tx: 3,
             emitter: None,
             kind: RejectKind::NoEmitter,
             ..

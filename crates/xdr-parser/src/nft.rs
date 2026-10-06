@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::sac::{SacOverride, sac_override_from_event_topics, topic_symbol_value};
 use crate::scval::map_get;
-use crate::types::{EventSource, ExtractedEvent, NftEvent};
+use crate::types::{ExtractedEvent, NftEvent};
 use domain::ContractEventType;
 
 /// Detect NFT-related events from a list of extracted events.
@@ -37,14 +37,6 @@ pub fn detect_nft_events(events: &[ExtractedEvent], net_id: &[u8; 32]) -> Vec<Nf
 
     for event in events {
         if event.event_type != ContractEventType::Contract {
-            continue;
-        }
-        // Skip diagnostic-container Contract-typed copies — when
-        // diagnostic mode is enabled, every per-op consensus Contract
-        // event is also present byte-identically in `v4.diagnostic_events`;
-        // without this guard NFT detection would double-emit
-        // transfer/mint/burn rows (task 0182).
-        if event.source == EventSource::Diagnostic {
             continue;
         }
         let Some(ref contract_id) = event.contract_id else {
@@ -122,9 +114,6 @@ pub fn detect_undeployed_sac_overrides(
         std::collections::HashMap::new();
     for (_tx_hash, evs) in events {
         for ev in evs {
-            if ev.source == EventSource::Diagnostic {
-                continue;
-            }
             let Some(cid) = &ev.contract_id else {
                 continue;
             };
@@ -157,7 +146,7 @@ fn try_parse_transfer(
         token_id,
         from: Some(addrs[0].clone()),
         to: Some(addrs[1].clone()),
-        ledger_sequence: event.ledger_sequence,
+        ledger_sequence: event.event_id.ledger_sequence,
         created_at: event.created_at,
         event_id: event.event_id,
     })
@@ -180,7 +169,7 @@ fn try_parse_mint(
         token_id,
         from: None,
         to: Some(addrs[0].clone()),
-        ledger_sequence: event.ledger_sequence,
+        ledger_sequence: event.event_id.ledger_sequence,
         created_at: event.created_at,
         event_id: event.event_id,
     })
@@ -204,7 +193,7 @@ fn try_parse_burn(
         token_id,
         from: Some(addrs[0].clone()),
         to: None,
-        ledger_sequence: event.ledger_sequence,
+        ledger_sequence: event.event_id.ledger_sequence,
         created_at: event.created_at,
         event_id: event.event_id,
     })
@@ -253,7 +242,7 @@ fn try_parse_consecutive_mint(
                 token_id: serde_json::json!({ "type": "u64", "value": id }),
                 from: None,
                 to: Some(to.clone()),
-                ledger_sequence: event.ledger_sequence,
+                ledger_sequence: event.event_id.ledger_sequence,
                 created_at: event.created_at,
                 event_id: event.event_id,
             })

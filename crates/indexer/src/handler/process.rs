@@ -221,7 +221,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         }
 
         if let Some(tm) = tx_meta {
-            let events = ledger_events.extract(tx_index, &ext_tx.hash);
+            // Consensus events only: nothing here reads the debug channel.
+            let events = ledger_events.extract(tx_index, &ext_tx.hash).events;
             let nft_events = xdr_parser::detect_nft_events(&events, net_id);
             all_nft_events.extend(nft_events);
             let edges = xdr_parser::extract_asset_transfers(&events, net_id);
