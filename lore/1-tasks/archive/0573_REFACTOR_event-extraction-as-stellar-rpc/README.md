@@ -2,7 +2,7 @@
 id: '0573'
 title: 'REFACTOR: extract Soroban events the way stellar-rpc does — one pass, consensus and diagnostic apart'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0059']
 related_tasks: ['0541', '0182', '0540', '0572']
 tags: ['xdr-parsing', 'indexer', 'api', 'effort-medium', 'priority-medium']
@@ -17,6 +17,17 @@ history:
       Filed and started after a review of `event.rs` following task 0541. The
       ids are right (3,298 of 3,298 against `getEvents`); the code that
       reaches them is not shaped like the source it copies.
+  - date: 2026-10-06
+    status: completed
+    who: claude
+    note: >
+      Shipped in three PRs: #579 (executable_update move, structure only),
+      #580 (golden differential test on four archive ledgers, low risk) and
+      #475 (the extraction, merged 2026-10-06). Proof: golden output
+      unchanged; production reconciliation 102 historical ledgers / 74,951
+      ids parsed == stored and 5 tip ledgers / 5,387 ids equal to getEvents.
+      Follow-ups 0604 (EventBody, one meta-version match, id checks) and 0626
+      (diagnostic decode only for the API).
 ---
 
 # Extract Soroban events the way stellar-rpc does
@@ -55,39 +66,6 @@ The ids task 0541 stores are right: `event_id_reconciliation` is green against
 
 `position_in_tx` is no longer stored anywhere; it survives in log lines only.
 
-## Implementation Plan
-
-### Step 1: differential baseline
-
-Before touching the code, dump the current output for real ledgers across
-protocols (20, 22, 23 and 27, plus the `ledger_58816920` fixture): per event,
-its id, where it came from, contract, and a hash of topics and data. Commit
-the dump as a fixture.
-
-### Step 2: the new model
-
-```text
-TxEvents { events: Vec<Event>, diagnostic: Vec<EventBody> }
-Event    { id: EventId, origin: Origin, body: EventBody }
-Origin   = Transaction(TransactionEventStage) | Operation(u16)
-```
-
-`LedgerEvents::new` counts stages only (no decoding); `transaction(i)` is
-stellar-rpc's loop body for one transaction. `EventId` and its sentinels stay.
-`extract_executable_update` moves to its own module.
-
-### Step 3: consumers
-
-Staging, `contract_transactions`, `asset_transfers`, the NFT and pool
-extractors, the transaction page: diagnostic filters removed, operation and
-stage read from `origin`, rejected transfers logged by rpc id.
-
-### Step 4: prove it
-
-The Step 1 dump matches byte for byte; a synthetic V3 meta gets
-`(ledger, tx, 0, i)` like stellar-go; `event_ids_real_ledger` and
-`event_id_reconciliation` pass.
-
 ## Acceptance Criteria
 
 - [x] Differential dump of the old code equals the new code's, byte for byte —
@@ -109,46 +87,51 @@ The Step 1 dump matches byte for byte; a synthetic V3 meta gets
       `docs/runbooks/live-tail-cutover.md`
 - [x] **API types regenerated** — no diff: the transaction page's DTO is
       unchanged
+- [x] Production reconciliation across history — 102 ledgers from the
+      protocol 20 activation to the tip, `AfterTx`/`AfterAllTxs` boundary
+      included: 74,951 ids, parse equals table on every one; tip: 5 ledgers,
+      5,387 ids equal on all three sides (2026-10-01)
+- [ ] Spec's protocol 22 ledger and the `ledger_58816920` fixture in the
+      golden set (not done: the four ledgers cover both refund stages and
+      protocols 20 and 28)
+- [ ] One shared `EventBody` type (deferred to 0604)
 
-## Implementation (2026-09-22)
+## Design Decisions
 
-Branch `refactor/0573_event-extraction`. `event.rs` 396 → 237 lines;
-`extract_executable_update` moved verbatim, with its tests, to
-`executable_update.rs`. 27 files changed in `crates/`, +713 −2,832 (the
-bulk: `nft.rs`'s tests moved to `nft/tests.rs` and the one-off
-`event_op_index_audit` example removed).
+### From Plan
 
-- `LedgerEvents::new` counts the stages of every transaction; `extract(i)` is
-  stellar-rpc's loop body and returns `TxEvents { events, diagnostic }`.
-- `ExtractedEvent` = `event_id` (never missing) + `origin`
-  (`Transaction(stage)` | `Operation(u16)`) + the decoded body + transaction
-  hash and close time. `ledger_sequence` is read from the id.
-- `DiagnosticEvent` is its own type. The indexer takes `.events` only; the API
-  maps both lists to the unchanged DTO.
-- Removed consumer code: eight diagnostic filters in seven files, the staging
-  error for a missing id, the API's `split_events`.
+1. **Containers from stellar-go, ids from stellar-rpc** — one pass, the
+   ledger-wide fee counters precomputed without decoding.
+2. **The diagnostic channel is its own type** — the consumer filters go away
+   because nothing can hand a diagnostic event to them.
 
-Verified: `cargo test` of `xdr-parser`, `db-clickhouse`, `indexer`, `api`,
-`backfill-runner` green (the ClickHouse e2e tests against the local docker
-server); `clippy -D warnings` clean.
+### Emerged
 
-**Tests changed:**
+3. **V3 metas read as operation 0** — the old code produced id-less events
+   that staging refused; the new types cannot express that. No V3 meta exists
+   in the archive: 393 ledgers, three from each of the 131 partitions between
+   the protocol 20 activation and protocol 23, 117,579 transaction metas, all
+   V4 (2026-10-06). No warning added.
+4. **NFT event ids not optional** — task 0424 landed `Option<EventId>` and a
+   staging error on `develop` meanwhile; both removed with the rest.
+5. **`containers()` names every meta version** — a future one fails to
+   compile instead of losing its events (review finding).
+6. **PR split after the fact** — the move (#579) and the golden test (#580)
+   left #475; the dead example and the history reconciliation test stayed in
+   it by decision.
 
-- `event/tests.rs` rewritten for the new API: 12 tests, including V3 as
-  operation 0, the ledger counters when one transaction is asked for alone,
-  an empty operation keeping its place, and the diagnostic mirror staying out
-  of the consensus list.
-- New: `tests/event_extraction_golden.rs` with four archive ledgers (protocols
-  20, 23 on both sides of the refund-stage change, and 28).
-- Removed, because the type now makes the state impossible: the staging
-  "event without an id" error test, the three tests that a diagnostic event is
-  skipped (wasm upgrade, pool registration, undeployed-SAC override), the
-  asset-transfer diagnostic case, and `tx_event_stage_real_meta`'s test that
-  `position_in_tx` numbers the refund before the operation.
-- Fixtures that used `TxLevel` without a stage map to
-  `Transaction(BeforeAllTxs)`, which keeps them out of `contract_transactions`
-  as before; the share-token corpus keeps each event's place as its
-  `event_index`, which is what its tie-break reads.
+## Issues Encountered
+
+- `develop` moved by hundreds of commits while the PR waited; two merges, the
+  second resolved conflicts with #579/#580 in favour of the branch.
+- Merging `develop` brought new consumers of the old API (pool tests, NFT
+  ids from task 0424); moved onto the new types in the merge follow-up.
+
+## Future Work
+
+- 0604 — `EventBody`, one match over meta versions (the invocation tree still
+  has `_ => Vec::new()`), duplicate-id checks in reconciliation and staging.
+- 0626 — decode diagnostic events only where the API reads them.
 
 ## Notes
 
