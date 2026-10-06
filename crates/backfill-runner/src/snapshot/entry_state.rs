@@ -4,7 +4,7 @@
 //! `lastModifiedLedgerSeq`, and the live writer (deployed 2026-08-24) stamps
 //! every change since. So the snapshot adds something only for a live account
 //! whose entry is newer than our newest row of it — the rule the pool pass
-//! applies to its snapshots ([`pools::need`]), and the one used here.
+//! applies to its snapshots ([`entry_freshness::need`]), and the one used here.
 //!
 //! Until task 0521 this pass emitted every live account on every run. Measured
 //! on the second production pass (checkpoint 64,132,415): every other
@@ -19,8 +19,8 @@ use db_clickhouse::persist::rows::AccountEntryStateRow;
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
+use crate::snapshot::entry_freshness::{self, Need};
 use crate::snapshot::network_state::NetworkState;
-use crate::snapshot::pools::{self, Need};
 use crate::snapshot::slices::key_slices;
 
 #[derive(Default)]
@@ -91,7 +91,7 @@ fn corrections(state: &NetworkState, ours: &HashMap<i64, i64>) -> EntryStateCorr
         let Some(d) = state.account_details.get(id) else {
             continue;
         };
-        match pools::need(ours.get(id).copied(), e.ledger) {
+        match entry_freshness::need(ours.get(id).copied(), e.ledger) {
             Need::Current => {
                 out.current += 1;
                 continue;
