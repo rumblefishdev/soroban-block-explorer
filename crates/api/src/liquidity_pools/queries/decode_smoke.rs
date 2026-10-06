@@ -54,16 +54,14 @@ async fn chart_row_decodes_nullable_values() {
     // visible (`Unknown expression identifier`).
     let rows = ch
         .query(
-            "SELECT bucket_ms, reserves, price_bucket_s, samples_in_bucket, volume FROM ( \
+            "SELECT bucket_ms, reserves, samples_in_bucket, volume FROM ( \
                  SELECT toInt64(1700000000000)     AS bucket_ms, \
                         [toNullable(toFloat64(25.31)), toNullable(toFloat64(2))] AS reserves, \
-                        toInt64(1699920000)        AS price_bucket_s, \
                         toUInt64(7)                AS samples_in_bucket, \
                         CAST(?, 'Nullable(Float64)')    AS volume \
                  UNION ALL \
                  SELECT toInt64(1700000086400000)  AS bucket_ms, \
                         [CAST(NULL, 'Nullable(Float64)'), toNullable(toFloat64(3))] AS reserves, \
-                        toInt64(1700006400)        AS price_bucket_s, \
                         toUInt64(0)                AS samples_in_bucket, \
                         CAST(NULL, 'Nullable(Float64)') AS volume \
              ) ORDER BY bucket_ms",
@@ -75,7 +73,6 @@ async fn chart_row_decodes_nullable_values() {
 
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].reserves, vec![Some(25.31), Some(2.0)]);
-    assert_eq!(rows[0].price_bucket_s, 1_699_920_000);
     assert_eq!(rows[0].volume, Some(1.985));
     assert_eq!(rows[0].samples_in_bucket, 7);
     // NULL must survive as None, not decode as 0.0.
@@ -165,7 +162,7 @@ async fn lp_ch_rows_decode() {
     .await
     .expect("usd-analytics rows decode");
 
-    // chart — `ClassicBucketChRow`, `LegCloseChRow`.
+    // chart — `ClassicBucketChRow`, `SeedChRow`, `LegCloseChRow`.
     let to = chrono::Utc::now();
     let from = to - chrono::Duration::days(90);
     fetch_pool_chart(&ch, &pool, &ctx, "1d", from, to)

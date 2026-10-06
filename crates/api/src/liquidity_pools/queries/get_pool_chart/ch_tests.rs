@@ -208,3 +208,144 @@ async fn soroban_volume_series() {
         .expect("remove test prices rows");
     }
 }
+
+/// A quiet pool of each kind: one state six days back, none in the window.
+/// Both legs price every day (A at 0.5, B at 2.0), so every daily bucket of
+/// the last four days carries 10 A + 20 B = $45, observed nowhere (0 samples)
+/// and with no volume (task 0597).
+#[tokio::test]
+async fn quiet_pools_carry_their_last_state() {
+    const DB_Q: &str = "api_test_0597_quiet_pools";
+    const CLASSIC: &str = "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b";
+    const SOROBAN: &str = "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c";
+    const CODE_A: &str = "TST0597A";
+    const CODE_B: &str = "TST0597B";
+    let Some(base) = crate::common::ch::test_client_from_env() else {
+        eprintln!("CH_URL unset — skipping quiet pool chart check");
+        return;
+    };
+    let price_engine: Vec<String> = base
+        .query("SELECT engine FROM system.tables WHERE database = 'prices' AND name = 'price_usd_series'")
+        .fetch_all()
+        .await
+        .expect("read system.tables");
+    if price_engine.iter().any(|e| e != "MergeTree") {
+        eprintln!("prices.price_usd_series is a real view here — skipping");
+        return;
+    }
+    let created_prices = price_engine.is_empty();
+    for sql in [
+        "CREATE DATABASE IF NOT EXISTS prices",
+        "CREATE TABLE IF NOT EXISTS prices.price_usd_series (asset_kind String, asset_code String, \
+         issuer_address String, bucket DateTime, close_usd Decimal(38, 14)) \
+         ENGINE = MergeTree ORDER BY (asset_kind, asset_code, issuer_address, bucket)",
+    ] {
+        base.query(sql).execute().await.expect("prices table");
+    }
+    base.query(&format!("DROP DATABASE IF EXISTS {DB_Q}"))
+        .execute()
+        .await
+        .expect("drop leftover throwaway db");
+    base.query(&format!("CREATE DATABASE {DB_Q}"))
+        .execute()
+        .await
+        .expect("create throwaway db");
+    let ch = base.clone().with_database(DB_Q);
+    db_clickhouse::apply_init_sql(&ch)
+        .await
+        .expect("apply init.sql");
+
+    let day = |n: i64| format!("toStartOfDay(now()) - INTERVAL {n} DAY");
+    let mut prices = Vec::new();
+    for n in 0..9 {
+        prices.push(format!(
+            "('credit', '{CODE_A}', '{ISSUER}', {}, 0.5)",
+            day(n)
+        ));
+        prices.push(format!(
+            "('credit', '{CODE_B}', '{ISSUER}', {}, 2.0)",
+            day(n)
+        ));
+    }
+    for sql in [
+        format!(
+            "INSERT INTO ledgers (sequence, closed_at) VALUES \
+             (100, {} + INTERVAL 12 HOUR), (300, {} + INTERVAL 12 HOUR), (400, {} + INTERVAL 12 HOUR)",
+            day(6),
+            day(3),
+            day(1)
+        ),
+        format!(
+            "INSERT INTO liquidity_pool_snapshots (pool_id, ledger_sequence, reserve_a, reserve_b, total_shares) \
+             VALUES (unhex('{CLASSIC}'), 100, 10, 20, 1)"
+        ),
+        format!(
+            "INSERT INTO pool_state_changes (pool_id, ledger_sequence, reserves, plane_id) \
+             VALUES (unhex('{SOROBAN}'), 100, [100000000, 200000000], 0)"
+        ),
+        format!(
+            "INSERT INTO liquidity_pools (pool_id, fee_bps, last_updated_ledger, pool_kind, legs) VALUES \
+             (unhex('{SOROBAN}'), 30, 1, 1, [201, 202])"
+        ),
+        format!(
+            "INSERT INTO prices.price_usd_series VALUES {}",
+            prices.join(", ")
+        ),
+    ] {
+        ch.query(&sql).execute().await.expect("seed rows");
+    }
+
+    let legs = vec![
+        PriceLeg {
+            kind: "credit",
+            code: CODE_A.to_string(),
+            issuer: ISSUER.to_string(),
+        },
+        PriceLeg {
+            kind: "credit",
+            code: CODE_B.to_string(),
+            issuer: ISSUER.to_string(),
+        },
+    ];
+    let (from, to) = (Utc::now() - Duration::days(4), Utc::now());
+    for (pool, kind) in [
+        (CLASSIC, domain::PoolKind::Classic),
+        (SOROBAN, domain::PoolKind::Soroban),
+    ] {
+        let ctx = PoolChartContext {
+            price: PoolPriceContext {
+                legs: legs.clone(),
+                fee_bps: 30,
+            },
+            pool_kind: kind,
+            leg_decimals: vec![Some(7), Some(7)],
+        };
+        let points = super::fetch_pool_chart(&ch, pool, &ctx, "1d", from, to)
+            .await
+            .expect("chart runs");
+        assert_eq!(points.len(), 5, "{kind:?}: one point per day of the window");
+        for p in &points {
+            assert_eq!(p.tvl.as_deref(), Some("45.00"), "{kind:?} {}", p.bucket);
+            assert_eq!(p.samples_in_bucket, 0);
+            assert_eq!(p.volume, None);
+        }
+    }
+
+    base.query(&format!("DROP DATABASE IF EXISTS {DB_Q}"))
+        .execute()
+        .await
+        .expect("drop throwaway db");
+    if created_prices {
+        base.query("DROP TABLE IF EXISTS prices.price_usd_series")
+            .execute()
+            .await
+            .expect("drop test prices table");
+    } else {
+        base.query(&format!(
+            "ALTER TABLE prices.price_usd_series DELETE WHERE asset_code IN ('{CODE_A}', '{CODE_B}')"
+        ))
+        .execute()
+        .await
+        .expect("remove test prices rows");
+    }
+}
