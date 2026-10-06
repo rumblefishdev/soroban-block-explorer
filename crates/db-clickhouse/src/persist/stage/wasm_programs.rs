@@ -1,5 +1,6 @@
 //! WASM programs uploaded in this ledger: one `wasm_interface_metadata` row
-//! per hash and the per-hash contract-type verdict the deploys use.
+//! and one `wasm_code` row per hash, and the per-hash contract-type verdict
+//! the deploys use.
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
@@ -10,7 +11,7 @@ use xdr_parser::types::ExtractedContractInterface;
 
 use super::{StagedLedger, decode_hash, staging_err};
 use crate::SchemaError;
-use crate::persist::rows::WasmInterfaceMetadataRow;
+use crate::persist::rows::{WasmCodeRow, WasmInterfaceMetadataRow};
 
 pub(super) fn wasm_rows(
     out: &mut StagedLedger,
@@ -52,7 +53,14 @@ pub(super) fn wasm_rows(
             metadata: serde_json::to_string(&metadata)
                 .map_err(|e| staging_err(&format!("wasm metadata serialize: {e}")))?,
         });
+        out.wasm_code_rows.push(WasmCodeRow {
+            wasm_hash: hash,
+            code: iface.code.clone(),
+        });
     }
 
     Ok(wasm_classification)
 }
+
+#[cfg(test)]
+mod tests;

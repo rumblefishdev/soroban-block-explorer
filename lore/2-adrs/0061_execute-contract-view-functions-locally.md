@@ -18,7 +18,7 @@ history:
 
 **Related:**
 
-- [Task 0620: Execute contract view functions locally](../1-tasks/backlog/0620_FEATURE_execute-contract-view-functions-locally/README.md)
+- [Task 0620: Execute contract view functions locally](../1-tasks/active/0620_FEATURE_execute-contract-view-functions-locally/README.md)
 - [Task 0621: Classify fungible tokens by exact SEP-41 signatures](../1-tasks/backlog/0621_REFACTOR_classify-tokens-by-sep41-signatures.md)
 
 ---
@@ -114,7 +114,7 @@ database); fetching ties every execution to an external service.
 ## Delivery Checklist
 
 - [ ] `docs/architecture/technical-design-general-overview.md` — N/A until 0620 lands
-- [ ] `docs/architecture/database-schema/database-schema-overview.md` — `wasm_code` (0620)
+- [x] `docs/architecture/database-schema/database-schema-overview.md` — `wasm_code` (0620 PR 1)
 - [ ] `docs/architecture/backend/backend-overview.md` — N/A — API unchanged
 - [ ] `docs/architecture/frontend/frontend-overview.md` — N/A — no frontend change
 - [ ] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` — executor step (0620)

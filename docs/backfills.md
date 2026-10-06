@@ -280,9 +280,9 @@ The dividing line is **`EXCHANGE TABLES`**. A subcommand that builds a staging
 table and swaps it will **lose any live write** that lands between build and
 swap.
 
-| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                          |
-| ------------------------------------------------------- | --------------------------------------------------------- |
-| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify` |
+| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify`, `wasm-code-backfill` |
 
 **Grey zone:**
 
@@ -416,7 +416,8 @@ Gotchas, all recorded:
 
 **Subcommands:** `run`, `status`, `bootstrap`, `repair-tier1`,
 `contract-type-rebuild`, `balance-seed`, `nft-reclassify`,
-`soroban-pool-amounts`. Most one-shot ops
+`soroban-pool-amounts`, `wasm-code-backfill` (program bytes for `wasm_code`,
+read from RPC and checked against their hash). Most one-shot ops
 subcommands take `--dry-run`. No separate bins remain.
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),
