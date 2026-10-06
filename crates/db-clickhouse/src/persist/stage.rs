@@ -52,9 +52,9 @@ use xdr_parser::executable_ref::ExtractedExecutableRefTarget;
 use xdr_parser::scval;
 use xdr_parser::types::{
     EventOrigin, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
-    ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
-    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
-    ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
+    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedOperation, ExtractedTransaction, ExtractedWasmProgram, SacAssetIdentity,
 };
 use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
@@ -300,7 +300,7 @@ pub struct StageInputs<'a> {
     pub operations: &'a [(String, Vec<ExtractedOperation>)],
     pub events: &'a [(String, Vec<ExtractedEvent>)],
     pub invocations: &'a [(String, Vec<ExtractedInvocation>)],
-    pub contract_interfaces: &'a [ExtractedContractInterface],
+    pub programs: &'a [ExtractedWasmProgram],
     pub contract_deployments: &'a [ExtractedContractDeployment],
     pub account_states: &'a [ExtractedAccountState],
     pub liquidity_pools: &'a [ExtractedLiquidityPool],
@@ -366,7 +366,7 @@ pub fn prepare(
     operations: &[(String, Vec<ExtractedOperation>)],
     events: &[(String, Vec<ExtractedEvent>)],
     invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
     contract_deployments: &[ExtractedContractDeployment],
     account_states: &[ExtractedAccountState],
     liquidity_pools: &[ExtractedLiquidityPool],
@@ -384,7 +384,7 @@ pub fn prepare(
         operations,
         events,
         invocations,
-        contract_interfaces,
+        programs,
         contract_deployments,
         account_states,
         liquidity_pools,
@@ -615,7 +615,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         operations,
         events,
         invocations,
-        contract_interfaces,
+        programs,
         contract_deployments,
         account_states,
         liquidity_pools,
@@ -903,7 +903,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         });
     }
 
-    let wasm_classification = wasm_programs::wasm_rows(&mut out, contract_interfaces)?;
+    let wasm_classification = wasm_programs::wasm_rows(&mut out, programs)?;
 
     // ---- soroban_contracts (deduped by contract_id) ----
     let mut contract_seen: HashSet<String> = HashSet::new();

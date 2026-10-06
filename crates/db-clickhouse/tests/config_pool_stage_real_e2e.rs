@@ -150,7 +150,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             operations: &ops,
             events: &events,
             invocations: &[],
-            contract_interfaces: &[],
+            programs: &[],
             contract_deployments: &[],
             account_states: &[],
             liquidity_pools: &[],

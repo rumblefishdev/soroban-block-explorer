@@ -195,12 +195,12 @@ pub struct ExtractedInvocation {
     pub created_at: i64,
 }
 
-/// Extracted contract interface from WASM bytecode at deployment time.
+/// One WASM program from a `ContractCodeEntry` change: its bytes and the
+/// interface read from them.
 ///
-/// Produced by `extract_contract_interfaces` when LedgerEntryChanges contain
-/// new `ContractCodeEntry` items. Stored in the contract `metadata` column.
+/// Produced by `extract_wasm_programs`; stored as one `wasm_programs` row.
 #[derive(Debug, Clone)]
-pub struct ExtractedContractInterface {
+pub struct ExtractedWasmProgram {
     /// SHA-256 hash of the WASM bytecode, hex-encoded (64 chars).
     pub wasm_hash: String,
     /// Extracted public function signatures.

@@ -43,7 +43,7 @@ pub enum ContractClassification {
 /// Classify a Soroban contract from its public WASM function list.
 ///
 /// Input: the `functions` slice of [`crate::types::ContractFunction`]
-/// as produced by [`crate::contract::extract_contract_interfaces`].
+/// as produced by [`crate::contract::extract_wasm_programs`].
 ///
 /// Pure function: no I/O, no allocation beyond the iterator closures.
 ///

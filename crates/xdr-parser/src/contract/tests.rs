@@ -186,7 +186,7 @@ fn no_interfaces_for_non_soroban_meta() {
         soroban_meta: None,
     });
 
-    let result = extract_contract_interfaces(&tx_meta);
+    let result = extract_wasm_programs(&tx_meta);
     assert!(result.is_empty());
 }
 

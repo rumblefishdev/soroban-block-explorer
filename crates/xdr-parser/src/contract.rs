@@ -2,19 +2,19 @@
 //!
 //! When a contract is deployed, `ContractCodeEntry` appears in ledger entry changes.
 //! This module extracts the WASM `contractspecv0` custom section, deserializes
-//! `ScSpecEntry` values, and produces `ExtractedContractInterface` with function
+//! `ScSpecEntry` values, and produces `ExtractedWasmProgram` with function
 //! signatures for storage in `soroban_contracts.metadata`.
 
 use stellar_xdr::*;
 
-use crate::types::{ContractFunction, ExtractedContractInterface, FunctionParam};
+use crate::types::{ContractFunction, ExtractedWasmProgram, FunctionParam};
 
 /// Extract contract interfaces from all `ContractCodeEntry` items found in
 /// the transaction meta's ledger entry changes.
 ///
-/// Returns one `ExtractedContractInterface` per new WASM deployment found.
+/// Returns one `ExtractedWasmProgram` per new WASM deployment found.
 /// Non-Soroban transactions and transactions without new code produce an empty vec.
-pub fn extract_contract_interfaces(tx_meta: &TransactionMeta) -> Vec<ExtractedContractInterface> {
+pub fn extract_wasm_programs(tx_meta: &TransactionMeta) -> Vec<ExtractedWasmProgram> {
     let changes = crate::meta::ledger_changes(tx_meta);
     let mut interfaces = Vec::new();
 
@@ -33,8 +33,8 @@ pub fn extract_contract_interfaces(tx_meta: &TransactionMeta) -> Vec<ExtractedCo
     interfaces
 }
 
-/// Parse a single ContractCodeEntry into an ExtractedContractInterface.
-fn parse_contract_code(code_entry: &ContractCodeEntry) -> Option<ExtractedContractInterface> {
+/// Parse a single ContractCodeEntry into an ExtractedWasmProgram.
+fn parse_contract_code(code_entry: &ContractCodeEntry) -> Option<ExtractedWasmProgram> {
     let wasm_bytes = code_entry.code.as_slice();
     let wasm_hash = hex::encode(code_entry.hash.0);
     let wasm_byte_len = wasm_bytes.len();
@@ -43,7 +43,7 @@ fn parse_contract_code(code_entry: &ContractCodeEntry) -> Option<ExtractedContra
     let functions = parse_spec_entries(&spec_bytes);
     let upgradeable = wasm_imports_upgrade_fn(wasm_bytes);
 
-    Some(ExtractedContractInterface {
+    Some(ExtractedWasmProgram {
         wasm_hash,
         functions,
         wasm_byte_len,

@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use domain::ContractType;
-use xdr_parser::types::ExtractedContractInterface;
+use xdr_parser::types::ExtractedWasmProgram;
 
 use super::{StagedLedger, decode_hash, staging_err};
 use crate::SchemaError;
@@ -15,7 +15,7 @@ use crate::persist::rows::{WasmCodeRow, WasmProgramRow};
 
 pub(super) fn wasm_rows(
     out: &mut StagedLedger,
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
 ) -> Result<HashMap<[u8; 32], ContractType>, SchemaError> {
     // ---- wasm_programs (deduped by wasm_hash) ----
     //
@@ -30,8 +30,8 @@ pub(super) fn wasm_rows(
     //     quarantine; `Fungible` / `Token` drops the row entirely.
     let mut wasm_seen: HashSet<[u8; 32]> = HashSet::new();
     let mut wasm_classification: HashMap<[u8; 32], ContractType> =
-        HashMap::with_capacity(contract_interfaces.len());
-    for iface in contract_interfaces {
+        HashMap::with_capacity(programs.len());
+    for iface in programs {
         let hash = decode_hash(&iface.wasm_hash, "wasm_hash")?;
         if !wasm_seen.insert(hash) {
             continue;

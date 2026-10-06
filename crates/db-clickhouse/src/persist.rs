@@ -39,9 +39,9 @@ pub use domain::ClassificationCache;
 use xdr_parser::executable_update::extract_executable_update;
 use xdr_parser::types::{
     ContractFunction, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
-    ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
-    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
-    ExtractedNftEvent, ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction,
+    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction, ExtractedWasmProgram,
 };
 use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
@@ -79,7 +79,7 @@ pub async fn persist_ledger_clickhouse(
     operations: &[(String, Vec<ExtractedOperation>)],
     events: &[(String, Vec<ExtractedEvent>)],
     invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
     contract_deployments: &[ExtractedContractDeployment],
     account_states: &[ExtractedAccountState],
     liquidity_pools: &[ExtractedLiquidityPool],
@@ -109,7 +109,7 @@ pub async fn persist_ledger_clickhouse(
     // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
     // All three are independent reads; one `join!` pays a single round-trip.
     let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows, sac_classic) = tokio::join!(
-        fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
+        fetch_prior_wasm_verdicts(client, contract_deployments, programs),
         fetch_prior_contract_verdicts(
             client,
             nfts,
@@ -140,7 +140,7 @@ pub async fn persist_ledger_clickhouse(
         operations,
         events,
         invocations,
-        contract_interfaces,
+        programs,
         contract_deployments,
         account_states,
         liquidity_pools,
@@ -240,9 +240,9 @@ struct WasmVerdictRow {
 async fn fetch_prior_wasm_verdicts(
     client: &Client,
     contract_deployments: &[ExtractedContractDeployment],
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
 ) -> HashMap<[u8; 32], ContractType> {
-    let same_ledger: HashSet<String> = contract_interfaces
+    let same_ledger: HashSet<String> = programs
         .iter()
         .map(|i| i.wasm_hash.to_lowercase())
         .collect();

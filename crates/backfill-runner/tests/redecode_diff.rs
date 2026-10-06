@@ -175,7 +175,7 @@ fn stage_ledger(cache: &Path, seq: u32) -> Vec<StagedLedger> {
                 operations: &parsed.operations,
                 events: &parsed.events,
                 invocations: &parsed.invocations,
-                contract_interfaces: &parsed.contract_interfaces,
+                programs: &parsed.programs,
                 contract_deployments: &parsed.contract_deployments,
                 account_states: &parsed.account_states,
                 liquidity_pools: &parsed.liquidity_pools,

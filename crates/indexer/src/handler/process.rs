@@ -15,10 +15,10 @@ use std::time::Instant;
 use stellar_xdr::{LedgerCloseMeta, TransactionMeta};
 use tracing::{info, warn};
 use xdr_parser::types::{
-    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
-    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
-    ExtractedOperation, ExtractedTransaction,
+    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedEvent,
+    ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
+    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
+    ExtractedWasmProgram,
 };
 
 /// Parsed-but-not-yet-persisted output of a single `LedgerCloseMeta`.
@@ -33,7 +33,7 @@ pub struct ParseOutput {
     pub operations: Vec<(String, Vec<ExtractedOperation>)>,
     pub events: Vec<(String, Vec<ExtractedEvent>)>,
     pub invocations: Vec<(String, Vec<ExtractedInvocation>)>,
-    pub contract_interfaces: Vec<ExtractedContractInterface>,
+    pub programs: Vec<ExtractedWasmProgram>,
     pub contract_deployments: Vec<ExtractedContractDeployment>,
     pub account_states: Vec<ExtractedAccountState>,
     pub liquidity_pools: Vec<ExtractedLiquidityPool>,
@@ -182,7 +182,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     let mut all_events = Vec::new();
     let mut all_invocations = Vec::new();
     let mut all_operation_trees: Vec<(String, serde_json::Value)> = Vec::new();
-    let mut all_contract_interfaces = Vec::new();
+    let mut all_programs = Vec::new();
     let mut all_ledger_entry_changes = Vec::new();
     let mut all_nft_events = Vec::new();
     let mut all_asset_transfers = Vec::new();
@@ -247,8 +247,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
                 }
             }
 
-            let interfaces = xdr_parser::extract_contract_interfaces(tm);
-            all_contract_interfaces.extend(interfaces);
+            let interfaces = xdr_parser::extract_wasm_programs(tm);
+            all_programs.extend(interfaces);
 
             let changes = xdr_parser::extract_ledger_entry_changes(
                 tm,
@@ -323,7 +323,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         // ledger without a matching interface are skipped here and picked up
         // by the late-WASM bridge step (task 0120) once reclassify promotes
         // them.
-        let assets = xdr_parser::detect_assets(&deployments, &all_contract_interfaces);
+        let assets = xdr_parser::detect_assets(&deployments, &all_programs);
         all_assets.extend(assets);
         all_pool_family_writes.extend(xdr_parser::pool_family::extract_pool_family_writes(changes));
         let classic_credits = xdr_parser::detect_classic_credit_assets(changes);
@@ -395,7 +395,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         operations: all_operations,
         events: all_events,
         invocations: all_invocations,
-        contract_interfaces: all_contract_interfaces,
+        programs: all_programs,
         contract_deployments: all_contract_deployments,
         account_states: all_account_states,
         liquidity_pools: all_liquidity_pools,
