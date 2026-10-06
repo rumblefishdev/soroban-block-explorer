@@ -2,7 +2,7 @@
 id: '0628'
 title: 'REFACTOR: no wildcard over TransactionMeta versions in the parser'
 type: REFACTOR
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0604', '0573', '0393']
 tags: ['xdr-parsing', 'effort-small', 'priority-medium']
@@ -18,6 +18,12 @@ history:
     note: >
       Filed and started on request after 0604, which removed the wildcards in
       the event model and the invocation tree and left two in the parser.
+  - date: 2026-10-07
+    status: completed
+    who: claude
+    note: >
+      Shipped in #621 (the change) and #622 (its review commit, pushed after
+      #621's head was merged). Behaviour unchanged; all tests pass.
 ---
 
 # No wildcard over TransactionMeta versions in the parser
@@ -40,9 +46,17 @@ does not change: today's versions take the same arms.
 
 ## Acceptance Criteria
 
-- [ ] No `_ =>` arm over `TransactionMeta` versions in `crates/xdr-parser/src`.
-- [ ] One `soroban_return_value`, in `meta.rs`.
-- [ ] All tests pass unchanged; golden event output untouched.
-- [ ] PR title ends with `[refactor]`.
-- [ ] Docs: `meta.rs` module doc updated; `docs/architecture/**` N/A — no
+- [x] No `_ =>` arm over `TransactionMeta` versions in `crates/xdr-parser/src`.
+- [x] One `soroban_return_value`, in `meta.rs`.
+- [x] All tests pass unchanged; golden event output untouched.
+- [x] PR title ends with `[refactor]`.
+- [x] Docs: `meta.rs` module doc updated; `docs/architecture/**` N/A — no
       change in what the parser extracts.
+
+## Outcome
+
+- **Emerged:** a third wildcard, `_ => {}` in `extract_ledger_entry_changes`;
+  a line-distance search missed it behind the long V4 arm, a per-match-block
+  scan found it.
+- **Issue:** #621 merged on its first commit; the review follow-up landed
+  separately as #622.
