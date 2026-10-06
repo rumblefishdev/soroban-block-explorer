@@ -60,14 +60,14 @@ and why delivery is an issue rather than Slack:
 A scheduled Lambda, not a GitHub workflow (the filed plan and why it was
 dropped: [notes/R-github-workflow-plan-superseded.md](notes/R-github-workflow-plan-superseded.md)).
 
-- Every 6 h it reads the image of the Galexie service's current task
+- Every 3 h it reads the image of the Galexie service's current task
   definition and that image's `STELLAR_CORE_VERSION` from its ECR config,
   and the same for the newest `stellar/stellar-galexie` tag on Docker Hub.
 - Docker Hub's core major newer than ours, or any read that fails → the
   function throws; the log says NEW CORE (with the tag) or why it could not
   check.
-- The alarm watches the function's built-in `Errors` (no custom metric): two
-  runs in a row failed, missing data breaching → the existing SNS → Slack.
+- The alarm watches the function's built-in `Errors` (no custom metric):
+  both runs of a 6 h period failed, missing data breaching → the existing SNS → Slack.
   It posts to the alarm channel; nobody is @-mentioned.
 - Code: `infra/lambdas/galexie-protocol-watch/` (plain `.mjs`, AWS SDK from
   the Node 22 runtime), wired in `infra/src/lib/stacks/galexie-protocol-watch.ts`
