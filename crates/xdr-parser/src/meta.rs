@@ -1,13 +1,12 @@
-//! `TransactionMeta` ledger-change accessor (task 0359, revived by 0393).
+//! `TransactionMeta` accessors (task 0359, revived by 0393).
 //!
-//! Projects the ledger entry changes out of a `TransactionMeta`, whatever its
-//! version. Two consumers: [`contract`](crate::contract), which scans them for
-//! deployed WASM, and [`ledger_value`](crate::ledger_value), which telescopes
-//! the before/after balance images into a transaction's net-settled value.
+//! Projects parts of a `TransactionMeta` out, whatever its version: the ledger
+//! entry changes ([`ledger_changes`], [`operation_changes`]) and the Soroban
+//! return value ([`soroban_return_value`]).
 //!
-//! ## Why a module for one function
+//! ## Why a module for these functions
 //!
-//! [`ledger_changes`] is exhaustive with **no `_` wildcard**, so a new
+//! Each match here is exhaustive with **no `_` wildcard**, so a new
 //! protocol meta version (e.g. `V5` for Protocol 24) fails to compile HERE
 //! rather than being silently absorbed into an empty result. A `_ => empty` arm
 //! quietly drops every change of a `V5` transaction while the ledger still
@@ -27,16 +26,16 @@
 //! code (which no dead-code lint would ever flag) — they remain in history at
 //! commit `ddb021ff` for whoever finishes the adoption.
 //!
-//! `contract.rs` was migrated onto this function (0393), and the transaction's
-//! return value lives here too (0628), shared by `operation` and
-//! `invocation`. Other modules still match `TransactionMeta` themselves —
+//! `contract.rs` was migrated onto [`ledger_changes`] (0393), and
+//! [`soroban_return_value`] replaced the copies in `operation` and
+//! `invocation` (0628). Other modules still match `TransactionMeta` themselves —
 //! `ledger_entry_changes`, `event` (`containers`), `operation`
 //! (`op_meta_changes`) — but none with a `_ =>` arm: a new version fails to
 //! compile at every match.
 //!
 //! ## Adding a new meta version (Protocol 24+)
 //!
-//! The compiler will point at [`ledger_changes`]. Decide whether the new
+//! The compiler will point at every match on `TransactionMeta`. Decide whether the new
 //! version carries changes (implement the arm) or not (extend the legacy arm) —
 //! never add a `_ =>` wildcard, never stub an empty return.
 

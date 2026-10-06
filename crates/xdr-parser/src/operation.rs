@@ -5,6 +5,7 @@
 //! functionName, functionArgs (ScVal decoded), and returnValue.
 
 use crate::envelope::{InnerTxRef, muxed_id, muxed_to_g_strkey};
+use crate::meta::soroban_return_value;
 use crate::scval::scval_to_typed_json;
 use crate::types::ExtractedOperation;
 use domain::OperationType;
@@ -35,7 +36,7 @@ pub fn extract_operations(
         InnerTxRef::V1(tx) => tx.operations.as_slice(),
     };
 
-    let return_value = tx_meta.and_then(crate::meta::soroban_return_value);
+    let return_value = tx_meta.and_then(soroban_return_value);
     // Resolved once; the fallback issuer for `allow_trust` ops that inherit it.
     let tx_source = envelope.source_account();
 
