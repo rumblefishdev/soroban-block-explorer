@@ -55,7 +55,8 @@ pub struct TxEvents {
 
 /// One ledger's events, a transaction at a time — the only way to get them.
 /// Transaction-level events are numbered across the whole ledger, so the
-/// ledger is the unit; nothing is decoded until a transaction is asked for.
+/// ledger is the unit; a transaction's events, diagnostic ones included, are
+/// decoded when that transaction is asked for.
 pub struct LedgerEvents<'a> {
     ledger_sequence: u32,
     created_at: i64,
