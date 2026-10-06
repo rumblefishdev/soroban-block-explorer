@@ -305,7 +305,7 @@ entities:
   `Symbol("name")` entry — they are not (that path matched 0 contracts); the name
   lives nested in the metadata struct in instance storage, which
   `scval_to_typed_json` used to drop.
-- WASM upload → `wasm_interface_metadata` row (SEP-48-derived JSONB, keyed by
+- WASM upload → `wasm_programs` row (SEP-48-derived JSONB, keyed by
   wasm_hash BYTEA) and a `wasm_code` row with the program bytes
   ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
 - account state → `accounts` row + `account_balances_current` entries per
@@ -545,7 +545,7 @@ archive is the authoritative source.
 ### 5.4 Contract Interface Extraction
 
 Public function signatures are extracted from contract WASM at deployment time
-and stored in `wasm_interface_metadata.metadata` (keyed by `wasm_hash BYTEA(32)`),
+and stored in `wasm_programs.metadata` (keyed by `wasm_hash BYTEA(32)`),
 deduplicated across every contract instance that shares the same WASM.
 
 The same pass also derives the **mutability** bit (task 0327): the parser scans
@@ -786,7 +786,7 @@ Typed summary columns / structured artifacts retained for normal explorer reads:
   typed `asset_code`/`asset_issuer_id`
 - `soroban_events_appearances` / `soroban_invocations_appearances` — appearance
   indexes only (per §4.4 / §4.5)
-- `soroban_contracts`, `wasm_interface_metadata` — with surrogate PK, BYTEA
+- `soroban_contracts`, `wasm_programs` — with surrogate PK, BYTEA
   wasm_hash, SMALLINT contract_type, JSONB metadata
 - derived explorer entities: `accounts`, `assets`, `nfts`, `nft_ownership_changes`,
   `liquidity_pools`, `liquidity_pool_snapshots`, `lp_positions`,

@@ -1,5 +1,5 @@
 //! Task 0283 — one-shot rebuild of `soroban_contracts.contract_type` from
-//! `wasm_interface_metadata`, plus the `assets` type-3 (Soroban-fungible)
+//! `wasm_programs`, plus the `assets` type-3 (Soroban-fungible)
 //! backfill that cascades from it.
 //!
 //! ## Why this exists
@@ -54,7 +54,7 @@ pub struct ContractTypeRebuildStats {
     pub dry_run: bool,
 }
 
-/// `(wasm_hash, metadata)` row read from `wasm_interface_metadata`.
+/// `(wasm_hash, metadata)` row read from `wasm_programs`.
 #[derive(Row, Deserialize)]
 struct WasmMetaRow {
     wasm_hash: [u8; 32],
@@ -131,12 +131,12 @@ pub async fn execute(
     Ok(stats)
 }
 
-/// Read all `wasm_interface_metadata`, classify each hash in Rust, and return
+/// Read all `wasm_programs`, classify each hash in Rust, and return
 /// only the definitive `Nft`/`Fungible` verdicts (Other is the parser default,
 /// nothing to override).
 async fn classify_all_wasm(client: &ClickhouseClient) -> Result<Vec<VerdictRow>, BackfillError> {
     let rows = client
-        .query("SELECT wasm_hash, metadata FROM wasm_interface_metadata")
+        .query("SELECT wasm_hash, metadata FROM wasm_programs")
         .fetch_all::<WasmMetaRow>()
         .await
         .map_err(BackfillError::Ch)?;
@@ -425,13 +425,13 @@ mod tests {
         let nft_hash = "11".repeat(32); // 64 hex chars = FixedString(32)
         let fun_hash = "22".repeat(32);
         cl.query(&format!(
-            "INSERT INTO wasm_interface_metadata (wasm_hash, metadata) VALUES \
+            "INSERT INTO wasm_programs (wasm_hash, metadata) VALUES \
              (unhex('{nft_hash}'), '{{\"functions\":[{{\"name\":\"owner_of\",\"doc\":\"\",\"inputs\":[],\"outputs\":[]}}],\"wasm_byte_len\":1}}'), \
              (unhex('{fun_hash}'), '{{\"functions\":[{{\"name\":\"total_supply\",\"doc\":\"\",\"inputs\":[],\"outputs\":[]}}],\"wasm_byte_len\":1}}')"
         ))
         .execute()
         .await
-        .expect("seed wasm_interface_metadata");
+        .expect("seed wasm_programs");
 
         cl.query(&format!(
             "INSERT INTO soroban_contracts \

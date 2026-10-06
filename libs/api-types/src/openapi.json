@@ -2646,7 +2646,7 @@
           },
           "upgradeable": {
             "type": ["boolean", "null"],
-            "description": "Task 0327: contract mutability, 3-state.\n- `Some(true)` → **Upgradeable**: the current WASM imports\n  `update_current_contract_wasm` (a self-upgrade path).\n- `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC\n  has no WASM and is always `Some(false)`).\n- `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /\n  pre-0327 row) — the frontend renders no chip.\n\nDerived from the WASM at parse time\n(`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag\n(none exists)."
+            "description": "Task 0327: contract mutability, 3-state.\n- `Some(true)` → **Upgradeable**: the current WASM imports\n  `update_current_contract_wasm` (a self-upgrade path).\n- `Some(false)` → **Immutable/frozen**: it cannot upgrade itself (a SAC\n  has no WASM and is always `Some(false)`).\n- `None` → **Unknown**: the WASM interface hasn't been parsed yet (stub /\n  pre-0327 row) — the frontend renders no chip.\n\nDerived from the WASM at parse time\n(`wasm_programs.metadata.upgradeable`), not from a ledger flag\n(none exists)."
           },
           "wasm_hash": {
             "type": ["string", "null"]
@@ -2699,7 +2699,7 @@
       },
       "ContractInterfaceMetadata": {
         "type": "object",
-        "description": "Soroban contract interface metadata persisted in\n`wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the\nindexer's `xdr_parser::types::ContractInterface` exactly — the API\nhands the same JSON object to clients that the indexer wrote.",
+        "description": "Soroban contract interface metadata persisted in\n`wasm_programs.metadata` (JSONB). Field shape mirrors the\nindexer's `xdr_parser::types::ContractInterface` exactly — the API\nhands the same JSON object to clients that the indexer wrote.",
         "required": ["functions", "wasm_byte_len"],
         "properties": {
           "functions": {

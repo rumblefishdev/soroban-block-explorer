@@ -39,11 +39,8 @@ fn column_order_ledgers() {
 }
 
 #[test]
-fn column_order_wasm_interface_metadata() {
-    assert_columns::<WasmInterfaceMetadataRow>(
-        "wasm_interface_metadata",
-        &["wasm_hash", "metadata"],
-    );
+fn column_order_wasm_programs() {
+    assert_columns::<WasmProgramRow>("wasm_programs", &["wasm_hash", "metadata"]);
 }
 
 #[test]
@@ -1843,7 +1840,7 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
 /// The common Soroban case: the WASM was uploaded in an EARLIER ledger, so it
 /// is NOT in this ledger's `contract_interfaces` (the same-ledger map is
 /// empty). The writer pre-fetched its `Nft` verdict from
-/// `wasm_interface_metadata` and passes it via `prior_wasm_verdicts`. The
+/// `wasm_programs` and passes it via `prior_wasm_verdicts`. The
 /// deploy override must consult that fallback and flip the contract to `Nft`
 /// — and because the override runs before NFT routing, this ledger's NFT row
 /// routes straight to the hot bucket (no quarantine round-trip).

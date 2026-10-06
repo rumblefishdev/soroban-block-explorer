@@ -218,7 +218,7 @@ pub struct StagedLedger {
     /// OBSERVED this change set (full-set replace; trustline-only appearances
     /// never emit one). lore-0463.
     pub account_entry_state_rows: Vec<AccountEntryStateRow>,
-    pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
+    pub wasm_rows: Vec<WasmProgramRow>,
     /// `wasm_code` — the bytes of each program uploaded in this ledger.
     pub wasm_code_rows: Vec<WasmCodeRow>,
     pub contract_rows: Vec<SorobanContractRow>,
@@ -602,7 +602,7 @@ pub fn build_balance_rows(
 /// different ledgers, so a deploy's WASM is invisible to the same-ledger
 /// `wasm_classification` map below and the contract would persist the parser
 /// default `Other`. The writer pre-fetches the verdict for such hashes from
-/// the already-persisted `wasm_interface_metadata` (see
+/// the already-persisted `wasm_programs` (see
 /// `persist::fetch_prior_wasm_verdicts`) and passes it here; the deploy
 /// override consults it as a fallback after the same-ledger map. Legacy
 /// callers via [`prepare`] pass an empty map and behave exactly as before.
@@ -925,7 +925,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         // Verdict source, in precedence order:
         //   1. `wasm_classification` — WASM uploaded in THIS ledger.
         //   2. `prior_wasm_verdicts` — WASM uploaded in an EARLIER ledger,
-        //      pre-fetched by the writer from `wasm_interface_metadata`
+        //      pre-fetched by the writer from `wasm_programs`
         //      (task 0283 live G1). This is the common Soroban case
         //      (upload + deploy are separate txs / ledgers); without it
         //      the contract would persist `Other` and its NFT events would

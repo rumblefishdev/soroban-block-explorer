@@ -2,7 +2,7 @@
 //! uploaded before the indexer started writing them.
 //!
 //! The indexer stores a program's bytes when it sees the upload. Older
-//! programs are known only by hash (`wasm_interface_metadata`,
+//! programs are known only by hash (`wasm_programs`,
 //! `soroban_contracts.wasm_hash`). This pass reads each missing program from
 //! Soroban RPC `getLedgerEntries` (`ContractCode` by hash — archived programs
 //! are returned too) and keeps it only when its sha256 equals the hash, so a
@@ -67,7 +67,7 @@ pub async fn execute(
     let missing: Vec<[u8; 32]> = client
         .query(
             "SELECT wasm_hash FROM ( \
-                 SELECT wasm_hash FROM wasm_interface_metadata \
+                 SELECT wasm_hash FROM wasm_programs \
                  UNION DISTINCT \
                  SELECT assumeNotNull(wasm_hash) AS wasm_hash FROM soroban_contracts \
                  WHERE wasm_hash IS NOT NULL \

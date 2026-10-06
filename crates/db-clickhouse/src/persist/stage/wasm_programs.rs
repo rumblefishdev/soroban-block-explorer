@@ -1,4 +1,4 @@
-//! WASM programs uploaded in this ledger: one `wasm_interface_metadata` row
+//! WASM programs uploaded in this ledger: one `wasm_programs` row
 //! and one `wasm_code` row per hash, and the per-hash contract-type verdict
 //! the deploys use.
 //!
@@ -11,13 +11,13 @@ use xdr_parser::types::ExtractedContractInterface;
 
 use super::{StagedLedger, decode_hash, staging_err};
 use crate::SchemaError;
-use crate::persist::rows::{WasmCodeRow, WasmInterfaceMetadataRow};
+use crate::persist::rows::{WasmCodeRow, WasmProgramRow};
 
 pub(super) fn wasm_rows(
     out: &mut StagedLedger,
     contract_interfaces: &[ExtractedContractInterface],
 ) -> Result<HashMap<[u8; 32], ContractType>, SchemaError> {
-    // ---- wasm_interface_metadata (deduped by wasm_hash) ----
+    // ---- wasm_programs (deduped by wasm_hash) ----
     //
     // Task 0118 Phase 2 (PG-side mirror) — run the wasm-spec classifier
     // alongside the metadata dedup. The resulting per-hash verdict
@@ -48,7 +48,7 @@ pub(super) fn wasm_rows(
             "wasm_byte_len": iface.wasm_byte_len,
             "upgradeable": iface.upgradeable,
         });
-        out.wasm_rows.push(WasmInterfaceMetadataRow {
+        out.wasm_rows.push(WasmProgramRow {
             wasm_hash: hash,
             metadata: serde_json::to_string(&metadata)
                 .map_err(|e| staging_err(&format!("wasm metadata serialize: {e}")))?,

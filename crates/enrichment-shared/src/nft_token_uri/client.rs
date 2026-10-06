@@ -559,7 +559,7 @@ fn build_simulate_envelope(
 ///
 /// TODO(audit-0197 follow-up): replace the try/fallback with
 /// WASM-spec-driven dispatch — inspect the contract's interface
-/// (in `wasm_interface_metadata.metadata` JSONB) to learn
+/// (in `wasm_programs.metadata` JSONB) to learn
 /// `token_uri`'s arity ahead of time and call the right variant
 /// directly. Saves one RPC round-trip per SEP-39 token (a SEP-39
 /// collection with N tokens currently spends 2 × N RPC calls; with
@@ -567,7 +567,7 @@ fn build_simulate_envelope(
 ///   1. `soroban_contracts.wasm_hash` is reliably populated for
 ///      non-SAC contracts — currently 99.9 % NULL (Step 1 Finding F9;
 ///      same root cause class as Bug #4 SAC-detection gap).
-///   2. `wasm_interface_metadata.metadata` is populated with a real
+///   2. `wasm_programs.metadata` is populated with a real
 ///      `functions[]` array — locally 40 % of audited rows store
 ///      `{}` because the parser produced no spec from the WASM
 ///      bytecode (Step 1 Finding F8).

@@ -134,7 +134,7 @@ all-NULL row but stamps `wasm_uploaded_at_ledger = 0` — the lowest possible
 version — so it always loses to the real deploy row. `accounts` breaks the rule:
 its version is `last_seen_ledger`, which the defaulting write *bumps to the
 current ledger*, so the emptied row wins. Tables with **no** version column
-(`assets`, `wasm_interface_metadata`) are exposed by default, because there the
+(`assets`, `wasm_programs`) are exposed by default, because there the
 last write always wins. Check any new state-table writer against this.
 
 ### Removed (lore 0425)

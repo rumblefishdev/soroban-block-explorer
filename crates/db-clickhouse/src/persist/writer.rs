@@ -85,7 +85,7 @@ pub struct PartitionWriter {
 struct TableInserts {
     accounts: Option<Insert<AccountRow>>,
     account_entry_state: Option<Insert<AccountEntryStateRow>>,
-    wasm: Option<Insert<WasmInterfaceMetadataRow>>,
+    wasm: Option<Insert<WasmProgramRow>>,
     wasm_code: Option<Insert<WasmCodeRow>>,
     contracts: Option<Insert<SorobanContractRow>>,
     metadata: Option<Insert<SorobanContractMetadataRow>>,
@@ -320,7 +320,7 @@ impl PartitionWriter {
         write_rows(
             &self.client,
             &mut self.inserts.wasm,
-            "wasm_interface_metadata",
+            "wasm_programs",
             &wasm_rows,
         )
         .await?;
@@ -706,7 +706,7 @@ where
 ///   long-running partition-aligned inserts can have multi-minute
 ///   gaps between chunked HTTP body writes on **sparse** tables
 ///   (e.g. `nfts` with ~15 rows/ledger fills the crate's ~256 KiB
-///   buffer only every ~5 minutes; `wasm_interface_metadata` and
+///   buffer only every ~5 minutes; `wasm_programs` and
 ///   `lp_positions` can sit empty across many ledgers). CH's default
 ///   `http_receive_timeout = 30s` then closes the socket
 ///   server-side between sparse chunks, surfacing on the client as

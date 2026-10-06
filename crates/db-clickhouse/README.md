@@ -190,7 +190,7 @@ docker exec sorban-block-explorer-clickhouse-1 \
 | `Authentication failed: password is incorrect`                | `.env` `CLICKHOUSE_PASSWORD` ≠ compose value    | Match the value in `docker-compose.yml` (default `clickhouse`)   |
 | Dictionary load fails after schema apply                      | `CLICKHOUSE_PASSWORD` ≠ literal in `init.sql`   | Either revert the env, or change both `init.sql` + compose       |
 | `Storage MergeTree doesn't support FINAL` in queries          | `FINAL` only valid on `ReplacingMergeTree`      | Drop `FINAL` for plain MergeTree (`ledgers`, `liquidity_pools`,  |
-|                                                               |                                                 | `wasm_interface_metadata`)                                       |
+|                                                               |                                                 | `wasm_programs`)                                       |
 | Smoke test reports `CLICKHOUSE_URL not set — skipping`        | env not exported to the cargo subshell          | `set -a; source .env; set +a` first                              |
 
 ## What lives here
@@ -313,7 +313,7 @@ The writer applies these CH settings on every per-table insert:
 | `min_insert_block_size_rows`  | `1_000_000`   | Coalesce small chunks into 1 M-row blocks before the part-create path.                           |
 | `min_insert_block_size_bytes` | `268_435_456` | Same coalescing knob, byte side (256 MiB).                                                       |
 | `insert_deduplicate`          | `0`           | Rely on `ReplacingMergeTree` ORDER-BY dedup, not per-block dedup hash.                           |
-| `http_receive_timeout`        | `7200` (2 h)  | CH default 30s closes the socket between sparse chunks on tables like `nfts` / `wasm_interface_metadata` / `lp_positions` that fill the client's 256 KiB buffer slowly. Surface: `Network("channel closed")` after ~10 min on a real mainnet partition. 2 h covers a 64 k-ledger partition (~80 min wall-clock) with headroom for parallel contention. |
+| `http_receive_timeout`        | `7200` (2 h)  | CH default 30s closes the socket between sparse chunks on tables like `nfts` / `wasm_programs` / `lp_positions` that fill the client's 256 KiB buffer slowly. Surface: `Network("channel closed")` after ~10 min on a real mainnet partition. 2 h covers a 64 k-ledger partition (~80 min wall-clock) with headroom for parallel contention. |
 | `http_send_timeout`           | `7200` (2 h)  | Same axis, response side.                                                                        |
 
 > **Important — split XML config overrides.** CH 26.3 records the
@@ -409,7 +409,7 @@ The full table-by-table ENGINE / PARTITION BY / ORDER BY matrix lives in
 | `VARCHAR(N)` / `TEXT` / variable `BYTEA`            | `String`                                                                    |
 | 32-byte `BYTEA` (hashes, `pool_id`, `wasm_hash`)    | `FixedString(32)`                                                           |
 | `NUMERIC(28,7)`                                     | `Decimal128(7)`                                                             |
-| `JSONB` (only `wasm_interface_metadata.metadata`)   | `String`                                                                    |
+| `JSONB` (only `wasm_programs.metadata`)   | `String`                                                                    |
 | `JSONB` (`nfts.metadata`)                           | **OMITTED** (column dropped on the CH side; PG keeps it)                    |
 | `TIMESTAMPTZ` (only `ledgers.closed_at`)            | `DateTime64(3, 'UTC')`                                                      |
 | `TIMESTAMPTZ created_at` (every other table)        | **OMITTED** (column dropped on the CH side; PG keeps it)                    |

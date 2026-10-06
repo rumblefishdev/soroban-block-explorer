@@ -145,18 +145,18 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- wasm_interface_metadata (immutable lookup) -----
+    // ----- wasm_programs (immutable lookup) -----
     client
         .query(
-            "INSERT INTO wasm_interface_metadata (wasm_hash, metadata) \
+            "INSERT INTO wasm_programs (wasm_hash, metadata) \
              VALUES (unhex('0000000000000000000000000000000000000000000000000000000000000099'), '{\"functions\":[]}')",
         )
         .execute()
         .await
-        .expect("insert wasm_interface_metadata");
+        .expect("insert wasm_programs");
     assert_count(
         &client,
-        "wasm_interface_metadata",
+        "wasm_programs",
         "hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'",
         1,
     )
@@ -585,7 +585,7 @@ async fn cleanup(client: &clickhouse::Client) {
         ),
         format!("ALTER TABLE account_balances_current DELETE WHERE account_id = {l}"),
         format!("ALTER TABLE soroban_contracts DELETE WHERE id = {l}"),
-        "ALTER TABLE wasm_interface_metadata DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
+        "ALTER TABLE wasm_programs DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {l}"),
         format!(
             "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence IN ({l}, {l} - 1)"
