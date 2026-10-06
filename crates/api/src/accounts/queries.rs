@@ -153,12 +153,9 @@ struct AccountListBalanceRow {
 ///   no `account_id` (task 0447: it was 82 % of the bytes the MV rewrites every
 ///   refresh); Step 2 resolves it by `id` for the page only. The native-balance
 ///   seek (Step 2) is `FINAL` on `balances`/`assets` to collapse re-ingest versions.
-/// - **Native balance** is the `asset_type = 0` row of
-///   `account_balances_current`, mirroring the PG partial-index join. A
-///   `1 AS matched` marker in the subquery + `if(abc.matched = 1, …, NULL)`
-///   makes a missing native row decode as `None` (PG `NULL`). We do NOT use
-///   `SETTINGS join_use_nulls = 1` — the `api_reader` CH user runs `readonly = 1`
-///   (RBAC `read_only` profile), which rejects per-query setting overrides.
+/// - **Native balance** is the open native (`asset_type = 0`) row of the
+///   unified `balances` table, looked up for the page ids; an account without
+///   one keeps `xlm_balance = None` (PG `NULL`).
 /// - **Cursor inlined**, not `.bind()`-ed: the clickhouse 0.15 bound-parameter
 ///   path returns 0 rows when `None` is bound into a tuple keyset comparison
 ///   (the documented defect that forced the transactions list to inline). The
@@ -229,14 +226,14 @@ pub async fn fetch_list(
     // StrKey comes from `accounts` by `id` (bloom seek, shared resolver). The
     // balance comes from the unified `balances` table by a PK-prefix key-seek:
     // `balances` is ORDER BY (holder_id, asset_id), so `holder_id IN (…)` seeks
-    // the prefix; `FINAL` is bounded to the ≤limit page keys. The IN-list is i64 surrogates (no injection
-    // surface), bounded by the page limit.
-    let ids = {
-        let mut v: Vec<i64> = rows.iter().map(|r| r.id).collect();
-        v.sort_unstable();
-        v.dedup();
-        v.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
-    };
+    // the prefix; `FINAL` is bounded to the ≤limit page keys. The IN-list is
+    // i64 surrogates (no injection surface), bounded by the page limit.
+    let page_ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let ids = page_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let balances_sql = format!(
         // task 0331 read-cutover: native (XLM) balance now from the unified
         // `balances` table (RAW Int128 = stroops). The frontend scales by
@@ -259,7 +256,7 @@ pub async fn fetch_list(
     );
     // Both seeks key off the page ids alone, so they go out together.
     let (strkeys, balance_rows) = tokio::join!(
-        resolve_accounts(client, rows.iter().map(|r| r.id).collect()),
+        resolve_accounts(client, page_ids),
         client
             .query(&balances_sql)
             .fetch_all::<AccountListBalanceRow>(),
@@ -270,21 +267,25 @@ pub async fn fetch_list(
         .map(|r| (r.account_id, r.balance))
         .collect();
 
-    // Every row of the copy comes from `accounts`, so its StrKey is always
-    // there; a row without one is skipped rather than shown with no address.
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| {
-            Some(AccountListRow {
-                account_id: strkeys.get(&r.id)?.clone(),
-                xlm_balance: balances.get(&r.id).cloned(),
-                id: r.id,
-                last_seen_ledger: r.last_seen_ledger,
-                first_seen_ledger: r.first_seen_ledger,
-                home_domain: r.home_domain,
-            })
-        })
-        .collect())
+    // Every row of the copy comes from `accounts`, so its StrKey is there
+    // unless `accounts` was swapped since the last refresh (a backfill). Such
+    // a row cannot link anywhere, so it is left out and logged.
+    let mut page = Vec::with_capacity(rows.len());
+    for r in rows {
+        let Some(account_id) = strkeys.get(&r.id) else {
+            tracing::warn!("account list: no StrKey in accounts for id {}", r.id);
+            continue;
+        };
+        page.push(AccountListRow {
+            account_id: account_id.clone(),
+            xlm_balance: balances.get(&r.id).cloned(),
+            id: r.id,
+            last_seen_ledger: r.last_seen_ledger,
+            first_seen_ledger: r.first_seen_ledger,
+            home_domain: r.home_domain,
+        });
+    }
+    Ok(page)
 }
 
 // ---------------------------------------------------------------------------
