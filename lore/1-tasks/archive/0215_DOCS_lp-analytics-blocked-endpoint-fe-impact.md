@@ -2,10 +2,10 @@
 id: '0215'
 title: 'Doc: LP analytics endpoints blocked-on-oracle — frontend impact catalog'
 type: DOCS
-status: blocked
-by: ['0199']
+status: superseded
 related_adr: ['0043']
 related_tasks: ['0199', '0207']
+superseded_by: ['0199']
 tags: [layer-docs, layer-frontend, audit-2026-05-12, priority-low, effort-small]
 milestone: 2
 links:
@@ -36,6 +36,16 @@ history:
       writing is the inverse: which views change once TVL starts returning values,
       and how to present the ~1.5-day price staleness. Re-scope or close with
       0199; do not publish the catalogue as-is.
+  - date: '2026-10-06'
+    status: superseded
+    who: karolkow
+    note: >
+      Archived as superseded by 0199, per its own third criterion. 0199 is
+      archived (completed 2026-08-19); TVL, volume and fee revenue are computed
+      at read time through the prices join (ADR 0053), not by a "Lambda 2"
+      writer, so the catalogue's premise no longer holds. The one live residue
+      is documented in code: the TVL filter stays disabled
+      (`web/src/pages/liquidity-pools/PoolsFilterBar.tsx:15-23`).
 ---
 
 # LP analytics endpoints — blocked-on-oracle, frontend impact
@@ -73,9 +83,9 @@ When task 0199 ships (price oracle + Lambda 2 LP analytics writer):
 
 ## Acceptance Criteria
 
-- [ ] This doc reviewed by FE lead — confirm view list (§6.13, §6.14) maps to current sprint plan.
-- [ ] Sprint backlog tagged: any LP-detail UI work scheduled BEFORE 0199 ships must explicitly note "uses placeholder for tvl/volume/fee_revenue".
-- [ ] On 0199 ship: revisit this doc, archive with `superseded_by: ['0199']`.
+- [ ] This doc reviewed by FE lead — obsolete: 0199 shipped first
+- [ ] Sprint backlog tagged with the placeholder note — obsolete: 0199 shipped first
+- [x] On 0199 ship: revisit this doc, archive with `superseded_by: ['0199']`.
 
 ## Notes
 

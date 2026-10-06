@@ -2,9 +2,9 @@
 id: '0608'
 title: 'Serve the Prices portal at /prices-api/, 301 from /api'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0519']
+related_tasks: ['0519', '0631']
 tags: ['infra', 'cloudfront', 'prices-portal', 'effort-small']
 links: []
 history:
@@ -32,6 +32,16 @@ history:
       /prices-api/ live ~10:55 UTC: prices bundle synced under prices-api/
       (#385), then Delivery deployed from develop (#599; cdk diff showed only
       this change). Every 301 and the portal verified on production.
+  - date: 2026-10-06
+    status: completed
+    who: karolkow
+    note: >
+      Archived. The footer / nav link shipped with the SPA release
+      `production-2026.10.05-1-web` (#599 inside it): the live bundle carries
+      `"/prices-api/"`, and `/api/dashboard?x=1` answers 301 to
+      `/prices-api/dashboard?x=1` (public GET, 2026-10-06). Dropping the old
+      `api/` and `pricing-api/` bucket prefixes waits on the Prices asset_id
+      migration and moves to 0631.
 ---
 
 # Serve the Prices portal at /prices-api/, 301 from /api
@@ -48,10 +58,10 @@ already shared breaks.
 
 - Done: `/prices-api/` live on production since 2026-10-02 ~10:55 UTC;
   `/api…` and `/pricing-api…` answer `301` there, query string kept.
-- Next: SPA deploy (footer / nav link) with the next regular release — not
-  before Prices' asset_id migration ends (no AWS deploys meanwhile, Adam,
-  2026-10-02); then drop the `api/` and `pricing-api/` bucket prefixes.
-- In force: the `301` covers the old link until the SPA ships.
+- Done: footer / nav link live with the SPA release of 2026-10-05.
+- Moved: dropping the `api/` and `pricing-api/` bucket prefixes — task 0631,
+  after Prices' asset_id migration ends.
+- In force: the `301` keeps every old link working.
 
 ## Context
 
@@ -94,8 +104,8 @@ the explorer half is the hosting and the redirect.
 - [x] `/api`, `/api/`, `/api/dashboard?signin=failed`, `/pricing-api/docs`
       → `301` to `/prices-api/`, `/prices-api/`,
       `/prices-api/dashboard?signin=failed`, `/prices-api/docs`
-- [ ] Explorer footer / nav link points at `/prices-api/` (merged in #599,
-      ships with the next SPA deploy)
+- [x] Explorer footer / nav link points at `/prices-api/` (#599, live with
+      `production-2026.10.05-1-web`; the bundle carries `"/prices-api/"`)
 - [x] **Docs updated** — infrastructure-overview.md, frontend-overview.md
 - [x] **API types regenerated** — N/A — no change under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**`
@@ -115,6 +125,11 @@ the explorer half is the hosting and the redirect.
    Confirmed on production 2026-10-02: CloudFront hands them over still
    percent-encoded (`a%26b`, `%C3%A9` round-trip); parameter order may change.
 4. **`/prices-api/`, not `/pricing-api/`** — see the 2026-10-02 history entry.
+
+## Future Work
+
+- Drop the `api/` and `pricing-api/` prefixes from
+  `production-soroban-explorer-api-spa` (deploy order step 4) — task 0631.
 
 ## Notes
 

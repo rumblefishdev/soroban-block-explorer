@@ -4,7 +4,7 @@ title: 'BUG: accounts row is rewritten with defaults on every touch — first_se
 type: BUG
 status: backlog
 related_adr: []
-related_tasks: ['0420', '0232', '0425']
+related_tasks: ['0420', '0232', '0425', '0497']
 tags:
   [
     'area-indexer',
@@ -151,18 +151,18 @@ see a wrong account age today.
   (the NFT, LP and contract entries are retired — task 0497). About 3.5% of
   accounts show a first appearance that is too late (estimate, 400-row sample,
   task 0531), on the account page and the account list.
+- **Owns the end of `repair-tier1`** (handed over when 0497 was archived,
+  2026-10-06): once `first_seen_ledger` survives later writes, this task
+  deletes the `repair-tier1` subcommand (`crates/backfill-runner/src/repair_tier1.rs`)
+  and the mandatory step in `docs/backfills.md`.
 - **Rejected by the user (thread 403):** a separate first-seen table, and
   keeping `repair-tier1` as the lasting answer.
 - **Measured:** one account's first appearance from `transaction_participants`
   costs 25 ms even for the busiest account (4.3 M rows, 65 MiB,
   `ORDER BY ledger_sequence LIMIT 1`); a 50-account list page costs 2.3–27 GiB
   (task 0531) — read-time derivation fits the account page only.
-- **Tested on a local ClickHouse 26.3:** `SimpleAggregateFunction(max,
-Tuple(Int64 ledger, value…))` acts as argMax with plain inserts — rows
-  written out of order give the newest value before and after a merge; a
-  newer `NULL` wins, as it should; a tie at one ledger is broken by the value
-  (the writer emits one row per ledger, so it does not arise). Not tested:
-  whether clickhouse-rs inserts a `Tuple` column.
+- **Tested on a local ClickHouse 26.3:** the tuple `max` acts as argMax —
+  [notes/R-tuple-max-test-2026-10.md](notes/R-tuple-max-test-2026-10.md).
 - **Routes still open:** the split recommended below (identity + first/last
   seen as `min`/`max` on `AggregatingMergeTree`, volatile fields to
   `account_entry_state` — no argMax needed), or one `AggregatingMergeTree`

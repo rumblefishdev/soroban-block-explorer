@@ -2,9 +2,9 @@
 id: '0497'
 title: 'RESEARCH: retire repair-tier1 — move every MIN-semantics copy off RMT state tables'
 type: RESEARCH
-status: active
+status: completed
 related_adr: ['0055']
-related_tasks: ['0464', '0463', '0420', '0492']
+related_tasks: ['0464', '0463', '0420', '0492', '0421']
 tags:
   [
     backend,
@@ -50,6 +50,16 @@ history:
       lp_positions (task 0468, decision 399 B, PR #578): the column was
       dropped. repair-tier1 now rebuilds accounts.first_seen_ledger only.
       Converted to a directory (file past 150 lines).
+  - date: '2026-10-06'
+    status: completed
+    who: karolkow
+    note: >
+      Archived. Four of five entries retired (both NFT copies, lp_positions,
+      soroban_contracts); `repair_tier1.rs` now rebuilds only
+      `accounts.first_seen_ledger`. That last entry, its candidate routes and
+      the deletion of the subcommand with its mandatory step in
+      `docs/backfills.md` are handed to 0421, whose storage change is the
+      route that retires it.
 ---
 
 # RESEARCH: retire repair-tier1
@@ -69,7 +79,7 @@ and the mandatory step in `docs/backfills.md` can be deleted.
 | `nfts.minted_at_ledger`, `nfts_pending.minted_at_ledger` | retired — read from the ownership history, columns dropped (2026-09-25 / 2026-10-01)                                                                                                                                                                                                              |
 | `lp_positions.first_deposit_ledger`                      | retired — column dropped (task 0468, decision 399 B, PR #578, 2026-10-01)                                                                                                                                                                                                                         |
 | `soroban_contracts.{deployer_id, deployed_at_ledger}`    | retired — not corrupt: written once at creation, carried by every upgrade; all 154,331 contracts agree across their rows. The rebuild took the first surviving upgrade for 1,652 contracts (decision 402 A, PR #575, 2026-10-01). The "1 597 / 146 397 diverge" below compared with that formula. |
-| `accounts.first_seen_ledger`                             | **open** — the only entry left (thread 403)                                                                                                                                                                                                                                                       |
+| `accounts.first_seen_ledger`                             | **handed to 0421** — the only entry left (thread 403); 0421 also deletes the subcommand and its `docs/backfills.md` step                                                                                                                                                                          |
 
 **Accounts, the remaining entry.** About 3.5% late (estimate, 400-row sample,
 task 0531). Measured 2026-10-01: one account's first appearance read from

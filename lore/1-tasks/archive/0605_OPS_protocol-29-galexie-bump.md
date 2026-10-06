@@ -2,9 +2,9 @@
 id: '0605'
 title: 'Protocol 29: Galexie 28.0.1 stalled at the pubnet vote — bump to 29.0.0 (no XDR change)'
 type: OPS
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0367', '0548']
+related_tasks: ['0367', '0548', '0560', '0610']
 tags: [ingestion, galexie, protocol-29, incident, priority-high]
 links:
   - 'https://hub.docker.com/r/stellar/stellar-galexie/tags'
@@ -19,6 +19,16 @@ history:
       Created during the outage. Pubnet voted to protocol 29 at 17:00 UTC;
       Galexie 28.0.1 stopped exporting at ledger 64,717,644. Third occurrence
       of the 0367 failure mode, and the first upgrade with no advance work.
+  - date: 2026-10-06
+    status: completed
+    who: karolkow
+    note: >
+      Archived. Galexie 29.0.0 deployed 2026-10-02 06:27 UTC (release
+      `production-2026.10.02-1`, #590), first P29 export 07:04 UTC (0610 note
+      `R-p29-stall-and-pinned-core-version.md`). Checked 2026-10-06, read-only:
+      `ledgers` 64,717,000–64,730,000 holds 13,001 distinct sequences of 13,001;
+      both production DLQs at 0 messages; `production-galexie-ingestion-lag` OK
+      since 2026-10-02 07:07 UTC. The healthcheck item lives in 0560 step 4.
 ---
 
 # Protocol 29: Galexie bump
@@ -35,7 +45,7 @@ whole migration is the Galexie image: 29.0.0, captive core
 
 - Done: cause found, protocol 29 content checked, decode of P29 ledgers checked.
 - Done: Galexie 29.0.0 mirrored into ECR and pinned in `production.json`.
-- Next: `deploy-production-ingestion`, then the contiguity check.
+- Done: deployed 2026-10-02 06:27 UTC; ledgers contiguous across the gap.
 - In force: no Rust change — `stellar-xdr` stays at 28.0.0.
 
 ## Context
@@ -88,9 +98,11 @@ JSON, so it is not part of this task.
       `sha256:5269dfd9…a495a3`, identical to the Hub digest: ECR stored the
       manifest list as pushed (one linux/amd64 entry, `sha256:538ad0fb…`, also
       present in ECR)
-- [ ] Galexie 29.0.0 live, S3 exports resumed from 64,717,645
-- [ ] `ledgers` contiguous across the gap (count = distinct = range), DLQ 0,
-      ingestion-lag alarm back to OK
+- [x] Galexie 29.0.0 live, S3 exports resumed from 64,717,645 — deployed
+      2026-10-02 06:27 UTC, first P29 export 07:04 UTC
+- [x] `ledgers` contiguous across the gap — 64,717,000–64,730,000: 13,001
+      distinct of 13,001 (2026-10-06); both DLQs 0; ingestion-lag alarm OK
+      since 2026-10-02 07:07 UTC
 - [x] Protocol 29 checked for XDR changes — none; no Rust change needed
 - [x] **Docs updated** — N/A: the Galexie recipe in `docs/deployment.md` and
       the upgrade note in `infrastructure-overview.md` already describe this
@@ -102,6 +114,8 @@ JSON, so it is not part of this task.
 - Queued on `stellar-xdr` `main`, not in any protocol yet: contract-spec type
   names widen from 60 to 1024 characters (ungated), CAP-88 millisecond close
   time (new `StellarValue` arms) and CAP-87 ML-DSA cost types. The first can
-  break our Wasm interface-spec parsing once SDKs emit long names.
+  break our Wasm interface-spec parsing once SDKs emit long names. No task:
+  nothing ships it yet; it belongs to the next `stellar-xdr` bump.
 - The 0367 healthcheck item is still open: `pgrep -x stellar-core` stayed
-  healthy for this whole stall; only the lag alarm noticed.
+  healthy for this whole stall; only the lag alarm noticed. Tracked in 0560,
+  step 4 (ledger-advance health check).
