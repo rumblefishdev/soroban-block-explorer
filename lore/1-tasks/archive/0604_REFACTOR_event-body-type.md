@@ -1,8 +1,8 @@
 ---
 id: '0604'
-title: 'REFACTOR: one EventBody type for consensus and diagnostic events [structure only]'
+title: 'REFACTOR: one EventBody type for consensus and diagnostic events'
 type: REFACTOR
-status: active
+status: completed
 related_adr: ['0059']
 related_tasks: ['0573']
 tags: ['xdr-parsing', 'effort-small', 'priority-low']
@@ -32,6 +32,14 @@ history:
       Started on request. Two PRs: `[refactor]` (EventBody, one match over
       meta versions, NFT ledger only in the id), then a small behaviour PR
       (duplicate-id refusal in staging, count check in the reconciliation).
+  - date: 2026-10-07
+    status: completed
+    who: claude
+    note: >
+      Shipped in four PRs: #613 soroban_events staging move (structure only),
+      #614 duplicate-id refusal (behaviour), #615 reconciliation count (low
+      risk), #612 EventBody (refactor). Golden output unchanged; four golden
+      ledgers carry 3,598 ids, none repeated.
 ---
 
 # One EventBody type for consensus and diagnostic events
@@ -82,17 +90,31 @@ Proof gaps from the 0573 review, for the same PR's tests:
 
 ## Acceptance Criteria
 
-- [ ] `EventBody` is the only place the four body fields are declared.
-- [ ] NFT events carry their ledger only inside `event_id`.
-- [ ] No wildcard over `TransactionMeta` versions in the event model and the
+- [x] `EventBody` is the only place the four body fields are declared.
+- [x] NFT events carry their ledger only inside `event_id`.
+- [x] No wildcard over `TransactionMeta` versions in the event model and the
       invocation tree (`operation.rs` and `ledger_entry_changes.rs` keep theirs:
       outside the event model).
-- [ ] Reconciliation compares counts; staging refuses a duplicated id.
-- [ ] Golden test `event_extraction_golden` passes with its expected files
+- [x] Reconciliation compares counts; staging refuses a duplicated id.
+- [x] Golden test `event_extraction_golden` passes with its expected files
       untouched; no assertion changes beyond the field paths.
-- [ ] API types regenerate with no diff.
-- [ ] PRs by basket: #612 `[refactor]`; #613 `[structure only]` (the
+- [x] API types regenerate with no diff.
+- [x] PRs by basket: #612 `[refactor]`; #613 `[structure only]` (the
       `soroban_events` staging move `stage.rs` needed first); #614 the
       duplicate-id guard (behaviour); a `[low risk]` reconciliation count.
-- [ ] Docs updated: `docs/architecture/xdr-parsing/xdr-parsing-overview.md`
+- [x] Docs updated: `docs/architecture/xdr-parsing/xdr-parsing-overview.md`
       (event model), or N/A with reason.
+
+## Outcome
+
+- **Emerged:** #614 needed `stage.rs` split first (#613, `moved.sh`: 96 lines
+  out, 96 in), because the file is past the size limit.
+- **Emerged:** the duplicate-id guard found five staging fixtures with several
+  events under one id; `numbered()` gives them distinct ids, assertions
+  unchanged.
+- **Issue:** the compiler-guided rename collapsed three NFT state-test events
+  to ledger 100 (were 200, 300 and a parameter) while tests still passed;
+  caught in review, restored with `event_at(ledger)`.
+- **Issue:** the disk filled during the work; merged worktrees were cleaned.
+- **Left:** `operation.rs` and `ledger_entry_changes.rs` keep a wildcard over
+  meta versions (outside the event model, no task yet).
