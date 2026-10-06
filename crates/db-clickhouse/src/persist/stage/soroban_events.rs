@@ -29,8 +29,10 @@ pub(super) fn rows(
     // `contract_activity` below: the parser says where an event came from,
     // so a fee event is left out by its origin, not inferred from its id.
     let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
-    // The id is the row's key: two events under one id would merge into one
-    // row without a trace, so a repeated id stops the ledger instead.
+    // The id is an event's public identity (stellar-rpc's), and with the
+    // contract it keys the row: a repeat can only be a parser defect, and two
+    // events of one contract under one id would merge into one row without a
+    // trace, so a repeated id stops the ledger instead.
     let mut seen_ids: HashSet<EventId> = HashSet::new();
     for (tx_hash, evs) in events {
         let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
