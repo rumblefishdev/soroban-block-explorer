@@ -7,6 +7,12 @@ import { useLocation } from 'react-router-dom';
 import { NETWORK_SITES, type Network } from '../network.js';
 import { NAV_LINKS } from './routes.js';
 
+/** From this width up the switcher sits beside the logo. Below it, on phones,
+ *  the row has no room for it: the header shows only a TESTNET badge on
+ *  testnet ({@link TestnetBadge}) and the choice moves into the menu drawer
+ *  ({@link NetworkMenu}). */
+export const SWITCHER_FROM = 'sm';
+
 /** How long the highlight takes to slide to the other network. */
 const SLIDE_MS = 220;
 
@@ -40,7 +46,11 @@ export function NetworkSwitcher({ current }: { current: Network }) {
   };
 
   return (
-    <Box component="nav" aria-label="Network" sx={{ flexShrink: 0 }}>
+    <Box
+      component="nav"
+      aria-label="Network"
+      sx={{ flexShrink: 0, display: { xs: 'none', [SWITCHER_FROM]: 'block' } }}
+    >
       <Box
         component="a"
         href={href}
@@ -84,7 +94,7 @@ export function sectionOf(pathname: string): string {
 // component. They come from the colour scales, which are the same in both
 // themes: the highlight is a pastel chip on either background, so its ink
 // must stay dark too.
-function tabColors(theme: Theme, key: Network) {
+export function tabColors(theme: Theme, key: Network) {
   if (key === 'testnet') {
     return {
       fill: theme.palette.yellow[100],
@@ -116,13 +126,6 @@ const switchShape = (theme: Theme) => ({
     outline: `2px solid ${theme.palette.stroke.action}`,
     outlineOffset: 2,
   },
-  // On phones the control is only ~33px tall; an invisible margin around it
-  // makes it a comfortable target for a thumb without making it look bigger.
-  '&::before': {
-    content: '""',
-    position: 'absolute' as const,
-    inset: { xs: '-6px -2px', sm: 0 },
-  },
 });
 
 // The highlight: one box that sits under the current network's name and
@@ -145,19 +148,13 @@ const thumbLook = (shown: Network) => (theme: Theme) => ({
   transform: shown === 'testnet' ? 'translateX(100%)' : 'none',
 });
 
-const labelShape = (theme: Theme) => ({
+const labelShape = {
   position: 'relative' as const,
-  // Narrower and smaller on phones, so logo, switcher, theme toggle and
-  // menu fit one row at 360px.
-  px: { xs: 0.75, sm: 1.5 },
+  px: 1.5,
   py: 0.25,
   textAlign: 'center' as const,
-  fontSize: theme.typography.bodyXsMedium.fontSize,
-  [theme.breakpoints.up('sm')]: {
-    fontSize: theme.typography.bodySmMedium.fontSize,
-  },
   transition: `color ${slide}`,
-});
+};
 
 const labelLook = (key: Network, shown: Network) => (theme: Theme) => ({
   color:
