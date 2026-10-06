@@ -1,5 +1,5 @@
-//! The chart assembly in isolation: which buckets appear and how a state is
-//! priced, with the database's answers written by hand.
+//! The chart assembly in isolation: buckets, carry-forward and pricing, with
+//! the database's answers written by hand.
 
 use chrono::{DateTime, TimeZone, Utc};
 
@@ -17,19 +17,9 @@ fn secs(t: DateTime<Utc>) -> i64 {
     t.timestamp()
 }
 
-/// One bucket's last state, priced at `price_bucket`, from `samples` rows.
-fn add_state(
-    inputs: &mut ChartInputs,
-    bucket: DateTime<Utc>,
-    reserves: Vec<Option<f64>>,
-    price_bucket: DateTime<Utc>,
-    samples: u64,
-) {
-    inputs.states.insert(ms(bucket), reserves);
-    inputs
-        .state_price_buckets
-        .insert(ms(bucket), secs(price_bucket));
-    inputs.samples.insert(ms(bucket), samples);
+/// A day long after every window below, so no bucket is "still running".
+fn later() -> DateTime<Utc> {
+    at(2030, 1, 1, 0)
 }
 
 fn tvls(points: &[crate::liquidity_pools::dto::ChartDataPoint]) -> Vec<Option<String>> {
@@ -37,101 +27,273 @@ fn tvls(points: &[crate::liquidity_pools::dto::ChartDataPoint]) -> Vec<Option<St
 }
 
 #[test]
-fn only_buckets_in_which_the_pool_changed_or_traded_appear() {
-    // Day 1 changed, day 2 was quiet, day 3 traded without a state row.
-    let day1 = at(2026, 9, 1, 0);
-    let day3 = at(2026, 9, 3, 0);
-    let mut inputs = ChartInputs {
-        prices: vec![vec![(secs(day1), 2.0)]],
+fn a_quiet_pool_draws_its_last_state_in_every_bucket() {
+    // No change in the window: only the state before it. Leg A at $2 and
+    // leg B at $1 on each of the three days.
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(10.0), Some(5.0)]),
+        prices: vec![
+            vec![
+                (secs(at(2026, 9, 1, 0)), 2.0),
+                (secs(at(2026, 9, 2, 0)), 2.0),
+                (secs(at(2026, 9, 3, 0)), 2.0),
+            ],
+            vec![
+                (secs(at(2026, 9, 1, 0)), 1.0),
+                (secs(at(2026, 9, 2, 0)), 1.0),
+                (secs(at(2026, 9, 3, 0)), 1.0),
+            ],
+        ],
         ..ChartInputs::default()
     };
-    add_state(&mut inputs, day1, vec![Some(10.0)], day1, 4);
-    inputs.volumes.insert(ms(day1), Some(7.0));
-    inputs.volumes.insert(ms(day3), Some(3.0));
+    let points = assemble_chart(
+        "1d",
+        at(2026, 9, 1, 0),
+        at(2026, 9, 4, 0),
+        later(),
+        &inputs,
+        30,
+    );
 
-    let points = assemble_chart(&inputs, 30);
-
-    let buckets: Vec<_> = points.iter().map(|p| p.bucket).collect();
-    assert_eq!(buckets, vec![day1, day3]);
-    assert_eq!(tvls(&points), vec![Some("20.00".into()), None]);
-    assert_eq!(points[0].samples_in_bucket, 4);
-    assert_eq!(points[0].volume.as_deref(), Some("7.00"));
-    assert_eq!(points[1].samples_in_bucket, 0);
-    assert_eq!(points[1].volume.as_deref(), Some("3.00"));
+    assert_eq!(points.len(), 3);
+    assert_eq!(tvls(&points), vec![Some("25.00".into()); 3]);
+    // Carried, not observed: no state row, no trades.
+    assert!(
+        points
+            .iter()
+            .all(|p| p.samples_in_bucket == 0 && p.volume.is_none())
+    );
 }
 
 #[test]
-fn a_week_prices_at_the_day_of_its_last_change() {
-    // The week of Monday 2026-09-07 last changed on Wednesday; Sunday's
-    // close is higher and must not be used.
-    let monday = at(2026, 9, 7, 0);
-    let wednesday = at(2026, 9, 9, 0);
-    let mut inputs = ChartInputs {
+fn a_carried_state_is_priced_at_each_bucket_s_own_price() {
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(10.0)]),
         prices: vec![vec![
-            (secs(wednesday), 5.0),
-            (secs(at(2026, 9, 13, 0)), 8.0),
+            (secs(at(2026, 9, 1, 0)), 1.0),
+            (secs(at(2026, 9, 2, 0)), 3.0),
         ]],
         ..ChartInputs::default()
     };
-    add_state(&mut inputs, monday, vec![Some(1.0)], wednesday, 2);
+    let points = assemble_chart(
+        "1d",
+        at(2026, 9, 1, 0),
+        at(2026, 9, 3, 0),
+        later(),
+        &inputs,
+        30,
+    );
 
-    let points = assemble_chart(&inputs, 30);
+    assert_eq!(
+        tvls(&points),
+        vec![Some("10.00".into()), Some("30.00".into())]
+    );
+}
 
-    assert_eq!(points[0].bucket, monday);
-    assert_eq!(tvls(&points), vec![Some("5.00".into())]);
+#[test]
+fn a_pool_born_in_the_window_starts_at_its_first_state() {
+    // No state before the window; the first change is on day 2, then the
+    // pool is quiet on day 3.
+    let day2 = at(2026, 9, 2, 0);
+    let inputs = ChartInputs {
+        seed: None,
+        states: [(ms(day2), vec![Some(4.0)])].into_iter().collect(),
+        samples: [(ms(day2), 3)].into_iter().collect(),
+        volumes: [(ms(day2), Some(7.0))].into_iter().collect(),
+        prices: vec![vec![(secs(at(2026, 9, 1, 0)), 1.0)]],
+    };
+    let points = assemble_chart(
+        "1d",
+        at(2026, 9, 1, 0),
+        at(2026, 9, 4, 0),
+        later(),
+        &inputs,
+        30,
+    );
+
+    let buckets: Vec<_> = points.iter().map(|p| p.bucket).collect();
+    assert_eq!(buckets, vec![day2, at(2026, 9, 3, 0)]);
+    assert_eq!(points[0].samples_in_bucket, 3);
+    assert_eq!(points[0].volume.as_deref(), Some("7.00"));
+    // The flow is not carried: the quiet day traded nothing.
+    assert_eq!(points[1].samples_in_bucket, 0);
+    assert_eq!(points[1].volume, None);
+    assert_eq!(points[1].fee_revenue, None);
+    assert_eq!(points[1].tvl.as_deref(), Some("4.00"));
 }
 
 #[test]
 fn a_price_older_than_the_carry_cap_prices_nothing() {
-    // The only close is on day 1: 48 h before day 3 (inside the cap), 72 h
-    // before day 4 (past it).
-    let day3 = at(2026, 9, 3, 0);
-    let day4 = at(2026, 9, 4, 0);
-    let mut inputs = ChartInputs {
+    // The last close is three days before the bucket: past the 48 h cap.
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(10.0)]),
         prices: vec![vec![(secs(at(2026, 9, 1, 0)), 1.0)]],
         ..ChartInputs::default()
     };
-    add_state(&mut inputs, day3, vec![Some(10.0)], day3, 1);
-    add_state(&mut inputs, day4, vec![Some(10.0)], day4, 1);
+    let points = assemble_chart(
+        "1d",
+        at(2026, 9, 3, 0),
+        at(2026, 9, 5, 0),
+        later(),
+        &inputs,
+        30,
+    );
 
-    let points = assemble_chart(&inputs, 30);
-
+    // Day 3 is 48 h after the close (inside the cap), day 4 is past it.
     assert_eq!(tvls(&points), vec![Some("10.00".into()), None]);
 }
 
 #[test]
 fn a_leg_without_a_reserve_or_a_price_leaves_no_tvl() {
-    let day = at(2026, 9, 1, 0);
-    let prices = vec![vec![(secs(day), 1.0)], vec![(secs(day), 1.0)]];
-    let mut unknown_reserve = ChartInputs {
+    let prices = vec![
+        vec![(secs(at(2026, 9, 1, 0)), 1.0)],
+        vec![(secs(at(2026, 9, 1, 0)), 1.0)],
+    ];
+    let unknown_reserve = ChartInputs {
+        seed: Some(vec![Some(10.0), None]),
         prices: prices.clone(),
         ..ChartInputs::default()
     };
-    add_state(&mut unknown_reserve, day, vec![Some(10.0), None], day, 1);
-    let mut unpriced_leg = ChartInputs {
+    let unpriced_leg = ChartInputs {
+        seed: Some(vec![Some(10.0), Some(1.0)]),
         prices: vec![prices[0].clone(), Vec::new()],
         ..ChartInputs::default()
     };
-    add_state(&mut unpriced_leg, day, vec![Some(10.0), Some(1.0)], day, 1);
-    let mut short_reserves = ChartInputs {
-        prices,
-        ..ChartInputs::default()
-    };
-    add_state(&mut short_reserves, day, vec![Some(10.0)], day, 1);
-
-    for inputs in [unknown_reserve, unpriced_leg, short_reserves] {
-        let points = assemble_chart(&inputs, 30);
+    for inputs in [unknown_reserve, unpriced_leg] {
+        let points = assemble_chart(
+            "1d",
+            at(2026, 9, 1, 0),
+            at(2026, 9, 2, 0),
+            later(),
+            &inputs,
+            30,
+        );
         assert_eq!(tvls(&points), vec![None], "never a partial sum");
     }
 }
 
 #[test]
-fn a_pool_with_no_legs_has_no_tvl() {
-    let day = at(2026, 9, 1, 0);
-    let mut inputs = ChartInputs::default();
-    add_state(&mut inputs, day, Vec::new(), day, 1);
+fn weekly_buckets_start_on_monday_and_price_at_their_last_day() {
+    // 2026-09-07 is a Monday. The window starts mid-week, on Wednesday.
+    let monday = at(2026, 9, 7, 0);
+    let sunday = at(2026, 9, 13, 0);
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(1.0)]),
+        prices: vec![vec![(secs(at(2026, 9, 9, 0)), 5.0), (secs(sunday), 8.0)]],
+        ..ChartInputs::default()
+    };
+    let points = assemble_chart(
+        "1w",
+        at(2026, 9, 9, 12),
+        at(2026, 9, 14, 0),
+        later(),
+        &inputs,
+        30,
+    );
 
-    let points = assemble_chart(&inputs, 30);
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].bucket, monday);
+    assert_eq!(points[0].tvl.as_deref(), Some("8.00"));
+}
+
+#[test]
+fn the_running_week_prices_at_today_not_at_its_sunday() {
+    // `now` is Wednesday 2026-09-09: the week's Sunday has no price yet, so
+    // the bucket prices at today — through the carry, at Tuesday's close.
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(1.0)]),
+        prices: vec![vec![(secs(at(2026, 9, 8, 0)), 6.0)]],
+        ..ChartInputs::default()
+    };
+    let points = assemble_chart(
+        "1w",
+        at(2026, 9, 7, 0),
+        at(2026, 9, 9, 15),
+        at(2026, 9, 9, 15),
+        &inputs,
+        30,
+    );
+
+    assert_eq!(tvls(&points), vec![Some("6.00".into())]);
+}
+
+#[test]
+fn hourly_buckets_follow_the_hour() {
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(2.0)]),
+        prices: vec![vec![
+            (secs(at(2026, 9, 1, 10)), 1.0),
+            (secs(at(2026, 9, 1, 11)), 2.0),
+        ]],
+        ..ChartInputs::default()
+    };
+    let from = Utc.with_ymd_and_hms(2026, 9, 1, 10, 30, 0).unwrap();
+    let points = assemble_chart("1h", from, at(2026, 9, 1, 12), later(), &inputs, 30);
+
+    let buckets: Vec<_> = points.iter().map(|p| p.bucket).collect();
+    assert_eq!(buckets, vec![at(2026, 9, 1, 10), at(2026, 9, 1, 11)]);
+    assert_eq!(
+        tvls(&points),
+        vec![Some("2.00".into()), Some("4.00".into())]
+    );
+}
+
+#[test]
+fn a_weekly_range_ending_mid_week_prices_its_last_week_at_its_end() {
+    // The range ends Thursday 2026-09-10, long ago; closes stop the day
+    // before. The week must price at Wednesday, not at its Sunday (which
+    // would be past the 48 h cap from Wednesday's close).
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(1.0)]),
+        prices: vec![vec![(secs(at(2026, 9, 9, 0)), 4.0)]],
+        ..ChartInputs::default()
+    };
+    let points = assemble_chart(
+        "1w",
+        at(2026, 9, 7, 0),
+        at(2026, 9, 10, 0),
+        later(),
+        &inputs,
+        30,
+    );
+
+    assert_eq!(tvls(&points), vec![Some("4.00".into())]);
+}
+
+#[test]
+fn nothing_is_drawn_past_now() {
+    let inputs = ChartInputs {
+        seed: Some(vec![Some(1.0)]),
+        prices: vec![vec![(secs(at(2026, 9, 1, 0)), 1.0)]],
+        ..ChartInputs::default()
+    };
+    // `to` a day ahead of `now` (noon on day 1): only day 1 exists.
+    let points = assemble_chart(
+        "1d",
+        at(2026, 9, 1, 0),
+        at(2026, 9, 3, 0),
+        at(2026, 9, 1, 12),
+        &inputs,
+        30,
+    );
+
+    assert_eq!(points.len(), 1);
+}
+
+#[test]
+fn a_pool_with_no_legs_has_no_tvl() {
+    let inputs = ChartInputs {
+        seed: Some(Vec::new()),
+        ..ChartInputs::default()
+    };
+    let points = assemble_chart(
+        "1d",
+        at(2026, 9, 1, 0),
+        at(2026, 9, 2, 0),
+        later(),
+        &inputs,
+        30,
+    );
 
     assert_eq!(
         tvls(&points),

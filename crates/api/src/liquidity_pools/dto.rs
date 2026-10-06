@@ -418,11 +418,13 @@ pub struct ChartParams {
 /// One row from the chart endpoint. All money fields are **USD decimal
 /// strings with exactly two decimals**, computed at read from on-chain
 /// quantities × the in-cluster price series (task 0199, ADR 0053):
-/// - `tvl` — "TVL at close of bucket": the bucket's last pool state,
-///   Σ reserve·price over every leg, priced at that state's own hour or
-///   day (`1w`: the day of the week's last change). A leg with no candle
-///   then falls back to its most recent close within 48 h, so a pool whose
-///   second leg has not traded today still reports; `null` when any leg
+/// - `tvl` — "TVL at close of bucket": the pool's last state at or before
+///   the bucket, carried into buckets in which the pool did not change
+///   (those have `samples_in_bucket = 0`), Σ reserve·price over every leg,
+///   priced at the bucket's own hour or day (`1w`: the week's last day, or
+///   the window's last day for a week the window cuts short). A leg with no
+///   candle then falls back to its most recent close within 48 h, so a pool
+///   whose second leg has not traded today still reports; `null` when any leg
 ///   has no price within that window (untracked asset, pre-listing
 ///   history, or a provider-side gap such as the 2026-07-21..08-03 freeze)
 ///   or no known reserve.
