@@ -14,19 +14,22 @@ export function TestnetBadge({ current }: { current: Network }) {
 
   return (
     <Box
-      sx={(theme) => ({
-        display: { xs: 'inline-flex', [SWITCHER_FROM]: 'none' },
-        alignItems: 'center',
-        flexShrink: 0,
-        px: 0.75,
-        py: 0.25,
-        borderRadius: `${theme.shape.radius.s}px`,
-        border: `1px solid ${tabColors(theme, 'testnet').border}`,
-        backgroundColor: tabColors(theme, 'testnet').fill,
-        color: tabColors(theme, 'testnet').text,
-        ...theme.typography.bodyXsMedium,
-        letterSpacing: '0.04em',
-      })}
+      sx={(theme) => {
+        const colors = tabColors(theme, 'testnet');
+        return {
+          display: { xs: 'inline-flex', [SWITCHER_FROM]: 'none' },
+          alignItems: 'center',
+          flexShrink: 0,
+          px: 0.75,
+          py: 0.25,
+          borderRadius: `${theme.shape.radius.s}px`,
+          border: `1px solid ${colors.border}`,
+          backgroundColor: colors.fill,
+          color: colors.text,
+          ...theme.typography.bodyXsMedium,
+          letterSpacing: '0.04em',
+        };
+      }}
     >
       TESTNET
     </Box>

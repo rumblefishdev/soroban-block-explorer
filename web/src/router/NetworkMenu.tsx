@@ -3,6 +3,8 @@ import Typography from '@mui/material/Typography';
 import CheckIcon from '@mui/icons-material/Check';
 import { useLocation } from 'react-router-dom';
 
+import { NavButton } from '@rumblefish/soroban-block-explorer-ui';
+
 import { NETWORK_SITES, type Network } from '../network.js';
 import { SWITCHER_FROM, sectionOf } from './NetworkSwitcher.js';
 
@@ -17,10 +19,11 @@ export function NetworkMenu({ current }: { current: Network }) {
 
   return (
     <Box
-      component="nav"
-      aria-label="Network"
+      role="group"
+      aria-labelledby="drawer-network-heading"
       sx={(theme) => ({
-        display: { xs: 'block', [SWITCHER_FROM]: 'none' },
+        display: { xs: 'flex', [SWITCHER_FROM]: 'none' },
+        flexDirection: 'column',
         mt: 1,
         pt: 1,
         borderTop: `1px solid ${theme.palette.stroke.default}`,
@@ -29,6 +32,7 @@ export function NetworkMenu({ current }: { current: Network }) {
       <Typography
         variant="bodyXsMedium"
         color="text.tertiary"
+        id="drawer-network-heading"
         sx={{ display: 'block', px: 1, pb: 0.5 }}
       >
         Network
@@ -53,28 +57,12 @@ export function NetworkMenu({ current }: { current: Network }) {
             <CheckIcon aria-hidden sx={{ fontSize: 18 }} />
           </Box>
         ) : (
-          <Box
+          <NavButton
             key={site.key}
-            component="a"
+            label={site.name}
+            size="lg"
             href={`${site.url}${section}`}
-            sx={(theme) => ({
-              display: 'flex',
-              px: 1,
-              py: 1,
-              textDecoration: 'none',
-              color: theme.palette.text.tertiary,
-              transition: 'background-color 0.15s, color 0.15s',
-              '&:hover': {
-                backgroundColor: theme.palette.surface.background,
-                borderRadius: `${theme.shape.radius.s}px`,
-                color: theme.palette.text.secondary,
-              },
-            })}
-          >
-            <Typography variant="bodyMedium" color="inherit">
-              {site.name}
-            </Typography>
-          </Box>
+          />
         )
       )}
     </Box>
