@@ -41,6 +41,8 @@ pub fn extract_account_states(
         signers: Option<Vec<Value>>,
         thresholds: Option<String>,
         flags: Option<u32>,
+        num_sponsoring: Option<u32>,
+        num_sponsored: Option<u32>,
     }
 
     let mut map: HashMap<String, AccountAccum> = HashMap::new();
@@ -134,6 +136,14 @@ pub fn extract_account_states(
             .and_then(Value::as_str)
             .map(str::to_string);
         entry.flags = data.get("flags").and_then(Value::as_u64).map(|f| f as u32);
+        entry.num_sponsoring = data
+            .get("num_sponsoring")
+            .and_then(Value::as_u64)
+            .map(|n| n as u32);
+        entry.num_sponsored = data
+            .get("num_sponsored")
+            .and_then(Value::as_u64)
+            .map(|n| n as u32);
         entry.is_creation = entry.is_creation || is_creation;
         entry.ledger_sequence = change.ledger_sequence;
         entry.created_at = change.created_at;
@@ -298,6 +308,8 @@ pub fn extract_account_states(
                 signers: accum.signers,
                 thresholds: accum.thresholds,
                 flags: accum.flags,
+                num_sponsoring: accum.num_sponsoring,
+                num_sponsored: accum.num_sponsored,
                 home_domain: accum.home_domain,
                 created_at: accum.created_at,
             }

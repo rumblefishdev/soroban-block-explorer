@@ -21,6 +21,9 @@ fn account(state: &mut NetworkState, id: i64, live: bool, ledger: u32) {
             home_domain: String::new(),
             thresholds: [1, 0, 0, 0],
             flags: 0,
+            // Non-zero, so a seed row that dropped them would read as 0.
+            num_sponsoring: 4,
+            num_sponsored: 2,
             signers: vec![],
         },
     );
@@ -55,5 +58,22 @@ fn only_accounts_newer_than_ours_are_written() {
         out.rows
             .iter()
             .all(|r| r.last_updated_ledger == i64::from(CHECKPOINT_ERA))
+    );
+}
+
+/// The seed writes the same CAP-33 counters the live writer does, copied from
+/// the snapshot's entry — an account last touched before our floor must not
+/// read 0 for a sponsor that pays for others. lore-0629.
+#[test]
+fn seed_row_carries_the_sponsorship_counters() {
+    let mut state = NetworkState::default();
+    account(&mut state, 1, true, CHECKPOINT_ERA);
+
+    let out = corrections(&state, &HashMap::new());
+
+    assert_eq!(out.rows.len(), 1);
+    assert_eq!(
+        (out.rows[0].num_sponsoring, out.rows[0].num_sponsored),
+        (4, 2)
     );
 }

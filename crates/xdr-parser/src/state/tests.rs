@@ -695,6 +695,53 @@ fn extract_updated_account_with_home_domain() {
     assert_eq!(accounts[0].sequence_number, 42);
 }
 
+/// The CAP-33 counters travel with the account entry, as the chain states
+/// them. lore-0629.
+#[test]
+fn account_state_carries_the_sponsorship_counters() {
+    let changes = vec![make_change(
+        "account",
+        "updated",
+        json!({ "account_id": "GABC123" }),
+        Some(json!({
+            "account_id": "GABC123",
+            "balance": 0,
+            "seq_num": 7,
+            "home_domain": "",
+            "num_sub_entries": 1,
+            "thresholds": "01000000",
+            "flags": 0,
+            "num_sponsoring": 0,
+            "num_sponsored": 3,
+        })),
+    )];
+
+    let a = &extract_account_states(&changes)[0];
+    assert_eq!((a.num_sponsoring, a.num_sponsored), (Some(0), Some(3)));
+}
+
+/// A trustline-only change set never saw the account entry, so it carries no
+/// counters — the writer must not overwrite them with a 0. lore-0629.
+#[test]
+fn trustline_only_state_carries_no_sponsorship_counters() {
+    let changes = vec![make_change(
+        "trustline",
+        "updated",
+        json!({ "account_id": "GABC123" }),
+        Some(json!({
+            "account_id": "GABC123",
+            "asset": { "type": "credit_alphanum4", "code": "USDC", "issuer": "GISSUER" },
+            "balance": 10,
+            "limit": 100,
+            "flags": 1,
+        })),
+    )];
+
+    let a = &extract_account_states(&changes)[0];
+    assert_eq!((a.num_sponsoring, a.num_sponsored), (None, None));
+    assert!(a.thresholds.is_none());
+}
+
 #[test]
 fn skip_state_only_account() {
     // `state` is a read-only pre-image snapshot; account state is derived

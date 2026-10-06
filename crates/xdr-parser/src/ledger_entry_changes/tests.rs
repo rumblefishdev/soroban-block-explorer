@@ -582,3 +582,60 @@ fn config_setting_id_table_covers_every_variant() {
         "config_setting_id_name lacks arms for: {unmapped:?}"
     );
 }
+
+/// An `AccountEntry` carrying the CAP-33 counters in its V2 extension.
+fn account_with_ext(ext: AccountEntryExtensionV1Ext) -> AccountEntry {
+    let LedgerEntryData::Account(mut a) = make_account_entry(make_account_id(0xC1), 0).data else {
+        unreachable!()
+    };
+    a.ext = AccountEntryExt::V1(AccountEntryExtensionV1 {
+        liabilities: Liabilities {
+            buying: 0,
+            selling: 0,
+        },
+        ext,
+    });
+    a
+}
+
+fn v2(num_sponsoring: u32, num_sponsored: u32) -> AccountEntryExtensionV1Ext {
+    AccountEntryExtensionV1Ext::V2(AccountEntryExtensionV2 {
+        num_sponsored,
+        num_sponsoring,
+        signer_sponsoring_i_ds: VecM::default(),
+        ext: AccountEntryExtensionV2Ext::V0,
+    })
+}
+
+/// The counters are the chain's, copied as stored. Values from mainnet
+/// (`getLedgerEntries`, 2026-10-06): a wallet that pays reserves for others,
+/// and an account whose 3 reserves a sponsor pays. lore-0629.
+#[test]
+fn sponsorship_counts_copy_the_v2_extension() {
+    assert_eq!(
+        sponsorship_counts(&account_with_ext(v2(4_044_091, 0))),
+        (4_044_091, 0)
+    );
+    assert_eq!(sponsorship_counts(&account_with_ext(v2(0, 3))), (0, 3));
+}
+
+/// Without the V2 extension the account never took part in sponsorship: the
+/// network reads both counters as 0, and so do we — a real 0, not unknown.
+#[test]
+fn sponsorship_counts_are_zero_without_the_v2_extension() {
+    let LedgerEntryData::Account(v0) = make_account_entry(make_account_id(0xC2), 0).data else {
+        unreachable!()
+    };
+    assert_eq!(sponsorship_counts(&v0), (0, 0));
+    assert_eq!(
+        sponsorship_counts(&account_with_ext(AccountEntryExtensionV1Ext::V0)),
+        (0, 0)
+    );
+}
+
+#[test]
+fn account_data_carries_the_sponsorship_counts() {
+    let data = account_data(&account_with_ext(v2(7, 3)));
+    assert_eq!(data["num_sponsoring"], 7);
+    assert_eq!(data["num_sponsored"], 3);
+}

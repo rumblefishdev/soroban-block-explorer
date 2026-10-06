@@ -72,6 +72,8 @@ fn column_order_account_entry_state() {
             "threshold_med",
             "threshold_high",
             "flags",
+            "num_sponsoring",
+            "num_sponsored",
             "last_updated_ledger",
         ],
     );
@@ -2896,6 +2898,8 @@ fn closed_at_ledger_marks_only_real_closures() {
         ]),
         thresholds: Some("01030303".to_string()),
         flags: Some(0),
+        num_sponsoring: Some(0),
+        num_sponsored: Some(0),
         home_domain: None,
         created_at: 1_700_000_000,
     };
@@ -2912,6 +2916,8 @@ fn closed_at_ledger_marks_only_real_closures() {
         signers: None,
         thresholds: None,
         flags: None,
+        num_sponsoring: None,
+        num_sponsored: None,
         home_domain: None,
         created_at: 1_700_000_000,
     };
@@ -2990,6 +2996,8 @@ fn entry_state_rows_full_set_replace_semantics() {
         ]),
         thresholds: Some("01030303".to_string()),
         flags: Some(5),
+        num_sponsoring: Some(0),
+        num_sponsored: Some(0),
     };
     // Entry observed with an EMPTY set — removing the last signer must still
     // emit a row, or the stale set survives in the RMT forever.
@@ -3006,6 +3014,8 @@ fn entry_state_rows_full_set_replace_semantics() {
         signers: Some(vec![]),
         thresholds: Some("01000000".to_string()),
         flags: Some(0),
+        num_sponsoring: Some(0),
+        num_sponsored: Some(0),
     };
     // Trustline-only accum: NO entry observed — must not touch the set.
     let trustline_only = ExtractedAccountState {
@@ -3024,6 +3034,8 @@ fn entry_state_rows_full_set_replace_semantics() {
         signers: None,
         thresholds: None,
         flags: None,
+        num_sponsoring: None,
+        num_sponsored: None,
     };
     // Merged account: nothing to emit.
     let merged = ExtractedAccountState {
@@ -3039,6 +3051,8 @@ fn entry_state_rows_full_set_replace_semantics() {
         signers: None,
         thresholds: None,
         flags: None,
+        num_sponsoring: None,
+        num_sponsored: None,
     };
 
     let staged = stage::prepare(
@@ -3160,6 +3174,8 @@ fn same_ledger_state_pairs_collapse_to_the_last_for_every_state_writer() {
         signers: None,
         thresholds: None,
         flags: None,
+        num_sponsoring: None,
+        num_sponsored: None,
     };
     let second = ExtractedAccountState {
         sequence_number: 9,
@@ -3342,6 +3358,8 @@ fn two_states_for_one_account_in_one_ledger_collapse_to_the_last() {
         })]),
         thresholds: Some("01020202".to_string()),
         flags: Some(0),
+        num_sponsoring: Some(0),
+        num_sponsored: Some(0),
     };
     // tx #5, SAME ledger — signer S removed. This is the state that must win.
     let removed = ExtractedAccountState {

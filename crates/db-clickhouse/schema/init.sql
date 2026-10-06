@@ -442,6 +442,18 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- rename an existing table, so a database created before 2026-08-21 needs:
 --     RENAME TABLE account_signers TO account_entry_state;
 -- Metadata-only, instant, nothing to move.
+-- num_sponsoring / num_sponsored (task 0629): the CAP-33 counters the network
+-- keeps on the AccountEntry — reserves this account pays for others, and
+-- reserves of this account paid by others. Copied as stored, never counted by
+-- us; an entry without the V2 extension reads 0 on chain and 0 here. `DEFAULT
+-- 0` lets the ALTER land before the writer deploys (see `balances` below).
+-- PROD: an existing table needs, BEFORE the indexer that writes them deploys
+-- and before any `backfill-runner` built from this code runs a seed (both
+-- insert the same row struct, positional against this column order, hence
+-- AFTER):
+--     ALTER TABLE account_entry_state ADD COLUMN IF NOT EXISTS num_sponsoring UInt32 DEFAULT 0 AFTER flags;
+--     ALTER TABLE account_entry_state ADD COLUMN IF NOT EXISTS num_sponsored  UInt32 DEFAULT 0 AFTER num_sponsoring;
+-- Rows written before then read 0 until the checkpoint seed rewrites them.
 CREATE TABLE IF NOT EXISTS account_entry_state (
     account_id          Int64,
     signer_keys         Array(String),
@@ -452,6 +464,8 @@ CREATE TABLE IF NOT EXISTS account_entry_state (
     threshold_med       UInt8,
     threshold_high      UInt8,
     flags               UInt32,
+    num_sponsoring      UInt32 DEFAULT 0,
+    num_sponsored       UInt32 DEFAULT 0,
     last_updated_ledger Int64
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)

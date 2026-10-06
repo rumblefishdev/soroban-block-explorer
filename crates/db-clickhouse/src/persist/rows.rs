@@ -95,6 +95,9 @@ pub struct AccountEntryStateRow {
     pub threshold_med: u8,
     pub threshold_high: u8,
     pub flags: u32,
+    /// CAP-33 counters, copied from the entry (lore-0629).
+    pub num_sponsoring: u32,
+    pub num_sponsored: u32,
     pub last_updated_ledger: i64,
 }
 
