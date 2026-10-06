@@ -27,14 +27,12 @@
 //! code (which no dead-code lint would ever flag) — they remain in history at
 //! commit `ddb021ff` for whoever finishes the adoption.
 //!
-//! `contract.rs` was migrated onto this function (0393): it had an identical
-//! private copy, wildcard arm included. Four modules still match
-//! `TransactionMeta` themselves — `ledger_entry_changes` (18 sites), `event`
-//! (11), `invocation` (6), `operation` (6), plus `transaction` (1 site, for
-//! version detection rather than projection). **`invocation` (×2) and
-//! `operation` (×1) still carry `_ =>` wildcard arms** — the exact hole this
-//! module exists to close. Migrating them is open work (0393 hygiene notes), so
-//! this is not yet the only way to walk meta.
+//! `contract.rs` was migrated onto this function (0393), and the transaction's
+//! return value lives here too (0628), shared by `operation` and
+//! `invocation`. Other modules still match `TransactionMeta` themselves —
+//! `ledger_entry_changes`, `event` (`containers`), `operation`
+//! (`op_meta_changes`) — but none with a `_ =>` arm: a new version fails to
+//! compile at every match.
 //!
 //! ## Adding a new meta version (Protocol 24+)
 //!
@@ -42,7 +40,7 @@
 //! version carries changes (implement the arm) or not (extend the legacy arm) —
 //! never add a `_ =>` wildcard, never stub an empty return.
 
-use stellar_xdr::{LedgerCloseMeta, LedgerEntryChange, LedgerEntryChanges, TransactionMeta};
+use stellar_xdr::{LedgerCloseMeta, LedgerEntryChange, LedgerEntryChanges, ScVal, TransactionMeta};
 
 /// Visit every transaction's apply-time meta of one `LedgerCloseMeta`, in
 /// apply order, and return the ledger sequence. Same exhaustive-match
@@ -123,6 +121,18 @@ pub fn operation_changes(meta: &TransactionMeta) -> Vec<&LedgerEntryChange> {
             .chain(v4.operations.iter().flat_map(|o| o.changes.iter()))
             .collect(),
         TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_) => Vec::new(),
+    }
+}
+
+/// A Soroban transaction's return value; `None` for any other transaction.
+pub fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
+    match meta {
+        TransactionMeta::V3(v3) => v3.soroban_meta.as_ref().map(|m| m.return_value.clone()),
+        TransactionMeta::V4(v4) => v4
+            .soroban_meta
+            .as_ref()
+            .and_then(|m| m.return_value.clone()),
+        TransactionMeta::V0(_) | TransactionMeta::V1(_) | TransactionMeta::V2(_) => None,
     }
 }
 

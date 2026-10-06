@@ -35,7 +35,7 @@ pub fn extract_operations(
         InnerTxRef::V1(tx) => tx.operations.as_slice(),
     };
 
-    let return_value = tx_meta.and_then(soroban_return_value);
+    let return_value = tx_meta.and_then(crate::meta::soroban_return_value);
     // Resolved once; the fallback issuer for `allow_trust` ops that inherit it.
     let tx_source = envelope.source_account();
 
@@ -295,18 +295,6 @@ fn append_pool_claims(details: &mut Value, op_result: Option<&OperationResult>) 
     }
     map.insert("poolIds".into(), Value::from(pool_ids));
     map.insert("claimedAtoms".into(), Value::from(claimed));
-}
-
-/// Extract the Soroban return value from TransactionMeta, if present.
-fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
-    match meta {
-        TransactionMeta::V3(v3) => v3.soroban_meta.as_ref().map(|m| m.return_value.clone()),
-        TransactionMeta::V4(v4) => v4
-            .soroban_meta
-            .as_ref()
-            .and_then(|m| m.return_value.clone()),
-        _ => None,
-    }
 }
 
 /// The ledger changes of operation `op_idx` (0-based), index-aligned with the
