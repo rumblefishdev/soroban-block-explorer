@@ -26,6 +26,7 @@ use stellar_xdr::{LedgerEntry, LedgerEntryData, LiquidityPoolEntryBody};
 
 use crate::error::BackfillError;
 use crate::sink::Sink;
+use crate::snapshot::entry_freshness::{Need, need};
 use crate::snapshot::network_state::{NetworkState, classic_asset};
 
 #[derive(Default)]
@@ -47,23 +48,6 @@ struct OurNewest {
     pool_id: [u8; 32],
     ledger: i64,
     has_reserves: u8,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Need {
-    Missing,
-    Stale,
-    Current,
-}
-
-/// Whether the network's entry, last modified at `entry_ledger`, adds anything
-/// to our newest snapshot of the same pool.
-pub(crate) fn need(our_newest_ledger: Option<i64>, entry_ledger: u32) -> Need {
-    match our_newest_ledger {
-        None => Need::Missing,
-        Some(ours) if ours < i64::from(entry_ledger) => Need::Stale,
-        Some(_) => Need::Current,
-    }
 }
 
 /// Our pool and snapshot rows for one live pool entry, built exactly as live

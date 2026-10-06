@@ -27,6 +27,7 @@ pub mod archive;
 pub mod balances;
 pub mod claimable;
 pub mod dumps;
+pub mod entry_freshness;
 pub mod entry_state;
 pub mod network_state;
 pub mod pools;
