@@ -1,7 +1,7 @@
-// Galexie protocol watch (task 0610): every 30 minutes, compare the captive-core
-// version of the Galexie that runs with the protocol the network's core
-// supports. Any answer other than OK — and any read that fails — throws, and
-// the alarm on this function's Errors goes to Slack. The reason is in the log.
+// Galexie protocol watch (task 0610): every 6 hours, compare the captive-core
+// version of the Galexie that runs with the newest Galexie on Docker Hub. A
+// newer core there — and any read that fails — throws, and the alarm on this
+// function's Errors goes to Slack. The reason is in the log.
 //
 // The AWS SDK v3 comes with the Lambda Node.js runtime; nothing is bundled.
 import {
@@ -15,7 +15,7 @@ import {
   DescribeTaskDefinitionCommand,
 } from '@aws-sdk/client-ecs';
 
-import { coreIsReady, coreVersion, verdict } from './check.mjs';
+import { coreVersion, verdict } from './check.mjs';
 
 const MANIFEST_TYPES = [
   'application/vnd.docker.distribution.manifest.list.v2+json',
@@ -37,23 +37,6 @@ async function getJson(url, headers = {}) {
     throw new Error(`cannot read ${url}: HTTP ${response.status}`);
   }
   return response.json();
-}
-
-async function networkProtocols() {
-  const root = await getJson(process.env.HORIZON_URL);
-  const network = {
-    current: root.current_protocol_version,
-    supported: root.core_supported_protocol_version,
-  };
-  if (
-    !Number.isInteger(network.current) ||
-    !Number.isInteger(network.supported)
-  ) {
-    throw new Error(
-      `cannot determine: unexpected Horizon root ${JSON.stringify(network)}`
-    );
-  }
-  return network;
 }
 
 /** The Galexie image of the service's current task definition. */
@@ -151,33 +134,26 @@ async function hubRegistry() {
 }
 
 /**
- * The most recently pushed tag on Docker Hub, release or commit build. P29's
- * core first shipped as commit tag `c927ffc` (2026-09-24), a week before the
- * `29.0.0` tag, so release tags alone would hide the earliest image.
+ * The most recently pushed tag on Docker Hub and its core, release or commit
+ * build. P29's core first shipped as commit tag `c927ffc` (2026-09-24), a
+ * week before the vote and the `29.0.0` tag, which came after it.
  */
 async function newestOnHub() {
-  try {
-    const tags = await getJson(
-      `https://hub.docker.com/v2/repositories/${HUB_REPO}/tags?page_size=1&ordering=last_updated`
-    );
-    const tag = tags.results[0].name;
-    return { tag, ...(await coreVersion(await hubRegistry(), tag)) };
-  } catch (error) {
-    return { error: error.message };
-  }
+  const tags = await getJson(
+    `https://hub.docker.com/v2/repositories/${HUB_REPO}/tags?page_size=1&ordering=last_updated`
+  );
+  const tag = tags.results[0].name;
+  return { tag, ...(await coreVersion(await hubRegistry(), tag)) };
 }
 
 export async function handler() {
-  const network = await networkProtocols();
   const image = await runningImage();
   const ours = await coreVersion(
     ecrRegistry(image.repository),
     image.reference
   );
-  // Docker Hub limits anonymous pulls per IP, shared with every Lambda on
-  // AWS's egress: ask it only on the days the answer depends on it.
-  const newest = coreIsReady({ network, ours }) ? null : await newestOnHub();
-  const result = verdict({ network, ours, newest });
+  const newest = await newestOnHub();
+  const result = verdict({ ours, newest });
 
   console.log(result.message);
   if (!result.ok) {

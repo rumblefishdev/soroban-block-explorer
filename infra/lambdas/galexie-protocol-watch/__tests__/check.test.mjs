@@ -66,57 +66,35 @@ describe('coreVersion', () => {
 });
 
 describe('verdict, replaying protocol 29', () => {
-  it('LAGGING from 2026-09-22: core 28, the network core supports 29', () => {
+  it('until 2026-09-24 Docker Hub has nothing newer: OK', () => {
     const result = verdict({
-      network: { current: 28, supported: 29 },
       ours: core28,
-      newest: hub29,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain('LAGGING');
-    expect(result.message).toContain('the bump is possible today');
-  });
-
-  it('LAGGING before an image exists says so', () => {
-    const result = verdict({
-      network: { current: 28, supported: 29 },
-      ours: core28,
-      newest: { tag: '28.0.1', ...core28 },
-    });
-
-    expect(result.message).toContain('no image for protocol 29 yet');
-  });
-
-  it('BEHIND after the vote on 2026-10-01', () => {
-    const result = verdict({
-      network: { current: 29, supported: 29 },
-      ours: core28,
-      newest: hub29,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain('BEHIND');
-  });
-
-  it('OK once 29.0.0 runs', () => {
-    const result = verdict({
-      network: { current: 29, supported: 29 },
-      ours: core29,
-      newest: hub29,
+      newest: { tag: '2aa7c4a', ...core28 },
     });
 
     expect(result.ok).toBe(true);
   });
 
-  it('a Docker Hub outage is reported, never turns LAGGING into OK', () => {
-    const result = verdict({
-      network: { current: 28, supported: 29 },
-      ours: core28,
-      newest: { error: 'HTTP 503' },
-    });
+  it('from 2026-09-24 commit tag c927ffc carries core 29: deploy it', () => {
+    const result = verdict({ ours: core28, newest: hub29 });
 
     expect(result.ok).toBe(false);
-    expect(result.message).toContain('Docker Hub could not be read: HTTP 503');
+    expect(result.message).toContain('a Galexie with core 29 is out');
+    expect(result.message).toContain('Docker Hub tag c927ffc');
+  });
+
+  it('OK once 29.0.0 runs', () => {
+    const result = verdict({ ours: core29, newest: hub29 });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('OK when ours is newer than Docker Hub (a self-built image)', () => {
+    const result = verdict({
+      ours: core29,
+      newest: { tag: '28.0.1', ...core28 },
+    });
+
+    expect(result.ok).toBe(true);
   });
 });

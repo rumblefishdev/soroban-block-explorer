@@ -607,7 +607,8 @@ External runtime dependencies are limited to read-only canonical Stellar data so
   layer per [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)
 
 No other external API is required. Horizon, Soroban RPC, and third-party
-indexers are explicitly not in the trust boundary.
+indexers are explicitly not in the trust boundary. Docker Hub is read by the
+Galexie protocol watch (§8.2) only, for an alarm; no data path depends on it.
 
 ## 7. Environments and Scalability
 
@@ -755,12 +756,13 @@ The deployed alarms (production; authoritative definitions in
   the alarm signal, S3 listing is only a diagnostic cross-check), missing data
   treated as breaching
 - Galexie ephemeral storage above 60% sustained 3×5 min
-- Galexie protocol watch — a scheduled Lambda (every 30 min) reads the
+- Galexie protocol watch — a scheduled Lambda (every 6 h) reads the
   captive-core version of the image the Galexie service runs (from its ECR
-  image config) and Horizon's current and core-supported protocols; it
-  throws when our core is older than either, or when it cannot read them.
-  Alarm when both runs of an hour fail (the function's `Errors`), missing
-  data breaching. Warns before a pubnet vote (task 0610); runbook
+  image config) and of the newest `stellar/stellar-galexie` image on Docker
+  Hub; it throws when Docker Hub's core major is newer than ours, or when it
+  cannot read either. Alarm when two runs in a row fail (the function's
+  `Errors`), missing data breaching. Pages when the Galexie for the next
+  protocol is out, before the pubnet vote (task 0610); runbook
   [`docs/runbooks/galexie-protocol-watch.md`](../../runbooks/galexie-protocol-watch.md)
 - Ingest backlog age above 120 s for 3 consecutive minutes (set by
   `ingestionBacklogAgeSeconds` in `infra/envs/production.json`) — the consumer-side
@@ -794,7 +796,7 @@ The source design documents specific operational recovery assumptions:
   (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md)) **and** the
   pinned Galexie image, whose captive core is tied to a protocol and stops
   exporting to S3 without erroring if it is left behind — the Galexie
-  protocol watch (§8.2) pages before the vote; the frontend consumes
+  protocol watch (§8.2) pages when the new image is out; the frontend consumes
   typed API responses via OpenAPI-generated TS client (task 0096).
 
 These assumptions connect runtime infrastructure directly to safe ingestion operations.

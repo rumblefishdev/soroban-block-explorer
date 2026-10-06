@@ -1,14 +1,14 @@
 // The decision of the Galexie protocol watch (task 0610), kept free of the
-// AWS SDK so the test can run it against fakes. `index.mjs` feeds it the real
-// Horizon, ECR and Docker Hub.
+// AWS SDK so the test can run it against fakes. `index.mjs` feeds it our
+// image from ECR and the newest image on Docker Hub.
 //
-// Why the protocol number is the whole check: captive core refuses to apply a
-// ledger of a protocol it does not support. When pubnet votes, a Galexie
-// whose core is one protocol short stops exporting at the vote ledger — P29
-// did that on 2026-10-01 and ingestion stood still ~14 h. Horizon reports
-// `core_supported_protocol_version` days before the vote (P29: from about
-// 2026-09-22), so "our core < what the network's core supports" is the early
-// warning, and "our core < what the network runs" means the stall is here.
+// Why a newer core on Docker Hub is the whole check: captive core refuses to
+// apply a ledger of a protocol it does not support. When pubnet votes, a
+// Galexie whose core is one protocol short stops exporting at the vote
+// ledger — P29 did that on 2026-10-01 and ingestion stood still ~14 h. SDF
+// publishes the Galexie image with the new core before the vote (P27: four
+// weeks, P28: four to six, P29: seven days), and an older core keeps working
+// until then, so the day that image appears is the day to deploy it.
 
 /**
  * The captive-core version baked into an image, read from its config's
@@ -52,44 +52,20 @@ export async function coreVersion(registry, reference) {
   return { version, major };
 }
 
-/** Our core applies both what the network runs and what it is ready to vote. */
-export function coreIsReady({ network, ours }) {
-  return ours.major >= network.supported && ours.major >= network.current;
-}
-
 /**
- * OK, LAGGING (the vote is ahead, bump now) or BEHIND (the network already
- * runs a protocol our core cannot apply). `newest` is the newest image on
- * Docker Hub, or `{ error }` when Hub could not be read; it is read only when
- * the core is not ready, and says whether the bump is possible today. A Hub
- * outage alone never fails the check.
+ * OK while our core major is at least the newest Docker Hub image's; anything
+ * else means a Galexie for the next protocol is out and ours is not on it.
  */
-export function verdict({ network, ours, newest }) {
-  const summary =
-    `our Galexie core ${ours.version} | the network runs protocol ${network.current}` +
-    ` | its core supports ${network.supported}`;
+export function verdict({ ours, newest }) {
+  const summary = `our Galexie core ${ours.version} | Docker Hub tag ${newest.tag} has core ${newest.version}`;
 
-  if (coreIsReady({ network, ours })) {
+  if (ours.major >= newest.major) {
     return { ok: true, message: `OK: ${summary}` };
   }
-
-  const needed = Math.max(network.supported, network.current);
-  const tier =
-    ours.major < network.current
-      ? `BEHIND: the network already runs protocol ${network.current} - Galexie cannot apply its ledgers.`
-      : `LAGGING: the network core supports protocol ${network.supported} before the vote - bump Galexie now.`;
-
-  let hub;
-  if (newest.error) {
-    hub = `Docker Hub could not be read: ${newest.error}`;
-  } else if (newest.major >= needed) {
-    hub = `Docker Hub tag ${newest.tag} has core ${newest.version} - the bump is possible today.`;
-  } else {
-    hub = `Docker Hub's newest tag ${newest.tag} has core ${newest.version} - no image for protocol ${needed} yet.`;
-  }
-
   return {
     ok: false,
-    message: `${tier}\n${summary}\n${hub}\nRunbook: docs/runbooks/galexie-protocol-watch.md`,
+    message:
+      `NEW CORE: a Galexie with core ${newest.major} is out - deploy it before the protocol ${newest.major} vote.\n` +
+      `${summary}\nRunbook: docs/runbooks/galexie-protocol-watch.md`,
   };
 }
