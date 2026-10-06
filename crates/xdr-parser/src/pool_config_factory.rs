@@ -105,10 +105,10 @@ pub fn detect_config_pool_registrations(
     let mut out = Vec::new();
     for (_tx, evs) in events {
         for ev in evs {
-            let Some(factory) = ev.contract_id.as_deref() else {
+            let Some(factory) = ev.body.contract_id.as_deref() else {
                 continue;
             };
-            match parse_pool_created(&ev.topics, &ev.data) {
+            match parse_pool_created(&ev.body.topics, &ev.body.data) {
                 Ok(pool) => out.push(ConfigPoolRegistration {
                     factory: factory.to_string(),
                     pool,

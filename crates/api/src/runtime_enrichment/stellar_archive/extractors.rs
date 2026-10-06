@@ -221,10 +221,10 @@ fn event_dtos(tx: xdr_parser::TxEvents) -> (Vec<XdrEventDto>, Vec<XdrEventDto>) 
                 EventOrigin::Transaction(stage) => (None, Some(stage_name(stage))),
             };
             XdrEventDto {
-                event_type: e.event_type.to_string(),
-                contract_id: e.contract_id,
-                topics: topics_to_vec(e.topics),
-                data: e.data,
+                event_type: e.body.event_type.to_string(),
+                contract_id: e.body.contract_id,
+                topics: topics_to_vec(e.body.topics),
+                data: e.body.data,
                 id: Some(e.event_id.to_rpc_string()),
                 // The operation that emitted the event; a fee event has none.
                 operation_index,

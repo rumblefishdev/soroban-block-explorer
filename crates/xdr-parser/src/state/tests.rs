@@ -1622,7 +1622,6 @@ fn nft_mint_event_produces_nft() {
         token_id: json!({"type": "u32", "value": 42}),
         from: None,
         to: Some("GOWNER".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
         event_id: any_event_id(),
     }];
@@ -1644,7 +1643,6 @@ fn nft_transfer_event() {
         token_id: json!({"type": "u32", "value": 42}),
         from: Some("GFROM".into()),
         to: Some("GTO".into()),
-        ledger_sequence: 200,
         created_at: 1700001000,
         event_id: any_event_id(),
     }];
@@ -1664,7 +1662,6 @@ fn nft_burn_event() {
         token_id: json!({"type": "string", "value": "unique-nft-id"}),
         from: Some("GFROM".into()),
         to: None,
-        ledger_sequence: 300,
         created_at: 1700002000,
         event_id: any_event_id(),
     }];
@@ -1684,7 +1681,6 @@ fn empty_token_id_skipped() {
         token_id: json!({"type": "void", "value": null}),
         from: None,
         to: Some("GOWNER".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
         event_id: any_event_id(),
     }];
@@ -1710,7 +1706,6 @@ fn make_nft_event(
         token_id: json!({"type": "u32", "value": token}),
         from: from.map(Into::into),
         to: to.map(Into::into),
-        ledger_sequence: ledger,
         created_at: 1700000000 + ledger as i64,
         event_id: any_event_id(),
     }
@@ -1733,7 +1728,7 @@ fn mint_event_yields_owner_to() {
     assert_eq!(out[0].token_id, "42");
     assert_eq!(out[0].event_type, NftEventType::Mint);
     assert_eq!(out[0].owner.as_deref(), Some("GRECIPIENT"));
-    assert_eq!(out[0].ledger_sequence, 100);
+    assert_eq!(out[0].event_id.ledger_sequence, 100);
 }
 
 #[test]
@@ -1793,7 +1788,6 @@ fn token_id_jsonvalue_stringified() {
         token_id: json!({"type": "u64", "value": 42}),
         from: None,
         to: Some("GA".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
         event_id: any_event_id(),
     };
@@ -1805,7 +1799,6 @@ fn token_id_jsonvalue_stringified() {
         token_id: json!({"type": "string", "value": "uuid-abc"}),
         from: None,
         to: Some("GB".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
         event_id: any_event_id(),
     };
@@ -1828,7 +1821,6 @@ fn empty_token_id_event_skipped() {
         token_id: json!({"type": "void", "value": null}),
         from: None,
         to: Some("GA".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
         event_id: any_event_id(),
     }];

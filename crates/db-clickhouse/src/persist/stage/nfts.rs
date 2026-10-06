@@ -169,7 +169,7 @@ pub(super) fn nft_rows(
         let change = NftOwnershipChangeRow {
             contract_id: ids::contract_id(&ev.contract_id),
             token_id: ev.token_id.clone(),
-            ledger_sequence: i64::from(ev.ledger_sequence),
+            ledger_sequence: i64::from(ev.event_id.ledger_sequence),
             application_order,
             operation_index: id.operation_index,
             event_index: id.event_index,

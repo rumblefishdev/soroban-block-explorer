@@ -1,7 +1,7 @@
 use super::*;
 use domain::{ContractEventType, OperationType};
 use serde_json::json;
-use xdr_parser::types::ExtractedEvent;
+use xdr_parser::types::{EventBody, ExtractedEvent};
 use xdr_parser::{EventAsset, EventId, EventOrigin};
 
 const TX: &str = "0a120260ab2a4d3e7f9c1b5d6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1";
@@ -16,13 +16,13 @@ const XLM_SAC: &str = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
 fn sep50_token_number_does_not_become_a_persisted_amount() {
     const NFT_CONTRACT: &str = "CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA";
     let mut ev = event(0, 0);
-    ev.contract_id = Some(NFT_CONTRACT.into());
+    ev.body.contract_id = Some(NFT_CONTRACT.into());
     // No asset label: this event is attributed to its own emitter, never USDC.
-    ev.topics = json!([
+    ev.body.topics = json!([
         {"type":"sym", "value":"mint"},
         {"type":"address", "value":G_RECEIVER}
     ]);
-    ev.data = xdr_parser::scval::scval_to_typed_json(&stellar_xdr::ScVal::U128(
+    ev.body.data = xdr_parser::scval::scval_to_typed_json(&stellar_xdr::ScVal::U128(
         stellar_xdr::UInt128Parts {
             hi: 0,
             lo: 1_000_000_000,
@@ -112,10 +112,12 @@ fn event(op: u16, pos: u32) -> ExtractedEvent {
             event_index: pos,
         },
         origin: EventOrigin::Operation(op),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(XLM_SAC.into()),
-        topics: json!([]),
-        data: json!({ "type": "void" }),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(XLM_SAC.into()),
+            topics: json!([]),
+            data: json!({ "type": "void" }),
+        },
         created_at: 0,
     }
 }

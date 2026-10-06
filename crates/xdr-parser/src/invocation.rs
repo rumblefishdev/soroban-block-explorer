@@ -314,7 +314,7 @@ pub fn extract_invocations_from_diagnostics(
     tx_source_account: &str,
     successful: bool,
 ) -> Vec<ExtractedInvocation> {
-    let diags = collect_diagnostic_events(tx_meta);
+    let diags = crate::event::diagnostic_events(tx_meta);
     if diags.is_empty() {
         return Vec::new();
     }
@@ -421,22 +421,6 @@ fn decode_call_target(topic: &ScVal) -> Option<String> {
         }
         ScVal::Address(addr @ ScAddress::Contract(_)) => Some(addr.to_string()),
         _ => None,
-    }
-}
-
-/// Pull `diagnostic_events` from V3 (`soroban_meta.diagnostic_events`) or
-/// V4 (`v4.diagnostic_events`) meta. Galexie's captive-core enables
-/// diagnostic mode by default, so the V4 stream is reliably populated;
-/// the V3 path follows `event::LedgerEvents`.
-fn collect_diagnostic_events(meta: &TransactionMeta) -> Vec<&DiagnosticEvent> {
-    match meta {
-        TransactionMeta::V3(v3) => v3
-            .soroban_meta
-            .as_ref()
-            .map(|m| m.diagnostic_events.iter().collect())
-            .unwrap_or_default(),
-        TransactionMeta::V4(v4) => v4.diagnostic_events.iter().collect(),
-        _ => Vec::new(),
     }
 }
 

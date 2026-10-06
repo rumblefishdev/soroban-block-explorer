@@ -77,7 +77,7 @@ pub use state::{
 pub use token_metadata::TokenMetadata;
 pub use transaction::{collect_tx_results, extract_transactions};
 pub use types::{
-    ContractFunction, DiagnosticEvent, EventOrigin, ExtractedAccountState, ExtractedAsset,
+    ContractFunction, EventBody, EventOrigin, ExtractedAccountState, ExtractedAsset,
     ExtractedContractDeployment, ExtractedContractInterface, ExtractedContractMetadata,
     ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLedgerEntryChange,
     ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,

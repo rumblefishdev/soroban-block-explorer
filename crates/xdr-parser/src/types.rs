@@ -125,6 +125,20 @@ pub enum EventOrigin {
     Operation(u16),
 }
 
+/// What an event says: its type, the contract that emitted it, and its
+/// ScVal-decoded topics and data. Consensus and diagnostic events share it.
+#[derive(Debug, Clone)]
+pub struct EventBody {
+    /// Event type (ADR 0031).
+    pub event_type: ContractEventType,
+    /// Contract that emitted the event (C... address). `None` for system events without a contract.
+    pub contract_id: Option<String>,
+    /// ScVal-decoded topic values as JSON array.
+    pub topics: serde_json::Value,
+    /// ScVal-decoded event data payload as JSON.
+    pub data: serde_json::Value,
+}
+
 /// A consensus Soroban event, from [`crate::event::LedgerEvents`].
 #[derive(Debug, Clone)]
 pub struct ExtractedEvent {
@@ -135,28 +149,9 @@ pub struct ExtractedEvent {
     /// sentinels, so which operation emitted an event is read from `origin`.
     pub event_id: crate::event::EventId,
     pub origin: EventOrigin,
-    /// Event type (ADR 0031).
-    pub event_type: ContractEventType,
-    /// Contract that emitted the event (C... address). `None` for system events without a contract.
-    pub contract_id: Option<String>,
-    /// ScVal-decoded topic values as JSON array.
-    pub topics: serde_json::Value,
-    /// ScVal-decoded event data payload as JSON.
-    pub data: serde_json::Value,
+    pub body: EventBody,
     /// Parent ledger close time (Unix seconds).
     pub created_at: i64,
-}
-
-/// A host debug-channel event (`diagnostic_events`). Not consensus and without
-/// an id; with diagnostic mode on (Galexie's captive-core default) the channel
-/// also holds byte-identical copies of the consensus events (task 0182), which
-/// is why it is a type of its own. Only the transaction page reads it.
-#[derive(Debug, Clone)]
-pub struct DiagnosticEvent {
-    pub event_type: ContractEventType,
-    pub contract_id: Option<String>,
-    pub topics: serde_json::Value,
-    pub data: serde_json::Value,
 }
 
 /// Extracted Soroban invocation data, aggregated at indexer staging into
@@ -250,8 +245,6 @@ pub struct NftEvent {
     pub from: Option<String>,
     /// Recipient address. `None` for burn events.
     pub to: Option<String>,
-    /// Parent ledger sequence number.
-    pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time.
     pub created_at: i64,
     /// The source event's stellar-rpc id (ADR 0059) — its canonical location.
@@ -507,8 +500,6 @@ pub struct ExtractedNftEvent {
     pub event_type: NftEventType,
     /// New owner after the event. `None` for burns.
     pub owner: Option<String>,
-    /// Parent ledger sequence number.
-    pub ledger_sequence: u32,
     /// Unix seconds. Matches parent transaction partitioning key.
     pub created_at: i64,
     /// The source event's stellar-rpc id (ADR 0059): the row's location in

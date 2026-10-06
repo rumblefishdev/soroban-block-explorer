@@ -98,10 +98,10 @@ pub fn detect_pool_registrations(
             // `as_deref`, not `clone`: this runs for EVERY event on the
             // chain, and the overwhelming majority are not registrations —
             // the allocation belongs in the match arm that keeps one.
-            let Some(router) = ev.contract_id.as_deref() else {
+            let Some(router) = ev.body.contract_id.as_deref() else {
                 continue;
             };
-            match parse_add_pool(&ev.topics, &ev.data) {
+            match parse_add_pool(&ev.body.topics, &ev.body.data) {
                 Ok(event) => out.push(PoolRegistration {
                     router: router.to_string(),
                     event,

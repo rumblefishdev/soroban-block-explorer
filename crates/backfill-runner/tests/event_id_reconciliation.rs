@@ -319,7 +319,7 @@ async fn parsed_event_ids(http: &reqwest::Client, archive: &str, ledger: u32) ->
         .flat_map(|meta| indexer::handler::process::parse_ledger(meta).events)
         .flat_map(|(_, events)| events)
         // `getEvents` reports contract-scoped events only.
-        .filter(|e| e.contract_id.is_some())
+        .filter(|e| e.body.contract_id.is_some())
         .map(|e| e.event_id.to_rpc_string())
         .collect()
 }

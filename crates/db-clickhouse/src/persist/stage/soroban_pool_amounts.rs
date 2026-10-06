@@ -100,7 +100,8 @@ pub(super) fn pool_movement_rows(
 pub fn carries_pool_amounts(events: &[(String, Vec<xdr_parser::ExtractedEvent>)]) -> bool {
     events.iter().flat_map(|(_, evs)| evs).any(|ev| {
         matches!(
-            ev.topics
+            ev.body
+                .topics
                 .get(0)
                 .and_then(|t| t.get("value"))
                 .and_then(Value::as_str),

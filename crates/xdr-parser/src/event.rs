@@ -9,7 +9,7 @@ use stellar_xdr::{
 };
 
 use crate::scval::scval_to_typed_json;
-use crate::types::{DiagnosticEvent, EventOrigin, ExtractedEvent};
+use crate::types::{EventBody, EventOrigin, ExtractedEvent};
 use domain::ContractEventType as DomainEventType;
 
 /// stellar-rpc's identity for a consensus event (ADR 0059): a TOID (SEP-35
@@ -49,8 +49,12 @@ pub struct TxEvents {
     /// each operation's, as stellar-rpc reads them. Id order is execution
     /// order.
     pub events: Vec<ExtractedEvent>,
-    /// The host debug channel, in container order.
-    pub diagnostic: Vec<DiagnosticEvent>,
+    /// The host debug channel, in container order. Not consensus and
+    /// without an id; with diagnostic mode on (Galexie's captive-core
+    /// default) it also holds byte-identical copies of the consensus events
+    /// (task 0182), which is why it is a list of its own. Only the
+    /// transaction page reads it.
+    pub diagnostic: Vec<EventBody>,
 }
 
 /// One ledger's events, a transaction at a time — the only way to get them.
@@ -109,18 +113,12 @@ impl<'a> LedgerEvents<'a> {
             operation_index,
             event_index,
         };
-        let consensus = |event_id, origin, event: &ContractEvent| {
-            let (event_type, contract_id, topics, data) = decode(event);
-            ExtractedEvent {
-                transaction_hash: transaction_hash.to_string(),
-                event_id,
-                origin,
-                event_type,
-                contract_id,
-                topics,
-                data,
-                created_at: self.created_at,
-            }
+        let consensus = |event_id, origin, event: &ContractEvent| ExtractedEvent {
+            transaction_hash: transaction_hash.to_string(),
+            event_id,
+            origin,
+            body: decode(event),
+            created_at: self.created_at,
         };
 
         let (mut before_all, mut after_all) = self.starts[tx_index];
@@ -161,15 +159,7 @@ impl<'a> LedgerEvents<'a> {
         let diagnostic = containers
             .diagnostic
             .iter()
-            .map(|d| {
-                let (event_type, contract_id, topics, data) = decode(&d.event);
-                DiagnosticEvent {
-                    event_type,
-                    contract_id,
-                    topics,
-                    data,
-                }
-            })
+            .map(|d| decode(&d.event))
             .collect();
         TxEvents { events, diagnostic }
     }
@@ -215,8 +205,15 @@ fn containers(meta: &TransactionMeta) -> Containers<'_> {
     }
 }
 
+/// A transaction's raw `diagnostic_events`, from the same match over meta
+/// versions as the consensus events. The invocation tree reads the host's
+/// call trace from here.
+pub(crate) fn diagnostic_events(meta: &TransactionMeta) -> &[stellar_xdr::DiagnosticEvent] {
+    containers(meta).diagnostic
+}
+
 /// An event's type, contract and ScVal-decoded topics and data.
-fn decode(event: &ContractEvent) -> (DomainEventType, Option<String>, Value, Value) {
+fn decode(event: &ContractEvent) -> EventBody {
     // ADR 0031: the typed enum; persist binds it as SMALLINT.
     let event_type = match event.type_ {
         ContractEventType::System => DomainEventType::System,
@@ -229,12 +226,12 @@ fn decode(event: &ContractEvent) -> (DomainEventType, Option<String>, Value, Val
         .map(|id| ScAddress::Contract(id.clone()).to_string());
     let ContractEventBody::V0(body) = &event.body;
     let topics: Vec<Value> = body.topics.iter().map(scval_to_typed_json).collect();
-    (
+    EventBody {
         event_type,
         contract_id,
-        json!(topics),
-        scval_to_typed_json(&body.data),
-    )
+        topics: json!(topics),
+        data: scval_to_typed_json(&body.data),
+    }
 }
 
 #[cfg(test)]

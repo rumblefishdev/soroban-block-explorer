@@ -1,5 +1,6 @@
 use super::*;
 use crate::sac::{MAINNET_PASSPHRASE, derive_sac_strkey, network_id};
+use crate::types::EventBody;
 use domain::ContractEventType;
 use serde_json::json;
 
@@ -48,10 +49,12 @@ fn event(
             Some((op, _)) => EventOrigin::Operation(op),
             None => EventOrigin::Transaction(stellar_xdr::TransactionEventStage::BeforeAllTxs),
         },
-        event_type: ContractEventType::Contract,
-        contract_id: emitter.map(str::to_string),
-        topics: Value::Array(topics),
-        data,
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: emitter.map(str::to_string),
+            topics: Value::Array(topics),
+            data,
+        },
         created_at: 0,
     }
 }

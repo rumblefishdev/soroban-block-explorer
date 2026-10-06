@@ -487,11 +487,17 @@ shaped like its two upstream sources (task 0573):
 
 `extract` returns `TxEvents { events, diagnostic }`:
 
-| Container                                                      | Type              | Id                           | `origin`                          |
-| -------------------------------------------------------------- | ----------------- | ---------------------------- | --------------------------------- |
-| `v4.events`                                                    | `ExtractedEvent`  | stage sentinel + its counter | `EventOrigin::Transaction(stage)` |
-| `v4.operations[i].events`; `v3.soroban_meta.events` as `i = 0` | `ExtractedEvent`  | (tx, `i`, position)          | `EventOrigin::Operation(i)`       |
-| `v4.diagnostic_events`; `v3.soroban_meta.diagnostic_events`    | `DiagnosticEvent` | none                         | —                                 |
+| Container                                                      | Type             | Id                           | `origin`                          |
+| -------------------------------------------------------------- | ---------------- | ---------------------------- | --------------------------------- |
+| `v4.events`                                                    | `ExtractedEvent` | stage sentinel + its counter | `EventOrigin::Transaction(stage)` |
+| `v4.operations[i].events`; `v3.soroban_meta.events` as `i = 0` | `ExtractedEvent` | (tx, `i`, position)          | `EventOrigin::Operation(i)`       |
+| `v4.diagnostic_events`; `v3.soroban_meta.diagnostic_events`    | `EventBody`      | none                         | —                                 |
+
+What an event says — type, contract, topics, data — is one `EventBody` for
+both: an `ExtractedEvent` is that body with its id and origin. The match over
+`TransactionMeta` versions lives in one place, `containers()`, which names
+every version; the invocation tree reads its call trace through the same
+match.
 
 Which operation emitted an event is read from `origin`, never from the id: a
 fee event's id names operation 0 or 4095.
@@ -510,7 +516,7 @@ events** — the same inner `type_ = Contract` — alongside the trace of calls
 that were rolled back. CAP-67 keeps it out of the ledger hash: it is "not part
 of the protocol". A filter on `event_type` cannot tell a copy from its
 original; the container can. So the parser returns the channel as a separate
-list of `DiagnosticEvent`s without ids. The indexer drops it where it reads
+list of `EventBody`s without ids. The indexer drops it where it reads
 it, and no consensus reader — staging, NFT, pool and transfer detection — can
 receive it. Only the transaction page shows it (the host-VM `fn_call`,
 `fn_return`, `core_metrics` and error entries).

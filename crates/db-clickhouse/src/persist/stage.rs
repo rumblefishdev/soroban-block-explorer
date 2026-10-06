@@ -433,14 +433,14 @@ pub fn build_wasm_upgrade_rows(
             // event. A contract can emit a Contract-typed event with the same
             // topic shape; requiring System blocks that spoof of its own
             // `wasm_hash` (and never drops a real upgrade — all are System).
-            if ev.event_type != ContractEventType::System {
+            if ev.body.event_type != ContractEventType::System {
                 continue;
             }
-            let Some(addr) = ev.contract_id.as_deref() else {
+            let Some(addr) = ev.body.contract_id.as_deref() else {
                 continue;
             };
             // `extract_…` returns `Some` only for a well-formed executable_update.
-            let Some(update) = extract_executable_update(&ev.topics) else {
+            let Some(update) = extract_executable_update(&ev.body.topics) else {
                 continue;
             };
             // Skip-on-miss: without the prior row we cannot carry identity
@@ -782,9 +782,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let entry = participants_per_tx.entry(tx_hash.clone()).or_default();
         let asset_entry = event_assets_per_tx.entry(tx_hash.clone()).or_default();
         for ev in evs {
-            let Some(derived) =
-                derive_token_event(&ev.topics, ev.contract_id.as_deref().map(ids::contract_id))
-            else {
+            let Some(derived) = derive_token_event(
+                &ev.body.topics,
+                ev.body.contract_id.as_deref().map(ids::contract_id),
+            ) else {
                 continue;
             };
             for key in derived.participant_strkeys {
@@ -1629,16 +1630,16 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             continue;
         };
         for ev in evs {
-            let Some(contract_strkey) = &ev.contract_id else {
+            let Some(contract_strkey) = &ev.body.contract_id else {
                 contract_orphan_dropped += 1;
                 continue;
             };
             let id = ev.event_id;
-            let topics_xdr = serde_json::to_string(&ev.topics)
+            let topics_xdr = serde_json::to_string(&ev.body.topics)
                 .map_err(|e| staging_err(&format!("event topics serialize: {e}")))?;
-            let data_xdr = serde_json::to_string(&ev.data)
+            let data_xdr = serde_json::to_string(&ev.body.data)
                 .map_err(|e| staging_err(&format!("event data serialize: {e}")))?;
-            let signature = extract_event_signature(&ev.topics);
+            let signature = extract_event_signature(&ev.body.topics);
             let contract_id = ids::contract_id(contract_strkey);
             if matches!(ev.origin, EventOrigin::Operation(_)) {
                 contract_txs.insert((contract_id, application_order));
@@ -1650,7 +1651,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
                 operation_index: id.operation_index,
                 event_index: id.event_index,
                 application_order,
-                event_type: ev.event_type as i16,
+                event_type: ev.body.event_type as i16,
                 signature,
                 topics_xdr,
                 data_xdr,
