@@ -13,7 +13,7 @@
 
 use base64::Engine;
 use stellar_xdr::{Limits, ReadXdr, TransactionEventStage, TransactionMeta};
-use xdr_parser::{EventId, EventSource, LedgerEvents, extract_events};
+use xdr_parser::{EventId, EventOrigin, LedgerEvents};
 
 const META_B64: &str = include_str!("fixtures/tx_0a120260_meta_v4.b64");
 
@@ -44,87 +44,52 @@ fn fee_charge_is_before_all_txs_and_the_refund_is_after_all_txs() {
 }
 
 #[test]
-fn only_tx_level_events_carry_a_stage() {
-    let events = extract_events(&meta(), "0a120260", 62_032_880, 0);
+fn the_fee_events_carry_their_stage_through_the_parser() {
+    let meta = meta();
+    let events = LedgerEvents::new(62_032_880, 0, &[&meta])
+        .extract(0, "0a120260")
+        .events;
 
-    // Both fee events are tx-level and both carry their stage through the
-    // parser — this is the path the API serves.
-    let tx_level: Vec<_> = events
+    // This is the path the API serves.
+    let stages: Vec<_> = events
         .iter()
-        .filter(|e| e.source == EventSource::TxLevel)
-        .map(|e| e.stage)
+        .filter_map(|e| match e.origin {
+            EventOrigin::Transaction(stage) => Some(stage),
+            EventOrigin::Operation(_) => None,
+        })
         .collect();
     assert_eq!(
-        tx_level,
+        stages,
         vec![
-            Some(TransactionEventStage::BeforeAllTxs),
-            Some(TransactionEventStage::AfterAllTxs),
+            TransactionEventStage::BeforeAllTxs,
+            TransactionEventStage::AfterAllTxs,
         ]
-    );
-
-    // Everything else has none, and we invent none. The per-operation
-    // container states position via `op_index`; the diagnostic container
-    // states nothing about time at all.
-    assert!(
-        events
-            .iter()
-            .filter(|e| e.source != EventSource::TxLevel)
-            .all(|e| e.stage.is_none()),
-        "per-op and diagnostic events carry no stage in the protocol"
-    );
-}
-
-#[test]
-fn the_refund_is_numbered_before_the_operation_it_refunds() {
-    let events = extract_events(&meta(), "0a120260", 62_032_880, 0);
-
-    let refund = events
-        .iter()
-        .find(|e| e.stage == Some(TransactionEventStage::AfterAllTxs))
-        .expect("the fixture carries a refund");
-    let first_op_event = events
-        .iter()
-        .find(|e| e.source == EventSource::PerOp)
-        .expect("the fixture carries a per-operation event");
-
-    // This is the whole reason the field is carried: `position_in_tx` follows
-    // the XDR containers, so the refund — settled last — is numbered ahead of
-    // the operation that caused it. The number is a position in the record,
-    // the stage is the time.
-    assert!(
-        refund.position_in_tx < first_op_event.position_in_tx,
-        "refund #{} should be numbered before the op event #{}",
-        refund.position_in_tx,
-        first_op_event.position_in_tx
     );
 }
 
 #[test]
 fn the_rpc_id_orders_charge_operation_refund() {
     let meta = meta();
-    let events = LedgerEvents::new(62_032_880, 0, &[&meta]).extract(0, "0a120260");
+    let events = LedgerEvents::new(62_032_880, 0, &[&meta])
+        .extract(0, "0a120260")
+        .events;
 
-    let id = |pick: &dyn Fn(&xdr_parser::ExtractedEvent) -> bool| {
+    let id = |origin: &dyn Fn(EventOrigin) -> bool| {
         events
             .iter()
-            .find(|e| pick(e))
-            .and_then(|e| e.event_id)
-            .expect("event with an id")
+            .find(|e| origin(e.origin))
+            .map(|e| e.event_id)
+            .expect("the fixture carries the event")
     };
-    let charge = id(&|e| e.stage == Some(TransactionEventStage::BeforeAllTxs));
-    let op = id(&|e| e.source == EventSource::PerOp);
-    let refund = id(&|e| e.stage == Some(TransactionEventStage::AfterAllTxs));
+    let charge = id(&|o| o == EventOrigin::Transaction(TransactionEventStage::BeforeAllTxs));
+    let op = id(&|o| matches!(o, EventOrigin::Operation(_)));
+    let refund = id(&|o| o == EventOrigin::Transaction(TransactionEventStage::AfterAllTxs));
 
-    // Execution order, which the flat position above gets wrong.
+    // Execution order: the refund is settled after every transaction, though
+    // the meta lists it ahead of the operation it refunds.
     assert!(charge < op && op < refund);
     assert_eq!(
         (refund.transaction_index, refund.operation_index),
         (EventId::AFTER_ALL_TXS, 0)
-    );
-    assert!(
-        events
-            .iter()
-            .filter(|e| e.source == EventSource::Diagnostic)
-            .all(|e| e.event_id.is_none())
     );
 }

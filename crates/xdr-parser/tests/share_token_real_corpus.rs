@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 
 use domain::ContractEventType;
-use xdr_parser::types::{EventSource, ExtractedEvent};
+use xdr_parser::types::ExtractedEvent;
 
 #[derive(serde::Deserialize)]
 struct CorpusEvent {
@@ -128,17 +128,18 @@ fn every_mainnet_deposit_resolves_like_share_id() {
             .iter()
             .map(|e| ExtractedEvent {
                 transaction_hash: tx.tx.to_string(),
+                // The corpus keeps each event's place in its transaction.
+                event_id: xdr_parser::EventId {
+                    ledger_sequence: tx.ledger as u32,
+                    transaction_index: 1,
+                    operation_index: 0,
+                    event_index: e.idx,
+                },
+                origin: xdr_parser::EventOrigin::Operation(0),
                 event_type: ContractEventType::Contract,
-                source: EventSource::TxLevel,
                 contract_id: Some(e.contract.clone()),
                 topics: serde_json::from_str(&e.topics).expect("topics json"),
                 data: serde_json::from_str(&e.data).expect("data json"),
-                position_in_tx: e.idx,
-                op_index: None,
-                event_pos_in_op: None,
-                stage: None,
-                event_id: None,
-                ledger_sequence: tx.ledger as u32,
                 created_at: 0,
             })
             .collect();
@@ -245,11 +246,11 @@ pub fn detect_share_tokens(events: &[(String, Vec<ExtractedEvent>)]) -> Vec<Shar
             continue;
         }
         for (pool, shares) in deposits {
-            // Highest position_in_tx wins the (single-occurrence) migration tie.
+            // The latest event wins the (single-occurrence) migration tie.
             let winner = evs
                 .iter()
                 .filter(|ev| sep41_mint_matches(ev, pool, &shares))
-                .max_by_key(|ev| ev.position_in_tx)
+                .max_by_key(|ev| ev.event_id)
                 .and_then(|ev| ev.contract_id.clone());
             if let Some(token) = winner {
                 out.push(ShareTokenSighting {
@@ -307,7 +308,6 @@ fn symbol_value(v: &Value) -> Option<&str> {
 mod shape_tests {
     use super::*;
     use serde_json::json;
-    use xdr_parser::types::EventSource;
 
     fn ev(
         contract: &str,
@@ -317,17 +317,17 @@ mod shape_tests {
     ) -> ExtractedEvent {
         ExtractedEvent {
             transaction_hash: "tx".into(),
+            event_id: xdr_parser::EventId {
+                ledger_sequence: 61_777_648,
+                transaction_index: 1,
+                operation_index: 0,
+                event_index: idx,
+            },
+            origin: xdr_parser::EventOrigin::Operation(0),
             event_type: ContractEventType::Contract,
-            source: EventSource::TxLevel,
             contract_id: Some(contract.into()),
             topics,
             data,
-            position_in_tx: idx,
-            op_index: None,
-            event_pos_in_op: None,
-            stage: None,
-            event_id: None,
-            ledger_sequence: 61_777_648,
             created_at: 0,
         }
     }

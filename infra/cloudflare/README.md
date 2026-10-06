@@ -3,7 +3,7 @@
 Terraform for the **sorobanscan-specific** Cloudflare resources only
 (task 0277 / ADR 0048). Part of a deliberate **repo split** (D9):
 
-| Lives here (`soroban-explorer`)                         | Lives in `rf-domains` (private)                             |
+| Lives here (`soroban-explorer`)                         | Lives in `dns-cloudformation` (private)                     |
 | ------------------------------------------------------- | ----------------------------------------------------------- |
 | `api-sorobanscan.rumblefishdev.com` DNS record (orange) | the `cloudflare_zone` `rumblefishdev.com`                   |
 | API origin lock — per-host **AOP** (mTLS)               | company DNS records + zone settings                         |
@@ -11,24 +11,24 @@ Terraform for the **sorobanscan-specific** Cloudflare resources only
 | own TF-state bucket (`*-cf-tfstate`)                    | its own, separate TF-state bucket                           |
 
 This module **does not own the zone** — it references it by id
-(`var.cloudflare_zone_id`, from rf-domains' `zone_id` output).
+(`var.cloudflare_zone_id`, from dns-cloudformation's `zone_id` output).
 
 ## Ruleset ownership — model A (D10)
 
 The zone's WAF / rate-limit / Managed Challenge / Transform rulesets are
 **per-(zone, phase) singletons**, so only one Terraform state may own each
-phase. They are owned by **rf-domains** (the zone owner); each rule is
+phase. They are owned by **dns-cloudformation** (the zone owner); each rule is
 `http.host`-scoped to `api-sorobanscan.rumblefishdev.com`. Rulesets only act on
 **proxied** traffic and only the API record is orange, so this is conflict-free.
 
 Reversible to single-tenant **model C** (rulesets pulled into this repo) via
-`terraform state rm` (rf-domains) + `terraform import` (here) — no destroy /
+`terraform state rm` (dns-cloudformation) + `terraform import` (here) — no destroy /
 recreate, no downtime. Keep the provider version in lockstep so the move plans
 clean.
 
 ## Prerequisites (ordering)
 
-1. `rf-domains` applied first → the zone `rumblefishdev.com` exists; copy its
+1. `dns-cloudformation` applied first → the zone `rumblefishdev.com` exists; copy its
    `zone_id` output into `terraform.tfvars`.
 2. CDK `CloudflareBootstrapStack` deployed → the state bucket exists
    (`make -C infra deploy-production-cloudflare-bootstrap`).
@@ -56,11 +56,34 @@ terraform plan      # gates default false → provisions nothing destructive
   (operator `openssl`); confirm per-host vs zone-level AOP on Free in the
   staging dry-run (Step 3).
 
+## Testnet
+
+The testnet API host (task 0553) is the same module with its own state, in
+the Terraform workspace `testnet` — same backend file, same bucket; S3 keeps
+the workspace's state under `env:/testnet/`. Production stays in `default`.
+
+```bash
+cp terraform.testnet.tfvars.example testnet.tfvars   # fill zone id + origin target
+terraform workspace select -or-create testnet
+terraform plan -var-file=testnet.tfvars
+terraform workspace select default                   # back to production
+```
+
+`workspace-guard.tf` stops a plan whose host does not belong to the selected
+workspace (a testnet host outside `testnet`, or production's inside it), so a
+forgotten `workspace select` cannot touch production's API record. Its
+`terraform_data` resource shows up once as "1 to add" in each workspace; it
+creates nothing in Cloudflare.
+
+The origin target is the `CloudflareApiRegionalTarget` output of
+`Explorer-testnet-ApiGateway`, which exists after the testnet deploy with
+`enableCloudflareApiDomain: true` (`docs/deployment.md` § Testnet).
+
 ## Secrets / safety
 
-- **Never commit** `backend.hcl`, `terraform.tfvars`, `*.tfstate`, `certs/`
+- **Never commit** `backend.hcl`, `terraform.tfvars`, `testnet.tfvars`, `*.tfstate`, `*.plan`, `certs/`
   (see `.gitignore`). State can carry the mTLS private key → bucket stays
   private + encrypted.
 - API token: zone-scoped, least-privilege, from Secrets Manager — never the
   Global API Key, never in `.tf` or committed state.
-- SSL/TLS mode (Full strict) is a **zone setting → owned by rf-domains**.
+- SSL/TLS mode (Full strict) is a **zone setting → owned by dns-cloudformation**.

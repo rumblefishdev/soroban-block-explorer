@@ -13,7 +13,6 @@ function entry(
   order: number
 ): OperationEntry {
   const light: OperationItem = {
-    appearance_id: order,
     type: 1,
     operation_index: order - 1,
     ledger_sequence: 1,

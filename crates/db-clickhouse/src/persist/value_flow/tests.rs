@@ -2,7 +2,7 @@ use super::*;
 use domain::{ContractEventType, OperationType};
 use serde_json::json;
 use xdr_parser::types::ExtractedEvent;
-use xdr_parser::{EventAsset, EventSource};
+use xdr_parser::{EventAsset, EventId, EventOrigin};
 
 const TX: &str = "0a120260ab2a4d3e7f9c1b5d6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1";
 const G_SENDER: &str = "GARNRDKOUGVQ6FMJLL5RPDU6NG36LZHTEOIAWZPNOKFNKNKCOJEC3WMZ";
@@ -15,7 +15,7 @@ const XLM_SAC: &str = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
 #[test]
 fn sep50_token_number_does_not_become_a_persisted_amount() {
     const NFT_CONTRACT: &str = "CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA";
-    let mut ev = event(EventSource::PerOp, 0, Some((0, 0)));
+    let mut ev = event(0, 0);
     ev.contract_id = Some(NFT_CONTRACT.into());
     // No asset label: this event is attributed to its own emitter, never USDC.
     ev.topics = json!([
@@ -101,20 +101,21 @@ fn transfer(
     }
 }
 
-fn event(source: EventSource, position_in_tx: u32, op: Option<(u32, u32)>) -> ExtractedEvent {
+/// The event at position `pos` of operation `op`.
+fn event(op: u16, pos: u32) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: TX.into(),
+        event_id: EventId {
+            ledger_sequence: 64_259_660,
+            transaction_index: 1,
+            operation_index: op,
+            event_index: pos,
+        },
+        origin: EventOrigin::Operation(op),
         event_type: ContractEventType::Contract,
-        source,
         contract_id: Some(XLM_SAC.into()),
         topics: json!([]),
         data: json!({ "type": "void" }),
-        position_in_tx,
-        op_index: op.map(|o| o.0),
-        event_pos_in_op: op.map(|o| o.1),
-        stage: None,
-        event_id: None,
-        ledger_sequence: 64_259_660,
         created_at: 0,
     }
 }

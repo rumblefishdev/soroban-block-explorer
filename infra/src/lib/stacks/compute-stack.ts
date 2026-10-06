@@ -15,6 +15,7 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
+import { PublicLakeKeepalive } from './public-lake-keepalive.js';
 
 const DLQ_RETENTION_DAYS = 14;
 
@@ -207,7 +208,7 @@ export class ComputeStack extends cdk.Stack {
     // (to be copied into the Cloudflare Transform Rule) BEFORE the Lambda starts
     // requiring the header:
     //   phase 1  provisionEdgeSecret  → create the secret (Lambda NOT yet armed)
-    //   (then)   copy value → rf-domains Transform Rule injects X-Edge-Secret
+    //   (then)   copy value → dns-cloudformation Transform Rule injects X-Edge-Secret
     //   phase 2  enableEdgeSecretLock → set EDGE_SECRET env → middleware enforces
     // RETAIN so rotation is deliberate.
     const edgeSecret = config.provisionEdgeSecret
@@ -434,6 +435,20 @@ export class ComputeStack extends cdk.Stack {
           stringValue: value,
         });
       }
+    } else {
+      // No bucket of ours to publish events: the indexer paces itself, and a
+      // once-a-minute keepalive restarts it if that stops.
+      new PublicLakeKeepalive(this, 'PublicLakeKeepalive', {
+        envName: config.envName,
+        ingestQueue,
+        enabled: config.indexerLambdaConcurrency > 0,
+      });
+      // The indexer queues its own next wake-up, one per ledger it expects.
+      processorFunction.addEnvironment(
+        'INGEST_QUEUE_URL',
+        ingestQueue.queueUrl
+      );
+      ingestQueue.grantSendMessages(processorFunction);
     }
 
     // SQS → indexer event-source-mapping. Gated on concurrency so a

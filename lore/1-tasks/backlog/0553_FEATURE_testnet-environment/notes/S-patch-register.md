@@ -13,12 +13,21 @@ each one in the shape we would build from scratch.
   required even for a lake environment; `publicArchivePrefix?`,
   `clickhouseDatabase?` as conditional env. From scratch: `ledgerSource` as
   a discriminated union carrying its own fields; the database always explicit.
-- **Two env vars that can contradict, plus a guard** (A, D2 fix 2):
-  `BUCKET_NAME` + `PUBLIC_ARCHIVE_PREFIX`, and a start-up refusal of the bad
-  pair. From scratch: one `LedgerSource { OwnBucket | PublicLake(prefix) }`
-  parsed once.
-- **Network check assumes pubnet for an own bucket** (A): a future testnet with
-  its own Galexie would be refused at start. Falls out of the item above.
+- **Two env vars that can contradict, plus a guard** (A, D2 fix 2): kept on
+  purpose (2026-10-02). A `LedgerSource` type (#595) was built and dropped:
+  two plain fields and two start-up checks read more simply than a new type
+  with five methods. The empty-lake start (#597) adds one more
+  `bucket == PUBLIC_BUCKET` check, in `first_ledger_to_read`.
+- **Network check assumes pubnet for an own bucket** (A): decided 2026-10-02
+  that this is the design, not debt — testnet reads the lake and will not run
+  its own Galexie, so our own bucket is mainnet's only. Kept as the start-up
+  refusal of any other passphrase there (`LedgerSource`, #595).
+- **Site URLs written twice** (E, #600): `NETWORK_SITES` in
+  `web/src/network.ts` repeats `domainName` of `infra/envs/*.json` (a third
+  copy of the mainnet host is the report link in `ContractCode.tsx`). From
+  scratch: the web build recipes pass both hosts as build variables, one
+  source. Kept for now: the hosts change rarely and two more build variables
+  cost more than they save today.
 
 ## Kept on purpose
 

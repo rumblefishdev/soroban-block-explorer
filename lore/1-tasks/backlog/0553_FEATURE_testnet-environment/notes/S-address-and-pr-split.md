@@ -22,3 +22,13 @@ Stellar's own software is built: one instance and one database per network.
 C is its own PR because production must act between it and D; B because a
 mechanical move next to new infra would bury it, and it is proven by one
 command. Stack depth two at most (B → D).
+
+## Certs, API host, alarms
+
+Decided 2026-09-30: Lambdas use their own certs mapped to the `testnet_*`
+users — one project, but a misconfigured testnet cannot touch mainnet data,
+and cert names already carry the environment. API host
+`api-testnet-sorobanscan.rumblefishdev.com` behind Cloudflare with the same
+Turnstile widget as mainnet and its own edge secret (each environment
+generates one; corrected 2026-10-02); testnet alarms in their own Slack
+channel.

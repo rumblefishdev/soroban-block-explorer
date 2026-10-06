@@ -1,0 +1,338 @@
+// Feasibility spike: run a Soroban contract view function locally with the
+// official soroban-env-host, fed only by ledger entries from getLedgerEntries.
+//
+// Usage: local-exec <contracts.txt> <fn,fn,...> <out.tsv>
+// Cache of fetched entries: ./cache.tsv (key_b64 \t entry_b64|- \t live_until|-)
+
+use sha2::{Digest, Sha256};
+use soroban_env_host::{
+    budget::Budget,
+    e2e_invoke::{invoke_host_function_in_recording_mode, RecordingInvocationAuthMode},
+    storage::{EntryWithLiveUntil, SnapshotSource},
+    xdr::{
+        AccountId, ConfigSettingEntry, ConfigSettingId, ContractDataDurability, ContractExecutable,
+        ContractId, Hash, HostFunction, InvokeContractArgs, LedgerEntryData, LedgerKey,
+        LedgerKeyConfigSetting, LedgerKeyContractCode, LedgerKeyContractData, Limits, PublicKey,
+        ReadXdr, ScAddress, ScSymbol, ScVal, Uint256, WriteXdr,
+    },
+    HostError, LedgerInfo,
+};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    io::Write,
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+const RPCS: [&str; 2] = [
+    "https://mainnet.sorobanrpc.com",
+    "https://soroban-rpc.mainnet.stellar.gateway.fm/",
+];
+const PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
+const CACHE: &str = "cache.tsv";
+
+type Cached = Option<(String, Option<u32>)>; // entry xdr b64, live_until
+
+fn rpc(method: &str, params: serde_json::Value) -> serde_json::Value {
+    let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params});
+    let mut wait = 2;
+    for attempt in 0.. {
+        let url = RPCS[attempt % 2];
+        match ureq::post(url).timeout(Duration::from_secs(60)).send_json(body.clone()) {
+            Ok(r) => {
+                let v: serde_json::Value = r.into_json().unwrap();
+                if v.get("result").is_some() {
+                    return v["result"].clone();
+                }
+                eprintln!("rpc error {}: {}", url, v);
+            }
+            Err(e) => eprintln!("rpc fail {}: {}", url, e),
+        }
+        std::thread::sleep(Duration::from_secs(wait));
+        wait = (wait * 2).min(60);
+    }
+    unreachable!()
+}
+
+fn load_cache() -> HashMap<String, Cached> {
+    let mut m = HashMap::new();
+    if let Ok(s) = std::fs::read_to_string(CACHE) {
+        for line in s.lines() {
+            let p: Vec<&str> = line.split('\t').collect();
+            let v = if p[1] == "-" {
+                None
+            } else {
+                Some((p[1].to_string(), p[2].parse().ok()))
+            };
+            m.insert(p[0].to_string(), v);
+        }
+    }
+    m
+}
+
+/// Fetches keys not yet cached, 200 per call, and appends them to the cache file.
+fn fetch(cache: &mut Rc<HashMap<String, Cached>>, keys: &[String]) {
+    let mut todo: Vec<String> = keys.iter().filter(|k| !cache.contains_key(*k)).cloned().collect();
+    todo.sort();
+    todo.dedup();
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(CACHE).unwrap();
+    for chunk in todo.chunks(200) {
+        let res = rpc("getLedgerEntries", serde_json::json!({ "keys": chunk }));
+        let mut got: HashMap<String, Cached> = chunk.iter().map(|k| (k.clone(), None)).collect();
+        for e in res["entries"].as_array().cloned().unwrap_or_default() {
+            let key = e["key"].as_str().unwrap().to_string();
+            let live = e["liveUntilLedgerSeq"].as_u64().map(|x| x as u32);
+            // The RPC returns LedgerEntryData; wrap it into a full LedgerEntry.
+            let data = LedgerEntryData::from_xdr_base64(e["xdr"].as_str().unwrap(), Limits::none()).unwrap();
+            let entry = soroban_env_host::xdr::LedgerEntry {
+                last_modified_ledger_seq: e["lastModifiedLedgerSeq"].as_u64().unwrap_or(0) as u32,
+                data,
+                ext: soroban_env_host::xdr::LedgerEntryExt::V0,
+            };
+            got.insert(key, Some((entry.to_xdr_base64(Limits::none()).unwrap(), live)));
+        }
+        for (k, v) in got {
+            match &v {
+                None => writeln!(f, "{}\t-\t-", k).unwrap(),
+                Some((x, l)) => writeln!(f, "{}\t{}\t{}", k, x, l.map(|l| l.to_string()).unwrap_or("-".into())).unwrap(),
+            }
+            Rc::make_mut(cache).insert(k, v);
+        }
+        eprintln!("fetched {} keys", chunk.len());
+    }
+}
+
+fn b64(k: &LedgerKey) -> String {
+    k.to_xdr_base64(Limits::none()).unwrap()
+}
+
+fn instance_key(c: &[u8; 32]) -> LedgerKey {
+    LedgerKey::ContractData(LedgerKeyContractData {
+        contract: ScAddress::Contract(ContractId(Hash(*c))),
+        key: ScVal::LedgerKeyContractInstance,
+        durability: ContractDataDurability::Persistent,
+    })
+}
+
+fn code_key(h: &Hash) -> LedgerKey {
+    LedgerKey::ContractCode(LedgerKeyContractCode { hash: h.clone() })
+}
+
+fn entry(cache: &HashMap<String, Cached>, k: &LedgerKey) -> Option<(soroban_env_host::xdr::LedgerEntry, Option<u32>)> {
+    cache.get(&b64(k))?.as_ref().map(|(x, l)| {
+        (soroban_env_host::xdr::LedgerEntry::from_xdr_base64(x, Limits::none()).unwrap(), *l)
+    })
+}
+
+/// Snapshot backed by the fetched entries; every key asked for and not yet
+/// fetched is recorded as a miss so the caller can fetch it and re-run.
+struct Snap {
+    cache: Rc<HashMap<String, Cached>>,
+    misses: RefCell<Vec<String>>,
+}
+
+impl SnapshotSource for Snap {
+    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+        let k = b64(key);
+        match self.cache.get(&k) {
+            None => {
+                self.misses.borrow_mut().push(k);
+                Ok(None)
+            }
+            Some(None) => Ok(None),
+            Some(Some((x, l))) => Ok(Some((
+                Rc::new(soroban_env_host::xdr::LedgerEntry::from_xdr_base64(x, Limits::none()).unwrap()),
+                *l,
+            ))),
+        }
+    }
+}
+
+fn show(v: &ScVal) -> String {
+    match v {
+        ScVal::U32(n) => n.to_string(),
+        ScVal::I32(n) => n.to_string(),
+        ScVal::U64(n) => n.to_string(),
+        ScVal::String(s) => format!("{:?}", s.to_utf8_string_lossy()),
+        ScVal::Symbol(s) => format!("{:?}", s.to_utf8_string_lossy()),
+        o => format!("{:?}", o),
+    }
+}
+
+fn key_kind(k: &LedgerKey, own: &[u8; 32]) -> String {
+    match k {
+        LedgerKey::ContractCode(_) => "code".into(),
+        LedgerKey::ContractData(d) => {
+            let mine = matches!(&d.contract, ScAddress::Contract(ContractId(Hash(h))) if h == own);
+            let what = match (&d.key, d.durability) {
+                (ScVal::LedgerKeyContractInstance, _) => "instance",
+                (_, ContractDataDurability::Persistent) => "persistent",
+                (_, ContractDataDurability::Temporary) => "temporary",
+            };
+            if mine { what.into() } else { format!("foreign_{}", what) }
+        }
+        LedgerKey::Account(_) => "account".into(),
+        LedgerKey::Trustline(_) => "trustline".into(),
+        o => format!("{:?}", o.discriminant()),
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args[1] == "tx" {
+        print_tx(&args[2], &args[3]);
+        return;
+    }
+    let contracts: Vec<String> = std::fs::read_to_string(&args[1]).unwrap().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    let fns: Vec<String> = args[2].split(',').map(String::from).collect();
+    let mut out = std::fs::File::create(&args[3]).unwrap();
+    let mut cache = Rc::new(load_cache());
+
+    // Network state: protocol, ledger, and the network's own cost model and limits.
+    let latest = rpc("getLatestLedger", serde_json::json!({}));
+    let seq = latest["sequence"].as_u64().unwrap() as u32;
+    let protocol = latest["protocolVersion"].as_u64().unwrap() as u32;
+    let cfg_keys: Vec<LedgerKey> = [
+        ConfigSettingId::ContractComputeV0,
+        ConfigSettingId::ContractCostParamsCpuInstructions,
+        ConfigSettingId::ContractCostParamsMemoryBytes,
+        ConfigSettingId::StateArchival,
+    ]
+    .iter()
+    .map(|id| LedgerKey::ConfigSetting(LedgerKeyConfigSetting { config_setting_id: *id }))
+    .collect();
+    // Config is always fetched fresh (not from cache).
+    let res = rpc("getLedgerEntries", serde_json::json!({ "keys": cfg_keys.iter().map(b64).collect::<Vec<_>>() }));
+    let mut cfg = HashMap::new();
+    for e in res["entries"].as_array().unwrap() {
+        if let LedgerEntryData::ConfigSetting(c) = LedgerEntryData::from_xdr_base64(e["xdr"].as_str().unwrap(), Limits::none()).unwrap() {
+            cfg.insert(c.discriminant() as i32, c);
+        }
+    }
+    let (ConfigSettingEntry::ContractComputeV0(compute), ConfigSettingEntry::ContractCostParamsCpuInstructions(cpu), ConfigSettingEntry::ContractCostParamsMemoryBytes(mem), ConfigSettingEntry::StateArchival(arch)) = (
+        cfg[&(ConfigSettingId::ContractComputeV0 as i32)].clone(),
+        cfg[&(ConfigSettingId::ContractCostParamsCpuInstructions as i32)].clone(),
+        cfg[&(ConfigSettingId::ContractCostParamsMemoryBytes as i32)].clone(),
+        cfg[&(ConfigSettingId::StateArchival as i32)].clone(),
+    ) else { panic!("config") };
+    eprintln!("ledger {} protocol {} tx_max_insns {} tx_mem {}", seq, protocol, compute.tx_max_instructions, compute.tx_memory_limit);
+    let network_id: [u8; 32] = Sha256::digest(PASSPHRASE.as_bytes()).into();
+    let ledger_info = LedgerInfo {
+        protocol_version: protocol,
+        sequence_number: seq,
+        timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+        network_id,
+        base_reserve: 5_000_000,
+        min_temp_entry_ttl: arch.min_temporary_ttl,
+        min_persistent_entry_ttl: arch.min_persistent_ttl,
+        max_entry_ttl: arch.max_entry_ttl,
+    };
+
+    // Phase 1: instances, then the distinct WASM codes they reference.
+    let ids: Vec<[u8; 32]> = contracts.iter().map(|c| match stellar_strkey::Strkey::from_string(c).unwrap() {
+        stellar_strkey::Strkey::Contract(stellar_strkey::Contract(b)) => b,
+        _ => panic!("not a contract {}", c),
+    }).collect();
+    fetch(&mut cache, &ids.iter().map(|c| b64(&instance_key(c))).collect::<Vec<_>>());
+    let mut codes: BTreeMap<String, Hash> = BTreeMap::new();
+    for c in &ids {
+        if let Some((e, _)) = entry(&cache, &instance_key(c)) {
+            if let LedgerEntryData::ContractData(d) = e.data {
+                if let ScVal::ContractInstance(i) = d.val {
+                    if let ContractExecutable::Wasm(h) = i.executable {
+                        codes.insert(b64(&code_key(&h)), h);
+                    }
+                }
+            }
+        }
+    }
+    fetch(&mut cache, &codes.keys().cloned().collect::<Vec<_>>());
+    let (mut total, mut live, mut archived, mut missing) = (0usize, 0, 0, 0);
+    for k in codes.keys() {
+        match cache.get(k).unwrap() {
+            Some((x, l)) => {
+                let e = soroban_env_host::xdr::LedgerEntry::from_xdr_base64(x, Limits::none()).unwrap();
+                if let LedgerEntryData::ContractCode(cc) = e.data { total += cc.code.len(); }
+                if l.map_or(false, |l| l >= seq) { live += 1 } else { archived += 1 }
+            }
+            None => missing += 1,
+        }
+    }
+    eprintln!("WASM: {} distinct, {} bytes total, live {}, archived {}, not returned {}", codes.len(), total, live, archived, missing);
+
+    // Phase 2: invoke each function; fetch whatever the run asked for and re-run.
+    let source = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])));
+    for (c, id) in contracts.iter().zip(&ids) {
+        for f in &fns {
+            let hf = HostFunction::InvokeContract(InvokeContractArgs {
+                contract_address: ScAddress::Contract(ContractId(Hash(*id))),
+                function_name: ScSymbol(f.as_str().try_into().unwrap()),
+                args: vec![].try_into().unwrap(),
+            });
+            let mut rounds = 0;
+            loop {
+                rounds += 1;
+                let snap = Rc::new(Snap { cache: cache.clone(), misses: RefCell::new(vec![]) });
+                let budget = Budget::try_from_configs(compute.tx_max_instructions as u64, compute.tx_memory_limit as u64, cpu.clone(), mem.clone()).unwrap();
+                let mut diag = vec![];
+                let t = Instant::now();
+                let r = invoke_host_function_in_recording_mode(
+                    &budget, false, &hf, &source,
+                    RecordingInvocationAuthMode::recording(true, false),
+                    ledger_info.clone(), snap.clone(), [0; 32], &mut diag,
+                );
+                let us = t.elapsed().as_micros();
+                let misses = snap.misses.borrow().clone();
+                drop(snap);
+                if !misses.is_empty() && rounds < 6 {
+                    fetch(&mut cache, &misses);
+                    continue;
+                }
+                let (val, fp, insns, restored) = match r {
+                    Err(e) => (format!("error: {:?}", e.error), String::new(), 0, 0),
+                    Ok(res) => {
+                        let mut kinds: Vec<String> = res.resources.footprint.read_only.iter().chain(res.resources.footprint.read_write.iter()).map(|k| key_kind(k, id)).collect();
+                        kinds.sort();
+                        let v = match res.invoke_result {
+                            Ok(v) => show(&v),
+                            Err(e) => format!("error: {:?}", e.error),
+                        };
+                        (v, kinds.join("+"), res.resources.instructions, res.restored_rw_entry_indices.len())
+                    }
+                };
+                writeln!(out, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", c, f, val, fp, insns, us, rounds, restored).unwrap();
+                break;
+            }
+        }
+    }
+}
+
+/// Prints an unsigned invoke transaction envelope for raw simulateTransaction
+/// (the CLI cannot build one for contracts whose spec it fails to parse).
+fn print_tx(c: &str, f: &str) {
+    use soroban_env_host::xdr::*;
+    let stellar_strkey::Strkey::Contract(stellar_strkey::Contract(id)) = stellar_strkey::Strkey::from_string(c).unwrap() else { panic!() };
+    let op = Operation {
+        source_account: None,
+        body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+            host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                contract_address: ScAddress::Contract(ContractId(Hash(id))),
+                function_name: ScSymbol(f.try_into().unwrap()),
+                args: vec![].try_into().unwrap(),
+            }),
+            auth: vec![].try_into().unwrap(),
+        }),
+    };
+    let tx = Transaction {
+        source_account: MuxedAccount::Ed25519(Uint256([0; 32])),
+        fee: 100,
+        seq_num: SequenceNumber(1),
+        cond: Preconditions::None,
+        memo: Memo::None,
+        operations: vec![op].try_into().unwrap(),
+        ext: TransactionExt::V0,
+    };
+    let env = TransactionEnvelope::Tx(TransactionV1Envelope { tx, signatures: vec![].try_into().unwrap() });
+    println!("{}", env.to_xdr_base64(Limits::none()).unwrap());
+}

@@ -341,7 +341,7 @@ filter, and had to be corrected — the exception looked like the rule.
 | Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                                                                    |
 | Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/decompiled`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
 | NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                             |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/transactions`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                              |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/activity`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                                  |
 | Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                          |
 
 ### 6.4 Resource Details
@@ -585,9 +585,10 @@ computed at read from the in-cluster `prices.*` views (task 0199,
 and are `null` when a leg is unpriceable. A prices-side failure degrades those
 three fields to `null` — it never fails the request.
 
-**`GET /liquidity-pools/:id/transactions`** - Deposits, withdrawals, and trades for this
-pool. Each row carries `amounts` (task 0279): **one entry per operation**, in
-application order, each with `amounts` — one entry per pool leg, in the order
+**`GET /liquidity-pools/:id/activity`** - Deposits, withdrawals, and trades for this
+pool, newest first, filterable by `filter[event]` (task 0491; it replaced
+`/transactions`, whose row was a transaction). **One row per operation**, each
+with an `event` and `amounts` — one entry per pool leg, in the order
 of the pool's `legs` (`amounts[i]` moved in `legs[i]`), a list rather than an
 `a` / `b` pair because a Soroban pool has two to four legs — as raw decimal
 **strings** (same reason as a leg's `reserve` — a JSON number is a browser double and
@@ -603,6 +604,24 @@ sit under an Event chip that does not describe it. An empty list means no
 figures — never zero — for history the backfill has not reached; the frontend
 renders those rows blank.
 
+A classic pool's rows come from `pool_operation_amounts`, a Soroban pool's from
+`pool_movements` (task 0374), **one row per event the pool emitted**
+(`event_index`, its position in the operation; `null` on a classic row): an
+operation that withdraws and re-deposits, or swaps twice, lists each event, as
+summing them produced rows that described none. An unmerged duplicate row is
+counted once. Its `event` is the kind the pool's event declared, and
+`filter[event]` selects on that stored kind; a leg the event did not name is
+`null` (a 4-token pool's event names three tokens at most), and
+`pools_crossed` is `null` — a Soroban route is not recorded per operation. The
+cursor carries `event_index` too. The read walks
+ledger windows back from the cursor, each twice the last, so a page touches
+only the partitions it needs. `event_kind` is not in the table's sort key, so
+a filtered page reads its whole window: on the busiest pool (2.8M rows,
+2026-10-01) an unfiltered first page reads ~25k rows, a `deposit` page ~230k,
+and a kind the pool never had reads all of the pool's rows. Amounts stay raw; each leg's `decimals` on the
+pool (`legs[i].decimals`: 7 for native and classic, a Soroban token's
+published value, `null` when it publishes none) scales them.
+
 **`GET /liquidity-pools/:id/chart`** - Time-series data for TVL, volume, and fee revenue.
 Query params (all optional, sensible defaults): `interval` (`1h`/`1d`/`1w`,
 default `1d`), `from` (ISO 8601, default `to` minus interval-appropriate
@@ -612,8 +631,17 @@ aggregation bounded. Bucket aggregation policy in
 `crates/api/src/liquidity_pools/queries/get_pool_chart.rs`.
 A Soroban pool's series comes from its reserve history (`pool_state_changes`,
 raw per leg, scaled by each leg's own decimals) on the same buckets and price
-rules — TVL only; `volume` and `fee_revenue` are `null` until its trades are
-indexed, and the frontend's Volume and Fees tabs say "not indexed".
+rules. Its `volume` is the classic definition on its trades: the absolute
+amount of every trade's **traded leg** in `pool_movements` (deduped on the
+full key), scaled by that leg's decimals and priced at the trade's own ledger;
+`fee_revenue` follows from it. The traded leg is the lowest-index leg the trade
+wrote a row for: a two-leg trade writes both legs, so it is always leg A, the
+leg the classic snapshot counts; a three- or four-leg trade writes only the two
+legs it moved and is counted on the first.
+A bucket holding a trade whose traded leg has no price or no published
+decimals has `null` volume — a hole, never a partial sum. The detail
+endpoint's 24h `volume` / `fee_revenue` read the same trades, each leg's
+amount priced at that leg's last close.
 
 **`GET /liquidity-pools/:id/participants`** - Paginated list of liquidity providers
 with their share size, share percentage of the pool, and last update ledger

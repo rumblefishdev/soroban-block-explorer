@@ -139,3 +139,5 @@ bloom went in task 0579, the dictionary here.
 - `system.query_log`: `DROP DICTIONARY transaction_hash_dict` finished
   2026-09-24 08:09:36 UTC.
 - `system.dictionaries` is empty; no `Dictionary` engine in `system.tables`.
+- Step 2 shipped 2026-10-02 with task 0553's Hetzner run: `dict_reader` is
+  gone from `system.users`, `dict.xml` deleted from the box.

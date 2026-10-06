@@ -108,7 +108,7 @@ export function PoolParticipants({ poolId }: PoolParticipantsProps) {
         <EmptyState
           icon={<HourglassIcon />}
           title="Not indexed yet"
-          description="Liquidity providers of this pool are not indexed yet."
+          description="This pool has no share token we can read. In a concentrated pool each provider holds a position inside the pool contract instead, and those positions are not indexed yet."
         />
       </SectionCard>
     );

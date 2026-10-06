@@ -103,6 +103,10 @@ async fn soroban_pool_reads_serve_leg_reserves() {
     let detail_reserves: Vec<Option<String>> =
         detail.legs.iter().map(|l| l.reserve.clone()).collect();
     assert_eq!(detail_reserves, expected, "detail legs");
+    // The same scales reach the wire, for the page to scale activity amounts.
+    let expected_decimals = vec![Some(7), Some(7), Some(18), None];
+    let detail_decimals: Vec<Option<u32>> = detail.legs.iter().map(|l| l.decimals).collect();
+    assert_eq!(detail_decimals, expected_decimals, "detail leg decimals");
 
     let replaced = fetch_pool_by_id(&ch, REPLACED)
         .await
@@ -128,6 +132,8 @@ async fn soroban_pool_reads_serve_leg_reserves() {
         .expect("pool is listed");
     let list_reserves: Vec<Option<String>> = row.legs.iter().map(|l| l.reserve.clone()).collect();
     assert_eq!(list_reserves, expected, "list legs");
+    let list_decimals: Vec<Option<u32>> = row.legs.iter().map(|l| l.decimals).collect();
+    assert_eq!(list_decimals, expected_decimals, "list leg decimals");
 
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
         .execute()

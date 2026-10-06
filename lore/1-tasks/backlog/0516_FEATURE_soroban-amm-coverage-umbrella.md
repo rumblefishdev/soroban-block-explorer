@@ -184,7 +184,7 @@ Copy into each adapter task:
       registry that produced it
 - [ ] reserves compared to the contract's own answer, across every pool type
 - [ ] positions: coverage measured, unresolvable cases render "not indexed"
-- [ ] Aquarius concentrated positions (0374's deferred step 23): index from
+- [ ] Aquarius concentrated positions (task 0613, ex-0374 step 23): index from
       `position_update` per the decision recorded in 0374's notes
       (2026-08-27), then lift the participants endpoint's explicit 400 for
       concentrated pools
@@ -192,11 +192,11 @@ Copy into each adapter task:
 
 ## Adapters
 
-| Protocol               | Task                                                                         | State                                     |
-| ---------------------- | ---------------------------------------------------------------------------- | ----------------------------------------- |
-| Router-registry family | [0374](../active/0374_FEATURE_lp-native-leg-and-soroban-amm-completeness.md) | active, first adapter                     |
-| **Soroswap**           | [0518](./0518_FEATURE_soroswap-pool-adapter.md)                              | **next after 0374** (0517 fix in PR #443) |
-| Phoenix                | —                                                                            | after Soroswap; spawn then                |
+| Protocol               | Task                                                                                 | State                                     |
+| ---------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------- |
+| Router-registry family | [0374](../archive/0374_FEATURE_lp-native-leg-and-soroban-amm-completeness/README.md) | done 2026-10-02, first adapter            |
+| **Soroswap**           | [0518](./0518_FEATURE_soroswap-pool-adapter.md)                                      | **next after 0374** (0517 fix in PR #443) |
+| Phoenix                | —                                                                                    | after Soroswap; spawn then                |
 
 **Order reversed 2026-08-27 on measurement — and REVERSED BACK 2026-09-02 on a
 better one (karolkow).** The 3.4x figure counted raw EVENTS, but Phoenix

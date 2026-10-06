@@ -280,9 +280,9 @@ The dividing line is **`EXCHANGE TABLES`**. A subcommand that builds a staging
 table and swaps it will **lose any live write** that lands between build and
 swap.
 
-| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                          |
-| ------------------------------------------------------- | --------------------------------------------------------- |
-| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify` |
+| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify`, `wasm-code-backfill` |
 
 **Grey zone:**
 
@@ -416,7 +416,8 @@ Gotchas, all recorded:
 
 **Subcommands:** `run`, `status`, `bootstrap`, `repair-tier1`,
 `contract-type-rebuild`, `balance-seed`, `nft-reclassify`,
-`soroban-pool-amounts`. Most one-shot ops
+`soroban-pool-amounts`, `wasm-code-backfill` (program bytes for `wasm_code`,
+read from RPC and checked against their hash). Most one-shot ops
 subcommands take `--dry-run`. No separate bins remain.
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),
@@ -1167,7 +1168,7 @@ Per slice `[A, B)`, in this order:
 The event arm tells an operation event by its id: a fee event's carries a
 sentinel, so only an operation event names its own transaction in
 `transaction_index`. The live writer needs no such inference — the parser
-states each event's source (`EventSource::PerOp`); the check after the window
+states each event's origin (`EventOrigin::Operation`); the check after the window
 (below) confirms the two agree on real rows. Measured read-only on 63,700,000–
 63,705,000 (2026-09-21): 1,554,897 pairs across 8,369 contracts, 740 ms,
 586 MiB — well inside the read profile. The sentinel test was checked on the

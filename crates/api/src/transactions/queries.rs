@@ -10,9 +10,8 @@
 //!   parent ledger `closed_at`, joined in from `ledgers` (ADR 0044 §5.2).
 //! - **CH `transactions` has no `id`.** Every list keys on the position
 //!   `(ledger_sequence, application_order)` (ADR 0059).
-//! - **`transaction_operations` has no `id` surrogate** (PR #175). The
-//!   per-op `appearance_id` is the operation's 1-based position,
-//!   `operation_index + 1` (ADR 0059).
+//! - **`transaction_operations` has no `id` surrogate** (PR #175). An
+//!   operation is located by its 0-based `operation_index` (ADR 0059).
 //! - **`soroban_events` is the full-payload table** (one row per event). The
 //!   archive-unavailable fallback groups per (contract, ledger) to emit one
 //!   appearance row per contract — the same wire shape as the PG appearance
@@ -71,7 +70,6 @@ pub struct TxDetailRow {
 
 #[derive(Debug)]
 pub struct OpRow {
-    pub appearance_id: i64,
     pub type_name: String,
     pub op_type: i16,
     pub source_account: Option<String>,
@@ -303,7 +301,6 @@ pub async fn fetch_operations(
     Ok(raw
         .into_iter()
         .map(|r| OpRow {
-            appearance_id: i64::from(r.operation_index) + 1,
             type_name: operation_type_label(r.op_type),
             op_type: r.op_type,
             source_account: r

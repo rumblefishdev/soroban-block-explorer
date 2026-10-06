@@ -11,7 +11,7 @@
 #
 # The token MUST be zone-scoped to rumblefishdev.com, least-privilege — enough
 # to manage ONE DNS record + AOP: DNS:Edit, SSL and Certificates:Edit. It does
-# NOT need Zone:Edit or Rulesets (those belong to rf-domains). Never the Global
+# NOT need Zone:Edit or Rulesets (those belong to dns-cloudformation). Never the Global
 # API Key.
 
 provider "cloudflare" {
