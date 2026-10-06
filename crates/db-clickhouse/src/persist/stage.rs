@@ -434,14 +434,14 @@ pub fn build_wasm_upgrade_rows(
             // event. A contract can emit a Contract-typed event with the same
             // topic shape; requiring System blocks that spoof of its own
             // `wasm_hash` (and never drops a real upgrade — all are System).
-            if ev.event_type != ContractEventType::System {
+            if ev.body.event_type != ContractEventType::System {
                 continue;
             }
-            let Some(addr) = ev.contract_id.as_deref() else {
+            let Some(addr) = ev.body.contract_id.as_deref() else {
                 continue;
             };
             // `extract_…` returns `Some` only for a well-formed executable_update.
-            let Some(update) = extract_executable_update(&ev.topics) else {
+            let Some(update) = extract_executable_update(&ev.body.topics) else {
                 continue;
             };
             // Skip-on-miss: without the prior row we cannot carry identity
@@ -783,9 +783,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let entry = participants_per_tx.entry(tx_hash.clone()).or_default();
         let asset_entry = event_assets_per_tx.entry(tx_hash.clone()).or_default();
         for ev in evs {
-            let Some(derived) =
-                derive_token_event(&ev.topics, ev.contract_id.as_deref().map(ids::contract_id))
-            else {
+            let Some(derived) = derive_token_event(
+                &ev.body.topics,
+                ev.body.contract_id.as_deref().map(ids::contract_id),
+            ) else {
                 continue;
             };
             for key in derived.participant_strkeys {

@@ -45,16 +45,16 @@ pub(super) fn rows(
                     ev.event_id.to_rpc_string()
                 )));
             }
-            let Some(contract_strkey) = &ev.contract_id else {
+            let Some(contract_strkey) = &ev.body.contract_id else {
                 contract_orphan_dropped += 1;
                 continue;
             };
             let id = ev.event_id;
-            let topics_xdr = serde_json::to_string(&ev.topics)
+            let topics_xdr = serde_json::to_string(&ev.body.topics)
                 .map_err(|e| staging_err(&format!("event topics serialize: {e}")))?;
-            let data_xdr = serde_json::to_string(&ev.data)
+            let data_xdr = serde_json::to_string(&ev.body.data)
                 .map_err(|e| staging_err(&format!("event data serialize: {e}")))?;
-            let signature = extract_event_signature(&ev.topics);
+            let signature = extract_event_signature(&ev.body.topics);
             let contract_id = ids::contract_id(contract_strkey);
             if matches!(ev.origin, EventOrigin::Operation(_)) {
                 contract_txs.insert((contract_id, application_order));
@@ -66,7 +66,7 @@ pub(super) fn rows(
                 operation_index: id.operation_index,
                 event_index: id.event_index,
                 application_order,
-                event_type: ev.event_type as i16,
+                event_type: ev.body.event_type as i16,
                 signature,
                 topics_xdr,
                 data_xdr,

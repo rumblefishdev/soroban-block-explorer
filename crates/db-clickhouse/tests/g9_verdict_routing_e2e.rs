@@ -29,7 +29,8 @@ use db_clickhouse::persist::{ClassificationCache, ids, persist_ledger_clickhouse
 use db_clickhouse::{Config, apply_init_sql, client};
 use domain::{ContractEventType, NftEventType};
 use xdr_parser::types::{
-    ExtractedEvent, ExtractedLedger, ExtractedNft, ExtractedNftEvent, ExtractedTransaction,
+    EventBody, ExtractedEvent, ExtractedLedger, ExtractedNft, ExtractedNftEvent,
+    ExtractedTransaction,
 };
 
 /// Out-of-band sentinel — distinct from `smoke.rs` (99_999_001) and
@@ -116,16 +117,18 @@ fn fixture_upgrade_event(contract_id: &str) -> ExtractedEvent {
             event_index: 0,
         },
         origin: xdr_parser::EventOrigin::Operation(0),
-        event_type: ContractEventType::System,
-        contract_id: Some(contract_id.to_string()),
-        topics: serde_json::json!([
-            {"type": "symbol", "value": "executable_update"},
-            {"type": "vec", "value": [{"type": "symbol", "value": "Wasm"},
-                                      {"type": "bytes", "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
-            {"type": "vec", "value": [{"type": "symbol", "value": "Wasm"},
-                                      {"type": "bytes", "value": NEW_WASM_B64}]},
-        ]),
-        data: serde_json::Value::Null,
+        body: EventBody {
+            event_type: ContractEventType::System,
+            contract_id: Some(contract_id.to_string()),
+            topics: serde_json::json!([
+                {"type": "symbol", "value": "executable_update"},
+                {"type": "vec", "value": [{"type": "symbol", "value": "Wasm"},
+                                          {"type": "bytes", "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
+                {"type": "vec", "value": [{"type": "symbol", "value": "Wasm"},
+                                          {"type": "bytes", "value": NEW_WASM_B64}]},
+            ]),
+            data: serde_json::Value::Null,
+        },
         created_at: 1_700_000_000,
     }
 }
@@ -137,7 +140,6 @@ fn fixture_event(contract_id: &str, token: &str, order: u16) -> ExtractedNftEven
         token_id: token.to_string(),
         event_type: NftEventType::Transfer,
         owner: Some(owner()),
-        ledger_sequence: E2E_LEDGER,
         created_at: 1_700_000_000,
         event_id: xdr_parser::EventId {
             ledger_sequence: E2E_LEDGER,

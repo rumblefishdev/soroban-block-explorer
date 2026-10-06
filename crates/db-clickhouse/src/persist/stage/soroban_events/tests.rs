@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use domain::ContractEventType;
-use xdr_parser::types::{EventOrigin, ExtractedEvent, ExtractedLedger};
+use xdr_parser::types::{EventBody, EventOrigin, ExtractedEvent, ExtractedLedger};
 
 use super::rows;
 use crate::persist::stage::StagedLedger;
@@ -29,10 +29,12 @@ fn event(event_index: u32) -> ExtractedEvent {
             event_index,
         },
         origin: EventOrigin::Operation(0),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(CONTRACT.into()),
-        topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
-        data: serde_json::json!({}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(CONTRACT.into()),
+            topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
+            data: serde_json::json!({}),
+        },
         created_at: 1_700_000_000,
     }
 }

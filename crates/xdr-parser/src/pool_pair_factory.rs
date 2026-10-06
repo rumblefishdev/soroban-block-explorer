@@ -119,10 +119,10 @@ pub fn detect_pair_registrations(
     let mut out = Vec::new();
     for (_tx, evs) in events {
         for ev in evs {
-            let Some(factory) = ev.contract_id.as_deref() else {
+            let Some(factory) = ev.body.contract_id.as_deref() else {
                 continue;
             };
-            match parse_new_pair(&ev.topics, &ev.data) {
+            match parse_new_pair(&ev.body.topics, &ev.body.data) {
                 Ok(event) => out.push(PairRegistration {
                     factory: factory.to_string(),
                     event,

@@ -1623,9 +1623,8 @@ fn nft_mint_event_produces_nft() {
         token_id: json!({"type": "u32", "value": 42}),
         from: None,
         to: Some("GOWNER".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: any_event_id(),
+        event_id: event_at(100),
     }];
 
     let nfts = detect_nfts(&events);
@@ -1645,9 +1644,8 @@ fn nft_transfer_event() {
         token_id: json!({"type": "u32", "value": 42}),
         from: Some("GFROM".into()),
         to: Some("GTO".into()),
-        ledger_sequence: 200,
         created_at: 1700001000,
-        event_id: any_event_id(),
+        event_id: event_at(200),
     }];
 
     let nfts = detect_nfts(&events);
@@ -1665,9 +1663,8 @@ fn nft_burn_event() {
         token_id: json!({"type": "string", "value": "unique-nft-id"}),
         from: Some("GFROM".into()),
         to: None,
-        ledger_sequence: 300,
         created_at: 1700002000,
-        event_id: any_event_id(),
+        event_id: event_at(300),
     }];
 
     let nfts = detect_nfts(&events);
@@ -1685,9 +1682,8 @@ fn empty_token_id_skipped() {
         token_id: json!({"type": "void", "value": null}),
         from: None,
         to: Some("GOWNER".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: any_event_id(),
+        event_id: event_at(100),
     }];
 
     let nfts = detect_nfts(&events);
@@ -1711,9 +1707,8 @@ fn make_nft_event(
         token_id: json!({"type": "u32", "value": token}),
         from: from.map(Into::into),
         to: to.map(Into::into),
-        ledger_sequence: ledger,
         created_at: 1700000000 + ledger as i64,
-        event_id: any_event_id(),
+        event_id: event_at(ledger),
     }
 }
 
@@ -1734,7 +1729,7 @@ fn mint_event_yields_owner_to() {
     assert_eq!(out[0].token_id, "42");
     assert_eq!(out[0].event_type, NftEventType::Mint);
     assert_eq!(out[0].owner.as_deref(), Some("GRECIPIENT"));
-    assert_eq!(out[0].ledger_sequence, 100);
+    assert_eq!(out[0].event_id.ledger_sequence, 100);
 }
 
 #[test]
@@ -1794,9 +1789,8 @@ fn token_id_jsonvalue_stringified() {
         token_id: json!({"type": "u64", "value": 42}),
         from: None,
         to: Some("GA".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: any_event_id(),
+        event_id: event_at(100),
     };
     // String token_id → "uuid-abc".
     let string = NftEvent {
@@ -1806,9 +1800,8 @@ fn token_id_jsonvalue_stringified() {
         token_id: json!({"type": "string", "value": "uuid-abc"}),
         from: None,
         to: Some("GB".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: any_event_id(),
+        event_id: event_at(100),
     };
 
     let out = extract_nft_ownership_events(&[numeric, string]);
@@ -1829,9 +1822,8 @@ fn empty_token_id_event_skipped() {
         token_id: json!({"type": "void", "value": null}),
         from: None,
         to: Some("GA".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: any_event_id(),
+        event_id: event_at(100),
     }];
 
     let out = extract_nft_ownership_events(&events);
@@ -2042,10 +2034,10 @@ fn native_singleton_returns_native_asset_no_identity() {
     assert!(asset.contract_id.is_none());
 }
 
-/// An id for NFT events whose location the test does not look at.
-fn any_event_id() -> crate::event::EventId {
+/// An NFT event's id in `ledger`; the rest of its location is not looked at.
+fn event_at(ledger: u32) -> crate::event::EventId {
     crate::event::EventId {
-        ledger_sequence: 100,
+        ledger_sequence: ledger,
         transaction_index: 1,
         operation_index: 0,
         event_index: 0,

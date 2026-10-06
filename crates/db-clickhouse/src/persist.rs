@@ -575,9 +575,9 @@ async fn fetch_prior_contract_rows(
         // Must match `build_wasm_upgrade_rows`'s filters so the prefetch covers
         // exactly the contracts it will rewrite: host-emitted SYSTEM events with
         // a parseable new hash.
-        .filter(|ev| ev.event_type == ContractEventType::System)
-        .filter(|ev| extract_executable_update(&ev.topics).is_some())
-        .filter_map(|ev| ev.contract_id.as_deref())
+        .filter(|ev| ev.body.event_type == ContractEventType::System)
+        .filter(|ev| extract_executable_update(&ev.body.topics).is_some())
+        .filter_map(|ev| ev.body.contract_id.as_deref())
         .collect();
     want.sort_unstable();
     want.dedup();

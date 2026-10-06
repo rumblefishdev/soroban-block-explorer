@@ -236,7 +236,7 @@ pub fn extract_asset_transfers(
     for ev in events {
         // Not a token event at all: skipped silently. A token verb from here
         // on either becomes a row or a reject.
-        let Some(kind) = token_verb(&ev.topics) else {
+        let Some(kind) = token_verb(&ev.body.topics) else {
             continue;
         };
         let reject = |emitter: Option<&str>, kind: RejectKind| TransferReject {
@@ -247,7 +247,7 @@ pub fn extract_asset_transfers(
         };
         // A token verb without an emitting contract has never been observed
         // (0 of 12 237); without one there is no asset identity to write.
-        let Some(emitter) = ev.contract_id.clone() else {
+        let Some(emitter) = ev.body.contract_id.clone() else {
             debug!(
                 target: "xdr_parser::asset_transfers",
                 tx = %ev.transaction_hash, event_id = %ev.event_id.to_rpc_string(),
@@ -256,8 +256,8 @@ pub fn extract_asset_transfers(
             out.rejects.push(reject(None, RejectKind::NoEmitter));
             continue;
         };
-        let Some(token) = parse_token_event(&ev.topics) else {
-            let topic_count = ev.topics.as_array().map_or(0, Vec::len);
+        let Some(token) = parse_token_event(&ev.body.topics) else {
+            let topic_count = ev.body.topics.as_array().map_or(0, Vec::len);
             debug!(
                 target: "xdr_parser::asset_transfers",
                 tx = %ev.transaction_hash, event_id = %ev.event_id.to_rpc_string(), %emitter,
@@ -287,9 +287,10 @@ pub fn extract_asset_transfers(
 
         // Rule 1 — a labelled asset must be emitted by its own SAC.
         if !matches!(token.asset, EventAsset::Bespoke)
-            && sac_override_from_event_topics(&emitter, &ev.topics, net_id).is_none()
+            && sac_override_from_event_topics(&emitter, &ev.body.topics, net_id).is_none()
         {
             let asset = ev
+                .body
                 .topics
                 .as_array()
                 .and_then(|t| t.last())
@@ -308,11 +309,12 @@ pub fn extract_asset_transfers(
         }
 
         // Rule 2 — the payload is an amount, a token id, or not a movement.
-        let amount = match token_event_amount(&ev.data) {
+        let amount = match token_event_amount(&ev.body.data) {
             TokenAmount::Fungible(n) => Some(n),
             TokenAmount::NonFungible => None,
             TokenAmount::Unrecognised => {
                 let data_type = ev
+                    .body
                     .data
                     .get("type")
                     .and_then(Value::as_str)

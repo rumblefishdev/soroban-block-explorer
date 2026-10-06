@@ -442,8 +442,8 @@ fn column_order_liquidity_pool_snapshots() {
 
 use domain::{AssetFamily, ContractEventType, ContractType, OperationType};
 use xdr_parser::types::{
-    EventOrigin, ExtractedContractDeployment, ExtractedEvent, ExtractedLedger, ExtractedOperation,
-    ExtractedTransaction,
+    EventBody, EventOrigin, ExtractedContractDeployment, ExtractedEvent, ExtractedLedger,
+    ExtractedOperation, ExtractedTransaction,
 };
 
 fn synthetic_ledger() -> ExtractedLedger {
@@ -614,10 +614,12 @@ fn prepare_extracts_signature_from_first_symbol_topic() {
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(contract.clone()),
-        topics,
-        data: serde_json::json!({}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(contract.clone()),
+            topics,
+            data: serde_json::json!({}),
+        },
         created_at: 1_700_000_000,
     };
     let events = vec![(
@@ -675,10 +677,12 @@ fn prepare_drops_events_without_a_contract() {
         transaction_hash: tx.hash.clone(),
         event_id: any_event_id(),
         origin: EventOrigin::Transaction(stellar_xdr::TransactionEventStage::BeforeAllTxs),
-        event_type: ContractEventType::Contract,
-        contract_id,
-        topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
-        data: serde_json::json!({}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id,
+            topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
+            data: serde_json::json!({}),
+        },
         created_at: 1_700_000_000,
     };
     let events = vec![(
@@ -752,10 +756,12 @@ fn staged_events_carry_the_rpc_id_and_their_transaction() {
             event_index: id.2,
         },
         origin,
-        event_type: ContractEventType::Contract,
-        contract_id: Some(sac.clone()),
-        topics: serde_json::json!([{"type": "sym", "value": "fee"}]),
-        data: serde_json::json!({}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(sac.clone()),
+            topics: serde_json::json!([{"type": "sym", "value": "fee"}]),
+            data: serde_json::json!({}),
+        },
         created_at: 1_700_000_000,
     };
     let events = vec![
@@ -850,10 +856,12 @@ fn contract_activity_joins_every_way_a_transaction_touches_a_contract() {
                 event_index: 0,
             },
             origin,
-            event_type: ContractEventType::Contract,
-            contract_id: Some(contract.to_owned()),
-            topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
-            data: serde_json::json!({}),
+            body: EventBody {
+                event_type: ContractEventType::Contract,
+                contract_id: Some(contract.to_owned()),
+                topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
+                data: serde_json::json!({}),
+            },
             created_at: 1_700_000_000,
         }
     };
@@ -1574,10 +1582,12 @@ fn a_merely_referenced_contract_gets_no_contract_row() {
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(referenced_contract.clone()),
-        topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
-        data: serde_json::json!({}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(referenced_contract.clone()),
+            topics: serde_json::json!([{"type": "sym", "value": "transfer"}]),
+            data: serde_json::json!({}),
+        },
         created_at: 1_700_000_000,
     };
 
@@ -1634,10 +1644,12 @@ fn prepare_does_not_duplicate_when_contract_both_deployed_and_referenced() {
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(contract.clone()),
-        topics: serde_json::json!([{"type": "sym", "value": "init"}]),
-        data: serde_json::json!({}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(contract.clone()),
+            topics: serde_json::json!([{"type": "sym", "value": "init"}]),
+            data: serde_json::json!({}),
+        },
         created_at: 1_700_000_000,
     };
 
@@ -1719,7 +1731,6 @@ fn synthetic_nft_event(
         token_id: token.to_string(),
         event_type: NftEventType::Mint,
         owner: None,
-        ledger_sequence: 10,
         created_at: 1_700_000_000,
         // Operation 2's event `event_index`. `transaction_index` deliberately
         // differs from the transaction's position (1, its only transaction)
@@ -2657,14 +2668,16 @@ fn executable_update_event(contract: &str) -> ExtractedEvent {
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::System,
-        contract_id: Some(contract.to_string()),
-        topics: serde_json::json!([
-            {"type":"sym","value":"executable_update"},
-            {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"ERERERERERERERERERERERERERERERERERERERERERE="}]},
-            {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI="}]}
-        ]),
-        data: serde_json::json!({"type":"vec","value":[]}),
+        body: EventBody {
+            event_type: ContractEventType::System,
+            contract_id: Some(contract.to_string()),
+            topics: serde_json::json!([
+                {"type":"sym","value":"executable_update"},
+                {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"ERERERERERERERERERERERERERERERERERERERERERE="}]},
+                {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI="}]}
+            ]),
+            data: serde_json::json!({"type":"vec","value":[]}),
+        },
         created_at: 1_700_000_000,
     }
 }
@@ -2673,7 +2686,7 @@ fn executable_update_event(contract: &str) -> ExtractedEvent {
 /// `vec[Symbol("ExternalRef"), map{owner, tag}]`, per the CAP.
 fn external_ref_update_event(contract: &str, owner: &str, tag: &str) -> ExtractedEvent {
     let mut ev = executable_update_event(contract);
-    ev.topics = serde_json::json!([
+    ev.body.topics = serde_json::json!([
         {"type":"sym","value":"executable_update"},
         {"type":"vec","value":[{"type":"sym","value":"Wasm"},{"type":"bytes","value":"ERERERERERERERERERERERERERERERERERERERERERE="}]},
         {"type":"vec","value":[
@@ -2810,7 +2823,7 @@ fn build_wasm_upgrade_rows_skips_when_no_prior_row() {
 fn build_wasm_upgrade_rows_ignores_non_upgrade_events() {
     let addr = "C".to_string() + &"W".repeat(55);
     let mut ev = executable_update_event(&addr);
-    ev.topics = serde_json::json!([{"type":"sym","value":"transfer"}]);
+    ev.body.topics = serde_json::json!([{"type":"sym","value":"transfer"}]);
     let events = vec![("abcd".to_string(), vec![ev])];
     let mut prior = std::collections::HashMap::new();
     prior.insert(
@@ -2826,7 +2839,7 @@ fn build_wasm_upgrade_rows_ignores_non_system_event_type() {
     // only host-emitted System events may rewrite wasm_hash.
     let addr = "C".to_string() + &"Z".repeat(55);
     let mut ev = executable_update_event(&addr);
-    ev.event_type = ContractEventType::Contract;
+    ev.body.event_type = ContractEventType::Contract;
     let events = vec![("abcd".to_string(), vec![ev])];
     let mut prior = std::collections::HashMap::new();
     prior.insert(
@@ -3382,21 +3395,23 @@ fn prepare_registers_a_pool_from_a_real_add_pool_event() {
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(router.to_string()),
-        topics: serde_json::json!([
-            {"type": "sym", "value": "add_pool"},
-            {"type": "vec", "value": [
-                {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
-                {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
-            ]}
-        ]),
-        data: serde_json::json!({"type": "vec", "value": [
-            {"type": "address", "value": pool},
-            {"type": "sym", "value": "constant"},
-            {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
-            {"type": "vec", "value": [{"type": "u32", "value": 10}]}
-        ]}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(router.to_string()),
+            topics: serde_json::json!([
+                {"type": "sym", "value": "add_pool"},
+                {"type": "vec", "value": [
+                    {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
+                    {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
+                ]}
+            ]),
+            data: serde_json::json!({"type": "vec", "value": [
+                {"type": "address", "value": pool},
+                {"type": "sym", "value": "constant"},
+                {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
+                {"type": "vec", "value": [{"type": "u32", "value": 10}]}
+            ]}),
+        },
         created_at: 1_700_000_000,
     };
     let events = vec![(tx.hash.clone(), vec![ev])];
@@ -3448,10 +3463,12 @@ fn prepare_ignores_non_registrations_and_labelled_topics() {
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(contract.clone()),
-        topics,
-        data: serde_json::json!({"type": "vec", "value": []}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(contract.clone()),
+            topics,
+            data: serde_json::json!({"type": "vec", "value": []}),
+        },
         created_at: 1_700_000_000,
     };
     let events = vec![(
@@ -3504,21 +3521,23 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(router.to_string()),
-        topics: serde_json::json!([
-            {"type": "sym", "value": "add_pool"},
-            {"type": "vec", "value": [
-                {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
-                {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
-            ]}
-        ]),
-        data: serde_json::json!({"type": "vec", "value": [
-            {"type": "address", "value": "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O"},
-            {"type": "sym", "value": "constant"},
-            {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
-            {"type": "vec", "value": [{"type": "sym", "value": "not_a_fee"}]}
-        ]}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(router.to_string()),
+            topics: serde_json::json!([
+                {"type": "sym", "value": "add_pool"},
+                {"type": "vec", "value": [
+                    {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
+                    {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
+                ]}
+            ]),
+            data: serde_json::json!({"type": "vec", "value": [
+                {"type": "address", "value": "CDTSSTLKVVPWJZXVCGJJNGWKH5MY7OMINVXTB7DGFMDJTCCDBCSRG52O"},
+                {"type": "sym", "value": "constant"},
+                {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
+                {"type": "vec", "value": [{"type": "sym", "value": "not_a_fee"}]}
+            ]}),
+        },
         created_at: 1_700_000_000,
     };
     let events = vec![(tx.hash.clone(), vec![ev])];
@@ -3614,7 +3633,7 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
     // exactly when `pool_movements` is written; other events do not.
     let mut trade = add_pool_event("tx", pool, pool);
     trade.origin = EventOrigin::Operation(0);
-    trade.topics = serde_json::json!([{"type": "sym", "value": "trade"}]);
+    trade.body.topics = serde_json::json!([{"type": "sym", "value": "trade"}]);
     let trade_ledger = vec![("tx".to_string(), vec![trade])];
     assert!(crate::persist::sac_classic_map_needed(
         &[],
@@ -3630,7 +3649,7 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
     ));
     let mut other = add_pool_event("tx", pool, pool);
     other.origin = EventOrigin::Operation(0);
-    other.topics = serde_json::json!([{"type": "sym", "value": "update_reserves"}]);
+    other.body.topics = serde_json::json!([{"type": "sym", "value": "update_reserves"}]);
     assert!(!crate::persist::sac_classic_map_needed(
         &[],
         &[("tx".to_string(), vec![other])],
@@ -3668,21 +3687,23 @@ fn add_pool_event(tx_hash: &str, router: &str, pool: &str) -> ExtractedEvent {
         transaction_hash: tx_hash.to_string(),
         event_id: any_event_id(),
         origin: EventOrigin::Transaction(stellar_xdr::TransactionEventStage::BeforeAllTxs),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(router.to_string()),
-        topics: serde_json::json!([
-            {"type": "sym", "value": "add_pool"},
-            {"type": "vec", "value": [
-                {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
-                {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
-            ]}
-        ]),
-        data: serde_json::json!({"type": "vec", "value": [
-            {"type": "address", "value": pool},
-            {"type": "sym", "value": "constant"},
-            {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
-            {"type": "vec", "value": [{"type": "u32", "value": 10}]}
-        ]}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(router.to_string()),
+            topics: serde_json::json!([
+                {"type": "sym", "value": "add_pool"},
+                {"type": "vec", "value": [
+                    {"type": "address", "value": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"},
+                    {"type": "address", "value": "CDLWTKL7XIALOQPTV7R2KKTXTA6OPKT4T354Y7RG7S6TERQ7KI2VPXIW"}
+                ]}
+            ]),
+            data: serde_json::json!({"type": "vec", "value": [
+                {"type": "address", "value": pool},
+                {"type": "sym", "value": "constant"},
+                {"type": "bytes", "value": "suAvz8pslvitXL2E53hKd3s22clqJFlALE9FhGKqt/A="},
+                {"type": "vec", "value": [{"type": "u32", "value": 10}]}
+            ]}),
+        },
         created_at: 1_700_000_000,
     }
 }
@@ -4227,19 +4248,21 @@ fn new_pair_event(tx_hash: &str, factory: &str, pair: &str) -> ExtractedEvent {
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(factory.to_string()),
-        topics: serde_json::json!([
-            {"type": "string", "value": "SoroswapFactory"},
-            {"type": "sym", "value": "new_pair"}
-        ]),
-        data: serde_json::json!({"type": "map", "value": [
-            {"key": {"type": "sym", "value": "new_pairs_length"},
-             "value": {"type": "u32", "value": 1}},
-            {"key": {"type": "sym", "value": "pair"}, "value": {"type": "address", "value": pair}},
-            {"key": {"type": "sym", "value": "token_0"}, "value": {"type": "address", "value": SORO_T0}},
-            {"key": {"type": "sym", "value": "token_1"}, "value": {"type": "address", "value": SORO_T1}}
-        ]}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(factory.to_string()),
+            topics: serde_json::json!([
+                {"type": "string", "value": "SoroswapFactory"},
+                {"type": "sym", "value": "new_pair"}
+            ]),
+            data: serde_json::json!({"type": "map", "value": [
+                {"key": {"type": "sym", "value": "new_pairs_length"},
+                 "value": {"type": "u32", "value": 1}},
+                {"key": {"type": "sym", "value": "pair"}, "value": {"type": "address", "value": pair}},
+                {"key": {"type": "sym", "value": "token_0"}, "value": {"type": "address", "value": SORO_T0}},
+                {"key": {"type": "sym", "value": "token_1"}, "value": {"type": "address", "value": SORO_T1}}
+            ]}),
+        },
         created_at: 1_700_000_000,
     }
 }
@@ -4437,13 +4460,15 @@ fn liquidity_pool_created_event(tx_hash: &str, factory: &str, pool: &str) -> Ext
         origin: xdr_parser::EventOrigin::Transaction(
             stellar_xdr::TransactionEventStage::BeforeAllTxs,
         ),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(factory.to_string()),
-        topics: serde_json::json!([
-            {"type": "string", "value": "create"},
-            {"type": "string", "value": "liquidity_pool"}
-        ]),
-        data: serde_json::json!({"type": "address", "value": pool}),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(factory.to_string()),
+            topics: serde_json::json!([
+                {"type": "string", "value": "create"},
+                {"type": "string", "value": "liquidity_pool"}
+            ]),
+            data: serde_json::json!({"type": "address", "value": pool}),
+        },
         created_at: 1_700_000_000,
     }
 }

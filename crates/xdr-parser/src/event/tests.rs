@@ -88,7 +88,7 @@ fn id(ledger_sequence: u32, tx: u32, op: u16, event: u32) -> EventId {
 fn data(events: &[ExtractedEvent]) -> Vec<u64> {
     events
         .iter()
-        .map(|e| e.data["value"].as_u64().unwrap())
+        .map(|e| e.body.data["value"].as_u64().unwrap())
         .collect()
 }
 
@@ -112,19 +112,19 @@ fn decodes_type_contract_topics_and_data() {
     let tx = only(&v4(vec![], vec![op(vec![event])], vec![]));
 
     let e = &tx.events[0];
-    assert_eq!(e.event_type, DomainEventType::Contract);
+    assert_eq!(e.body.event_type, DomainEventType::Contract);
     assert_eq!(e.transaction_hash, "abcd1234");
-    assert!(e.contract_id.as_ref().unwrap().starts_with('C'));
+    assert!(e.body.contract_id.as_ref().unwrap().starts_with('C'));
     assert_eq!(e.event_id, id(100, 1, 0, 0));
     assert_eq!(e.created_at, 1_700_000_000);
-    let topics = e.topics.as_array().unwrap();
+    let topics = e.body.topics.as_array().unwrap();
     assert_eq!(
         topics.iter().map(|t| t["type"].clone()).collect::<Vec<_>>(),
         ["sym", "address", "u64"]
     );
     assert_eq!(topics[0]["value"], "transfer");
-    assert_eq!(e.data["type"], "u64");
-    assert_eq!(e.data["value"], 42);
+    assert_eq!(e.body.data["type"], "u64");
+    assert_eq!(e.body.data["value"], 42);
 }
 
 #[test]
@@ -139,9 +139,9 @@ fn a_system_event_may_have_no_contract() {
         }),
     };
     let tx = only(&v4(vec![], vec![op(vec![event])], vec![]));
-    assert_eq!(tx.events[0].event_type, DomainEventType::System);
-    assert!(tx.events[0].contract_id.is_none());
-    assert!(tx.events[0].topics.as_array().unwrap().is_empty());
+    assert_eq!(tx.events[0].body.event_type, DomainEventType::System);
+    assert!(tx.events[0].body.contract_id.is_none());
+    assert!(tx.events[0].body.topics.as_array().unwrap().is_empty());
 }
 
 /// stellar-rpc `InsertEvents`: the transaction-level events, then each

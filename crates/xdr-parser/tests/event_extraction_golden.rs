@@ -109,10 +109,10 @@ fn dump(raw: &[u8]) -> String {
                 tx,
                 &origin,
                 &id,
-                e.event_type,
-                &e.contract_id,
-                &e.topics,
-                &e.data,
+                e.body.event_type,
+                &e.body.contract_id,
+                &e.body.topics,
+                &e.body.data,
             );
         }
         for d in &tx_events.diagnostic {

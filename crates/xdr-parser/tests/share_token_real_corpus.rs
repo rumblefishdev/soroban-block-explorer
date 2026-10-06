@@ -136,10 +136,12 @@ fn every_mainnet_deposit_resolves_like_share_id() {
                     event_index: e.idx,
                 },
                 origin: xdr_parser::EventOrigin::Operation(0),
-                event_type: ContractEventType::Contract,
-                contract_id: Some(e.contract.clone()),
-                topics: serde_json::from_str(&e.topics).expect("topics json"),
-                data: serde_json::from_str(&e.data).expect("data json"),
+                body: xdr_parser::EventBody {
+                    event_type: ContractEventType::Contract,
+                    contract_id: Some(e.contract.clone()),
+                    topics: serde_json::from_str(&e.topics).expect("topics json"),
+                    data: serde_json::from_str(&e.data).expect("data json"),
+                },
                 created_at: 0,
             })
             .collect();
@@ -229,12 +231,12 @@ pub fn detect_share_tokens(events: &[(String, Vec<ExtractedEvent>)]) -> Vec<Shar
         let deposits: Vec<(&str, String)> = evs
             .iter()
             .filter_map(|ev| {
-                let pool = ev.contract_id.as_deref()?;
-                let topics = ev.topics.as_array()?;
+                let pool = ev.body.contract_id.as_deref()?;
+                let topics = ev.body.topics.as_array()?;
                 if symbol_value(topics.first()?)? != "deposit_liquidity" {
                     return None;
                 }
-                let shares = vec_elements(&ev.data)?
+                let shares = vec_elements(&ev.body.data)?
                     .first()
                     .and_then(|v| v.get("value"))
                     .and_then(Value::as_str)?
@@ -251,7 +253,7 @@ pub fn detect_share_tokens(events: &[(String, Vec<ExtractedEvent>)]) -> Vec<Shar
                 .iter()
                 .filter(|ev| sep41_mint_matches(ev, pool, &shares))
                 .max_by_key(|ev| ev.event_id)
-                .and_then(|ev| ev.contract_id.clone());
+                .and_then(|ev| ev.body.contract_id.clone());
             if let Some(token) = winner {
                 out.push(ShareTokenSighting {
                     pool: pool.to_string(),
@@ -265,7 +267,7 @@ pub fn detect_share_tokens(events: &[(String, Vec<ExtractedEvent>)]) -> Vec<Shar
 
 /// SEP-41 `mint` with `admin == pool` and `amount == shares`.
 fn sep41_mint_matches(ev: &ExtractedEvent, pool: &str, shares: &str) -> bool {
-    let Some(topics) = ev.topics.as_array() else {
+    let Some(topics) = ev.body.topics.as_array() else {
         return false;
     };
     if topics.first().and_then(symbol_value) != Some("mint") {
@@ -280,7 +282,7 @@ fn sep41_mint_matches(ev: &ExtractedEvent, pool: &str, shares: &str) -> bool {
     if topics.get(1).and_then(address_value).as_deref() != Some(pool) {
         return false;
     }
-    ev.data.get("value").and_then(Value::as_str) == Some(shares)
+    ev.body.data.get("value").and_then(Value::as_str) == Some(shares)
 }
 
 fn vec_elements(v: &Value) -> Option<&[Value]> {
@@ -324,10 +326,12 @@ mod shape_tests {
                 event_index: idx,
             },
             origin: xdr_parser::EventOrigin::Operation(0),
-            event_type: ContractEventType::Contract,
-            contract_id: Some(contract.into()),
-            topics,
-            data,
+            body: xdr_parser::EventBody {
+                event_type: ContractEventType::Contract,
+                contract_id: Some(contract.into()),
+                topics,
+                data,
+            },
             created_at: 0,
         }
     }

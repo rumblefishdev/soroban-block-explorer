@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::EventBody;
 
 /// Mainnet-defaulting shadow of [`detect_nft_events`] so the existing
 /// fixtures (all mainnet) keep their one-arg call shape after task 0294
@@ -22,10 +23,12 @@ fn make_event(contract_id: &str, topics: Vec<Value>, data: Value) -> ExtractedEv
             event_index: 0,
         },
         origin: crate::types::EventOrigin::Operation(0),
-        event_type: ContractEventType::Contract,
-        contract_id: Some(contract_id.into()),
-        topics: json!(topics),
-        data,
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(contract_id.into()),
+            topics: json!(topics),
+            data,
+        },
         created_at: 1700000000,
     }
 }
@@ -246,7 +249,7 @@ fn skip_system_events() {
         vec![json!({"type": "sym", "value": "transfer"})],
         json!({"type": "u32", "value": 1}),
     );
-    event.event_type = ContractEventType::System;
+    event.body.event_type = ContractEventType::System;
 
     let nft_events = detect_nft_events(&[event]);
     assert!(nft_events.is_empty());
@@ -262,7 +265,7 @@ fn skip_events_without_contract_id() {
         ],
         json!({"type": "u32", "value": 1}),
     );
-    event.contract_id = None;
+    event.body.contract_id = None;
 
     let nft_events = detect_nft_events(&[event]);
     assert!(nft_events.is_empty());
@@ -438,10 +441,12 @@ fn detect_real_mainnet_bachini_mint_event() {
             event_index: 0,
         },
         origin: crate::types::EventOrigin::Operation(0),
-        event_type: ContractEventType::Contract,
-        contract_id: Some("CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY".into()),
-        topics: json!([scval_to_typed_json(&topic)]),
-        data: scval_to_typed_json(&data),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some("CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY".into()),
+            topics: json!([scval_to_typed_json(&topic)]),
+            data: scval_to_typed_json(&data),
+        },
         created_at: 1732801047,
     };
 
@@ -747,15 +752,17 @@ fn detect_real_mainnet_map_token_id_mint() {
             event_index: 0,
         },
         origin: crate::types::EventOrigin::Operation(0),
-        event_type: ContractEventType::Contract,
-        contract_id: Some("CARTUL5AWDZYBSN7HUUJZSKCAKCIAKM7M54Z76G6KRYCK4XPR3OHUQZ4".into()),
-        topics: json!([scval_to_typed_json(&topic0), scval_to_typed_json(&topic1)]),
-        data: scval_to_typed_json(&data),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some("CARTUL5AWDZYBSN7HUUJZSKCAKCIAKM7M54Z76G6KRYCK4XPR3OHUQZ4".into()),
+            topics: json!([scval_to_typed_json(&topic0), scval_to_typed_json(&topic1)]),
+            data: scval_to_typed_json(&data),
+        },
         created_at: 1700000000,
     };
 
     // The real data really is a map carrying token_id — the pre-fix drop reason.
-    assert_eq!(event.data["type"], "map");
+    assert_eq!(event.body.data["type"], "map");
 
     let nft = detect_nft_events(&[event]);
     assert_eq!(nft.len(), 1, "real map{{token_id}} mint must be detected");
@@ -782,16 +789,18 @@ fn detect_real_mainnet_consecutive_mint_range() {
         transaction_hash: "real-mainnet-consecutive".into(),
         event_id: crate::event::EventId { ledger_sequence: 1, transaction_index: 1, operation_index: 0, event_index: 0 },
         origin: crate::types::EventOrigin::Operation(0),
-        event_type: ContractEventType::Contract,
-        contract_id: Some("CAKSC7JHQFBJ4LIYOJQGJX2URGGWABX2WM6OZ5WQVK57VNRUG4DUYK7F".into()),
-        topics: serde_json::from_str(
-            r#"[{"type":"sym","value":"consecutive_mint"},{"type":"address","value":"GBWHGYD5DFPQMJSUEEA77IT7YJ75PYQQFOCMP7HT5OIF2ULKJK22N4J4"}]"#,
-        )
-        .unwrap(),
-        data: serde_json::from_str(
-            r#"{"type":"vec","value":[{"type":"u32","value":4},{"type":"u32","value":149}]}"#,
-        )
-        .unwrap(),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some("CAKSC7JHQFBJ4LIYOJQGJX2URGGWABX2WM6OZ5WQVK57VNRUG4DUYK7F".into()),
+            topics: serde_json::from_str(
+                r#"[{"type":"sym","value":"consecutive_mint"},{"type":"address","value":"GBWHGYD5DFPQMJSUEEA77IT7YJ75PYQQFOCMP7HT5OIF2ULKJK22N4J4"}]"#,
+            )
+            .unwrap(),
+            data: serde_json::from_str(
+                r#"{"type":"vec","value":[{"type":"u32","value":4},{"type":"u32","value":149}]}"#,
+            )
+            .unwrap(),
+        },
         created_at: 1700000000,
     };
 
