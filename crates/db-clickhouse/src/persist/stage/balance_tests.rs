@@ -1,3 +1,4 @@
+use super::soroban_events::extract_event_signature;
 use super::*;
 use xdr_parser::ExtractedSorobanBalance;
 

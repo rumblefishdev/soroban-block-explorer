@@ -622,7 +622,7 @@ fn prepare_extracts_signature_from_first_symbol_topic() {
     };
     let events = vec![(
         tx.hash.clone(),
-        vec![
+        numbered(vec![
             make(serde_json::json!([
                 {"type": "sym", "value": "transfer"},
                 {"type": "address", "value": "G..."}
@@ -634,7 +634,7 @@ fn prepare_extracts_signature_from_first_symbol_topic() {
             make(serde_json::json!([
                 {"type": "address", "value": "G..."}
             ])),
-        ],
+        ]),
     )];
 
     let staged = stage::prepare(
@@ -683,7 +683,7 @@ fn prepare_drops_events_without_a_contract() {
     };
     let events = vec![(
         tx.hash.clone(),
-        vec![make(Some(contract.clone())), make(None)],
+        numbered(vec![make(Some(contract.clone())), make(None)]),
     )];
 
     let staged = stage::prepare(
@@ -714,6 +714,15 @@ fn prepare_drops_events_without_a_contract() {
         staged.event_rows[0].contract_id,
         ids::contract_id(&contract)
     );
+}
+
+/// A transaction's fixture events with distinct ids, as the parser gives
+/// them: staging refuses two events under one id.
+fn numbered(mut events: Vec<ExtractedEvent>) -> Vec<ExtractedEvent> {
+    for (i, ev) in events.iter_mut().enumerate() {
+        ev.event_id.event_index = u32::try_from(i).expect("few fixture events");
+    }
+    events
 }
 
 /// Staging copies the id; which one a fixture carries only matters to the
@@ -3447,13 +3456,13 @@ fn prepare_ignores_non_registrations_and_labelled_topics() {
     };
     let events = vec![(
         tx.hash.clone(),
-        vec![
+        numbered(vec![
             make(serde_json::json!([{"type": "sym", "value": "trade"}])),
             make(serde_json::json!([
                 {"type": "string", "value": "SoroswapPair"},
                 {"type": "sym", "value": "add_pool"}
             ])),
-        ],
+        ]),
     )];
 
     let staged = stage::prepare(
@@ -4667,10 +4676,10 @@ fn config_pool_gate_is_pointwise_first_and_refuses_both_on_true_conflict() {
     let tx = synthetic_tx(0x89);
     let events = vec![(
         tx.hash.clone(),
-        vec![
+        numbered(vec![
             liquidity_pool_created_event(&tx.hash, CFG_FACTORY, CFG_POOL),
             liquidity_pool_created_event(&tx.hash, ATTACKER, CFG_POOL),
-        ],
+        ]),
     )];
     let genuine_list = [address_list(CFG_FACTORY, &[CFG_POOL])];
     let staged = stage_config_pool(&ledger, &tx, &events, &pools, &genuine_list);
@@ -4691,10 +4700,10 @@ fn config_pool_gate_is_pointwise_first_and_refuses_both_on_true_conflict() {
     let tx2 = synthetic_tx(0x8a);
     let events2 = vec![(
         tx2.hash.clone(),
-        vec![
+        numbered(vec![
             liquidity_pool_created_event(&tx2.hash, CFG_FACTORY, CFG_POOL),
             liquidity_pool_created_event(&tx2.hash, ATTACKER, CFG_POOL),
-        ],
+        ]),
     )];
     let both_lists = [
         address_list(CFG_FACTORY, &[CFG_POOL]),
@@ -4712,10 +4721,10 @@ fn config_pool_gate_is_pointwise_first_and_refuses_both_on_true_conflict() {
     let tx3 = synthetic_tx(0x8b);
     let events3 = vec![(
         tx3.hash.clone(),
-        vec![
+        numbered(vec![
             liquidity_pool_created_event(&tx3.hash, CFG_FACTORY, CFG_POOL),
             liquidity_pool_created_event(&tx3.hash, CFG_FACTORY, CFG_POOL),
-        ],
+        ]),
     )];
     let staged3 = stage_config_pool(&ledger, &tx3, &events3, &pools, &genuine_list);
     assert_eq!(
