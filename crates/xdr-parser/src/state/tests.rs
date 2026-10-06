@@ -1371,6 +1371,7 @@ fn iface(wasm_hash: &str, fn_names: &[&str]) -> ExtractedContractInterface {
             .collect(),
         wasm_byte_len: 0,
         upgradeable: false,
+        code: Vec::new(),
     }
 }
 

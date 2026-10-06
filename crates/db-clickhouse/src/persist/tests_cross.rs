@@ -1741,6 +1741,7 @@ fn nft_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterface {
         }],
         wasm_byte_len: 256,
         upgradeable: false,
+        code: Vec::new(),
     }
 }
 
@@ -1757,6 +1758,7 @@ fn fungible_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterf
         }],
         wasm_byte_len: 256,
         upgradeable: false,
+        code: Vec::new(),
     }
 }
 

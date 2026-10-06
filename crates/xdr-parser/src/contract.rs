@@ -48,6 +48,7 @@ fn parse_contract_code(code_entry: &ContractCodeEntry) -> Option<ExtractedContra
         functions,
         wasm_byte_len,
         upgradeable,
+        code: wasm_bytes.to_vec(),
     })
 }
 
