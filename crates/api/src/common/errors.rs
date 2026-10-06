@@ -82,7 +82,7 @@ pub const INVALID_SEQUENCE: &str = "invalid_sequence";
 /// cause is logged server-side and never returned to the client.
 pub const DB_ERROR: &str = "db_error";
 
-/// `wasm_interface_metadata.metadata` JSONB was present (passed the
+/// `wasm_programs.metadata` JSONB was present (passed the
 /// `? 'functions'` SQL gate) but failed to decode into the typed schema —
 /// real shape drift between indexer output and the API DTO, or a
 /// legacy-shape row needing re-index. Surfaces as HTTP 500 so the drift is

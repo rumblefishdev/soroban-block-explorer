@@ -37,7 +37,7 @@ async fn seed(ch: &clickhouse::Client) {
         "INSERT INTO contract_executable_refs (owner_id, tag, wasm_hash, ledger) VALUES \
          (42, 'fleet-v2', unhex(repeat('bb', 32)), 64500123), \
          (42, 'fleet-v2', unhex(repeat('cc', 32)), 64500000)",
-        r#"INSERT INTO wasm_interface_metadata (wasm_hash, metadata) VALUES
+        r#"INSERT INTO wasm_programs (wasm_hash, metadata) VALUES
            (unhex(repeat('aa', 32)), '{"functions":[],"upgradeable":true}'),
            (unhex(repeat('bb', 32)), '{"functions":[{"name":"f"}],"upgradeable":false}')"#,
     ] {
@@ -148,7 +148,7 @@ async fn contract_detail_sql_runs_and_resolves_references() {
 
 const DB_0592: &str = "api_test_0592_wim_dedup";
 
-/// Task 0592 — `wasm_interface_metadata` is a `ReplacingMergeTree` with no
+/// Task 0592 — `wasm_programs` is a `ReplacingMergeTree` with no
 /// version column, so one `wasm_hash` written twice lives in two parts until a
 /// background merge collapses them. That is not hypothetical: the 0327
 /// `upgradeable-backfill` re-inserts an existing hash with different metadata
@@ -175,12 +175,10 @@ async fn contract_reads_dedup_wasm_metadata_written_twice() {
     db_clickhouse::apply_init_sql(&ch)
         .await
         .expect("apply init.sql");
-    ch.query(&format!(
-        "SYSTEM STOP MERGES {DB_0592}.wasm_interface_metadata"
-    ))
-    .execute()
-    .await
-    .expect("stop merges on the throwaway table");
+    ch.query(&format!("SYSTEM STOP MERGES {DB_0592}.wasm_programs"))
+        .execute()
+        .await
+        .expect("stop merges on the throwaway table");
 
     for sql in [
         "INSERT INTO soroban_contracts \
@@ -189,9 +187,9 @@ async fn contract_reads_dedup_wasm_metadata_written_twice() {
          (1, 'CTWICE', unhex(repeat('ee', 32)), 100, NULL, 100, 1, false, NULL, NULL)",
         // Two separate INSERTs = two parts. The first is what the live indexer
         // wrote at deploy; the second is the backfill's re-write.
-        r#"INSERT INTO wasm_interface_metadata (wasm_hash, metadata) VALUES
+        r#"INSERT INTO wasm_programs (wasm_hash, metadata) VALUES
            (unhex(repeat('ee', 32)), '{"functions":[{"name":"first_write"}]}')"#,
-        r#"INSERT INTO wasm_interface_metadata (wasm_hash, metadata) VALUES
+        r#"INSERT INTO wasm_programs (wasm_hash, metadata) VALUES
            (unhex(repeat('ee', 32)), '{"functions":[{"name":"second_write"}],"upgradeable":true}')"#,
     ] {
         ch.query(sql).execute().await.expect("seed row");
@@ -201,14 +199,14 @@ async fn contract_reads_dedup_wasm_metadata_written_twice() {
     let parts: u64 = ch
         .query(&format!(
             "SELECT count() FROM system.parts \
-             WHERE database = '{DB_0592}' AND table = 'wasm_interface_metadata' AND active"
+             WHERE database = '{DB_0592}' AND table = 'wasm_programs' AND active"
         ))
         .fetch_one()
         .await
         .expect("count parts");
     assert_eq!(parts, 2, "two INSERTs, merges stopped: two parts");
     let copies: u64 = ch
-        .query("SELECT count() FROM wasm_interface_metadata")
+        .query("SELECT count() FROM wasm_programs")
         .fetch_one()
         .await
         .expect("count physical rows");

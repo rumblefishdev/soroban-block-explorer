@@ -32,7 +32,7 @@
 -- Other tables (`assets`, `nfts`, `liquidity_pools`,
 -- `liquidity_pool_snapshots`, `transaction_operations`,
 -- `transaction_participants`, `nft_ownership_changes`, `lp_positions`,
--- `account_balances_current`, `wasm_interface_metadata`,
+-- `account_balances_current`, `wasm_programs`,
 -- `ledgers`, `transaction_hash_prefix_index`) keep their natural / composite
 -- primary keys — no surrogate `id`. Composite (StrKey-or-hash, …)
 -- ORDER BYs work cheaply for these without a hash layer.
@@ -68,7 +68,7 @@
 -- - **`LowCardinality(String)`** on bounded-cardinality columns:
 --   asset codes, event signatures, home_domain.
 -- - **`ZSTD(3)` codecs** on JSON-ish columns: `soroban_events.topics_xdr`,
---   `soroban_events.data_xdr`, `wasm_interface_metadata.metadata`.
+--   `soroban_events.data_xdr`, `wasm_programs.metadata`.
 -- - **Empty-string sentinel** for composite-PK "no value" slots
 --   (`assets.asset_code = ''` for native, etc.). CH `ORDER BY` on
 --   plain `String` is significantly faster than `Nullable(String)`.
@@ -135,7 +135,11 @@ ORDER BY (sequence);
 -- not always byte-identical: the 0327 `upgradeable-backfill` re-writes a hash with
 -- an extra key. Until the merge both copies are live, so reads dedup with FINAL
 -- (lore-0293, lore-0592).
-CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
+-- One row per WASM program. Named `wasm_interface_metadata` until task 0620,
+-- which renamed it on production with
+-- `RENAME TABLE wasm_interface_metadata TO wasm_programs` — the table holds
+-- the program, not only its interface.
+CREATE TABLE IF NOT EXISTS wasm_programs (
     wasm_hash FixedString(32),
     metadata  String CODEC(ZSTD(3))
 )

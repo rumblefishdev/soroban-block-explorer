@@ -451,7 +451,7 @@ async fn persist_with_retry(
                 &parsed.operations,
                 &parsed.events,
                 &parsed.invocations,
-                &parsed.contract_interfaces,
+                &parsed.programs,
                 &parsed.contract_deployments,
                 &parsed.account_states,
                 &parsed.liquidity_pools,

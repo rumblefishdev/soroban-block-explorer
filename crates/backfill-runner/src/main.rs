@@ -214,7 +214,7 @@ enum Command {
     },
 
     /// One-shot rebuild of `soroban_contracts.contract_type` from
-    /// `wasm_interface_metadata` + `assets` type-3 backfill (task 0283).
+    /// `wasm_programs` + `assets` type-3 backfill (task 0283).
     /// Classifies every WASM in Rust (parity with the parser), rebuilds
     /// `soroban_contracts` into staging and `EXCHANGE TABLES`-swaps it, then
     /// inserts the missing Soroban-fungible `assets` rows. Must run BEFORE

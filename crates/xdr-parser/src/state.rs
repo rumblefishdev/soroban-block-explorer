@@ -11,10 +11,10 @@ use tracing::{instrument, warn};
 
 use crate::classification::{ContractClassification, classify_contract_from_wasm_spec};
 use crate::types::{
-    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
-    ExtractedContractMetadata, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
-    ExtractedSorobanBalance, NftEvent, SacAssetIdentity,
+    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractMetadata,
+    ExtractedLedgerEntryChange, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
+    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, ExtractedSorobanBalance,
+    ExtractedWasmProgram, NftEvent, SacAssetIdentity,
 };
 use domain::{AssetFamily, ContractType, NftEventType};
 
@@ -977,7 +977,7 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
 /// `balances` into `balance_aggregates` (0293/0331).
 pub fn detect_assets(
     deployments: &[ExtractedContractDeployment],
-    interfaces: &[ExtractedContractInterface],
+    interfaces: &[ExtractedWasmProgram],
 ) -> Vec<ExtractedAsset> {
     // Pre-index interfaces by wasm_hash so the inner loop is O(1) per
     // deployment. Classification itself is O(|functions|) but amortised

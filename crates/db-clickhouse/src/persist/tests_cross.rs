@@ -39,11 +39,8 @@ fn column_order_ledgers() {
 }
 
 #[test]
-fn column_order_wasm_interface_metadata() {
-    assert_columns::<WasmInterfaceMetadataRow>(
-        "wasm_interface_metadata",
-        &["wasm_hash", "metadata"],
-    );
+fn column_order_wasm_programs() {
+    assert_columns::<WasmProgramRow>("wasm_programs", &["wasm_hash", "metadata"]);
 }
 
 #[test]
@@ -1704,8 +1701,8 @@ fn enum_discriminants_lock_in_with_schema() {
 use domain::NftEventType;
 use xdr_parser::SacOverride;
 use xdr_parser::types::{
-    ContractFunction, ExtractedContractInterface, ExtractedLiquidityPool, ExtractedLpPosition,
-    ExtractedNft, ExtractedNftEvent, SacAssetIdentity,
+    ContractFunction, ExtractedLiquidityPool, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedWasmProgram, SacAssetIdentity,
 };
 
 fn synthetic_nft(contract: &str, token: &str) -> ExtractedNft {
@@ -1748,10 +1745,10 @@ fn synthetic_nft_event(
     }
 }
 
-/// Build a minimal `ExtractedContractInterface` that the wasm-spec
+/// Build a minimal `ExtractedWasmProgram` that the wasm-spec
 /// classifier reads as `Nft` (OwnerOf is a discriminator function).
-fn nft_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterface {
-    ExtractedContractInterface {
+fn nft_classified_interface(wasm_hash_hex: &str) -> ExtractedWasmProgram {
+    ExtractedWasmProgram {
         wasm_hash: wasm_hash_hex.to_string(),
         functions: vec![ContractFunction {
             name: "owner_of".into(),
@@ -1765,10 +1762,10 @@ fn nft_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterface {
     }
 }
 
-/// Build a minimal `ExtractedContractInterface` that the wasm-spec
+/// Build a minimal `ExtractedWasmProgram` that the wasm-spec
 /// classifier reads as `Fungible` (Decimals is a discriminator function).
-fn fungible_classified_interface(wasm_hash_hex: &str) -> ExtractedContractInterface {
-    ExtractedContractInterface {
+fn fungible_classified_interface(wasm_hash_hex: &str) -> ExtractedWasmProgram {
+    ExtractedWasmProgram {
         wasm_hash: wasm_hash_hex.to_string(),
         functions: vec![ContractFunction {
             name: "decimals".into(),
@@ -1861,9 +1858,9 @@ fn prepare_routes_nft_classified_contract_to_hot_bucket() {
 // ---------------------------------------------------------------------------
 
 /// The common Soroban case: the WASM was uploaded in an EARLIER ledger, so it
-/// is NOT in this ledger's `contract_interfaces` (the same-ledger map is
+/// is NOT in this ledger's `programs` (the same-ledger map is
 /// empty). The writer pre-fetched its `Nft` verdict from
-/// `wasm_interface_metadata` and passes it via `prior_wasm_verdicts`. The
+/// `wasm_programs` and passes it via `prior_wasm_verdicts`. The
 /// deploy override must consult that fallback and flip the contract to `Nft`
 /// — and because the override runs before NFT routing, this ledger's NFT row
 /// routes straight to the hot bucket (no quarantine round-trip).
@@ -1897,7 +1894,7 @@ fn prepare_applies_prior_wasm_verdict_when_wasm_uploaded_earlier_ledger() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[], // EMPTY — wasm not uploaded this ledger
+        programs: &[], // EMPTY — wasm not uploaded this ledger
         contract_deployments: std::slice::from_ref(&dep),
         account_states: &[],
         liquidity_pools: &[],
@@ -2062,7 +2059,7 @@ fn prepare_routes_event_to_hot_via_prior_contract_verdict() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[], // no deploy this ledger — contract deployed earlier
         account_states: &[],
         liquidity_pools: &[],
@@ -2107,7 +2104,7 @@ fn prepare_drops_event_when_prior_contract_verdict_is_sac() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -2154,7 +2151,7 @@ fn prepare_routes_event_to_pending_without_prior_verdict() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -2214,7 +2211,7 @@ fn prepare_prior_wasm_verdict_leaves_sac_untouched() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: std::slice::from_ref(&dep),
         account_states: &[],
         liquidity_pools: &[],
@@ -2272,7 +2269,7 @@ fn prepare_keeps_other_when_no_prior_verdict() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: std::slice::from_ref(&dep),
         account_states: &[],
         liquidity_pools: &[],
@@ -2430,7 +2427,7 @@ fn prepare_models_undeployed_sac_override_as_asset_not_contract() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -2541,7 +2538,7 @@ fn prepare_skips_sac_override_when_contract_deployed_same_ledger() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: std::slice::from_ref(&dep),
         account_states: &[],
         liquidity_pools: &[],
@@ -2622,7 +2619,7 @@ fn prepare_trustline_only_ledger_emits_no_sac_facet() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -3568,7 +3565,7 @@ fn prepare_refuses_a_registration_with_an_unparseable_fee() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &events,
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -3749,7 +3746,7 @@ fn stage_registration(
         operations: &[(tx.hash.clone(), vec![])],
         events,
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -3819,7 +3816,7 @@ fn two_writers_for_one_pool_and_ledger_fold_to_one_row() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -3999,7 +3996,7 @@ fn stage_router_writes(writes: &[xdr_parser::pool_family::PoolFamilyWrite]) -> s
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -4155,7 +4152,7 @@ fn prepare_stages_plane_writes_and_instance_share_tokens() {
         operations: &[(tx.hash.clone(), vec![])],
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -4308,7 +4305,7 @@ fn stage_factory_pair(
         operations: &[(tx.hash.clone(), vec![])],
         events,
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],
@@ -4541,7 +4538,7 @@ fn stage_config_pool(
         operations: &[(tx.hash.clone(), vec![])],
         events,
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],

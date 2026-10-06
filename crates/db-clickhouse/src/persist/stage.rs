@@ -50,10 +50,10 @@ use xdr_parser::SacOverride;
 use xdr_parser::claimable_balance::ExtractedClaimableBalance;
 use xdr_parser::executable_ref::ExtractedExecutableRefTarget;
 use xdr_parser::types::{
-    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractInterface,
-    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
-    ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
+    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedEvent,
+    ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
+    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
+    ExtractedWasmProgram, SacAssetIdentity,
 };
 use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
@@ -217,7 +217,7 @@ pub struct StagedLedger {
     /// OBSERVED this change set (full-set replace; trustline-only appearances
     /// never emit one). lore-0463.
     pub account_entry_state_rows: Vec<AccountEntryStateRow>,
-    pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
+    pub wasm_rows: Vec<WasmProgramRow>,
     /// `wasm_code` — the bytes of each program uploaded in this ledger.
     pub wasm_code_rows: Vec<WasmCodeRow>,
     pub contract_rows: Vec<SorobanContractRow>,
@@ -299,7 +299,7 @@ pub struct StageInputs<'a> {
     pub operations: &'a [(String, Vec<ExtractedOperation>)],
     pub events: &'a [(String, Vec<ExtractedEvent>)],
     pub invocations: &'a [(String, Vec<ExtractedInvocation>)],
-    pub contract_interfaces: &'a [ExtractedContractInterface],
+    pub programs: &'a [ExtractedWasmProgram],
     pub contract_deployments: &'a [ExtractedContractDeployment],
     pub account_states: &'a [ExtractedAccountState],
     pub liquidity_pools: &'a [ExtractedLiquidityPool],
@@ -365,7 +365,7 @@ pub fn prepare(
     operations: &[(String, Vec<ExtractedOperation>)],
     events: &[(String, Vec<ExtractedEvent>)],
     invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
     contract_deployments: &[ExtractedContractDeployment],
     account_states: &[ExtractedAccountState],
     liquidity_pools: &[ExtractedLiquidityPool],
@@ -383,7 +383,7 @@ pub fn prepare(
         operations,
         events,
         invocations,
-        contract_interfaces,
+        programs,
         contract_deployments,
         account_states,
         liquidity_pools,
@@ -601,7 +601,7 @@ pub fn build_balance_rows(
 /// different ledgers, so a deploy's WASM is invisible to the same-ledger
 /// `wasm_classification` map below and the contract would persist the parser
 /// default `Other`. The writer pre-fetches the verdict for such hashes from
-/// the already-persisted `wasm_interface_metadata` (see
+/// the already-persisted `wasm_programs` (see
 /// `persist::fetch_prior_wasm_verdicts`) and passes it here; the deploy
 /// override consults it as a fallback after the same-ledger map. Legacy
 /// callers via [`prepare`] pass an empty map and behave exactly as before.
@@ -614,7 +614,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         operations,
         events,
         invocations,
-        contract_interfaces,
+        programs,
         contract_deployments,
         account_states,
         liquidity_pools,
@@ -903,7 +903,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         });
     }
 
-    let wasm_classification = wasm_programs::wasm_rows(&mut out, contract_interfaces)?;
+    let wasm_classification = wasm_programs::wasm_rows(&mut out, programs)?;
 
     // ---- soroban_contracts (deduped by contract_id) ----
     let mut contract_seen: HashSet<String> = HashSet::new();
@@ -925,7 +925,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         // Verdict source, in precedence order:
         //   1. `wasm_classification` — WASM uploaded in THIS ledger.
         //   2. `prior_wasm_verdicts` — WASM uploaded in an EARLIER ledger,
-        //      pre-fetched by the writer from `wasm_interface_metadata`
+        //      pre-fetched by the writer from `wasm_programs`
         //      (task 0283 live G1). This is the common Soroban case
         //      (upload + deploy are separate txs / ledgers); without it
         //      the contract would persist `Other` and its NFT events would

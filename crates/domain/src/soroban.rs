@@ -1,5 +1,5 @@
 //! Soroban domain types matching the `soroban_contracts` and
-//! `wasm_interface_metadata` ClickHouse tables.
+//! `wasm_programs` ClickHouse tables.
 //!
 //! Schema: ADR 0027 Part I §7, §8.
 //! `soroban_contracts.search_vector` is a generated TSVECTOR — DB-only, omitted.

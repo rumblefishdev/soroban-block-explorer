@@ -52,9 +52,9 @@ pub struct LedgerRow {
     pub base_fee: i64,
 }
 
-/// `wasm_interface_metadata` — immutable lookup, MergeTree.
+/// `wasm_programs` — immutable lookup, MergeTree.
 #[derive(Debug, Clone, Row, Serialize)]
-pub struct WasmInterfaceMetadataRow {
+pub struct WasmProgramRow {
     pub wasm_hash: [u8; 32],
     pub metadata: String,
 }

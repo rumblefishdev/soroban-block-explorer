@@ -65,12 +65,12 @@ The current design implies the following principles:
 
 - `ledgers` and `transactions` are the backbone of the explorer timeline
 - Soroban-specific entities are modeled explicitly as first-class tables
-  (`soroban_contracts`, `wasm_interface_metadata`, appearance indexes) rather than
+  (`soroban_contracts`, `wasm_programs`, appearance indexes) rather than
   being hidden inside generic JSON blobs
 - typed columns are preferred over JSONB for anything that participates in a
   closed domain (enums as `SMALLINT` per ADR 0031, hashes as `BYTEA(32)` per
   ADR 0024, balances as `NUMERIC(28,7)`); JSONB is reserved for genuinely open
-  metadata shapes (`soroban_contracts.metadata`, `wasm_interface_metadata.metadata`).
+  metadata shapes (`soroban_contracts.metadata`, `wasm_programs.metadata`).
   Detail-only NFT attributes (formerly `nfts.metadata` JSONB) are NOT persisted —
   per ADR 0043 they are fetched at request time on `GET /v1/nfts/:id` via
   `runtime_enrichment::nft_token_uri` (Soroban RPC `token_uri()` + IPFS gateway,
@@ -146,7 +146,7 @@ contract-event and invocation-tree payloads are fetched at read time from the pu
 Stellar archive, not stored in the DB):
 
 - `soroban_contracts` — deployed contracts (`BIGSERIAL id` + `VARCHAR(56)` natural `contract_id`)
-- `wasm_interface_metadata` — WASM ABI keyed by `wasm_hash`
+- `wasm_programs` — WASM ABI keyed by `wasm_hash`
 - `wasm_code` — the bytes of each WASM program keyed by `wasm_hash`, written
   at upload, so a contract's own functions can be executed
   ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
@@ -290,7 +290,7 @@ ledgers
        └─ soroban_events_appearances (partitioned)
 
 soroban_contracts                           # contracts OBSERVED being deployed (0548)
-  ├─ wasm_interface_metadata
+  ├─ wasm_programs
   ├─ contract_executable_refs               # (owner, tag) -> wasm_hash, CAP-85 (0548)
   ├─ soroban_events_appearances
   ├─ contract_activity
@@ -329,7 +329,7 @@ The public API surface is unchanged by this rewrite.
 Every 32-byte chain hash is stored as `BYTEA` with `CHECK (octet_length(...) = 32)`:
 `ledgers.hash`, `transactions.hash`, `transactions.inner_tx_hash`,
 `transaction_hash_index.hash`, `soroban_contracts.wasm_hash`,
-`wasm_interface_metadata.wasm_hash`, and the 32-byte `pool_id` on
+`wasm_programs.wasm_hash`, and the 32-byte `pool_id` on
 `liquidity_pools` / `liquidity_pool_snapshots` / `lp_positions` / `operations_appearances`.
 The domain layer renders each as lowercase hex on the API; no route changes hex
 strings into binary.
@@ -899,7 +899,7 @@ Purpose / design notes:
 CREATE TABLE soroban_contracts (
     id                      BIGSERIAL   PRIMARY KEY,                        -- ADR 0030 surrogate
     contract_id             VARCHAR(56) NOT NULL UNIQUE,                    -- StrKey natural key
-    wasm_hash               BYTEA       REFERENCES wasm_interface_metadata(wasm_hash), -- ADR 0024
+    wasm_hash               BYTEA       REFERENCES wasm_programs(wasm_hash), -- ADR 0024
     wasm_uploaded_at_ledger BIGINT,
     deployer_id             BIGINT      REFERENCES accounts(id),            -- ADR 0026
     deployed_at_ledger      BIGINT,
@@ -994,7 +994,7 @@ Design notes:
   is kept as the natural StrKey for E22 search, URL routing, and display. Every
   contract FK in other tables (`operations_appearances`, `soroban_events_appearances`,
   `soroban_invocations_appearances`, `assets`, `nfts`) targets `id`
-- `wasm_hash` is `BYTEA(32)` (ADR 0024) and FKs into `wasm_interface_metadata`
+- `wasm_hash` is `BYTEA(32)` (ADR 0024) and FKs into `wasm_programs`
 - `deployer_id` is an `accounts.id` surrogate FK (ADR 0026). The attributed
   account is the **operation-level effective source** of the
   `CreateContract*` host function: `op.source_account` when the op
@@ -1056,7 +1056,7 @@ Design notes:
 ### 4.7 WASM Interface Metadata
 
 ```sql
-CREATE TABLE wasm_interface_metadata (
+CREATE TABLE wasm_programs (
     wasm_hash BYTEA PRIMARY KEY,                                       -- 32-byte WASM SHA-256 (ADR 0024)
     metadata  JSONB NOT NULL,                                          -- SEP-48 / interface descriptor
     CONSTRAINT ck_wim_hash_len CHECK (octet_length(wasm_hash) = 32)
@@ -1894,7 +1894,7 @@ anchor and registry tables stay unpartitioned:
   `soroban_invocations_appearances`, `liquidity_pool_snapshots`,
   `nft_ownership`
 - **Unpartitioned:** `ledgers`, `transaction_hash_index`, `accounts`,
-  `soroban_contracts`, `wasm_interface_metadata`, `assets`, `nfts`,
+  `soroban_contracts`, `wasm_programs`, `assets`, `nfts`,
   `liquidity_pools`, `lp_positions`, `account_balances_current`
 
 On ClickHouse, partitioning is declared in the table DDL as `PARTITION BY
@@ -1992,7 +1992,7 @@ The DB therefore holds only:
   because its only consumer (a balance-over-time chart endpoint) is deferred;
   it will be re-introduced under a fresh ADR if the feature is scheduled
 - **Current-state registries** populated by the ingest pipeline + async enrichment
-  workers (`assets`, `nfts`, `soroban_contracts`, `wasm_interface_metadata`,
+  workers (`assets`, `nfts`, `soroban_contracts`, `wasm_programs`,
   `account_balances_current`, `lp_positions`)
 
 This split — typed summaries in the DB, heavy payloads fetched on-demand from the
