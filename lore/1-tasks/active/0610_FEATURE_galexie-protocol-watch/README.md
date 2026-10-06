@@ -35,17 +35,18 @@ history:
 Every pubnet protocol vote stops Galexie unless its captive core already
 supports the new protocol — even when the vote changes no XDR (P29). Today
 nothing notices until the ingestion-lag alarm fires after the vote. Add a
-daily check that compares Horizon's `core_supported_protocol_version` with the
-protocol the pinned Galexie image's captive core supports, so the bump is a
-planned task days before the vote instead of an overnight outage.
+check that pages when a Galexie with a newer captive core is on Docker Hub
+and ours is not on it, so the bump is a planned task before the vote instead
+of an overnight outage.
 
 ## Stan teraz
 
-- Done: nothing yet; filed with the P29 measurements below.
-- Next: build v1 (a scheduled workflow + one tracking issue); v2 is optional.
-- In force: for a captive core the protocol number is the exact signal, not a
-  proxy — a core that does not support the voted protocol always stalls, so
-  there is no "waiting" tier.
+- Done: the Lambda (ECR core vs Docker Hub core), its alarm, test and
+  runbook in PR #605; reshaped 2026-10-06 (see Shape).
+- Next: merge, deploy `Explorer-production-CloudWatch`, one test message
+  through Slack.
+- In force: for a captive core the major version is the exact signal — a
+  core that does not support the voted protocol always stalls.
 
 ## Context
 
@@ -54,69 +55,57 @@ read the pinned captive-core version from the image config (not from tags),
 and why delivery is an issue rather than Slack:
 [notes/R-p29-stall-and-pinned-core-version.md](notes/R-p29-stall-and-pinned-core-version.md).
 
-## Implementation Plan
+## Shape — decided 2026-10-05, reshaped 2026-10-06
 
-### Step 1: The check (v1)
+A scheduled Lambda, not a GitHub workflow (the filed plan and why it was
+dropped: [notes/R-github-workflow-plan-superseded.md](notes/R-github-workflow-plan-superseded.md)).
 
-A dependency-free script plus a scheduled workflow (daily + `workflow_dispatch`),
-modelled on stellar-prices-api's `verify-xdr-protocol-gap.mjs` and
-`xdr-protocol-watch.yml`. Horizon `current_protocol_version` and
-`core_supported_protocol_version` against the captive-core major read as above:
+- Every 3 h it reads the image of the Galexie service's current task
+  definition and that image's `STELLAR_CORE_VERSION` from its ECR config,
+  and the same for the newest `stellar/stellar-galexie` tag on Docker Hub.
+- Docker Hub's core major newer than ours, or any read that fails → the
+  function throws; the log says NEW CORE (with the tag) or why it could not
+  check.
+- The alarm watches the function's built-in `Errors` (no custom metric):
+  both runs of a 6 h period failed, missing data breaching → the existing SNS → Slack.
+  It posts to the alarm channel; nobody is @-mentioned.
+- Code: `infra/lambdas/galexie-protocol-watch/` (plain `.mjs`, AWS SDK from
+  the Node 22 runtime), wired in `infra/src/lib/stacks/galexie-protocol-watch.ts`
+  from `addIngestionAlarms` — only where our own Galexie runs.
 
-| Tier     | Condition                                 | Run   | Issue                                   |
-| -------- | ----------------------------------------- | ----- | --------------------------------------- |
-| OK       | core major ≥ core supports                | green | an open one is closed                   |
-| LAGGING  | core major < core supports, not yet voted | red   | opened: "bump Galexie before the vote"  |
-| BEHIND   | core major < mainnet current              | red   | opened, or LAGGING escalated by comment |
-| NO CHECK | Horizon or the registry unreadable        | red   | untouched                               |
+**Why the image, not the network's readiness (2026-10-06).** The first
+version compared our core with Horizon's `core_supported_protocol_version`.
+A review found its one page said "the network is ready" while the moment
+someone can act — the image appearing — reached no one. The image date is
+that moment, and it led every measured vote (first image with the new core
+on Docker Hub, read from the registry 2026-10-06):
 
-LAGGING should say whether Docker Hub already has an image whose
-`STELLAR_CORE_VERSION` reaches the new protocol, so the issue tells the reader
-if the bump is possible today.
+| Protocol | First image with the new core                       | Pubnet vote              | Lead       |
+| -------- | --------------------------------------------------- | ------------------------ | ---------- |
+| 27       | 2026-06-10 (`c97d648`, `27.0.0`)                    | 2026-07-08               | ~4 weeks   |
+| 28       | 2026-08-03 (`e746a5b`, pre-release; `28.0.0` 08-14) | mid-September (estimate) | ~4–6 weeks |
+| 29       | 2026-09-24 (`c927ffc`, later tagged `29.0.0`)       | 2026-10-01               | 7 days     |
 
-### Step 2: Delivery
-
-One tracking issue, opened once, body refreshed silently, a comment only on
-LAGGING → BEHIND, closed on OK (the prices watch's lifecycle). Assign it, or
-@-mention the Galexie owners in it, so the notification reaches people and not
-only the cron editor's inbox.
-
-### Step 3: Branches
-
-The default branch is `master`, and a `schedule` trigger only runs the
-default branch's copy. Put the workflow on `master` and let it check out
-`develop` for the script and `production.json`, as the prices watch does.
-GitHub starts these crons 5–8 h late (the prices watch: cron 06:17, actual
-starts 11:25–13:56 UTC) — fine for a week of lead time.
-
-### Step 4 (optional, v2): read production, notify Slack
-
-A scheduled Lambda beside the existing probes reads the running
-`production-galexie-live` task definition's image instead of the pinned
-digest (production, not intent: on 2026-10-02 29.0.0 was deployed at 06:27
-and PR #590 put it on `develop` at 07:12), publishes a metric, and an alarm goes through the existing
-SNS → AWS Chatbot → Slack path (the Chatbot Slack workspace is already
-authorized). A CDK change, a deploy and a `docs/architecture/**` update.
+It also drops Horizon, which SDF is retiring in favour of Stellar RPC.
+Rejected: two alarms ("bump available" / "cannot check"), judged not worth
+the second signal for a page that comes weeks ahead.
 
 ## Acceptance Criteria
 
-- [ ] A daily scheduled workflow (and `workflow_dispatch`) compares Horizon's
-      current and core-supported protocols with the captive-core major of the
-      pinned Galexie digest, read from the image config, not from tags
-- [ ] OK / LAGGING / BEHIND / NO CHECK as in the table; there is no
-      waiting tier
-- [ ] A digest that is not on Docker Hub, or an image without
-      `STELLAR_CORE_VERSION`, fails as "cannot determine" — never green
-- [ ] One tracking issue with the lifecycle above, reaching the Galexie
-      owners directly (assignee or @-mention)
-- [ ] A test replays the P29 timeline against a mock Horizon and registry:
-      pin 28.0.1 with core 29 → LAGGING; with mainnet 29 → BEHIND; pin 29.0.0
-      → OK; unknown digest → NO CHECK
-- [ ] A runbook says what to do per tier (the Galexie recipe in
-      `docs/deployment.md` already covers the bump itself)
-- [ ] **Docs updated** — `docs/architecture/**` only if v2 (Step 4) is built;
-      v1 adds a workflow and a script, not a change to the system's shape
-- [ ] **API types regenerated** — N/A: nothing under `crates/api/**`,
+- [x] A scheduled Lambda compares the captive-core major of the image in the
+      Galexie service's current task definition (its ECR config, not tags)
+      with the newest Galexie image on Docker Hub
+- [x] A newer core there, or a read that fails, is a failed run; never green
+- [x] A test replays P29: Hub without a newer core → OK; commit tag
+      `c927ffc` with core 29 against our 28 → NEW CORE; ours 29 → OK; unknown
+      image or no `STELLAR_CORE_VERSION` → cannot determine
+- [x] A run against production (read-only) answers OK, and the 27.0.0 image,
+      absent from Docker Hub, reads as core 27 from ECR
+- [ ] Deployed; one alarm message seen in Slack (ADR 0054 rule 5)
+- [x] A runbook says what to do per answer: `docs/runbooks/galexie-protocol-watch.md`
+- [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
+      §6 (external dependencies), §8.2, §8.3; `docs/runbooks/health.md`
+- [x] **API types regenerated** — N/A: nothing under `crates/api/**`,
       `Cargo.{toml,lock}` or `libs/api-types/**`
 
 ## Notes
