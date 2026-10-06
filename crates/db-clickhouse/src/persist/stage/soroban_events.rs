@@ -3,9 +3,10 @@
 //!
 //! Lives in its own file because `stage.rs` is past the module size limit.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
+use xdr_parser::EventId;
 use xdr_parser::scval;
 use xdr_parser::types::{EventOrigin, ExtractedEvent, ExtractedLedger};
 
@@ -28,11 +29,22 @@ pub(super) fn rows(
     // `contract_activity` below: the parser says where an event came from,
     // so a fee event is left out by its origin, not inferred from its id.
     let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
+    // The id is an event's public identity (stellar-rpc's), and with the
+    // contract it keys the row: a repeat can only be a parser defect, and two
+    // events of one contract under one id would merge into one row without a
+    // trace, so a repeated id stops the ledger instead.
+    let mut seen_ids: HashSet<EventId> = HashSet::new();
     for (tx_hash, evs) in events {
         let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
             continue;
         };
         for ev in evs {
+            if !seen_ids.insert(ev.event_id) {
+                return Err(staging_err(&format!(
+                    "two events share the stellar-rpc id {} (tx {tx_hash}) — ADR 0059",
+                    ev.event_id.to_rpc_string()
+                )));
+            }
             let Some(contract_strkey) = &ev.contract_id else {
                 contract_orphan_dropped += 1;
                 continue;
@@ -123,3 +135,6 @@ pub(super) fn extract_event_signature(topics: &Value) -> Option<String> {
     );
     None
 }
+
+#[cfg(test)]
+mod tests;
