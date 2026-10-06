@@ -113,7 +113,12 @@ is the deploy/upgrade ledger despite its name).
 EXISTS code String DEFAULT '' CODEC(ZSTD(3))` — both BEFORE the deploy,
    or the indexer's typed insert fails — then deploy, drop the view, run
    the backfill. The backfill rewrites every existing row with metadata
-   recomputed by today's parser (old rows gain `upgradeable`).
+   recomputed by today's parser. Local run 2026-10-06 (46 programs drawn
+   from production: 40 random with an interface + all 6 without one): 46/46
+   fetched, sha256 46/46, byte length = `wasm_byte_len` 40/40, metadata
+   identical to production 40/40, the 6 spec-less rows have empty metadata;
+   a second run found nothing missing. Production holds no row without the
+   `upgradeable` key (0 of 5,238), so none changes on that account.
 2. Executor module wrapping `soroban-env-host` (pinned to the network's
    protocol): `call_view(contract, fn) -> Result<ScVal, …>` over a snapshot
    source fed by the current ledger's changes, `wasm_programs.code` and the
