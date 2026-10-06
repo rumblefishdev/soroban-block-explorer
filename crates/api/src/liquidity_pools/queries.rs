@@ -151,7 +151,7 @@ mod soroban_total_shares;
 mod usd_analytics;
 
 pub use get_pool::fetch_pool_by_id;
-pub use get_pool_chart::{fetch_pool_chart, fetch_soroban_pool_chart};
+pub use get_pool_chart::fetch_pool_chart;
 pub use list_participants::{
     count_soroban_participants, fetch_participants, fetch_soroban_participants, pool_exists,
 };
