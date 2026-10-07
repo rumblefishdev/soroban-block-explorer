@@ -119,10 +119,10 @@ pub struct AccountDetailResponse {
     /// security claim the data does not support. Render the unknown as
     /// unknown.
     pub signing: Option<AccountSigning>,
-    /// Sponsored reserves (CAP-33), or `null` when the account has no
-    /// `account_entry_state` row — which, since the checkpoint seed, means no
-    /// account entry on the ledger (closed, or never an account), so no
-    /// reserves exist. Never read `null` as 0.
+    /// Sponsored reserves (CAP-33), or `null` when the account has no entry
+    /// on the ledger — closed (`deleted`), or never an account (no
+    /// `account_entry_state` row) — so it holds no reserves to count. Render
+    /// nothing for `null`.
     pub sponsorship: Option<AccountSponsorship>,
 }
 

@@ -633,9 +633,10 @@ still cannot miss a live account, since every live account carries a native XLM 
 `Sponsoring` (reserves this account pays for others) and `Sponsored by others`
 (reserves of this account paid by others), with their XLM at the 0.5 XLM base reserve.
 Both come from the API's `sponsorship` — the CAP-33 counters the ledger keeps on the
-`AccountEntry`, read from the same `account_entry_state` row as the signers. A `null`
-`sponsorship` hides the row, for the reason above: no row means no account entry, and
-without an entry there are no reserves.
+`AccountEntry`, read from the same `account_entry_state` row as the signers. The API
+returns `null` for an address with no account entry — never an account (no row, as
+above) or closed (`deleted`: the row from before the merge is kept, and its counters
+describe reserves that no longer exist) — and the page then hides the row.
 
 ### 6.8 Assets (`/assets`)
 

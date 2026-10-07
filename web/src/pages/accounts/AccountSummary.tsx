@@ -78,9 +78,8 @@ export function AccountSummary({
           },
         ]}
       />
-      {/* No entry-state row means the address has no account entry on the
-          ledger (closed, or never an account — see AccountSigners), and
-          without an entry there are no reserves to show. */}
+      {/* `null` when the address has no account entry on the ledger —
+          closed, or never an account — and so no reserves to show. */}
       {account.sponsorship != null && (
         <SponsoredReserves sponsorship={account.sponsorship} />
       )}

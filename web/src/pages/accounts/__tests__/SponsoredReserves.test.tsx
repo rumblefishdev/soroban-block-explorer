@@ -30,4 +30,16 @@ describe('SponsoredReserves', () => {
 
     expect(screen.getByText(/1\.5 XLM paid by sponsors/)).toBeInTheDocument();
   });
+
+  it('says "1 reserve", not "1 reserves"', () => {
+    renderWithProviders(
+      <SponsoredReserves
+        sponsorship={{ num_sponsoring: 1, num_sponsored: 0 }}
+      />
+    );
+
+    expect(screen.getByText(/^1 reserve/)).toHaveTextContent(
+      '1 reserve · 0.5 XLM locked for others'
+    );
+  });
 });

@@ -2185,7 +2185,7 @@
               },
               {
                 "$ref": "#/components/schemas/AccountSponsorship",
-                "description": "Sponsored reserves (CAP-33), or `null` when the account has no\n`account_entry_state` row — which, since the checkpoint seed, means no\naccount entry on the ledger (closed, or never an account), so no\nreserves exist. Never read `null` as 0."
+                "description": "Sponsored reserves (CAP-33), or `null` when the account has no entry\non the ledger — closed (`deleted`), or never an account (no\n`account_entry_state` row) — so it holds no reserves to count. Render\nnothing for `null`."
               }
             ]
           }
