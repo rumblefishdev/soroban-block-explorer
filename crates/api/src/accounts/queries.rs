@@ -422,6 +422,8 @@ pub struct AccountEntryStateRow {
     pub threshold_low: u8,
     pub threshold_med: u8,
     pub threshold_high: u8,
+    pub num_sponsoring: u32,
+    pub num_sponsored: u32,
     pub last_updated_ledger: i64,
 }
 
@@ -452,7 +454,7 @@ pub async fn fetch_entry_state(
         .query(
             "SELECT signer_keys, signer_weights, signer_types, \
                     master_weight, threshold_low, threshold_med, threshold_high, \
-                    last_updated_ledger \
+                    num_sponsoring, num_sponsored, last_updated_ledger \
              FROM account_entry_state FINAL \
              WHERE account_id = ?",
         )

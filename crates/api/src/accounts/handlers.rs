@@ -17,8 +17,8 @@ use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     AccountBalance, AccountBalanceChange, AccountDetailResponse, AccountListItem, AccountSigner,
-    AccountSigning, AccountTransactionItem, AccountTxListParams, AccountsListCursor,
-    AccountsListParams,
+    AccountSigning, AccountSponsorship, AccountTransactionItem, AccountTxListParams,
+    AccountsListCursor, AccountsListParams,
 };
 use super::queries::{
     self, AccountBalanceRow, AccountEntryStateRow, AccountHeaderRow, AccountListRow, AccountTxRow,
@@ -189,6 +189,15 @@ pub async fn get_account(
         }
     };
 
+    // One `account_entry_state` row carries both the signing configuration
+    // and the sponsorship counters; a missing row leaves both unknown.
+    let sponsorship = match &signing_res {
+        Ok(Some(r)) => Some(AccountSponsorship {
+            num_sponsoring: r.num_sponsoring,
+            num_sponsored: r.num_sponsored,
+        }),
+        _ => None,
+    };
     let signing = match signing_res {
         Ok(row) => row.map(|r| AccountSigning {
             // Zip the three parallel arrays the table stores. They cannot be
@@ -229,6 +238,7 @@ pub async fn get_account(
         last_seen_ledger: header.last_seen_ledger,
         deleted,
         signing,
+        sponsorship,
     };
 
     let mut resp = Json(body).into_response();

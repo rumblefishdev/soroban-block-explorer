@@ -11,9 +11,12 @@ import { useFederatedName } from '../../search/useFederation.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
 
+import { SponsoredReserves } from './SponsoredReserves.js';
+
 /**
- * Account summary card — account ID (copyable), sequence number, and the
- * first / last seen ledgers, each linked to its ledger detail page.
+ * Account summary card — account ID (copyable), sequence number, sponsored
+ * reserves, and the first / last seen ledgers, each linked to its ledger
+ * detail page.
  */
 export function AccountSummary({
   account,
@@ -75,6 +78,12 @@ export function AccountSummary({
           },
         ]}
       />
+      {/* No entry-state row means the address has no account entry on the
+          ledger (closed, or never an account — see AccountSigners), and
+          without an entry there are no reserves to show. */}
+      {account.sponsorship != null && (
+        <SponsoredReserves sponsorship={account.sponsorship} />
+      )}
       <SummaryRow
         cells={[
           {
