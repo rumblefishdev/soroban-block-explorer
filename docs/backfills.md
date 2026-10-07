@@ -482,9 +482,9 @@ hand-exported-TSV transport were removed in the 2026-08-20 review;
 the seed's dry-run IS the four-way comparison — a separate `snapshot-compare`
 carried the same decode and the same verdict behind its own counting shell.)
 
-| Subcommand                                                                                 | What it does                                                                                                                                                                                                                                                                                                                                                   | Writes                                                                                                                                                       |
-| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snapshot-seed [--artifacts <dir>] [--execute] [--refill-entry-state-older-than <ledger>]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers and sponsorship counters, dimension stubs; with the refill option also rewrites entry-state rows older than `<ledger>`); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                      | What it does                                                                                                                                                                                                                                                                       | Writes                                                                                                                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, entry state of every live account, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
 **The decision table.** Every one of our rows falls into exactly one verdict,
 and the verdict alone decides what (if anything) is written. Read the report's
@@ -505,34 +505,20 @@ buckets against this:
 | open             | live                      | differ, ours newer        | `divergent ours newer`        | nothing — the live parser saw more                          |
 | open             | live                      | differ, SAME ledger       | **`divergent SAME ledger`**   | nothing — defect signal                                     |
 
-**Signers are gated on version, not on a verdict.** `account_entry_state`
-gets a row only for a live account whose entry is newer than our newest row
-of it (task 0521) — the rule the classic-pool pass uses. The summary line
-reports new, changed and unchanged, and the three sum to the snapshot's live
-accounts. On a first seed nearly all are new; on any later pass nearly all
-are unchanged (0 written of 10,909,433 on 2026-09-02). **A later pass that
-writes millions again is the signal** that the live signers writer stopped
-stamping.
-
-**Refill after a new `account_entry_state` column (task 0629).** A column
-added with `ALTER … DEFAULT` reads its default on every row written before
-the writer that fills it went live, and the version rule above cannot see
-that — the row is current, only incomplete. `--refill-entry-state-older-than
-<ledger>` also rewrites every live account whose newest row is older than
-`<ledger>`, at that row's own version, so the merge keeps the refill (the
-later insert) and any live write after it still wins. Give the first ledger
-the new writer wrote (for the sponsorship counters: 64,816,029, the first
-ledger after the 2026-10-07 deploy). The run refuses a checkpoint older than
-`<ledger>`. The summary line reads `… N refilled; M unchanged`; a normal pass
-afterwards writes ~0 again. A refilled row keeps its old version, so a later
-`run --reindex` of an old range with a binary older than the new column would
-write the default back at the same version and win as the later insert — use
-a current build.
-
-```bash
-backfill-runner snapshot-seed --refill-entry-state-older-than 64816029            # dry-run
-backfill-runner snapshot-seed --refill-entry-state-older-than 64816029 --execute
-```
+**Entry state is written for every live account.** `account_entry_state`
+(signers, thresholds, flags, sponsorship counters) gets one row per live
+account in the snapshot, at the entry's own ledger, and the version rule
+decides the rest: where our row is at the same ledger the seed's row is the
+later insert and replaces it (ClickHouse keeps the most recently inserted row
+on a version tie); where the live writer stamped a newer change, ours wins.
+That is ~10.9M rows per pass, identical where nothing changed. Task 0521 had
+narrowed the pass to accounts newer than our row, so a repeat pass wrote ~0
+and a jump would show the live writer stopping; task 0629 went back to every
+account, because a column added with `ALTER … DEFAULT` reads its default on
+every row written before its writer went live, and only rewriting the
+current rows fills it — now on any ordinary pass. Keep the binary current: a
+`run --reindex` of an old range with a build older than such a column writes
+the default back at the same version and wins as the later insert.
 
 **Version discipline:** a live fact versions on the entry's own
 `lastModifiedLedgerSeq`; an absence fact (closure, ghost) on the run's

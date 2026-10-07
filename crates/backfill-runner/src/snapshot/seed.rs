@@ -11,7 +11,7 @@
 //! | self-heal (snapshot newer) | ~25k | the entry's own ledger | 0 |
 //! | `claimable_balance_holdings`, same four kinds (task 0210, [`claimable`]) | not yet measured | as above | as above |
 //! | classic pools missing or stale on our side: `liquidity_pools` + `liquidity_pool_snapshots`, insert-only (task 0210, [`pools`]) | not yet measured | the entry's own ledger | — |
-//! | `account_entry_state` for live accounts newer than our newest row (task 0521, [`entry_state`]); with `--refill-entry-state-older-than`, also those whose newest row is older than that ledger (task 0629) | 0 of 10,909,433 on a repeat pass (2026-09-02) | the entry's own ledger; a refill keeps our row's version | — |
+//! | `account_entry_state` for every live account (task 0629, [`entry_state`]) | ~10.9M per pass, identical rows collapse | the entry's own ledger | — |
 //! | `assets` / `accounts` dimension stubs | the referenced ids we lack | entry ledger | — |
 //!
 //! ## The versioning contract (the load-bearing part)
@@ -97,7 +97,7 @@ const INSERT_CHUNK: usize = 500_000;
 #[derive(Default)]
 struct Corrections {
     balances: balances::BalanceCorrections,
-    entry_states: entry_state::EntryStateCorrections,
+    entry_states: Vec<db_clickhouse::persist::rows::AccountEntryStateRow>,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
     claimable: claimable::ClaimableCorrections,
@@ -168,7 +168,6 @@ async fn build_corrections(
     known_assets: &HashSet<i64>,
     known_accounts: &HashSet<i64>,
     checkpoint: u32,
-    refill_older_than: Option<u32>,
     report: &mut Report,
 ) -> Result<Corrections, BackfillError> {
     let mut out = Corrections::default();
@@ -260,9 +259,8 @@ async fn build_corrections(
     }
 
     // Pass 4: signers, thresholds, flags and sponsorship counters for every
-    // live account newer than our newest row of it, and on a refill every one
-    // whose newest row is older than the refill ledger.
-    out.entry_states = entry_state::build_corrections(sink, state, refill_older_than).await?;
+    // live account.
+    out.entry_states = entry_state::rows(state);
 
     Ok(out)
 }
@@ -350,7 +348,6 @@ pub async fn seed_command(
     sink: &Sink,
     artifacts_root: &Path,
     execute: bool,
-    refill_older_than: Option<u32>,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
 
@@ -362,18 +359,6 @@ pub async fn seed_command(
     refuse_if_reads_can_truncate(sink).await?;
 
     let list = network_state::latest_checkpoint().await?;
-    // A checkpoint before the refill ledger holds entries the old writer may
-    // have changed after it; their rows outrank the seed's and keep the old
-    // defaults. Only a later checkpoint sees every account the refill targets.
-    if let Some(refill) = refill_older_than
-        && list.checkpoint_ledger < refill
-    {
-        return Err(BackfillError::Incomplete(format!(
-            "refusing the refill: checkpoint {} is older than --refill-entry-state-older-than {refill}; \
-             wait for a checkpoint after it",
-            list.checkpoint_ledger
-        )));
-    }
     let coverage = claimable::writer_coverage(
         claimable::first_writer_tombstone(sink).await?,
         list.checkpoint_ledger,
@@ -423,7 +408,6 @@ pub async fn seed_command(
         &known_assets,
         &known_accounts,
         list.checkpoint_ledger,
-        refill_older_than,
         &mut report,
     )
     .await?;
@@ -447,7 +431,7 @@ pub async fn seed_command(
         &artifacts.join("dumps"),
         &corr.asset_stubs,
         &corr.account_stubs,
-        &corr.entry_states.rows,
+        &corr.entry_states,
         &state,
     )?;
     let (excluded_contract, excluded_type3) = balances::excluded_counts(sink).await?;
@@ -462,7 +446,7 @@ pub async fn seed_command(
          claimable_balance_holdings   {:>12}\n    \
          liquidity_pools              {:>12}\n    \
          liquidity_pool_snapshots     {:>12}\n    \
-         account_entry_state          {:>12}  ({} new, {} changed, {} refilled; {} unchanged)\n    \
+         account_entry_state          {:>12}  (every live account)\n    \
          assets (stubs)               {:>12}\n    \
          accounts (stubs)             {:>12}\n\
          \n  UNRESOLVED REFERENCES (must be 0 for the first two)\n    \
@@ -492,11 +476,7 @@ pub async fn seed_command(
         corr.claimable.rows.len(),
         corr.pools.pool_rows.len(),
         corr.pools.snapshot_rows.len(),
-        corr.entry_states.rows.len(),
-        corr.entry_states.missing,
-        corr.entry_states.stale,
-        corr.entry_states.refilled,
-        corr.entry_states.current,
+        corr.entry_states.len(),
         corr.asset_stubs.len(),
         corr.account_stubs.len(),
         corr.dangling.assets,
@@ -526,7 +506,7 @@ pub async fn seed_command(
         insert_chunked(sink, "liquidity_pool_snapshots", &corr.pools.snapshot_rows).await?;
         insert_chunked(sink, "balances", &corr.balances.rows).await?;
         insert_chunked(sink, claimable::TABLE, &corr.claimable.rows).await?;
-        insert_chunked(sink, "account_entry_state", &corr.entry_states.rows).await?;
+        insert_chunked(sink, "account_entry_state", &corr.entry_states).await?;
         println!("  inserts done.");
     } else {
         println!("  dry-run: nothing inserted. Re-run with --execute to write.");

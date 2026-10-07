@@ -243,13 +243,6 @@ enum Command {
         /// Actually insert. Without this flag the run is read-only.
         #[arg(long)]
         execute: bool,
-        /// Also rewrite every live account whose newest `account_entry_state`
-        /// row is older than this ledger — rows written before a column
-        /// existed carry its default (task 0629: the sponsorship counters).
-        /// Give the first ledger the writer of the new column wrote. Refused
-        /// when the checkpoint is older than it.
-        #[arg(long)]
-        refill_entry_state_older_than: Option<u32>,
     },
 
     /// Task 0331 step 7 — one-shot RPC-snapshot seed of per-holder balances into
@@ -404,13 +397,9 @@ async fn main() {
                 stats.dry_run, stats.flipped_nft, stats.flipped_fungible, stats.assets_inserted,
             );
         }
-        Command::SnapshotSeed {
-            artifacts,
-            execute,
-            refill_entry_state_older_than,
-        } => {
+        Command::SnapshotSeed { artifacts, execute } => {
             refuse_non_pubnet_seed();
-            snapshot::seed::seed_command(&sink, &artifacts, execute, refill_entry_state_older_than)
+            snapshot::seed::seed_command(&sink, &artifacts, execute)
                 .await
                 .expect("snapshot seed failed");
         }
