@@ -12,6 +12,14 @@
 //! rows identical to what we held. The data was never at risk — the rows
 //! collapse at the same version — but a number that cannot move could not show
 //! the live writer stopping, which is what it is for.
+//!
+//! **Refill (task 0629).** A column added to the table reads its default on
+//! every row written before it existed — the sponsorship counters read 0 for
+//! an account whose entry has not changed since. The version rule cannot see
+//! that: the row is current, only incomplete. `--refill-entry-state-older-than
+//! <ledger>` rewrites exactly those rows, the ones whose newest version
+//! predates the ledger the new writer went live, and no others — so a normal
+//! pass afterwards still writes ~0.
 
 use std::collections::HashMap;
 
@@ -30,8 +38,12 @@ pub(crate) struct EntryStateCorrections {
     pub(crate) missing: u64,
     /// Live accounts whose entry changed after our newest row.
     pub(crate) stale: u64,
+    /// Live accounts we hold at the entry's ledger or later, but whose newest
+    /// row predates the refill ledger — rewritten whole from the snapshot.
+    pub(crate) refilled: u64,
     /// Live accounts we already hold at the entry's ledger or later. With
-    /// `missing` and `stale` they sum to the snapshot's live-account count.
+    /// `missing`, `stale` and `refilled` they sum to the snapshot's
+    /// live-account count.
     pub(crate) current: u64,
 }
 
@@ -75,14 +87,21 @@ async fn our_newest(sink: &Sink) -> Result<HashMap<i64, i64>, BackfillError> {
 pub(crate) async fn build_corrections(
     sink: &Sink,
     state: &NetworkState,
+    refill_older_than: Option<u32>,
 ) -> Result<EntryStateCorrections, BackfillError> {
     let ours = our_newest(sink).await?;
     println!("  read our newest entry state of {} accounts", ours.len());
-    Ok(corrections(state, &ours))
+    Ok(corrections(state, &ours, refill_older_than))
 }
 
-/// A row for every live account the snapshot knows newer than `ours` does.
-fn corrections(state: &NetworkState, ours: &HashMap<i64, i64>) -> EntryStateCorrections {
+/// A row for every live account the snapshot knows newer than `ours` does,
+/// and — with a refill ledger — for every one whose newest row of ours is
+/// older than that ledger.
+fn corrections(
+    state: &NetworkState,
+    ours: &HashMap<i64, i64>,
+    refill_older_than: Option<u32>,
+) -> EntryStateCorrections {
     let mut out = EntryStateCorrections::default();
     for (id, e) in &state.accounts {
         if !e.live {
@@ -91,14 +110,30 @@ fn corrections(state: &NetworkState, ours: &HashMap<i64, i64>) -> EntryStateCorr
         let Some(d) = state.account_details.get(id) else {
             continue;
         };
-        match entry_freshness::need(ours.get(id).copied(), e.ledger) {
-            Need::Current => {
-                out.current += 1;
-                continue;
+        let our_newest = ours.get(id).copied();
+        let version = match entry_freshness::need(our_newest, e.ledger) {
+            Need::Missing => {
+                out.missing += 1;
+                i64::from(e.ledger)
             }
-            Need::Missing => out.missing += 1,
-            Need::Stale => out.stale += 1,
-        }
+            Need::Stale => {
+                out.stale += 1;
+                i64::from(e.ledger)
+            }
+            Need::Current => match (our_newest, refill_older_than) {
+                // Our row is current but older than the columns it lacks.
+                // Rewritten at its own version: the merge then keeps this,
+                // the later insert, and any live write after it outranks both.
+                (Some(ours), Some(refill)) if ours < i64::from(refill) => {
+                    out.refilled += 1;
+                    ours
+                }
+                _ => {
+                    out.current += 1;
+                    continue;
+                }
+            },
+        };
         out.rows.push(AccountEntryStateRow {
             account_id: *id,
             signer_keys: d.signers.iter().map(|(k, _, _)| k.clone()).collect(),
@@ -111,7 +146,7 @@ fn corrections(state: &NetworkState, ours: &HashMap<i64, i64>) -> EntryStateCorr
             flags: d.flags,
             num_sponsoring: d.num_sponsoring,
             num_sponsored: d.num_sponsored,
-            last_updated_ledger: i64::from(e.ledger),
+            last_updated_ledger: version,
         });
     }
     out

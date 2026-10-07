@@ -482,9 +482,9 @@ hand-exported-TSV transport were removed in the 2026-08-20 review;
 the seed's dry-run IS the four-way comparison — a separate `snapshot-compare`
 carried the same decode and the same verdict behind its own counting shell.)
 
-| Subcommand                                      | What it does                                                                                                                                                                                                                                             | Writes                                                                                                                                                       |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                                                                 | What it does                                                                                                                                                                                                                                             | Writes                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snapshot-seed [--artifacts <dir>] [--execute] [--refill-entry-state-older-than <ledger>]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
 **The decision table.** Every one of our rows falls into exactly one verdict,
 and the verdict alone decides what (if anything) is written. Read the report's
@@ -513,6 +513,23 @@ accounts. On a first seed nearly all are new; on any later pass nearly all
 are unchanged (0 written of 10,909,433 on 2026-09-02). **A later pass that
 writes millions again is the signal** that the live signers writer stopped
 stamping.
+
+**Refill after a new `account_entry_state` column (task 0629).** A column
+added with `ALTER … DEFAULT` reads its default on every row written before
+the writer that fills it went live, and the version rule above cannot see
+that — the row is current, only incomplete. `--refill-entry-state-older-than
+<ledger>` also rewrites every live account whose newest row is older than
+`<ledger>`, at that row's own version, so the merge keeps the refill (the
+later insert) and any live write after it still wins. Give the first ledger
+the new writer wrote (for the sponsorship counters: 64,816,029, the first
+ledger after the 2026-10-07 deploy). The run refuses a checkpoint older than
+`<ledger>`. The summary line reads `… N refilled; M unchanged`; a normal pass
+afterwards writes ~0 again.
+
+```bash
+backfill-runner snapshot-seed --refill-entry-state-older-than 64816029            # dry-run
+backfill-runner snapshot-seed --refill-entry-state-older-than 64816029 --execute
+```
 
 **Version discipline:** a live fact versions on the entry's own
 `lastModifiedLedgerSeq`; an absence fact (closure, ghost) on the run's

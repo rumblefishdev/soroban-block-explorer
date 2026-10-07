@@ -168,6 +168,7 @@ async fn build_corrections(
     known_assets: &HashSet<i64>,
     known_accounts: &HashSet<i64>,
     checkpoint: u32,
+    refill_older_than: Option<u32>,
     report: &mut Report,
 ) -> Result<Corrections, BackfillError> {
     let mut out = Corrections::default();
@@ -258,9 +259,9 @@ async fn build_corrections(
         });
     }
 
-    // Pass 4: signers, thresholds and flags for every live account newer than
-    // our newest row of it.
-    out.entry_states = entry_state::build_corrections(sink, state).await?;
+    // Pass 4: signers, thresholds, flags and sponsorship counters for every
+    // live account newer than our newest row of it (and, on a refill, older).
+    out.entry_states = entry_state::build_corrections(sink, state, refill_older_than).await?;
 
     Ok(out)
 }
@@ -348,6 +349,7 @@ pub async fn seed_command(
     sink: &Sink,
     artifacts_root: &Path,
     execute: bool,
+    refill_older_than: Option<u32>,
 ) -> Result<(), BackfillError> {
     let started = std::time::Instant::now();
 
@@ -359,6 +361,18 @@ pub async fn seed_command(
     refuse_if_reads_can_truncate(sink).await?;
 
     let list = network_state::latest_checkpoint().await?;
+    // A checkpoint before the refill ledger holds entries the old writer may
+    // have changed after it; their rows outrank the seed's and keep the old
+    // defaults. Only a later checkpoint sees every account the refill targets.
+    if let Some(refill) = refill_older_than
+        && list.checkpoint_ledger < refill
+    {
+        return Err(BackfillError::Incomplete(format!(
+            "refusing the refill: checkpoint {} is older than --refill-entry-state-older-than {refill}; \
+             wait for a checkpoint after it",
+            list.checkpoint_ledger
+        )));
+    }
     let coverage = claimable::writer_coverage(
         claimable::first_writer_tombstone(sink).await?,
         list.checkpoint_ledger,
@@ -408,6 +422,7 @@ pub async fn seed_command(
         &known_assets,
         &known_accounts,
         list.checkpoint_ledger,
+        refill_older_than,
         &mut report,
     )
     .await?;
@@ -446,7 +461,7 @@ pub async fn seed_command(
          claimable_balance_holdings   {:>12}\n    \
          liquidity_pools              {:>12}\n    \
          liquidity_pool_snapshots     {:>12}\n    \
-         account_entry_state          {:>12}  ({} new, {} changed; {} unchanged)\n    \
+         account_entry_state          {:>12}  ({} new, {} changed, {} refilled; {} unchanged)\n    \
          assets (stubs)               {:>12}\n    \
          accounts (stubs)             {:>12}\n\
          \n  UNRESOLVED REFERENCES (must be 0 for the first two)\n    \
@@ -479,6 +494,7 @@ pub async fn seed_command(
         corr.entry_states.rows.len(),
         corr.entry_states.missing,
         corr.entry_states.stale,
+        corr.entry_states.refilled,
         corr.entry_states.current,
         corr.asset_stubs.len(),
         corr.account_stubs.len(),

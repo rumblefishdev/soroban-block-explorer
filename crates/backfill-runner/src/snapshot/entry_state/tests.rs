@@ -47,7 +47,7 @@ fn only_accounts_newer_than_ours_are_written() {
         (4, i64::from(CHECKPOINT_ERA) + 50),
     ]);
 
-    let out = corrections(&state, &ours);
+    let out = corrections(&state, &ours, None);
 
     let mut written: Vec<i64> = out.rows.iter().map(|r| r.account_id).collect();
     written.sort_unstable();
@@ -69,11 +69,84 @@ fn seed_row_carries_the_sponsorship_counters() {
     let mut state = NetworkState::default();
     account(&mut state, 1, true, CHECKPOINT_ERA);
 
-    let out = corrections(&state, &HashMap::new());
+    let out = corrections(&state, &HashMap::new(), None);
 
     assert_eq!(out.rows.len(), 1);
     assert_eq!(
         (out.rows[0].num_sponsoring, out.rows[0].num_sponsored),
         (4, 2)
     );
+}
+
+/// The ledger the writer of the sponsorship counters went live on mainnet
+/// (task 0629): rows older than it carry the columns' default, 0.
+const REFILL: u32 = 64_816_029;
+
+/// The refill rewrites exactly the rows older than the refill ledger, each at
+/// its own version so this insert replaces it — and leaves every row the new
+/// writer has already stamped. The four counts still add up to the live
+/// accounts.
+#[test]
+fn refill_rewrites_only_rows_older_than_the_refill_ledger() {
+    let mut state = NetworkState::default();
+    account(&mut state, 1, true, 64_800_534); // unchanged since before the writer
+    account(&mut state, 2, true, REFILL + 10); // the new writer already wrote it
+    account(&mut state, 3, true, REFILL + 20); // changed after our row: stale anyway
+    account(&mut state, 4, true, REFILL + 30); // never seen
+    let ours = HashMap::from([
+        (1, 64_800_534),
+        (2, i64::from(REFILL) + 10),
+        (3, 64_700_000),
+    ]);
+
+    let out = corrections(&state, &ours, Some(REFILL));
+
+    let mut written: Vec<(i64, i64)> = out
+        .rows
+        .iter()
+        .map(|r| (r.account_id, r.last_updated_ledger))
+        .collect();
+    written.sort_unstable();
+    assert_eq!(
+        written,
+        [
+            (1, 64_800_534),
+            (3, i64::from(REFILL) + 20),
+            (4, i64::from(REFILL) + 30)
+        ]
+    );
+    assert_eq!(
+        (out.missing, out.stale, out.refilled, out.current),
+        (1, 1, 1, 1)
+    );
+}
+
+/// The refill row carries the counters — the whole point of the pass.
+#[test]
+fn refill_row_carries_the_sponsorship_counters() {
+    let mut state = NetworkState::default();
+    account(&mut state, 1, true, 64_800_534);
+    let ours = HashMap::from([(1, 64_800_534)]);
+
+    let out = corrections(&state, &ours, Some(REFILL));
+
+    assert_eq!(out.refilled, 1);
+    assert_eq!(
+        (out.rows[0].num_sponsoring, out.rows[0].num_sponsored),
+        (4, 2)
+    );
+}
+
+/// Our row newer than the snapshot's entry (the entry did not change since):
+/// the refill row takes OUR version, not the entry's, or the merge would keep
+/// the old row with the default.
+#[test]
+fn refill_row_takes_our_version_when_it_is_newer_than_the_entry() {
+    let mut state = NetworkState::default();
+    account(&mut state, 1, true, 64_000_000);
+    let ours = HashMap::from([(1, 64_500_000)]);
+
+    let out = corrections(&state, &ours, Some(REFILL));
+
+    assert_eq!(out.rows[0].last_updated_ledger, 64_500_000);
 }
