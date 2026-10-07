@@ -1,6 +1,6 @@
-//! Whether a network entry adds anything to what we hold — the rule both
-//! checkpoint passes apply: classic pools ([`super::pools`]) and account entry
-//! state ([`super::entry_state`]).
+//! Whether a network entry adds anything to what we hold — the rule the
+//! classic-pool pass applies ([`super::pools`]). Account entry state used it
+//! too until task 0629, which writes every live account instead.
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Need {
