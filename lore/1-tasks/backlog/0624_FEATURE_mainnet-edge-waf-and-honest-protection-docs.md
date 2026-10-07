@@ -28,11 +28,15 @@ that are not active.
 
 ## Stan teraz
 
-- Done: Free Managed Ruleset live on the testnet API host only (zone
-  Terraform, company `dns-cloudformation` repo); a Log4j-shaped probe gets
-  403 on testnet, 401 on mainnet.
-- Next: 2026-10-07 — read testnet's Security Events (managed rules, ~40 h);
-  if no false positives, add the mainnet host to the WAF expression.
+- Done: Free Managed Ruleset live on both API hosts since 2026-10-07 (zone
+  Terraform, company `dns-cloudformation` repo, its PR #4). Testnet's Security
+  Events over the first two days held only real attacks (a React RCE probe,
+  `POST /`) and our own Log4j-shaped probes, nothing on `/v1` or `/auth`.
+  After the apply a Log4j-shaped probe gets Cloudflare's 403 on both hosts;
+  `/health` 200, `/v1/...` and `POST /auth/session` still reach the API.
+- Next: Security Events on the mainnet host at ~24 h; then Step 2 (docs).
+  Blocks never reach AWS, so no alarm of ours sees a false positive: consider
+  a Cloudflare notification on managed-rule blocks.
 - In force: Managed Challenge stays **off** (an HTML challenge page on a JSON
   API breaks `fetch()` and API-key clients; Turnstile filters bots for the
   SPA). The Free plan allows one rate-limit rule per zone, so both API hosts
