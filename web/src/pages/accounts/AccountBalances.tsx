@@ -2,6 +2,7 @@ import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWalletOu
 import { Box, Stack, Typography } from '@mui/material';
 import type { AccountBalance } from '@rumblefish/api-types';
 import {
+  addressType,
   Chip,
   EmptyState,
   formatAmount,
@@ -211,7 +212,8 @@ function BalanceRow({
                 >
                   <IdentifierDisplay
                     value={s.subline}
-                    type={s.subline.startsWith('C') ? 'contract' : 'account'}
+                    type={addressType(s.subline) ?? 'account'}
+                    linked={addressType(s.subline) != null}
                     tone="inherit"
                     fontSize={12}
                   />

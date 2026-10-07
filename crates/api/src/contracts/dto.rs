@@ -90,7 +90,7 @@ pub struct ContractDetailResponse {
     ///   pre-0327 row) — the frontend renders no chip.
     ///
     /// Derived from the WASM at parse time
-    /// (`wasm_interface_metadata.metadata.upgradeable`), not from a ledger flag
+    /// (`wasm_programs.metadata.upgradeable`), not from a ledger flag
     /// (none exists).
     pub upgradeable: Option<bool>,
     /// Task 0548 / CAP-85 (protocol 28): the contract this one borrows its code
@@ -130,7 +130,7 @@ pub struct ContractFunctionSig {
 }
 
 /// Soroban contract interface metadata persisted in
-/// `wasm_interface_metadata.metadata` (JSONB). Field shape mirrors the
+/// `wasm_programs.metadata` (JSONB). Field shape mirrors the
 /// indexer's `xdr_parser::types::ContractInterface` exactly — the API
 /// hands the same JSON object to clients that the indexer wrote.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -153,11 +153,8 @@ pub struct InterfaceResponse {
 pub struct InvocationItem {
     pub transaction_hash: String,
     pub ledger_sequence: i64,
-    /// Caller G-StrKey when an account made the call.
-    pub caller_account: Option<String>,
-    /// Caller C-StrKey when a contract made the call; exactly one of the two
-    /// is set on an invocation.
-    pub caller_contract: Option<String>,
+    /// Who made the call: a `G…` account or a `C…` contract (task 0600).
+    pub caller: Option<String>,
     pub created_at: DateTime<Utc>,
     pub successful: bool,
 }

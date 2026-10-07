@@ -145,18 +145,18 @@ async fn smoke_inserts_and_reads_each_table() {
     )
     .await;
 
-    // ----- wasm_interface_metadata (immutable lookup) -----
+    // ----- wasm_programs (immutable lookup) -----
     client
         .query(
-            "INSERT INTO wasm_interface_metadata (wasm_hash, metadata) \
+            "INSERT INTO wasm_programs (wasm_hash, metadata) \
              VALUES (unhex('0000000000000000000000000000000000000000000000000000000000000099'), '{\"functions\":[]}')",
         )
         .execute()
         .await
-        .expect("insert wasm_interface_metadata");
+        .expect("insert wasm_programs");
     assert_count(
         &client,
-        "wasm_interface_metadata",
+        "wasm_programs",
         "hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'",
         1,
     )
@@ -165,10 +165,9 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- transactions (append-only fact, partitioned) -----
     client
         .query(
-            "INSERT INTO transactions (id, hash, ledger_sequence, application_order, source_id, fee_charged, inner_tx_hash, successful, operation_count, has_soroban, parse_error) \
-             VALUES (?, unhex('0000000000000000000000000000000000000000000000000000000000000003'), ?, 1, ?, 100, NULL, true, 1, false, false)",
+            "INSERT INTO transactions (hash, ledger_sequence, application_order, source_id, fee_charged, inner_tx_hash, successful, operation_count, has_soroban, parse_error) \
+             VALUES (unhex('0000000000000000000000000000000000000000000000000000000000000003'), ?, 1, ?, 100, NULL, true, 1, false, false)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
@@ -401,10 +400,9 @@ async fn smoke_inserts_and_reads_each_table() {
     // ----- lp_positions (state) -----
     client
         .query(
-            "INSERT INTO lp_positions (pool_id, account_id, shares, first_deposit_ledger, last_updated_ledger) \
-             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000bb'), ?, toDecimal128('50.0', 7), ?, ?)",
+            "INSERT INTO lp_positions (pool_id, account_id, shares, last_updated_ledger) \
+             VALUES (unhex('00000000000000000000000000000000000000000000000000000000000000bb'), ?, toDecimal128('50.0', 7), ?)",
         )
-        .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .bind(SMOKE_LEDGER)
         .execute()
@@ -587,7 +585,7 @@ async fn cleanup(client: &clickhouse::Client) {
         ),
         format!("ALTER TABLE account_balances_current DELETE WHERE account_id = {l}"),
         format!("ALTER TABLE soroban_contracts DELETE WHERE id = {l}"),
-        "ALTER TABLE wasm_interface_metadata DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
+        "ALTER TABLE wasm_programs DELETE WHERE hex(wasm_hash) = '0000000000000000000000000000000000000000000000000000000000000099'".into(),
         format!("ALTER TABLE transactions DELETE WHERE ledger_sequence = {l}"),
         format!(
             "ALTER TABLE transaction_hash_prefix_index DELETE WHERE ledger_sequence IN ({l}, {l} - 1)"

@@ -6,11 +6,11 @@
  * data plane lives on the Hetzner-hosted ClickHouse box reached over
  * mTLS. There is no RDS, no NAT Gateway, no private subnet.
  *
- * Production is the only supported AWS environment until product
- * explicitly asks to bring staging back (see task 0249 archive notes).
+ * One deployment per Stellar network (ADR 0052): `production` is mainnet,
+ * `testnet` is being built (task 0553).
  */
 export interface EnvironmentConfig {
-  readonly envName: 'production';
+  readonly envName: 'production' | 'testnet';
   readonly awsRegion: string;
 
   // Network (consumed by NetworkStack)
@@ -50,6 +50,32 @@ export interface EnvironmentConfig {
   readonly galexieDesiredCount: number;
   /** Stellar network passphrase. Determines which network Galexie connects to. */
   readonly stellarNetworkPassphrase: string;
+  /**
+   * Soroban RPC endpoints of this network, tried in order on failure. The API
+   * receives them as `SOROBAN_RPC_URLS`.
+   */
+  readonly sorobanRpcUrls: readonly string[];
+  /**
+   * Where the indexer reads ledger files (task 0553). `galexie`: our own
+   * Galexie writes them into this environment's ledger bucket, whose S3
+   * events ring the indexer. `public-lake`: SDF's public data lake bucket
+   * `aws-public-blockchain`, under `publicArchivePrefix` — no Galexie and no
+   * ledger bucket are deployed.
+   */
+  readonly ledgerSource: 'galexie' | 'public-lake';
+  /**
+   * Folder of this network's ledgers in the public data lake, e.g.
+   * `v1.1/stellar/ledgers/testnet/2025-12-18`. The indexer and API receive it
+   * as `PUBLIC_ARCHIVE_PREFIX` and refuse to start when its network segment
+   * disagrees with the passphrase. Unset: both read the pubnet folder.
+   * Required with `ledgerSource: 'public-lake'`.
+   */
+  readonly publicArchivePrefix?: string;
+  /**
+   * ClickHouse database of this environment, passed to all three Lambdas as
+   * `CLICKHOUSE_DATABASE`. Unset: they use `default`.
+   */
+  readonly clickhouseDatabase?: string;
   /** CloudWatch Logs retention in days for ECS log groups. */
   readonly ecsLogRetentionDays: number;
   /** Graceful shutdown timeout in seconds. ECS waits this long after SIGTERM before SIGKILL. */
@@ -130,11 +156,12 @@ export interface EnvironmentConfig {
   readonly enableBasicAuth: boolean;
 
   /**
-   * Enable CloudFront Function basic auth on the `/api/*` behavior only
-   * (task 0519) — the separate API SPA served from its own S3 bucket
-   * (`apiSpaBucket`) on the same distribution. Independent of
-   * `enableBasicAuth`: flipping this on does NOT gate the main site's
-   * behaviors, and flipping `enableBasicAuth` on does NOT gate `/api/*`.
+   * Enable CloudFront Function basic auth on the `/prices-api/*` behavior
+   * only (task 0519; `/api/*` until task 0608) — the separate Prices portal
+   * SPA served from its own S3 bucket (`apiSpaBucket`) on the same
+   * distribution. Independent of `enableBasicAuth`: flipping this on does NOT
+   * gate the main site's behaviors, and flipping `enableBasicAuth` on does
+   * NOT gate `/prices-api/*`.
    *
    * Shares the same CloudFront Function code and KeyValueStore as
    * `enableBasicAuth` when both are true (one construct, one set of
@@ -162,7 +189,7 @@ export interface EnvironmentConfig {
    * Scope note (task 0277 D9/D11): this is the bucket for the **sorobanscan**
    * slice only (api DNS record + AOP origin lock). The Cloudflare zone, company
    * DNS, zone-level rulesets and a SEPARATE state bucket live in the private
-   * `rf-domains` repo. Default false.
+   * `dns-cloudformation` repo. Default false.
    */
   readonly provisionCloudflareBootstrap: boolean;
 
@@ -234,7 +261,7 @@ export interface EnvironmentConfig {
    * Phase 1 of the secret-header origin lock (task 0277 / ADR 0048): provision
    * the CDK-generated `EdgeSecret` in Secrets Manager (and only that). Split from
    * `enableEdgeSecretLock` so the value can be copied into the Cloudflare
-   * Transform Rule (rf-domains) BEFORE the Lambda starts requiring the header.
+   * Transform Rule (dns-cloudformation) BEFORE the Lambda starts requiring the header.
    * Default false.
    */
   readonly provisionEdgeSecret: boolean;
@@ -246,7 +273,7 @@ export interface EnvironmentConfig {
    * `X-Edge-Secret` — i.e. any request that did not pass through Cloudflare.
    *
    * REQUIRES `provisionEdgeSecret=true` AND the Cloudflare Transform Rule
-   * already injecting the matching value (rf-domains `enable_edge_secret`).
+   * already injecting the matching value (dns-cloudformation `enable_edge_secret`).
    * Arming before the edge stamps the header would 403 even legitimate
    * Cloudflare traffic. Default false.
    */
@@ -358,6 +385,12 @@ export interface EnvironmentConfig {
    * service's spend that previously went unnoticed for three weeks.
    */
   readonly costAnomalyAlertThresholdUsd: number;
+  /**
+   * Create the AWS-services cost anomaly monitor and its subscription. An
+   * account holds one such monitor, so a second environment in the same
+   * account sets false. Unset: true.
+   */
+  readonly provisionCostAnomalyMonitor?: boolean;
   // Slack workspace + channel IDs are NOT in env config — they are
   // deployment-specific identifiers kept out of the (public) repo and sourced
   // at deploy time from SSM Parameter Store (see CloudWatchStack).
@@ -373,6 +406,12 @@ export interface EnvironmentConfig {
    * `/soroban/${envName}/ch-ip` by `HetznerDnsStack`.
    */
   readonly chDomainName: string;
+  /**
+   * Create the Route 53 record for `chDomainName` (HetznerDnsStack). False
+   * for an environment that shares another one's ClickHouse host and so
+   * must not own its record. Unset: true.
+   */
+  readonly provisionChDns?: boolean;
   /**
    * Secret-name prefix in AWS Secrets Manager for mTLS client cert
    * bundles. Each AWS service (Lambda, Galexie) gets its own secret at
@@ -424,6 +463,24 @@ export function relativeRecordName(fqdn: string, zoneName: string): string {
  */
 export function validateConfig(config: EnvironmentConfig): void {
   const errors: string[] = [];
+
+  if (config.sorobanRpcUrls.length === 0) {
+    errors.push('sorobanRpcUrls must list at least one endpoint');
+  }
+
+  // With our own bucket the indexer refuses a lake folder at start, so the
+  // pair would deploy and then stall ingestion (task 0553).
+  if (config.ledgerSource === 'galexie' && config.publicArchivePrefix) {
+    errors.push(
+      "publicArchivePrefix is read only with ledgerSource 'public-lake'; the indexer refuses it next to our own bucket"
+    );
+  }
+
+  if (config.ledgerSource === 'public-lake' && !config.publicArchivePrefix) {
+    errors.push(
+      "ledgerSource 'public-lake' needs publicArchivePrefix (the network's folder in the data lake)"
+    );
+  }
 
   // CloudFront cert must be in us-east-1 regardless of awsRegion.
   if (
@@ -572,7 +629,7 @@ export function validateConfig(config: EnvironmentConfig): void {
     errors.push(
       `enableEdgeSecretLock=true requires provisionEdgeSecret=true: provision ` +
         `the EdgeSecret and copy its value into the Cloudflare Transform Rule ` +
-        `(rf-domains) before arming the Lambda.`
+        `(dns-cloudformation) before arming the Lambda.`
     );
   }
 

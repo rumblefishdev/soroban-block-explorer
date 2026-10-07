@@ -181,10 +181,13 @@ async fn main() {
     // fetch from the Secrets Lambda Extension and the AWS SDK config load. Both
     // are tens to hundreds of milliseconds; running them sequentially would
     // double the cold-start budget.
-    let ch_fut = db_clickhouse::mtls::client_from_lambda_env(db_clickhouse::PROD_DATABASE);
+    let database = db_clickhouse::database_from_env();
+    let ch_fut = db_clickhouse::mtls::client_from_lambda_env(&database);
     let aws_config_fut = aws_config::defaults(aws_config::BehaviorVersion::latest())
         .no_credentials()
-        .region(aws_sdk_s3::config::Region::new("us-east-2"))
+        .region(aws_sdk_s3::config::Region::new(
+            xdr_parser::public_archive::PUBLIC_BUCKET_REGION,
+        ))
         .timeout_config(runtime_enrichment::stellar_archive::default_timeout_config())
         .load();
     let (ch, aws_config) = tokio::join!(ch_fut, aws_config_fut);
@@ -200,7 +203,7 @@ async fn main() {
             .expect("failed to build wasm-code RPC client"),
     };
 
-    let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {
+    let raw_passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {
         panic!(
             "STELLAR_NETWORK_PASSPHRASE env not set; required to align tx_set \
              envelopes with apply-order tx_processing when re-extracting \
@@ -208,7 +211,17 @@ async fn main() {
              (e.g. \"Public Global Stellar Network ; September 2015\")."
         )
     });
-    let network_id = xdr_parser::network_id(&passphrase);
+    // Trimmed once, as the indexer does: the archive guard and the network id
+    // must see the same passphrase.
+    let passphrase = raw_passphrase.trim();
+    // Heavy fields come from the public data lake; a folder of the other
+    // network would decode fine and match nothing (lore-0553).
+    xdr_parser::public_archive::check_archive_network(
+        &xdr_parser::public_archive::public_archive_prefix(),
+        passphrase,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let network_id = xdr_parser::network_id(passphrase);
     let state = AppState::new(ch, runtime_enrichment, network_id);
     let app = app(&config, state);
 

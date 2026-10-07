@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addressType,
   isAccountId,
   isAssetId,
   isContractId,
@@ -131,5 +132,21 @@ describe('isAssetId', () => {
     expect(isAssetId(`USDC-${VALID_CONTRACT}`)).toBe(false); // issuer not G
     expect(isAssetId(`USDCUSDCUSDCX-${VALID_ACCOUNT}`)).toBe(false); // 13-char code
     expect(isAssetId('42')).toBe(false); // numeric surrogate is NOT a canonical id
+  });
+});
+
+describe('addressType', () => {
+  it('names the page each StrKey links to', () => {
+    expect(addressType(VALID_ACCOUNT)).toBe('account');
+    expect(addressType(VALID_CONTRACT)).toBe('contract');
+    expect(addressType(VALID_POOL)).toBe('pool');
+  });
+
+  it('links nothing without a page of its own', () => {
+    // A muxed account and a claimable balance are StrKeys with no route.
+    expect(addressType('M' + VALID_ACCOUNT.slice(1))).toBeNull();
+    expect(addressType('B' + VALID_ACCOUNT.slice(1))).toBeNull();
+    expect(addressType('USDC')).toBeNull();
+    expect(addressType('')).toBeNull();
   });
 });

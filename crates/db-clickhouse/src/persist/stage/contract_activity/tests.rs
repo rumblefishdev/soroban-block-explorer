@@ -58,7 +58,7 @@ fn contract_activity_is_the_presence_plus_the_invocation_caller() {
     let invocation = |contract: &str, caller: &str| ExtractedInvocation {
         transaction_hash: hash.clone(),
         contract_id: Some(contract.to_owned()),
-        caller_account: Some(caller.to_owned()),
+        caller: Some(caller.to_owned()),
         function_name: Some("f".into()),
         function_args: serde_json::json!([]),
         return_value: serde_json::Value::Null,

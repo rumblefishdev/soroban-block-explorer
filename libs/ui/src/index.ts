@@ -141,6 +141,8 @@ export {
   truncateMiddle,
   type EntityType,
   type TruncationConfig,
+  addressType,
+  type AddressType,
   isAccountId,
   isAssetId,
   isContractId,

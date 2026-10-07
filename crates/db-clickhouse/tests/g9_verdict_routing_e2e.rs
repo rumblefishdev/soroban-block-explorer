@@ -29,7 +29,7 @@ use db_clickhouse::persist::{ClassificationCache, ids, persist_ledger_clickhouse
 use db_clickhouse::{Config, apply_init_sql, client};
 use domain::{ContractEventType, NftEventType};
 use xdr_parser::types::{
-    EventSource, ExtractedEvent, ExtractedLedger, ExtractedNft, ExtractedNftEvent,
+    EventBody, ExtractedEvent, ExtractedLedger, ExtractedNft, ExtractedNftEvent,
     ExtractedTransaction,
 };
 
@@ -42,7 +42,7 @@ fn contract(tag: char) -> String {
     "C".to_string() + &tag.to_string().repeat(55)
 }
 
-fn owner_account() -> String {
+fn owner() -> String {
     "G".to_string() + &"B".repeat(55)
 }
 
@@ -68,7 +68,7 @@ fn fixture_tx() -> ExtractedTransaction {
         hash: tx_hash(),
         inner_tx_hash: None,
         ledger_sequence: E2E_LEDGER,
-        source_account: owner_account(),
+        source_account: owner(),
         fee_source: None,
         fee_charged: 100,
         successful: true,
@@ -91,7 +91,7 @@ fn fixture_nft(contract_id: &str, token: &str) -> ExtractedNft {
         contract_id: contract_id.to_string(),
         token_id: token.to_string(),
         collection_name: None,
-        owner_account: Some(owner_account()),
+        owner: Some(owner()),
         name: None,
         media_url: None,
         minted_at_ledger: Some(E2E_LEDGER),
@@ -109,30 +109,26 @@ const NEW_WASM_B64: &str = "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u4=";
 fn fixture_upgrade_event(contract_id: &str) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: tx_hash(),
-        event_type: ContractEventType::System,
-        source: EventSource::TxLevel,
-        contract_id: Some(contract_id.to_string()),
-        topics: serde_json::json!([
-            {"type": "symbol", "value": "executable_update"},
-            {"type": "vec", "value": [{"type": "symbol", "value": "Wasm"},
-                                      {"type": "bytes", "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
-            {"type": "vec", "value": [{"type": "symbol", "value": "Wasm"},
-                                      {"type": "bytes", "value": NEW_WASM_B64}]},
-        ]),
-        data: serde_json::Value::Null,
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        // Staging refuses a consensus event without one (ADR 0059); the
-        // transaction is the ledger's first, its event the first of operation 0.
-        event_id: Some(xdr_parser::EventId {
+        // The ledger's first transaction; the first event of its operation 0.
+        event_id: xdr_parser::EventId {
             ledger_sequence: E2E_LEDGER,
             transaction_index: 1,
             operation_index: 0,
             event_index: 0,
-        }),
-        ledger_sequence: E2E_LEDGER,
+        },
+        origin: xdr_parser::EventOrigin::Operation(0),
+        body: EventBody {
+            event_type: ContractEventType::System,
+            contract_id: Some(contract_id.to_string()),
+            topics: serde_json::json!([
+                {"type": "symbol", "value": "executable_update"},
+                {"type": "vec", "value": [{"type": "symbol", "value": "Wasm"},
+                                          {"type": "bytes", "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
+                {"type": "vec", "value": [{"type": "symbol", "value": "Wasm"},
+                                          {"type": "bytes", "value": NEW_WASM_B64}]},
+            ]),
+            data: serde_json::Value::Null,
+        },
         created_at: 1_700_000_000,
     }
 }
@@ -143,16 +139,14 @@ fn fixture_event(contract_id: &str, token: &str, order: u16) -> ExtractedNftEven
         contract_id: contract_id.to_string(),
         token_id: token.to_string(),
         event_type: NftEventType::Transfer,
-        owner_account: Some(owner_account()),
-        event_order: order,
-        ledger_sequence: E2E_LEDGER,
+        owner: Some(owner()),
         created_at: 1_700_000_000,
-        event_id: Some(xdr_parser::EventId {
+        event_id: xdr_parser::EventId {
             ledger_sequence: E2E_LEDGER,
             transaction_index: 1,
             operation_index: 0,
             event_index: u32::from(order),
-        }),
+        },
     }
 }
 
@@ -180,7 +174,7 @@ async fn cleanup(cl: &clickhouse::Client, contracts: &[&str]) {
         format!("ALTER TABLE soroban_events DELETE WHERE ledger_sequence = {E2E_LEDGER}"),
         format!(
             "ALTER TABLE accounts DELETE WHERE account_id = '{}'",
-            owner_account()
+            owner()
         ),
     ] {
         let _ = cl.query(&stmt).execute().await;

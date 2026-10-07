@@ -11,7 +11,6 @@ use crate::common::cache_control;
 use crate::common::cursor;
 use crate::common::errors;
 use crate::common::extractors::Pagination;
-use crate::common::filters;
 use crate::common::pagination::{finalize_page, into_envelope};
 use crate::common::path;
 use crate::common::pool_asset_codes::normalize_asset_codes;
@@ -20,11 +19,14 @@ use crate::openapi::schemas::{ErrorEnvelope, Paginated};
 use crate::state::AppState;
 
 use super::dto::{
-    ChartParams, ChartResponse, ParticipantItem, PoolActivityCursor, PoolActivityItem,
-    PoolActivityParams, PoolAssetLeg, PoolEvent, PoolItem, PoolListCursor, PoolListParams,
-    SharesCursor,
+    ParticipantItem, PoolAssetLeg, PoolItem, PoolListCursor, PoolListParams, SharesCursor,
 };
 use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
+
+mod get_pool_chart;
+mod list_pool_activity;
+pub use get_pool_chart::*;
+pub use list_pool_activity::*;
 
 #[utoipa::path(
     get,
@@ -42,7 +44,9 @@ use super::queries::{self, PoolLegRow, PoolRow, ResolvedPoolListParams};
     responses(
         (status = 200, description = "Paginated participants list",
          body = Paginated<ParticipantItem>),
-        (status = 400, description = "Invalid pool_id, limit, or cursor", body = ErrorEnvelope),
+        (status = 400, description = "Invalid pool_id, limit, or cursor; or `not_indexed`: \
+         a soroban pool whose providers are not readable (no share token — a concentrated \
+         pool — or a token that publishes no decimals)", body = ErrorEnvelope),
         (status = 404, description = "Pool not found",  body = ErrorEnvelope),
         (status = 500, description = "Database error",  body = ErrorEnvelope),
     )
@@ -71,17 +75,33 @@ pub async fn list_participants(
     // existence answer — so they go out together (task 0446). `exists` is still
     // what decides the 404 and is still checked first, so responses are
     // unchanged; the cost is one wasted page read when the pool is missing.
+    //
+    // A `C…` id is a soroban pool: its providers are the holders of its share
+    // token, not `lp_positions` rows.
     let ch = state.ch();
-    let (exists, fetched) = tokio::join!(
-        queries::pool_exists(&ch, &pool_id_hex),
-        queries::fetch_participants(
-            &ch,
-            &pool_id_hex,
-            pagination.cursor.as_ref(),
-            fetch_limit,
-            direction,
-        ),
-    );
+    let soroban = pool_id.starts_with('C');
+    let (exists, fetched) = tokio::join!(queries::pool_exists(&ch, &pool_id_hex), async {
+        if soroban {
+            queries::fetch_soroban_participants(
+                &ch,
+                &pool_id_hex,
+                pagination.cursor.as_ref(),
+                fetch_limit,
+                direction,
+            )
+            .await
+        } else {
+            queries::fetch_participants(
+                &ch,
+                &pool_id_hex,
+                pagination.cursor.as_ref(),
+                fetch_limit,
+                direction,
+            )
+            .await
+            .map(Some)
+        }
+    },);
     match exists.map_err(|e| e.to_string()) {
         Ok(true) => {}
         Ok(false) => return errors::not_found("liquidity pool not found"),
@@ -92,9 +112,17 @@ pub async fn list_participants(
     }
 
     let mut rows = match fetched.map_err(|e| e.to_string()) {
-        Ok(r) => r,
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return errors::bad_request(
+                errors::NOT_INDEXED,
+                "this pool's providers are not indexed: it has no share token \
+                 (a concentrated pool keeps positions), or the token publishes no \
+                 decimals",
+            );
+        }
         Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_participants");
+            tracing::error!(pool_id = %pool_id, soroban, error = %e, "DB error in the participants read");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -111,7 +139,7 @@ pub async fn list_participants(
         |dir, last| {
             cursor::encode(
                 &SharesCursor {
-                    shares: last.shares.clone(),
+                    shares: last.cursor_shares.clone(),
                     account_id: last.account_id_surrogate,
                 },
                 dir,
@@ -125,7 +153,6 @@ pub async fn list_participants(
             account: r.account,
             shares: r.shares,
             share_percentage: r.share_percentage,
-            first_deposit_ledger: r.first_deposit_ledger,
             last_updated_ledger: r.last_updated_ledger,
         })
         .collect();
@@ -156,6 +183,7 @@ fn map_leg(leg: PoolLegRow) -> PoolAssetLeg {
         symbol: leg.symbol,
         icon_url: leg.icon_url,
         reserve: leg.reserve,
+        decimals: leg.decimals,
     }
 }
 
@@ -171,8 +199,7 @@ fn map_pool_item(row: PoolRow) -> PoolItem {
         fee_bps: row.fee_bps,
         fee_percent: row.fee_percent,
         created_at_ledger: row.created_at_ledger,
-        participant_count: (row.pool_kind == domain::PoolKind::Classic)
-            .then_some(row.participant_count),
+        participant_count: row.participant_count,
         latest_snapshot_ledger: row.latest_snapshot_ledger,
         total_shares: row.total_shares,
         tvl: row.tvl,
@@ -352,356 +379,50 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
             .collect(),
         fee_bps: row.fee_bps,
     };
-    match queries::fetch_pool_usd_analytics(
-        &state.ch(),
-        &pool_id_hex,
-        &ctx,
-        &row.legs
-            .iter()
-            .map(|l| l.reserve.as_deref())
-            .collect::<Vec<_>>(),
-    )
-    .await
-    {
+    let reserves: Vec<Option<&str>> = row.legs.iter().map(|l| l.reserve.as_deref()).collect();
+    let leg_decimals: Vec<Option<u32>> = row.legs.iter().map(|l| l.decimals).collect();
+    let soroban = row.pool_kind == domain::PoolKind::Soroban;
+    let ch = state.ch();
+    let (analytics, soroban_count) = tokio::join!(
+        queries::fetch_pool_usd_analytics(
+            &ch,
+            &pool_id_hex,
+            row.pool_kind,
+            &ctx,
+            &reserves,
+            &leg_decimals,
+        ),
+        async {
+            if soroban {
+                queries::count_soroban_participants(&ch, &pool_id_hex).await
+            } else {
+                Ok(None)
+            }
+        },
+    );
+    match analytics {
         Ok(analytics) => {
             row.tvl = analytics.tvl;
-            // The analytics read "no snapshot in the window" as a zero-volume
-            // day. True for a classic pool, whose every trade writes a
-            // snapshot; a soroban pool writes none, so its `0.00` would be a
-            // claim, not a measurement — nothing records its trades yet.
-            if row.pool_kind == domain::PoolKind::Classic {
-                row.volume = analytics.volume;
-                row.fee_revenue = analytics.fee_revenue;
-            }
+            row.volume = analytics.volume;
+            row.fee_revenue = analytics.fee_revenue;
         }
         Err(e) => {
             tracing::error!("DB error in fetch_pool_usd_analytics({pool_id}): {e}");
         }
     }
 
-    let mut resp = Json(map_pool_item(row)).into_response();
+    let mut item = map_pool_item(row);
+    // A soroban pool's providers are its share token's holders — the count
+    // the participants section lists. Degrades to "not indexed" on error.
+    match soroban_count {
+        Ok(n) if soroban => item.participant_count = n,
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!(pool_id = %pool_id, error = %e, "DB error in count_soroban_participants");
+        }
+    }
+    let mut resp = Json(item).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
-    resp
-}
-
-/// The `allowed` list a `filter[event]` rejection returns. Derived from the
-/// enum's own spellings rather than retyped, so it cannot advertise a value
-/// `PoolEvent::from_param` would then refuse.
-const ALLOWED_EVENTS: [&str; 3] = [
-    PoolEvent::Trade.as_param(),
-    PoolEvent::Deposit.as_param(),
-    PoolEvent::Withdrawal.as_param(),
-];
-
-/// `GET /v1/liquidity-pools/{pool_id}/activity` — the pool's operations
-/// (task 0491, issue #371).
-///
-/// Supersedes `/transactions`, whose row was a transaction. That unit could
-/// not carry an honest `Event` chip (a bundled deposit + trade collapsed to
-/// one label), forced the Amount cell to stack figures that must not be
-/// summed, and made a trades filter inexpressible — "trades only" has no
-/// truthful answer for a transaction that deposits *and* trades. The old path
-/// stays mounted until the frontend moves to this one (task 0491 step 3),
-/// which is also when its handler, DTO and query go.
-#[utoipa::path(
-    get,
-    path = "/liquidity-pools/{pool_id}/activity",
-    tag = "liquidity-pools",
-    params(
-        ("pool_id" = String, Path,
-         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
-        ("limit" = Option<u32>, Query,
-         description = "Items per page (1–100, default 20).",
-         minimum = 1, maximum = 100),
-        ("cursor" = Option<String>, Query,
-         description = "Opaque pagination cursor from a previous response."),
-        ("filter[event]" = Option<String>, Query,
-         description = "Restrict to `trade`, `deposit` or `withdrawal`."),
-    ),
-    responses(
-        (status = 200, description = "Paginated pool activity, one row per operation",
-         body = Paginated<PoolActivityItem>),
-        (status = 400, description = "Invalid pool_id, limit, cursor, or event", body = ErrorEnvelope),
-        (status = 404, description = "Pool not found",  body = ErrorEnvelope),
-        (status = 500, description = "Database error",  body = ErrorEnvelope),
-    )
-)]
-pub async fn list_pool_activity(
-    State(state): State<AppState>,
-    Path(pool_id): Path<String>,
-    pagination: Pagination<PoolActivityCursor>,
-    Query(params): Query<PoolActivityParams>,
-) -> Response {
-    let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
-        Ok(hex) => hex,
-        Err(resp) => return resp,
-    };
-
-    // The pool's leg surrogates, which double as this path's existence
-    // check: the driver pivots `pool_operation_amounts.asset_id` onto them, so
-    // the read cannot run without them and a missing pool is one seek away
-    // (task 0279's pairing, kept).
-    let legs = queries::fetch_pool_asset_ids(&state.ch(), &pool_id_hex)
-        .await
-        .map_err(|e| e.to_string());
-    let leg_ids = match legs {
-        Ok(Some(ids)) => ids,
-        Ok(None) => return errors::not_found("liquidity pool not found"),
-        Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_asset_ids");
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
-
-    // Validated here rather than by serde on the way in, so a bad value gets
-    // this API's error envelope with the allowed list — same shape the chart's
-    // `interval` returns.
-    let event = match params.event.as_deref() {
-        Some(s) => match PoolEvent::from_param(s) {
-            Some(e) => Some(e),
-            None => {
-                return errors::bad_request_with_details(
-                    errors::INVALID_FILTER,
-                    "filter[event] must be one of: trade, deposit, withdrawal",
-                    serde_json::json!({
-                        "param": "filter[event]",
-                        "received": s,
-                        "allowed": ALLOWED_EVENTS,
-                    }),
-                );
-            }
-        },
-        None => None,
-    };
-
-    let fetched = queries::fetch_pool_activity(
-        &state.ch(),
-        &pool_id_hex,
-        &leg_ids,
-        pagination.fetch_limit(),
-        pagination.cursor.as_ref(),
-        pagination.direction,
-        event,
-    )
-    .await
-    .map_err(|e| e.to_string());
-    let mut rows = match fetched {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_activity");
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
-
-    let page = finalize_page(
-        &mut rows,
-        pagination.limit,
-        pagination.direction,
-        pagination.has_predecessor(),
-        |dir, r| {
-            cursor::encode(
-                &PoolActivityCursor {
-                    ledger_sequence: r.ledger_sequence,
-                    application_order: r.application_order,
-                    operation_index: r.operation_index,
-                },
-                dir,
-            )
-        },
-    );
-    let data: Vec<PoolActivityItem> = rows
-        .into_iter()
-        .map(|r| PoolActivityItem {
-            transaction_hash: r.transaction_hash,
-            ledger_sequence: r.ledger_sequence,
-            // The operation's 1-based position (the `#op-N` anchor); the
-            // tables store the 0-based index (ADR 0059).
-            application_order: r.operation_index + 1,
-            event: r.event,
-            amounts: r.amounts,
-            source_account: r.source_account,
-            pools_crossed: r.pools_crossed,
-            created_at: r.created_at,
-        })
-        .collect();
-
-    let mut resp = Json(into_envelope(data, page)).into_response();
-    cache_control::attach(&mut resp, cache_control::SHORT);
-    resp
-}
-
-const ALLOWED_INTERVALS: &[&str] = &["1h", "1d", "1w"];
-
-/// Hard cap on the number of buckets a single chart request can produce.
-///
-/// Without a cap a malicious / buggy caller could request a 10-year window
-/// at `interval=1h` (≈ 87 600 buckets), which forces the planner into a
-/// large GROUP BY + ARRAY_AGG aggregation. 1 000 buckets covers every
-/// realistic UI need (≈ 41 days at 1h, ≈ 2.7 years at 1d, ≈ 19 years at
-/// 1w) and stays cheap on the snapshots index.
-const MAX_CHART_BUCKETS: i64 = 1_000;
-
-/// Approximate bucket width in seconds for each allowlisted interval.
-/// Used only for the bucket-count guard before SQL — `date_trunc`
-/// computes the actual buckets.
-fn interval_seconds(interval: &str) -> i64 {
-    match interval {
-        "1h" => 3_600,
-        "1d" => 86_400,
-        "1w" => 604_800,
-        // unreachable — handler validates against ALLOWED_INTERVALS first.
-        _ => 1,
-    }
-}
-
-#[utoipa::path(
-    get,
-    path = "/liquidity-pools/{pool_id}/chart",
-    tag = "liquidity-pools",
-    params(
-        ("pool_id" = String, Path,
-         description = "Pool ID — a classic pool's SEP-23 strkey (`L…`) or a soroban pool's contract address (`C…`), 56 chars."),
-        ChartParams,
-    ),
-    responses(
-        (status = 200, description = "Time-bucketed pool chart series", body = ChartResponse),
-        (status = 400, description = "Invalid pool_id / interval / from / to", body = ErrorEnvelope),
-        (status = 404, description = "Pool not found", body = ErrorEnvelope),
-        (status = 500, description = "Database error", body = ErrorEnvelope),
-    ),
-)]
-pub async fn get_pool_chart(
-    State(state): State<AppState>,
-    Path(pool_id): Path<String>,
-    Query(params): Query<ChartParams>,
-) -> Response {
-    let pool_id_hex = match path::pool_id_strkey(&pool_id, "pool_id") {
-        Ok(hex) => hex,
-        Err(resp) => return resp,
-    };
-
-    // All three params are optional. Defaults are tuned per interval so a
-    // bare `?` request produces a useful chart without bucket-cap
-    // violations:
-    //   1h → last 7 days     (168 buckets)
-    //   1d → last 90 days    ( 90 buckets, ≈ 3 months)
-    //   1w → last 104 weeks  (104 buckets, ≈ 2 years)
-    let interval = match params.interval.as_deref() {
-        Some(s) if ALLOWED_INTERVALS.contains(&s) => s.to_string(),
-        Some(s) => {
-            return errors::bad_request_with_details(
-                errors::INVALID_FILTER,
-                "interval must be one of: 1h, 1d, 1w",
-                serde_json::json!({
-                    "param": "interval",
-                    "received": s,
-                    "allowed": ALLOWED_INTERVALS,
-                }),
-            );
-        }
-        None => "1d".to_string(),
-    };
-
-    let to = match params.to.as_deref() {
-        Some(v) => match filters::parse_iso8601(v, "to") {
-            Ok(d) => d,
-            Err(resp) => return resp,
-        },
-        None => chrono::Utc::now(),
-    };
-    let from = match params.from.as_deref() {
-        Some(v) => match filters::parse_iso8601(v, "from") {
-            Ok(d) => d,
-            Err(resp) => return resp,
-        },
-        None => {
-            // Default window matches the interval — see comment above.
-            let back = match interval.as_str() {
-                "1h" => chrono::Duration::days(7),
-                "1d" => chrono::Duration::days(90),
-                "1w" => chrono::Duration::weeks(104),
-                _ => unreachable!("interval already validated against allowlist"),
-            };
-            to - back
-        }
-    };
-    if from >= to {
-        return errors::bad_request_with_details(
-            errors::INVALID_FILTER,
-            "from must be strictly before to",
-            serde_json::json!({ "from": from.to_rfc3339(), "to": to.to_rfc3339() }),
-        );
-    }
-
-    // Bucket-count guard: reject ranges that would force the aggregation
-    // beyond `MAX_CHART_BUCKETS`. `date_trunc` aligns buckets to wall-clock
-    // boundaries — a span that crosses a boundary mid-interval produces
-    // one extra bucket. Ceil division covers the "span just under N
-    // intervals" case; `+ 1` covers the wall-clock alignment case.
-    let interval_secs = interval_seconds(&interval);
-    let span_seconds = (to - from).num_seconds();
-    // Manual ceil division (`i64::div_ceil` is still unstable as of stable
-    // Rust 2024). `+ 1` covers the wall-clock alignment edge.
-    let approx_buckets = (span_seconds + interval_secs - 1) / interval_secs + 1;
-    if approx_buckets > MAX_CHART_BUCKETS {
-        return errors::bad_request_with_details(
-            errors::INVALID_FILTER,
-            format!(
-                "(to - from) at interval={interval} would produce ~{approx_buckets} buckets; \
-                 maximum is {MAX_CHART_BUCKETS}"
-            ),
-            serde_json::json!({
-                "interval": interval,
-                "approx_buckets": approx_buckets,
-                "max_buckets": MAX_CHART_BUCKETS,
-                "from": from.to_rfc3339(),
-                "to": to.to_rfc3339(),
-            }),
-        );
-    }
-
-    // Doubles as the 404 existence gate (one row on `liquidity_pools`) and
-    // supplies the leg identities + fee_bps the USD computation joins on.
-    //
-    // Stays SERIAL, unlike the gates in `list_participants` /
-    // `list_pool_transactions` (task 0446), and for two independent reasons.
-    // The chart read now CONSUMES `ctx`, so it is genuinely dependent — nothing
-    // to overlap. It also could not have been paired even before that: its
-    // `JOIN (SELECT … FROM ledgers WHERE closed_at …)` build side is
-    // materialised even when the left side is empty, and `MAX_CHART_BUCKETS`
-    // admits a ~19-year window, so speculatively running it cost a measured
-    // 43.7M rows / 4.66 s for a pool that does not exist, against 16.5k rows /
-    // 3.6 ms for the gate. Pool ids are user-supplied strkeys. If a future
-    // change breaks the data dependency, that measurement still stands.
-    let ctx = match queries::fetch_pool_price_context(&state.ch(), &pool_id_hex).await {
-        Ok(Some(ctx)) => ctx,
-        Ok(None) => return errors::not_found("liquidity pool not found"),
-        Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_price_context");
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
-
-    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
-        .await
-        .map_err(|e| e.to_string());
-    let data_points = match fetched {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(pool_id = %pool_id, error = %e, "DB error in fetch_pool_chart");
-            return errors::internal_error(errors::DB_ERROR, "database error");
-        }
-    };
-
-    let mut resp = Json(ChartResponse {
-        pool_id,
-        interval,
-        from,
-        to,
-        data_points,
-    })
-    .into_response();
-    cache_control::attach(&mut resp, cache_control::MEDIUM);
     resp
 }
 
@@ -710,3 +431,6 @@ mod normalize_asset_code_tests;
 
 #[cfg(test)]
 mod map_pool_item_tests;
+
+#[cfg(test)]
+mod participants_tests;

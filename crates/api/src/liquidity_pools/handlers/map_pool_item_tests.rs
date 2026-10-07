@@ -10,6 +10,7 @@ fn native_leg() -> PoolLegRow {
         symbol: None,
         icon_url: None,
         reserve: None,
+        decimals: Some(7),
     }
 }
 
@@ -22,6 +23,7 @@ fn usdc_leg() -> PoolLegRow {
         symbol: None,
         icon_url: None,
         reserve: None,
+        decimals: Some(7),
     }
 }
 
@@ -35,7 +37,7 @@ fn base_row() -> PoolRow {
         fee_percent: "0.30".into(),
         created_at_ledger: 100,
         cursor_ledger: 100,
-        participant_count: 0,
+        participant_count: Some(0),
         latest_snapshot_ledger: None,
         total_shares: None,
         tvl: None,
@@ -72,6 +74,7 @@ fn a_soroban_leg_carries_its_symbol() {
         symbol: Some("USDx".into()),
         icon_url: None,
         reserve: None,
+        decimals: Some(6),
     };
     let item = map_pool_item(row);
     assert_eq!(item.legs[1].symbol.as_deref(), Some("USDx"));
@@ -104,6 +107,7 @@ fn a_three_leg_pool_renders_all_three() {
         symbol: None,
         icon_url: None,
         reserve: None,
+        decimals: None,
     });
     let item = map_pool_item(row);
     assert_eq!(item.legs.len(), 3);
@@ -130,17 +134,6 @@ fn the_pool_id_renders_by_kind() {
     assert_eq!(soroban.pool_kind, domain::PoolKind::Soroban);
 }
 
-/// `lp_positions` holds classic providers only, so its count for a soroban
-/// pool is always 0 — the wire must say "not read", not "no providers".
-#[test]
-fn participant_count_is_null_for_a_soroban_pool() {
-    let mut row = base_row();
-    row.participant_count = 7;
-    assert_eq!(map_pool_item(row.clone()).participant_count, Some(7));
-    row.pool_kind = domain::PoolKind::Soroban;
-    assert_eq!(map_pool_item(row).participant_count, None);
-}
-
 /// The protocol name follows the pool's registering deployment: named for a
 /// claimed one, absent for a classic pool and for an unclaimed deployment.
 #[test]
@@ -161,4 +154,19 @@ fn a_pool_names_its_protocol_only_from_a_claimed_deployment() {
     unclaimed.pool_kind = domain::PoolKind::Soroban;
     unclaimed.deployment_id = 7;
     assert_eq!(map_pool_item(unclaimed).protocol, None);
+}
+
+/// The page scales a leg's raw activity amounts by this, so it must reach the
+/// wire unchanged — including `None`, a token that publishes no decimals.
+#[test]
+fn decimals_propagate_per_leg() {
+    let mut row = base_row();
+    row.legs[1].decimals = Some(18);
+    row.legs.push(PoolLegRow {
+        decimals: None,
+        ..native_leg()
+    });
+    let item = map_pool_item(row);
+    let decimals: Vec<Option<u32>> = item.legs.iter().map(|l| l.decimals).collect();
+    assert_eq!(decimals, vec![Some(7), Some(18), None]);
 }

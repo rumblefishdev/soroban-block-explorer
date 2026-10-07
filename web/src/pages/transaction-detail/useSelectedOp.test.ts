@@ -7,24 +7,28 @@ describe('resolveOp', () => {
     expect(resolveOp('', 3)).toBe(0);
   });
 
-  it('maps the 1-based fragment onto a 0-based index', () => {
-    expect(resolveOp('#op-2', 3)).toBe(1);
+  it('reads the fragment as the 0-based operation index', () => {
+    expect(resolveOp('#op-1', 3)).toBe(1);
   });
 
   it('accepts the last operation', () => {
-    expect(resolveOp('#op-3', 3)).toBe(2);
+    expect(resolveOp('#op-2', 3)).toBe(2);
   });
 
   it('resets a number past the end to the first operation', () => {
     // The regression this exists for: the index used to escape unclamped, so
-    // the card rendered operation 1 while the picker beside it — handed the
+    // the card rendered the first operation while the picker beside it — handed the
     // raw 98 — highlighted nothing.
     expect(resolveOp('#op-99', 1)).toBe(0);
     expect(resolveOp('#op-99', 4)).toBe(0);
   });
 
-  it('resets #op-0, which is below the 1-based range', () => {
+  it('selects the first operation for #op-0', () => {
     expect(resolveOp('#op-0', 2)).toBe(0);
+  });
+
+  it('resets #op-N when N equals the count, one past the last', () => {
+    expect(resolveOp('#op-2', 2)).toBe(0);
   });
 
   it('ignores a fragment that is not an operation reference', () => {

@@ -158,9 +158,9 @@ and read latency still require their own gates.
 - [ ] Historical coverage is gated partition by partition; every
       `asset_transfers` NFT row has its token id or a documented counted reject
 - [ ] Reconciliation by 0538's canonical event location reports zero unexplained
-      token-id mismatches against `nft_ownership`
+      token-id mismatches against `nft_ownership_changes`
 - [ ] The migration is deterministic on `ReplacingMergeTree`; no competing
-      version-less duplicates are introduced
+      version-less duplicates are introduced; it renames `op_index` / `event_pos_in_op` to `operation_index` / `event_index` (ADR 0059 rule 4, thread 348 A)
 - [ ] Account balance changes no longer infer NFT pieces from previous-owner
       history and retain the Alice/Bob/Carol, mint, burn, duplicate, and
       incomplete-data regression cases

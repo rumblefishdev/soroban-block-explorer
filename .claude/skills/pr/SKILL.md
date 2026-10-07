@@ -48,6 +48,10 @@ Format:
 - Bullet point 1 summarizing a key change
 - Bullet point 2
 - ...
+
+## Verified
+
+- `<command>` → `<output, trimmed>`
 ```
 
 Derive the summary bullets from `git diff {base}...HEAD --stat` and commit messages on the branch. Keep it to 3-5 bullets max. Focus on WHAT changed, not HOW.
@@ -62,6 +66,19 @@ The git hooks run the checks: `pre-commit` formats the staged files and runs
 lint, typecheck and test for the Nx projects they reach; `pre-push` does the
 same for the pushed commits and runs clippy when they touch Rust. Never bypass
 them. If one fails, fix the issue in a new commit.
+
+**Evidence on real data — required before step 6.** Tests prove the code
+matches our understanding; they do not prove the understanding. Before
+pushing, run the change against real data and put it in the PR body as a
+`## Verified` section: the exact command and its output, e.g. a `chq` read of
+production ClickHouse, the local API against production ClickHouse, a chain
+read over RPC, or a Playwright run on the real stack. A change real data
+cannot exercise (a pure move, CI config) says `N/A — <reason>`. No section,
+no PR: stop and run the check first.
+
+Why: "verify deeper — did you test it on real data?" was the most common
+correction across 413 sessions (18% of corrections, measured 2026-09-29),
+and 72% of `fix` commits corrected work from the same task within 7 days.
 
 ### 6. Push and create PR
 

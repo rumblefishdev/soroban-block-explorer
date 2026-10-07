@@ -2,7 +2,8 @@
 //!
 //! Implements the read-path component of ADR 0029: heavy fields (memo, signatures,
 //! full event topics/data, XDR blobs) not persisted in the DB are pulled on-demand
-//! from `s3://aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` at request time.
+//! from `s3://aws-public-blockchain/v1.1/stellar/ledgers/pubnet/` at request time
+//! (or the network folder named by `PUBLIC_ARCHIVE_PREFIX`, lore-0553).
 //!
 //! Callers pass a slice of ledger sequences and receive
 //! `Vec<Result<LedgerCloseMeta, FetchError>>` in input order, so each requested
@@ -25,10 +26,7 @@ use tracing::instrument;
 use self::key::build_s3_key;
 
 /// Public Stellar data archive bucket. No credentials required.
-pub const PUBLIC_ARCHIVE_BUCKET: &str = "aws-public-blockchain";
-
-/// S3 key prefix inside the bucket for pubnet ledgers.
-pub const PUBLIC_ARCHIVE_PREFIX: &str = "v1.1/stellar/ledgers/pubnet";
+pub const PUBLIC_ARCHIVE_BUCKET: &str = xdr_parser::public_archive::PUBLIC_BUCKET;
 
 /// Default per-request budget for public-archive S3 GETs. Chosen so that an
 /// end-to-end E3/E14 request completes well under API Gateway's 29s limit
@@ -93,12 +91,17 @@ pub enum FetchError {
 #[derive(Clone)]
 pub struct StellarArchiveFetcher {
     client: S3Client,
+    /// The network's folder in the bucket (`xdr_parser::public_archive`).
+    prefix: String,
 }
 
 impl StellarArchiveFetcher {
     /// Construct a fetcher from a pre-configured unsigned S3 client.
     pub fn new(client: S3Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            prefix: xdr_parser::public_archive::public_archive_prefix(),
+        }
     }
 
     /// Fetch, decompress, and deserialize a single ledger.
@@ -107,7 +110,7 @@ impl StellarArchiveFetcher {
     /// writes one ledger per file, so there is never more than one.
     #[instrument(skip(self), fields(ledger_seq = seq))]
     pub async fn fetch_ledger(&self, seq: u32) -> Result<LedgerCloseMeta, FetchError> {
-        let key = format!("{PUBLIC_ARCHIVE_PREFIX}/{}", build_s3_key(seq));
+        let key = format!("{}/{}", self.prefix, build_s3_key(seq));
 
         let compressed = self.download(seq, &key).await?;
 

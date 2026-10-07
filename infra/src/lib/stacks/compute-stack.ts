@@ -15,13 +15,20 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
+import { PublicLakeKeepalive } from './public-lake-keepalive.js';
 
 const DLQ_RETENTION_DAYS = 14;
 
+// SDF's public data lake bucket. Mirrors `PUBLIC_BUCKET` in
+// crates/xdr-parser/src/public_archive.rs: when BUCKET_NAME equals it, the
+// indexer reads with an unsigned us-east-2 client under PUBLIC_ARCHIVE_PREFIX.
+const PUBLIC_LAKE_BUCKET = 'aws-public-blockchain';
+
 export interface ComputeStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
-  readonly ledgerBucketArn: string;
-  readonly ledgerBucketName: string;
+  /** This environment's own ledger bucket; absent with `ledgerSource: 'public-lake'`. */
+  readonly ledgerBucketArn?: string;
+  readonly ledgerBucketName?: string;
   readonly cargoWorkspacePath: string;
 }
 
@@ -55,10 +62,13 @@ export class ComputeStack extends cdk.Stack {
     const { config, ledgerBucketArn, ledgerBucketName, cargoWorkspacePath } =
       props;
 
-    const ledgerBucket = s3.Bucket.fromBucketAttributes(this, 'LedgerBucket', {
-      bucketArn: ledgerBucketArn,
-      bucketName: ledgerBucketName,
-    });
+    const ledgerBucket =
+      ledgerBucketArn && ledgerBucketName
+        ? s3.Bucket.fromBucketAttributes(this, 'LedgerBucket', {
+            bucketArn: ledgerBucketArn,
+            bucketName: ledgerBucketName,
+          })
+        : undefined;
 
     const apiLogGroup = new logs.LogGroup(this, 'ApiLogGroup', {
       logGroupName: `/aws/lambda/${config.envName}-soroban-explorer-api`,
@@ -116,7 +126,16 @@ export class ComputeStack extends cdk.Stack {
       // turn on in-memory caching so repeat reads in the same execution
       // environment hit RAM, not Secrets Manager.
       PARAMETERS_SECRETS_EXTENSION_CACHE_ENABLED: 'true',
+      ...(config.clickhouseDatabase
+        ? { CLICKHOUSE_DATABASE: config.clickhouseDatabase }
+        : {}),
     };
+
+    // Both readers of ledger files — the indexer and the API's runtime
+    // enrichment — take the data-lake folder from here (task 0553).
+    const archivePrefixEnv: Record<string, string> = config.publicArchivePrefix
+      ? { PUBLIC_ARCHIVE_PREFIX: config.publicArchivePrefix }
+      : {};
 
     // ---------------------
     // SQS Dead-Letter Queue
@@ -189,7 +208,7 @@ export class ComputeStack extends cdk.Stack {
     // (to be copied into the Cloudflare Transform Rule) BEFORE the Lambda starts
     // requiring the header:
     //   phase 1  provisionEdgeSecret  → create the secret (Lambda NOT yet armed)
-    //   (then)   copy value → rf-domains Transform Rule injects X-Edge-Secret
+    //   (then)   copy value → dns-cloudformation Transform Rule injects X-Edge-Secret
     //   phase 2  enableEdgeSecretLock → set EDGE_SECRET env → middleware enforces
     // RETAIN so rotation is deliberate.
     const edgeSecret = config.provisionEdgeSecret
@@ -263,6 +282,7 @@ export class ComputeStack extends cdk.Stack {
       },
       environment: {
         ...sharedEnv,
+        ...archivePrefixEnv,
         // Same level as the other two Lambdas (lore-0455, inconsistency I1).
         // The API's EnvFilter::from_default_env() falls back to ERROR when
         // RUST_LOG is unset, which silently dropped every warn!/info! —
@@ -294,12 +314,7 @@ export class ComputeStack extends cdk.Stack {
         // (task 0465): WasmCodeFetcher round-robins these on failure. Same
         // keyless pool the enrichment worker uses (see its block below);
         // without this env the fetcher falls back to the single SDF default.
-        SOROBAN_RPC_URLS: [
-          'https://mainnet.sorobanrpc.com',
-          'https://soroban-rpc.mainnet.stellar.gateway.fm/',
-          'https://rpc.ankr.com/stellar_soroban',
-          'https://stellar.api.onfinality.io/public',
-        ].join(','),
+        SOROBAN_RPC_URLS: config.sorobanRpcUrls.join(','),
         // Origin lock (task 0277), phase 2: arm the middleware by injecting the
         // shared secret as EDGE_SECRET. The Lambda's edge_lock middleware then
         // rejects any request (except /health) lacking a matching X-Edge-Secret —
@@ -349,7 +364,8 @@ export class ComputeStack extends cdk.Stack {
       reservedConcurrentExecutions: config.indexerLambdaConcurrency,
       environment: {
         ...sharedEnv,
-        BUCKET_NAME: ledgerBucket.bucketName,
+        ...archivePrefixEnv,
+        BUCKET_NAME: ledgerBucket?.bucketName ?? PUBLIC_LAKE_BUCKET,
         RUST_LOG: 'info',
         ENRICHMENT_QUEUE_URL: enrichmentQueue.queueUrl,
         MTLS_SECRET_NAME: processorSecretName,
@@ -358,63 +374,81 @@ export class ComputeStack extends cdk.Stack {
     this.processorFunction = processorFunction;
     grantMtlsSecretRead(this, processorFunction, processorSecretName);
 
-    // ---------------------
-    // Ledger events fan-out topic (task 0306)
-    // ---------------------
-    // A second tenant (prices-api, same AWS account) needs the same
-    // `ObjectCreated` doorbells. S3 allows only ONE destination per overlapping
-    // `event + suffix`, so we fan out through SNS: the bucket publishes to this
-    // topic, and each consumer subscribes its own SQS queue. prices-api owns the
-    // subscribe side via its own deploy-role IAM (no cross-account policy needed
-    // while we share an account); it reads the topic ARN from SSM below.
-    const ledgerEventsTopic = new sns.Topic(this, 'LedgerEventsTopic', {
-      topicName: `${config.envName}-ledger-events`,
-    });
-
-    // S3 `ObjectCreated` → SNS (was `SqsDestination(ingestQueue)`). Always wired
-    // (not gated on concurrency) so a paused indexer
-    // (`indexerLambdaConcurrency = 0`) still captures events durably in the
-    // queue instead of dropping them on the floor. `SnsDestination` auto-adds
-    // the topic policy letting S3 publish.
-    ledgerBucket.addEventNotification(
-      s3.EventType.OBJECT_CREATED,
-      new s3n.SnsDestination(ledgerEventsTopic),
-      { suffix: '.xdr.zst' }
-    );
-
-    // SNS → indexer's ingest queue. Our indexer treats the SQS message as a
-    // content-free doorbell — `SqsMessage` (crates/indexer/src/handler/mod.rs)
-    // deserializes only `messageId` and ignores the body — so the SNS envelope
-    // vs raw-event body shape does NOT affect ingestion either way.
-    // `rawMessageDelivery: true` is kept because (a) it leaves the SQS body
-    // byte-identical to the legacy direct `S3 → SQS` event and (b) it is the
-    // shape the prices-api consumer expects (it DOES read the S3 object key from
-    // the body). The indexer's ESM and `messageId` extraction are unchanged
-    // regardless of this flag.
-    ledgerEventsTopic.addSubscription(
-      new subs.SqsSubscription(ingestQueue, { rawMessageDelivery: true })
-    );
-
-    // ---------------------
-    // Cross-team SSM hand-off (task 0306)
-    // ---------------------
-    // prices-api's CDK reads these at ITS deploy time (never at Lambda runtime)
-    // to subscribe its own queue to the topic and locate the ledger bucket. The
-    // `/platform/{env}/*` namespace is the contract its stack already references
-    // (distinct from our own `/soroban-explorer/{env}/*` keys). The network
-    // passphrase is the public mainnet/testnet value, not a secret.
-    const platformParams: Record<string, string> = {
-      'ledger-events-topic-arn': ledgerEventsTopic.topicArn,
-      'stellar-ledger-data-bucket-name': ledgerBucketName,
-      'stellar-ledger-data-bucket-arn': ledgerBucketArn,
-      'ch-domain': config.chDomainName,
-      'stellar-network-passphrase': config.stellarNetworkPassphrase,
-    };
-    for (const [key, value] of Object.entries(platformParams)) {
-      new ssm.StringParameter(this, `Platform-${key}`, {
-        parameterName: `/platform/${config.envName}/${key}`,
-        stringValue: value,
+    // The fan-out and the hand-off below describe OUR ledger bucket; with
+    // `public-lake` there is none (task 0553).
+    if (ledgerBucket && ledgerBucketArn && ledgerBucketName) {
+      // ---------------------
+      // Ledger events fan-out topic (task 0306)
+      // ---------------------
+      // A second tenant (prices-api, same AWS account) needs the same
+      // `ObjectCreated` doorbells. S3 allows only ONE destination per overlapping
+      // `event + suffix`, so we fan out through SNS: the bucket publishes to this
+      // topic, and each consumer subscribes its own SQS queue. prices-api owns the
+      // subscribe side via its own deploy-role IAM (no cross-account policy needed
+      // while we share an account); it reads the topic ARN from SSM below.
+      const ledgerEventsTopic = new sns.Topic(this, 'LedgerEventsTopic', {
+        topicName: `${config.envName}-ledger-events`,
       });
+
+      // S3 `ObjectCreated` → SNS (was `SqsDestination(ingestQueue)`). Always wired
+      // (not gated on concurrency) so a paused indexer
+      // (`indexerLambdaConcurrency = 0`) still captures events durably in the
+      // queue instead of dropping them on the floor. `SnsDestination` auto-adds
+      // the topic policy letting S3 publish.
+      ledgerBucket.addEventNotification(
+        s3.EventType.OBJECT_CREATED,
+        new s3n.SnsDestination(ledgerEventsTopic),
+        { suffix: '.xdr.zst' }
+      );
+
+      // SNS → indexer's ingest queue. Our indexer treats the SQS message as a
+      // content-free doorbell — `SqsMessage` (crates/indexer/src/handler/mod.rs)
+      // deserializes only `messageId` and ignores the body — so the SNS envelope
+      // vs raw-event body shape does NOT affect ingestion either way.
+      // `rawMessageDelivery: true` is kept because (a) it leaves the SQS body
+      // byte-identical to the legacy direct `S3 → SQS` event and (b) it is the
+      // shape the prices-api consumer expects (it DOES read the S3 object key from
+      // the body). The indexer's ESM and `messageId` extraction are unchanged
+      // regardless of this flag.
+      ledgerEventsTopic.addSubscription(
+        new subs.SqsSubscription(ingestQueue, { rawMessageDelivery: true })
+      );
+
+      // ---------------------
+      // Cross-team SSM hand-off (task 0306)
+      // ---------------------
+      // prices-api's CDK reads these at ITS deploy time (never at Lambda runtime)
+      // to subscribe its own queue to the topic and locate the ledger bucket. The
+      // `/platform/{env}/*` namespace is the contract its stack already references
+      // (distinct from our own `/soroban-explorer/{env}/*` keys). The network
+      // passphrase is the public mainnet/testnet value, not a secret.
+      const platformParams: Record<string, string> = {
+        'ledger-events-topic-arn': ledgerEventsTopic.topicArn,
+        'stellar-ledger-data-bucket-name': ledgerBucketName,
+        'stellar-ledger-data-bucket-arn': ledgerBucketArn,
+        'ch-domain': config.chDomainName,
+        'stellar-network-passphrase': config.stellarNetworkPassphrase,
+      };
+      for (const [key, value] of Object.entries(platformParams)) {
+        new ssm.StringParameter(this, `Platform-${key}`, {
+          parameterName: `/platform/${config.envName}/${key}`,
+          stringValue: value,
+        });
+      }
+    } else {
+      // No bucket of ours to publish events: the indexer paces itself, and a
+      // once-a-minute keepalive restarts it if that stops.
+      new PublicLakeKeepalive(this, 'PublicLakeKeepalive', {
+        envName: config.envName,
+        ingestQueue,
+        enabled: config.indexerLambdaConcurrency > 0,
+      });
+      // The indexer queues its own next wake-up, one per ledger it expects.
+      processorFunction.addEnvironment(
+        'INGEST_QUEUE_URL',
+        ingestQueue.queueUrl
+      );
+      ingestQueue.grantSendMessages(processorFunction);
     }
 
     // SQS → indexer event-source-mapping. Gated on concurrency so a
@@ -484,7 +518,7 @@ export class ComputeStack extends cdk.Stack {
     // ---------------------
     // IAM Grants (non-mTLS)
     // ---------------------
-    ledgerBucket.grantRead(processorFunction);
+    ledgerBucket?.grantRead(processorFunction);
     processorFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['cloudwatch:PutMetricData'],

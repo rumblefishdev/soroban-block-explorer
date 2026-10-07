@@ -1,8 +1,8 @@
 use super::*;
 use domain::{ContractEventType, OperationType};
 use serde_json::json;
-use xdr_parser::types::ExtractedEvent;
-use xdr_parser::{EventAsset, EventSource};
+use xdr_parser::types::{EventBody, ExtractedEvent};
+use xdr_parser::{EventAsset, EventId, EventOrigin};
 
 const TX: &str = "0a120260ab2a4d3e7f9c1b5d6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1";
 const G_SENDER: &str = "GARNRDKOUGVQ6FMJLL5RPDU6NG36LZHTEOIAWZPNOKFNKNKCOJEC3WMZ";
@@ -15,14 +15,14 @@ const XLM_SAC: &str = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
 #[test]
 fn sep50_token_number_does_not_become_a_persisted_amount() {
     const NFT_CONTRACT: &str = "CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA";
-    let mut ev = event(EventSource::PerOp, 0, Some((0, 0)));
-    ev.contract_id = Some(NFT_CONTRACT.into());
+    let mut ev = event(0, 0);
+    ev.body.contract_id = Some(NFT_CONTRACT.into());
     // No asset label: this event is attributed to its own emitter, never USDC.
-    ev.topics = json!([
+    ev.body.topics = json!([
         {"type":"sym", "value":"mint"},
         {"type":"address", "value":G_RECEIVER}
     ]);
-    ev.data = xdr_parser::scval::scval_to_typed_json(&stellar_xdr::ScVal::U128(
+    ev.body.data = xdr_parser::scval::scval_to_typed_json(&stellar_xdr::ScVal::U128(
         stellar_xdr::UInt128Parts {
             hi: 0,
             lo: 1_000_000_000,
@@ -101,20 +101,23 @@ fn transfer(
     }
 }
 
-fn event(source: EventSource, position_in_tx: u32, op: Option<(u32, u32)>) -> ExtractedEvent {
+/// The event at position `pos` of operation `op`.
+fn event(op: u16, pos: u32) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: TX.into(),
-        event_type: ContractEventType::Contract,
-        source,
-        contract_id: Some(XLM_SAC.into()),
-        topics: json!([]),
-        data: json!({ "type": "void" }),
-        position_in_tx,
-        op_index: op.map(|o| o.0),
-        event_pos_in_op: op.map(|o| o.1),
-        stage: None,
-        event_id: None,
-        ledger_sequence: 64_259_660,
+        event_id: EventId {
+            ledger_sequence: 64_259_660,
+            transaction_index: 1,
+            operation_index: op,
+            event_index: pos,
+        },
+        origin: EventOrigin::Operation(op),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(XLM_SAC.into()),
+            topics: json!([]),
+            data: json!({ "type": "void" }),
+        },
         created_at: 0,
     }
 }
@@ -122,7 +125,7 @@ fn event(source: EventSource, position_in_tx: u32, op: Option<(u32, u32)>) -> Ex
 #[test]
 fn plain_payment_row_carries_ids_kinds_and_the_official_identity() {
     let txs = [tx(None, None)];
-    let ops = [(TX.to_string(), vec![payment_op(1, G_RECEIVER, None, None)])];
+    let ops = [(TX.to_string(), vec![payment_op(0, G_RECEIVER, None, None)])];
     let t = [transfer(
         0,
         0,
@@ -159,7 +162,7 @@ fn muxed_destination_comes_from_the_envelope_and_keeps_the_g_surrogate() {
     let txs = [tx(None, None)];
     let ops = [(
         TX.to_string(),
-        vec![payment_op(1, G_RECEIVER, Some(3_539_365_402), None)],
+        vec![payment_op(0, G_RECEIVER, Some(3_539_365_402), None)],
     )];
     let t = [transfer(
         0,
@@ -187,7 +190,7 @@ fn muxed_id_is_not_borrowed_from_an_op_whose_destination_is_someone_else() {
     let txs = [tx(None, None)];
     let ops = [(
         TX.to_string(),
-        vec![payment_op(1, G_RECEIVER, Some(42), None)],
+        vec![payment_op(0, G_RECEIVER, Some(42), None)],
     )];
     let t = [transfer(
         0,
@@ -210,8 +213,8 @@ fn muxed_source_comes_from_the_op_override_or_the_tx_source() {
     let ops = [(
         TX.to_string(),
         vec![
-            payment_op(1, G_RECEIVER, None, None),
-            payment_op(2, G_RECEIVER, None, Some((G_RECEIVER, Some(9)))),
+            payment_op(0, G_RECEIVER, None, None),
+            payment_op(1, G_RECEIVER, None, Some((G_RECEIVER, Some(9)))),
         ],
     )];
     let t = [
@@ -350,7 +353,7 @@ fn a_transfer_for_an_unknown_transaction_is_a_staging_error_not_a_dropped_row() 
 fn muxed_id_follows_only_the_transfer_of_the_ops_delivered_asset() {
     const USDC_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
     let txs = [tx(None, None)];
-    let mut path = payment_op(1, G_RECEIVER, Some(3_539_365_402), None);
+    let mut path = payment_op(0, G_RECEIVER, Some(3_539_365_402), None);
     path.op_type = OperationType::PathPaymentStrictSend;
     path.details = json!({
         "destination": G_RECEIVER,

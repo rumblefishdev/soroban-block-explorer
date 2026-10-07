@@ -3,27 +3,27 @@
 # CLOUDFLARE_API_TOKEN (providers.tf) and the mTLS cert/key from ./certs/
 # (gitignored, origin-lock.tf).
 
-# ── Cross-repo reference: the zone owned by rf-domains ─────────────────
+# ── Cross-repo reference: the zone owned by dns-cloudformation ─────────────────
 #
-# The zone `rumblefishdev.com` is created and owned by the rf-domains repo
+# The zone `rumblefishdev.com` is created and owned by the dns-cloudformation repo
 # (model A, D9/D10). We reference it by id rather than create it. Copy the
-# value from rf-domains' `zone_id` output (or the Cloudflare dashboard) into
+# value from dns-cloudformation's `zone_id` output (or the Cloudflare dashboard) into
 # terraform.tfvars. The zone id is an identifier, not a secret.
 #
-# Ordering: rf-domains must apply (zone exists) BEFORE this module's first
+# Ordering: dns-cloudformation must apply (zone exists) BEFORE this module's first
 # apply. (Alternative: a `data "cloudflare_zone"` lookup by name — avoided here
 # to keep a single, explicit cross-repo contract and a narrower token scope.)
 variable "cloudflare_zone_id" {
-  description = "Cloudflare zone id of rumblefishdev.com (from rf-domains' zone_id output)."
+  description = "Cloudflare zone id of rumblefishdev.com (from dns-cloudformation's zone_id output)."
   type        = string
 
   # Cheap guardrail: a Cloudflare zone id is 32 lowercase hex chars. Catches an
   # empty value, the REPLACE_WITH_… placeholder, or a typo before it silently
   # writes the API record/AOP into the wrong (or nonexistent) zone. It does NOT
-  # prove the id is the RIGHT zone — copy it from rf-domains' zone_id output.
+  # prove the id is the RIGHT zone — copy it from dns-cloudformation's zone_id output.
   validation {
     condition     = can(regex("^[0-9a-f]{32}$", var.cloudflare_zone_id))
-    error_message = "cloudflare_zone_id must be a 32-char hex Cloudflare zone id (copy from rf-domains' zone_id output)."
+    error_message = "cloudflare_zone_id must be a 32-char hex Cloudflare zone id (copy from dns-cloudformation's zone_id output)."
   }
 }
 

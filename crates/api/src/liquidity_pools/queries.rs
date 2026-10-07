@@ -52,9 +52,11 @@ pub struct PoolRow {
     /// The wire `PoolListCursor.created_at_ledger` slot stays opaque (ADR
     /// 0008); only this field feeds the cursor builder. Unused by detail.
     pub cursor_ledger: i64,
-    /// `COUNT(*) FROM lp_positions WHERE pool_id = lp.pool_id AND shares > 0`.
-    /// Task 0246 — see DTO doc for surfacing rules.
-    pub participant_count: i64,
+    /// Providers: a classic pool's `lp_positions` with shares > 0 (task 0246);
+    /// a soroban pool's share-token holders (`balance_aggregates` on the
+    /// list, a live count on the detail). `None` where they are not read — a pool
+    /// with no share token.
+    pub participant_count: Option<i64>,
     pub latest_snapshot_ledger: Option<i64>,
     pub total_shares: Option<String>,
     pub tvl: Option<String>,
@@ -81,6 +83,8 @@ pub struct PoolLegRow {
     pub icon_url: Option<String>,
     /// What the pool holds of this leg, raw units — see `PoolAssetLeg::reserve`.
     pub reserve: Option<String>,
+    /// The leg's scale where it is a fact — see `PoolAssetLeg::decimals`.
+    pub decimals: Option<u32>,
 }
 
 /// Turn one pool's stored leg surrogates into the rows the handler finishes.
@@ -95,11 +99,13 @@ fn leg_rows(
     icons: &HashMap<i64, String>,
     reserves: &[Option<String>],
 ) -> Vec<PoolLegRow> {
+    let decimals = soroban_reserves::leg_decimals(leg_ids, identities);
     leg_ids
         .iter()
         .enumerate()
         .map(|(i, id)| {
             let reserve = reserves.get(i).cloned().flatten();
+            let decimals = decimals[i];
             match identities.get(id) {
                 Some(r) if r.known => PoolLegRow {
                     family: r.asset_type,
@@ -114,6 +120,7 @@ fn leg_rows(
                     symbol: r.symbol.clone(),
                     icon_url: icons.get(id).cloned(),
                     reserve,
+                    decimals,
                 },
                 // Unknown to `assets`: no family, no code — only the contract
                 // and its symbol, which `soroban_contracts` and its metadata
@@ -126,6 +133,7 @@ fn leg_rows(
                     symbol: other.and_then(|r| r.symbol.clone()),
                     icon_url: None,
                     reserve,
+                    decimals,
                 },
             }
         })
@@ -137,17 +145,21 @@ mod get_pool_chart;
 mod list_participants;
 mod list_pool_activity;
 mod list_pools;
+mod list_soroban_pool_activity;
 mod soroban_reserves;
 mod soroban_total_shares;
 mod usd_analytics;
 
 pub use get_pool::fetch_pool_by_id;
-pub use get_pool_chart::fetch_pool_chart;
-pub use list_participants::{fetch_participants, pool_exists};
+pub use get_pool_chart::{fetch_pool_chart, fetch_soroban_pool_chart};
+pub use list_participants::{
+    count_soroban_participants, fetch_participants, fetch_soroban_participants, pool_exists,
+};
 pub use list_pool_activity::{fetch_pool_activity, fetch_pool_asset_ids};
 pub use list_pools::{ResolvedPoolListParams, fetch_pool_list};
+pub use list_soroban_pool_activity::fetch_soroban_pool_activity;
 pub use usd_analytics::{
-    PoolPriceContext, fetch_pool_price_context, fetch_pool_usd_analytics, price_leg,
+    PoolPriceContext, fetch_pool_chart_context, fetch_pool_usd_analytics, price_leg,
 };
 
 /// `fee_bps / 100` as a decimal string (e.g. 30 → "0.3", 25 → "0.25",

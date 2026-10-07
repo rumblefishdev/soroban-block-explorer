@@ -4,8 +4,10 @@ import { Box, Collapse, IconButton, Stack, Typography } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import type { Theme } from '@mui/material/styles';
 import {
+  addressType,
   Chip,
   IdentifierWithCopy,
+  type AddressType,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
 import { Fragment, useState } from 'react';
@@ -239,23 +241,10 @@ function eventCategory(label: string): {
  *  clickable). */
 export type InlinePart =
   | { kind: 'text'; text: string }
-  | { kind: 'id'; value: string; short: string; type: IdType }
+  | { kind: 'id'; value: string; short: string; type: AddressType }
   // A UI abbreviation, not a value — renders tertiary italic like the
   // `6 args` counts so it never reads as part of the payload.
   | { kind: 'muted'; text: string };
-
-type IdType = 'contract' | 'account' | 'pool';
-
-/** Routable strkey prefixes only. `ScAddress` also carries muxed accounts
- *  (`M…`) and claimable balances (`B…`), which have no page of their own —
- *  defaulting them to `account` produced a link that cannot resolve. Null
- *  means "show the value, do not link it". */
-function idType(value: string): IdType | null {
-  if (value.startsWith('C')) return 'contract';
-  if (value.startsWith('L')) return 'pool';
-  if (value.startsWith('G')) return 'account';
-  return null;
-}
 
 /** One argument as an inline part, or null when it wouldn't fit a row:
  *  addresses become linkable parts (shortened GC4Q…K7XQ), numbers/symbols
@@ -265,7 +254,9 @@ function shortPart(value: unknown): InlinePart | null {
   const { type, value: inner } = value as TypedVal;
   if (type === 'address' && typeof inner === 'string' && inner.length > 12) {
     const short = `${inner.slice(0, 4)}…${inner.slice(-4)}`;
-    const kind = idType(inner);
+    // `ScAddress` also carries muxed accounts and claimable balances, which
+    // have no page: `addressType` gives them null.
+    const kind = addressType(inner);
     // Unroutable address forms keep the same truncation but render as text —
     // an unclickable value is honest, a link to a page that does not exist is
     // not.

@@ -16,11 +16,12 @@ import {
   EmptyState,
   EXPLORER_TABLE_ROW_HEIGHT_TALL,
   ExplorerTable,
-  formatTokenAmount,
+  formatAmount,
   IdentifierWithCopy,
   PaginationControls,
   QueryErrorState,
   RelativeTimestamp,
+  scaleByDecimals,
   useCursorPagination,
   type ExplorerTableColumn,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -79,18 +80,20 @@ function isPoolEvent(value: string | null): value is PoolEvent {
 }
 
 /** One display leg of an operation's amount: the grouped decimal WITHOUT its
- *  unit (the unit renders separately as an icon + linked code), the leg it
- *  belongs to, and its direction from the pool's side. */
+ *  unit (the unit renders separately as an icon + linked code), the same
+ *  value ungrouped, the leg it belongs to, and its direction from the pool's
+ *  side. */
 export interface AmountLegPart {
   amount: string;
-  raw: string;
+  value: string;
   leg: PoolAssetLeg;
   incoming: boolean;
 }
 
 /**
- * What ONE operation moved through this pool, as ordered display parts — or
- * `null` when it carries no readable leg.
+ * What ONE row moved through this pool — an operation on a classic pool, a
+ * pool event on a Soroban one — as ordered display parts, or `null` when it
+ * carries no readable leg.
  *
  * `amounts[i]` is what moved in `legs[i]`, raw and **signed from the pool's side**:
  * positive = the asset entered the pool. That sign is the whole direction
@@ -99,14 +102,19 @@ export interface AmountLegPart {
  * same way are a deposit or a withdrawal, joined with `+` and already named
  * by the Event chip.
  *
- * Amounts stay STRINGS end to end — `formatTokenAmount` consumes them exactly,
- * while a leg above 2^53 stroops would lose digits as a number. The unit is
- * split back off its output (the format is always `number unit` and an asset
- * code cannot contain a space) rather than reformatting the number here, so
- * the digits shown next to a linked code are byte-identical to the plain-text
- * form in `formatPoolAmount`.
+ * Each raw amount is scaled by its leg's own `decimals` — 7 for XLM and a
+ * classic asset, whatever a Soroban token publishes (6, 7, 8, 9 and 18 all
+ * occur). Amounts stay STRINGS end to end, so a leg above 2^53 raw units keeps
+ * every digit.
  *
- * A leg that is `null` did not move in this operation — never rendered as `0`.
+ * Left out, never rendered as `0` or as a raw integer:
+ * - a leg that is `null` — the row did not name it (a swap on a three-token
+ *   pool names only the two tokens it moved);
+ * - a leg whose token publishes no decimals — its raw integer would read as a
+ *   huge amount.
+ *
+ * A leg that moved exactly `0` IS shown: the amount is known, and a swap
+ * that paid out nothing or a one-sided deposit says so.
  */
 export function poolAmountLegs(
   op: Pick<PoolActivityItem, 'amounts'>,
@@ -115,16 +123,14 @@ export function poolAmountLegs(
   const legs = op.amounts.flatMap((amount, i) => {
     // `amounts[i]` is what moved in `legs[i]`; the API sends one per leg.
     const leg = pool.legs[i];
-    if (amount == null || amount === '') return [];
-    const raw = amount.replace(/^-/, '');
+    if (amount == null || amount === '' || leg == null) return [];
     // The sign is carried by the ordering and the separator, not the digits.
-    const text = formatTokenAmount(raw, assetLegLabel(leg));
-    if (text == null) return [];
-    const cut = text.lastIndexOf(' ');
+    const value = scaleByDecimals(amount.replace(/^-/, ''), leg.decimals);
+    if (value == null) return [];
     return [
       {
-        amount: text.slice(0, cut),
-        raw,
+        amount: formatAmount(value),
+        value,
         leg,
         incoming: !amount.startsWith('-'),
       },
@@ -132,9 +138,9 @@ export function poolAmountLegs(
   });
   if (legs.length === 0) return null;
 
-  // ponytail: a swap is two legs in opposite directions — the only shape
-  // classic data has. A three- or four-leg Soroban swap gets its own reading
-  // when Soroban activity is served; until then it joins with `+`.
+  // A swap is two legs in opposite directions. A swap that moved three
+  // tokens of a stable pool (rare) has no single direction to read, so it
+  // joins with `+`.
   const swap = legs.length === 2 && legs[0].incoming !== legs[1].incoming;
   // A swap reads from what entered the pool to what left it.
   const ordered = swap && !legs[0].incoming ? [...legs].reverse() : legs;
@@ -162,19 +168,21 @@ export function formatPoolAmount(
  *
  * Rounded to 4 significant figures. Doubles are fine HERE and only here: the
  * displayed amounts stay exact strings, and a relative error of 1e-16 cannot
- * move a 4-figure rate, even for legs beyond 2^53 stroops.
+ * move a 4-figure rate, even for legs beyond 2^53 raw units. The rate is of
+ * the scaled amounts: two legs of different decimals have no rate in raw
+ * units.
  */
 export function tradeRate(
   parts: { legs: AmountLegPart[]; swap: boolean } | null
 ): string | null {
   if (parts == null || !parts.swap) return null;
   const [inLeg, outLeg] = parts.legs;
-  const inRaw = Number(inLeg.raw);
-  const outRaw = Number(outLeg.raw);
-  if (!Number.isFinite(inRaw) || !Number.isFinite(outRaw) || inRaw <= 0) {
+  const inValue = Number(inLeg.value);
+  const outValue = Number(outLeg.value);
+  if (!Number.isFinite(inValue) || !Number.isFinite(outValue) || inValue <= 0) {
     return null;
   }
-  const rate = Number((outRaw / inRaw).toPrecision(4));
+  const rate = Number((outValue / inValue).toPrecision(4));
   const text = rate.toLocaleString('en-US', { maximumFractionDigits: 7 });
   return `${text} ${assetLegLabel(outLeg.leg)}/${assetLegLabel(inLeg.leg)}`;
 }
@@ -199,9 +207,12 @@ function assetCodeNode(leg: PoolAssetLeg): ReactNode {
 }
 
 /** Stable identity for a row. The hash is NOT unique here — a transaction
- *  running several operations against one pool appears once per operation. */
+ *  running several operations against one pool appears once per operation,
+ *  and a Soroban operation once per pool event. */
 export function activityRowKey(row: PoolActivityItem): string {
-  return `${row.transaction_hash}-${row.application_order}`;
+  return `${row.transaction_hash}-${row.operation_index}-${
+    row.event_index ?? ''
+  }`;
 }
 
 function activityColumns(
@@ -212,10 +223,10 @@ function activityColumns(
       id: 'event',
       header: 'Event',
       width: 140,
-      // Accurate by construction: the row IS one operation, so the chip has
-      // exactly one thing to name. The mixed deposit-and-trade bundle that
-      // made the old per-transaction chip lie now renders as two rows, each
-      // correctly labelled.
+      // Accurate by construction: the row IS one operation (one pool event on
+      // a Soroban pool), so the chip has exactly one thing to name. The mixed
+      // deposit-and-trade bundle that made the old per-transaction chip lie
+      // now renders as two rows, each correctly labelled.
       cell: (row) => {
         if (row.event == null) return null;
         const { label, color, Icon } = EVENT_META[row.event];
@@ -225,7 +236,7 @@ function activityColumns(
     {
       id: 'amount',
       header: 'Amount',
-      // One operation, one figure — no stack. The two-leg linked `A → B` form
+      // One row, one figure — no stack. The two-leg linked `A → B` form
       // is the widest case, which is what this width has to hold (carried over
       // from task 0490, whose line cap this row unit makes unreachable; was
       // 280 as plain text, the icons and link affordances buy 40px).
@@ -301,7 +312,7 @@ function activityColumns(
         <IdentifierWithCopy
           value={row.transaction_hash}
           type="transaction"
-          href={`/transactions/${row.transaction_hash}#op-${row.application_order}`}
+          href={`/transactions/${row.transaction_hash}#op-${row.operation_index}`}
         />
       ),
     },
@@ -349,8 +360,8 @@ interface PoolActivityProps {
 
 /**
  * "Recent activity" section on the LP detail page — one row per OPERATION
- * against this pool, with a trade / deposit / withdrawal filter (task 0491,
- * issue #371).
+ * against a classic pool, one per pool EVENT of a Soroban pool, with a
+ * trade / deposit / withdrawal filter (task 0491, issue #371; task 0374).
  *
  * The row used to be a transaction, which could not carry an honest Event
  * chip (a bundled deposit + trade collapsed to one label), forced the Amount

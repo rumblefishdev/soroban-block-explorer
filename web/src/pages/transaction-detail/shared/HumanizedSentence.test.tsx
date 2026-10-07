@@ -12,16 +12,17 @@ import { HumanizedSentence, sentenceIds } from './HumanizedSentence.js';
 const DEST = 'GC4QMEH5CY5HAEZVC2XNTRV2XBPQWUX2WCV3ANU32HBFNCYIKWHGK7XQ';
 const CONTRACT = 'CDDTJ7OZU2WZAEZNTUZWIRAE4EMP5CF63M3INFQWTLX4ENMYUFK6RCTX';
 
-function light(partial: Partial<OperationItem> & { type_name: string }) {
+function light(
+  partial: Partial<OperationItem> & { type_name: string }
+): OperationItem {
   return {
-    appearance_id: 1,
     type: 1,
-    application_order: 1,
+    operation_index: 0,
     ledger_sequence: 1,
     created_at: '2026-01-01T00:00:00Z',
     pool_ids: [],
     ...partial,
-  } as OperationItem;
+  };
 }
 
 function renderSentence(
@@ -43,10 +44,10 @@ describe('sentenceIds', () => {
       light({ type_name: 'PAYMENT', destination_account: DEST }),
       {
         op_type: 'PAYMENT',
-        application_order: 1,
+        operation_index: 0,
         details: { asset: `USDC:${DEST}`, contract: CONTRACT },
         result_code: 'Success',
-      } as XdrOperationDto
+      } satisfies XdrOperationDto
     );
     expect(ids.get('GC4Q…K7XQ')).toBe(DEST);
     expect(ids.get('CDDT…RCTX')).toBe(CONTRACT);
@@ -55,10 +56,10 @@ describe('sentenceIds', () => {
   it('ignores ids with no detail page (hex balance ids, asset codes)', () => {
     const ids = sentenceIds(light({ type_name: 'CLAIM_CLAIMABLE_BALANCE' }), {
       op_type: 'CLAIM_CLAIMABLE_BALANCE',
-      application_order: 1,
+      operation_index: 0,
       details: { balanceId: 'ab'.repeat(32), asset: 'USDC' },
       result_code: 'Success',
-    } as XdrOperationDto);
+    } satisfies XdrOperationDto);
     expect(ids.size).toBe(0);
   });
 });

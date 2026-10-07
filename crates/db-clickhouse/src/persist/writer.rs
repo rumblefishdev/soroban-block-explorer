@@ -85,7 +85,7 @@ pub struct PartitionWriter {
 struct TableInserts {
     accounts: Option<Insert<AccountRow>>,
     account_entry_state: Option<Insert<AccountEntryStateRow>>,
-    wasm: Option<Insert<WasmInterfaceMetadataRow>>,
+    wasm: Option<Insert<WasmProgramRow>>,
     contracts: Option<Insert<SorobanContractRow>>,
     metadata: Option<Insert<SorobanContractMetadataRow>>,
     executable_refs: Option<Insert<ContractExecutableRefRow>>,
@@ -94,6 +94,7 @@ struct TableInserts {
     participants: Option<Insert<TransactionParticipantRow>>,
     op_assets: Option<Insert<OperationAssetAppearanceRow>>,
     pool_amounts: Option<Insert<PoolOperationAmountRow>>,
+    pool_movements: Option<Insert<PoolMovementRow>>,
     pools: Option<Insert<LiquidityPoolRow>>,
     pool_instance_state: Option<Insert<PoolInstanceStateRow>>,
     pool_state_changes: Option<Insert<PoolStateChangeRow>>,
@@ -192,6 +193,15 @@ impl PartitionWriter {
                     )
                     .await?
                 }
+                "pool_movements" => {
+                    write_rows(
+                        &self.client,
+                        &mut self.inserts.pool_movements,
+                        "pool_movements",
+                        &staged.pool_movement_rows,
+                    )
+                    .await?
+                }
                 "asset_transfers" => {
                     write_rows(
                         &self.client,
@@ -276,6 +286,7 @@ impl PartitionWriter {
             tx_operation_rows,
             op_asset_rows,
             pool_amount_rows,
+            pool_movement_rows,
             event_rows,
             contract_activity_rows,
             asset_rows,
@@ -307,7 +318,7 @@ impl PartitionWriter {
         write_rows(
             &self.client,
             &mut self.inserts.wasm,
-            "wasm_interface_metadata",
+            "wasm_programs",
             &wasm_rows,
         )
         .await?;
@@ -365,6 +376,13 @@ impl PartitionWriter {
             &mut self.inserts.pool_amounts,
             "pool_operation_amounts",
             &pool_amount_rows,
+        )
+        .await?;
+        write_rows(
+            &self.client,
+            &mut self.inserts.pool_movements,
+            "pool_movements",
+            &pool_movement_rows,
         )
         .await?;
         write_rows(
@@ -534,6 +552,7 @@ impl PartitionWriter {
             participants,
             op_assets,
             pool_amounts,
+            pool_movements,
             pools,
             pool_instance_state,
             pool_state_changes,
@@ -564,6 +583,7 @@ impl PartitionWriter {
         end(participants).await?;
         end(op_assets).await?;
         end(pool_amounts).await?;
+        end(pool_movements).await?;
         end(pools).await?;
         end(pool_instance_state).await?;
         end(pool_state_changes).await?;
@@ -675,7 +695,7 @@ where
 ///   long-running partition-aligned inserts can have multi-minute
 ///   gaps between chunked HTTP body writes on **sparse** tables
 ///   (e.g. `nfts` with ~15 rows/ledger fills the crate's ~256 KiB
-///   buffer only every ~5 minutes; `wasm_interface_metadata` and
+///   buffer only every ~5 minutes; `wasm_programs` and
 ///   `lp_positions` can sit empty across many ledgers). CH's default
 ///   `http_receive_timeout = 30s` then closes the socket
 ///   server-side between sparse chunks, surfacing on the client as

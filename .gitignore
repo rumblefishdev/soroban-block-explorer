@@ -1,4 +1,4 @@
-# Company Cloudflare/DNS scaffold — belongs in the private `rf-domains` repo,
+# Company Cloudflare/DNS scaffold — belongs in the private `dns-cloudformation` repo,
 # never in this public repo (task 0277 D9). Generated locally; move it out.
 rf-domains/
 

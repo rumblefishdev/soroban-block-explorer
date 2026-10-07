@@ -1,5 +1,5 @@
 //! Row structs for the CH writer — production schema (hybrid: surrogate
-//! `id Int64` on the three high-cardinality FK hubs, natural / composite
+//! `id Int64` on the two high-cardinality FK hubs, natural / composite
 //! keys elsewhere).
 //!
 //! One `#[derive(clickhouse::Row, serde::Serialize)]` struct per table
@@ -52,11 +52,14 @@ pub struct LedgerRow {
     pub base_fee: i64,
 }
 
-/// `wasm_interface_metadata` — immutable lookup, MergeTree.
+/// `wasm_programs` — one row per WASM program: its bytes and the metadata
+/// read from them.
 #[derive(Debug, Clone, Row, Serialize)]
-pub struct WasmInterfaceMetadataRow {
+pub struct WasmProgramRow {
     pub wasm_hash: [u8; 32],
     pub metadata: String,
+    #[serde(with = "serde_bytes")]
+    pub code: Vec<u8>,
 }
 
 /// `accounts` — state hub, RMT(last_seen_ledger). Surrogate `id` for
@@ -87,6 +90,9 @@ pub struct AccountEntryStateRow {
     pub threshold_med: u8,
     pub threshold_high: u8,
     pub flags: u32,
+    /// CAP-33 counters, copied from the entry (lore-0629).
+    pub num_sponsoring: u32,
+    pub num_sponsored: u32,
     pub last_updated_ledger: i64,
 }
 
@@ -394,18 +400,16 @@ pub struct LpPositionRow {
     pub pool_id: [u8; 32],
     pub account_id: i64,
     pub shares: i128,
-    pub first_deposit_ledger: i64,
     pub last_updated_ledger: i64,
     /// ADR 0055 — see [`BalanceRow::closed_at_ledger`]. A withdrawn position
     /// and a position still open at zero shares both wrote `shares = 0`.
     pub closed_at_ledger: i64,
 }
 
-/// `transactions` — append-only fact hub, surrogate `id`,
+/// `transactions` — append-only fact hub,
 /// ORDER BY (ledger_sequence, application_order).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct TransactionRow {
-    pub id: i64,
     pub hash: [u8; 32],
     pub ledger_sequence: i64,
     pub application_order: i16,
@@ -535,6 +539,26 @@ pub struct PoolOperationAmountRow {
     pub amount: i64,
 }
 
+/// `pool_movements` — fact, what one swap / deposit / withdrawal
+/// event of a registered soroban pool moved through it (task 0374, W1): one
+/// row per (event, leg), located by the event's stellar-rpc id (ADR 0059).
+/// The soroban twin of [`PoolOperationAmountRow`]: `amount` is SIGNED FROM
+/// THE POOL'S SIDE, raw token units in `Int128` (a soroban leg may carry 18
+/// decimals). `event_kind` is stored (0 trade, 1 deposit, 2 withdrawal)
+/// because a leg can be zero; every leg is written. Column order matches
+/// `init.sql`.
+#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize)]
+pub struct PoolMovementRow {
+    pub pool_id: [u8; 32],
+    pub ledger_sequence: i64,
+    pub application_order: i16,
+    pub operation_index: u16,
+    pub event_index: u32,
+    pub event_kind: u8,
+    pub asset_id: i64,
+    pub amount: i128,
+}
+
 /// `asset_transfers` — fact, one row per token movement (task 0540). Keyed
 /// by Stellar's official event identity `(ledger, tx, op, event-in-op)`.
 /// `amount` is `NULL` for exactly one reason: a non-fungible movement.
@@ -577,7 +601,7 @@ pub struct TransactionMemoRow {
 /// sentinels included. `application_order` is the transaction the event
 /// belongs to, which a fee refund's sentinel id does not say.
 /// `signature` is the lifted first-topic Symbol. Column order = DDL.
-#[derive(Debug, Clone, Row, Serialize)]
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
 pub struct SorobanEventRow {
     pub contract_id: i64,
     pub ledger_sequence: i64,

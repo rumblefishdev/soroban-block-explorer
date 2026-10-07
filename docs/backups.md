@@ -31,6 +31,10 @@ the immutable MergeTree parts into the data dir's `shadow/` (**~0 extra disk —
 full local copy**), Borg pushes that frozen tree to the Hetzner BX21 Storage Box
 (client-side encrypted + deduplicated), then `UNFREEZE` releases the hardlinks.
 
+It freezes the `default` database only. Testnet's `testnet` database is left
+out on purpose (task 0553): it is rebuilt from the public data lake by a
+backfill from genesis, the same path a testnet reset takes.
+
 This **replaced** the original `BACKUP DATABASE … TO Disk` mechanism, which wrote
 a full local copy (~737 GiB) that could not fit on this box — dataset ≈ disk size
 → **ENOSPC → prod incident**. That history is why the weekly path is FREEZE-based
@@ -201,7 +205,10 @@ are refused and the readers query columns that are not there. Redo the change on
 the restored database before resuming ingest — the rekey is filled inside
 ClickHouse from the restored tables, no archive read
 ([`docs/backfills.md` § Canonical event location fill](backfills.md#canonical-event-location-fill-task-0541--in-db-per-5k-ledger-slice))
-— then re-ingest the gap below.
+— then re-ingest the gap below. A dropped column comes back the same way: a
+backup taken before task 0538 dropped `transactions.id` restores it without a
+`DEFAULT`, and the indexer refuses every insert until
+`ALTER TABLE transactions DROP COLUMN id` is run on the restored database.
 
 ---
 

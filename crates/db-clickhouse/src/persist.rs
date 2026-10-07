@@ -6,10 +6,10 @@
 //! * [`stage::prepare`] — synchronous pre-write transform. Reads the
 //!   same `Extracted*` slices PG does and produces CH-shaped row
 //!   structs from [`rows`]. FK columns use a **hybrid key strategy**:
-//!   three high-fan-out hubs (`accounts`, `soroban_contracts`,
-//!   `transactions`) carry a deterministic surrogate `Int64 id`
-//!   derived via [`ids`] (`cityhash_102_128` lower 64 bits over the
-//!   StrKey / hash), keeping referencing tables narrow; the other 12
+//!   two high-fan-out hubs (`accounts`, `soroban_contracts`) carry a
+//!   deterministic surrogate `Int64 id` derived via [`ids`]
+//!   (`cityhash_102_128` lower 64 bits over the StrKey), keeping
+//!   referencing tables narrow; the other
 //!   tables use natural composite keys (StrKey / hash / tuple) on
 //!   their PK and reference the hubs by surrogate. Surrogates are
 //!   derived synchronously from the source key, so the writer is
@@ -36,13 +36,12 @@ use domain::{ContractEventType, ContractType};
 // ClassificationCache` stays a valid path for callers + integration tests that
 // don't depend on `domain` directly (task 0283).
 pub use domain::ClassificationCache;
-use xdr_parser::event::extract_executable_update;
+use xdr_parser::executable_update::extract_executable_update;
 use xdr_parser::types::{
-    ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
-    ExtractedContractDeployment, ExtractedContractInterface, ExtractedEvent, ExtractedInvocation,
-    ExtractedLedger, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition,
-    ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedSorobanBalance,
-    ExtractedTransaction,
+    ContractFunction, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
+    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction, ExtractedWasmProgram,
 };
 use xdr_parser::{SacOverride, classify_contract_from_wasm_spec};
 
@@ -80,7 +79,7 @@ pub async fn persist_ledger_clickhouse(
     operations: &[(String, Vec<ExtractedOperation>)],
     events: &[(String, Vec<ExtractedEvent>)],
     invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
     contract_deployments: &[ExtractedContractDeployment],
     account_states: &[ExtractedAccountState],
     liquidity_pools: &[ExtractedLiquidityPool],
@@ -103,14 +102,14 @@ pub async fn persist_ledger_clickhouse(
     // `tokio::join!` pays a single round-trip latency on a ledger carrying both
     // a deploy and a cross-ledger NFT event. Both fail open (empty map on error
     // = exact pre-0283 behaviour):
-    // * G1 — verdict by `wasm_hash` from `wasm_interface_metadata` (the deploy
+    // * G1 — verdict by `wasm_hash` from `wasm_programs` (the deploy
     //   override; upload + deploy are separate Soroban txs / ledgers).
     // * G9 — verdict by `contract_id` from `soroban_contracts` (event routing
     //   for contracts deployed earlier), memoised by `classification_cache`.
     // G1/G9 verdict lookups + task 0320 live WASM-upgrade prior-row prefetch.
     // All three are independent reads; one `join!` pays a single round-trip.
     let (prior_wasm_verdicts, prior_contract_verdicts, prior_contract_rows, sac_classic) = tokio::join!(
-        fetch_prior_wasm_verdicts(client, contract_deployments, contract_interfaces),
+        fetch_prior_wasm_verdicts(client, contract_deployments, programs),
         fetch_prior_contract_verdicts(
             client,
             nfts,
@@ -123,7 +122,7 @@ pub async fn persist_ledger_clickhouse(
         // surrogate; re-map them onto the wrapped classic/native asset id below.
         fetch_sac_classic_map(
             client,
-            sac_classic_map_needed(soroban_token_balances, events, true)
+            sac_classic_map_needed(soroban_token_balances, events, true, true)
         ),
     );
     // Fail closed on the SAC map (unlike the verdict prefetches above): an error
@@ -141,7 +140,7 @@ pub async fn persist_ledger_clickhouse(
         operations,
         events,
         invocations,
-        contract_interfaces,
+        programs,
         contract_deployments,
         account_states,
         liquidity_pools,
@@ -172,7 +171,7 @@ pub async fn persist_ledger_clickhouse(
     pw.commit().await
 }
 
-/// Subset of `wasm_interface_metadata.metadata` we need to re-classify a
+/// Subset of `wasm_programs.metadata` we need to re-classify a
 /// WASM by its already-persisted function list. The column is the JSON
 /// written by [`stage`] as `{"functions": [...], "wasm_byte_len": N}`; we
 /// only read `functions` and feed it back through the canonical
@@ -184,7 +183,7 @@ struct WasmMetadata {
 }
 
 /// Re-classify an already-persisted WASM from its stored
-/// `wasm_interface_metadata.metadata` JSON, returning a verdict **only** when
+/// `wasm_programs.metadata` JSON, returning a verdict **only** when
 /// it is decisive enough to override the parser default `Other` — i.e.
 /// `Nft`/`Fungible`. Anything else (parse failure, `Other`, `Token`) yields
 /// `None`.
@@ -199,7 +198,7 @@ pub fn classify_wasm_metadata_json(metadata_json: &str) -> Option<ContractType> 
     matches!(verdict, ContractType::Nft | ContractType::Fungible).then_some(verdict)
 }
 
-/// One `(hash, metadata)` row read from `wasm_interface_metadata` during the
+/// One `(hash, metadata)` row read from `wasm_programs` during the
 /// live G1 prefetch. `h` is the lower-case hex of the `FixedString(32)`
 /// `wasm_hash` (`lower(hex(...))` server-side) so it matches the hex the
 /// parser emits without binding raw bytes.
@@ -218,7 +217,7 @@ struct WasmVerdictRow {
 /// deploy's WASM verdict is invisible to the stage and the contract would
 /// persist the parser default `Other` — its NFT events then route to the
 /// quarantine and the hot tables stay empty. This reads the verdict for those
-/// deploy hashes from the already-persisted `wasm_interface_metadata` (the
+/// deploy hashes from the already-persisted `wasm_programs` (the
 /// upload landed in an earlier, already-committed ledger) and hands it to the
 /// stage's existing deploy override.
 ///
@@ -241,9 +240,9 @@ struct WasmVerdictRow {
 async fn fetch_prior_wasm_verdicts(
     client: &Client,
     contract_deployments: &[ExtractedContractDeployment],
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
 ) -> HashMap<[u8; 32], ContractType> {
-    let same_ledger: HashSet<String> = contract_interfaces
+    let same_ledger: HashSet<String> = programs
         .iter()
         .map(|i| i.wasm_hash.to_lowercase())
         .collect();
@@ -274,12 +273,14 @@ async fn fetch_prior_wasm_verdicts(
 
 /// Whether a ledger needs the SAC → classic map: it has a contract-held token
 /// balance to re-key AND this write persists `balances`, OR it registers a
-/// soroban pool, whose legs key on the same map.
+/// soroban pool, whose legs key on the same map, OR it may carry pool events
+/// AND this write persists `pool_movements` — their tokens key on it too.
 ///
 /// The pool arm is what went missing. Gating on balances alone left a pool
 /// registered in a ledger with no token balance change keyed on its SAC
 /// surrogate — the orphan defect task 0374's repair runbook exists for — so the
-/// live writer kept producing it after the fix. `writes_balances` is asked of
+/// live writer kept producing it after the fix. A pool's amount events key
+/// their tokens on it too, when this write persists `pool_movements`. `writes_balances` is asked of
 /// the caller rather than inferred from a targeted write: whether `balances`
 /// is written is the fact the balance arm depends on, and a targeted write
 /// that one day includes it must still get the map.
@@ -287,9 +288,45 @@ pub fn sac_classic_map_needed(
     soroban_token_balances: &[ExtractedSorobanBalance],
     events: &[(String, Vec<xdr_parser::ExtractedEvent>)],
     writes_balances: bool,
+    writes_pool_movements: bool,
 ) -> bool {
     (writes_balances && !soroban_token_balances.is_empty())
         || stage::registers_soroban_pools(events)
+        || (writes_pool_movements && stage::soroban_pool_amounts::carries_pool_amounts(events))
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct SorobanPoolLegsRow {
+    pool_hex: String,
+    legs: Vec<i64>,
+}
+
+/// Every registered soroban pool (`liquidity_pools`, kind 1) with its legs,
+/// keyed by contract surrogate (~800 rows) — for the backfill, which reads
+/// pool events back from `soroban_events` without their ledger's entry
+/// writes, and for the checks. The live writer never reads it.
+pub async fn fetch_soroban_pools(
+    client: &Client,
+) -> Result<HashMap<i64, stage::soroban_pool_amounts::SorobanPool>, clickhouse::error::Error> {
+    let rows = client
+        .query(
+            "SELECT lower(hex(pool_id)) AS pool_hex, \
+                    argMax(legs, last_updated_ledger) AS legs \
+             FROM liquidity_pools WHERE pool_kind = 1 GROUP BY pool_id",
+        )
+        .fetch_all::<SorobanPoolLegsRow>()
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            // `FixedString(32)` hex: always 64 hex digits.
+            let pool_id: [u8; 32] = hex::decode(&r.pool_hex)
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .expect("liquidity_pools.pool_id is FixedString(32)");
+            stage::soroban_pool_amounts::soroban_pool_entry(pool_id, r.legs)
+        })
+        .collect())
 }
 
 /// One AGGREGATED row of the `fetch_sac_classic_map` query (a projection, not the
@@ -349,7 +386,7 @@ pub async fn fetch_sac_classic_map(
 }
 
 /// Read + classify the verdicts for `hashes_hex_lower` from
-/// `wasm_interface_metadata`. Returns only `Nft` / `Fungible` verdicts — the
+/// `wasm_programs`. Returns only `Nft` / `Fungible` verdicts — the
 /// deploy override ignores anything else, and `Other` is already the parser
 /// default, so there is nothing to override.
 async fn query_wasm_verdicts(
@@ -366,7 +403,7 @@ async fn query_wasm_verdicts(
         .join(", ");
     let sql = format!(
         "SELECT lower(hex(wasm_hash)) AS h, metadata \
-         FROM wasm_interface_metadata \
+         FROM wasm_programs \
          WHERE lower(hex(wasm_hash)) IN ({in_list})"
     );
 
@@ -535,14 +572,12 @@ async fn fetch_prior_contract_rows(
     let mut want: Vec<&str> = events
         .iter()
         .flat_map(|(_, evs)| evs.iter())
-        // Consensus events only — drop the diagnostic container (byte-identical
-        // copies + failed-tx events). Must match `build_wasm_upgrade_rows`'s
-        // filters so the prefetch covers exactly the contracts it will rewrite:
-        // non-diagnostic, host-emitted SYSTEM events with a parseable new hash.
-        .filter(|ev| !matches!(ev.source, EventSource::Diagnostic))
-        .filter(|ev| ev.event_type == ContractEventType::System)
-        .filter(|ev| extract_executable_update(&ev.topics).is_some())
-        .filter_map(|ev| ev.contract_id.as_deref())
+        // Must match `build_wasm_upgrade_rows`'s filters so the prefetch covers
+        // exactly the contracts it will rewrite: host-emitted SYSTEM events with
+        // a parseable new hash.
+        .filter(|ev| ev.body.event_type == ContractEventType::System)
+        .filter(|ev| extract_executable_update(&ev.body.topics).is_some())
+        .filter_map(|ev| ev.body.contract_id.as_deref())
         .collect();
     want.sort_unstable();
     want.dedup();

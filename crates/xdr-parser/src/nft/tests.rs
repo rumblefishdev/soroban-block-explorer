@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::EventBody;
 
 /// Mainnet-defaulting shadow of [`detect_nft_events`] so the existing
 /// fixtures (all mainnet) keep their one-arg call shape after task 0294
@@ -15,17 +16,19 @@ use serde_json::json;
 fn make_event(contract_id: &str, topics: Vec<Value>, data: Value) -> ExtractedEvent {
     ExtractedEvent {
         transaction_hash: "abcd1234".into(),
-        event_type: ContractEventType::Contract,
-        source: EventSource::PerOp,
-        contract_id: Some(contract_id.into()),
-        topics: json!(topics),
-        data,
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: None,
-        ledger_sequence: 100,
+        event_id: crate::event::EventId {
+            ledger_sequence: 100,
+            transaction_index: 1,
+            operation_index: 0,
+            event_index: 0,
+        },
+        origin: crate::types::EventOrigin::Operation(0),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some(contract_id.into()),
+            topics: json!(topics),
+            data,
+        },
         created_at: 1700000000,
     }
 }
@@ -78,18 +81,6 @@ fn undeployed_sac_overrides_collects_and_dedups() {
     assert!(
         matches!(ov.identity, crate::types::SacAssetIdentity::Credit { ref code, .. } if code == "USDC"),
         "identity carries the classic asset for the AC#3 assets row",
-    );
-}
-
-#[test]
-fn undeployed_sac_overrides_skips_diagnostic() {
-    let net = crate::sac::network_id(crate::sac::MAINNET_PASSPHRASE);
-    let mut diag = sac_event(USDC_SAC, "transfer");
-    diag.source = EventSource::Diagnostic;
-    let events = vec![("tx".to_string(), vec![diag])];
-    assert!(
-        super::detect_undeployed_sac_overrides(&events, &net).is_empty(),
-        "diagnostic-container SAC events are skipped (byte-identical mirrors)",
     );
 }
 
@@ -258,7 +249,7 @@ fn skip_system_events() {
         vec![json!({"type": "sym", "value": "transfer"})],
         json!({"type": "u32", "value": 1}),
     );
-    event.event_type = ContractEventType::System;
+    event.body.event_type = ContractEventType::System;
 
     let nft_events = detect_nft_events(&[event]);
     assert!(nft_events.is_empty());
@@ -274,7 +265,7 @@ fn skip_events_without_contract_id() {
         ],
         json!({"type": "u32", "value": 1}),
     );
-    event.contract_id = None;
+    event.body.contract_id = None;
 
     let nft_events = detect_nft_events(&[event]);
     assert!(nft_events.is_empty());
@@ -443,17 +434,19 @@ fn detect_real_mainnet_bachini_mint_event() {
 
     let event = ExtractedEvent {
         transaction_hash: "real-mainnet".into(),
-        event_type: ContractEventType::Contract,
-        source: EventSource::PerOp,
-        contract_id: Some("CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY".into()),
-        topics: json!([scval_to_typed_json(&topic)]),
-        data: scval_to_typed_json(&data),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: None,
-        ledger_sequence: 1,
+        event_id: crate::event::EventId {
+            ledger_sequence: 1,
+            transaction_index: 1,
+            operation_index: 0,
+            event_index: 0,
+        },
+        origin: crate::types::EventOrigin::Operation(0),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some("CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY".into()),
+            topics: json!([scval_to_typed_json(&topic)]),
+            data: scval_to_typed_json(&data),
+        },
         created_at: 1732801047,
     };
 
@@ -632,7 +625,7 @@ fn nft_events_carry_the_source_event_id() {
         ],
         json!({"type":"vec","value":[{"type":"u32","value":5},{"type":"u32","value":6}]}),
     );
-    mint.event_id = Some(id(0));
+    mint.event_id = id(0);
     let mut transfer = make_event(
         "CABC123",
         vec![
@@ -642,7 +635,7 @@ fn nft_events_carry_the_source_event_id() {
         ],
         json!({"type":"u32","value":5}),
     );
-    transfer.event_id = Some(id(1));
+    transfer.event_id = id(1);
 
     let nft = detect_nft_events(&[mint, transfer]);
     let ids: Vec<_> = nft
@@ -651,17 +644,13 @@ fn nft_events_carry_the_source_event_id() {
         .collect();
     assert_eq!(
         ids,
-        vec![
-            ("mint", Some(id(0))),
-            ("mint", Some(id(0))),
-            ("transfer", Some(id(1))),
-        ]
+        vec![("mint", id(0)), ("mint", id(0)), ("transfer", id(1)),]
     );
     // …and the ownership rows keep it.
     let rows = crate::state::extract_nft_ownership_events(&nft);
     assert_eq!(
         rows.iter().map(|r| r.event_id).collect::<Vec<_>>(),
-        vec![Some(id(0)), Some(id(0)), Some(id(1))]
+        vec![id(0), id(0), id(1)]
     );
 }
 
@@ -756,22 +745,24 @@ fn detect_real_mainnet_map_token_id_mint() {
 
     let event = ExtractedEvent {
         transaction_hash: "real-mainnet-map".into(),
-        event_type: ContractEventType::Contract,
-        source: EventSource::PerOp,
-        contract_id: Some("CARTUL5AWDZYBSN7HUUJZSKCAKCIAKM7M54Z76G6KRYCK4XPR3OHUQZ4".into()),
-        topics: json!([scval_to_typed_json(&topic0), scval_to_typed_json(&topic1)]),
-        data: scval_to_typed_json(&data),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: None,
-        ledger_sequence: 62952436,
+        event_id: crate::event::EventId {
+            ledger_sequence: 62952436,
+            transaction_index: 1,
+            operation_index: 0,
+            event_index: 0,
+        },
+        origin: crate::types::EventOrigin::Operation(0),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some("CARTUL5AWDZYBSN7HUUJZSKCAKCIAKM7M54Z76G6KRYCK4XPR3OHUQZ4".into()),
+            topics: json!([scval_to_typed_json(&topic0), scval_to_typed_json(&topic1)]),
+            data: scval_to_typed_json(&data),
+        },
         created_at: 1700000000,
     };
 
     // The real data really is a map carrying token_id — the pre-fix drop reason.
-    assert_eq!(event.data["type"], "map");
+    assert_eq!(event.body.data["type"], "map");
 
     let nft = detect_nft_events(&[event]);
     assert_eq!(nft.len(), 1, "real map{{token_id}} mint must be detected");
@@ -796,23 +787,20 @@ fn detect_real_mainnet_consecutive_mint_range() {
     // this uses the real decoded event values verbatim from prod CH.
     let event = ExtractedEvent {
         transaction_hash: "real-mainnet-consecutive".into(),
-        event_type: ContractEventType::Contract,
-        source: EventSource::PerOp,
-        contract_id: Some("CAKSC7JHQFBJ4LIYOJQGJX2URGGWABX2WM6OZ5WQVK57VNRUG4DUYK7F".into()),
-        topics: serde_json::from_str(
-            r#"[{"type":"sym","value":"consecutive_mint"},{"type":"address","value":"GBWHGYD5DFPQMJSUEEA77IT7YJ75PYQQFOCMP7HT5OIF2ULKJK22N4J4"}]"#,
-        )
-        .unwrap(),
-        data: serde_json::from_str(
-            r#"{"type":"vec","value":[{"type":"u32","value":4},{"type":"u32","value":149}]}"#,
-        )
-        .unwrap(),
-        position_in_tx: 0,
-        op_index: None,
-        event_pos_in_op: None,
-        stage: None,
-        event_id: None,
-        ledger_sequence: 1,
+        event_id: crate::event::EventId { ledger_sequence: 1, transaction_index: 1, operation_index: 0, event_index: 0 },
+        origin: crate::types::EventOrigin::Operation(0),
+        body: EventBody {
+            event_type: ContractEventType::Contract,
+            contract_id: Some("CAKSC7JHQFBJ4LIYOJQGJX2URGGWABX2WM6OZ5WQVK57VNRUG4DUYK7F".into()),
+            topics: serde_json::from_str(
+                r#"[{"type":"sym","value":"consecutive_mint"},{"type":"address","value":"GBWHGYD5DFPQMJSUEEA77IT7YJ75PYQQFOCMP7HT5OIF2ULKJK22N4J4"}]"#,
+            )
+            .unwrap(),
+            data: serde_json::from_str(
+                r#"{"type":"vec","value":[{"type":"u32","value":4},{"type":"u32","value":149}]}"#,
+            )
+            .unwrap(),
+        },
         created_at: 1700000000,
     };
 

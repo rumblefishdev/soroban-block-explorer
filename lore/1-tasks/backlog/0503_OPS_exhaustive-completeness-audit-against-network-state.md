@@ -16,6 +16,11 @@ history:
       made was taken over our OWN data, which cannot see what we never
       ingested. The checkpoint snapshot removes that blindness for the first
       time. Blocked on task 0502 (the decoder).
+  - date: 2026-09-29
+    status: backlog
+    who: karolkow
+    note: >-
+      Absorbed 0429 (seeding state the ingest never observed): part of the completeness audit against network state. Read 0429 in archive/ for its research.
 ---
 
 # OPS: exhaustive completeness audit

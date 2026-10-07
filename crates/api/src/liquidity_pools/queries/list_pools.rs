@@ -10,9 +10,7 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use crate::common::pool_asset_codes::asset_codes_predicate;
 use crate::common::strkey::decode_pool_kind;
 
-use super::soroban_reserves::{
-    fetch_raw_reserves, fetch_token_decimals, leg_reserves, soroban_token_contracts,
-};
+use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
 use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::usd_analytics::{PriceLeg, fetch_last_closes, price_leg_of, tvl_usd, usd_str};
 use super::{PoolRow, fee_percent_str, leg_rows};
@@ -64,7 +62,7 @@ struct PoolListChRow {
     created_at_ledger: i64,
     /// [`ACTIVITY_LEDGER`] — the list sort/cursor key.
     cursor_ledger: i64,
-    participant_count: i64,
+    participant_count: Option<i64>,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
     reserve_b: Option<String>,
@@ -266,6 +264,21 @@ pub async fn fetch_pool_list(
          band AS ( \
              SELECT min(activity_ledger) - 10000 AS lo, \
                     max(activity_ledger) + 10000 AS hi FROM page \
+         ), \
+         share_token AS ( \
+             SELECT pool_id, argMax(share_token_id, derived_at_ledger) AS token \
+             FROM pool_instance_state \
+             WHERE pool_id IN (SELECT pool_id FROM page) \
+             GROUP BY pool_id \
+             HAVING token != 0 \
+         ), \
+         /* The pool's own contract surrogate: its `C…` id decodes to the pool id. */ \
+         pool_self AS ( \
+             SELECT substring(base32Decode(contract_id), 2, 32) AS pool_id, any(id) AS id \
+             FROM soroban_contracts \
+             WHERE startsWith(contract_id, 'C') \
+               AND substring(base32Decode(contract_id), 2, 32) IN (SELECT pool_id FROM share_token) \
+             GROUP BY pool_id \
          ) \
          SELECT \
              lower(hex(lp.pool_id))                          AS pool_id_hex, \
@@ -275,7 +288,12 @@ pub async fn fetch_pool_list(
              lp.fee_bps                                      AS fee_bps, \
              ifNull(cr.created_at_ledger, lp.last_updated_ledger) AS created_at_ledger, \
              lp.activity_ledger                              AS cursor_ledger, \
-             toInt64(ifNull(pc.participant_count, 0))        AS participant_count, \
+             /* classic: its `lp_positions`; soroban: its share-token holders, \
+                absent (NULL) for a pool with no share token. The LEFT JOIN miss \
+                reads defaults, not NULL, so the match is tested on the key. */ \
+             if(lp.pool_kind = 0, toNullable(toInt64(ifNull(pc.participant_count, 0))), \
+                if(ph.pool_id = lp.pool_id, toNullable(ph.holders), NULL)) \
+                                                             AS participant_count, \
              s.latest_ledger_sequence                        AS latest_snapshot_ledger, \
              toString(s.reserve_a)                           AS reserve_a, \
              toString(s.reserve_b)                           AS reserve_b, \
@@ -304,6 +322,29 @@ pub async fn fetch_pool_list(
              WHERE shares > 0 AND pool_id IN (SELECT pool_id FROM page) \
              GROUP BY pool_id \
          ) pc ON pc.pool_id = lp.pool_id \
+         /* A soroban pool's providers: the holder count `balance_aggregates` \
+            keeps for its share token, less the pool's own contract when it \
+            holds some — the minimum liquidity locked at its first deposit, \
+            not a provider. The count refreshes every 2 minutes while the \
+            pool's own balance is read live, so in a new pool's first minutes \
+            the difference can be -1; `greatest` shows 0 there. */ \
+         LEFT JOIN ( \
+             SELECT t.pool_id AS pool_id, \
+                    greatest(toInt64(ifNull(ba.holder_count, 0)) - toInt64(me.held), 0) AS holders \
+             FROM share_token t \
+             LEFT JOIN balance_aggregates ba ON ba.asset_id = t.token \
+             LEFT JOIN ( \
+                 SELECT c.pool_id AS pool_id, argMax(b.amount, b.last_updated_ledger) > 0 AS held \
+                 FROM pool_self c \
+                 INNER JOIN share_token t ON t.pool_id = c.pool_id \
+                 INNER JOIN ( \
+                     SELECT holder_id, asset_id, amount, last_updated_ledger FROM balances \
+                     WHERE holder_id IN (SELECT id FROM pool_self) \
+                       AND asset_id IN (SELECT token FROM share_token) \
+                 ) b ON b.holder_id = c.id AND b.asset_id = t.token \
+                 GROUP BY c.pool_id \
+             ) me ON me.pool_id = t.pool_id \
+         ) ph ON ph.pool_id = lp.pool_id \
          /* `GROUP BY sequence` dedups `ledgers` (ReplacingMergeTree, unmerged \
             duplicate rows): without it this LEFT JOIN doubled every page row \
             whose latest snapshot ledger falls in the duplicated range, doubling \
@@ -354,12 +395,6 @@ pub async fn fetch_pool_list(
         .collect();
     let soroban_raw = fetch_raw_reserves(client, &soroban_ids).await?;
     let soroban_shares = fetch_total_shares(client, &soroban_ids).await?;
-    let soroban_legs = rows
-        .iter()
-        .filter(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind) == domain::PoolKind::Soroban)
-        .flat_map(|r| r.legs.iter());
-    let token_decimals =
-        fetch_token_decimals(client, &soroban_token_contracts(soroban_legs, &identities)).await?;
 
     // Phase A2 (issue #367): per-row USD TVL, computed like the detail
     // endpoint (latest reserves × last 1h close per leg; both legs required)
@@ -409,7 +444,7 @@ pub async fn fetch_pool_list(
                     r.total_shares.clone(),
                 ),
                 domain::PoolKind::Soroban => (
-                    leg_reserves(&r.legs, &identities, &token_decimals, raw),
+                    leg_reserves(&r.legs, &identities, raw),
                     served_total_shares(soroban_shares.get(&r.pool_id_hex), raw),
                 ),
             };

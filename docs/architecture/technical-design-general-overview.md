@@ -418,9 +418,11 @@ types, return types).
 `filter[collection]`, `filter[contract_id]`.
 
 **`GET /nfts/:contract_id/:token_id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
-media URL.
+media URL. The owner (`owner`) is a `G…` account or a `C…` contract; null once the NFT is
+burned. List rows carry the same field.
 
-**`GET /nfts/:contract_id/:token_id/transfers`** — Transfer history for a single NFT.
+**`GET /nfts/:contract_id/:token_id/transfers`** — Transfer history for a single NFT; each side of a
+change (`from`, `to`) is likewise a `G…` account or a `C…` contract.
 
 #### Liquidity Pools
 
@@ -507,7 +509,7 @@ Caching operates at two levels:
 │  │ ClickHouse — Hetzner ch-prod-01, reached over mTLS   │                     │
 │  │ ledgers · transactions · operations_appearances      │                     │
 │  │ accounts · transaction_participants · tx_hash_index  │                     │
-│  │ soroban_contracts · wasm_interface_metadata · assets │                     │
+│  │ soroban_contracts · wasm_programs · assets │                     │
 │  │ soroban_events_appearances · soroban_invocations_…   │                     │
 │  │ nfts · nft_ownership_changes · liquidity_pools · lp_…│                     │
 │  │ account_balances_current (ADR 0035: history dropped) │                     │
@@ -748,7 +750,7 @@ Stellar Network (mainnet peers)
 │     caller_id → soroban_invocations_appearances         │
 │     (per-node detail fetched at read time — ADR 0034)   │
 │  9. Contract deployments + classic account state →      │
-│     soroban_contracts, wasm_interface_metadata,         │
+│     soroban_contracts, wasm_programs,         │
 │     accounts, account_balances_current                  │
 │ 10. Detect SEP-41 token contracts, NFT contracts,       │
 │     classic LPs → assets, nfts, liquidity_pools,        │
@@ -934,7 +936,7 @@ XDR parsing happens in two places, each with a different scope:
   `soroban_events_appearances` with an `amount` count of non-diagnostic events
   (ADR 0033). Full event detail (type, topics, data, per-event index) is not
   persisted; E14 re-expands it from the archive via
-  `xdr_parser::extract_events`
+  `xdr_parser::LedgerEvents`
 - Known SEP-41 / NFT transfer patterns also drive derived-state upserts on
   `assets`, `nfts`, and `nft_ownership_changes`. Per-account Soroban token holdings
   are explicitly out of scope: `account_balances_current` (§4.17 of the
@@ -980,8 +982,8 @@ XDR parsing happens in two places, each with a different scope:
   per-node tree on demand (no `transactions.operation_tree` JSONB)
 - **Contract interface** — function signatures (names, parameter types) are
   extracted from the contract WASM on upload and stored as JSONB in
-  `wasm_interface_metadata.metadata`, keyed by `wasm_hash` (BYTEA 32). The
-  contract page joins `soroban_contracts.wasm_hash → wasm_interface_metadata`
+  `wasm_programs.metadata`, keyed by `wasm_hash` (BYTEA 32). The
+  contract page joins `soroban_contracts.wasm_hash → wasm_programs`
   for display ([ADR 0022](../../lore/2-adrs/0022_schema-correction-and-token-metadata-enrichment.md))
 
 ### 5.4 Error Handling
@@ -1134,7 +1136,7 @@ filtered list endpoints; full decoded payloads come from the archive via
 CREATE TABLE soroban_contracts (
     id                      BIGSERIAL   PRIMARY KEY,                             -- ADR 0030 surrogate
     contract_id             VARCHAR(56) NOT NULL UNIQUE,                         -- StrKey natural key
-    wasm_hash               BYTEA       REFERENCES wasm_interface_metadata(wasm_hash),  -- 32-byte (ADR 0024)
+    wasm_hash               BYTEA       REFERENCES wasm_programs(wasm_hash),  -- 32-byte (ADR 0024)
     wasm_uploaded_at_ledger BIGINT,
     deployer_id             BIGINT      REFERENCES accounts(id),                 -- ADR 0026
     deployed_at_ledger      BIGINT,
@@ -1182,7 +1184,7 @@ CREATE TABLE soroban_events_appearances (
 ```
 
 Parsed event type, topics, and data live at read time in the public archive and are
-re-expanded on demand via `xdr_parser::extract_events`.
+re-expanded on demand via `xdr_parser::LedgerEvents`.
 
 ### 6.7 Assets
 
@@ -1319,7 +1321,7 @@ Partitioned (`PARTITION BY RANGE (created_at)`, monthly):
 
 Unpartitioned anchors and registries:
 `ledgers`, `transaction_hash_index`, `accounts`, `soroban_contracts`,
-`wasm_interface_metadata`, `assets`, `nfts`, `liquidity_pools`, `lp_positions`,
+`wasm_programs`, `assets`, `nfts`, `liquidity_pools`, `lp_positions`,
 `account_balances_current`.
 
 On ClickHouse, partitions are 500k-ledger blocks (`PARTITION BY
@@ -1526,7 +1528,7 @@ CloudWatch dashboards and ingestion lag alarms.
    events in known Soroswap/Aquarius/Phoenix transactions (spot-checked by
    transaction hashes); decoded events are confirmed by fetching the
    corresponding `.xdr.zst` from the public archive and re-expanding via
-   `xdr_parser::extract_events`
+   `xdr_parser::LedgerEvents`
 4. `cdk deploy` (AWS side) + `ansible-playbook` (Hetzner side) from clean environments
    produces the full working stack with no manual steps
 5. CloudWatch dashboard accessible; Galexie lag alarm fires correctly in staging

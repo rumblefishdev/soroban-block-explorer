@@ -42,8 +42,8 @@ pub enum BackfillError {
         stderr: String,
     },
 
-    /// Task 0225: post-sync local file count is below `PARTITION_SIZE`
-    /// despite S3 reporting the partition as fully archived. Re-sync
+    /// Task 0225: post-sync local file count is below the partition's
+    /// ledger count despite S3 reporting it as fully archived. Re-sync
     /// did not fix it. Distinct from `AwsSyncFailed` because the
     /// subprocess itself returned exit 0 — the failure is on our side
     /// (disk full, permissions, network glitch that AWS CLI swallowed,

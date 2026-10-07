@@ -695,6 +695,53 @@ fn extract_updated_account_with_home_domain() {
     assert_eq!(accounts[0].sequence_number, 42);
 }
 
+/// The CAP-33 counters travel with the account entry, as the chain states
+/// them. lore-0629.
+#[test]
+fn account_state_carries_the_sponsorship_counters() {
+    let changes = vec![make_change(
+        "account",
+        "updated",
+        json!({ "account_id": "GABC123" }),
+        Some(json!({
+            "account_id": "GABC123",
+            "balance": 0,
+            "seq_num": 7,
+            "home_domain": "",
+            "num_sub_entries": 1,
+            "thresholds": "01000000",
+            "flags": 0,
+            "num_sponsoring": 0,
+            "num_sponsored": 3,
+        })),
+    )];
+
+    let a = &extract_account_states(&changes)[0];
+    assert_eq!((a.num_sponsoring, a.num_sponsored), (Some(0), Some(3)));
+}
+
+/// A trustline-only change set never saw the account entry, so it carries no
+/// counters — the writer must not overwrite them with a 0. lore-0629.
+#[test]
+fn trustline_only_state_carries_no_sponsorship_counters() {
+    let changes = vec![make_change(
+        "trustline",
+        "updated",
+        json!({ "account_id": "GABC123" }),
+        Some(json!({
+            "account_id": "GABC123",
+            "asset": { "type": "credit_alphanum4", "code": "USDC", "issuer": "GISSUER" },
+            "balance": 10,
+            "limit": 100,
+            "flags": 1,
+        })),
+    )];
+
+    let a = &extract_account_states(&changes)[0];
+    assert_eq!((a.num_sponsoring, a.num_sponsored), (None, None));
+    assert!(a.thresholds.is_none());
+}
+
 #[test]
 fn skip_state_only_account() {
     // `state` is a read-only pre-image snapshot; account state is derived
@@ -1102,12 +1149,11 @@ fn lp_position_extracted_from_created_pool_share_trustline() {
     assert_eq!(positions[0].pool_id, "aabb");
     assert_eq!(positions[0].account_id, "GABC");
     assert_eq!(positions[0].shares, "42.0000000");
-    assert_eq!(positions[0].first_deposit_ledger, Some(100));
     assert_eq!(positions[0].last_updated_ledger, 100);
 }
 
 #[test]
-fn lp_position_updated_drops_first_deposit_ledger() {
+fn lp_position_updated_emits_the_new_balance() {
     let changes = vec![make_change(
         "trustline",
         "updated",
@@ -1127,9 +1173,6 @@ fn lp_position_updated_drops_first_deposit_ledger() {
     let positions = extract_lp_positions(&changes);
     assert_eq!(positions.len(), 1);
     assert_eq!(positions[0].shares, "5.0000000");
-    // updated → preserve original first_deposit_ledger via NULL +
-    // staging COALESCE, not overwrite from this change.
-    assert!(positions[0].first_deposit_ledger.is_none());
 }
 
 #[test]
@@ -1148,7 +1191,6 @@ fn lp_position_removed_emits_zero_shares_from_key() {
     let positions = extract_lp_positions(&changes);
     assert_eq!(positions.len(), 1);
     assert_eq!(positions[0].shares, "0.0000000");
-    assert!(positions[0].first_deposit_ledger.is_none());
     assert_eq!(positions[0].last_updated_ledger, 100);
 }
 
@@ -1362,20 +1404,23 @@ fn extract_pool_produces_state_and_snapshot() {
 
 use crate::types::ContractFunction;
 
-fn iface(wasm_hash: &str, fn_names: &[&str]) -> ExtractedContractInterface {
-    ExtractedContractInterface {
+fn iface(wasm_hash: &str, fn_names: &[&str]) -> ExtractedWasmProgram {
+    ExtractedWasmProgram {
         wasm_hash: wasm_hash.to_string(),
-        functions: fn_names
-            .iter()
-            .map(|n| ContractFunction {
-                name: (*n).to_string(),
-                doc: String::new(),
-                inputs: Vec::new(),
-                outputs: Vec::new(),
-            })
-            .collect(),
+        functions: Some(
+            fn_names
+                .iter()
+                .map(|n| ContractFunction {
+                    name: (*n).to_string(),
+                    doc: String::new(),
+                    inputs: Vec::new(),
+                    outputs: Vec::new(),
+                })
+                .collect(),
+        ),
         wasm_byte_len: 0,
         upgradeable: false,
+        code: Vec::new(),
     }
 }
 
@@ -1627,16 +1672,15 @@ fn nft_mint_event_produces_nft() {
         token_id: json!({"type": "u32", "value": 42}),
         from: None,
         to: Some("GOWNER".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: None,
+        event_id: event_at(100),
     }];
 
     let nfts = detect_nfts(&events);
     assert_eq!(nfts.len(), 1);
     assert_eq!(nfts[0].contract_id, "CNFT789");
     assert_eq!(nfts[0].token_id, "42");
-    assert_eq!(nfts[0].owner_account.as_deref(), Some("GOWNER"));
+    assert_eq!(nfts[0].owner.as_deref(), Some("GOWNER"));
     assert_eq!(nfts[0].minted_at_ledger, Some(100));
 }
 
@@ -1649,14 +1693,13 @@ fn nft_transfer_event() {
         token_id: json!({"type": "u32", "value": 42}),
         from: Some("GFROM".into()),
         to: Some("GTO".into()),
-        ledger_sequence: 200,
         created_at: 1700001000,
-        event_id: None,
+        event_id: event_at(200),
     }];
 
     let nfts = detect_nfts(&events);
     assert_eq!(nfts.len(), 1);
-    assert_eq!(nfts[0].owner_account.as_deref(), Some("GTO"));
+    assert_eq!(nfts[0].owner.as_deref(), Some("GTO"));
     assert!(nfts[0].minted_at_ledger.is_none());
 }
 
@@ -1669,15 +1712,14 @@ fn nft_burn_event() {
         token_id: json!({"type": "string", "value": "unique-nft-id"}),
         from: Some("GFROM".into()),
         to: None,
-        ledger_sequence: 300,
         created_at: 1700002000,
-        event_id: None,
+        event_id: event_at(300),
     }];
 
     let nfts = detect_nfts(&events);
     assert_eq!(nfts.len(), 1);
     assert_eq!(nfts[0].token_id, "unique-nft-id");
-    assert!(nfts[0].owner_account.is_none());
+    assert!(nfts[0].owner.is_none());
 }
 
 #[test]
@@ -1689,9 +1731,8 @@ fn empty_token_id_skipped() {
         token_id: json!({"type": "void", "value": null}),
         from: None,
         to: Some("GOWNER".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: None,
+        event_id: event_at(100),
     }];
 
     let nfts = detect_nfts(&events);
@@ -1715,9 +1756,8 @@ fn make_nft_event(
         token_id: json!({"type": "u32", "value": token}),
         from: from.map(Into::into),
         to: to.map(Into::into),
-        ledger_sequence: ledger,
         created_at: 1700000000 + ledger as i64,
-        event_id: None,
+        event_id: event_at(ledger),
     }
 }
 
@@ -1737,9 +1777,8 @@ fn mint_event_yields_owner_to() {
     assert_eq!(out[0].contract_id, "CNFT1");
     assert_eq!(out[0].token_id, "42");
     assert_eq!(out[0].event_type, NftEventType::Mint);
-    assert_eq!(out[0].owner_account.as_deref(), Some("GRECIPIENT"));
-    assert_eq!(out[0].event_order, 0);
-    assert_eq!(out[0].ledger_sequence, 100);
+    assert_eq!(out[0].owner.as_deref(), Some("GRECIPIENT"));
+    assert_eq!(out[0].event_id.ledger_sequence, 100);
 }
 
 #[test]
@@ -1756,7 +1795,7 @@ fn transfer_event_yields_owner_to() {
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].event_type, NftEventType::Transfer);
-    assert_eq!(out[0].owner_account.as_deref(), Some("GTO"));
+    assert_eq!(out[0].owner.as_deref(), Some("GTO"));
 }
 
 #[test]
@@ -1773,11 +1812,11 @@ fn burn_event_yields_owner_none() {
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].event_type, NftEventType::Burn);
-    assert!(out[0].owner_account.is_none());
+    assert!(out[0].owner.is_none());
 }
 
 #[test]
-fn event_order_monotonic_per_triple() {
+fn keeps_one_tokens_changes_in_ledger_order() {
     let events = vec![
         make_nft_event("CNFT1", "mint", 42, None, Some("GA"), 100),
         make_nft_event("CNFT1", "transfer", 42, Some("GA"), Some("GB"), 100),
@@ -1785,28 +1824,8 @@ fn event_order_monotonic_per_triple() {
     ];
     let out = extract_nft_ownership_events(&events);
 
-    assert_eq!(out.len(), 3);
-    assert_eq!(out[0].event_order, 0);
-    assert_eq!(out[1].event_order, 1);
-    assert_eq!(out[2].event_order, 2);
-}
-
-#[test]
-fn event_order_resets_per_token() {
-    let events = vec![
-        // Same contract, same ledger, different tokens.
-        make_nft_event("CNFT1", "mint", 42, None, Some("GA"), 100),
-        make_nft_event("CNFT1", "mint", 43, None, Some("GB"), 100),
-        // Different contract, same ledger.
-        make_nft_event("CNFT2", "mint", 42, None, Some("GC"), 100),
-    ];
-    let out = extract_nft_ownership_events(&events);
-
-    assert_eq!(out.len(), 3);
-    // Each (contract, token, ledger) triple starts its own counter.
-    assert_eq!(out[0].event_order, 0);
-    assert_eq!(out[1].event_order, 0);
-    assert_eq!(out[2].event_order, 0);
+    let owners: Vec<_> = out.iter().map(|e| e.owner.as_deref()).collect();
+    assert_eq!(owners, [Some("GA"), Some("GB"), Some("GC")]);
 }
 
 #[test]
@@ -1819,9 +1838,8 @@ fn token_id_jsonvalue_stringified() {
         token_id: json!({"type": "u64", "value": 42}),
         from: None,
         to: Some("GA".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: None,
+        event_id: event_at(100),
     };
     // String token_id → "uuid-abc".
     let string = NftEvent {
@@ -1831,9 +1849,8 @@ fn token_id_jsonvalue_stringified() {
         token_id: json!({"type": "string", "value": "uuid-abc"}),
         from: None,
         to: Some("GB".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: None,
+        event_id: event_at(100),
     };
 
     let out = extract_nft_ownership_events(&[numeric, string]);
@@ -1854,9 +1871,8 @@ fn empty_token_id_event_skipped() {
         token_id: json!({"type": "void", "value": null}),
         from: None,
         to: Some("GA".into()),
-        ledger_sequence: 100,
         created_at: 1700000000,
-        event_id: None,
+        event_id: event_at(100),
     }];
 
     let out = extract_nft_ownership_events(&events);
@@ -1880,35 +1896,17 @@ fn unknown_event_kind_skipped() {
 }
 
 #[test]
-fn event_order_overflow_skips_excess_events() {
-    // Pathological-input guard: once a (contract, token, ledger)
-    // triple has emitted i16::MAX events, further events for that
-    // triple are skipped with a warn rather than overflowing the
-    // SMALLINT column at staging.
-    const OVERFLOW_AT: u16 = i16::MAX as u16;
-
-    let mut events = Vec::with_capacity((OVERFLOW_AT as usize) + 5);
-    for _ in 0..(OVERFLOW_AT as usize + 5) {
-        events.push(make_nft_event(
-            "CNFT1",
-            "transfer",
-            42,
-            Some("GA"),
-            Some("GB"),
-            100,
-        ));
-    }
+fn keeps_every_change_past_the_old_smallint_cap() {
+    // The retired `nft_ownership` stored a per-token counter as SMALLINT and
+    // the parser dropped every event past 32,767 for one (contract, token,
+    // ledger). A row is now placed by its event id, so nothing is dropped.
+    let count = i16::MAX as usize + 5;
+    let events: Vec<_> = (0..count)
+        .map(|_| make_nft_event("CNFT1", "transfer", 42, Some("GA"), Some("GB"), 100))
+        .collect();
     let out = extract_nft_ownership_events(&events);
 
-    // Emits exactly i16::MAX + 1 rows (event_order 0..=32_767),
-    // then refuses to write more — five excess events dropped.
-    assert_eq!(
-        out.len(),
-        OVERFLOW_AT as usize + 1,
-        "should emit one row per slot 0..=i16::MAX, no overflow"
-    );
-    assert_eq!(out.first().unwrap().event_order, 0);
-    assert_eq!(out.last().unwrap().event_order, i16::MAX as u16);
+    assert_eq!(out.len(), count);
 }
 
 // ----------------------------------------------------------------------
@@ -2083,4 +2081,14 @@ fn native_singleton_returns_native_asset_no_identity() {
     assert!(asset.asset_code.is_none());
     assert!(asset.issuer_address.is_none());
     assert!(asset.contract_id.is_none());
+}
+
+/// An NFT event's id in `ledger`; the rest of its location is not looked at.
+fn event_at(ledger: u32) -> crate::event::EventId {
+    crate::event::EventId {
+        ledger_sequence: ledger,
+        transaction_index: 1,
+        operation_index: 0,
+        event_index: 0,
+    }
 }

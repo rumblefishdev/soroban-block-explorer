@@ -9,9 +9,9 @@ import { buildOperationEntries } from './operationEntries.js';
 
 function light(partial: Partial<OperationItem>): OperationItem {
   return {
-    appearance_id: 1,
     created_at: '2026-01-01T00:00:00Z',
     ledger_sequence: 100,
+    operation_index: 0,
     pool_ids: [],
     type: 0,
     type_name: 'PAYMENT',
@@ -19,8 +19,8 @@ function light(partial: Partial<OperationItem>): OperationItem {
   };
 }
 
-function heavy(application_order: number, op_type: string): XdrOperationDto {
-  return { application_order, op_type, details: { amount: application_order } };
+function heavy(operation_index: number, op_type: string): XdrOperationDto {
+  return { operation_index, op_type, details: { amount: operation_index } };
 }
 
 function tx(
@@ -42,41 +42,36 @@ describe('buildOperationEntries', () => {
       tx(
         [
           light({
-            appearance_id: 7,
-            application_order: 1,
+            operation_index: 0,
             type_name: 'MANAGE_BUY_OFFER',
           }),
         ],
-        [1, 2, 3, 4].map((n) => heavy(n, 'manage_buy_offer'))
+        [0, 1, 2, 3].map((n) => heavy(n, 'manage_buy_offer'))
       )
     );
     expect(entries).toHaveLength(4);
     // every entry resolves to the shared light identity but carries its own heavy op
-    expect(entries.map((e) => e.heavy?.application_order)).toEqual([
-      1, 2, 3, 4,
-    ]);
-    expect(entries.every((e) => e.light?.appearance_id === 7)).toBe(true);
-    // picker keys (row.appearance_id) are unique
-    const keys = entries.map((e) => e.row.appearance_id);
+    expect(entries.map((e) => e.heavy?.operation_index)).toEqual([0, 1, 2, 3]);
+    expect(entries.every((e) => e.light?.operation_index === 0)).toBe(true);
+    // picker keys (row.operation_index) are unique
+    const keys = entries.map((e) => e.row.operation_index);
     expect(new Set(keys).size).toBe(4);
   });
 
-  it('matches 1:1 unfolded ops by application_order', () => {
+  it('matches 1:1 unfolded ops by operation_index', () => {
     const entries = buildOperationEntries(
       tx(
         [
           light({
-            appearance_id: 1,
-            application_order: 1,
+            operation_index: 0,
             type_name: 'PAYMENT',
           }),
           light({
-            appearance_id: 2,
-            application_order: 2,
+            operation_index: 1,
             type_name: 'CREATE_ACCOUNT',
           }),
         ],
-        [heavy(1, 'payment'), heavy(2, 'create_account')]
+        [heavy(0, 'payment'), heavy(1, 'create_account')]
       )
     );
     expect(entries.map((e) => e.light?.type_name)).toEqual([
@@ -86,7 +81,7 @@ describe('buildOperationEntries', () => {
   });
 
   it('synthesizes a row when no light identity matches', () => {
-    const entries = buildOperationEntries(tx([], [heavy(1, 'bump_sequence')]));
+    const entries = buildOperationEntries(tx([], [heavy(0, 'bump_sequence')]));
     expect(entries).toHaveLength(1);
     expect(entries[0]?.light).toBeUndefined();
     expect(entries[0]?.row.type_name).toBe('BUMP_SEQUENCE');
@@ -100,7 +95,7 @@ describe('buildOperationEntries', () => {
   // archive miss instead of standing in a shape the user reads as the truth
   // (0377 F7).
   it('yields nothing when heavy is absent, rather than the folded light rows', () => {
-    const ops = [light({ appearance_id: 5, application_order: 1 })];
+    const ops = [light({ operation_index: 0 })];
     expect(buildOperationEntries(tx(ops, null))).toHaveLength(0);
   });
 });

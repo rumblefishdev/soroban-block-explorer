@@ -13,7 +13,6 @@ import { usePoolDetail } from '../api/index.js';
 import { PoolCharts } from './pool-detail/PoolCharts.js';
 import { PoolDetailHeader } from './pool-detail/PoolDetailHeader.js';
 import { PoolDetailSkeleton } from './pool-detail/PoolDetailSkeleton.js';
-import { NotIndexedSection } from './pool-detail/NotIndexedSection.js';
 import { PoolKpiStrip } from './pool-detail/PoolKpiStrip.js';
 import { PoolParticipants } from './pool-detail/PoolParticipants.js';
 import { PoolSummary } from './pool-detail/PoolSummary.js';
@@ -28,7 +27,7 @@ import { PoolActivity } from './pool-detail/PoolActivity.js';
  *   3. Summary (key-value rows for Pool ID, Fee, Total shares, reserves)
  *   4. Activity chart (TVL/Volume/Fees tabs, 1D/7D/30D/1Y range)
  *   5. Pool participants table
- *   6. Recent transactions table
+ *   6. Recent activity table
  *
  * Each section is fetched by its own query and wrapped in a
  * `SectionErrorBoundary` so one failing section never collapses
@@ -88,20 +87,11 @@ export default function LiquidityPoolDetailPage() {
       {/* Gate the sub-sections on resolved parent data so their queries never
           fire while the pool is still loading — a parent 404 then produces
           zero sub-section 404s. */}
-      {/* A soroban pool's operations and providers are not indexed yet, so
-          these sections say so instead of firing queries that can only come
-          back empty and read as "no activity". */}
-      {detail.data?.pool_kind === 'soroban' && (
-        <>
-          <NotIndexedSection title="Activity chart" what="Pool history" />
-          <NotIndexedSection
-            title="Pool participants"
-            what="Liquidity providers"
-          />
-          <NotIndexedSection title="Recent activity" what="Pool activity" />
-        </>
-      )}
-      {detail.data != null && detail.data.pool_kind !== 'soroban' && (
+      {/* A soroban pool's chart plots TVL from its reserve history and
+          volume and fees from its trades; its providers are its share token's
+          holders, and its activity is its movements, one row per pool event —
+          all read by the same endpoints a classic pool uses. */}
+      {detail.data != null && (
         <>
           <SectionErrorBoundary sectionName="pool-charts">
             <PoolCharts poolId={poolId} />

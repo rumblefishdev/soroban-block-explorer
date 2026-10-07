@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <!-- Google Consent Mode: everything denied until the HubSpot banner says
          otherwise. Must run before GTM; the listener after the HubSpot loader
-         sends the update. -->
+         sends the update. The GTM blocklist below it has to be in place before
+         GTM loads as well. -->
     <script>
       window.dataLayer = window.dataLayer || [];
       function gtag() {
@@ -17,6 +18,10 @@
         ad_personalization: 'denied',
         wait_for_update: 500,
       });
+      // No Custom HTML tags or Custom JavaScript variables, whatever the
+      // container holds: a published tag must not be able to run arbitrary
+      // code on this origin, which the Prices API portal trusts (lore-0593).
+      dataLayer.push({ 'gtm.blocklist': ['customScripts'] });
     </script>
     <!-- Google Tag Manager -->
     <script>

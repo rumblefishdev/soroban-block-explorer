@@ -3,8 +3,8 @@
 //!
 //! ## Design — hybrid surrogate / natural keys
 //!
-//! Three high-cardinality FK hubs (`accounts`, `soroban_contracts`,
-//! `transactions`) carry surrogate `id: Int64` derived via
+//! Two high-cardinality FK hubs (`accounts`, `soroban_contracts`) carry
+//! surrogate `id: Int64` derived via
 //! [`super::ids`] (`cityhash64(natural_key)`, deterministic). All FK
 //! columns pointing at these tables are `Int64` referencing those
 //! ids. Cheaper joins, smaller storage, faster scans vs natural-key
@@ -39,7 +39,7 @@
 //! convention: `WHERE amount > 0` to recover "active trustlines"
 //! semantics.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
@@ -49,17 +49,16 @@ use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::claimable_balance::ExtractedClaimableBalance;
 use xdr_parser::executable_ref::ExtractedExecutableRefTarget;
-use xdr_parser::scval;
 use xdr_parser::types::{
-    EventSource, ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment,
-    ExtractedContractInterface, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
-    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
-    ExtractedNftEvent, ExtractedOperation, ExtractedTransaction, SacAssetIdentity,
+    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedEvent,
+    ExtractedInvocation, ExtractedLedger, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
+    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, ExtractedOperation, ExtractedTransaction,
+    ExtractedWasmProgram, SacAssetIdentity,
 };
 use xdr_parser::{AccountDelta, LedgerDelta, NetSettled};
 use xdr_parser::{EventAsset, LedgerAsset};
 
-use xdr_parser::event::{ExecutableUpdate, extract_executable_update};
+use xdr_parser::executable_update::{ExecutableUpdate, extract_executable_update};
 use xdr_parser::pool_config_factory::PoolConfig;
 use xdr_parser::pool_family::PoolFamilyWrite;
 
@@ -218,7 +217,7 @@ pub struct StagedLedger {
     /// OBSERVED this change set (full-set replace; trustline-only appearances
     /// never emit one). lore-0463.
     pub account_entry_state_rows: Vec<AccountEntryStateRow>,
-    pub wasm_rows: Vec<WasmInterfaceMetadataRow>,
+    pub wasm_rows: Vec<WasmProgramRow>,
     pub contract_rows: Vec<SorobanContractRow>,
     /// On-chain Soroban token metadata side table (task 0297). Populated inside
     /// [`prepare_with_sac_overrides`] via [`build_metadata_rows`] from the
@@ -246,6 +245,10 @@ pub struct StagedLedger {
     /// position (task 0372) → `pool_operation_amounts`: trades from
     /// `claimedAtoms`, deposits/withdrawals from `poolDelta`.
     pub pool_amount_rows: Vec<PoolOperationAmountRow>,
+    /// Task 0374 (W1) → `pool_movements`: the swaps, deposits and withdrawals
+    /// of the soroban pools this ledger staged state for, decoded from
+    /// `event_rows`.
+    pub pool_movement_rows: Vec<PoolMovementRow>,
     pub event_rows: Vec<SorobanEventRow>,
     /// Per-(contract, tx) presence plus the invocation's caller and call count
     /// (tasks 0541, 0586) → `contract_activity`, the contract-dimension twin of
@@ -294,7 +297,7 @@ pub struct StageInputs<'a> {
     pub operations: &'a [(String, Vec<ExtractedOperation>)],
     pub events: &'a [(String, Vec<ExtractedEvent>)],
     pub invocations: &'a [(String, Vec<ExtractedInvocation>)],
-    pub contract_interfaces: &'a [ExtractedContractInterface],
+    pub programs: &'a [ExtractedWasmProgram],
     pub contract_deployments: &'a [ExtractedContractDeployment],
     pub account_states: &'a [ExtractedAccountState],
     pub liquidity_pools: &'a [ExtractedLiquidityPool],
@@ -360,7 +363,7 @@ pub fn prepare(
     operations: &[(String, Vec<ExtractedOperation>)],
     events: &[(String, Vec<ExtractedEvent>)],
     invocations: &[(String, Vec<ExtractedInvocation>)],
-    contract_interfaces: &[ExtractedContractInterface],
+    programs: &[ExtractedWasmProgram],
     contract_deployments: &[ExtractedContractDeployment],
     account_states: &[ExtractedAccountState],
     liquidity_pools: &[ExtractedLiquidityPool],
@@ -378,7 +381,7 @@ pub fn prepare(
         operations,
         events,
         invocations,
-        contract_interfaces,
+        programs,
         contract_deployments,
         account_states,
         liquidity_pools,
@@ -425,26 +428,18 @@ pub fn build_wasm_upgrade_rows(
     let mut by_contract: HashMap<String, SorobanContractRow> = HashMap::new();
     for (_tx_hash, evs) in events {
         for ev in evs {
-            // Only consensus events drive state. The diagnostic container holds
-            // byte-identical copies of consensus events AND events from FAILED
-            // transactions (an upgrade that never applied) — acting on those would
-            // write a `wasm_hash` the chain never adopted. Mirror the `soroban_events`
-            // staging guard (this is the same population the backfill reads, post-drop).
-            if is_diagnostic(ev.source) {
-                continue;
-            }
             // Only the host emits `executable_update`, and always as a SYSTEM
             // event. A contract can emit a Contract-typed event with the same
             // topic shape; requiring System blocks that spoof of its own
             // `wasm_hash` (and never drops a real upgrade — all are System).
-            if ev.event_type != ContractEventType::System {
+            if ev.body.event_type != ContractEventType::System {
                 continue;
             }
-            let Some(addr) = ev.contract_id.as_deref() else {
+            let Some(addr) = ev.body.contract_id.as_deref() else {
                 continue;
             };
             // `extract_…` returns `Some` only for a well-formed executable_update.
-            let Some(update) = extract_executable_update(&ev.topics) else {
+            let Some(update) = extract_executable_update(&ev.body.topics) else {
                 continue;
             };
             // Skip-on-miss: without the prior row we cannot carry identity
@@ -604,7 +599,7 @@ pub fn build_balance_rows(
 /// different ledgers, so a deploy's WASM is invisible to the same-ledger
 /// `wasm_classification` map below and the contract would persist the parser
 /// default `Other`. The writer pre-fetches the verdict for such hashes from
-/// the already-persisted `wasm_interface_metadata` (see
+/// the already-persisted `wasm_programs` (see
 /// `persist::fetch_prior_wasm_verdicts`) and passes it here; the deploy
 /// override consults it as a fallback after the same-ledger map. Legacy
 /// callers via [`prepare`] pass an empty map and behave exactly as before.
@@ -617,7 +612,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         operations,
         events,
         invocations,
-        contract_interfaces,
+        programs,
         contract_deployments,
         account_states,
         liquidity_pools,
@@ -786,17 +781,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let entry = participants_per_tx.entry(tx_hash.clone()).or_default();
         let asset_entry = event_assets_per_tx.entry(tx_hash.clone()).or_default();
         for ev in evs {
-            // Skip diagnostic-source events — they are host trace/simulation
-            // output, not a real state change, and are dropped from the
-            // persisted `soroban_events` (below). Filtering here keeps live
-            // ingest byte-identical to the backfill (which reads `soroban_events`)
-            // and never registers a participant/asset from a failed-call trace.
-            if is_diagnostic(ev.source) {
-                continue;
-            }
-            let Some(derived) =
-                derive_token_event(&ev.topics, ev.contract_id.as_deref().map(ids::contract_id))
-            else {
+            let Some(derived) = derive_token_event(
+                &ev.body.topics,
+                ev.body.contract_id.as_deref().map(ids::contract_id),
+            ) else {
                 continue;
             };
             for key in derived.participant_strkeys {
@@ -812,7 +800,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     for (tx_hash, invs) in invocations {
         let entry = participants_per_tx.entry(tx_hash.clone()).or_default();
         for inv in invs {
-            if let Some(caller) = &inv.caller_account
+            if let Some(caller) = &inv.caller
                 && is_strkey_account(caller)
             {
                 account_keys.insert(caller.clone());
@@ -858,12 +846,12 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         }
     }
     for nft in nfts {
-        if let Some(owner) = &nft.owner_account {
+        if let Some(owner) = &nft.owner {
             account_keys.insert(owner.clone());
         }
     }
     for ev in nft_events {
-        if let Some(owner) = &ev.owner_account
+        if let Some(owner) = &ev.owner
             && is_strkey_account(owner)
         {
             account_keys.insert(owner.clone());
@@ -913,43 +901,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         });
     }
 
-    // ---- wasm_interface_metadata (deduped by wasm_hash) ----
-    //
-    // Task 0118 Phase 2 (PG-side mirror) — run the wasm-spec classifier
-    // alongside the metadata dedup. The resulting per-hash verdict
-    // feeds two downstream consumers in this same `prepare` call:
-    //   * `contract_rows.contract_type` override for non-SAC deploys
-    //     whose WASM is uploaded in the same ledger (matches PG
-    //     `Staged::prepare` behaviour at staging.rs:578-585).
-    //   * NFT-candidate routing (`nft_rows` / `nft_pending_rows`,
-    //     task 0217 / 0220) — `Other`/NULL verdict routes to
-    //     quarantine; `Fungible` / `Token` drops the row entirely.
-    let mut wasm_seen: HashSet<[u8; 32]> = HashSet::new();
-    let mut wasm_classification: HashMap<[u8; 32], ContractType> =
-        HashMap::with_capacity(contract_interfaces.len());
-    for iface in contract_interfaces {
-        let hash = decode_hash(&iface.wasm_hash, "wasm_hash")?;
-        if !wasm_seen.insert(hash) {
-            continue;
-        }
-        let classification = xdr_parser::classify_contract_from_wasm_spec(&iface.functions);
-        wasm_classification.insert(hash, classification.into());
-
-        // Task 0327: persist the mutability bit so the API can surface the
-        // Upgradeable/Immutable badge. Read back via
-        // `JSONExtractBool(metadata,'upgradeable')`; rows written before this
-        // (no key) read as Unknown → chip renders nothing.
-        let metadata = serde_json::json!({
-            "functions": iface.functions,
-            "wasm_byte_len": iface.wasm_byte_len,
-            "upgradeable": iface.upgradeable,
-        });
-        out.wasm_rows.push(WasmInterfaceMetadataRow {
-            wasm_hash: hash,
-            metadata: serde_json::to_string(&metadata)
-                .map_err(|e| staging_err(&format!("wasm metadata serialize: {e}")))?,
-        });
-    }
+    let wasm_classification = wasm_programs::wasm_rows(&mut out, programs)?;
 
     // ---- soroban_contracts (deduped by contract_id) ----
     let mut contract_seen: HashSet<String> = HashSet::new();
@@ -971,7 +923,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         // Verdict source, in precedence order:
         //   1. `wasm_classification` — WASM uploaded in THIS ledger.
         //   2. `prior_wasm_verdicts` — WASM uploaded in an EARLIER ledger,
-        //      pre-fetched by the writer from `wasm_interface_metadata`
+        //      pre-fetched by the writer from `wasm_programs`
         //      (task 0283 live G1). This is the common Soroban case
         //      (upload + deploy are separate txs / ledgers); without it
         //      the contract would persist `Other` and its NFT events would
@@ -1035,7 +987,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let mut app_order_by_hash: HashMap<String, i16> = HashMap::with_capacity(transactions.len());
     for (idx, tx) in transactions.iter().enumerate() {
         let hash = decode_hash(&tx.hash, "tx.hash")?;
-        let tx_id = ids::transaction_id(&hash);
 
         let inner_tx_hash = match tx.inner_tx_hash.as_deref() {
             Some(h) => Some(decode_hash(h, "inner_tx_hash")?),
@@ -1047,7 +998,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         let op_count = op_count_by_tx.get(tx.hash.as_str()).copied().unwrap_or(0);
 
         out.transaction_rows.push(TransactionRow {
-            id: tx_id,
             hash,
             ledger_sequence: ledger_sequence_i64,
             application_order: app_order,
@@ -1103,6 +1053,17 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
             PoolFamilyWrite::AddressList(w) => address_lists.push(w),
         }
     }
+    // A pair's legs, from its own instance written in this ledger: its
+    // `swap`/`deposit`/`withdraw` events name amounts by leg position only.
+    let pair_legs: HashMap<[u8; 32], Vec<i64>> = factory_pairs
+        .iter()
+        .filter_map(|sp| {
+            let legs = [&sp.state.token_0, &sp.state.token_1]
+                .map(|t| contract_token_asset_id(t, sac_classic))
+                .to_vec();
+            Some((ids::contract_payload(&sp.state.pair)?, legs))
+        })
+        .collect();
 
     // Soroban pool registrations (task 0374): the semantic decode lives in
     // `xdr_parser::pool_router` (same idiom as `detect_nft_events`); this
@@ -1640,44 +1601,8 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     )?;
 
     // ---- lp_positions (dedup by (pool_id, account_id)) ----
-    use std::collections::hash_map::Entry;
-    let mut lp_dedup: HashMap<([u8; 32], i64), LpPositionRow> = HashMap::new();
-    for pos in lp_positions {
-        let pool_id = decode_hash(&pos.pool_id, "lp_position.pool_id")?;
-        let acct_id = ids::account_id(&pos.account_id);
-        let last = i64::from(pos.last_updated_ledger);
-        let first = pos.first_deposit_ledger.map(i64::from).unwrap_or(last);
-        let new_row = LpPositionRow {
-            pool_id,
-            account_id: acct_id,
-            shares: decimal7_string_to_i128(&pos.shares)?,
-            first_deposit_ledger: first,
-            last_updated_ledger: last,
-            // The pool-share trustline was removed — the participant left the
-            // pool, as opposed to withdrawing to zero and staying. ADR 0055.
-            closed_at_ledger: if pos.closed { last } else { 0 },
-        };
-        match lp_dedup.entry((pool_id, acct_id)) {
-            Entry::Occupied(mut occ) => {
-                let existing = occ.get_mut();
-                if new_row.last_updated_ledger >= existing.last_updated_ledger {
-                    let preserved_first = existing
-                        .first_deposit_ledger
-                        .min(new_row.first_deposit_ledger);
-                    *existing = new_row;
-                    existing.first_deposit_ledger = preserved_first;
-                } else {
-                    existing.first_deposit_ledger = existing
-                        .first_deposit_ledger
-                        .min(new_row.first_deposit_ledger);
-                }
-            }
-            Entry::Vacant(vac) => {
-                vac.insert(new_row);
-            }
-        }
-    }
-    out.lp_position_rows.extend(lp_dedup.into_values());
+    out.lp_position_rows
+        .extend(lp_positions::lp_position_rows(lp_positions)?);
 
     operations::operation_rows(
         &mut out,
@@ -1694,65 +1619,13 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     ));
 
     // ---- soroban_events (UNFOLDED per ADR 0044 §4a, keyed by rpc id per ADR 0059) ----
-    let mut diagnostic_dropped: usize = 0;
-    let mut contract_orphan_dropped: usize = 0;
-    // (contract, transaction) of every operation event, for
-    // `contract_activity` below: the parser says where an event came from,
-    // so a fee event is left out by its source, not inferred from its id.
-    let mut contract_txs: BTreeSet<(i64, i16)> = BTreeSet::new();
-    for (tx_hash, evs) in events {
-        let Some(&application_order) = app_order_by_hash.get(tx_hash) else {
-            continue;
-        };
-        for ev in evs {
-            if is_diagnostic(ev.source) {
-                diagnostic_dropped += 1;
-                continue;
-            }
-            let Some(contract_strkey) = &ev.contract_id else {
-                contract_orphan_dropped += 1;
-                continue;
-            };
-            // Never guessed: an id is the parser's reading of the meta, and a
-            // wrong one would silently merge two events under the RMT key.
-            let Some(id) = ev.event_id else {
-                return Err(staging_err(&format!(
-                    "event without a stellar-rpc id (tx {tx_hash}, source {:?}) — ADR 0059",
-                    ev.source
-                )));
-            };
-            let topics_xdr = serde_json::to_string(&ev.topics)
-                .map_err(|e| staging_err(&format!("event topics serialize: {e}")))?;
-            let data_xdr = serde_json::to_string(&ev.data)
-                .map_err(|e| staging_err(&format!("event data serialize: {e}")))?;
-            let signature = extract_event_signature(&ev.topics);
-            let contract_id = ids::contract_id(contract_strkey);
-            if ev.source == EventSource::PerOp {
-                contract_txs.insert((contract_id, application_order));
-            }
-            out.event_rows.push(SorobanEventRow {
-                contract_id,
-                ledger_sequence: ledger_sequence_i64,
-                transaction_index: id.transaction_index,
-                operation_index: id.operation_index,
-                event_index: id.event_index,
-                application_order,
-                event_type: ev.event_type as i16,
-                signature,
-                topics_xdr,
-                data_xdr,
-            });
-        }
-    }
-    if diagnostic_dropped > 0 || contract_orphan_dropped > 0 {
-        tracing::debug!(
-            ledger_sequence = ledger.sequence,
-            diagnostic_dropped,
-            contract_orphan_dropped,
-            staged = out.event_rows.len(),
-            "CH soroban_events filtered"
-        );
-    }
+    let contract_txs = soroban_events::rows(
+        &mut out,
+        events,
+        &app_order_by_hash,
+        ledger,
+        ledger_sequence_i64,
+    )?;
 
     contract_activity::rows(
         &mut out,
@@ -2026,67 +1899,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         // observed (`thresholds.is_some()`); a trustline-only accum must not
         // touch the set. Deleted accounts (`account_removed`) emit nothing:
         // the page gates on `deleted`, and a merge cannot change signers.
-        if let (Some(th_hex), false) = (&st.thresholds, st.account_removed) {
-            match parse_thresholds(th_hex) {
-                Some([master_weight, threshold_low, threshold_med, threshold_high]) => {
-                    let signers = st.signers.as_deref().unwrap_or_default();
-                    let mut signer_keys = Vec::with_capacity(signers.len());
-                    let mut signer_weights = Vec::with_capacity(signers.len());
-                    let mut signer_types = Vec::with_capacity(signers.len());
-                    for sg in signers {
-                        let key = sg.get("key").and_then(Value::as_str).unwrap_or("");
-                        let weight = sg.get("weight").and_then(Value::as_u64).unwrap_or(0) as u32;
-                        let typ = sg.get("type").and_then(Value::as_str).unwrap_or("unknown");
-                        // A keyless signer would silently shrink the set — a
-                        // 3-of-5 stored as 3-of-4, which reads as a real
-                        // threshold rather than as missing data. Cannot happen
-                        // from `account_data` (the key is always emitted), so
-                        // reaching this means the producer changed shape.
-                        if key.is_empty() {
-                            tracing::warn!(
-                                account = %st.account_id,
-                                "signer entry carries no key — DROPPED from the set; \
-                                 the stored signer count is now lower than the chain's"
-                            );
-                            continue;
-                        }
-                        // The protocol constrains non-master weights to 1-255
-                        // (SetOptions deletes at 0). Store what the chain
-                        // carried; out-of-range is an anomaly worth a trace,
-                        // never a silent clamp.
-                        if weight == 0 || weight > 255 {
-                            tracing::warn!(
-                                account = %st.account_id,
-                                weight,
-                                "signer weight outside protocol range 1-255 — stored as carried"
-                            );
-                        }
-                        signer_keys.push(key.to_string());
-                        signer_weights.push(weight);
-                        signer_types.push(typ.to_string());
-                    }
-                    entry_state_dedup.insert(
-                        account_id_int,
-                        AccountEntryStateRow {
-                            account_id: account_id_int,
-                            signer_keys,
-                            signer_weights,
-                            signer_types,
-                            master_weight,
-                            threshold_low,
-                            threshold_med,
-                            threshold_high,
-                            flags: st.flags.unwrap_or(0),
-                            last_updated_ledger: watermark,
-                        },
-                    );
-                }
-                None => tracing::warn!(
-                    account = %st.account_id,
-                    thresholds = %th_hex,
-                    "unparseable thresholds hex — signers row skipped, not fabricated"
-                ),
-            }
+        if let (Some(th_hex), false) = (&st.thresholds, st.account_removed)
+            && let Some(row) = entry_state_row(st, th_hex, account_id_int, watermark)
+        {
+            entry_state_dedup.insert(account_id_int, row);
         }
 
         for rm in &st.removed_trustlines {
@@ -2150,6 +1966,10 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     out.asset_transfer_rows = value_flow.transfers;
     out.transaction_memo_rows = value_flow.memos;
 
+    // ---- pool_movements (0374, W1): from the event rows staged above ----
+    out.pool_movement_rows =
+        soroban_pool_amounts::pool_movement_rows(&out, &pair_legs, sac_classic);
+
     Ok(out)
 }
 
@@ -2170,13 +1990,6 @@ pub(crate) fn decode_hash(hex_str: &str, field: &'static str) -> Result<[u8; 32]
 
 fn staging_err(msg: &str) -> SchemaError {
     SchemaError::Staging(msg.to_string())
-}
-
-/// 4-byte `Thresholds` hex → [master_weight, low, med, high]. `None` on any
-/// malformation — the caller skips the row rather than fabricating zeros.
-fn parse_thresholds(hex_str: &str) -> Option<[u8; 4]> {
-    let bytes = hex::decode(hex_str).ok()?;
-    <[u8; 4]>::try_from(bytes.as_slice()).ok()
 }
 
 /// Upsert a `BalanceRow` into the per-`(holder_id, asset_id)` dedup map, keeping
@@ -2248,294 +2061,6 @@ pub(crate) fn decimal7_string_to_i128(s: &str) -> Result<i128, SchemaError> {
 
 fn is_strkey_account(s: &str) -> bool {
     s.len() <= 56 && s.starts_with('G')
-}
-
-fn is_diagnostic(src: EventSource) -> bool {
-    matches!(src, EventSource::Diagnostic)
-}
-
-/// Collapse `pool_state_changes` to ONE row per (pool, plane, ledger) — the
-/// cross-writer twin of `dedup_final_pool_snapshots` (lore-0356), via the
-/// shared `keep_last_by_key` fold. This is the ONLY fold on this vector: a
-/// pool's instance is rewritten several times in one busy ledger, and
-/// emitting every image would leave the surviving row to a version-less
-/// `ReplacingMergeTree` — the hazard backfills.md rule 4 names.
-///
-/// `plane_id` is IN the key (three-lens review, 2026-09-01): a forged plane
-/// entry naming a real pool would otherwise EVICT the pool's genuine row at
-/// this fold (and at the table's RMT key) — the read-side declared-plane
-/// filter would then hide the forgery but serve a stale ledger's reserves as
-/// current. With the plane in the key a forged row lands in its own key
-/// space, dies at the read filter, and stays visible to the divergence
-/// monitor (see the `pool_state_changes` DDL comment). Genuine collisions
-/// still fold: both arms stamp the pool's own declared plane.
-///
-/// Last-wins in staging order: the instance arm is the more specific source
-/// for a concentrated pool and runs second. Folding — not a version column —
-/// is what makes the stored row a deterministic function of the ledger, so a
-/// re-parse still wins simply by landing last (rule 4). The `ledger_sequence`
-/// component is belt-and-braces for a future batching caller
-/// (`xdr_parser::fold`).
-fn fold_pool_state_changes(rows: Vec<PoolStateChangeRow>) -> Vec<PoolStateChangeRow> {
-    xdr_parser::fold::keep_last_by_key(rows, |r| (r.pool_id, r.plane_id, r.ledger_sequence))
-}
-
-/// Collapse instance-state rows to ONE per (pool, ledger) — the last image
-/// in apply order. Load-bearing, not theoretical: 29 of 259 real
-/// (pool, ledger) keys in the raw corpus carry more than one instance image
-/// (up to 5 in one ledger — every pool action rewrites the instance), and
-/// the table's RMT version (`derived_at_ledger`) TIES within a ledger, so an
-/// unfolded insert would leave the surviving image to an arbitrary merge —
-/// the 0463 defect class. Every image carries the FULL instance storage, so
-/// keeping only the last loses nothing.
-fn fold_pool_instance_state(rows: Vec<PoolInstanceStateRow>) -> Vec<PoolInstanceStateRow> {
-    xdr_parser::fold::keep_last_by_key(rows, |r| (r.pool_id, r.derived_at_ledger))
-}
-
-/// Raw decimal reserve strings → `i128`, all-or-nothing: one unparseable
-/// element refuses the whole vector, because a partial reserve set is a
-/// snapshot lying about its own arity. Used by the router-family instance
-/// arm.
-fn parse_reserves(raw: &[String]) -> Option<Vec<i128>> {
-    raw.iter().map(|r| r.parse::<i128>().ok()).collect()
-}
-
-/// The two-leg tuple flavour of [`parse_reserves`], shared by the
-/// pair-factory and config-factory arms — same all-or-nothing rule.
-fn parse_reserve_pair(a: &str, b: &str) -> Option<Vec<i128>> {
-    Some(vec![a.parse::<i128>().ok()?, b.parse::<i128>().ok()?])
-}
-
-/// Raw LP-supply string → `i128`. Absent means the write did not touch the
-/// key (a structural 0, never a fallback); PRESENT-but-unparseable is
-/// `Err` so the caller refuses the row loudly. Shared by the pair-factory
-/// (TotalSupply) and config-factory (TotalShares) arms.
-fn parse_supply(raw: Option<&str>) -> Result<i128, ()> {
-    match raw {
-        None => Ok(0),
-        Some(raw) => raw.parse::<i128>().map_err(|_| ()),
-    }
-}
-
-/// The `assets.id` surrogate for a token named by its CONTRACT address —
-/// a soroban pool leg, or a contract-held balance.
-///
-/// Such a token is one of two things, and only one of them may keep its own
-/// contract surrogate. A genuine Soroban token IS its contract as far as asset
-/// identity goes (`ids::asset_id`'s type-3 arm returns `contract_id`). A SAC is
-/// NOT: ADR 0051 retired `asset_type = 2`, so a SAC has no `assets` row of its
-/// own and a leg keyed on its surrogate points at nothing — the same orphaning
-/// `build_balance_rows` exists to prevent for contract-held balances, and the
-/// reason 1,084 of 1,175 soroban legs resolved to no asset at all (task 0374,
-/// measured on production 2026-09-08).
-///
-/// `sac_classic` is the SAME map the balance path uses (seeded with this
-/// ledger's own SAC carriers before either caller runs), so both paths key the
-/// same asset identically. A token ABSENT from the map is a Soroban-native
-/// token, and it goes through `ids::asset_id` rather than returning the
-/// contract surrogate directly — the two are equal only because that is what
-/// the type-3 arm does, and spelling it as an ASSET id is what the defect
-/// above was missing.
-///
-/// Both callers key the same asset identically because they are the same
-/// function. They were two copies, which had already drifted cosmetically (one
-/// spelled the family `3`, the other named the enum).
-#[inline]
-fn contract_token_asset_id(token: &str, sac_classic: &HashMap<i64, i64>) -> i64 {
-    let contract = ids::contract_id(token);
-    sac_classic
-        .get(&contract)
-        .copied()
-        .unwrap_or_else(|| ids::asset_id(domain::AssetFamily::Soroban as i16, "", 0, contract))
-}
-
-/// Whether this ledger's events register any soroban pool, in any of the three
-/// families — i.e. whether [`contract_token_asset_id`] will be asked for a leg.
-pub fn registers_soroban_pools(events: &[(String, Vec<ExtractedEvent>)]) -> bool {
-    !xdr_parser::pool_router::detect_pool_registrations(events).is_empty()
-        || !xdr_parser::pool_pair_factory::detect_pair_registrations(events).is_empty()
-        || !xdr_parser::pool_config_factory::detect_config_pool_registrations(events).is_empty()
-}
-
-/// Registry row for one corroborated `new_pair` registration (task 0518).
-///
-/// `pool_type_raw` stays EMPTY: the vendor emits no type — Soroswap is one
-/// fixed constant-product mode — and an invented label would be our
-/// interpretation, not a verbatim value (decision 64). The fee is the
-/// vendor's compiled-in constant: 3/1000 on every swap ("Constant product
-/// AMM with a .3% swap fee", `soroswap/core` pair source, fetched
-/// 2026-09-02) = 30 bps. Legs are the pair's leg TOKENS in vendor order
-/// (token_0, token_1); the share token is NOT a registry column — the pair
-/// is its own LP token and the relation lives in `pool_instance_state`.
-fn factory_pair_registry_row(
-    reg: &xdr_parser::pool_pair_factory::PairRegistration,
-    ledger_sequence: i64,
-    sac_classic: &HashMap<i64, i64>,
-) -> Result<LiquidityPoolRow, &'static str> {
-    let pool_id =
-        ids::contract_payload(&reg.event.pair).ok_or("pair address is not a valid C… strkey")?;
-    Ok(LiquidityPoolRow {
-        pool_id,
-        asset_a_type: 0,
-        asset_a_code: String::new(),
-        asset_a_issuer_id: 0,
-        asset_b_type: 0,
-        asset_b_code: String::new(),
-        asset_b_issuer_id: 0,
-        fee_bps: 30,
-        last_updated_ledger: ledger_sequence,
-        pool_kind: 1,
-        legs: vec![
-            contract_token_asset_id(&reg.event.token_0, sac_classic),
-            contract_token_asset_id(&reg.event.token_1, sac_classic),
-        ],
-        deployment_id: ids::contract_id(&reg.factory),
-        pool_type_raw: String::new(),
-    })
-}
-
-/// Registry row for one corroborated config-factory registration. The event
-/// names only the pool; every registry fact comes from the pool's own
-/// `CONFIG` (the same map that corroborated the registration). The share
-/// token is NOT a registry column — the relation lives in
-/// `pool_instance_state`, same as both sibling families.
-///
-/// `pool_type_raw` stores the vendor's `PairType` discriminant verbatim
-/// ("0" = XYK today; a stable pool would carry its own value) — the same
-/// un-normalised-on-purpose rule as the router family's sym.
-fn config_pool_registry_row(
-    reg: &xdr_parser::pool_config_factory::ConfigPoolRegistration,
-    config: &xdr_parser::pool_config_factory::PoolConfig,
-    ledger_sequence: i64,
-    sac_classic: &HashMap<i64, i64>,
-) -> Result<LiquidityPoolRow, &'static str> {
-    let pool_id =
-        ids::contract_payload(&reg.pool).ok_or("pool address is not a valid C… strkey")?;
-    // The chain carries the fee as i64; an out-of-i32-range value is a new
-    // vocabulary nobody has seen — refuse it loudly rather than record a
-    // plausible truncation.
-    let fee_bps =
-        i32::try_from(config.total_fee_bps).map_err(|_| "total_fee_bps out of i32 range")?;
-    Ok(LiquidityPoolRow {
-        pool_id,
-        asset_a_type: 0,
-        asset_a_code: String::new(),
-        asset_a_issuer_id: 0,
-        asset_b_type: 0,
-        asset_b_code: String::new(),
-        asset_b_issuer_id: 0,
-        fee_bps,
-        last_updated_ledger: ledger_sequence,
-        pool_kind: 1,
-        legs: vec![
-            contract_token_asset_id(&config.token_a, sac_classic),
-            contract_token_asset_id(&config.token_b, sac_classic),
-        ],
-        deployment_id: ids::contract_id(&reg.factory),
-        pool_type_raw: config.pool_type.to_string(),
-    })
-}
-
-/// Registry row for one decoded `add_pool` registration.
-///
-/// `Err` names what was wrong. A bad pool address must never fabricate a
-/// 32-byte `pool_id`, and an unparseable fee must never become a plausible
-/// zero (Karol, 2026-08-28: error, not warn-and-default) — either way the
-/// registration is refused loudly and lands in the missing-pool alarm.
-///
-/// The share-token relation lives ONLY in `pool_instance_state` (side table;
-/// a registry column for it was dead-on-arrival and removed). No venue label
-/// is stored anywhere: labels resolve from `deployment_id` at read time. The salt and raw
-/// init_args are NOT materialised — the add_pool event itself sits complete
-/// in soroban_events; extract on demand, never copy.
-fn pool_registry_row(
-    reg: &xdr_parser::pool_router::AddPoolEvent,
-    router_strkey: &str,
-    ledger_sequence: i64,
-    sac_classic: &HashMap<i64, i64>,
-) -> Result<LiquidityPoolRow, &'static str> {
-    let pool_id =
-        ids::contract_payload(&reg.pool).ok_or("pool address is not a valid C… strkey")?;
-    // Position 0 is a u32 fee in EVERY shape measured on mainnet (497/497,
-    // pinned by the corpus test). A shape where it is missing or unparseable
-    // is a new vocabulary nobody has seen — refuse it loudly rather than
-    // record a plausible fee of 0.
-    let fee_bps = reg
-        .init_args
-        .first()
-        .and_then(|v| v.parse::<i32>().ok())
-        .ok_or("init_args[0] is not a parseable fee")?;
-    Ok(LiquidityPoolRow {
-        pool_id,
-        asset_a_type: 0,
-        asset_a_code: String::new(),
-        asset_a_issuer_id: 0,
-        asset_b_type: 0,
-        asset_b_code: String::new(),
-        asset_b_issuer_id: 0,
-        fee_bps,
-        last_updated_ledger: ledger_sequence,
-        pool_kind: 1,
-        legs: reg
-            .tokens
-            .iter()
-            .map(|t| contract_token_asset_id(t, sac_classic))
-            .collect(),
-        deployment_id: ids::contract_id(router_strkey),
-        pool_type_raw: reg.pool_type.clone(),
-    })
-}
-
-/// Event NAME, lifted from the topics into the `signature` column (the cheap
-/// `WHERE signature = 'transfer'` filter).
-///
-/// Three publishing conventions exist on mainnet (task 0517; measured
-/// 2026-09-02 on two 1M-ledger windows of the then-NULL population, shapes
-/// identical in both):
-///
-/// 1. `[Symbol(name), …]` — the dominant convention (SEP-41, the router
-///    family, …). Unchanged.
-/// 2. `[String(label), Symbol(name), …]` — a protocol label first, the name
-///    second (SoroswapPair/Router/Aggregator, DeFindexVault, BlendStrategy).
-///    The label is NOT copied anywhere: it sits verbatim in `topics_xdr`
-///    forever — extract on demand, never copy.
-/// 3. `[String(name), …]` where `topics[1]` is NOT a Symbol — the
-///    Phoenix-family plain-&str convention (`("swap","sender")` publishes
-///    two Strings): the FIRST topic is the name, the second discriminates
-///    the field and stays in the topics for the protocol's decoder.
-///
-/// Known compromise in arm 3: a future protocol publishing
-/// `[String(label), String(name)]` would get its label lifted as the name —
-/// wrong but visible and verifiable per protocol, unlike the silent NULL it
-/// replaces.
-///
-/// Anything else with a non-empty topic vector resolves nowhere: it keeps
-/// NULL **and warns**, so the next convention surfaces as a count, never as
-/// absence (the 0517 monitor; 100% of the measured NULL population had a
-/// String first topic, so this arm is quiet today). An EMPTY topic vector
-/// stays a silent NULL — there is no name to resolve.
-fn extract_event_signature(topics: &Value) -> Option<String> {
-    let arr = topics.as_array()?;
-    let first = arr.first()?;
-    let nonempty = |s: &str| (!s.is_empty()).then(|| s.to_string());
-    if let Some(name) = scval::typed_str(first, "sym").and_then(nonempty) {
-        return Some(name);
-    }
-    if let Some(label_or_name) = scval::typed_str(first, "string").and_then(nonempty) {
-        if let Some(name) = arr
-            .get(1)
-            .and_then(|t| scval::typed_str(t, "sym"))
-            .and_then(nonempty)
-        {
-            return Some(name);
-        }
-        return Some(label_or_name);
-    }
-    tracing::warn!(
-        topics = %topics,
-        "event name unresolved — unknown topic convention (task 0517 monitor)"
-    );
-    None
 }
 
 fn tx_has_soroban_map(operations: &[(String, Vec<ExtractedOperation>)]) -> HashMap<String, bool> {
@@ -2919,10 +2444,24 @@ pub fn ledger_deltas_net_settled(
     xdr_parser::net_settled(&resolved)
 }
 
+mod account_entry_state;
 mod contract_activity;
+mod lp_positions;
 mod nfts;
 mod operations;
 mod presence;
+mod soroban_events;
+pub mod soroban_pool_amounts;
+mod soroban_pools;
+pub mod wasm_programs;
+
+use account_entry_state::entry_state_row;
+pub use soroban_pools::registers_soroban_pools;
+use soroban_pools::{
+    config_pool_registry_row, contract_token_asset_id, factory_pair_registry_row,
+    fold_pool_instance_state, fold_pool_state_changes, parse_reserve_pair, parse_reserves,
+    parse_supply, pool_registry_row,
+};
 
 #[cfg(test)]
 mod stage_tests;

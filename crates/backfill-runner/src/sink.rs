@@ -179,10 +179,16 @@ impl PartitionWriterHandle {
             // ponytail: per-ledger query on the small `asset_sac` table; the
             // `Run` path is the rarely-used heavy fallback, so no cross-ledger
             // cache. Add one if a full reprocess ever makes this hot.
+            // Task 0374 (W1): pool events key their tokens on the SAC map.
+            let writes_pool_movements = self
+                .only
+                .as_ref()
+                .is_none_or(|t| t.contains("pool_movements"));
             let needed = db_clickhouse::persist::sac_classic_map_needed(
                 &parsed.soroban_token_balances,
                 &parsed.events,
                 writes_balances,
+                writes_pool_movements,
             );
             let sac_classic =
                 db_clickhouse::persist::fetch_sac_classic_map(pw.client(), needed).await?;
@@ -203,7 +209,7 @@ impl PartitionWriterHandle {
                     operations: &parsed.operations,
                     events: &parsed.events,
                     invocations: &parsed.invocations,
-                    contract_interfaces: &parsed.contract_interfaces,
+                    programs: &parsed.programs,
                     contract_deployments: &parsed.contract_deployments,
                     account_states: &parsed.account_states,
                     liquidity_pools: &parsed.liquidity_pools,

@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::sac::{SacOverride, sac_override_from_event_topics, topic_symbol_value};
 use crate::scval::map_get;
-use crate::types::{EventSource, ExtractedEvent, NftEvent};
+use crate::types::{ExtractedEvent, NftEvent};
 use domain::ContractEventType;
 
 /// Detect NFT-related events from a list of extracted events.
@@ -36,22 +36,14 @@ pub fn detect_nft_events(events: &[ExtractedEvent], net_id: &[u8; 32]) -> Vec<Nf
     let mut nft_events = Vec::new();
 
     for event in events {
-        if event.event_type != ContractEventType::Contract {
+        if event.body.event_type != ContractEventType::Contract {
             continue;
         }
-        // Skip diagnostic-container Contract-typed copies — when
-        // diagnostic mode is enabled, every per-op consensus Contract
-        // event is also present byte-identically in `v4.diagnostic_events`;
-        // without this guard NFT detection would double-emit
-        // transfer/mint/burn rows (task 0182).
-        if event.source == EventSource::Diagnostic {
-            continue;
-        }
-        let Some(ref contract_id) = event.contract_id else {
+        let Some(ref contract_id) = event.body.contract_id else {
             continue;
         };
 
-        let topics = match event.topics.as_array() {
+        let topics = match event.body.topics.as_array() {
             Some(t) if !t.is_empty() => t,
             _ => continue,
         };
@@ -61,7 +53,7 @@ pub fn detect_nft_events(events: &[ExtractedEvent], net_id: &[u8; 32]) -> Vec<Nf
         // is cryptographic proof the i128 in `data` is a transfer AMOUNT, not an
         // NFT token_id. `None` for bespoke contracts / non-SAC signatures, so
         // real NFTs pass through (false-negative-only).
-        if sac_override_from_event_topics(contract_id, &event.topics, net_id).is_some() {
+        if sac_override_from_event_topics(contract_id, &event.body.topics, net_id).is_some() {
             continue;
         }
 
@@ -72,7 +64,7 @@ pub fn detect_nft_events(events: &[ExtractedEvent], net_id: &[u8; 32]) -> Vec<Nf
         // to N mints, so it yields multiple events — handle it before the
         // single-event symbols below.
         if first_lower == "consecutive_mint" {
-            match try_parse_consecutive_mint(contract_id, &topics[1..], &event.data, event) {
+            match try_parse_consecutive_mint(contract_id, &topics[1..], &event.body.data, event) {
                 Some(mut evs) => nft_events.append(&mut evs),
                 None => maybe_tripwire(contract_id, &first_lower, event, topics.len()),
             }
@@ -80,9 +72,9 @@ pub fn detect_nft_events(events: &[ExtractedEvent], net_id: &[u8; 32]) -> Vec<Nf
         }
 
         let parsed = match first_lower.as_str() {
-            "transfer" => try_parse_transfer(contract_id, &topics[1..], &event.data, event),
-            "mint" => try_parse_mint(contract_id, &topics[1..], &event.data, event),
-            "burn" => try_parse_burn(contract_id, &topics[1..], &event.data, event),
+            "transfer" => try_parse_transfer(contract_id, &topics[1..], &event.body.data, event),
+            "mint" => try_parse_mint(contract_id, &topics[1..], &event.body.data, event),
+            "burn" => try_parse_burn(contract_id, &topics[1..], &event.body.data, event),
             // Not an NFT-candidate symbol — skip silently (no tripwire).
             _ => continue,
         };
@@ -122,16 +114,13 @@ pub fn detect_undeployed_sac_overrides(
         std::collections::HashMap::new();
     for (_tx_hash, evs) in events {
         for ev in evs {
-            if ev.source == EventSource::Diagnostic {
-                continue;
-            }
-            let Some(cid) = &ev.contract_id else {
+            let Some(cid) = &ev.body.contract_id else {
                 continue;
             };
             if by_cid.contains_key(cid) {
                 continue;
             }
-            if let Some(ov) = sac_override_from_event_topics(cid, &ev.topics, net_id) {
+            if let Some(ov) = sac_override_from_event_topics(cid, &ev.body.topics, net_id) {
                 by_cid.insert(cid.clone(), ov);
             }
         }
@@ -157,7 +146,6 @@ fn try_parse_transfer(
         token_id,
         from: Some(addrs[0].clone()),
         to: Some(addrs[1].clone()),
-        ledger_sequence: event.ledger_sequence,
         created_at: event.created_at,
         event_id: event.event_id,
     })
@@ -180,7 +168,6 @@ fn try_parse_mint(
         token_id,
         from: None,
         to: Some(addrs[0].clone()),
-        ledger_sequence: event.ledger_sequence,
         created_at: event.created_at,
         event_id: event.event_id,
     })
@@ -204,7 +191,6 @@ fn try_parse_burn(
         token_id,
         from: Some(addrs[0].clone()),
         to: None,
-        ledger_sequence: event.ledger_sequence,
         created_at: event.created_at,
         event_id: event.event_id,
     })
@@ -253,7 +239,6 @@ fn try_parse_consecutive_mint(
                 token_id: serde_json::json!({ "type": "u64", "value": id }),
                 from: None,
                 to: Some(to.clone()),
-                ledger_sequence: event.ledger_sequence,
                 created_at: event.created_at,
                 event_id: event.event_id,
             })
@@ -278,14 +263,14 @@ fn consecutive_range(from_v: &Value, to_v: &Value) -> Option<(u64, u64)> {
 /// map (CAP-67/SAC `map{amount,to_muxed_id}`) — those are not NFTs and would
 /// bury the real signal under ~148M events.
 fn maybe_tripwire(contract_id: &str, event_kind: &str, event: &ExtractedEvent, topic_count: usize) {
-    if is_fungible_map(&event.data) {
+    if is_fungible_map(&event.body.data) {
         return;
     }
     warn!(
         target: "xdr_parser::nft",
         contract_id = %contract_id,
         event_kind,
-        data_type = event.data.get("type").and_then(|v| v.as_str()).unwrap_or("?"),
+        data_type = event.body.data.get("type").and_then(|v| v.as_str()).unwrap_or("?"),
         topic_count,
         "NFT event symbol matched but no known arg shape parsed — row dropped. \
          Extend nft.rs shapes if this is a real NFT."

@@ -16,6 +16,10 @@ import { useNetworkStats } from '../api/index.js';
 import { HomeHeroGlow } from '../pages/home/HomeHeroGlow.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
+import { network } from '../network.js';
+import { NetworkMenu } from './NetworkMenu.js';
+import { NetworkSwitcher } from './NetworkSwitcher.js';
+import { TestnetBadge } from './TestnetBadge.js';
 import { NAV_LINKS, routes } from './routes.js';
 
 const NAV_ITEMS: NavItem[] = NAV_LINKS.map((link) => ({
@@ -224,10 +228,19 @@ export function AppShell() {
           />
         )}
         <SecondaryNav
-          logo={<HomeLogo height={24} onClick={handleHomeClick} />}
+          logo={
+            <Box
+              sx={{ display: 'inline-flex', alignItems: 'center', gap: 1.5 }}
+            >
+              <HomeLogo height={24} onClick={handleHomeClick} />
+              <NetworkSwitcher current={network} />
+              <TestnetBadge current={network} />
+            </Box>
+          }
           navItems={NAV_ITEMS}
           activePage={activePage}
           onNavClick={handleNavClick}
+          drawerFooter={<NetworkMenu current={network} />}
         />
       </Box>
       <Box sx={{ flex: 1, position: 'relative', width: '100%' }}>

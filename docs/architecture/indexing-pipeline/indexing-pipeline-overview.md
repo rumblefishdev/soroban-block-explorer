@@ -117,6 +117,19 @@ as "process this object":
   (`indexerLambdaConcurrency = 0`), so a paused indexer still captures events
   durably (visible `ApproximateNumberOfMessages`, multi-day retention) instead
   of dropping them.
+- **Testnet reads the public data lake** (task 0553), which sends no events,
+  so the indexer paces itself (`handler/lake_pacing.rs`): after a wake that
+  stored ledgers it queues one SQS message, delayed to ~3 s after the next
+  ledger's expected close (the newest close + 5 s), whose body names the
+  ledger it expects (`{"expect":N,"attempt":k}`). A late file is looked for
+  again after 1, 2, 4, 8, then 15 s. A once-a-minute keepalive starts a chain
+  only when it stored new ledgers itself (the chain had died), and a chain
+  message whose ledger another chain already stored is dropped, so two chains
+  merge. About one wake per ledger; per wake one extra ClickHouse read, a
+  primary-key lookup of the newest close time. On mainnet the body stays
+  ignored. An empty database reading the lake starts at the network's first
+  closed ledger (2), so testnet rebuilds itself after a reset; an empty
+  database reading our own bucket (mainnet) waits for a seeding backfill.
 
 A backlog drains across the stream of doorbells (one per S3 file ≫ the handful
 of time-budget stops needed); the next doorbell always resumes from the
@@ -241,9 +254,10 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    It stages rows via
    `db_clickhouse::persist::stage::prepare_with_sac_overrides`, opens a
    one-shot `PartitionWriter`, streams the staged rows, and commits. The
-   hybrid-key strategy keeps three high-fan-out hubs (`accounts`,
-   `soroban_contracts`, `transactions`) on a deterministic surrogate
-   `Int64 id` derived from the StrKey / hash via cityhash; the other 12
+   hybrid-key strategy keeps two high-fan-out hubs (`accounts`,
+   `soroban_contracts`) on a deterministic surrogate `Int64 id` derived
+   from the StrKey via cityhash (transactions are located by position,
+   ADR 0059); the other
    tables use natural composite keys with `LowCardinality(String)`
    dictionary encoding (per
    [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md))
@@ -342,10 +356,14 @@ schema on Hetzner. That write includes both:
 
 - low-level structured explorer records (`ledgers`, `transactions`,
   `transaction_operations`, `pool_operation_amounts`,
+  `pool_movements` (decoded in staging from the ledger's pool events, for
+  the pools the ledger staged state for — no registry read),
   `transaction_participants`, and the appearance indexes `soroban_events`,
   `contract_activity`)
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
-  `wasm_interface_metadata`, `assets`, `nfts`, `nfts_pending`, the
+  `wasm_programs` (each program's bytes and interface,
+  [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)),
+  `assets`, `nfts`, `nfts_pending`, the
   ownership changes located by each change's source event
   `nft_ownership_changes{,_pending}` (task 0424), `liquidity_pools`,
   `liquidity_pool_snapshots`, `lp_positions`, `account_balances_current`)

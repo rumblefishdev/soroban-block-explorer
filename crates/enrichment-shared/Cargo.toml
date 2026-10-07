@@ -35,6 +35,9 @@ base64 = { workspace = true }
 # registrable domain) but never `circle.com` → `evil.com`. `domain_str` returns
 # the registrable domain; the list is compiled in, so there is no runtime fetch.
 psl = "2"
+# Base32 decode of an `ipfs://` CIDv1, to refuse a CID that cannot exist
+# before asking any gateway. Already in the tree via stellar-strkey.
+data-encoding = "2"
 
 [dev-dependencies]
 # Mock Soroban RPC + IPFS gateway for fetcher integration tests

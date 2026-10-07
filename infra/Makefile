@@ -1,4 +1,5 @@
 PRODUCTION_APP := node dist/bin/production.js
+TESTNET_APP := node dist/bin/testnet.js
 CICD_APP := node dist/bin/cicd.js
 
 build:
@@ -106,7 +107,8 @@ destroy-production-cloudflare-bootstrap: build
 # through the Cloudflare-fronted host (task 0277), NOT the legacy apiDomainName.
 
 build-production-web:
-	cd .. && VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
+	cd .. && VITE_STELLAR_NETWORK=mainnet \
+		VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json) \
 		pnpm nx build @rumblefish/soroban-block-explorer-web
 	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json); \
@@ -120,6 +122,14 @@ build-production-web:
 			fi; \
 		fi
 
+# Two syncs, assets first (task 0595). Hashed `assets/*` are immutable and are
+# never deleted, so a browser still holding the previous index.html finds its
+# files. Everything else, index.html included, is revalidated by browsers on
+# every load; CloudFront may keep it for 60 s (`s-maxage`). Without these
+# headers a browser guessed index.html's freshness and could keep an old one
+# pointing at deleted assets, which loads as a blank page.
+# ponytail: old assets are never pruned (~1.3 MB per build); prune ones no
+# recent index.html references if the bucket ever matters.
 deploy-production-web: build-production-web
 	@BUCKET=$$(aws cloudformation describe-stacks --region eu-central-1 \
 		--stack-name Explorer-production-Delivery \
@@ -128,7 +138,61 @@ deploy-production-web: build-production-web
 		--stack-name Explorer-production-Delivery \
 		--query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text); \
 	echo "SPA bucket=$$BUCKET  distribution=$$DIST"; \
-	cd .. && aws s3 sync web/dist/ "s3://$$BUCKET/" --delete && \
+	cd .. && \
+	aws s3 sync web/dist/ "s3://$$BUCKET/" --exclude '*' --include 'assets/*' \
+		--cache-control 'public, max-age=31536000, immutable' && \
+	aws s3 sync web/dist/ "s3://$$BUCKET/" --exclude 'assets/*' --delete \
+		--cache-control 'public, max-age=0, s-maxage=60, must-revalidate' && \
+	aws cloudfront create-invalidation --distribution-id "$$DIST" --paths "/*"
+
+# --- Testnet (task 0553) ---
+# Same recipes as production against envs/testnet.json. The SPA calls the
+# API through its Cloudflare host, so build-testnet-web needs
+# enableCloudflareApiDomain=true there first.
+
+synth-testnet: build
+	pnpm exec cdk --app "$(TESTNET_APP)" synth
+
+diff-testnet: build
+	pnpm exec cdk --app "$(TESTNET_APP)" diff --strict
+
+deploy-testnet: build
+	pnpm exec cdk --app "$(TESTNET_APP)" diff --strict
+	@if [ "$(FORCE)" != "1" ]; then \
+		printf '\nThe deploy is --all: EVERY delta above ships now, parked or not.\nType yes to continue: '; \
+		read ans; [ "$$ans" = "yes" ] || { echo "aborted — nothing deployed"; exit 1; }; \
+	fi
+	pnpm exec cdk --app "$(TESTNET_APP)" deploy --all --require-approval broadening
+
+build-testnet-web:
+	cd .. && VITE_STELLAR_NETWORK=testnet \
+		VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/testnet.json) \
+		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json) \
+		pnpm nx build @rumblefish/soroban-block-explorer-web
+	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json); \
+		AUTH=$$(jq -r '.enableAuthLayer // false' infra/envs/testnet.json); \
+		if [ "$$AUTH" = "true" ] && [ -n "$$KEY" ]; then \
+			if grep -rqF "$$KEY" web/dist/assets/*.js; then \
+				echo "✓ arming check: Turnstile key present in bundle"; \
+			else \
+				echo "FATAL: enableAuthLayer=true but Turnstile key absent — refusing to ship"; \
+				exit 1; \
+			fi; \
+		fi
+
+deploy-testnet-web: build-testnet-web
+	@BUCKET=$$(aws cloudformation describe-stacks --region eu-central-1 \
+		--stack-name Explorer-testnet-Delivery \
+		--query "Stacks[0].Outputs[?OutputKey=='SpaBucketName'].OutputValue" --output text); \
+	DIST=$$(aws cloudformation describe-stacks --region eu-central-1 \
+		--stack-name Explorer-testnet-Delivery \
+		--query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text); \
+	echo "SPA bucket=$$BUCKET  distribution=$$DIST"; \
+	cd .. && \
+	aws s3 sync web/dist/ "s3://$$BUCKET/" --exclude '*' --include 'assets/*' \
+		--cache-control 'public, max-age=31536000, immutable' && \
+	aws s3 sync web/dist/ "s3://$$BUCKET/" --exclude 'assets/*' --delete \
+		--cache-control 'public, max-age=0, s-maxage=60, must-revalidate' && \
 	aws cloudfront create-invalidation --distribution-id "$$DIST" --paths "/*"
 
 # --- CI/CD (shared, deploy once per account) ---

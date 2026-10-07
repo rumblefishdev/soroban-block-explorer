@@ -13,10 +13,6 @@ use aws_sdk_sqs::Client as SqsClient;
 use lambda_runtime::{Error, service_fn};
 use tracing::info;
 
-/// Production CH database — the writer module's `init.sql` creates
-/// every table under the `default` database (`crates/db-clickhouse/schema/init.sql`).
-const CH_DATABASE: &str = "default";
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
@@ -47,7 +43,11 @@ async fn main() -> Result<(), Error> {
     // https://{CH_DOMAIN}. Any failure here (missing env, extension
     // unreachable, bundle malformed) returns from `main` so Lambda
     // surfaces it via CW `Init Errors`.
-    let ch_client = match db_clickhouse::mtls::client_from_lambda_env(CH_DATABASE).await {
+    let ch_client = match db_clickhouse::mtls::client_from_lambda_env(
+        &db_clickhouse::database_from_env(),
+    )
+    .await
+    {
         Ok(c) => c,
         Err(e) => {
             // Surface a structured `error!` line BEFORE propagating —
@@ -73,12 +73,11 @@ async fn main() -> Result<(), Error> {
     info!("mTLS ClickHouse client ready");
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let s3_client = S3Client::new(&aws_config);
     let cw_client = CloudWatchClient::new(&aws_config);
     let sqs_client = SqsClient::new(&aws_config);
 
     let enrichment_publisher =
-        handler::enrichment_publish::Publisher::from_env(sqs_client, ch_client.clone())?;
+        handler::enrichment_publish::Publisher::from_env(sqs_client.clone(), ch_client.clone())?;
 
     // The doorbell handler derives S3 keys from ledger numbers and reads them
     // from this bucket (it does not parse the S3 event). CDK always injects
@@ -88,17 +87,63 @@ async fn main() -> Result<(), Error> {
         return Err("BUCKET_NAME env var is missing or empty".into());
     }
 
+    // Mainnet reads its own Galexie bucket at the root. Testnet names the
+    // public data lake instead (lore-0553): unsigned, in its own region, under
+    // this network's folder — which must match the passphrase, or every
+    // transaction would hash wrong without an error.
+    xdr_parser::public_archive::check_configured_archive()?;
+    check_folder_needs_lake(
+        &bucket,
+        xdr_parser::public_archive::configured_archive_prefix().as_deref(),
+    )?;
+    // The lake sends no events: reading it, the indexer also queues its own
+    // next wake-up (`Pacer`).
+    let (s3_client, key_prefix, pacer) = if bucket == xdr_parser::public_archive::PUBLIC_BUCKET {
+        let public = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .no_credentials()
+            .region(aws_sdk_s3::config::Region::new(
+                xdr_parser::public_archive::PUBLIC_BUCKET_REGION,
+            ))
+            .load()
+            .await;
+        let prefix = format!("{}/", xdr_parser::public_archive::public_archive_prefix());
+        let pacer = handler::lake_pacing::Pacer::from_env(sqs_client)?;
+        (S3Client::new(&public), prefix, Some(pacer))
+    } else {
+        (S3Client::new(&aws_config), String::new(), None)
+    };
+
     let state = handler::HandlerState {
         s3_client,
         bucket,
+        key_prefix,
         cw_client,
         ch_client,
         enrichment_publisher,
         // Task 0283 live G9 — fresh per cold start; warms across invocations.
         classification_cache: domain::ClassificationCache::new(),
+        pacer,
     };
 
     info!("indexer ready — starting Lambda runtime");
 
     lambda_runtime::run(service_fn(|event| handler::handler(event, &state))).await
 }
+
+/// A ledger folder is read only inside the public data lake; our own Galexie
+/// bucket keeps ledgers at its root. A folder configured next to our own
+/// bucket would be ignored without a word, so that pairing is refused.
+fn check_folder_needs_lake(bucket: &str, configured_prefix: Option<&str>) -> Result<(), String> {
+    match configured_prefix {
+        Some(prefix) if bucket != xdr_parser::public_archive::PUBLIC_BUCKET => Err(format!(
+            "PUBLIC_ARCHIVE_PREFIX is `{prefix}`, but BUCKET_NAME is `{bucket}`: a ledger \
+             folder is read only from `{}`, so it would be ignored",
+            xdr_parser::public_archive::PUBLIC_BUCKET
+        )),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/main_tests.rs"]
+mod tests;

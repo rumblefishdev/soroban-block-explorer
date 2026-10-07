@@ -68,7 +68,7 @@ fn raw_registration_ledger_stages_the_exact_rows() {
         operations: &ops,
         events: &[],
         invocations: &[],
-        contract_interfaces: &[],
+        programs: &[],
         contract_deployments: &[],
         account_states: &[],
         liquidity_pools: &[],

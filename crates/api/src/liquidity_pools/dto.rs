@@ -30,19 +30,21 @@ pub struct SharesCursor {
 /// (`queries::list_participants`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ParticipantItem {
-    /// Participant account StrKey (G...).
+    /// Provider StrKey: a `G…` account, or for a soroban pool also a `C…`
+    /// contract holding the share token (a gauge, a vault).
     pub account: String,
-    /// Pool-share balance carried as a decimal string preserving the
-    /// underlying `NUMERIC(28,7)` precision (no f64 round-trip).
+    /// Pool-share balance as a decimal string (no f64 round-trip): the
+    /// `NUMERIC(28,7)` position of a classic pool, the share-token balance
+    /// scaled by the token's decimals for a soroban one.
     pub shares: String,
     /// Share of the pool, expressed as a decimal-string percentage
-    /// (`100 * shares / total_pool_shares`, over the pool's latest snapshot
-    /// however old — a classic pool snapshots every change). `None` when the
-    /// pool has no snapshot or its total is 0; the frontend renders "—".
+    /// (`100 * shares / total`). Classic: over the pool's latest snapshot
+    /// however old — a classic pool snapshots every change — and `None` when
+    /// the pool has no snapshot or its total is 0; the frontend renders "—".
+    /// Soroban: over the pool's own stored total as on chain (the holders'
+    /// sum where it keeps none), always present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_percentage: Option<String>,
-    /// Ledger of the first deposit by this account into this pool.
-    pub first_deposit_ledger: i64,
     /// Ledger of the most recent change to this position.
     pub last_updated_ledger: i64,
 }
@@ -180,6 +182,12 @@ pub struct PoolAssetLeg {
     /// leg and by the `decimals` a soroban token publishes in its metadata; a
     /// token that publishes none keeps its leg `null`.
     pub reserve: Option<String>,
+    /// How many decimals the leg's raw amounts carry: 7 for native XLM and a
+    /// classic asset (by protocol), the `decimals` a soroban token publishes in
+    /// its metadata. `null` when the token publishes none — its raw amounts
+    /// then have no honest display. Scales the raw `amounts` of `/activity`;
+    /// `reserve` above is already scaled.
+    pub decimals: Option<u32>,
 }
 
 /// One pool row returned by the list endpoint (`queries::list_pools`).
@@ -239,8 +247,12 @@ pub struct PoolItem {
     /// untracked assets and stale pools read `null`.
     pub tvl: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
-    /// Gross trade volume over the last 24h (`gross_volume_a` sum) priced
-    /// at the leg-A last hourly close; `null` when the pool is unpriceable.
+    /// Gross trade volume over the last 24h — every trade's leg-A amount,
+    /// whichever way it went (a classic pool's `gross_volume_a`, a soroban
+    /// pool's trade events) — priced at the leg-A last hourly close; `null`
+    /// when leg A is unpriceable, when it has no known decimals, and for a
+    /// pool with three or four legs, whose volume is not priced (its `tvl`
+    /// can still be).
     pub volume: Option<String>,
     /// USD, decimal string rounded to cents. **Detail endpoint only.**
     /// `volume × fee_bps / 10000` — the pool's 24h fee estimate.
@@ -252,75 +264,13 @@ pub struct PoolItem {
 // Activity (task 0491) — the per-operation successor to `/transactions`
 // ---------------------------------------------------------------------------
 
-/// What an operation did to the pool, named by the SIGN PAIR of its two legs
-/// and nothing else — `pool_operation_amounts.amount` is signed from the pool's
-/// perspective, so `+/+` is a deposit, `-/-` a withdrawal and `+/-` a trade.
-/// There is no operation-type column to read and no join to `operations`.
-///
-/// Classified in SQL rather than here, because the same expression is the
-/// `filter[event]` predicate: two classifiers would eventually disagree, and
-/// the one the user sees must be the one the filter used. This deliberately
-/// reverses the client-side policy the retired `/transactions` shape carried.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum PoolEvent {
-    Trade,
-    Deposit,
-    Withdrawal,
-}
-
-impl PoolEvent {
-    /// The whole classifier: the signs of an operation's leg amounts.
-    ///
-    /// Every amount is signed from the pool's perspective, so a leg that
-    /// entered the pool is positive. Anything that is not "all in" or "all
-    /// out" moved value across the pool in opposite directions, which is a
-    /// trade — including the zero-amount edge a dust swap can produce, since
-    /// it is still not a deposit and not a withdrawal.
-    ///
-    /// Callers must only reach here with EVERY leg present; a half-row has no
-    /// event (see [`PoolActivityItem::event`]).
-    pub fn from_signs(amounts: &[i64]) -> Self {
-        if amounts.iter().all(|&a| a > 0) {
-            Self::Deposit
-        } else if amounts.iter().all(|&a| a < 0) {
-            Self::Withdrawal
-        } else {
-            Self::Trade
-        }
-    }
-
-    /// Parse a `filter[event]` value.
-    pub fn from_param(value: &str) -> Option<Self> {
-        match value {
-            "trade" => Some(Self::Trade),
-            "deposit" => Some(Self::Deposit),
-            "withdrawal" => Some(Self::Withdrawal),
-            _ => None,
-        }
-    }
-
-    /// The accepted spelling, for the `allowed` list a rejection returns.
-    /// `const` so that list can be built from these three arms instead of
-    /// being retyped next to the handler and drifting from the parser.
-    pub const fn as_param(self) -> &'static str {
-        match self {
-            Self::Trade => "trade",
-            Self::Deposit => "deposit",
-            Self::Withdrawal => "withdrawal",
-        }
-    }
-}
-
-#[cfg(test)]
-mod pool_event_tests;
+pub use domain::PoolEvent;
 
 /// `filter[...]` query parameters for `GET /v1/liquidity-pools/{id}/activity`.
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct PoolActivityParams {
-    /// `trade` | `deposit` | `withdrawal`. Applied as a `HAVING` on the same
-    /// expression that produces `event`, so the filtered list and the chips
-    /// cannot disagree.
+    /// `trade` | `deposit` | `withdrawal`. Applied to the same value that
+    /// fills `event`, so the filtered list and the chips cannot disagree.
     ///
     /// Rows whose `event` is `null` (a leg missing — see [`PoolActivityItem`])
     /// match no filter value: we cannot claim such a row is a trade.
@@ -338,7 +288,9 @@ pub struct PoolActivityParams {
 /// Cursor payload for `GET /v1/liquidity-pools/{id}/activity`, keyed on
 /// `(ledger_sequence, application_order, operation_index)` — the sort-key
 /// prefix of `pool_operation_amounts` minus its `asset_id` tail: the
-/// transaction's position and the operation's 0-based index (ADR 0059).
+/// transaction's position and the operation's 0-based index (ADR 0059). A
+/// soroban pool's rows add `event_index`, the next component of
+/// `pool_movements`' key.
 ///
 /// A plain struct, not an enum tagged by datasource. A stale cursor fails to
 /// deserialize and the extractor answers `invalid_cursor` on its own: the
@@ -349,10 +301,15 @@ pub struct PoolActivityCursor {
     pub ledger_sequence: i64,
     pub application_order: i16,
     pub operation_index: i16,
+    /// The last soroban row's event; `0` and unread for a classic pool, and
+    /// absent from a cursor minted before soroban rows existed.
+    #[serde(default)]
+    pub event_index: u32,
 }
 
 /// One row from `GET /v1/liquidity-pools/{id}/activity` — **one operation
-/// against this pool**, not one transaction (task 0491, issue #371).
+/// against a classic pool, one event of a soroban pool**, never one
+/// transaction (task 0491, issue #371; task 0374).
 ///
 /// The transaction-level fields the retired `/transactions` shape carried
 /// (`fee_charged`, `operation_count`, `has_soroban`, `successful`,
@@ -364,17 +321,27 @@ pub struct PoolActivityCursor {
 pub struct PoolActivityItem {
     /// Transaction hash (64-char lowercase hex). NOT unique across rows — a
     /// transaction running several operations against this pool appears once
-    /// per operation, so a row key needs `application_order` too.
+    /// per operation, and a soroban operation once per pool event, so a row
+    /// key needs `operation_index` and `event_index` too.
     pub transaction_hash: String,
     pub ledger_sequence: i64,
-    /// The operation's 1-based position in its transaction (Horizon's
-    /// `application_order`), and the `#op-N` anchor on the transaction detail
-    /// page this row links to (task 0482).
-    pub application_order: i16,
-    /// `null` when not every leg of the pool landed in `pool_operation_amounts`
-    /// for this operation. Rare but real: 350 of 6.09M operations in the
-    /// 100k ledgers to 64,576,995 carry one leg only. The read stays total
-    /// rather than classifying a half-row.
+    /// The operation's 0-based position in its transaction (ADR 0059); the
+    /// transaction page's `#op-N` anchor this row links to is
+    /// `operation_index + 1` (task 0482).
+    pub operation_index: i16,
+    /// Soroban pool: the index of the pool's event among ALL the contract
+    /// events its operation emitted (ADR 0059) — so not consecutive per pool,
+    /// and one row per event: an operation that traded the pool twice lists
+    /// twice, under one hash. `null` for a classic pool, whose row is the
+    /// operation.
+    pub event_index: Option<u32>,
+    /// Classic pool: `null` when not every leg of the pool landed in
+    /// `pool_operation_amounts` for this operation. Rare but real: 350 of
+    /// 6.09M operations in the 100k ledgers to 64,576,995 carry one leg only.
+    /// The read stays total rather than classifying a half-row.
+    ///
+    /// Soroban pool: the kind the pool's own event declared, which a missing
+    /// leg does not change.
     pub event: Option<PoolEvent>,
     /// One amount per leg, in the order of the pool's `legs`: `amounts[i]` is
     /// what moved in `legs[i]`. A list, not an `a` / `b` pair, for the same
@@ -383,10 +350,15 @@ pub struct PoolActivityItem {
     /// Signed from the POOL's perspective: positive entered the pool, negative
     /// left it. Raw units as a decimal string — a JSON number is a double in
     /// the browser, so an amount above 2^53 would silently lose digits.
+    /// Scale each by its leg's `decimals`. A soroban row's amounts are its
+    /// one event's.
     ///
-    /// The sign is the payload, not decoration: it is what names `event`, so
-    /// the frontend must not take an absolute value before deciding direction.
-    /// Every entry is `null` in the malformed case above.
+    /// The sign is the payload, not decoration: it is the direction (and names
+    /// a classic row's `event`), so the frontend must not take an absolute
+    /// value before deciding it.
+    /// Classic: every entry is `null` in the malformed case above. Soroban:
+    /// only the leg no event named is `null` — a 4-token pool's event can name
+    /// three tokens at most.
     pub amounts: Vec<Option<String>>,
     /// Who performed THIS OPERATION — the operation's own source account when
     /// it declares one, otherwise the transaction's, which is what an absent
@@ -401,8 +373,9 @@ pub struct PoolActivityItem {
     /// the same appearance seek that resolves the source account. `1` for
     /// every deposit/withdrawal (an LP op declares exactly one pool) and for
     /// a single-hop trade; `> 1` marks this row as one hop of a longer path
-    /// payment, whose full route lives on the op's detail page. `null` only
-    /// when the appearance row is missing — unknown, never guessed to `1`.
+    /// payment, whose full route lives on the op's detail page. `null` when
+    /// the appearance row is missing, and for every soroban pool's row, whose
+    /// route the appearance row does not record — unknown, never guessed.
     pub pools_crossed: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
@@ -453,8 +426,10 @@ pub struct ChartParams {
 ///   pre-listing history, or a provider-side gap such as the
 ///   2026-07-21..08-03 freeze).
 /// - `volume` — SUM over the bucket of per-ledger gross trade volume ×
-///   the leg-A price at that ledger's time. `null` for no-swap buckets and
-///   for buckets where a swap couldn't be priced (never a partial sum).
+///   the leg-A price at that ledger's time. `null` for no-swap buckets, for
+///   buckets where a swap couldn't be priced (never a partial sum), and in
+///   every bucket of a pool whose volume is not priced (three or four legs,
+///   or a leg A with no known decimals).
 /// - `fee_revenue` — `volume × fee_bps / 10000`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ChartDataPoint {

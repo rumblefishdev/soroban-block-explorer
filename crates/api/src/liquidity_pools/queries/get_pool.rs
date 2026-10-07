@@ -8,9 +8,7 @@ use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
 use crate::common::strkey::decode_pool_kind;
 
-use super::soroban_reserves::{
-    fetch_raw_reserves, fetch_token_decimals, leg_reserves, soroban_token_contracts,
-};
+use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
 use super::soroban_total_shares::{fetch_total_shares, served_total_shares};
 use super::{PoolRow, fee_percent_str, leg_rows};
 
@@ -23,7 +21,7 @@ struct PoolDetailChRow {
     legs: Vec<i64>,
     fee_bps: i32,
     created_at_ledger: i64,
-    participant_count: i64,
+    participant_count: Option<i64>,
     latest_snapshot_ledger: Option<i64>,
     reserve_a: Option<String>,
     reserve_b: Option<String>,
@@ -88,9 +86,11 @@ pub async fn fetch_pool_by_id(
                     (SELECT minOrNull(ledger_sequence) FROM liquidity_pool_snapshots \
                       WHERE pool_id = unhex(?)), \
                     lp.last_updated_ledger)          AS created_at_ledger, \
-                toInt64(ifNull( \
+                /* classic: its `lp_positions`; soroban: NULL here, its \
+                   share-token holders are counted by the handler. */ \
+                if(lp.pool_kind = 0, toNullable(toInt64(ifNull( \
                     (SELECT count() FROM lp_positions FINAL \
-                      WHERE pool_id = unhex(?) AND shares > 0), 0)) AS participant_count, \
+                      WHERE pool_id = unhex(?) AND shares > 0), 0))), NULL) AS participant_count, \
                 s.ledger_sequence                    AS latest_snapshot_ledger, \
                 toString(s.reserve_a)                AS reserve_a, \
                 toString(s.reserve_b)                AS reserve_b, \
@@ -138,15 +138,13 @@ pub async fn fetch_pool_by_id(
         ),
         domain::PoolKind::Soroban => {
             let ids = [r.pool_id_hex.as_str()];
-            let tokens = soroban_token_contracts(&r.legs, &identities);
-            let (raw, shares, token_decimals) = futures::try_join!(
+            let (raw, shares) = futures::try_join!(
                 fetch_raw_reserves(client, &ids),
                 fetch_total_shares(client, &ids),
-                fetch_token_decimals(client, &tokens),
             )?;
             let raw = raw.get(&r.pool_id_hex).map_or(&[][..], Vec::as_slice);
             (
-                leg_reserves(&r.legs, &identities, &token_decimals, raw),
+                leg_reserves(&r.legs, &identities, raw),
                 served_total_shares(shares.get(&r.pool_id_hex), raw),
             )
         }

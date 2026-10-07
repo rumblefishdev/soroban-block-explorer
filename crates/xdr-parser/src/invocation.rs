@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use stellar_xdr::*;
 
 use crate::envelope::{InnerTxRef, muxed_to_g_strkey};
+use crate::meta::soroban_return_value;
 use crate::scval::scval_to_typed_json;
 use crate::types::ExtractedInvocation;
 
@@ -230,14 +231,14 @@ fn flatten_invocation(
     struct Frame<'a> {
         node: &'a SorobanAuthorizedInvocation,
         depth: u32,
-        caller_account: Option<String>,
+        caller: Option<String>,
         return_value: Value,
     }
 
     let mut stack = vec![Frame {
         node: root,
         depth: 0,
-        caller_account: root_caller,
+        caller: root_caller,
         return_value: root_return_value,
     }];
 
@@ -248,7 +249,7 @@ fn flatten_invocation(
         out.push(ExtractedInvocation {
             transaction_hash: ctx.transaction_hash.to_string(),
             contract_id: contract_id.clone(),
-            caller_account: frame.caller_account,
+            caller: frame.caller,
             function_name,
             function_args,
             return_value: frame.return_value,
@@ -266,7 +267,7 @@ fn flatten_invocation(
             stack.push(Frame {
                 node: child,
                 depth: frame.depth + 1,
-                caller_account: contract_id.clone(),
+                caller: contract_id.clone(),
                 return_value: Value::Null,
             });
         }
@@ -314,7 +315,7 @@ pub fn extract_invocations_from_diagnostics(
     tx_source_account: &str,
     successful: bool,
 ) -> Vec<ExtractedInvocation> {
-    let diags = collect_diagnostic_events(tx_meta);
+    let diags = crate::event::diagnostic_events(tx_meta);
     if diags.is_empty() {
         return Vec::new();
     }
@@ -346,7 +347,7 @@ pub fn extract_invocations_from_diagnostics(
                 out.push(ExtractedInvocation {
                     transaction_hash: transaction_hash.to_string(),
                     contract_id: Some(contract_id.clone()),
-                    caller_account: Some(caller),
+                    caller: Some(caller),
                     function_name: None,
                     function_args: Value::Null,
                     return_value: Value::Null,
@@ -421,22 +422,6 @@ fn decode_call_target(topic: &ScVal) -> Option<String> {
         }
         ScVal::Address(addr @ ScAddress::Contract(_)) => Some(addr.to_string()),
         _ => None,
-    }
-}
-
-/// Pull `diagnostic_events` from V3 (`soroban_meta.diagnostic_events`) or
-/// V4 (`v4.diagnostic_events`) meta. Galexie's captive-core enables
-/// diagnostic mode by default, so the V4 stream is reliably populated;
-/// the V3 path is kept for parity with `extract_events`.
-fn collect_diagnostic_events(meta: &TransactionMeta) -> Vec<&DiagnosticEvent> {
-    match meta {
-        TransactionMeta::V3(v3) => v3
-            .soroban_meta
-            .as_ref()
-            .map(|m| m.diagnostic_events.iter().collect())
-            .unwrap_or_default(),
-        TransactionMeta::V4(v4) => v4.diagnostic_events.iter().collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -538,18 +523,6 @@ fn decode_authorized_function(
                 }),
             )
         }
-    }
-}
-
-/// Extract the Soroban return value from transaction metadata, if present.
-fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
-    match meta {
-        TransactionMeta::V3(v3) => v3.soroban_meta.as_ref().map(|m| m.return_value.clone()),
-        TransactionMeta::V4(v4) => v4
-            .soroban_meta
-            .as_ref()
-            .and_then(|m| m.return_value.clone()),
-        _ => None,
     }
 }
 

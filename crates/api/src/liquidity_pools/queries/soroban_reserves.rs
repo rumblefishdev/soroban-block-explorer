@@ -11,8 +11,9 @@
 //! Only a leg whose scale is a fact is served: native XLM and a classic credit
 //! asset (reached through its SAC) have 7 decimals by protocol; a soroban
 //! token's scale is the `decimals` its contract publishes in its metadata
-//! (6, 7, 8, 9 and 18 occur). A token that publishes none — 4 of 100 soroban
-//! legs on production, 2026-09-28 — keeps its leg `None`, never a raw integer
+//! (6, 7, 8, 9 and 18 occur), as the shared asset resolver reads it. A token
+//! that publishes none — 4 of 100 soroban legs on production, 2026-09-28 —
+//! keeps its leg `None`, never a raw integer
 //! that would read as a huge amount and never an assumed 7. Checked on
 //! chain: 13 of 13 published values equal the token's own `decimals()`.
 
@@ -22,68 +23,6 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::asset_identity::ResolvedAsset;
-use crate::common::contract_metadata::CONTRACT_METADATA;
-
-#[derive(Debug, Row, Deserialize)]
-struct TokenDecimalsChRow {
-    contract_id: String,
-    decimals: Option<u32>,
-}
-
-/// The contract address of every soroban-token leg among `leg_ids`.
-pub(super) fn soroban_token_contracts<'a>(
-    leg_ids: impl IntoIterator<Item = &'a i64>,
-    identities: &'a HashMap<i64, ResolvedAsset>,
-) -> Vec<&'a str> {
-    let mut out: Vec<&str> = leg_ids
-        .into_iter()
-        .filter_map(|id| identities.get(id))
-        .filter(|r| r.known && r.asset_type == domain::AssetFamily::Soroban as i16)
-        .filter_map(|r| r.contract_strkey.as_deref())
-        .collect();
-    out.sort_unstable();
-    out.dedup();
-    out
-}
-
-/// Published `decimals` per token contract. A token with no metadata row, or
-/// whose newest row carries no `decimals`, is absent from the map. The value is
-/// wrapped in a tuple because `argMax` skips a `NULL` argument and would
-/// return an older version's decimals instead.
-pub(super) async fn fetch_token_decimals(
-    client: &clickhouse::Client,
-    contracts: &[&str],
-) -> Result<HashMap<String, u32>, clickhouse::error::Error> {
-    // Contract StrKeys are base32 (A-Z, 2-7); anything else is not inlined.
-    let ids: Vec<&str> = contracts
-        .iter()
-        .copied()
-        .filter(|c| {
-            c.len() == 56
-                && c.bytes()
-                    .all(|b| b.is_ascii_uppercase() || (b'2'..=b'7').contains(&b))
-        })
-        .collect();
-    if ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let in_list = ids
-        .iter()
-        .map(|c| format!("'{c}'"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let rows = client
-        .query(&format!(
-            "SELECT contract_id, decimals FROM {CONTRACT_METADATA} \
-             WHERE contract_id IN ({in_list})"
-        ))
-        .fetch_all::<TokenDecimalsChRow>()
-        .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| Some((r.contract_id, r.decimals?)))
-        .collect())
-}
 
 #[derive(Debug, Row, Deserialize)]
 struct ReservesChRow {
@@ -152,31 +91,26 @@ pub(super) async fn fetch_raw_reserves(
 pub(super) fn leg_reserves(
     leg_ids: &[i64],
     identities: &HashMap<i64, ResolvedAsset>,
-    token_decimals: &HashMap<String, u32>,
     raw: &[String],
 ) -> Vec<Option<String>> {
+    leg_decimals(leg_ids, identities)
+        .into_iter()
+        .enumerate()
+        .map(|(i, decimals)| raw.get(i).and_then(|v| scale_raw(v, decimals?)))
+        .collect()
+}
+
+/// Each leg's decimals where they are a fact — the shared asset resolver's
+/// rule ([`known_decimals`](crate::common::asset_identity)): 7 for native XLM
+/// and a classic asset, the token's published decimals for a soroban token,
+/// `None` for a token that publishes none or an impossible scale.
+pub(super) fn leg_decimals(
+    leg_ids: &[i64],
+    identities: &HashMap<i64, ResolvedAsset>,
+) -> Vec<Option<u32>> {
     leg_ids
         .iter()
-        .enumerate()
-        .map(|(i, id)| {
-            let decimals =
-                identities
-                    .get(id)
-                    .filter(|r| r.known)
-                    .and_then(|r| match r.asset_type {
-                        t if t == domain::AssetFamily::Native as i16
-                            || t == domain::AssetFamily::ClassicCredit as i16 =>
-                        {
-                            Some(7)
-                        }
-                        t if t == domain::AssetFamily::Soroban as i16 => r
-                            .contract_strkey
-                            .as_deref()
-                            .and_then(|c| token_decimals.get(c).copied()),
-                        _ => None,
-                    })?;
-            raw.get(i).and_then(|v| scale_raw(v, decimals))
-        })
+        .map(|id| identities.get(id).and_then(|r| r.decimals))
         .collect()
 }
 

@@ -3,20 +3,19 @@
 -- ## Design — hybrid: surrogate Int64 for high-cardinality join hubs,
 -- natural keys everywhere else
 --
--- Three tables get surrogate `id Int64` columns (deterministic
+-- Two tables get surrogate `id Int64` columns (deterministic
 -- `cityhash64(natural_key)` derivation in
 -- `crates/db-clickhouse/src/persist/ids.rs`):
 --
 --   - `accounts.id`            ← cityhash64(account_id StrKey)
 --   - `soroban_contracts.id`   ← cityhash64(contract_id StrKey)
---   - `transactions.id`        ← cityhash64(hash bytes)
 --
--- **Transactions are the exception — do not add `transaction_id` to a new
+-- **Transactions have no surrogate — do not add `transaction_id` to a new
 -- table.** Locate a transaction by its position `(ledger_sequence,
 -- application_order)`, an operation by `operation_index`, an event by its
--- stellar-rpc id (ADR 0059). `transactions.id` is being retired (task 0538):
+-- stellar-rpc id (ADR 0059). Task 0538 removed the hash surrogate:
 -- a hash never compresses (ratio 1.0, 8.03 B/row, ~220 GiB across the
--- tables that still carry it, 2026-09-23), while the position costs
+-- tables that carried it, measured 2026-09-23), while the position costs
 -- 0.07–1.3 B/row and sorts in execution order. Lookups by hash go through
 -- `transaction_hash_prefix_index`. `tests/schema_conventions.rs` fails on a new
 -- `transaction_id` column.
@@ -33,7 +32,7 @@
 -- Other tables (`assets`, `nfts`, `liquidity_pools`,
 -- `liquidity_pool_snapshots`, `transaction_operations`,
 -- `transaction_participants`, `nft_ownership_changes`, `lp_positions`,
--- `account_balances_current`, `wasm_interface_metadata`,
+-- `account_balances_current`, `wasm_programs`,
 -- `ledgers`, `transaction_hash_prefix_index`) keep their natural / composite
 -- primary keys — no surrogate `id`. Composite (StrKey-or-hash, …)
 -- ORDER BYs work cheaply for these without a hash layer.
@@ -69,7 +68,7 @@
 -- - **`LowCardinality(String)`** on bounded-cardinality columns:
 --   asset codes, event signatures, home_domain.
 -- - **`ZSTD(3)` codecs** on JSON-ish columns: `soroban_events.topics_xdr`,
---   `soroban_events.data_xdr`, `wasm_interface_metadata.metadata`.
+--   `soroban_events.data_xdr`, `wasm_programs.metadata`, `wasm_programs.code`.
 -- - **Empty-string sentinel** for composite-PK "no value" slots
 --   (`assets.asset_code = ''` for native, etc.). CH `ORDER BY` on
 --   plain `String` is significantly faster than `Nullable(String)`.
@@ -136,9 +135,25 @@ ORDER BY (sequence);
 -- not always byte-identical: the 0327 `upgradeable-backfill` re-writes a hash with
 -- an extra key. Until the merge both copies are live, so reads dedup with FINAL
 -- (lore-0293, lore-0592).
-CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
+-- One row per WASM program. Named `wasm_interface_metadata` until task 0620,
+-- which renamed it on production with
+-- `RENAME TABLE wasm_interface_metadata TO wasm_programs` — the table holds
+-- the program, not only its interface.
+--
+-- `code` is the program itself (a binary `String`), so a contract's own
+-- functions can be executed (task 0620, ADR 0061); `metadata` is what the
+-- parser reads from those bytes (functions, byte length, upgradeable), empty
+-- for a program without a `contractspecv0` section. A row is always written
+-- whole, bytes and metadata together, so a later write never blanks the other
+-- half. Programs uploaded before `code` existed were filled once by
+-- `backfill-runner wasm-code-backfill`. ~5.2k programs measured 112 MB raw,
+-- ~35 MB under ZSTD(3). (A separate `wasm_code` table held the bytes for a
+-- while in development; it never reached production, so nothing to drop.)
+-- PROD: `ALTER TABLE wasm_programs ADD COLUMN IF NOT EXISTS code String DEFAULT '' CODEC(ZSTD(3))`.
+CREATE TABLE IF NOT EXISTS wasm_programs (
     wasm_hash FixedString(32),
-    metadata  String CODEC(ZSTD(3))
+    metadata  String CODEC(ZSTD(3)),
+    code      String DEFAULT '' CODEC(ZSTD(3))
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (wasm_hash);
@@ -197,9 +212,11 @@ ORDER BY (account_id);
 -- alternate ordering lives in this separate plain-MergeTree table, filled by a
 -- refreshable MV (full recompute + atomic EXCHANGE → reads need no FINAL; mirrors
 -- `balance_aggregates_mv`). `accounts::fetch_list` then read-in-order SEEKs it.
+-- No `account_id` (task 0447): the StrKey was 82 % of the bytes every refresh
+-- rewrites, and the list needs it for one page only — it resolves it from
+-- `accounts` by `id` (`idx_acc_id`).
 CREATE TABLE IF NOT EXISTS accounts_recent (
     id                Int64,
-    account_id        String,
     last_seen_ledger  Int64,
     first_seen_ledger Int64,
     home_domain       LowCardinality(Nullable(String))
@@ -215,7 +232,7 @@ ORDER BY (last_seen_ledger, id);
 CREATE MATERIALIZED VIEW IF NOT EXISTS accounts_recent_mv
 REFRESH EVERY 2 MINUTE
 TO accounts_recent AS
-SELECT id, account_id, last_seen_ledger, first_seen_ledger, home_domain
+SELECT id, last_seen_ledger, first_seen_ledger, home_domain
 FROM accounts FINAL;
 
 -- soroban_contracts: same hybrid pattern as accounts.
@@ -424,6 +441,18 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- rename an existing table, so a database created before 2026-08-21 needs:
 --     RENAME TABLE account_signers TO account_entry_state;
 -- Metadata-only, instant, nothing to move.
+-- num_sponsoring / num_sponsored (task 0629): the CAP-33 counters the network
+-- keeps on the AccountEntry — reserves this account pays for others, and
+-- reserves of this account paid by others. Copied as stored, never counted by
+-- us; an entry without the V2 extension reads 0 on chain and 0 here. `DEFAULT
+-- 0` lets the ALTER land before the writer deploys (see `balances` below).
+-- PROD: an existing table needs, BEFORE the indexer that writes them deploys
+-- and before any `backfill-runner` built from this code runs a seed (both
+-- insert the same row struct, positional against this column order, hence
+-- AFTER):
+--     ALTER TABLE account_entry_state ADD COLUMN IF NOT EXISTS num_sponsoring UInt32 DEFAULT 0 AFTER flags;
+--     ALTER TABLE account_entry_state ADD COLUMN IF NOT EXISTS num_sponsored  UInt32 DEFAULT 0 AFTER num_sponsoring;
+-- Rows written before then read 0 until the checkpoint seed rewrites them.
 CREATE TABLE IF NOT EXISTS account_entry_state (
     account_id          Int64,
     signer_keys         Array(String),
@@ -434,6 +463,8 @@ CREATE TABLE IF NOT EXISTS account_entry_state (
     threshold_med       UInt8,
     threshold_high      UInt8,
     flags               UInt32,
+    num_sponsoring      UInt32 DEFAULT 0,
+    num_sponsored       UInt32 DEFAULT 0,
     last_updated_ledger Int64
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)
@@ -882,7 +913,6 @@ CREATE TABLE IF NOT EXISTS lp_positions (
     pool_id              FixedString(32),
     account_id           Int64,
     shares               Decimal128(7),
-    first_deposit_ledger Int64,
     last_updated_ledger  Int64,
     closed_at_ledger     Int64 DEFAULT 0
 )
@@ -893,12 +923,10 @@ ORDER BY (pool_id, account_id);
 -- Append-only fact tables (ReplacingMergeTree, partitioned)
 ----------------------------------------------------------------------
 
--- transactions: surrogate `id Int64`, legacy — no table references it since
--- task 0424 retired `nft_ownership`, the last one; every table joins by
--- `(ledger_sequence, application_order)` (ADR 0059, task 0538). ORDER BY
--- (ledger_sequence, application_order) for time-series scans.
+-- transactions: located by `(ledger_sequence, application_order)`, the key
+-- every other table joins on (ADR 0059). The hash surrogate `id` was dropped
+-- by task 0538 once no table referenced it.
 CREATE TABLE IF NOT EXISTS transactions (
-    id                Int64,
     hash              FixedString(32),
     ledger_sequence   Int64,
     application_order Int16,
@@ -1090,6 +1118,51 @@ CREATE TABLE IF NOT EXISTS pool_operation_amounts (
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(ledger_sequence, 500000)
 ORDER BY (pool_id, ledger_sequence, application_order, operation_index, asset_id);
+
+-- pool_movements: what each swap / deposit / withdrawal moved through a
+-- liquidity pool, one row per leg — the table every pool's activity feed,
+-- volume and fees are meant to read, whatever the pool's kind. Today it holds
+-- soroban pools (task 0374, W1); classic pools join it and
+-- `pool_operation_amounts` retires in task 0598 — the shape was chosen to fit
+-- both (decision 147 A′). ROW GRAIN = (event, leg), located by the event's
+-- stellar-rpc id (ADR 0059); a classic operation is one movement,
+-- `event_index = 0`. One operation can trade the same soroban pool several
+-- times (0.74% of router-family pool-operations), so an operation-level key
+-- would collapse them. A per-field Phoenix swap (eight events) is one row
+-- group, keyed by its opening `sender` event.
+--
+-- `amount` is SIGNED FROM THE POOL'S SIDE, as in `pool_operation_amounts`,
+-- RAW token units in `Int128` — a soroban leg may carry 18 decimals — scaled
+-- at read by each leg's own decimals. A trade is written as the trader sees
+-- it: gross input in, received output out; fees the pool pays to other
+-- recipients are not in the row. `event_kind` (0 trade, 1 deposit,
+-- 2 withdrawal) is STORED, not read from the signs: a leg can be zero (a
+-- trade with a zero side, a withdrawal paying out nothing), and every leg is
+-- written, so an event always leaves its rows. `asset_id` = the leg's `liquidity_pools.legs` id
+-- (a SAC token keyed onto the classic asset it wraps).
+--
+-- Soroban rows are written for the pools a ledger staged state rows for —
+-- recognised from the ledger itself, never a registry read, so rows do not
+-- depend on processing order; readers start from the registry. Same decoder
+-- live and in the backfill, which reads `soroban_events` back
+-- (`stage/soroban_pool_amounts.rs`).
+--
+-- READS MUST DEDUP (`LIMIT 1 BY` the sorting key): the live writer and the
+-- backfill overlap on purpose, and until a background merge a `sum(amount)`
+-- counts the overlap twice.
+CREATE TABLE IF NOT EXISTS pool_movements (
+    pool_id           FixedString(32),
+    ledger_sequence   Int64  CODEC(Delta, ZSTD(1)),
+    application_order Int16  CODEC(T64, ZSTD(1)),
+    operation_index   UInt16 CODEC(T64, ZSTD(1)),
+    event_index       UInt32 CODEC(T64, ZSTD(1)),
+    event_kind        UInt8,
+    asset_id          Int64,
+    amount            Int128
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY intDiv(ledger_sequence, 500000)
+ORDER BY (pool_id, ledger_sequence, application_order, operation_index, event_index, asset_id);
 
 -- soroban_events: full-content per-event row (ADR 0044 §4a unfold).
 -- ZSTD codecs on the ScVal-decoded JSON columns. `signature` is the

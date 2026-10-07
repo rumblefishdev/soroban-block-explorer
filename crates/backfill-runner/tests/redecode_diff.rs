@@ -164,9 +164,10 @@ fn stage_ledger(cache: &Path, seq: u32) -> Vec<StagedLedger> {
         .iter()
         .map(|meta| {
             let parsed = indexer::handler::process::parse_ledger(meta);
-            // Mirrors `sink.rs::write_ledger` under `--only`: the SAC map is
-            // skipped there (no targetable table reads it), and the three
-            // prior-verdict maps are empty on every backfill path.
+            // This diff reads no ClickHouse, so the SAC map and the pool
+            // registry are empty: `pool_movements` is not compared
+            // here (its oracle is `soroban_pool_amounts_reconciliation`). The
+            // three prior-verdict maps are empty on every backfill path.
             let sac_classic = HashMap::new();
             prepare_with_sac_overrides(&StageInputs {
                 ledger: &parsed.ledger,
@@ -174,7 +175,7 @@ fn stage_ledger(cache: &Path, seq: u32) -> Vec<StagedLedger> {
                 operations: &parsed.operations,
                 events: &parsed.events,
                 invocations: &parsed.invocations,
-                contract_interfaces: &parsed.contract_interfaces,
+                programs: &parsed.programs,
                 contract_deployments: &parsed.contract_deployments,
                 account_states: &parsed.account_states,
                 liquidity_pools: &parsed.liquidity_pools,

@@ -7,7 +7,9 @@ Deep-dives live in the per-layer READMEs (linked below). This file does
 **not** duplicate them — it ties them together and is the source of truth
 for _which_ command ships _what_.
 
-> **Important — there is no staging environment.** Production is the only one.
+> **Important — there is no staging environment.** Production serves mainnet;
+> the only other environment is **testnet** ([§ Testnet](#testnet), task 0553),
+> the same code against Stellar Testnet.
 > A release is a `production-*` tag, which runs the CI deploy
 > (`.github/workflows/deploy-production.yml`); the same ships can also be run
 > **manually from an operator laptop**, which is the path for surgical,
@@ -77,12 +79,80 @@ environment (`eu-central-1`). Its leftovers were removed by task 0390:
 target **do not exist** and error immediately.
 
 If you find a `staging` command in an old README or your shell history, it is
-stale. A real pre-mainnet tier is proposed as the **testnet** environment
-(ADR 0052) — not as a revived `staging`.
+stale. The pre-mainnet tier is the **testnet** environment below (ADR 0052) —
+not a revived `staging`.
 
 > The GitHub **environment** named `staging` is a different thing. It is a
 > leftover from April 2026, superseded by `production` (below), and nothing
 > reads it.
+
+---
+
+## Testnet
+
+The same code against Stellar Testnet (task 0553, ADR 0052), from
+`infra/envs/testnet.json`, as `Explorer-testnet-*` stacks in the same account
+and region. What differs from production:
+
+- **No Galexie, no ledger bucket, no VPC.** `ledgerSource: public-lake`: the
+  indexer reads SDF's public data lake (`aws-public-blockchain`, folder in
+  `publicArchivePrefix`). The lake publishes no events, so the indexer paces
+  itself: after each ledger it queues one message delayed to when the next
+  file should have landed. A once-a-minute EventBridge Scheduler keepalive
+  (`public-lake-keepalive.ts`) restarts that chain if it stops.
+- **Its own ClickHouse database**, `testnet` on the production box, reached as
+  `testnet_reader` / `testnet_writer` through certs under
+  `soroban/testnet/mtls/*` (`docs/architecture/security/clickhouse-rbac.md`).
+- **One ingestion alarm**, `testnet-ingestion-stall`: the newest indexed
+  ledger older than 60 s for 3 minutes. It is also how a testnet reset shows
+  up — then follow [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md).
+- **No ClickHouse DNS record and no cost monitor** — both belong to
+  production (`provisionChDns`, `provisionCostAnomalyMonitor`).
+
+Targets in `infra/Makefile`: `synth-testnet`, `diff-testnet`,
+`deploy-testnet` (all stacks, same diff-then-`yes` guard as production),
+`build-testnet-web`, `deploy-testnet-web`.
+
+Before the first deploy: the three Lambda certs in Secrets Manager
+(`soroban/testnet/mtls/lambda-{api,ingestion,enrichment}-testnet`) and their
+CN pairs in `CLICKHOUSE_CN_USER_MAP`; the Slack IDs under
+`/soroban-explorer/testnet/`.
+
+The API goes public behind Cloudflare like production's, in two deploys —
+the edge secret exists only after the first, and Cloudflare must send it
+before the API demands it:
+
+1. An ACM certificate for `cloudflareApiDomainName` in `eu-central-1`, DNS
+   validation (the validation CNAME goes into the `rumblefishdev.com` zone
+   and **stays there**: ACM renews the certificate yearly through the same
+   record, as it does production's).
+   Its ARN into `cloudflareApiCertificateArn`, `enableCloudflareApiDomain:
+true`.
+2. **Deploy 1** creates the API custom domain and the testnet secrets
+   (`soroban/testnet/cloudflare/edge-secret`, `soroban/testnet/auth/*`).
+3. The proxied API record: this repo's Terraform, workspace `testnet`
+   ([`infra/cloudflare/README.md`](../infra/cloudflare/README.md#testnet)),
+   origin target from the `CloudflareApiRegionalTarget` output of
+   `Explorer-testnet-ApiGateway`.
+4. In `dns-cloudformation` (`cloudflare/`, Terraform, applied by the zone's
+   owner): `enable_testnet_edge_secret = true` with the **testnet** edge secret
+   in `testnet_edge_secret` (each environment has its own), which adds the
+   testnet rule stamping `X-Edge-Secret` on the testnet API host; the testnet
+   SPA hostname in `turnstile_domains`.
+5. The widget's Turnstile secret key into
+   `soroban/testnet/auth/turnstile-secret` (same widget as production, so the
+   same value).
+6. `enableEdgeSecretLock` and `enableAuthLayer` to `true`, **deploy 2**, then
+   `deploy-testnet-web`. Run deploy 2 the same day as deploy 1: until then the
+   testnet API answers on its `execute-api` address without the edge lock or
+   Turnstile.
+
+An empty `testnet` database needs the indexer **paused**
+(`indexerLambdaConcurrency: 0` in `infra/envs/testnet.json`, which also
+disables the keepalive): an indexer with nothing to continue from would only
+keep the stall alarm firing. Build it with
+[`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md), steps 2 and
+4–7: pause, backfill from genesis, resume.
 
 ---
 
@@ -238,7 +308,34 @@ the repo root as `make -C infra <target>` (or `cd infra && make <target>`).
 Frontend **content** is separate: `deploy-production-web`
 (build → S3 sync → CloudFront invalidation).
 
+The sync runs in two passes, and the order matters (task 0595):
+
+1. `assets/*` goes up first with `public, max-age=31536000, immutable`, and
+   it is **never deleted**. A browser that still holds the previous
+   `index.html` then finds that build's files, instead of receiving the SPA
+   fallback HTML where a script should be, which renders a blank page.
+2. Everything else, `index.html` included, goes up with
+   `public, max-age=0, s-maxage=60, must-revalidate`. Browsers revalidate it
+   on every load, and CloudFront keeps it for at most 60 s. `--delete`
+   applies to this pass only.
+
+Old hashed assets pile up at about 1.3 MB per build. Nothing prunes them.
+
 ### Gotchas — read before you deploy
+
+- **Every schema change runs on each explorer database: `default` (mainnet)
+  and `testnet` (task 0553).** Both hold the same `init.sql`. The sidecar
+  (`crates/db-clickhouse/schema/apply_init.sh`, list in `EXPLORER_DATABASES`
+  of `docker-compose.yml`) creates missing tables in both on every
+  `docker compose up`, but it never alters an existing table — so every
+  `ALTER`, `DROP` or `EXCHANGE` in a runbook below is run once per database
+  (`clickhouse-client --database testnet …`), and both indexers are recycled
+  after it (`testnet-soroban-explorer-indexer` too). A table missing from
+  `testnet` stops testnet ingestion, not mainnet's. After an
+  `ansible-playbook … --tags app` run, read the sidecar's log: Compose does
+  not report a sidecar that failed, and the log must end with
+  `init.sql applied to testnet`
+  (`ssh sorban-prod docker logs app-db-clickhouse-init-1`).
 
 - **Any `ALTER` on a table the indexer writes can stop ingestion — even an
   ADD.** clickhouse-rs 0.15 checks the row struct against `DESCRIBE TABLE`
@@ -307,55 +404,6 @@ Frontend **content** is separate: `deploy-production-web`
   2. **Then the indexer** (Galexie recipe below).
   3. **Then the catch-up backfills and the window-closure check** — see
      "Soroban-AMM pool passes" in [backfills.md](./backfills.md).
-
-- **Canonical event location (task 0541): no `production-*` tag between the
-  merge and the window.** The task-0541 writer keys `soroban_events` by the
-  stellar-rpc event id (`transaction_index`, `operation_index`, `event_index`,
-  `application_order`) and no longer names `transaction_id`; it stops writing
-  `asset_transfers.event_index`; and it writes a new table,
-  `contract_transactions`. Against the tables as they stand before the window,
-  the clickhouse-rs 0.15 client refuses all three inserts — the 0310 outage
-  class, on every ledger. `EXCHANGE TABLES` renames `soroban_events` only; it
-  does nothing for the other two. So once the task-0541 code is on `master`,
-  nothing ships until its window runs, in this order (the task's rollout plan,
-  phase 4, carries the gates and the rollback):
-
-  0. **`contract_transactions` exists and its history is filled** through the
-     partitions filled before the window. Created verbatim from `init.sql`;
-     filled in-DB, slice by slice after the `soroban_events` rekey of the same
-     slice ([backfills.md](./backfills.md), "Canonical event location fill").
-     An empty table is a working indexer and a contract transaction list with
-     no past — fill it, do not just create it. This must return `1`:
-     ```bash
-     chq "EXISTS TABLE default.contract_transactions"
-     ```
-  1. **`asset_transfers.event_index` has a DEFAULT — read it, do not assume
-     it.** This must return `DEFAULT`:
-     ```bash
-     chq "SELECT default_kind FROM system.columns WHERE database = 'default' AND table = 'asset_transfers' AND name = 'event_index'"
-     ```
-     If it does not, the operator runs
-     `ALTER TABLE asset_transfers MODIFY COLUMN event_index DEFAULT 0` — a
-     metadata change, safe under the running writer, which still names the
-     column.
-  2. **Pause durably:** `indexerLambdaConcurrency = 0`, deployed from a
-     checkout at the last `production-*` tag (a disabled trigger alone is
-     re-enabled by the next Compute deploy).
-  3. **Fill the tail** up to the paused head — `soroban_events_staging_canonical`
-     first, then `contract_transactions` for the same slices — and gate both.
-  4. **Deploy the new code, still at concurrency 0.**
-  5. **Swap:** `EXCHANGE TABLES soroban_events AND soroban_events_staging_canonical`.
-  6. **Resume:** concurrency back to `1` — the value production runs, not the
-     unset default — then deploy Compute and Web.
-
-  **After the swap the hold turns around:** only code that carries task 0541
-  may deploy Compute. The earlier writer still names `transaction_id`, which the
-  new `soroban_events` does not have, so a Compute deploy from `master` or a
-  `production-*` tag that predates the change stops ingest on its first ledger —
-  a hotfix included. The window deploys from `develop`; the hold lasts until
-  `master` carries the change and a `production-*` tag is cut from it.
-
-  Remove this item once that tag exists.
 
 - **Change a table's shape as a parallel change, not a swap window**
   (decided in task 0580). The clickhouse-rs 0.15 client checks every insert
@@ -492,6 +540,33 @@ Frontend **content** is separate: `deploy-production-web`
 
   A drop before this deploy stops ingest on the next ledger with an NFT change:
   the earlier writer still inserts into both.
+
+- **`transactions.id` dropped (task 0538, step 7).** The indexer no longer
+  writes the hash surrogate; no table or reader references it. `id` is not in
+  the sort key, so no rebuild: give it a `DEFAULT` first (metadata only, no
+  mutation), so the new build — which does not name it — passes the client's
+  `DESCRIBE` check while the running build still writes it:
+
+  ```sql
+  ALTER TABLE transactions MODIFY COLUMN id Int64 DEFAULT 0;
+  ```
+
+  Then deploy Compute; then, once `system.query_log` shows no insert naming
+  `id` (the old build's containers are gone) and the prices-api check is
+  recorded in task 0538, drop it:
+
+  ```sql
+  ALTER TABLE transactions DROP COLUMN id;
+  ```
+
+  A drop before this deploy stops ingest on every ledger: the earlier writer
+  still inserts `id`. Deploying before the `DEFAULT` does the same. After the
+  drop, `backfill-runner` and the parallel-backfill workers (whose parts the
+  merge scripts attach) must be built from this change or later: an older
+  build still writes `id`, which `query_log` cannot show until it runs. A local
+  ClickHouse keeps the column too (`init.sql` never alters an existing table),
+  so the CH-gated tests fail with `SchemaMismatch … missing: id` until the same
+  `DROP COLUMN` runs there.
 
 - **Presence tables by position (task 0575): no `production-*` tag between
   the merge and the window.** The task-0575 writer names `application_order`
@@ -716,7 +791,9 @@ Bump procedure — **pull → tag → push → sha**:
 `Delivery` provisions the CloudFront distribution and the SPA bucket. The
 **content** is a separate step that builds the SPA (baking `VITE_API_BASE_URL`
 from `cloudflareApiDomainName` and `VITE_TURNSTILE_SITE_KEY` from
-`turnstileSiteKey`, both read out of `production.json` — no shell env needed),
+`turnstileSiteKey`, both read out of `production.json` — no shell env needed —
+and `VITE_STELLAR_NETWORK=mainnet`; the testnet recipe sets `testnet`, which
+turns the network pill beside the logo yellow and marks the browser tab),
 syncs to S3, and invalidates CloudFront:
 
 ```bash

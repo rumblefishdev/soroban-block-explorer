@@ -83,7 +83,7 @@ pub struct XdrEventDto {
     pub id: Option<String>,
     /// Zero-based envelope position of the operation that emitted this event
     /// (CAP-67 per-operation container only; `None` for fee and diagnostic
-    /// events). Matches `XdrOperationDto.application_order - 1`.
+    /// events). Equals the emitting `XdrOperationDto.operation_index`.
     pub operation_index: Option<i16>,
     /// The id's event number: the position in the operation, or for a fee
     /// event the ledger's (or, for `after_tx`, the transaction's) counter of
@@ -102,9 +102,9 @@ pub struct XdrEventDto {
 pub struct XdrOperationDto {
     /// Operation type tag (e.g. `"payment"`, `"invoke_host_function"`).
     pub op_type: String,
-    /// Application order within the transaction (1-based, matches Horizon
-    /// `paging_token` convention).
-    pub application_order: i16,
+    /// The operation's position in its transaction's envelope, 0-based
+    /// (ADR 0059, stellar-rpc `operationIndex`).
+    pub operation_index: i16,
     /// Full operation details (type-specific JSON).
     pub details: serde_json::Value,
     /// Per-operation result code from the transaction result XDR, using the

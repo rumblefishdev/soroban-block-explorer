@@ -47,6 +47,8 @@ domain = { path = "../domain" }
 cityhash-rs = "1.0.1"
 hex = { workspace = true }
 serde = { workspace = true }
+# Writes `wasm_programs.code` (a binary `String` column) from `Vec<u8>`.
+serde_bytes = "0.11"
 serde_json = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
