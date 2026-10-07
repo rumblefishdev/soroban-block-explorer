@@ -25,6 +25,7 @@
 //! invite drift if Caddy's behaviour ever changed under our feet.
 
 use std::io::Cursor;
+use std::path::Path;
 use std::time::Duration;
 
 use rustls::ClientConfig;
@@ -259,6 +260,59 @@ pub async fn client_from_lambda_env(database: &str) -> Result<clickhouse::Client
     let domain = require_env("CH_DOMAIN")?;
     let bundle = fetch_bundle_from_extension(&secret_name).await?;
     client_with_mtls(&domain, &bundle, database)
+}
+
+/// The ClickHouse client of an operator CLI (`backfill-runner`, `enrich`),
+/// from its `--clickhouse-url` / `--ch-cert` / `--ch-key` / `--ch-ca` flags.
+/// Panics loudly at startup on a bad config (mismatched mTLS flags,
+/// unreadable PEM).
+///
+/// Reads ClickHouse env vars (user, password, database) via
+/// [`crate::Config::from_env`]; the `--clickhouse-url` CLI flag already
+/// overrides `CLICKHOUSE_URL` for the URL field because clap reads the same
+/// env var.
+///
+/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the client
+/// connects over mTLS to the Caddy-fronted endpoint: the PEMs are read into an
+/// `MtlsBundle` and `client_with_mtls` presents the client cert (whose CN Caddy
+/// maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url` must be the https
+/// Caddy host; user/password are ignored on that path.
+pub fn client_from_cli_flags(
+    clickhouse_url: Option<&str>,
+    ch_cert: Option<&Path>,
+    ch_key: Option<&Path>,
+    ch_ca: Option<&Path>,
+) -> clickhouse::Client {
+    let mut cfg = crate::Config::from_env();
+    if let Some(url) = clickhouse_url {
+        cfg.url = url.to_string();
+    }
+    match (ch_cert, ch_key, ch_ca) {
+        (Some(cert), Some(key), Some(ca)) => {
+            let read = |p: &Path| {
+                std::fs::read_to_string(p)
+                    .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
+            };
+            let bundle = MtlsBundle {
+                cert_pem: read(cert),
+                key_pem: read(key),
+                ca_pem: read(ca),
+            };
+            // `client_with_mtls` prepends `https://`, so hand it the
+            // bare host — strip any scheme / trailing slash from cfg.url.
+            let domain = cfg
+                .url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/');
+            client_with_mtls(domain, &bundle, &cfg.database)
+                .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"))
+        }
+        (None, None, None) => crate::client(&cfg),
+        _ => {
+            panic!("--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted")
+        }
+    }
 }
 
 fn require_env(key: &'static str) -> Result<String, MtlsError> {

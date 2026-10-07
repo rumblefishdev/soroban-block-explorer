@@ -462,55 +462,20 @@ async fn main() {
     }
 }
 
-/// Build the ClickHouse `Sink`. Panics loudly at startup on a bad config
-/// (mismatched mTLS flags, unreadable PEM) — same posture as the existing
-/// pre-flight panics.
-///
-/// Reads ClickHouse env vars (user, password, database) via
-/// `db_clickhouse::Config::from_env`; the `--clickhouse-url` CLI flag already
-/// overrides `CLICKHOUSE_URL` for the URL field because clap reads the same
-/// env var.
-///
-/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the sink
-/// connects over mTLS to the Caddy-fronted endpoint: the PEMs are read into an
-/// `MtlsBundle` and `client_with_mtls` presents the client cert (whose CN Caddy
-/// maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url` must be the https
-/// Caddy host; user/password are ignored on that path.
+/// Build the ClickHouse `Sink` on the operator-CLI client
+/// ([`db_clickhouse::mtls::client_from_cli_flags`]: plain, or mTLS when
+/// `--ch-cert` / `--ch-key` / `--ch-ca` are all set). Panics loudly at
+/// startup on a bad config — same posture as the existing pre-flight panics.
 fn build_sink(
     clickhouse_url: Option<&str>,
     ch_cert: Option<&Path>,
     ch_key: Option<&Path>,
     ch_ca: Option<&Path>,
 ) -> sink::Sink {
-    let mut cfg = db_clickhouse::Config::from_env();
-    if let Some(url) = clickhouse_url {
-        cfg.url = url.to_string();
-    }
-    match (ch_cert, ch_key, ch_ca) {
-        (Some(cert), Some(key), Some(ca)) => {
-            let read = |p: &Path| {
-                std::fs::read_to_string(p)
-                    .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
-            };
-            let bundle = db_clickhouse::mtls::MtlsBundle {
-                cert_pem: read(cert),
-                key_pem: read(key),
-                ca_pem: read(ca),
-            };
-            // `client_with_mtls` prepends `https://`, so hand it the
-            // bare host — strip any scheme / trailing slash from cfg.url.
-            let domain = cfg
-                .url
-                .trim_start_matches("https://")
-                .trim_start_matches("http://")
-                .trim_end_matches('/');
-            let client = db_clickhouse::mtls::client_with_mtls(domain, &bundle, &cfg.database)
-                .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"));
-            sink::Sink::new(client)
-        }
-        (None, None, None) => sink::Sink::new(db_clickhouse::client(&cfg)),
-        _ => {
-            panic!("--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted")
-        }
-    }
+    sink::Sink::new(db_clickhouse::mtls::client_from_cli_flags(
+        clickhouse_url,
+        ch_cert,
+        ch_key,
+        ch_ca,
+    ))
 }
