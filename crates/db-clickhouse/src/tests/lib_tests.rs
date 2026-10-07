@@ -98,10 +98,12 @@ fn init_sql_parses_into_statements() {
     // pool amounts. 39 → 40.
     // task 0620: added `wasm_code`, then folded it into `wasm_programs.code`
     // before it reached production. 40 → 41 → 40.
+    // task 0620: added `contract_instances` — each contract's instance entry,
+    // whole, for running its functions. 40 → 41.
     assert_eq!(
         stmts.len(),
-        40,
-        "expected 37 tables + 3 materialized views, got {}",
+        41,
+        "expected 38 tables + 3 materialized views, got {}",
         stmts.len()
     );
 }
