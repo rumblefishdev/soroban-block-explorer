@@ -99,13 +99,18 @@ and region. What differs from production:
   `publicArchivePrefix`). The lake publishes no events, so the indexer paces
   itself: after each ledger it queues one message delayed to when the next
   file should have landed. A once-a-minute EventBridge Scheduler keepalive
-  (`public-lake-keepalive.ts`) restarts that chain if it stops.
+  (`public-lake-keepalive.ts`) restarts that chain if it stops. Lambda's
+  recursive-loop guard is off for this function only (`recursiveLoop`
+  set to allow): it would drop every 17th hop of the chain.
 - **Its own ClickHouse database**, `testnet` on the production box, reached as
   `testnet_reader` / `testnet_writer` through certs under
   `soroban/testnet/mtls/*` (`docs/architecture/security/clickhouse-rbac.md`).
-- **One ingestion alarm**, `testnet-ingestion-stall`: the newest indexed
-  ledger older than 60 s for 3 minutes. It is also how a testnet reset shows
-  up — then follow [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md).
+- **Ingestion alarms in place of Galexie's**: `testnet-ingestion-stall`, the
+  newest indexed ledger older than 60 s for 3 minutes — also how a testnet
+  reset shows up, then follow
+  [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md); and
+  `testnet-indexer-runaway-wakeups`, over 400 indexer invocations in 15
+  minutes twice in a row, standing in for the loop guard.
 - **No ClickHouse DNS record and no cost monitor** — both belong to
   production (`provisionChDns`, `provisionCostAnomalyMonitor`).
 

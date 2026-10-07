@@ -362,6 +362,14 @@ export class ComputeStack extends cdk.Stack {
       memorySize: config.indexerLambdaMemory,
       timeout: cdk.Duration.seconds(config.indexerLambdaTimeout),
       reservedConcurrentExecutions: config.indexerLambdaConcurrency,
+      // Reading the public data lake, the indexer wakes itself through its own
+      // queue, one message per ledger (lake_pacing.rs). AWS counts that as a
+      // loop and drops the 17th hop of each chain, so the chain died every
+      // ~80 s and ~300 messages an hour went to the DLQ (measured 2026-10-07,
+      // `RecursiveInvocationsDropped`). The loop is intended, and reserved
+      // concurrency 1 bounds it; the runaway alarm in ingestion-alarms.ts
+      // replaces the guard. Mainnet's doorbells come from S3 and keep it.
+      ...(!ledgerBucket && { recursiveLoop: lambda.RecursiveLoop.ALLOW }),
       environment: {
         ...sharedEnv,
         ...archivePrefixEnv,
