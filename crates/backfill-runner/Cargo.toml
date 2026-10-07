@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 indexer = { path = "../indexer" }
 xdr-parser = { path = "../xdr-parser" }
+contract-executor = { path = "../contract-executor" }
 # ClickHouse sink (task 0205, ADR 0044). `aws-mtls` exposes the reusable
 # `client_with_mtls` builder for the mTLS sink path (task 0307,
 # `--ch-cert`/`--ch-key`/`--ch-ca`); the Lambda-only extension fetch in that
@@ -61,6 +62,8 @@ async-trait = "0.1"
 # `pool-ids-backfill` (task 0266): pool-id hex encode/decode for the
 # gross_volume_a aggregation keyed by raw 32-byte pool id.
 hex = { workspace = true }
+# Reads binary `String` columns (`wasm_programs.code`, `contract_instances.data_xdr`).
+serde_bytes = "0.11"
 # Task 0463: the history archive is content-addressed — bucket bytes are hashed
 # as they stream and checked against the manifest's hash, so "verified source"
 # is a check rather than a claim about TLS.

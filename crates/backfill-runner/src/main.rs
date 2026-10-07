@@ -9,6 +9,7 @@ mod balance_seed;
 mod bootstrap;
 mod ch_staging;
 mod contract_instance_backfill;
+mod contract_metadata_backfill;
 mod contract_type_rebuild;
 mod dashboard;
 mod error;
@@ -282,6 +283,17 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Task 0620 — `decimals`, `name` and `symbol` of every token contract
+    /// (program declares `decimals`), read by running its own functions
+    /// locally over `wasm_programs.code` and `contract_instances`, written to
+    /// `soroban_contract_metadata`. Run after `wasm-code-backfill` and
+    /// `contract-instance-backfill`. Idempotent. `--dry-run` compares with
+    /// the stored rows without writing.
+    ContractMetadataBackfill {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -455,6 +467,24 @@ async fn main() {
                 "contract_instance_backfill completed (dry_run={}): missing={} fetched={} \
                  not_returned={} written={}",
                 stats.dry_run, stats.missing, stats.fetched, stats.not_returned, stats.written,
+            );
+        }
+        Command::ContractMetadataBackfill { dry_run } => {
+            let s = contract_metadata_backfill::execute(&sink, dry_run)
+                .await
+                .expect("contract_metadata_backfill failed — idempotent, safe to re-run");
+            println!(
+                "contract_metadata_backfill completed (dry_run={}): tokens={} no_instance={} \
+                 needs_contract_data={} failed={} same={} different={} new={} written={}",
+                s.dry_run,
+                s.tokens,
+                s.no_instance,
+                s.needs_contract_data,
+                s.failed,
+                s.same,
+                s.different,
+                s.new,
+                s.written,
             );
         }
         Command::SorobanPoolAmounts { dry_run } => {

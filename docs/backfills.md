@@ -280,9 +280,9 @@ The dividing line is **`EXCHANGE TABLES`**. A subcommand that builds a staging
 table and swaps it will **lose any live write** that lands between build and
 swap.
 
-| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                                              |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify`, `wasm-code-backfill`, `contract-instance-backfill` |
+| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                                                                            |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify`, `wasm-code-backfill`, `contract-instance-backfill`, `contract-metadata-backfill` |
 
 **Grey zone:**
 
@@ -421,7 +421,10 @@ read from RPC and checked against their hash), `contract-instance-backfill`
 (each contract's instance entry for `contract_instances`, read from RPC and
 versioned by the entry's own last-modified ledger; run it only **after** the
 indexer that writes the table is deployed, or an instance changed in between
-is written by neither). Most one-shot ops
+is written by neither), `contract-metadata-backfill` (`decimals`, `name`,
+`symbol` of every token contract, read by running its own functions locally
+over the two tables above, into `soroban_contract_metadata`; run it after both
+fills). Most one-shot ops
 subcommands take `--dry-run`. No separate bins remain.
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),

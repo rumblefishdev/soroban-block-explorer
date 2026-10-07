@@ -115,11 +115,12 @@ is the deploy/upgrade ledger despite its name).
    fills the rest, versioned by the entry's last-modified ledger. Production:
    `CREATE TABLE` before the deploy, the backfill after it (mainnet and
    testnet). Evidence for both: `notes/R-stored-bytes-and-instances.md`.
-3. Executor module wrapping `soroban-env-host` (pinned to the network's
-   protocol): `call_view(contract, fn) -> Result<ScVal, …>` over a snapshot
-   source fed by the current ledger's changes, `wasm_programs.code` and the
-   contract-instance table (decided 2026-10-06: execution runs in the
-   indexer, ADR 0043 — no network round trip).
+3. `crates/contract-executor` (`soroban-env-host =29.0.0`, network limits
+   and cost params as constants) and `contract-metadata-backfill`, which
+   runs the declared `decimals`/`name`/`symbol` of every token over the two
+   tables (PR 3a, decided 2026-10-07: budget constants, split from the live
+   path). Contracts whose functions read persistent data: task 0633.
+   Live in the indexer: PR 3b.
 4. On token deploy, instance change and WASM upgrade: run `decimals`, `name`,
    `symbol`; write `soroban_contract_metadata` with the ledger. Remove the
    `METADATA` storage read once the backfilled values match.
