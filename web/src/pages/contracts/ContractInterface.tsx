@@ -5,7 +5,6 @@ import {
   AccordionDetails,
   AccordionSummary,
   Box,
-  Button,
   Stack,
   Typography,
 } from '@mui/material';
@@ -198,14 +197,7 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
  * empty state, the latter pointing to the Code tab, which reconstructs the
  * functions from the program itself.
  */
-export function ContractInterface({
-  contractId,
-  onShowCode,
-}: {
-  contractId: string;
-  /** Opens the Code tab; absent when the page shows no Code tab. */
-  onShowCode?: () => void;
-}) {
+export function ContractInterface({ contractId }: { contractId: string }) {
   const { data, isLoading, isError, error, refetch } =
     useContractInterface(contractId);
 
@@ -239,13 +231,6 @@ export function ContractInterface({
         icon={<InfoOutlinedIcon fontSize="small" />}
         title="No interface metadata"
         description="No function list is available for this contract's WASM. The Code tab reconstructs its functions from the WASM itself."
-        action={
-          onShowCode && (
-            <Button variant="contained" onClick={onShowCode}>
-              Open Code
-            </Button>
-          )
-        }
       />
     );
   }

@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../../test-utils.js';
@@ -24,46 +24,7 @@ const WASM_HASH =
   'cd8ad034fd37e246ca578b1cfd1dc3d95fb532a6591ecf491ee01d2db03f5244';
 
 describe('Interface tab with no function list', () => {
-  it('points a WASM without interface metadata to the Code tab', () => {
-    response = {
-      contract_id: CONTRACT,
-      wasm_hash: WASM_HASH,
-      interface_metadata: null,
-    };
-    const onShowCode = vi.fn();
-    renderWithProviders(
-      <ContractInterface contractId={CONTRACT} onShowCode={onShowCode} />
-    );
-
-    expect(screen.getByText('No interface metadata')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open Code' }));
-    expect(onShowCode).toHaveBeenCalledOnce();
-  });
-
-  it('treats a declared but empty function list the same way', () => {
-    response = {
-      contract_id: CONTRACT,
-      wasm_hash: WASM_HASH,
-      interface_metadata: { functions: [], wasm_byte_len: 1074 },
-    };
-    renderWithProviders(
-      <ContractInterface contractId={CONTRACT} onShowCode={vi.fn()} />
-    );
-
-    expect(screen.getByText('No interface metadata')).toBeInTheDocument();
-  });
-
-  it('keeps the SAC / pre-upload message when there is no WASM', () => {
-    response = { contract_id: CONTRACT, wasm_hash: null };
-    renderWithProviders(
-      <ContractInterface contractId={CONTRACT} onShowCode={vi.fn()} />
-    );
-
-    expect(screen.getByText('No public interface')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Open Code' })).toBeNull();
-  });
-
-  it('shows no button when the page has no Code tab to open', () => {
+  it('says a WASM has no function list and names the Code tab', () => {
     response = {
       contract_id: CONTRACT,
       wasm_hash: WASM_HASH,
@@ -72,6 +33,24 @@ describe('Interface tab with no function list', () => {
     renderWithProviders(<ContractInterface contractId={CONTRACT} />);
 
     expect(screen.getByText('No interface metadata')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Open Code' })).toBeNull();
+    expect(screen.getByText(/The Code tab reconstructs/)).toBeInTheDocument();
+  });
+
+  it('treats a declared but empty function list the same way', () => {
+    response = {
+      contract_id: CONTRACT,
+      wasm_hash: WASM_HASH,
+      interface_metadata: { functions: [], wasm_byte_len: 1074 },
+    };
+    renderWithProviders(<ContractInterface contractId={CONTRACT} />);
+
+    expect(screen.getByText('No interface metadata')).toBeInTheDocument();
+  });
+
+  it('keeps the SAC / pre-upload message when there is no WASM', () => {
+    response = { contract_id: CONTRACT, wasm_hash: null };
+    renderWithProviders(<ContractInterface contractId={CONTRACT} />);
+
+    expect(screen.getByText('No public interface')).toBeInTheDocument();
   });
 });
