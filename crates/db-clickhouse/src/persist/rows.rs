@@ -321,8 +321,8 @@ pub struct LiquidityPoolRow {
     pub asset_b_issuer_id: i64,
     pub fee_bps: i32,
     pub last_updated_ledger: i64,
-    /// 0 = classic (pool_id: CAP-38 hash), 1 = soroban contract (pool_id:
-    /// the 32-byte payload of the C… address). Registry columns below are
+    /// `domain::PoolKind as u8`: 0 = classic (pool_id: CAP-38 hash), 1 =
+    /// soroban contract (pool_id: the 32-byte payload of the C… address). Registry columns below are
     /// meaningful only for kind 1; classic writers set the defaults.
     pub pool_kind: u8,
     /// One surrogate per leg, in a PER-KIND id space (`pool_kind` says

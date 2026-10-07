@@ -142,7 +142,7 @@ pub(super) fn factory_pair_registry_row(
         asset_b_issuer_id: 0,
         fee_bps: 30,
         last_updated_ledger: ledger_sequence,
-        pool_kind: 1,
+        pool_kind: domain::PoolKind::Soroban as u8,
         legs: vec![
             contract_token_asset_id(&reg.event.token_0, sac_classic),
             contract_token_asset_id(&reg.event.token_1, sac_classic),
@@ -184,7 +184,7 @@ pub(super) fn config_pool_registry_row(
         asset_b_issuer_id: 0,
         fee_bps,
         last_updated_ledger: ledger_sequence,
-        pool_kind: 1,
+        pool_kind: domain::PoolKind::Soroban as u8,
         legs: vec![
             contract_token_asset_id(&config.token_a, sac_classic),
             contract_token_asset_id(&config.token_b, sac_classic),
@@ -233,7 +233,7 @@ pub(super) fn pool_registry_row(
         asset_b_issuer_id: 0,
         fee_bps,
         last_updated_ledger: ledger_sequence,
-        pool_kind: 1,
+        pool_kind: domain::PoolKind::Soroban as u8,
         legs: reg
             .tokens
             .iter()
