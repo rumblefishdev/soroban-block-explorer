@@ -475,10 +475,12 @@ async fn main() {
                 .expect("contract_metadata_backfill failed — idempotent, safe to re-run");
             println!(
                 "contract_metadata_backfill completed (dry_run={}): tokens={} no_instance={} \
-                 needs_contract_data={} failed={} same={} different={} new={} written={}",
+                 no_program={} needs_contract_data={} failed={} same={} different={} new={} \
+                 written={}",
                 s.dry_run,
                 s.tokens,
                 s.no_instance,
+                s.no_program,
                 s.needs_contract_data,
                 s.failed,
                 s.same,

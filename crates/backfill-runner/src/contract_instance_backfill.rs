@@ -149,7 +149,7 @@ pub async fn execute(
 
 /// The ledger key of a contract's instance: its persistent contract-data
 /// entry under the instance key.
-fn instance_key(contract: [u8; 32]) -> LedgerKey {
+pub(crate) fn instance_key(contract: [u8; 32]) -> LedgerKey {
     LedgerKey::ContractData(LedgerKeyContractData {
         contract: ScAddress::Contract(ContractId(Hash(contract))),
         key: ScVal::LedgerKeyContractInstance,

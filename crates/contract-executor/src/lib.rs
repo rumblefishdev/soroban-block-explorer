@@ -30,6 +30,11 @@ use soroban_env_host::{HostError, LedgerInfo};
 
 mod network;
 
+/// The newest network protocol this host runs. A ledger on a later protocol
+/// needs a newer `soroban-env-host`; callers refuse rather than report every
+/// call as failed.
+pub const PROTOCOL_VERSION: u32 = 29;
+
 /// The ledger the function runs "at".
 #[derive(Debug, Clone, Copy)]
 pub struct Ledger {

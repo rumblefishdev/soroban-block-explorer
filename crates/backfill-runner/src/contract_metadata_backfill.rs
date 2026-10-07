@@ -22,11 +22,12 @@ use contract_executor::{Ledger, ViewOutcome, call_view};
 use db_clickhouse::persist::rows::SorobanContractMetadataRow;
 use serde::Deserialize;
 use stellar_xdr::{
-    ContractDataDurability, ContractId, Hash, LedgerEntry, LedgerEntryData, LedgerEntryExt,
-    LedgerKey, LedgerKeyContractCode, LedgerKeyContractData, Limits, ReadXdr, ScAddress, ScVal,
+    ContractId, Hash, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
+    LedgerKeyContractCode, LedgerKeyContractData, Limits, ReadXdr, ScAddress, ScVal,
 };
 use tracing::{info, warn};
 
+use crate::contract_instance_backfill::instance_key;
 use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::util::insert_rows;
@@ -46,6 +47,8 @@ pub struct ContractMetadataBackfillStats {
     pub tokens: u64,
     /// No instance row yet (`contract-instance-backfill` not run for it).
     pub no_instance: u64,
+    /// The program's bytes are not stored (`wasm-code-backfill` not run).
+    pub no_program: u64,
     /// A function asked for persistent contract data we do not store (0633).
     pub needs_contract_data: u64,
     /// A function failed or returned a value of the wrong type.
@@ -122,13 +125,23 @@ pub async fn execute(
         )
         .fetch_one::<LatestLedger>()
         .await?;
-    let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE")
-        .unwrap_or_else(|_| xdr_parser::MAINNET_PASSPHRASE.to_string());
+    // The process's network (`STELLAR_NETWORK_PASSPHRASE`), mainnet when unset.
+    let network_id = match xdr_parser::sac::net_id() {
+        Some(id) => *id,
+        None => xdr_parser::sac::network_id(xdr_parser::MAINNET_PASSPHRASE),
+    };
+    if latest.protocol_version as u32 > contract_executor::PROTOCOL_VERSION {
+        return Err(BackfillError::Incomplete(format!(
+            "the network is on protocol {}, the executor runs up to {} — bump soroban-env-host first",
+            latest.protocol_version,
+            contract_executor::PROTOCOL_VERSION
+        )));
+    }
     let ledger = Ledger {
         sequence: latest.sequence as u32,
         timestamp: u64::from(latest.closed_at),
         protocol_version: latest.protocol_version as u32,
-        network_id: xdr_parser::sac::network_id(&passphrase),
+        network_id,
     };
 
     // Every non-SAC contract whose program declares `decimals`, with the
@@ -149,15 +162,20 @@ pub async fn execute(
         .fetch_all::<TokenRow>()
         .await?;
 
+    // The token programs' bytes, once each. `toFixedString`: see
+    // `load_instances`.
+    let mut token_programs: Vec<String> = tokens.iter().map(|t| hex::encode(t.wasm_hash)).collect();
+    token_programs.sort();
+    token_programs.dedup();
     let mut programs: HashMap<[u8; 32], Option<Vec<u8>>> = HashMap::new();
     for row in client
         .query(
             "SELECT wasm_hash, code FROM wasm_programs \
-             WHERE code != '' AND wasm_hash IN ( \
-                 SELECT assumeNotNull(wasm_hash) FROM soroban_contracts \
-                 WHERE NOT is_sac AND wasm_hash IS NOT NULL) \
+             WHERE code != '' \
+               AND wasm_hash IN (SELECT toFixedString(unhex(arrayJoin(?)), 32)) \
              LIMIT 1 BY wasm_hash",
         )
+        .bind(token_programs)
         .fetch_all::<ProgramRow>()
         .await?
     {
@@ -206,6 +224,10 @@ pub async fn execute(
             stats.no_instance += 1;
             continue;
         };
+        if !matches!(programs.get(&token.wasm_hash), Some(Some(_))) {
+            stats.no_program += 1;
+            continue;
+        }
         let answer = read_metadata(
             client,
             &ledger,
@@ -401,14 +423,6 @@ async fn load_instances(
         instances.insert(row.contract, Some((row.latest_xdr, row.latest_ledger)));
     }
     Ok(())
-}
-
-fn instance_key(contract: [u8; 32]) -> LedgerKey {
-    LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId(Hash(contract))),
-        key: ScVal::LedgerKeyContractInstance,
-        durability: ContractDataDurability::Persistent,
-    })
 }
 
 fn code_key(wasm_hash: [u8; 32]) -> LedgerKey {
