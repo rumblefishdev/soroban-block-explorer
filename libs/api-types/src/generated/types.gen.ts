@@ -489,10 +489,10 @@ export type AssetTransactionItem = {
  * One row from the chart endpoint. All money fields are **USD decimal
  * strings with exactly two decimals**, computed at read from on-chain
  * quantities × the in-cluster price series (task 0199, ADR 0053):
- * - `tvl` — "TVL at close of bucket": the bucket's last pool state,
- * Σ reserve·price over every leg, priced at that state's own hour or
- * day (`1w`: the day of the week's last change). A leg with no candle
- * then falls back to its most recent close within 48 h, so a pool whose
+ * - `tvl` — "TVL at close of bucket": the bucket's last pool state that
+ * prices, Σ reserve·price over every leg, priced at that state's own
+ * hour or day (`1w`: the latest day of the week that prices). A leg with
+ * no candle falls back to its most recent close within 48 h, so a pool whose
  * second leg has not traded today still reports; `null` when any leg
  * has no price within that window (untracked asset, pre-listing
  * history, or a provider-side gap such as the 2026-07-21..08-03 freeze)
