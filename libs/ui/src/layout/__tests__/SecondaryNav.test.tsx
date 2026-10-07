@@ -12,7 +12,11 @@ describe('SecondaryNav', () => {
   it('links the Prices API portal with a plain anchor', () => {
     render(
       <ExplorerThemeProvider>
-        <SecondaryNav logo={<span>logo</span>} navItems={[]} />
+        <SecondaryNav
+          logo={<span>logo</span>}
+          navItems={[]}
+          pricesApiUrl="/prices-api/"
+        />
       </ExplorerThemeProvider>
     );
 
@@ -28,6 +32,7 @@ describe('SecondaryNav', () => {
         <SecondaryNav
           logo={<span>logo</span>}
           navItems={[]}
+          pricesApiUrl="/prices-api/"
           drawerFooter={<span>network choice</span>}
         />
       </ExplorerThemeProvider>

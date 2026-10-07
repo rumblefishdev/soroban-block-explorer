@@ -2,6 +2,8 @@
 // SPA is deployed twice, once per network, and each build is told which one it
 // is through VITE_STELLAR_NETWORK.
 
+import { PRICES_API_URL } from '@rumblefish/soroban-block-explorer-ui';
+
 export type Network = 'mainnet' | 'testnet';
 
 export interface NetworkSite {
@@ -10,13 +12,15 @@ export interface NetworkSite {
   url: string;
 }
 
+const MAINNET_SITE_URL = 'https://sorobanscan.rumblefish.dev';
+
 // Both deployments, in the order the network menu lists them. The hosts are
 // the `domainName` of infra/envs/production.json and testnet.json.
 export const NETWORK_SITES: NetworkSite[] = [
   {
     key: 'mainnet',
     name: 'Mainnet',
-    url: 'https://sorobanscan.rumblefish.dev',
+    url: MAINNET_SITE_URL,
   },
   {
     key: 'testnet',
@@ -40,6 +44,15 @@ export function networkFrom(raw: string | undefined): Network {
 export const network: Network = networkFrom(
   import.meta.env.VITE_STELLAR_NETWORK
 );
+
+/** The Prices API portal ships with the mainnet site only, and its prices are
+ *  mainnet prices (task 0519). Mainnet links it on its own host; testnet
+ *  links to mainnet's, since its own host would answer with the explorer's
+ *  404 page. */
+export function pricesApiUrlFor(current: Network): string {
+  if (current === 'mainnet') return PRICES_API_URL;
+  return `${MAINNET_SITE_URL}${PRICES_API_URL}`;
+}
 
 // Each icon index.html declares, and its testnet twin with a yellow dot. All
 // of them: Safari skips the SVG for a PNG, and iOS uses the touch icon for a
