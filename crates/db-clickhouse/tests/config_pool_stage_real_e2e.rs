@@ -161,6 +161,7 @@ fn raw_registration_ledgers_stage_corroborated_registry_rows() {
             lp_positions: &[],
             contract_metadata_writes: &[],
             executable_ref_targets: &[],
+            contract_instances: &[],
             soroban_token_balances: &[],
             claimable_balances: &[],
             pool_family_writes: &writes,

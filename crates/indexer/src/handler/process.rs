@@ -49,6 +49,8 @@ pub struct ParseOutput {
     /// CAP-85 (task 0548) — `(owner, tag) → wasm_hash` mappings written by
     /// owner contracts this batch. Empty before protocol 28.
     pub executable_ref_targets: Vec<xdr_parser::executable_ref::ExtractedExecutableRefTarget>,
+    /// Contract instance entries, whole, for running contracts (task 0620).
+    pub contract_instances: Vec<xdr_parser::contract_instance::ExtractedContractInstance>,
     /// Per-holder Soroban token balances from `ContractData` `Balance(Address)`
     /// ledger entries, persisted into the unified `balances` table (task 0331; the
     /// field name is leftover Option-A naming — no `soroban_token_balances` table exists).
@@ -183,6 +185,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     let mut all_invocations = Vec::new();
     let mut all_operation_trees: Vec<(String, serde_json::Value)> = Vec::new();
     let mut all_programs = Vec::new();
+    let mut all_contract_instances = Vec::new();
     let mut all_ledger_entry_changes = Vec::new();
     let mut all_nft_events = Vec::new();
     let mut all_asset_transfers = Vec::new();
@@ -249,6 +252,9 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
             let interfaces = xdr_parser::extract_wasm_programs(tm);
             all_programs.extend(interfaces);
+            all_contract_instances.extend(
+                xdr_parser::contract_instance::extract_contract_instances(tm, ledger_sequence),
+            );
 
             let changes = xdr_parser::extract_ledger_entry_changes(
                 tm,
@@ -411,6 +417,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         lp_positions: all_lp_positions,
         contract_metadata_writes: all_contract_metadata_writes,
         executable_ref_targets: all_executable_ref_targets,
+        contract_instances: all_contract_instances,
         soroban_token_balances: all_soroban_token_balances,
         claimable_balances: all_claimable_balances,
         // Plane writes and instance images pass through unfolded: staging

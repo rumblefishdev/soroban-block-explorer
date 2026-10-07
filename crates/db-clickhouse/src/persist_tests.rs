@@ -46,6 +46,7 @@ async fn wrapper_returns_err_when_client_unreachable() {
         &[],
         &[],
         &[],
+        &[],
         &ClassificationCache::new(),
     )
     .await;

@@ -9,7 +9,6 @@ import MenuIcon from '@mui/icons-material/Menu';
 
 import { grid } from '../theme/grid.js';
 
-import { PRICES_API_URL } from './links.js';
 import { NavButton, type NavButtonSize } from './NavButton.js';
 import { ThemeToggle } from './ThemeToggle.js';
 
@@ -84,6 +83,8 @@ export interface SecondaryNavProps {
   /** Shown at the bottom of the drawer, under the external links. The caller
    *  draws its own top border and decides at which widths it shows. */
   drawerFooter?: ReactNode;
+  /** Where the Prices API portal lives for this site's network. */
+  pricesApiUrl: string;
 }
 
 export function SecondaryNav({
@@ -92,6 +93,7 @@ export function SecondaryNav({
   activePage,
   onNavClick,
   drawerFooter,
+  pricesApiUrl,
 }: SecondaryNavProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -190,7 +192,7 @@ export function SecondaryNav({
                 flexShrink: 0,
               })}
             />
-            <ExternalNavLink href={PRICES_API_URL} label="Prices API" />
+            <ExternalNavLink href={pricesApiUrl} label="Prices API" />
             <ExternalNavLink href={REPORT_BUG_URL} label="Report a bug" />
           </Box>
 
@@ -266,11 +268,7 @@ export function SecondaryNav({
               alignItems: 'flex-start',
             })}
           >
-            <ExternalNavLink
-              href={PRICES_API_URL}
-              label="Prices API"
-              size="lg"
-            />
+            <ExternalNavLink href={pricesApiUrl} label="Prices API" size="lg" />
             <ExternalNavLink
               href={REPORT_BUG_URL}
               label="Report a bug"

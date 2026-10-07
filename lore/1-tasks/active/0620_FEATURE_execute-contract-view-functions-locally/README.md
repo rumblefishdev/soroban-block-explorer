@@ -103,32 +103,28 @@ is the deploy/upgrade ledger despite its name).
 
 ## Implementation
 
-1. Program bytes in `wasm_programs.code` (the table renamed from
-   `wasm_interface_metadata`; a separate `wasm_code` table was folded in
-   before reaching production). The indexer writes the whole row from every
-   `ContractCode` change, `Restored` and spec-less programs included; a
-   one-off backfill fills the 5,235 known programs from `getLedgerEntries`,
-   verified by hash. Production order: `RENAME TABLE` (+ a compatibility
-   view for the old name), `ALTER TABLE wasm_programs ADD COLUMN IF NOT
-EXISTS code String DEFAULT '' CODEC(ZSTD(3))` — both BEFORE the deploy,
-   or the indexer's typed insert fails — then deploy, drop the view, run
-   the backfill. The backfill rewrites every existing row with metadata
-   recomputed by today's parser. Local run 2026-10-06 (46 programs drawn
-   from production: 40 random with an interface + all 6 without one): 46/46
-   fetched, sha256 46/46, byte length = `wasm_byte_len` 40/40, metadata
-   identical to production 40/40, the 6 spec-less rows have empty metadata;
-   a second run found nothing missing. Production holds no row without the
-   `upgradeable` key (0 of 5,238), so none changes on that account.
-2. Executor module wrapping `soroban-env-host` (pinned to the network's
+1. Program bytes in `wasm_programs.code` (renamed from
+   `wasm_interface_metadata`). The indexer writes the whole row from every
+   `ContractCode` change; `wasm-code-backfill` fills known programs from
+   `getLedgerEntries`, verified by hash. Production: `RENAME TABLE` (+ view
+   for the old name) and `ADD COLUMN code` before the deploy, then deploy,
+   drop the view, run the backfill.
+2. Contract instances in `contract_instances` (decided 2026-10-07: all
+   contracts, raw `LedgerEntryData` XDR, filled from RPC). The indexer writes
+   every created, updated or restored instance; `contract-instance-backfill`
+   fills the rest, versioned by the entry's last-modified ledger. Production:
+   `CREATE TABLE` before the deploy, the backfill after it (mainnet and
+   testnet). Evidence for both: `notes/R-stored-bytes-and-instances.md`.
+3. Executor module wrapping `soroban-env-host` (pinned to the network's
    protocol): `call_view(contract, fn) -> Result<ScVal, …>` over a snapshot
    source fed by the current ledger's changes, `wasm_programs.code` and the
    contract-instance table (decided 2026-10-06: execution runs in the
    indexer, ADR 0043 — no network round trip).
-3. On token deploy, instance change and WASM upgrade: run `decimals`, `name`,
+4. On token deploy, instance change and WASM upgrade: run `decimals`, `name`,
    `symbol`; write `soroban_contract_metadata` with the ledger. Remove the
    `METADATA` storage read once the backfilled values match.
-4. Backfill `soroban_contract_metadata` for every token contract.
-5. Protocol upgrades: bump `soroban-env-host` with `stellar-xdr`.
+5. Backfill `soroban_contract_metadata` for every token contract.
+6. Protocol upgrades: bump `soroban-env-host` with `stellar-xdr`.
 
 ## Acceptance Criteria
 

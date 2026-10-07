@@ -8,6 +8,7 @@
 mod balance_seed;
 mod bootstrap;
 mod ch_staging;
+mod contract_instance_backfill;
 mod contract_type_rebuild;
 mod dashboard;
 mod error;
@@ -271,6 +272,16 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Task 0620 — one-shot fill of `contract_instances` for every known
+    /// contract without a row, read from Soroban RPC (`getLedgerEntries`,
+    /// the contract's instance entry) and versioned by the entry's own
+    /// last-modified ledger. Requires `--soroban-rpc-url`. Idempotent.
+    /// `--dry-run` fetches without writing.
+    ContractInstanceBackfill {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -433,6 +444,17 @@ async fn main() {
                 stats.not_returned,
                 stats.hash_mismatch,
                 stats.written,
+            );
+        }
+        Command::ContractInstanceBackfill { dry_run } => {
+            let stats =
+                contract_instance_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
+                    .await
+                    .expect("contract_instance_backfill failed — idempotent, safe to re-run");
+            println!(
+                "contract_instance_backfill completed (dry_run={}): missing={} fetched={} \
+                 not_returned={} written={}",
+                stats.dry_run, stats.missing, stats.fetched, stats.not_returned, stats.written,
             );
         }
         Command::SorobanPoolAmounts { dry_run } => {

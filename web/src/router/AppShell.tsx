@@ -16,7 +16,7 @@ import { useNetworkStats } from '../api/index.js';
 import { HomeHeroGlow } from '../pages/home/HomeHeroGlow.js';
 import { directRouteFor } from '../search/directRouteFor.js';
 import { GlobalSearchBar } from '../search/GlobalSearchBar.js';
-import { network } from '../network.js';
+import { network, pricesApiUrlFor } from '../network.js';
 import { NetworkMenu } from './NetworkMenu.js';
 import { NetworkSwitcher } from './NetworkSwitcher.js';
 import { TestnetBadge } from './TestnetBadge.js';
@@ -241,6 +241,7 @@ export function AppShell() {
           activePage={activePage}
           onNavClick={handleNavClick}
           drawerFooter={<NetworkMenu current={network} />}
+          pricesApiUrl={pricesApiUrlFor(network)}
         />
       </Box>
       <Box sx={{ flex: 1, position: 'relative', width: '100%' }}>
@@ -275,6 +276,7 @@ export function AppShell() {
           />
         }
         navItems={FOOTER_NAV_ITEMS}
+        pricesApiUrl={pricesApiUrlFor(network)}
       />
     </Box>
   );

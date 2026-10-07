@@ -42,8 +42,8 @@ needs a new table.
 - Done: #625, #626, #627 live in `production-2026.10.07-1` (testnet since
   2026-10-07); ALTERs on `default` and `testnet`. Mainnet wallet
   `GAUA7…PNJU` 4,051,315 / 0 equals RPC.
-- Next: PR 1b — the seed refill for rows written before 2026-10-07; the
-  boundary is the first ledger the new indexer wrote.
+- Next: #638 (1b) in review; then a `snapshot-seed` dry-run and `--execute`
+  from a current build.
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
@@ -69,14 +69,15 @@ network enforces and what stellar.expert shows. A list of sponsored entries
 `GAUA7XL5…PNJU` sponsors 4,043,490 reserves, `GDB3RSSW…6CU` 111,104 — so a
 list must be paginated and keyed by sponsor.
 
-**Trap for the refill.** The seed writes an `account_entry_state` row only when
-the network's entry is newer than our newest row (task 0521). After the
-columns are added, almost every account already has a row at the same
-version, so the seed would skip them and the counters would stay 0. The
-refill rewrites only accounts whose newest row predates 1a going live — not
-every account, which would re-insert ~11M identical rows and blind the 0521
-"cannot move" signal. Rows carry the entry's own `lastModifiedLedgerSeq`, so a
-live write that lands meanwhile still wins.
+**Trap for the refill.** The seed wrote an `account_entry_state` row only
+when the network's entry was newer than our newest row (task 0521), so rows
+written before the columns existed — current, only incomplete — were never
+rewritten. Decided 2026-10-07: the seed writes every live account at the
+entry's own ledger and the version rule decides (equal version: the seed's
+later insert wins; newer live write: ours wins). Rejected: a refill flag with
+a hand-typed ledger floor — more code, a number to get wrong, and the next
+new column would need it again. Given up: 0521's "repeat pass writes ~0"
+signal.
 
 ## Implementation Plan
 
@@ -84,15 +85,19 @@ Each PR is one production step. Stage 2 starts only after stage 1 ships.
 
 ### Stage 1 — counts (certain: the data and both writers exist)
 
-| PR  | Scope                                                                                                                                         | Production acts after merge                                 |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| 1a  | Parser reads `num_sponsoring` / `num_sponsored`; `account_entry_state` gains two columns (`DEFAULT 0`); live writer and seed fill them — #626 | `ALTER TABLE … ADD COLUMN` ×2, then indexer deploy          |
-| 1b  | Seed: a one-off mode that rewrites accounts whose newest row predates 1a                                                                      | `snapshot-seed --execute` in that mode; check counts vs RPC |
-| 1c  | API `account` detail exposes both counts; the page shows them (two rows in Summary, prototype variant A)                                      | API + SPA deploy                                            |
+| PR  | Scope                                                                                                                                         | Production acts after merge                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| 1a  | Parser reads `num_sponsoring` / `num_sponsored`; `account_entry_state` gains two columns (`DEFAULT 0`); live writer and seed fill them — #626 | `ALTER TABLE … ADD COLUMN` ×2, then indexer deploy |
+| 1b  | Seed writes `account_entry_state` for every live account (drops task 0521's narrowing) — #638                                                 | `snapshot-seed --execute`; check counts vs RPC     |
+| 1c  | API `account` detail exposes both counts; the page shows them (two rows in Summary, prototype variant A)                                      | API + SPA deploy                                   |
 
-1c waits until one `chq` count says no row older than 1a's go-live is left
-without a newer version: shipped earlier, the page would show 0 for accounts
-not changed since the column appeared — a wrong number, not a missing one. An
+1c waits for the seed run after #638 (`account_entry_state` ≈ every live
+account) and for a stratified RPC sample (top
+sponsors, sponsored accounts, an account with neither, one last changed
+before our floor) to match. A refilled row keeps its old version by design,
+so "no row older than 1a" can never be the gate. Shipped earlier, the page
+would show 0 where the chain says otherwise — a wrong number, not a missing
+one. An
 account with no `account_entry_state` row shows "unknown", as Signers does.
 
 **Rejected: reading the counters live via RPC on each page load** — cheaper

@@ -241,7 +241,6 @@ pub struct LedgerEntryRecord {
     #[allow(dead_code)]
     pub key: LedgerKey,
     pub data: LedgerEntryData,
-    #[allow(dead_code)]
     pub last_modified_ledger: u32,
 }
 
