@@ -25,5 +25,6 @@ backfill's recomputed metadata changes nothing on that account.
   (`None` fails the call), so the executor passes one at or past the current
   ledger: archived instances read as live, which is right for read-only view
   calls (an earlier value would trigger a restore).
-- Persistent entries a few token functions read (17 in the spike) are not
-  stored; the executor fetches them from RPC.
+- Persistent entries a few token functions read (17 contracts on 10
+  programs, re-measured 2026-10-07) are not stored; where they come from is
+  deferred to task 0633.
