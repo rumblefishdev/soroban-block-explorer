@@ -3095,7 +3095,7 @@ export type GetDecompiledErrors = {
    */
   400: ErrorEnvelope;
   /**
-   * Contract not found, has no WASM (SAC / pre-upload), or code no longer live
+   * Contract not found, has no WASM (SAC / pre-upload), or code neither indexed nor live
    */
   404: ErrorEnvelope;
   /**

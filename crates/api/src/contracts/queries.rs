@@ -39,7 +39,9 @@ use crate::common::cursor::{Direction, keyset_sql_desc};
 use super::dto::ContractIdCursor;
 use super::dto::{ContractStats, EventCursor, EventItem, SacAsset};
 
+mod get_decompiled;
 mod list_invocations;
+pub use get_decompiled::fetch_program_code;
 pub use list_invocations::{ContractInvocationRow, fetch_contract_invocations};
 
 // ---------------------------------------------------------------------------

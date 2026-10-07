@@ -690,7 +690,7 @@
       "get": {
         "tags": ["contracts"],
         "summary": "Decompile the contract's WASM on demand (task 0465, refs #374).",
-        "description": "No persistence: bytes are fetched from Soroban RPC and decompiled per\nrequest. The output is immutable per (`wasm_hash`, decompiler version),\nwhich justifies the `LONG` cache header even without a server-side cache.",
+        "description": "The bytes come from `wasm_programs.code`, so a program archived on the\nledger still decompiles (task 0620); Soroban RPC answers only for a\nprogram whose bytes are not indexed yet. The output is immutable per\n(`wasm_hash`, decompiler version), which justifies the `LONG` cache header\neven without a server-side cache.",
         "operationId": "get_decompiled",
         "parameters": [
           {
@@ -734,7 +734,7 @@
             }
           },
           "404": {
-            "description": "Contract not found, has no WASM (SAC / pre-upload), or code no longer live",
+            "description": "Contract not found, has no WASM (SAC / pre-upload), or code neither indexed nor live",
             "content": {
               "application/json": {
                 "schema": {

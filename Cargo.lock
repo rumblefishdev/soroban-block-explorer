@@ -110,6 +110,7 @@ dependencies = [
  "moka",
  "reqwest",
  "serde",
+ "serde_bytes",
  "serde_json",
  "soroban-ret",
  "stellar-strkey 0.0.16",
