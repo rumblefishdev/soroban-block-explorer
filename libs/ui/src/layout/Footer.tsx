@@ -5,7 +5,7 @@ import Typography from '@mui/material/Typography';
 import { useLinkComponent } from '../identifiers/LinkComponentContext.js';
 import { grid } from '../theme/grid.js';
 
-import { PRICES_API_URL, PRIVACY_POLICY_URL } from './links.js';
+import { PRIVACY_POLICY_URL } from './links.js';
 
 export interface FooterNavItem {
   label: string;
@@ -19,6 +19,8 @@ export interface FooterNavItem {
 export interface FooterProps {
   logo: ReactNode;
   navItems: FooterNavItem[];
+  /** Where the Prices API portal lives for this site's network. */
+  pricesApiUrl: string;
 }
 
 // HubSpot's tracking code (web/index.html) exposes `_hsp`; pushing
@@ -31,7 +33,6 @@ declare global {
 }
 
 const RESOURCES: FooterNavItem[] = [
-  { label: 'Prices API', href: PRICES_API_URL },
   {
     label: 'GitHub',
     href: 'https://github.com/rumblefishdev/soroban-block-explorer',
@@ -81,7 +82,7 @@ function FooterLink({ label, href, onClick, internal }: FooterNavItem) {
   );
 }
 
-export function Footer({ logo, navItems }: FooterProps) {
+export function Footer({ logo, navItems, pricesApiUrl }: FooterProps) {
   return (
     <Box
       component="footer"
@@ -164,6 +165,7 @@ export function Footer({ logo, navItems }: FooterProps) {
               Resources
             </Typography>
             <Box display="flex" flexWrap="wrap" gap={1}>
+              <FooterLink label="Prices API" href={pricesApiUrl} />
               {RESOURCES.map((item) => (
                 <FooterLink key={item.label} {...item} />
               ))}
