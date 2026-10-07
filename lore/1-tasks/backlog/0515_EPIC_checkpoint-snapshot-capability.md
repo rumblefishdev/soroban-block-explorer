@@ -2,7 +2,7 @@
 id: '0515'
 title: 'EPIC: the checkpoint-snapshot capability — one entry point for everything seeded from network state'
 type: EPIC
-status: active
+status: backlog
 related_adr: ['0055', '0056', '0057']
 related_tasks: ['0463', '0492', '0497', '0499', '0502', '0503', '0504', '0514']
 tags: [epic, index, snapshot, clickhouse, data-integrity, priority-medium]
