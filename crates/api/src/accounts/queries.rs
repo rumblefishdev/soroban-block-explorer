@@ -22,7 +22,6 @@
 //!   whole 3.6B-row table (the read_rows-quota trap fixed in the global list).
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
@@ -492,7 +491,7 @@ pub async fn fetch_entry_state(
 /// Recency then orders the empty rows, where it is the only honest
 /// discriminator we have, and `asset_code` makes the whole thing stable so a
 /// page boundary never shows the same row twice.
-static BALANCES_SQL: LazyLock<String> = LazyLock::new(|| {
+fn balances_sql() -> String {
     format!(
         "SELECT \
                 a.asset_type                  AS asset_type, \
@@ -557,7 +556,7 @@ static BALANCES_SQL: LazyLock<String> = LazyLock::new(|| {
                       b.last_updated_ledger DESC, \
                       a.asset_code"
     )
-});
+}
 
 /// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
 /// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
@@ -571,7 +570,7 @@ pub async fn fetch_balances(
     account_id: i64,
 ) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
     let rows = client
-        .query(&BALANCES_SQL)
+        .query(&balances_sql())
         // Twice: the SAC subquery narrows itself to this holder's assets
         // before aggregating, and the outer read selects them. Same value,
         // bound in the order the two `?` appear.

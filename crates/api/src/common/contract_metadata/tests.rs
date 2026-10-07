@@ -1,39 +1,5 @@
 use super::CONTRACT_METADATA;
 
-/// Every read of the table goes through [`CONTRACT_METADATA`]: a second copy
-/// is how three dedup styles, one of them wrong, grew in the first place.
-#[test]
-fn only_this_module_reads_the_metadata_table() {
-    fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
-        for entry in std::fs::read_dir(dir).expect("read src dir") {
-            let path = entry.expect("dir entry").path();
-            if path.is_dir() {
-                walk(&path, hits);
-            } else if path.extension().is_some_and(|e| e == "rs")
-                && !path.to_string_lossy().contains("common/contract_metadata")
-            {
-                let text = std::fs::read_to_string(&path).expect("read source");
-                for (n, line) in text.lines().enumerate() {
-                    if line.contains("FROM soroban_contract_metadata")
-                        || line.contains("JOIN soroban_contract_metadata")
-                    {
-                        hits.push(format!("{}:{}", path.display(), n + 1));
-                    }
-                }
-            }
-        }
-    }
-    let mut hits = Vec::new();
-    walk(
-        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut hits,
-    );
-    assert!(
-        hits.is_empty(),
-        "read it through CONTRACT_METADATA: {hits:#?}"
-    );
-}
-
 /// A newest row without a field reads as unpublished, not as the older value.
 /// Merges are stopped so both versions stay in separate parts — a merge would
 /// hide the difference by keeping only the newer row.

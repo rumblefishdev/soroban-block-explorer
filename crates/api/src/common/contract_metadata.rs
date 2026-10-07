@@ -1,12 +1,9 @@
 //! A Soroban contract's on-chain metadata (name, symbol, decimals) — the ONE
 //! read of `soroban_contract_metadata`, shared by every endpoint that shows it.
 //!
-//! The API read this table thirteen times in seven files, deduplicated three
-//! ways: `FINAL`, `argMax(x, version)` and `argMax(tuple(x), version).1`. The
-//! middle one is wrong: `argMax` skips a `NULL` argument, so a newest row
-//! without a name or decimals fell back to an older version's value. A fix
-//! landed in one copy (#518) and not in the others; one definition cannot
-//! drift that way.
+//! Every endpoint shows the same name, symbol and decimals for a contract,
+//! because every endpoint reads them here. `tests/sql_conventions.rs` fails
+//! when a query reads the table directly.
 
 /// The newest metadata row per contract, as a subquery to join or select from:
 /// columns `contract_id`, `name`, `symbol`, `decimals`.
