@@ -1,9 +1,10 @@
 import { Box, Stack, Typography } from '@mui/material';
 import { Link } from 'react-router-dom';
 
-import type { SearchHit } from '@rumblefish/api-types';
+import { isMuxedSoranHit, type ExplorerSearchHit } from './searchHit.js';
 import {
   IdentifierDisplay,
+  CopyButton,
   RelativeTimestamp,
   StatusChip,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -11,7 +12,7 @@ import {
 import { routeForHit } from './routeForHit.js';
 
 interface SearchResultRowProps {
-  hit: SearchHit;
+  hit: ExplorerSearchHit;
   highlighted?: boolean;
   onMouseEnter?: () => void;
   onClick?: () => void;
@@ -23,14 +24,15 @@ export function SearchResultRow({
   onMouseEnter,
   onClick,
 }: SearchResultRowProps) {
+  const muxed = isMuxedSoranHit(hit);
+  const memo = hit.soran?.memo;
   const showRight = hit.successful != null || hit.last_activity_at != null;
 
   return (
     <Box
-      component={Link}
-      to={routeForHit(hit)}
+      component={hit.soran ? 'div' : Link}
+      {...(!hit.soran && { to: routeForHit(hit), onClick })}
       onMouseEnter={onMouseEnter}
-      onClick={onClick}
       sx={(theme) => ({
         display: 'flex',
         alignItems: 'flex-start',
@@ -46,7 +48,7 @@ export function SearchResultRow({
           ? theme.palette.surface.grayHover
           : 'transparent',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
-        cursor: 'pointer',
+        cursor: muxed ? 'default' : 'pointer',
         '&:last-of-type': { borderBottom: 'none' },
         '&:hover': {
           backgroundColor: theme.palette.surface.grayHover,
@@ -58,27 +60,80 @@ export function SearchResultRow({
       })}
     >
       <Stack spacing={0.5} sx={{ minWidth: 0, flex: 1 }}>
-        {/* No per-row type chip: rows are always scoped by the active
-            entity-type tab (SearchResultsView is the only render path), so the
-            chip would just repeat the tab label. (task 0348 F16) */}
-        <Box sx={{ minWidth: 0, flexShrink: 1 }}>
-          <IdentifierDisplay
-            value={hit.identifier}
-            type={hit.entity_type}
-            linked={false}
-          />
-        </Box>
-        {hit.label && hit.label !== hit.identifier && (
-          <Typography
-            variant="bodySmRegular"
+        <Stack direction="row" spacing={1} alignItems="flex-start">
+          <Box
+            component={hit.soran && !muxed ? Link : 'div'}
+            {...(hit.soran && !muxed && { to: routeForHit(hit), onClick })}
+            aria-label={hit.soran ? hit.identifier : undefined}
             sx={(theme) => ({
-              color: theme.palette.text.tertiary,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              minWidth: 0,
+              flex: 1,
+              color: 'inherit',
+              textDecoration: 'none',
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.stroke.action}`,
+                outlineOffset: 2,
+              },
             })}
           >
-            {hit.label}
+            <Stack spacing={0.5}>
+              {/* The active category tab already identifies the result type. */}
+              <Box sx={{ minWidth: 0, flexShrink: 1 }}>
+                {muxed ? (
+                  <Typography
+                    variant="bodyMonoSmMedium"
+                    sx={{ overflowWrap: 'anywhere', whiteSpace: 'normal' }}
+                  >
+                    {hit.identifier}
+                  </Typography>
+                ) : (
+                  <IdentifierDisplay
+                    value={hit.identifier}
+                    type={hit.entity_type}
+                    linked={false}
+                  />
+                )}
+              </Box>
+              {hit.label && hit.label !== hit.identifier && (
+                <Typography
+                  variant="bodySmRegular"
+                  sx={(theme) => ({
+                    color: theme.palette.text.tertiary,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  })}
+                >
+                  {hit.label}
+                </Typography>
+              )}
+            </Stack>
+          </Box>
+          {hit.soran && (
+            <CopyButton value={hit.identifier} ariaLabel="Copy Soran address" />
+          )}
+        </Stack>
+        {memo && memo.type !== 'none' && (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Typography
+              variant="bodySmRegular"
+              sx={{
+                minWidth: 0,
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
+              }}
+            >
+              Required memo ({memo.type}): {memo.value}
+            </Typography>
+            <CopyButton
+              value={memo.value}
+              ariaLabel="Copy required Soran memo"
+            />
+          </Stack>
+        )}
+        {muxed && (
+          <Typography variant="bodyXsRegular">
+            Muxed account — no detail page is available for this address.
           </Typography>
         )}
       </Stack>
