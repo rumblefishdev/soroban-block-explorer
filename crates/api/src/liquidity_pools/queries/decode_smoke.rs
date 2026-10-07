@@ -34,8 +34,8 @@ fn client() -> Option<clickhouse::Client> {
     Some(c)
 }
 
-/// `ClassicBucketChRow` reads its states as `Array(Tuple(Int64,
-/// Array(Nullable(Float64))))` and money
+/// `ClassicBucketChRow` reads its states as
+/// `Array(Tuple(Int64, Array(Nullable(Float64))))` and money
 /// as `Nullable(Float64)`; formatting is Rust's (task 0199). That is the
 /// wire-type↔struct contract a pure-Rust test cannot check, so assert it
 /// against a real server — including the NULL arms, which an unknown reserve

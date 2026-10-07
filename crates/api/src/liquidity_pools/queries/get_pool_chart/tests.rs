@@ -107,6 +107,29 @@ fn a_week_whose_last_day_does_not_price_falls_back_to_an_earlier_day() {
 }
 
 #[test]
+fn the_newest_day_that_prices_wins_in_any_order() {
+    // Both days price; the database lists Monday before Tuesday. The week
+    // shows Tuesday's state at Tuesday's close.
+    let monday = at(2026, 8, 17, 0);
+    let tuesday = at(2026, 8, 18, 0);
+    let mut inputs = ChartInputs {
+        prices: vec![vec![(secs(monday), 3.0), (secs(tuesday), 4.0)]],
+        ..ChartInputs::default()
+    };
+    inputs.states.insert(
+        ms(monday),
+        vec![
+            (secs(monday), vec![Some(5.0)]),
+            (secs(tuesday), vec![Some(9.0)]),
+        ],
+    );
+
+    let points = assemble_chart(&inputs, 30);
+
+    assert_eq!(tvls(&points), vec![Some("36.00".into())]);
+}
+
+#[test]
 fn a_price_older_than_the_carry_cap_prices_nothing() {
     // The only close is on day 1: 48 h before day 3 (inside the cap), 72 h
     // before day 4 (past it).

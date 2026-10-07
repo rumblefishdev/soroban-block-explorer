@@ -1,9 +1,9 @@
 //! `GET /v1/liquidity-pools/:id/chart` — the time-bucketed USD series.
 //!
 //! One shape for both pool kinds. The database answers three questions — the
-//! pool's last state in each bucket where it changed; each leg's price per
-//! price bucket; the traded volume per bucket — and [`assemble_chart`] turns
-//! the answers into points.
+//! pool's last state in each hour or day it changed, grouped by bucket; each
+//! leg's price per price bucket; the traded volume per bucket — and
+//! [`assemble_chart`] turns the answers into points.
 
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
@@ -103,8 +103,9 @@ fn assemble_chart(inputs: &ChartInputs, fee_bps: i32) -> Vec<ChartDataPoint> {
 }
 
 /// The TVL of a bucket's newest state that prices. Every state of one price
-/// bucket shares its closes, so the newest price bucket that prices holds the
-/// bucket's last priceable state.
+/// bucket shares its closes, and a pool's reserves are all known or all
+/// unknown alike within it, so the newest price bucket that prices holds the
+/// bucket's last priceable state. The database returns them in no order.
 fn last_priced_tvl(states: &[PricedState], prices: &[Vec<(i64, f64)>]) -> Option<f64> {
     let mut newest_first: Vec<&PricedState> = states.iter().collect();
     newest_first.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
