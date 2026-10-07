@@ -31,6 +31,9 @@ fn app(ch: clickhouse::Client) -> axum::Router {
             .expect("build nft_token_uri fetcher"),
         wasm_code: crate::runtime_enrichment::wasm_code::WasmCodeFetcher::new()
             .expect("build wasm_code fetcher"),
+        account_sponsors: crate::runtime_enrichment::account_sponsors::AccountSponsorsFetcher::new(
+        )
+        .expect("account sponsors fetcher"),
     };
     let (router, _spec) = OpenApiRouter::new()
         .nest("/v1", crate::liquidity_pools::router())

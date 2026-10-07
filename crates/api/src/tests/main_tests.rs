@@ -36,6 +36,8 @@ fn test_app_with(config: &AppConfig) -> Router {
             .expect("build nft_token_uri fetcher"),
         wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()
             .expect("build wasm_code fetcher"),
+        account_sponsors: runtime_enrichment::account_sponsors::AccountSponsorsFetcher::new()
+            .expect("account sponsors fetcher"),
     };
     app(config, AppState::for_tests(ch, runtime_enrichment))
 }

@@ -24,6 +24,9 @@ fn test_state(ch: clickhouse::Client) -> AppState {
             .expect("build nft_token_uri fetcher"),
         wasm_code: crate::runtime_enrichment::wasm_code::WasmCodeFetcher::new()
             .expect("build wasm_code fetcher"),
+        account_sponsors: crate::runtime_enrichment::account_sponsors::AccountSponsorsFetcher::new(
+        )
+        .expect("account sponsors fetcher"),
     };
     AppState::for_tests(ch, runtime_enrichment)
 }

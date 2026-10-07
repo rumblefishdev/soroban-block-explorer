@@ -224,6 +224,32 @@ export type AccountSigning = {
 };
 
 /**
+ * One sponsored entry of the account.
+ */
+export type AccountSponsoredEntry = {
+  /**
+   * `CODE-ISSUER` for a trustline.
+   */
+  asset?: string | null;
+  /**
+   * `account` | `trustline` | `signer`.
+   */
+  kind: string;
+  /**
+   * Reserves the entry costs: 2 for the account, 1 otherwise.
+   */
+  reserves: number;
+  /**
+   * The signer's key for a signer.
+   */
+  signer?: string | null;
+  /**
+   * The account paying them.
+   */
+  sponsor: string;
+};
+
+/**
  * The CAP-33 counters the network keeps on the account itself, copied as
  * stored. A reserve is the base reserve the network locks per ledger entry
  * (2 for the account, 1 per sub-entry, 1 per claimant of a claimable
@@ -238,6 +264,21 @@ export type AccountSponsorship = {
    * Reserves this account pays for other accounts and claimable balances.
    */
   num_sponsoring: number;
+};
+
+/**
+ * `GET /v1/accounts/{id}/sponsorship` — the account's sponsored entries and
+ * who pays each, read live from RPC (CAP-33, task 0629).
+ */
+export type AccountSponsorshipResponse = {
+  entries: Array<AccountSponsoredEntry>;
+  /**
+   * Reserves of this account paid by others, as the chain holds it now.
+   * Larger than the sum of `entries[].reserves` when some sponsored
+   * entries are not listed (offers, data entries, pool-share trustlines,
+   * more than 199 trustlines).
+   */
+  num_sponsored: number;
 };
 
 /**
@@ -2804,6 +2845,46 @@ export type GetAccountResponses = {
 };
 
 export type GetAccountResponse = GetAccountResponses[keyof GetAccountResponses];
+
+export type GetAccountSponsorshipData = {
+  body?: never;
+  path: {
+    /**
+     * Stellar account StrKey (G…, 56 chars)
+     */
+    account_id: string;
+  };
+  query?: never;
+  url: '/v1/accounts/{account_id}/sponsorship';
+};
+
+export type GetAccountSponsorshipErrors = {
+  /**
+   * Invalid account_id
+   */
+  400: ErrorEnvelope;
+  /**
+   * Account not found, or no entry on the ledger
+   */
+  404: ErrorEnvelope;
+  /**
+   * Database or RPC failure
+   */
+  500: ErrorEnvelope;
+};
+
+export type GetAccountSponsorshipError =
+  GetAccountSponsorshipErrors[keyof GetAccountSponsorshipErrors];
+
+export type GetAccountSponsorshipResponses = {
+  /**
+   * The account's sponsored entries and who pays them
+   */
+  200: AccountSponsorshipResponse;
+};
+
+export type GetAccountSponsorshipResponse =
+  GetAccountSponsorshipResponses[keyof GetAccountSponsorshipResponses];
 
 export type ListAccountTransactionsData = {
   body?: never;

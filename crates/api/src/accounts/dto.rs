@@ -272,3 +272,30 @@ pub struct AccountsListCursor {
     pub last_seen_ledger: i64,
     pub id: i64,
 }
+
+/// `GET /v1/accounts/{id}/sponsorship` — the account's sponsored entries and
+/// who pays each, read live from RPC (CAP-33, task 0629).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountSponsorshipResponse {
+    /// Reserves of this account paid by others, as the chain holds it now.
+    /// Larger than the sum of `entries[].reserves` when some sponsored
+    /// entries are not listed (offers, data entries, pool-share trustlines,
+    /// more than 199 trustlines).
+    pub num_sponsored: u32,
+    pub entries: Vec<AccountSponsoredEntry>,
+}
+
+/// One sponsored entry of the account.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountSponsoredEntry {
+    /// `account` | `trustline` | `signer`.
+    pub kind: String,
+    /// `CODE-ISSUER` for a trustline.
+    pub asset: Option<String>,
+    /// The signer's key for a signer.
+    pub signer: Option<String>,
+    /// Reserves the entry costs: 2 for the account, 1 otherwise.
+    pub reserves: u32,
+    /// The account paying them.
+    pub sponsor: String,
+}

@@ -201,6 +201,8 @@ async fn main() {
             .expect("failed to build NFT token_uri HTTP client"),
         wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()
             .expect("failed to build wasm-code RPC client"),
+        account_sponsors: runtime_enrichment::account_sponsors::AccountSponsorsFetcher::new()
+            .expect("account sponsors fetcher"),
     };
 
     let raw_passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {

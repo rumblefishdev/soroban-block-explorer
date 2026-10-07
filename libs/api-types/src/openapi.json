@@ -230,6 +230,65 @@
         }
       }
     },
+    "/v1/accounts/{account_id}/sponsorship": {
+      "get": {
+        "tags": ["accounts"],
+        "operationId": "get_account_sponsorship",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Stellar account StrKey (G…, 56 chars)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account's sponsored entries and who pays them",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSponsorshipResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid account_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found, or no entry on the ledger",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database or RPC failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/accounts/{account_id}/transactions": {
       "get": {
         "tags": ["accounts"],
@@ -2283,6 +2342,35 @@
           }
         }
       },
+      "AccountSponsoredEntry": {
+        "type": "object",
+        "description": "One sponsored entry of the account.",
+        "required": ["kind", "reserves", "sponsor"],
+        "properties": {
+          "asset": {
+            "type": ["string", "null"],
+            "description": "`CODE-ISSUER` for a trustline."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`account` | `trustline` | `signer`."
+          },
+          "reserves": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reserves the entry costs: 2 for the account, 1 otherwise.",
+            "minimum": 0
+          },
+          "signer": {
+            "type": ["string", "null"],
+            "description": "The signer's key for a signer."
+          },
+          "sponsor": {
+            "type": "string",
+            "description": "The account paying them."
+          }
+        }
+      },
       "AccountSponsorship": {
         "type": "object",
         "description": "The CAP-33 counters the network keeps on the account itself, copied as\nstored. A reserve is the base reserve the network locks per ledger entry\n(2 for the account, 1 per sub-entry, 1 per claimant of a claimable\nbalance); a sponsor can pay it for someone else.",
@@ -2298,6 +2386,25 @@
             "type": "integer",
             "format": "int32",
             "description": "Reserves this account pays for other accounts and claimable balances.",
+            "minimum": 0
+          }
+        }
+      },
+      "AccountSponsorshipResponse": {
+        "type": "object",
+        "description": "`GET /v1/accounts/{id}/sponsorship` — the account's sponsored entries and\nwho pays each, read live from RPC (CAP-33, task 0629).",
+        "required": ["num_sponsored", "entries"],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountSponsoredEntry"
+            }
+          },
+          "num_sponsored": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reserves of this account paid by others, as the chain holds it now.\nLarger than the sum of `entries[].reserves` when some sponsored\nentries are not listed (offers, data entries, pool-share trustlines,\nmore than 199 trustlines).",
             "minimum": 0
           }
         }

@@ -10,6 +10,9 @@ import type {
   GetAccountData,
   GetAccountErrors,
   GetAccountResponses,
+  GetAccountSponsorshipData,
+  GetAccountSponsorshipErrors,
+  GetAccountSponsorshipResponses,
   GetAssetData,
   GetAssetErrors,
   GetAssetResponses,
@@ -181,6 +184,22 @@ export const getAccount = <ThrowOnError extends boolean = false>(
       { scheme: 'bearer', type: 'http' },
     ],
     url: '/v1/accounts/{account_id}',
+    ...options,
+  });
+
+export const getAccountSponsorship = <ThrowOnError extends boolean = false>(
+  options: Options<GetAccountSponsorshipData, ThrowOnError>
+) =>
+  (options.client ?? client).get<
+    GetAccountSponsorshipResponses,
+    GetAccountSponsorshipErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/accounts/{account_id}/sponsorship',
     ...options,
   });
 

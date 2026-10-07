@@ -94,6 +94,10 @@ pub const INTERFACE_METADATA_CORRUPT: &str = "interface_metadata_corrupt";
 /// perspective — retrying later is reasonable.
 pub const WASM_FETCH_FAILED: &str = "wasm_fetch_failed";
 
+/// The account's sponsors could not be read from Soroban RPC. Transient —
+/// retrying later is reasonable.
+pub const SPONSORSHIP_FETCH_FAILED: &str = "sponsorship_fetch_failed";
+
 /// Decompilation produced no usable representation (both the Rust and the
 /// WAT paths failed) or exceeded the in-handler time budget.
 pub const DECOMPILE_FAILED: &str = "decompile_failed";
