@@ -200,11 +200,9 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
  */
 export function ContractInterface({
   contractId,
-  hasWasm,
   onShowCode,
 }: {
   contractId: string;
-  hasWasm: boolean;
   onShowCode: () => void;
 }) {
   const { data, isLoading, isError, error, refetch } =
@@ -223,28 +221,28 @@ export function ContractInterface({
   }
 
   // `interface_metadata` is `null` for SAC / pre-upload / stub rows, and for
-  // a program without an interface section.
+  // a program without an interface section (or one not indexed yet).
   const parsed = data?.interface_metadata ?? null;
-  if ((parsed == null || parsed.functions.length === 0) && hasWasm) {
+  if (parsed == null || parsed.functions.length === 0) {
+    if (data?.wasm_hash == null) {
+      return (
+        <EmptyState
+          icon={<InfoOutlinedIcon fontSize="small" />}
+          title="No public interface"
+          description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
+        />
+      );
+    }
     return (
       <EmptyState
         icon={<InfoOutlinedIcon fontSize="small" />}
-        title="No interface description"
-        description="This contract's program does not describe its functions. The Code tab reconstructs them from the program itself."
+        title="No interface metadata"
+        description="No function list is available for this contract's WASM. The Code tab reconstructs its functions from the WASM itself."
         action={
           <Button variant="contained" onClick={onShowCode}>
             Open Code
           </Button>
         }
-      />
-    );
-  }
-  if (parsed == null || parsed.functions.length === 0) {
-    return (
-      <EmptyState
-        icon={<InfoOutlinedIcon fontSize="small" />}
-        title="No public interface"
-        description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
       />
     );
   }

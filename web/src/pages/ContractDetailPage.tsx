@@ -197,7 +197,6 @@ export default function ContractDetailPage() {
             {effectiveKey === 'interface' && (
               <ContractInterface
                 contractId={contractId}
-                hasWasm={hasWasm}
                 onShowCode={() => setActiveKey('code')}
               />
             )}
