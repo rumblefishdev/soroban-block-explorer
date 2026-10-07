@@ -42,8 +42,8 @@ needs a new table.
 - Done: #625, #626, #627 live in `production-2026.10.07-1` (testnet since
   2026-10-07); ALTERs on `default` and `testnet`. Mainnet wallet
   `GAUA7…PNJU` 4,051,315 / 0 equals RPC.
-- Next: PR 1b — the seed refill for rows written before 2026-10-07; the
-  boundary is the first ledger the new indexer wrote.
+- Next: #638 (1b, the refill) in review; then build backfill-runner on the
+  box and run the seed with `--refill-entry-state-older-than 64816029`.
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
@@ -90,9 +90,13 @@ Each PR is one production step. Stage 2 starts only after stage 1 ships.
 | 1b  | Seed: a one-off mode that rewrites accounts whose newest row predates 1a                                                                      | `snapshot-seed --execute` in that mode; check counts vs RPC |
 | 1c  | API `account` detail exposes both counts; the page shows them (two rows in Summary, prototype variant A)                                      | API + SPA deploy                                            |
 
-1c waits until one `chq` count says no row older than 1a's go-live is left
-without a newer version: shipped earlier, the page would show 0 for accounts
-not changed since the column appeared — a wrong number, not a missing one. An
+1c waits for the refill run (#638) to report `refilled` ≈ the accounts whose
+newest row predates 64,816,029, and for a stratified RPC sample (top
+sponsors, sponsored accounts, an account with neither, one last changed
+before our floor) to match. A refilled row keeps its old version by design,
+so "no row older than 1a" can never be the gate. Shipped earlier, the page
+would show 0 where the chain says otherwise — a wrong number, not a missing
+one. An
 account with no `account_entry_state` row shows "unknown", as Signers does.
 
 **Rejected: reading the counters live via RPC on each page load** — cheaper
