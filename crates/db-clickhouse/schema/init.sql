@@ -68,7 +68,8 @@
 -- - **`LowCardinality(String)`** on bounded-cardinality columns:
 --   asset codes, event signatures, home_domain.
 -- - **`ZSTD(3)` codecs** on JSON-ish columns: `soroban_events.topics_xdr`,
---   `soroban_events.data_xdr`, `wasm_programs.metadata`, `wasm_programs.code`.
+--   `soroban_events.data_xdr`, `wasm_programs.metadata`, `wasm_programs.code`,
+--   `contract_instances.data_xdr`.
 -- - **Empty-string sentinel** for composite-PK "no value" slots
 --   (`assets.asset_code = ''` for native, etc.). CH `ORDER BY` on
 --   plain `String` is significantly faster than `Nullable(String)`.
@@ -333,6 +334,30 @@ CREATE TABLE IF NOT EXISTS contract_executable_refs (
 )
 ENGINE = ReplacingMergeTree(ledger)
 ORDER BY (owner_id, tag);
+
+-- contract_instances: each contract's instance entry — its executable and its
+-- instance storage — kept as the XDR of the entry's `LedgerEntryData`, so the
+-- contract's own functions can be run locally (task 0620, ADR 0061). Not
+-- decoded into columns: running a contract needs the entry exactly as the
+-- network stores it.
+--
+-- `contract` is the 32-byte contract id (as in `pool_instance_state`). RMT
+-- versioned on `ledger`, the ledger the entry last changed in; reads need
+-- `FINAL` or `argMax(data_xdr, ledger)`. The indexer writes every created,
+-- updated or restored instance; instances changed before the table existed
+-- were filled once from Soroban RPC by `backfill-runner
+-- contract-instance-backfill`, versioned by the entry's own last-modified
+-- ledger, so the fill never overrides a newer write. ~150k contracts measured
+-- ~375 B each (~57 MB raw).
+-- PROD: created by hand BEFORE the writer ships — a missing table fails every
+-- ledger's insert that changes an instance and stalls ingestion.
+CREATE TABLE IF NOT EXISTS contract_instances (
+    contract  FixedString(32),
+    data_xdr  String CODEC(ZSTD(3)),
+    ledger    Int64
+)
+ENGINE = ReplacingMergeTree(ledger)
+ORDER BY (contract);
 
 -- On-chain Soroban token metadata (name/symbol/decimals) read from the
 -- contract's instance-storage `Symbol("METADATA")` struct. Per-contract,

@@ -363,6 +363,7 @@ schema on Hetzner. That write includes both:
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
   `wasm_programs` (each program's bytes and interface,
   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)),
+  `contract_instances` (each contract's instance entry, whole),
   `assets`, `nfts`, `nfts_pending`, the
   ownership changes located by each change's source event
   `nft_ownership_changes{,_pending}` (task 0424), `liquidity_pools`,

@@ -10,6 +10,7 @@ pub mod asset_code;
 pub mod claimable_balance;
 pub mod classification;
 pub mod contract;
+pub mod contract_instance;
 pub mod error;
 pub mod event;
 pub mod event_filters;

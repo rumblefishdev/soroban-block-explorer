@@ -309,6 +309,9 @@ entities:
   by wasm_hash: the program bytes and the SEP-48-derived interface JSON,
   empty when the program has no `contractspecv0` section
   ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
+- contract instance (created, updated or restored) → `contract_instances` row:
+  the entry's `LedgerEntryData` re-encoded as XDR, not decoded, so the
+  contract can be run on exactly what the network stores
 - account state → `accounts` row + `account_balances_current` entries per
   trustline / native (balances are typed `NUMERIC(28,7)` per-asset rows, not a
   JSONB blob on `accounts`)
