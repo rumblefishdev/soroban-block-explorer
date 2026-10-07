@@ -52,11 +52,14 @@ pub struct LedgerRow {
     pub base_fee: i64,
 }
 
-/// `wasm_interface_metadata` — immutable lookup, MergeTree.
+/// `wasm_programs` — one row per WASM program: its bytes and the metadata
+/// read from them.
 #[derive(Debug, Clone, Row, Serialize)]
-pub struct WasmInterfaceMetadataRow {
+pub struct WasmProgramRow {
     pub wasm_hash: [u8; 32],
     pub metadata: String,
+    #[serde(with = "serde_bytes")]
+    pub code: Vec<u8>,
 }
 
 /// `accounts` — state hub, RMT(last_seen_ledger). Surrogate `id` for
@@ -87,6 +90,9 @@ pub struct AccountEntryStateRow {
     pub threshold_med: u8,
     pub threshold_high: u8,
     pub flags: u32,
+    /// CAP-33 counters, copied from the entry (lore-0629).
+    pub num_sponsoring: u32,
+    pub num_sponsored: u32,
     pub last_updated_ledger: i64,
 }
 

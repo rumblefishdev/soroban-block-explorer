@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use domain::ContractType;
 use xdr_parser::types::{ExtractedNft, ExtractedNftEvent};
 
-use super::{StagedLedger, staging_err};
+use super::StagedLedger;
 use crate::SchemaError;
 use crate::persist::ids;
 use crate::persist::rows::{NftOwnershipChangeRow, NftPendingRow, NftRow};
@@ -164,16 +164,12 @@ pub(super) fn nft_rows(
 
         // Task 0424: the change located as `soroban_events` locates its
         // event — the transaction's position from the ledger's own order, the
-        // operation and the event from the rpc id. An NFT event is a
-        // per-operation contract event, which always has an id;
-        // `soroban_events` refuses one without, and so does this.
-        let id = ev
-            .event_id
-            .ok_or_else(|| staging_err("nft event without an event id"))?;
+        // operation and the event from the rpc id.
+        let id = ev.event_id;
         let change = NftOwnershipChangeRow {
             contract_id: ids::contract_id(&ev.contract_id),
             token_id: ev.token_id.clone(),
-            ledger_sequence: i64::from(ev.ledger_sequence),
+            ledger_sequence: i64::from(ev.event_id.ledger_sequence),
             application_order,
             operation_index: id.operation_index,
             event_index: id.event_index,

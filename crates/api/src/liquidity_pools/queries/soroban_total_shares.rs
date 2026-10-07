@@ -74,10 +74,7 @@ pub(super) async fn fetch_total_shares(
                               WHERE pool_id IN ({in_list}) GROUP BY pool_id) \
                  LIMIT 1 BY id \
              ) sc ON sc.id = i.token_id \
-             LEFT JOIN ( \
-                 SELECT contract_id, argMax(decimals, version) AS decimals \
-                 FROM soroban_contract_metadata GROUP BY contract_id \
-             ) m ON m.contract_id = sc.contract_id"
+             LEFT JOIN (SELECT contract_id, decimals FROM soroban_contract_metadata FINAL) m ON m.contract_id = sc.contract_id"
         ))
         .fetch_all::<TotalSharesChRow>()
         .await?;

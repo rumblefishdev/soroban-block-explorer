@@ -16,7 +16,7 @@ pub fn detect_nfts(nft_events: &[NftEvent]) -> Vec<ExtractedNft> {
         }
 
         let (owner, minted_at_ledger) = match event.event_kind.as_str() {
-            "mint" => (event.to.clone(), Some(event.ledger_sequence)),
+            "mint" => (event.to.clone(), Some(event.event_id.ledger_sequence)),
             "transfer" => (event.to.clone(), None),
             "burn" => (None, None),
             _ => continue,
@@ -30,7 +30,7 @@ pub fn detect_nfts(nft_events: &[NftEvent]) -> Vec<ExtractedNft> {
             name: None,
             media_url: None,
             minted_at_ledger,
-            last_seen_ledger: event.ledger_sequence,
+            last_seen_ledger: event.event_id.ledger_sequence,
             created_at: event.created_at,
         });
     }
@@ -112,7 +112,6 @@ pub fn extract_nft_ownership_events(events: &[NftEvent]) -> Vec<ExtractedNftEven
             token_id,
             event_type,
             owner,
-            ledger_sequence: event.ledger_sequence,
             created_at: event.created_at,
             event_id: event.event_id,
         });

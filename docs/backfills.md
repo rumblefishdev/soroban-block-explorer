@@ -228,7 +228,7 @@ on a ClickHouse 26.3 server (lore 0425), in the shapes that actually occur:
 This also holds structurally: every version-less table is either **keyed by
 ledger** — so a re-parse of ledger N only ever competes with its own earlier
 parse of ledger N — or a **pure function of an immutable input**
-(`wasm_interface_metadata` by `wasm_hash`; `assets`, whose mutable columns are
+(`wasm_programs` by `wasm_hash`; `assets`, whose mutable columns are
 DEAD and now live in `balance_aggregates` / `asset_enrichment`).
 
 **The real hazard is two rows for one key inside a single insert.** Then "last"
@@ -280,9 +280,9 @@ The dividing line is **`EXCHANGE TABLES`**. A subcommand that builds a staging
 table and swaps it will **lose any live write** that lands between build and
 swap.
 
-| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                          |
-| ------------------------------------------------------- | --------------------------------------------------------- |
-| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify` |
+| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify`, `wasm-code-backfill` |
 
 **Grey zone:**
 
@@ -416,7 +416,8 @@ Gotchas, all recorded:
 
 **Subcommands:** `run`, `status`, `bootstrap`, `repair-tier1`,
 `contract-type-rebuild`, `balance-seed`, `nft-reclassify`,
-`soroban-pool-amounts`. Most one-shot ops
+`soroban-pool-amounts`, `wasm-code-backfill` (program bytes for `wasm_programs.code`,
+read from RPC and checked against their hash). Most one-shot ops
 subcommands take `--dry-run`. No separate bins remain.
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),
@@ -1114,31 +1115,65 @@ SELECT * REPLACE (
         CAST(NULL, 'Nullable(String)')
     ) AS signature
 )
-FROM soroban_events
-WHERE signature IS NULL
-  AND intDiv(ledger_sequence, 500000) = {P}
-  AND multiIf(
-        JSONExtractString(topics_xdr,1,'type') = 'string'
-          AND JSONExtractString(topics_xdr,2,'type') = 'sym'
-          AND JSONExtractString(topics_xdr,2,'value') != '',
-            JSONExtractString(topics_xdr,2,'value'),
-        JSONExtractString(topics_xdr,1,'type') = 'string'
-          AND JSONExtractString(topics_xdr,1,'value') != '',
-            JSONExtractString(topics_xdr,1,'value'),
-        CAST(NULL, 'Nullable(String)')
-    ) IS NOT NULL
+FROM (
+    SELECT * FROM soroban_events
+    WHERE signature IS NULL
+      AND intDiv(ledger_sequence, 500000) = {P}
+      AND multiIf(
+            JSONExtractString(topics_xdr,1,'type') = 'string'
+              AND JSONExtractString(topics_xdr,2,'type') = 'sym'
+              AND JSONExtractString(topics_xdr,2,'value') != '',
+                JSONExtractString(topics_xdr,2,'value'),
+            JSONExtractString(topics_xdr,1,'type') = 'string'
+              AND JSONExtractString(topics_xdr,1,'value') != '',
+                JSONExtractString(topics_xdr,1,'value'),
+            CAST(NULL, 'Nullable(String)')
+        ) IS NOT NULL
+)
 ```
 
-The trailing filter keeps still-unresolvable rows OUT of the insert — their
+**The filter must stay in the subquery.** Next to `REPLACE (… AS signature)`,
+a `WHERE signature IS NULL` on the same level reads the alias — the NEW value —
+not the stored column. Measured on partition 101 (2026-10-07): that form
+matches 414,386,502 rows instead of 744; with the trailing filter as well the
+two conditions contradict and the insert writes nothing, and without it every
+named event of the partition would be rewritten with `NULL`.
+
+The last filter keeps still-unresolvable rows OUT of the insert — their
 NULL row already exists, and re-inserting an identical NULL row would only
-churn the merge. **Verification** (after all partitions):
+churn the merge.
+
+**Verification**, per partition. A plain `count() … WHERE signature IS NULL`
+stays above zero until the table merges, because the old `NULL` row lives next
+to its named replacement. Count events (keys), not rows: an event is done when
+any of its rows carries a name. Must be zero:
 
 ```sql
--- the resolvable NULL population MUST be zero
-SELECT count() FROM soroban_events
-WHERE signature IS NULL
-  AND JSONExtractString(topics_xdr,1,'type') = 'string'
-  AND JSONExtractString(topics_xdr,1,'value') != ''
+SELECT count() FROM (
+    SELECT contract_id, ledger_sequence, transaction_index, operation_index,
+           event_index, max(signature IS NOT NULL) AS named
+    FROM soroban_events
+    WHERE intDiv(ledger_sequence, 500000) = {P}
+      AND (contract_id, ledger_sequence, transaction_index, operation_index,
+           event_index) IN (
+          SELECT contract_id, ledger_sequence, transaction_index,
+                 operation_index, event_index
+          FROM soroban_events
+          WHERE intDiv(ledger_sequence, 500000) = {P}
+            AND signature IS NULL
+            AND multiIf(
+                JSONExtractString(topics_xdr,1,'type') = 'string'
+                  AND JSONExtractString(topics_xdr,2,'type') = 'sym'
+                  AND JSONExtractString(topics_xdr,2,'value') != '',
+                    JSONExtractString(topics_xdr,2,'value'),
+                JSONExtractString(topics_xdr,1,'type') = 'string'
+                  AND JSONExtractString(topics_xdr,1,'value') != '',
+                    JSONExtractString(topics_xdr,1,'value'),
+                CAST(NULL, 'Nullable(String)')
+            ) IS NOT NULL)
+    GROUP BY contract_id, ledger_sequence, transaction_index, operation_index,
+             event_index)
+WHERE named = 0
 ```
 
 Verification criteria for the deployed result live in task 0374's
@@ -1167,7 +1202,7 @@ Per slice `[A, B)`, in this order:
 The event arm tells an operation event by its id: a fee event's carries a
 sentinel, so only an operation event names its own transaction in
 `transaction_index`. The live writer needs no such inference — the parser
-states each event's source (`EventSource::PerOp`); the check after the window
+states each event's origin (`EventOrigin::Operation`); the check after the window
 (below) confirms the two agree on real rows. Measured read-only on 63,700,000–
 63,705,000 (2026-09-21): 1,554,897 pairs across 8,369 contracts, 740 ms,
 586 MiB — well inside the read profile. The sentinel test was checked on the

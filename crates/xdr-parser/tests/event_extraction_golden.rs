@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 use domain::ContractEventType;
 use sha2::{Digest, Sha256};
 use stellar_xdr::{LedgerCloseMeta, TransactionMeta};
-use xdr_parser::{EventSource, LedgerEvents};
+use xdr_parser::{EventOrigin, LedgerEvents};
 
 const LEDGERS: [(u32, &[u8]); 4] = [
     (
@@ -98,28 +98,24 @@ fn dump(raw: &[u8]) -> String {
     let events = LedgerEvents::new(header.ledger_seq, 0, &metas);
     for tx in 0..metas.len() {
         let tx_events = events.extract(tx, "");
-        let (diagnostic, consensus): (Vec<_>, Vec<_>) = tx_events
-            .iter()
-            .partition(|e| matches!(e.source, EventSource::Diagnostic));
-        for e in consensus {
-            let origin = match e.source {
-                EventSource::TxLevel => format!("transaction {:?}", e.stage.expect("a stage")),
-                EventSource::PerOp => format!("operation {}", e.op_index.expect("an operation")),
-                EventSource::Diagnostic => unreachable!("partitioned out"),
+        for e in &tx_events.events {
+            let origin = match e.origin {
+                EventOrigin::Transaction(stage) => format!("transaction {stage:?}"),
+                EventOrigin::Operation(op) => format!("operation {op}"),
             };
-            let id = e.event_id.expect("a consensus event's id").to_rpc_string();
+            let id = e.event_id.to_rpc_string();
             line(
                 &mut out,
                 tx,
                 &origin,
                 &id,
-                e.event_type,
-                &e.contract_id,
-                &e.topics,
-                &e.data,
+                e.body.event_type,
+                &e.body.contract_id,
+                &e.body.topics,
+                &e.body.data,
             );
         }
-        for d in diagnostic {
+        for d in &tx_events.diagnostic {
             line(
                 &mut out,
                 tx,

@@ -23,6 +23,7 @@ mod soroban_pool_amounts;
 mod status;
 mod sync;
 mod util;
+mod wasm_code_backfill;
 
 use std::path::{Path, PathBuf};
 
@@ -213,7 +214,7 @@ enum Command {
     },
 
     /// One-shot rebuild of `soroban_contracts.contract_type` from
-    /// `wasm_interface_metadata` + `assets` type-3 backfill (task 0283).
+    /// `wasm_programs` + `assets` type-3 backfill (task 0283).
     /// Classifies every WASM in Rust (parity with the parser), rebuilds
     /// `soroban_contracts` into staging and `EXCHANGE TABLES`-swaps it, then
     /// inserts the missing Soroban-fungible `assets` rows. Must run BEFORE
@@ -255,6 +256,17 @@ enum Command {
     /// `--soroban-rpc-url`. Idempotent. `--dry-run` reports without writing.
     /// CH-only — a non-ClickHouse target errors (`Incomplete`), it does NOT no-op.
     BalanceSeed {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Task 0620 — one-shot fill of `wasm_programs.code` for every known
+    /// program that has none yet, read from Soroban RPC (`getLedgerEntries`,
+    /// `ContractCode` by hash), stored only when sha256 matches the hash, and
+    /// written as a whole row (bytes + metadata read from them).
+    /// Requires `--soroban-rpc-url`. Idempotent. `--dry-run` fetches and
+    /// verifies without writing.
+    WasmCodeBackfill {
         #[arg(long)]
         dry_run: bool,
     },
@@ -406,6 +418,21 @@ async fn main() {
                 stats.keys_requested,
                 stats.entries_returned,
                 stats.balances_decoded,
+            );
+        }
+        Command::WasmCodeBackfill { dry_run } => {
+            let stats = wasm_code_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
+                .await
+                .expect("wasm_code_backfill failed — idempotent, safe to re-run");
+            println!(
+                "wasm_code_backfill completed (dry_run={}): missing={} fetched={} \
+                 not_returned={} hash_mismatch={} written={}",
+                stats.dry_run,
+                stats.missing,
+                stats.fetched,
+                stats.not_returned,
+                stats.hash_mismatch,
+                stats.written,
             );
         }
         Command::SorobanPoolAmounts { dry_run } => {

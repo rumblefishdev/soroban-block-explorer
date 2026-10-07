@@ -5,7 +5,6 @@
 //! → Content-Type branch. See `super::mod` for the side-by-side with
 //! SEP-1, the rationale for source-naming, and the defensive-guard list.
 
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -23,6 +22,7 @@ use stellar_xdr::{
 use tracing::{debug, instrument};
 
 use super::errors::{NftTokenUriError, is_endpoint_fault};
+use super::validate_uri::validate_uri;
 
 /// Body cap for NFT metadata JSON (typical files <10 KB).
 pub(super) const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -559,7 +559,7 @@ fn build_simulate_envelope(
 ///
 /// TODO(audit-0197 follow-up): replace the try/fallback with
 /// WASM-spec-driven dispatch — inspect the contract's interface
-/// (in `wasm_interface_metadata.metadata` JSONB) to learn
+/// (in `wasm_programs.metadata` JSONB) to learn
 /// `token_uri`'s arity ahead of time and call the right variant
 /// directly. Saves one RPC round-trip per SEP-39 token (a SEP-39
 /// collection with N tokens currently spends 2 × N RPC calls; with
@@ -567,7 +567,7 @@ fn build_simulate_envelope(
 ///   1. `soroban_contracts.wasm_hash` is reliably populated for
 ///      non-SAC contracts — currently 99.9 % NULL (Step 1 Finding F9;
 ///      same root cause class as Bug #4 SAC-detection gap).
-///   2. `wasm_interface_metadata.metadata` is populated with a real
+///   2. `wasm_programs.metadata` is populated with a real
 ///      `functions[]` array — locally 40 % of audited rows store
 ///      `{}` because the parser produced no spec from the WASM
 ///      bytecode (Step 1 Finding F8).
@@ -705,63 +705,6 @@ fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_owned())
 }
 
-/// URI safety check: only `https://` (RFC1035 host, no IP literal /
-/// userinfo) and `ipfs://` (non-empty CID) pass.
-pub(super) fn validate_uri(uri: &str) -> Result<(), NftTokenUriError> {
-    let uri = uri.trim();
-    let bad = || NftTokenUriError::MalformedUri {
-        uri: uri.to_owned(),
-    };
-    if uri.is_empty() {
-        return Err(bad());
-    }
-    let host = if let Some(rest) = uri.strip_prefix("https://") {
-        rest
-    } else if let Some(rest) = uri.strip_prefix("ipfs://") {
-        if rest.is_empty() {
-            return Err(bad());
-        }
-        // Reject path-traversal segments — a contract returning
-        // `ipfs://Qm../../etc/passwd` (or percent-encoded variants)
-        // could trick a misbehaving gateway into serving an unrelated
-        // file. The gateway is the last line of defence, but rejecting
-        // up-front keeps the contract-vs-our-validator boundary clean.
-        // Decode `%2e` (any case) → `.` first so mixed encodings like
-        // `.%2e`, `%2e.`, `%2e/` collapse to literal-dot segments before
-        // the per-segment match.
-        let normalized = rest.to_ascii_lowercase().replace("%2e", ".");
-        if normalized.split('/').any(|seg| seg == ".." || seg == ".") {
-            return Err(bad());
-        }
-        return Ok(());
-    } else {
-        return Err(NftTokenUriError::UnsafeScheme {
-            uri: uri.to_owned(),
-        });
-    };
-    let authority = host.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.contains('@') {
-        return Err(bad()); // userinfo masks the host check
-    }
-    let host_only = authority.split(':').next().unwrap_or("");
-    if host_only.is_empty() {
-        return Err(bad());
-    }
-    if !host_only
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
-    {
-        return Err(bad());
-    }
-    if host_only.parse::<IpAddr>().is_ok() {
-        return Err(bad());
-    }
-    if !host_only.contains('.') {
-        return Err(bad()); // reject `localhost` etc. — must be public DNS
-    }
-    Ok(())
-}
-
 /// Stream body, bail out if cumulative size > `MAX_BODY_BYTES`.
 pub(super) async fn capped_body(
     mut resp: reqwest::Response,
@@ -792,131 +735,6 @@ pub(super) async fn capped_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn validate_uri_accepts_https() {
-        assert!(validate_uri("https://example.com/123.json").is_ok());
-        assert!(validate_uri("https://gateway.pinata.cloud/ipfs/Qm.../1.json").is_ok());
-    }
-
-    #[test]
-    fn validate_uri_accepts_ipfs() {
-        assert!(validate_uri("ipfs://QmXyZ...").is_ok());
-    }
-
-    #[test]
-    fn validate_uri_rejects_http() {
-        assert!(matches!(
-            validate_uri("http://example.com/1.json"),
-            Err(NftTokenUriError::UnsafeScheme { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_uri_rejects_file_scheme() {
-        assert!(matches!(
-            validate_uri("file:///etc/passwd"),
-            Err(NftTokenUriError::UnsafeScheme { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_uri_rejects_data_uri() {
-        assert!(matches!(
-            validate_uri("data:application/json,{}"),
-            Err(NftTokenUriError::UnsafeScheme { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_uri_rejects_javascript() {
-        assert!(matches!(
-            validate_uri("javascript:alert(1)"),
-            Err(NftTokenUriError::UnsafeScheme { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_uri_rejects_ip_literal_v4() {
-        assert!(matches!(
-            validate_uri("https://127.0.0.1/1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        assert!(matches!(
-            validate_uri("https://169.254.169.254/latest/meta-data/"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_uri_rejects_userinfo() {
-        assert!(matches!(
-            validate_uri("https://user:pass@evil.example/1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_uri_rejects_empty() {
-        assert!(matches!(
-            validate_uri(""),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        assert!(matches!(
-            validate_uri("   "),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_uri_rejects_ipfs_path_traversal() {
-        assert!(matches!(
-            validate_uri("ipfs://Qm../../etc/passwd"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        assert!(matches!(
-            validate_uri("ipfs://QmFoo/../../1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        assert!(matches!(
-            validate_uri("ipfs://QmFoo/%2e%2e/1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        assert!(matches!(
-            validate_uri("ipfs://QmFoo/./1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        // Mixed-encoding traversals — fully-encoded `%2e%2e`, partially-
-        // encoded `.%2e` / `%2e.`, single-encoded `%2e` (literal dot).
-        assert!(matches!(
-            validate_uri("ipfs://QmFoo/.%2e/1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        assert!(matches!(
-            validate_uri("ipfs://QmFoo/%2e./1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        assert!(matches!(
-            validate_uri("ipfs://QmFoo/%2E%2E/1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-        assert!(matches!(
-            validate_uri("ipfs://QmFoo/%2e/1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_uri_rejects_no_dot_host() {
-        // Wiremock + tests can still target IP literals (rejected above)
-        // or the host with an explicit FQDN. Bare `localhost` is rejected
-        // so a contract returning `https://localhost/…` cannot smuggle
-        // a SSRF target past the host-check.
-        assert!(matches!(
-            validate_uri("https://localhost/1.json"),
-            Err(NftTokenUriError::MalformedUri { .. })
-        ));
-    }
 
     #[test]
     fn resolve_ipfs_swaps_scheme() {

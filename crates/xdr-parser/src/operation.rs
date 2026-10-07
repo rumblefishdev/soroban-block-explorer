@@ -5,6 +5,7 @@
 //! functionName, functionArgs (ScVal decoded), and returnValue.
 
 use crate::envelope::{InnerTxRef, muxed_id, muxed_to_g_strkey};
+use crate::meta::soroban_return_value;
 use crate::scval::scval_to_typed_json;
 use crate::types::ExtractedOperation;
 use domain::OperationType;
@@ -295,18 +296,6 @@ fn append_pool_claims(details: &mut Value, op_result: Option<&OperationResult>) 
     }
     map.insert("poolIds".into(), Value::from(pool_ids));
     map.insert("claimedAtoms".into(), Value::from(claimed));
-}
-
-/// Extract the Soroban return value from TransactionMeta, if present.
-fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
-    match meta {
-        TransactionMeta::V3(v3) => v3.soroban_meta.as_ref().map(|m| m.return_value.clone()),
-        TransactionMeta::V4(v4) => v4
-            .soroban_meta
-            .as_ref()
-            .and_then(|m| m.return_value.clone()),
-        _ => None,
-    }
 }
 
 /// The ledger changes of operation `op_idx` (0-based), index-aligned with the

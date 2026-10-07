@@ -13,7 +13,7 @@
   Timeouts at 2 hours — 30 min was insufficient for 64k-ledger
   partitions which take ~80 min wall-clock. Sparse tables
   (lp_positions ~1700 rows / 84 KiB total per partition;
-  wasm_interface_metadata ~100 rows / 5 KiB total) never fill the
+  wasm_programs ~100 rows / 5 KiB total) never fill the
   client's 256 KiB chunk buffer, so chunks send only at partition
   end. 30 min cap fired on these idle streams. 2h cap covers any
   realistic single-partition workload, including future K=4 parallel

@@ -32,7 +32,7 @@
 -- Other tables (`assets`, `nfts`, `liquidity_pools`,
 -- `liquidity_pool_snapshots`, `transaction_operations`,
 -- `transaction_participants`, `nft_ownership_changes`, `lp_positions`,
--- `account_balances_current`, `wasm_interface_metadata`,
+-- `account_balances_current`, `wasm_programs`,
 -- `ledgers`, `transaction_hash_prefix_index`) keep their natural / composite
 -- primary keys — no surrogate `id`. Composite (StrKey-or-hash, …)
 -- ORDER BYs work cheaply for these without a hash layer.
@@ -68,7 +68,7 @@
 -- - **`LowCardinality(String)`** on bounded-cardinality columns:
 --   asset codes, event signatures, home_domain.
 -- - **`ZSTD(3)` codecs** on JSON-ish columns: `soroban_events.topics_xdr`,
---   `soroban_events.data_xdr`, `wasm_interface_metadata.metadata`.
+--   `soroban_events.data_xdr`, `wasm_programs.metadata`, `wasm_programs.code`.
 -- - **Empty-string sentinel** for composite-PK "no value" slots
 --   (`assets.asset_code = ''` for native, etc.). CH `ORDER BY` on
 --   plain `String` is significantly faster than `Nullable(String)`.
@@ -135,9 +135,25 @@ ORDER BY (sequence);
 -- not always byte-identical: the 0327 `upgradeable-backfill` re-writes a hash with
 -- an extra key. Until the merge both copies are live, so reads dedup with FINAL
 -- (lore-0293, lore-0592).
-CREATE TABLE IF NOT EXISTS wasm_interface_metadata (
+-- One row per WASM program. Named `wasm_interface_metadata` until task 0620,
+-- which renamed it on production with
+-- `RENAME TABLE wasm_interface_metadata TO wasm_programs` — the table holds
+-- the program, not only its interface.
+--
+-- `code` is the program itself (a binary `String`), so a contract's own
+-- functions can be executed (task 0620, ADR 0061); `metadata` is what the
+-- parser reads from those bytes (functions, byte length, upgradeable), empty
+-- for a program without a `contractspecv0` section. A row is always written
+-- whole, bytes and metadata together, so a later write never blanks the other
+-- half. Programs uploaded before `code` existed were filled once by
+-- `backfill-runner wasm-code-backfill`. ~5.2k programs measured 112 MB raw,
+-- ~35 MB under ZSTD(3). (A separate `wasm_code` table held the bytes for a
+-- while in development; it never reached production, so nothing to drop.)
+-- PROD: `ALTER TABLE wasm_programs ADD COLUMN IF NOT EXISTS code String DEFAULT '' CODEC(ZSTD(3))`.
+CREATE TABLE IF NOT EXISTS wasm_programs (
     wasm_hash FixedString(32),
-    metadata  String CODEC(ZSTD(3))
+    metadata  String CODEC(ZSTD(3)),
+    code      String DEFAULT '' CODEC(ZSTD(3))
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (wasm_hash);
@@ -196,9 +212,11 @@ ORDER BY (account_id);
 -- alternate ordering lives in this separate plain-MergeTree table, filled by a
 -- refreshable MV (full recompute + atomic EXCHANGE → reads need no FINAL; mirrors
 -- `balance_aggregates_mv`). `accounts::fetch_list` then read-in-order SEEKs it.
+-- No `account_id` (task 0447): the StrKey was 82 % of the bytes every refresh
+-- rewrites, and the list needs it for one page only — it resolves it from
+-- `accounts` by `id` (`idx_acc_id`).
 CREATE TABLE IF NOT EXISTS accounts_recent (
     id                Int64,
-    account_id        String,
     last_seen_ledger  Int64,
     first_seen_ledger Int64,
     home_domain       LowCardinality(Nullable(String))
@@ -214,7 +232,7 @@ ORDER BY (last_seen_ledger, id);
 CREATE MATERIALIZED VIEW IF NOT EXISTS accounts_recent_mv
 REFRESH EVERY 2 MINUTE
 TO accounts_recent AS
-SELECT id, account_id, last_seen_ledger, first_seen_ledger, home_domain
+SELECT id, last_seen_ledger, first_seen_ledger, home_domain
 FROM accounts FINAL;
 
 -- soroban_contracts: same hybrid pattern as accounts.
@@ -423,6 +441,18 @@ ORDER BY (asset_type, asset_code, issuer_id, contract_id);
 -- rename an existing table, so a database created before 2026-08-21 needs:
 --     RENAME TABLE account_signers TO account_entry_state;
 -- Metadata-only, instant, nothing to move.
+-- num_sponsoring / num_sponsored (task 0629): the CAP-33 counters the network
+-- keeps on the AccountEntry — reserves this account pays for others, and
+-- reserves of this account paid by others. Copied as stored, never counted by
+-- us; an entry without the V2 extension reads 0 on chain and 0 here. `DEFAULT
+-- 0` lets the ALTER land before the writer deploys (see `balances` below).
+-- PROD: an existing table needs, BEFORE the indexer that writes them deploys
+-- and before any `backfill-runner` built from this code runs a seed (both
+-- insert the same row struct, positional against this column order, hence
+-- AFTER):
+--     ALTER TABLE account_entry_state ADD COLUMN IF NOT EXISTS num_sponsoring UInt32 DEFAULT 0 AFTER flags;
+--     ALTER TABLE account_entry_state ADD COLUMN IF NOT EXISTS num_sponsored  UInt32 DEFAULT 0 AFTER num_sponsoring;
+-- Rows written before then read 0 until the checkpoint seed rewrites them.
 CREATE TABLE IF NOT EXISTS account_entry_state (
     account_id          Int64,
     signer_keys         Array(String),
@@ -433,6 +463,8 @@ CREATE TABLE IF NOT EXISTS account_entry_state (
     threshold_med       UInt8,
     threshold_high      UInt8,
     flags               UInt32,
+    num_sponsoring      UInt32 DEFAULT 0,
+    num_sponsored       UInt32 DEFAULT 0,
     last_updated_ledger Int64
 )
 ENGINE = ReplacingMergeTree(last_updated_ledger)

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { ExplorerThemeProvider } from '../../theme/ThemeProvider.js';
@@ -20,5 +20,23 @@ describe('SecondaryNav', () => {
       'href',
       '/prices-api/'
     );
+  });
+
+  it('puts the drawer footer at the bottom of the drawer', () => {
+    render(
+      <ExplorerThemeProvider>
+        <SecondaryNav
+          logo={<span>logo</span>}
+          navItems={[]}
+          drawerFooter={<span>network choice</span>}
+        />
+      </ExplorerThemeProvider>
+    );
+
+    expect(screen.queryByText('network choice')).toBeNull();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open navigation menu' })
+    );
+    expect(screen.getByText('network choice')).toBeInTheDocument();
   });
 });

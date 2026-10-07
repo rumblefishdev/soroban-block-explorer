@@ -96,6 +96,8 @@ fn init_sql_parses_into_statements() {
     // to `nft_ownership_changes`. 41 → 39.
     // task 0374: added `pool_movements` — per-(event, leg) soroban
     // pool amounts. 39 → 40.
+    // task 0620: added `wasm_code`, then folded it into `wasm_programs.code`
+    // before it reached production. 40 → 41 → 40.
     assert_eq!(
         stmts.len(),
         40,

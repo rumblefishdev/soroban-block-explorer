@@ -16,10 +16,10 @@
 //!    unsigned scalar ids and valid `token_id` maps mean non-fungible.**
 //!    Unknown or ambiguous payloads are rejected AND counted, so a new shape surfaces as
 //!    a number rather than a silent zero.
-//! 3. **Only the per-operation container.** Diagnostics are byte-identical
-//!    copies (or rolled-back calls), and token verbs never appear at
-//!    transaction level (12 237 of 12 237 measured) — one that does is a
-//!    reject, not a row with a null operation.
+//! 3. **Only operation events.** Token verbs never appear at transaction
+//!    level (12 237 of 12 237 measured) — one that does is a reject, not a row
+//!    with a null operation. Diagnostic events never arrive: they are a type
+//!    of their own.
 //!
 //! Rejects are returned to the caller, which raises them as ingest errors;
 //! they are a developer's problem, not something a reader of the account page
@@ -32,10 +32,11 @@
 use serde_json::Value;
 use tracing::debug;
 
+use crate::event::EventId;
 use crate::event_filters::{EventAsset, TokenEventKind, parse_token_event, token_verb};
 use crate::sac::sac_override_from_event_topics;
 use crate::scval::{map_get, typed, typed_str};
-use crate::types::{EventSource, ExtractedEvent};
+use crate::types::{EventOrigin, ExtractedEvent};
 
 /// What a token event's `data` payload says about the amount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,8 +136,8 @@ pub struct ExtractedAssetTransfer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferReject {
     pub transaction_hash: String,
-    /// Where to find the event in the transaction (log locator only).
-    pub position_in_tx: u32,
+    /// Where to find the event: its stellar-rpc id (log locator only).
+    pub event_id: EventId,
     /// `None` only for [`RejectKind::NoEmitter`].
     pub emitter: Option<String>,
     pub kind: RejectKind,
@@ -224,49 +225,42 @@ impl AssetTransferExtraction {
 
 /// Decode every token movement in one transaction's events.
 ///
-/// Diagnostic-container events are skipped silently (byte-identical copies of
-/// consensus events, or the trace of a call that was rolled back — task 0182,
-/// re-measured in 0540). Events that are not token events are skipped
-/// silently. Everything that *is* a token verb either becomes a transfer or a
-/// reject; nothing with a token verb is dropped without a trace.
+/// Events that are not token events are skipped silently. Everything that
+/// *is* a token verb either becomes a transfer or a reject; nothing with a
+/// token verb is dropped without a trace.
 pub fn extract_asset_transfers(
     events: &[ExtractedEvent],
     net_id: &[u8; 32],
 ) -> AssetTransferExtraction {
     let mut out = AssetTransferExtraction::default();
     for ev in events {
-        if ev.source == EventSource::Diagnostic {
-            continue;
-        }
         // Not a token event at all: skipped silently. A token verb from here
         // on either becomes a row or a reject.
-        let Some(kind) = token_verb(&ev.topics) else {
+        let Some(kind) = token_verb(&ev.body.topics) else {
             continue;
         };
-        // A token verb without an emitting contract has never been observed
-        // (0 of 12 237); without one there is no asset identity to write.
         let reject = |emitter: Option<&str>, kind: RejectKind| TransferReject {
             transaction_hash: ev.transaction_hash.clone(),
-            position_in_tx: ev.position_in_tx,
+            event_id: ev.event_id,
             emitter: emitter.map(str::to_string),
             kind,
         };
         // A token verb without an emitting contract has never been observed
         // (0 of 12 237); without one there is no asset identity to write.
-        let Some(emitter) = ev.contract_id.clone() else {
+        let Some(emitter) = ev.body.contract_id.clone() else {
             debug!(
                 target: "xdr_parser::asset_transfers",
-                tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx,
+                tx = %ev.transaction_hash, event_id = %ev.event_id.to_rpc_string(),
                 "token verb with no emitting contract — rejected"
             );
             out.rejects.push(reject(None, RejectKind::NoEmitter));
             continue;
         };
-        let Some(token) = parse_token_event(&ev.topics) else {
-            let topic_count = ev.topics.as_array().map_or(0, Vec::len);
+        let Some(token) = parse_token_event(&ev.body.topics) else {
+            let topic_count = ev.body.topics.as_array().map_or(0, Vec::len);
             debug!(
                 target: "xdr_parser::asset_transfers",
-                tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx, %emitter,
+                tx = %ev.transaction_hash, event_id = %ev.event_id.to_rpc_string(), %emitter,
                 verb = ?kind, topic_count,
                 "token verb in a topic shape the decoder does not know — rejected"
             );
@@ -280,11 +274,11 @@ pub fn extract_asset_transfers(
             continue;
         };
 
-        let (Some(op_index), Some(event_pos_in_op)) = (ev.op_index, ev.event_pos_in_op) else {
+        let EventOrigin::Operation(operation_index) = ev.origin else {
             debug!(
                 target: "xdr_parser::asset_transfers",
-                tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx, %emitter,
-                "token verb outside the per-operation container — rejected"
+                tx = %ev.transaction_hash, event_id = %ev.event_id.to_rpc_string(), %emitter,
+                "token verb outside an operation — rejected"
             );
             out.rejects
                 .push(reject(Some(&emitter), RejectKind::NoOperation));
@@ -293,9 +287,10 @@ pub fn extract_asset_transfers(
 
         // Rule 1 — a labelled asset must be emitted by its own SAC.
         if !matches!(token.asset, EventAsset::Bespoke)
-            && sac_override_from_event_topics(&emitter, &ev.topics, net_id).is_none()
+            && sac_override_from_event_topics(&emitter, &ev.body.topics, net_id).is_none()
         {
             let asset = ev
+                .body
                 .topics
                 .as_array()
                 .and_then(|t| t.last())
@@ -305,7 +300,7 @@ pub fn extract_asset_transfers(
                 .to_string();
             debug!(
                 target: "xdr_parser::asset_transfers",
-                tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx, %emitter, %asset,
+                tx = %ev.transaction_hash, event_id = %ev.event_id.to_rpc_string(), %emitter, %asset,
                 "labelled token event whose emitter is not the asset's SAC — rejected"
             );
             out.rejects
@@ -314,11 +309,12 @@ pub fn extract_asset_transfers(
         }
 
         // Rule 2 — the payload is an amount, a token id, or not a movement.
-        let amount = match token_event_amount(&ev.data) {
+        let amount = match token_event_amount(&ev.body.data) {
             TokenAmount::Fungible(n) => Some(n),
             TokenAmount::NonFungible => None,
             TokenAmount::Unrecognised => {
                 let data_type = ev
+                    .body
                     .data
                     .get("type")
                     .and_then(Value::as_str)
@@ -326,7 +322,7 @@ pub fn extract_asset_transfers(
                     .to_string();
                 debug!(
                     target: "xdr_parser::asset_transfers",
-                    tx = %ev.transaction_hash, position_in_tx = ev.position_in_tx, %emitter,
+                    tx = %ev.transaction_hash, event_id = %ev.event_id.to_rpc_string(), %emitter,
                     verb = ?token.kind, %data_type,
                     "token verb with an unrecognised payload — rejected, not a movement"
                 );
@@ -343,8 +339,8 @@ pub fn extract_asset_transfers(
 
         out.transfers.push(ExtractedAssetTransfer {
             transaction_hash: ev.transaction_hash.clone(),
-            op_index,
-            event_pos_in_op,
+            op_index: u32::from(operation_index),
+            event_pos_in_op: ev.event_id.event_index,
             kind: token.kind,
             from: token.from,
             to: token.to,

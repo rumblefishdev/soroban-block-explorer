@@ -22,7 +22,7 @@ export interface CloudflareBootstrapStackProps extends cdk.StackProps {
  *
  * Repo split (task 0277 D9/D11): the Cloudflare ZONE (`rumblefishdev.com`),
  * the company DNS records, the zone-level edge rulesets and a SEPARATE
- * TF-state bucket live in the private `rf-domains` repo — NOT here.
+ * TF-state bucket live in the private `dns-cloudformation` repo — NOT here.
  *
  * NOT here either:
  *  - the Cloudflare API token → paste once via `aws secretsmanager
@@ -31,7 +31,7 @@ export interface CloudflareBootstrapStackProps extends cdk.StackProps {
  *
  * No `X-Origin-Secret`: under the repo split the API is locked with mTLS
  * (per-host AOP + API GW mTLS, D12), not a secret header — a secret header
- * would force a cross-repo shared secret + the Transform Rule into rf-domains.
+ * would force a cross-repo shared secret + the Transform Rule into dns-cloudformation.
  */
 export class CloudflareBootstrapStack extends cdk.Stack {
   constructor(

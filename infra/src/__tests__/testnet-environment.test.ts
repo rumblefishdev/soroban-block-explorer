@@ -39,8 +39,10 @@ function synth(config: EnvironmentConfig): Templates {
   return templates;
 }
 
-// The committed config starts paused; the reset runbook's last step resumes it.
+// The reset runbook pauses the indexer (concurrency 0) and its last step
+// resumes it (1); both states are synthesized, whatever the committed one is.
 let templates: Templates = {};
+let paused: Templates = {};
 let resumed: Templates = {};
 const ofType = (stack: string, type: string, from = templates): Resource[] =>
   Object.values(from[stack] ?? {}).filter((r) => r.Type === type);
@@ -52,6 +54,7 @@ const ingestConsumers = (from: Templates): Resource[] =>
 
 beforeAll(() => {
   templates = synth(testnet);
+  paused = synth({ ...testnet, indexerLambdaConcurrency: 0 });
   resumed = synth({ ...testnet, indexerLambdaConcurrency: 1 });
 });
 
@@ -92,10 +95,9 @@ describe('testnet environment', () => {
     );
   });
 
-  it('ships paused: no queue consumer, no keepalive, until the database holds ledgers', () => {
-    expect(testnet.indexerLambdaConcurrency).toBe(0);
-    expect(ingestConsumers(templates)).toHaveLength(0);
-    const [keepalive] = ofType('Compute', 'AWS::Scheduler::Schedule');
+  it('paused: no queue consumer, no keepalive', () => {
+    expect(ingestConsumers(paused)).toHaveLength(0);
+    const [keepalive] = ofType('Compute', 'AWS::Scheduler::Schedule', paused);
     expect(keepalive?.Properties['State']).toBe('DISABLED');
   });
 

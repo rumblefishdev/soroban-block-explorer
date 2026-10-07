@@ -49,10 +49,10 @@ pub use asset_transfers::{
     TransferReject, extract_asset_transfers, token_event_amount,
 };
 pub use classification::{ContractClassification, classify_contract_from_wasm_spec};
-pub use contract::extract_contract_interfaces;
+pub use contract::{extract_wasm_programs, parse_wasm_program};
 pub use envelope::InnerTxRef;
 pub use error::{ParseError, ParseErrorKind};
-pub use event::{EventId, LedgerEvents, extract_events};
+pub use event::{EventId, LedgerEvents, TxEvents};
 pub use event_filters::{EventAsset, TokenEvent, TokenEventKind, parse_token_event, token_verb};
 pub use invocation::{InvocationResult, extract_invocations, extract_invocations_from_diagnostics};
 pub use ledger::extract_ledger;
@@ -77,12 +77,12 @@ pub use state::{
 pub use token_metadata::TokenMetadata;
 pub use transaction::{collect_tx_results, extract_transactions};
 pub use types::{
-    ContractFunction, EventSource, ExtractedAccountState, ExtractedAsset,
-    ExtractedContractDeployment, ExtractedContractInterface, ExtractedContractMetadata,
-    ExtractedEvent, ExtractedInvocation, ExtractedLedger, ExtractedLedgerEntryChange,
-    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
-    ExtractedNftEvent, ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction, NftEvent,
-    SacAssetIdentity,
+    ContractFunction, EventBody, EventOrigin, ExtractedAccountState, ExtractedAsset,
+    ExtractedContractDeployment, ExtractedContractMetadata, ExtractedEvent, ExtractedInvocation,
+    ExtractedLedger, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
+    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
+    ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction, ExtractedWasmProgram,
+    NftEvent, SacAssetIdentity,
 };
 
 use stellar_xdr::{LedgerCloseMetaBatch, ReadXdr};

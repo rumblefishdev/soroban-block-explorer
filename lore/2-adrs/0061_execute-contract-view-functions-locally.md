@@ -18,7 +18,7 @@ history:
 
 **Related:**
 
-- [Task 0620: Execute contract view functions locally](../1-tasks/backlog/0620_FEATURE_execute-contract-view-functions-locally/README.md)
+- [Task 0620: Execute contract view functions locally](../1-tasks/active/0620_FEATURE_execute-contract-view-functions-locally/README.md)
 - [Task 0621: Classify fungible tokens by exact SEP-41 signatures](../1-tasks/backlog/0621_REFACTOR_classify-tokens-by-sep41-signatures.md)
 
 ---
@@ -45,7 +45,7 @@ RPC simulation, p50 0.7 ms per call.
 1. Facts that a standard defines as a **view function** are read by executing
    that function locally with `soroban-env-host`, pinned to the network's
    protocol — first token `decimals`, `name`, `symbol` (0620).
-2. Program bytes are stored once per WASM hash (`wasm_code`), written at
+2. Program bytes are stored once per WASM hash (`wasm_programs.code`), written at
    upload; 5,235 programs are 34–65 MB compressed.
 3. Ledger entries the pipeline does not hold (another contract's instance,
    persistent data — 106 of 4,207 `decimals()` calls) are read as ledger
@@ -114,7 +114,7 @@ database); fetching ties every execution to an external service.
 ## Delivery Checklist
 
 - [ ] `docs/architecture/technical-design-general-overview.md` — N/A until 0620 lands
-- [ ] `docs/architecture/database-schema/database-schema-overview.md` — `wasm_code` (0620)
+- [x] `docs/architecture/database-schema/database-schema-overview.md` — `wasm_programs.code` (0620)
 - [ ] `docs/architecture/backend/backend-overview.md` — N/A — API unchanged
 - [ ] `docs/architecture/frontend/frontend-overview.md` — N/A — no frontend change
 - [ ] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md` — executor step (0620)

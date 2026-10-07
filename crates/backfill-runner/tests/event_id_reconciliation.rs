@@ -10,7 +10,8 @@
 //! ```
 //!
 //! The rpc window is short (about 7 days), so the ledgers are taken from the
-//! index tip. `getEvents` returns contract events only — the fee events of the
+//! index tip; `history_parsed_event_ids_match_stored` covers the rest of
+//! history parse against table. `getEvents` returns contract events only — the fee events of the
 //! native SAC are contract events too, so the charges and refunds, and with
 //! them the sentinel ids, are included; diagnostic events exist on neither
 //! side.
@@ -38,18 +39,9 @@ const LEDGERS: u32 = 5;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn stored_and_parsed_event_ids_match_stellar_rpc() {
-    let user = std::env::var("USER").unwrap_or_default();
-    let local = format!(
-        "{}/../../infra-hetzner/ca/out/{user}/{user}",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let cert = std::env::var("EVENT_CH_CERT").unwrap_or_else(|_| format!("{local}.crt"));
-    let key = std::env::var("EVENT_CH_KEY").unwrap_or_else(|_| format!("{local}.key"));
-    if !std::path::Path::new(&cert).exists() || !std::path::Path::new(&key).exists() {
-        eprintln!("no client certificate at {cert} — skipping the event id reconciliation");
+    let Some(ch) = prod_client() else {
         return;
-    }
-    let domain = env_or("EVENT_CH_DOMAIN", "ch.sorobanscan.rumblefish.dev");
+    };
     let rpc_url = env_or(
         "EVENT_RPC_URL",
         "https://soroban-rpc.mainnet.stellar.gateway.fm/",
@@ -58,13 +50,6 @@ async fn stored_and_parsed_event_ids_match_stellar_rpc() {
         "EVENT_ARCHIVE_URL",
         "https://aws-public-blockchain.s3.us-east-2.amazonaws.com/v1.1/stellar/ledgers/pubnet",
     );
-    let bundle = db_clickhouse::mtls::MtlsBundle {
-        cert_pem: std::fs::read_to_string(&cert).expect("read EVENT_CH_CERT"),
-        key_pem: std::fs::read_to_string(&key).expect("read EVENT_CH_KEY"),
-        ca_pem: String::new(),
-    };
-    let ch = db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
-        .expect("mTLS ClickHouse client");
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .user_agent("soroban-block-explorer/event-id-reconciliation")
@@ -136,6 +121,100 @@ async fn stored_and_parsed_event_ids_match_stellar_rpc() {
             rpc.len()
         );
     }
+}
+
+/// Across the whole history, where `getEvents` no longer reaches: the ids the
+/// parser assigns today equal the ids stored by earlier parser versions. The
+/// ledgers spread evenly from the protocol 20 activation to the tip, plus the
+/// rare classes on purpose: the activation ledger, the last `AfterTx` refund
+/// ledger and the first `AfterAllTxs` one, and the protocol 23 boundary.
+/// `EVENT_HISTORY_LEDGERS` sets the even spread (default 100).
+///
+/// ```bash
+/// cargo test -p backfill-runner --test event_id_reconciliation history -- --nocapture
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn history_parsed_event_ids_match_stored() {
+    let Some(ch) = prod_client() else {
+        return;
+    };
+    let archive = env_or(
+        "EVENT_ARCHIVE_URL",
+        "https://aws-public-blockchain.s3.us-east-2.amazonaws.com/v1.1/stellar/ledgers/pubnet",
+    );
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .user_agent("soroban-block-explorer/event-id-reconciliation")
+        .build()
+        .unwrap();
+    // SAFETY: set before any parse; `parse_ledger` needs the passphrase.
+    unsafe {
+        std::env::set_var(
+            "STELLAR_NETWORK_PASSPHRASE",
+            "Public Global Stellar Network ; September 2015",
+        );
+    }
+    indexer::handler::process::init_network_id().expect("network id");
+
+    let tip = ch
+        .query("SELECT toUInt32(max(sequence)) FROM ledgers")
+        .fetch_one::<u32>()
+        .await
+        .expect("index tip");
+    const FIRST_P20: u32 = 50_457_424;
+    let spread: u32 = env_or("EVENT_HISTORY_LEDGERS", "100")
+        .parse()
+        .expect("EVENT_HISTORY_LEDGERS");
+    let last = tip - BEHIND_TIP;
+    let mut ledgers: BTreeSet<u32> = (0..spread)
+        .map(|i| FIRST_P20 + (last - FIRST_P20) / (spread - 1) * i)
+        .collect();
+    ledgers.extend([FIRST_P20, 58_762_517, 58_762_518]);
+
+    let (mut matched, mut ids) = (0, 0);
+    for ledger in ledgers {
+        let stored = stored_event_ids(&ch, ledger).await;
+        let parsed = parsed_event_ids(&http, &archive, ledger).await;
+        assert_eq!(
+            parsed,
+            stored,
+            "ledger {ledger}: parsed ids differ from stored ({} vs {}); \
+             only in the parse: {:?}; only in the table: {:?}",
+            parsed.len(),
+            stored.len(),
+            parsed.difference(&stored).take(5).collect::<Vec<_>>(),
+            stored.difference(&parsed).take(5).collect::<Vec<_>>(),
+        );
+        matched += 1;
+        ids += parsed.len();
+    }
+    println!("{matched} ledgers, {ids} ids: parsed equals stored on every one");
+}
+
+/// The production ClickHouse, read-only, once it is keyed by the rpc id —
+/// `None` (and a note) when the certificate or the rekeyed table is missing.
+fn prod_client() -> Option<clickhouse::Client> {
+    let user = std::env::var("USER").unwrap_or_default();
+    let local = format!(
+        "{}/../../infra-hetzner/ca/out/{user}/{user}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let cert = std::env::var("EVENT_CH_CERT").unwrap_or_else(|_| format!("{local}.crt"));
+    let key = std::env::var("EVENT_CH_KEY").unwrap_or_else(|_| format!("{local}.key"));
+    if !std::path::Path::new(&cert).exists() || !std::path::Path::new(&key).exists() {
+        eprintln!("no client certificate at {cert} — skipping the event id reconciliation");
+        return None;
+    }
+    let domain = env_or("EVENT_CH_DOMAIN", "ch.sorobanscan.rumblefish.dev");
+    let bundle = db_clickhouse::mtls::MtlsBundle {
+        cert_pem: std::fs::read_to_string(&cert).expect("read EVENT_CH_CERT"),
+        key_pem: std::fs::read_to_string(&key).expect("read EVENT_CH_KEY"),
+        ca_pem: String::new(),
+    };
+    Some(
+        db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
+            .expect("mTLS ClickHouse client"),
+    )
 }
 
 /// Every event id `getEvents` reports for one ledger.
@@ -234,18 +313,25 @@ async fn parsed_event_ids(http: &reqwest::Client, archive: &str, ledger: u32) ->
         .expect("archive body");
     let xdr = xdr_parser::decompress_zstd(&bytes).expect("zstd");
     let batch = xdr_parser::deserialize_batch(&xdr).expect("LedgerCloseMetaBatch");
-    batch
+    let events: Vec<_> = batch
         .ledger_close_metas
         .iter()
         .flat_map(|meta| indexer::handler::process::parse_ledger(meta).events)
         .flat_map(|(_, events)| events)
-        // `getEvents` reports contract-scoped consensus events only.
-        .filter(|e| e.source != xdr_parser::EventSource::Diagnostic && e.contract_id.is_some())
-        .map(|e| {
-            e.event_id
-                .expect("consensus event without an rpc id")
-                .to_rpc_string()
-        })
+        .collect();
+    // Every id names one event: a repeat would merge two rows in the table,
+    // and the sets compared below would hide it.
+    let distinct: BTreeSet<_> = events.iter().map(|e| e.event_id).collect();
+    assert_eq!(
+        distinct.len(),
+        events.len(),
+        "ledger {ledger}: two parsed events share an id"
+    );
+    events
+        .iter()
+        // `getEvents` reports contract-scoped events only.
+        .filter(|e| e.body.contract_id.is_some())
+        .map(|e| e.event_id.to_rpc_string())
         .collect()
 }
 

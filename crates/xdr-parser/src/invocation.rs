@@ -29,6 +29,7 @@ use serde_json::{Value, json};
 use stellar_xdr::*;
 
 use crate::envelope::{InnerTxRef, muxed_to_g_strkey};
+use crate::meta::soroban_return_value;
 use crate::scval::scval_to_typed_json;
 use crate::types::ExtractedInvocation;
 
@@ -314,7 +315,7 @@ pub fn extract_invocations_from_diagnostics(
     tx_source_account: &str,
     successful: bool,
 ) -> Vec<ExtractedInvocation> {
-    let diags = collect_diagnostic_events(tx_meta);
+    let diags = crate::event::diagnostic_events(tx_meta);
     if diags.is_empty() {
         return Vec::new();
     }
@@ -424,22 +425,6 @@ fn decode_call_target(topic: &ScVal) -> Option<String> {
     }
 }
 
-/// Pull `diagnostic_events` from V3 (`soroban_meta.diagnostic_events`) or
-/// V4 (`v4.diagnostic_events`) meta. Galexie's captive-core enables
-/// diagnostic mode by default, so the V4 stream is reliably populated;
-/// the V3 path is kept for parity with `extract_events`.
-fn collect_diagnostic_events(meta: &TransactionMeta) -> Vec<&DiagnosticEvent> {
-    match meta {
-        TransactionMeta::V3(v3) => v3
-            .soroban_meta
-            .as_ref()
-            .map(|m| m.diagnostic_events.iter().collect())
-            .unwrap_or_default(),
-        TransactionMeta::V4(v4) => v4.diagnostic_events.iter().collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// Build a nested JSON tree from an invocation node using iterative post-order traversal.
 ///
 /// Uses an explicit stack to avoid stack overflow on deep auth trees.
@@ -538,18 +523,6 @@ fn decode_authorized_function(
                 }),
             )
         }
-    }
-}
-
-/// Extract the Soroban return value from transaction metadata, if present.
-fn soroban_return_value(meta: &TransactionMeta) -> Option<ScVal> {
-    match meta {
-        TransactionMeta::V3(v3) => v3.soroban_meta.as_ref().map(|m| m.return_value.clone()),
-        TransactionMeta::V4(v4) => v4
-            .soroban_meta
-            .as_ref()
-            .and_then(|m| m.return_value.clone()),
-        _ => None,
     }
 }
 

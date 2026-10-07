@@ -174,6 +174,9 @@ pub struct AccountDetail {
     /// `[master, low, med, high]`, raw from the XDR.
     pub thresholds: [u8; 4],
     pub flags: u32,
+    /// CAP-33 counters: reserves paid for others, reserves paid by others.
+    pub num_sponsoring: u32,
+    pub num_sponsored: u32,
     /// `(signer strkey, weight, type name)`. The MASTER KEY IS NOT HERE — its
     /// weight is thresholds byte 0. Horizon synthesizes a master entry into its
     /// signers array; the ledger does not carry one, and neither do we.
@@ -446,6 +449,8 @@ fn account_detail(a: &stellar_xdr::AccountEntry) -> AccountDetail {
         home_domain: String::from_utf8_lossy(a.home_domain.as_slice()).to_string(),
         thresholds: a.thresholds.0,
         flags: a.flags,
+        num_sponsoring: xdr_parser::ledger_entry_changes::num_sponsoring(a),
+        num_sponsored: xdr_parser::ledger_entry_changes::num_sponsored(a),
         signers: a
             .signers
             .iter()

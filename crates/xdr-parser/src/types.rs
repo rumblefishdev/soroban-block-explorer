@@ -7,10 +7,7 @@
 //! `soroban_contracts.contract_type`, `assets.asset_type`,
 //! `nft_ownership.event_type`) are typed via `domain::enums` enums — the
 //! parser emits the typed variant directly, skipping the legacy
-//! string round-trip through `Debug`/`Display`. ADR 0033 removed
-//! `soroban_events.event_type` from the DB column; `ExtractedEvent.event_type`
-//! is still produced for in-memory classification (diagnostic filtering +
-//! read-time tagging).
+//! string round-trip through `Debug`/`Display`.
 
 use domain::{AssetFamily, ContractEventType, ContractType, NftEventType, OperationType};
 use stellar_xdr::TransactionEventStage;
@@ -114,86 +111,46 @@ pub struct ExtractedTransaction {
     pub ledger_deltas: Vec<crate::ledger_value::LedgerDelta>,
 }
 
-/// Container an `ExtractedEvent` was sourced from in the on-chain meta.
-///
-/// CAP-67 (Protocol 23+) splits events across three V4 locations:
-/// `v4.events` (tx-level), `v4.operations[i].events` (per-op), and
-/// `v4.diagnostic_events` (host-VM trace entries + byte-identical
-/// Contract-typed copies of the per-op consensus events). Filtering by
-/// inner `event_type` cannot distinguish a real consensus Contract event
-/// from its diagnostic-container copy; the source container is the only
-/// reliable signal. Task 0182.
+/// Where a consensus event sits in its transaction (CAP-67).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EventSource {
-    /// `v4.events` (Protocol 23+) or `soroban_meta.events` (Protocol 22).
-    /// Hashed into `txSetResultHash` — counts toward consensus.
-    TxLevel,
-    /// `v4.operations[i].events` — CAP-67 per-operation consensus events.
-    /// Hashed; carries the bulk of post-Protocol-23 Soroban traffic.
-    /// Not produced for V3 meta.
-    PerOp,
-    /// `v4.diagnostic_events` or `soroban_meta.diagnostic_events`. NOT
-    /// hashed (CAP-67 spec). When diagnostic mode is enabled (the default
-    /// for Galexie's captive-core), this container holds byte-identical
-    /// Contract-typed copies of every consensus per-op Contract event
-    /// alongside the host-VM trace entries — staging must drop the
-    /// entire container regardless of inner type.
-    Diagnostic,
+pub enum EventOrigin {
+    /// `TransactionMetaV4.events`: a transaction-level event (today, fees)
+    /// and when in the ledger's application it fired. The fee charge is
+    /// `BeforeAllTxs`; the refund is `AfterTx` before protocol 23 and
+    /// `AfterAllTxs` from it (`tests/tx_event_stage_real_meta.rs`).
+    Transaction(TransactionEventStage),
+    /// Emitted by the operation at this envelope position (0-based):
+    /// `TransactionMetaV4.operations[i].events`, or V3's
+    /// `soroban_meta.events` as operation 0.
+    Operation(u16),
 }
 
-/// Extracted Soroban event data, produced by `extract_events` from
-/// `SorobanTransactionMeta.events`.
-///
-/// ADR 0033: only contract-scoped non-diagnostic events contribute to the
-/// `soroban_events_appearances` aggregate — full detail is re-expanded from
-/// the public archive at read time.
+/// What an event says: its type, the contract that emitted it, and its
+/// ScVal-decoded topics and data. Consensus and diagnostic events share it.
 #[derive(Debug, Clone)]
-pub struct ExtractedEvent {
-    /// Parent transaction hash, hex-encoded. Resolved to `transaction_id` FK at persistence time.
-    pub transaction_hash: String,
-    /// Event type (ADR 0031). In-memory classifier only; not persisted to DB.
+pub struct EventBody {
+    /// Event type (ADR 0031).
     pub event_type: ContractEventType,
-    /// Source container this event was extracted from. Used by staging and
-    /// read-time API to drop the entire `diagnostic_events` container,
-    /// including its byte-identical Contract-typed mirrors of per-op
-    /// consensus events (task 0182).
-    pub source: EventSource,
     /// Contract that emitted the event (C... address). `None` for system events without a contract.
     pub contract_id: Option<String>,
     /// ScVal-decoded topic values as JSON array.
     pub topics: serde_json::Value,
     /// ScVal-decoded event data payload as JSON.
     pub data: serde_json::Value,
-    /// Ordinal across all containers of the transaction (tx-level, per-op,
-    /// diagnostic). In memory only — never stored, never on the wire; the
-    /// event's identity is `event_id`.
-    pub position_in_tx: u32,
-    /// Zero-based envelope position of the operation that emitted this event.
-    /// Only the CAP-67 V4 per-operation container carries the attribution —
-    /// `None` for tx-level, diagnostic and V3 events (task 0453 D7).
-    pub op_index: Option<u32>,
-    /// Zero-based position of this event within its operation's own event
-    /// list (`v4.operations[op_index].events`). Together with `op_index` this
-    /// is Stellar's official event identity — the `getEvents` cursor is
-    /// `(ledger, tx, op, event)` with `event` reset per operation (stellar-rpc
-    /// `db/event.go`).
-    /// `None` whenever `op_index` is `None`.
-    pub event_pos_in_op: Option<u32>,
-    /// CAP-67 `TransactionEvent.stage` — when in ledger application the event
-    /// fired. The fee charge is `BeforeAllTxs`; the refund is `AfterTx` before
-    /// protocol 23 and `AfterAllTxs` from it (`tests/tx_event_stage_real_meta.rs`).
-    /// `position_in_tx` is a flat counter over the three containers, so a
-    /// refund is numbered ahead of the operations it refunds.
-    /// `None` for per-op, diagnostic and V3 events — only `v4.events` carries
-    /// a stage.
-    pub stage: Option<TransactionEventStage>,
-    /// stellar-rpc event id (ADR 0059), set by
-    /// [`crate::event::LedgerEvents`]. `None` for diagnostic events and
-    /// for a tx-level event without a stage.
-    pub event_id: Option<crate::event::EventId>,
-    /// Parent ledger sequence number.
-    pub ledger_sequence: u32,
-    /// Timestamp from parent ledger close time (Unix seconds), used for monthly partitioning.
+}
+
+/// A consensus Soroban event, from [`crate::event::LedgerEvents`].
+#[derive(Debug, Clone)]
+pub struct ExtractedEvent {
+    /// Parent transaction hash, hex-encoded.
+    pub transaction_hash: String,
+    /// stellar-rpc's id (ADR 0059); its ledger is the event's ledger. For a
+    /// transaction-level event the transaction and operation parts are
+    /// sentinels, so which operation emitted an event is read from `origin`.
+    pub event_id: crate::event::EventId,
+    pub origin: EventOrigin,
+    pub body: EventBody,
+    /// Parent ledger close time (Unix seconds).
     pub created_at: i64,
 }
 
@@ -233,22 +190,26 @@ pub struct ExtractedInvocation {
     pub created_at: i64,
 }
 
-/// Extracted contract interface from WASM bytecode at deployment time.
+/// One WASM program from a `ContractCodeEntry` change: its bytes and the
+/// interface read from them.
 ///
-/// Produced by `extract_contract_interfaces` when LedgerEntryChanges contain
-/// new `ContractCodeEntry` items. Stored in the contract `metadata` column.
+/// Produced by `extract_wasm_programs`; stored as one `wasm_programs` row.
 #[derive(Debug, Clone)]
-pub struct ExtractedContractInterface {
+pub struct ExtractedWasmProgram {
     /// SHA-256 hash of the WASM bytecode, hex-encoded (64 chars).
     pub wasm_hash: String,
-    /// Extracted public function signatures.
-    pub functions: Vec<ContractFunction>,
+    /// Public function signatures from the `contractspecv0` section; `None`
+    /// when the program has no such section.
+    pub functions: Option<Vec<ContractFunction>>,
     /// Raw WASM byte length (informational).
     pub wasm_byte_len: usize,
     /// Task 0327: the WASM imports `update_current_contract_wasm` (a self-upgrade
     /// path). See `wasm_imports_upgrade_fn` for how, and the API
     /// `ContractDetailResponse::upgradeable` for the user-facing 3-state.
     pub upgradeable: bool,
+    /// The program itself, stored in `wasm_programs.code` so its functions
+    /// can be executed (task 0620, ADR 0061).
+    pub code: Vec<u8>,
 }
 
 /// A single public function signature extracted from a contract's WASM spec.
@@ -288,13 +249,11 @@ pub struct NftEvent {
     pub from: Option<String>,
     /// Recipient address. `None` for burn events.
     pub to: Option<String>,
-    /// Parent ledger sequence number.
-    pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time.
     pub created_at: i64,
     /// The source event's stellar-rpc id (ADR 0059) — its canonical location.
     /// Every token a `consecutive_mint` expands to shares it.
-    pub event_id: Option<crate::event::EventId>,
+    pub event_id: crate::event::EventId,
 }
 
 /// Extracted ledger entry change from `TransactionMeta` V3/V4.
@@ -443,6 +402,11 @@ pub struct ExtractedAccountState {
     pub thresholds: Option<String>,
     /// `AccountEntry.flags`. Same Some/None semantics as `signers`.
     pub flags: Option<u32>,
+    /// CAP-33 counters from the `AccountEntry`: reserves this account pays for
+    /// others, and reserves of this account paid by others. Same Some/None
+    /// semantics as `signers`. lore-0629.
+    pub num_sponsoring: Option<u32>,
+    pub num_sponsored: Option<u32>,
     /// `true` when the ACCOUNT ENTRY itself was removed in this change set —
     /// an `account_merge`, the only way an account is deleted. The native
     /// balance is emitted as 0 either way, so without this flag the merge
@@ -545,13 +509,11 @@ pub struct ExtractedNftEvent {
     pub event_type: NftEventType,
     /// New owner after the event. `None` for burns.
     pub owner: Option<String>,
-    /// Parent ledger sequence number.
-    pub ledger_sequence: u32,
     /// Unix seconds. Matches parent transaction partitioning key.
     pub created_at: i64,
     /// The source event's stellar-rpc id (ADR 0059): the row's location in
     /// `nft_ownership_changes` (task 0424).
-    pub event_id: Option<crate::event::EventId>,
+    pub event_id: crate::event::EventId,
 }
 
 /// LP position change carried from the parser into `lp_positions`.

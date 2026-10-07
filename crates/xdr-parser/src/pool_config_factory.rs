@@ -53,7 +53,7 @@ use serde_json::Value;
 use tracing::error;
 
 use crate::scval::{address, map_get, symbol, typed, typed_str};
-use crate::types::{EventSource, ExtractedEvent, ExtractedLedgerEntryChange};
+use crate::types::{ExtractedEvent, ExtractedLedgerEntryChange};
 
 /// One pool registration, tied to the factory that emitted it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,24 +105,18 @@ pub fn detect_config_pool_registrations(
     let mut out = Vec::new();
     for (_tx, evs) in events {
         for ev in evs {
-            // The diagnostic container carries copies of consensus events
-            // AND events from FAILED transactions (task 0182); indexing it
-            // would register pools whose registration never applied.
-            if matches!(ev.source, EventSource::Diagnostic) {
-                continue;
-            }
-            let Some(factory) = ev.contract_id.as_deref() else {
+            let Some(factory) = ev.body.contract_id.as_deref() else {
                 continue;
             };
-            match parse_pool_created(&ev.topics, &ev.data) {
+            match parse_pool_created(&ev.body.topics, &ev.body.data) {
                 Ok(pool) => out.push(ConfigPoolRegistration {
                     factory: factory.to_string(),
                     pool,
-                    ledger_sequence: ev.ledger_sequence,
+                    ledger_sequence: ev.event_id.ledger_sequence,
                 }),
                 Err(ConfigPoolReject::NotRegistration) => {}
                 Err(reason) => tracing::warn!(
-                    ledger_sequence = ev.ledger_sequence,
+                    ledger_sequence = ev.event_id.ledger_sequence,
                     factory = %factory,
                     ?reason,
                     "create/liquidity_pool claimed to be a registration and could not \
