@@ -484,9 +484,11 @@ const DECOMPILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10
 
 /// Decompile the contract's WASM on demand (task 0465, refs #374).
 ///
-/// No persistence: bytes are fetched from Soroban RPC and decompiled per
-/// request. The output is immutable per (`wasm_hash`, decompiler version),
-/// which justifies the `LONG` cache header even without a server-side cache.
+/// The bytes come from `wasm_programs.code`, so a program archived on the
+/// ledger still decompiles (task 0620); Soroban RPC answers only for a
+/// program whose bytes are not indexed yet. The output is immutable per
+/// (`wasm_hash`, decompiler version), which justifies the `LONG` cache header
+/// even without a server-side cache.
 #[utoipa::path(
     get,
     path = "/contracts/{contract_id}/decompiled",
@@ -498,7 +500,7 @@ const DECOMPILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10
     responses(
         (status = 200, description = "Decompiled source (Rust, or WAT fallback)", body = DecompiledResponse),
         (status = 400, description = "Invalid contract_id or format", body = ErrorEnvelope),
-        (status = 404, description = "Contract not found, has no WASM (SAC / pre-upload), or code no longer live", body = ErrorEnvelope),
+        (status = 404, description = "Contract not found, has no WASM (SAC / pre-upload), or code neither indexed nor live", body = ErrorEnvelope),
         (status = 500, description = "WASM fetch or decompilation failed", body = ErrorEnvelope),
     ),
 )]
@@ -536,21 +538,32 @@ pub async fn get_decompiled(
         return errors::not_found("contract has no wasm (SAC or pre-upload)");
     };
 
-    let wasm = match state
-        .runtime_enrichment
-        .wasm_code
-        .fetch_wasm(&wasm_hash)
-        .await
-    {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return errors::not_found("contract code is not live on the ledger"),
+    let stored = match queries::fetch_program_code(&state.ch(), &wasm_hash).await {
+        Ok(stored) => stored,
         Err(e) => {
-            tracing::error!("wasm fetch failed for {contract_id} ({wasm_hash}): {e}");
-            return errors::internal_error(
-                errors::WASM_FETCH_FAILED,
-                "could not fetch contract code from Soroban RPC",
-            );
+            tracing::error!("DB error reading program bytes for {contract_id}: {e}");
+            return errors::internal_error(errors::DB_ERROR, "database error");
         }
+    };
+    let wasm = match stored {
+        Some(bytes) => bytes,
+        // Not indexed yet: ask the ledger, which still has live programs.
+        None => match state
+            .runtime_enrichment
+            .wasm_code
+            .fetch_wasm(&wasm_hash)
+            .await
+        {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return errors::not_found("contract code is not live on the ledger"),
+            Err(e) => {
+                tracing::error!("wasm fetch failed for {contract_id} ({wasm_hash}): {e}");
+                return errors::internal_error(
+                    errors::WASM_FETCH_FAILED,
+                    "could not fetch contract code from Soroban RPC",
+                );
+            }
+        },
     };
 
     let decompiled = match tokio::time::timeout(

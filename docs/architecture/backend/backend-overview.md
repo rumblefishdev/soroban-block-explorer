@@ -485,15 +485,17 @@ keeps the bare badge).
 types, return types).
 
 **`GET /contracts/:contract_id/decompiled`** - On-demand decompilation of the contract's
-WASM (task 0465, issue #374). No persistence: the handler resolves `wasm_hash`, fetches
-the code bytes live from Soroban RPC (`getLedgerEntries`, pool from `SOROBAN_RPC_URLS`),
-and runs the pinned `soroban-ret` crate on the blocking pool with a 10 s in-handler
+WASM (task 0465, issue #374). The handler resolves `wasm_hash` and reads the program
+bytes from `wasm_programs.code` (task 0620), so a program archived on the ledger still
+decompiles; only a program whose bytes are not indexed yet is fetched live from Soroban
+RPC (`getLedgerEntries`, pool from `SOROBAN_RPC_URLS`). The decompiled output is not
+stored: the handler runs the pinned `soroban-ret` crate on the blocking pool with a 10 s in-handler
 timeout. `?format=rust` (default) returns reconstructed Rust with completeness markers
 (`functions`, `todo_holes`, `unknown_vars` — counts, not percentages, per the
 soroban-ret team's guidance); when Rust emission fails the same response degrades to
 `representation: "wat"` with `rust_error` set. `?format=wat` returns the (lossless)
-WAT directly. 404 for SAC / pre-upload contracts (no WASM by design) and for code no
-longer live on the ledger. Output is immutable per (`wasm_hash`, decompiler version) —
+WAT directly. 404 for SAC / pre-upload contracts (no WASM by design) and for code neither
+indexed nor live on the ledger. Output is immutable per (`wasm_hash`, decompiler version) —
 responses carry the `LONG` cache header.
 
 **`GET /contracts/:contract_id/invocations`** - Paginated list of contract invocations.
