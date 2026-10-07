@@ -178,3 +178,36 @@ async fn rpc_error_object_stops_at_once() {
         Err(FetchError::RpcError(_))
     ));
 }
+
+/// A server that always sends `"error": null` is answering, not failing.
+#[tokio::test]
+async fn null_error_field_is_not_an_error() {
+    let mut answer = code_answer();
+    answer["error"] = serde_json::Value::Null;
+    let base = serve(vec![("/up", 200, answer)]).await;
+    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/up")]);
+    assert!(
+        fetcher
+            .fetch_wasm(&hex::encode(HASH))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+/// An endpoint that refuses the connection is skipped like any failure.
+#[tokio::test]
+async fn refused_connection_fails_over() {
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let base = serve(vec![("/up", 200, code_answer())]).await;
+    let fetcher = WasmCodeFetcher::with_urls(vec![dead, format!("{base}/up")]);
+    assert!(
+        fetcher
+            .fetch_wasm(&hex::encode(HASH))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
