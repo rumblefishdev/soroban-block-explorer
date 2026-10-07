@@ -5,6 +5,7 @@ import {
   AccordionDetails,
   AccordionSummary,
   Box,
+  Button,
   Stack,
   Typography,
 } from '@mui/material';
@@ -192,10 +193,20 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
 
 /**
  * Interface tab — the contract's declared public functions, rendered as a
- * readable accordion list. SAC and pre-upload contracts carry no WASM
- * interface metadata and show an empty state instead.
+ * readable accordion list. SAC and pre-upload contracts have no program, and
+ * a few programs carry no interface section (`contractspecv0`): both show an
+ * empty state, the latter pointing to the Code tab, which reconstructs the
+ * functions from the program itself.
  */
-export function ContractInterface({ contractId }: { contractId: string }) {
+export function ContractInterface({
+  contractId,
+  hasWasm,
+  onShowCode,
+}: {
+  contractId: string;
+  hasWasm: boolean;
+  onShowCode: () => void;
+}) {
   const { data, isLoading, isError, error, refetch } =
     useContractInterface(contractId);
 
@@ -211,8 +222,23 @@ export function ContractInterface({ contractId }: { contractId: string }) {
     return <QueryErrorState error={error} onRetry={() => void refetch()} />;
   }
 
-  // `interface_metadata` is `null` for SAC / pre-upload / stub rows.
+  // `interface_metadata` is `null` for SAC / pre-upload / stub rows, and for
+  // a program without an interface section.
   const parsed = data?.interface_metadata ?? null;
+  if ((parsed == null || parsed.functions.length === 0) && hasWasm) {
+    return (
+      <EmptyState
+        icon={<InfoOutlinedIcon fontSize="small" />}
+        title="No interface description"
+        description="This contract's program does not describe its functions. The Code tab reconstructs them from the program itself."
+        action={
+          <Button variant="contained" onClick={onShowCode}>
+            Open Code
+          </Button>
+        }
+      />
+    );
+  }
   if (parsed == null || parsed.functions.length === 0) {
     return (
       <EmptyState

@@ -195,7 +195,11 @@ export default function ContractDetailPage() {
             sectionName={`contract-${effectiveKey}`}
           >
             {effectiveKey === 'interface' && (
-              <ContractInterface contractId={contractId} />
+              <ContractInterface
+                contractId={contractId}
+                hasWasm={hasWasm}
+                onShowCode={() => setActiveKey('code')}
+              />
             )}
             {effectiveKey === 'code' && contract.data?.wasm_hash != null && (
               // Keyed by contract: navigating between contracts must not
