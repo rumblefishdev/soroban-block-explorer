@@ -69,7 +69,11 @@ pub(super) fn pool_movement_rows(
         let (contract, pool) = soroban_pool_entry(r.pool_id, legs);
         pools.entry(contract).or_insert(pool);
     }
-    for r in staged.pool_rows.iter().filter(|r| r.pool_kind == 1) {
+    for r in staged
+        .pool_rows
+        .iter()
+        .filter(|r| r.pool_kind == domain::PoolKind::Soroban as u8)
+    {
         let (contract, registered) = soroban_pool_entry(r.pool_id, r.legs.clone());
         if let Some(pool) = pools.get_mut(&contract)
             && pool.legs.is_empty()
