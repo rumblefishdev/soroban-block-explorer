@@ -11,7 +11,7 @@
 //! | self-heal (snapshot newer) | ~25k | the entry's own ledger | 0 |
 //! | `claimable_balance_holdings`, same four kinds (task 0210, [`claimable`]) | not yet measured | as above | as above |
 //! | classic pools missing or stale on our side: `liquidity_pools` + `liquidity_pool_snapshots`, insert-only (task 0210, [`pools`]) | not yet measured | the entry's own ledger | — |
-//! | `account_entry_state` for every live account (task 0629, [`entry_state`]) | ~10.9M per pass, identical rows collapse | the entry's own ledger | — |
+//! | `account_entry_state` for every live account, counted by what each row does to ours (task 0629, [`entry_state`]) | ~10.9M per pass, identical rows collapse | the entry's own ledger | — |
 //! | `assets` / `accounts` dimension stubs | the referenced ids we lack | entry ledger | — |
 //!
 //! ## The versioning contract (the load-bearing part)
@@ -78,7 +78,7 @@ use crate::snapshot::report::Report;
 use crate::snapshot::slices::key_slices;
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
-use db_clickhouse::persist::rows::{AccountEntryStateRow, AccountRow, AssetRow};
+use db_clickhouse::persist::rows::{AccountRow, AssetRow};
 
 /// Insert batch size. RowBinary streams; this only bounds peak buffering.
 const INSERT_CHUNK: usize = 500_000;
@@ -97,7 +97,7 @@ const INSERT_CHUNK: usize = 500_000;
 #[derive(Default)]
 struct Corrections {
     balances: balances::BalanceCorrections,
-    entry_states: Vec<AccountEntryStateRow>,
+    entry_states: entry_state::EntryState,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
     claimable: claimable::ClaimableCorrections,
@@ -260,7 +260,7 @@ async fn build_corrections(
 
     // Pass 4: signers, thresholds, flags and sponsorship counters for every
     // live account.
-    out.entry_states = entry_state::rows(state);
+    out.entry_states = entry_state::build(sink, state).await?;
 
     Ok(out)
 }
@@ -431,7 +431,7 @@ pub async fn seed_command(
         &artifacts.join("dumps"),
         &corr.asset_stubs,
         &corr.account_stubs,
-        &corr.entry_states,
+        &corr.entry_states.rows,
         &state,
     )?;
     let (excluded_contract, excluded_type3) = balances::excluded_counts(sink).await?;
@@ -446,7 +446,7 @@ pub async fn seed_command(
          claimable_balance_holdings   {:>12}\n    \
          liquidity_pools              {:>12}\n    \
          liquidity_pool_snapshots     {:>12}\n    \
-         account_entry_state          {:>12}  (every live account)\n    \
+         account_entry_state          {:>12}  (every live account: {} new, {} changed, {} same ledger with other counters, {} same ledger identical, {} ours newer)\n    \
          assets (stubs)               {:>12}\n    \
          accounts (stubs)             {:>12}\n\
          \n  UNRESOLVED REFERENCES (must be 0 for the first two)\n    \
@@ -476,7 +476,12 @@ pub async fn seed_command(
         corr.claimable.rows.len(),
         corr.pools.pool_rows.len(),
         corr.pools.snapshot_rows.len(),
-        corr.entry_states.len(),
+        corr.entry_states.rows.len(),
+        corr.entry_states.missing,
+        corr.entry_states.stale,
+        corr.entry_states.same_ledger_counters_differ,
+        corr.entry_states.same_ledger_counters_equal,
+        corr.entry_states.ours_newer,
         corr.asset_stubs.len(),
         corr.account_stubs.len(),
         corr.dangling.assets,
@@ -506,7 +511,7 @@ pub async fn seed_command(
         insert_chunked(sink, "liquidity_pool_snapshots", &corr.pools.snapshot_rows).await?;
         insert_chunked(sink, "balances", &corr.balances.rows).await?;
         insert_chunked(sink, claimable::TABLE, &corr.claimable.rows).await?;
-        insert_chunked(sink, "account_entry_state", &corr.entry_states).await?;
+        insert_chunked(sink, "account_entry_state", &corr.entry_states.rows).await?;
         println!("  inserts done.");
     } else {
         println!("  dry-run: nothing inserted. Re-run with --execute to write.");
