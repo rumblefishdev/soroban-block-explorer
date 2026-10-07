@@ -338,6 +338,7 @@ fn pool_hit(
     p: &PoolRow,
     identities: &HashMap<i64, ResolvedAsset>,
 ) -> Result<(String, SearchHit), clickhouse::error::Error> {
+    let kind = decode_pool_kind(&p.pool_hex, p.pool_kind)?;
     Ok((
         "pool".to_string(),
         SearchHit {
@@ -346,10 +347,7 @@ fn pool_hit(
             // pool's KIND at the boundary, because the same 32 bytes are an
             // `L…` strkey for a classic pool and a `C…` address for a soroban
             // one — and the wrong encoding is well-formed, not an error.
-            identifier: pool_id_hex_to_strkey(
-                &p.pool_hex,
-                decode_pool_kind(&p.pool_hex, p.pool_kind)?,
-            ),
+            identifier: pool_id_hex_to_strkey(&p.pool_hex, kind),
             label: p
                 .legs
                 .iter()

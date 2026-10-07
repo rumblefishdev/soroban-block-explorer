@@ -1,5 +1,7 @@
 //! `GET /v1/contracts/:id/events` — the contract's Events tab.
 
+use std::collections::HashSet;
+
 use clickhouse::Row;
 use serde::Deserialize;
 
@@ -117,10 +119,29 @@ fn map_event_row(r: EventChRow) -> Result<ChEvent, clickhouse::error::Error> {
     })
 }
 
-/// A stored event that breaks a rule the indexer keeps. The handler logs it
-/// and answers 500.
+/// A stored event that breaks a rule the indexer keeps.
 fn broken_event(id: &str, what: &str) -> clickhouse::error::Error {
     clickhouse::error::Error::Custom(format!("soroban_events row {id}: {what}"))
+}
+
+/// Which of `ledgers` have their `ledgers` row — the marker the writer adds
+/// once everything else of the ledger is written.
+async fn fetch_landed_ledgers(
+    client: &clickhouse::Client,
+    ledgers: &[i64],
+) -> Result<HashSet<i64>, clickhouse::error::Error> {
+    let in_list = ledgers
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let landed = client
+        .query(&format!(
+            "SELECT DISTINCT sequence FROM ledgers WHERE sequence IN ({in_list})"
+        ))
+        .fetch_all::<i64>()
+        .await?;
+    Ok(landed.into_iter().collect())
 }
 
 /// `contract_surrogate_id` is from [`fetch_contract`]; caller passes the
@@ -191,19 +212,36 @@ pub async fn fetch_events(
         })
         .collect();
 
-    // Rebuild full event rows in page order, then map. Every event's
-    // transaction is written in the same ledger batch, and step 1 reads only
-    // ledgers whose `ledgers` row (written last) has landed, so a missing
-    // transaction is a broken row, not a gap to paper over.
+    // An event's transaction is written in the same ledger batch, and the
+    // `ledgers` row last. So a missing transaction in a ledger whose `ledgers`
+    // row has landed is a broken row; in one that has not, the ledger is still
+    // being written (a backfill fills ranges below the tip) and its events show
+    // once it lands. The landed check runs only when a transaction is missing.
+    let missing: Vec<i64> = raw
+        .iter()
+        .filter(|r| !txs.contains_key(&(r.ledger_sequence, r.application_order)))
+        .map(|r| r.ledger_sequence)
+        .collect();
+    let landed = if missing.is_empty() {
+        HashSet::new()
+    } else {
+        fetch_landed_ledgers(client, &missing).await?
+    };
+
+    // Rebuild full event rows in page order, then map.
     let mut out = Vec::with_capacity(raw.len());
     for r in raw {
         let Some((transaction_hash, successful, created_at)) =
             txs.get(&(r.ledger_sequence, r.application_order)).cloned()
         else {
-            return Err(clickhouse::error::Error::Custom(format!(
-                "soroban_events row at ledger {} application_order {}: no transaction",
-                r.ledger_sequence, r.application_order
-            )));
+            if landed.contains(&r.ledger_sequence) {
+                let at = format!(
+                    "at ledger {} application_order {}",
+                    r.ledger_sequence, r.application_order
+                );
+                return Err(broken_event(&at, "no transaction"));
+            }
+            continue;
         };
         out.push(map_event_row(EventChRow {
             ledger_sequence: r.ledger_sequence,

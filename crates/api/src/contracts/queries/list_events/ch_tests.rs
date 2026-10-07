@@ -31,12 +31,14 @@ async fn events_page_hides_unlanded_ledgers_and_fails_on_a_missing_transaction()
         "INSERT INTO transactions (hash, ledger_sequence, application_order, source_id, fee_charged, \
           inner_tx_hash, successful, operation_count, has_soroban, parse_error) \
          VALUES (unhex(repeat('aa', 32)), 100, 1, 1, 100, NULL, true, 1, true, false)",
-        // Ledger 100's event, and one of ledger 101, whose `ledgers` row has
-        // not landed yet and whose transaction is missing.
+        // Ledger 100's event; one of ledger 101, past the tip, whose `ledgers`
+        // row has not landed; and one of ledger 99, below the tip, that a
+        // backfill is still writing. Neither has its transaction yet.
         "INSERT INTO soroban_events (contract_id, ledger_sequence, transaction_index, \
           operation_index, event_index, application_order, event_type, signature, topics_xdr, data_xdr) \
          VALUES (7, 100, 1, 0, 0, 1, 1, NULL, '[]', 'null'), \
-                (7, 101, 2, 0, 0, 2, 1, NULL, '[]', 'null')",
+                (7, 101, 2, 0, 0, 2, 1, NULL, '[]', 'null'), \
+                (7, 99, 3, 0, 0, 3, 1, NULL, '[]', 'null')",
     ] {
         ch.query(sql).execute().await.expect("seed row");
     }
@@ -47,7 +49,7 @@ async fn events_page_hides_unlanded_ledgers_and_fails_on_a_missing_transaction()
     assert_eq!(
         page.len(),
         1,
-        "ledger 101 has not landed, so it is not shown"
+        "ledgers 99 and 101 have not landed, so they are not shown"
     );
     assert_eq!(page[0].item.transaction_hash, "aa".repeat(32));
 

@@ -98,14 +98,15 @@ fn map_event_row_scalar_topics_wraps_singleton() {
     assert!(ev.item.data.is_null());
 }
 
+fn label(event_type: i16) -> String {
+    map_event_row(event_row(event_type, "[]", "null"))
+        .expect("a valid row decodes")
+        .item
+        .event_type
+}
+
 #[test]
 fn map_event_row_event_type_labels_and_out_of_range() {
-    let label = |t| {
-        map_event_row(event_row(t, "[]", "null"))
-            .expect("valid")
-            .item
-            .event_type
-    };
     assert_eq!(label(0), "system");
     assert_eq!(label(1), "contract");
     assert_eq!(label(2), "diagnostic");
