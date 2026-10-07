@@ -197,7 +197,8 @@ export default function ContractDetailPage() {
             {effectiveKey === 'interface' && (
               <ContractInterface
                 contractId={contractId}
-                onShowCode={() => setActiveKey('code')}
+                // The button follows the same condition as the Code tab.
+                onShowCode={hasWasm ? () => setActiveKey('code') : undefined}
               />
             )}
             {effectiveKey === 'code' && contract.data?.wasm_hash != null && (

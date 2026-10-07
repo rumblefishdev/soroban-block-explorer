@@ -203,7 +203,8 @@ export function ContractInterface({
   onShowCode,
 }: {
   contractId: string;
-  onShowCode: () => void;
+  /** Opens the Code tab; absent when the page shows no Code tab. */
+  onShowCode?: () => void;
 }) {
   const { data, isLoading, isError, error, refetch } =
     useContractInterface(contractId);
@@ -239,9 +240,11 @@ export function ContractInterface({
         title="No interface metadata"
         description="No function list is available for this contract's WASM. The Code tab reconstructs its functions from the WASM itself."
         action={
-          <Button variant="contained" onClick={onShowCode}>
-            Open Code
-          </Button>
+          onShowCode && (
+            <Button variant="contained" onClick={onShowCode}>
+              Open Code
+            </Button>
+          )
         }
       />
     );

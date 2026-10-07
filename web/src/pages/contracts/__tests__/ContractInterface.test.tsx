@@ -62,4 +62,16 @@ describe('Interface tab with no function list', () => {
     expect(screen.getByText('No public interface')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open Code' })).toBeNull();
   });
+
+  it('shows no button when the page has no Code tab to open', () => {
+    response = {
+      contract_id: CONTRACT,
+      wasm_hash: WASM_HASH,
+      interface_metadata: null,
+    };
+    renderWithProviders(<ContractInterface contractId={CONTRACT} />);
+
+    expect(screen.getByText('No interface metadata')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Code' })).toBeNull();
+  });
 });
