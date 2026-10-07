@@ -62,7 +62,6 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::asset_identity::{ResolvedAsset, leg_label, resolve_asset_identities};
-use crate::common::contract_metadata::CONTRACT_METADATA;
 use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
 use crate::common::strkey::{decode_pool_kind, pool_id_hex_to_strkey};
 
@@ -522,7 +521,7 @@ async fn search_contracts(
         // the RowBinary decoder mismatch (500). Empty string ⇒ "no name".
         let name_sql = format!(
             "SELECT contract_id AS contract_id, ifNull(name, '') AS name \
-             FROM {CONTRACT_METADATA} \
+             FROM soroban_contract_metadata FINAL \
              WHERE contract_id IN ({placeholders})"
         );
         let mut name_q = client.query(&name_sql);
@@ -549,7 +548,7 @@ async fn search_contracts(
         // change the column's Nullable wire type).
         let sql = format!(
             "SELECT contract_id AS contract_id, ifNull(name, '') AS name \
-             FROM {CONTRACT_METADATA} \
+             FROM soroban_contract_metadata FINAL \
              WHERE positionCaseInsensitive(ifNull(name, ''), ?) > 0 \
              LIMIT {per_group_limit}"
         );
@@ -845,7 +844,7 @@ async fn search_nfts(
              WHERE id IN (SELECT contract_surrogate FROM page) GROUP BY id \
          ), \
          scm AS ( \
-             SELECT contract_id, name FROM {CONTRACT_METADATA} \
+             SELECT contract_id, name FROM soroban_contract_metadata FINAL \
              WHERE contract_id IN (SELECT contract_id FROM sc) \
          ) \
          SELECT \

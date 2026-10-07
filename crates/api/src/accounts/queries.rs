@@ -30,7 +30,6 @@ use serde::Deserialize;
 use super::balance_changes::{BalanceChange, TxKey, fetch_balance_changes};
 use crate::common::asset_identity::known_decimals;
 use crate::common::ch::{self, millis_to_utc, resolve_accounts};
-use crate::common::contract_metadata::CONTRACT_METADATA;
 use crate::common::cursor::{Direction, SortOrder, keyset_sql};
 use crate::transactions::dto::TxListCursor;
 
@@ -491,9 +490,7 @@ pub async fn fetch_entry_state(
 /// Recency then orders the empty rows, where it is the only honest
 /// discriminator we have, and `asset_code` makes the whole thing stable so a
 /// page boundary never shows the same row twice.
-fn balances_sql() -> String {
-    format!(
-        "SELECT \
+const BALANCES_SQL: &str = "SELECT \
                 a.asset_type                  AS asset_type, \
                 nullIf(a.asset_code, '')      AS asset_code, \
                 a.issuer_id                   AS issuer_id, \
@@ -511,7 +508,9 @@ fn balances_sql() -> String {
                 It was previously dedup'd only incidentally by the adjacent \
                 `assets a FINAL` — made explicit here. lore-0420 */ \
              LEFT JOIN soroban_contracts sc FINAL ON sc.id = a.contract_id \
-             LEFT JOIN {CONTRACT_METADATA} m ON m.contract_id = sc.contract_id \
+             LEFT JOIN ( \
+                 SELECT contract_id, name, symbol, decimals FROM soroban_contract_metadata FINAL \
+             ) m ON m.contract_id = sc.contract_id \
              LEFT JOIN ( \
                  SELECT asset_type, asset_code, issuer_id, contract_id, \
                         argMax(name, version) AS name \
@@ -554,9 +553,7 @@ fn balances_sql() -> String {
                       b.amount > 0 DESC, \
                       b.amount DESC, \
                       b.last_updated_ledger DESC, \
-                      a.asset_code"
-    )
-}
+                      a.asset_code";
 
 /// `account_id` is the surrogate from [`fetch_account`]. Reads the unified
 /// `balances` table (task 0331 Option C) by `holder_id` — a leading-PK-prefix
@@ -570,7 +567,7 @@ pub async fn fetch_balances(
     account_id: i64,
 ) -> Result<Vec<AccountBalanceRow>, clickhouse::error::Error> {
     let rows = client
-        .query(&balances_sql())
+        .query(BALANCES_SQL)
         // Twice: the SAC subquery narrows itself to this holder's assets
         // before aggregating, and the outer read selects them. Same value,
         // bound in the order the two `?` appear.

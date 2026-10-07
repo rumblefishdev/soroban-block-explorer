@@ -80,7 +80,6 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{millis_to_utc, resolve_accounts, resolve_contracts};
-use crate::common::contract_metadata::CONTRACT_METADATA;
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use super::dto::{NftItem, NftListCursor, NftTransferCursor, NftTransferItem};
@@ -191,17 +190,15 @@ pub async fn fetch_list(
     // not the enrichment one). Keeps filter[collection] consistent with the
     // collection_name the list displays.
     let collection_pred = if params.filter_collection.is_some() {
-        format!(
-            " AND ( \
+        " AND ( \
              n.contract_id IN (SELECT sc0.id FROM soroban_contracts sc0 WHERE sc0.contract_id IN \
-                 (SELECT contract_id FROM {CONTRACT_METADATA} WHERE name = ?)) \
+                 (SELECT contract_id FROM soroban_contract_metadata FINAL WHERE name = ?)) \
              OR (e.collection_name = ? AND n.contract_id NOT IN \
                  (SELECT sc1.id FROM soroban_contracts sc1 WHERE sc1.contract_id IN \
-                     (SELECT contract_id FROM {CONTRACT_METADATA} WHERE name != ''))) \
+                     (SELECT contract_id FROM soroban_contract_metadata FINAL WHERE name != ''))) \
          )"
-        )
     } else {
-        String::new()
+        ""
     };
     let name_pred = if params.filter_name.is_some() {
         " AND positionCaseInsensitive(ifNull(e.name, ''), ?) > 0"
@@ -265,7 +262,7 @@ pub async fn fetch_list(
              GROUP BY id \
          ), \
          scm AS ( \
-             SELECT contract_id, name FROM {CONTRACT_METADATA} \
+             SELECT contract_id, name FROM soroban_contract_metadata FINAL \
              WHERE contract_id IN (SELECT contract_id FROM sc) \
          ) \
          SELECT \
@@ -344,15 +341,14 @@ pub async fn fetch_by_composite(
     contract_id: &str,
     token_id: &str,
 ) -> Result<Option<NftItem>, clickhouse::error::Error> {
-    let sql = format!(
-        "WITH cid AS ( \
+    let sql = "WITH cid AS ( \
                    SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1 \
                ) \
                SELECT \
                    n.current_owner_id                AS current_owner_id, \
                    n.token_id                        AS token_id, \
                    coalesce( \
-                       nullIf((SELECT name FROM {CONTRACT_METADATA} WHERE contract_id = ?), ''), \
+                       nullIf((SELECT name FROM soroban_contract_metadata FINAL WHERE contract_id = ?), ''), \
                        nullIf(ne.collection_name, '') \
                    )                                 AS collection_name, \
                    nullIf(ne.name, '')               AS name, \
@@ -378,10 +374,9 @@ pub async fn fetch_by_composite(
                ) mi ON mi.contract_id = n.contract_id AND mi.token_id = n.token_id \
                WHERE n.contract_id IN (SELECT id FROM cid) \
                  AND n.token_id = ? \
-               LIMIT 1"
-    );
+               LIMIT 1";
     let Some(r) = client
-        .query(&sql)
+        .query(sql)
         .bind(contract_id)
         .bind(contract_id)
         .bind(token_id)

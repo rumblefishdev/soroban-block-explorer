@@ -1,7 +1,7 @@
 //! Predicates of the accounts read that a rename or a one-word edit would
 //! silently break, asserted against the SQL itself — no ClickHouse needed.
 
-use super::{asset_type_name, balances_sql};
+use super::{BALANCES_SQL, asset_type_name};
 
 /// The account-detail read must select on the LIFECYCLE column, never on
 /// the amount. `amount != 0` cannot tell "holds nothing" from "the
@@ -10,19 +10,18 @@ use super::{asset_type_name, balances_sql};
 /// left to review. Asserted against the SQL itself, no ClickHouse needed.
 #[test]
 fn balances_are_selected_by_lifecycle_not_by_amount() {
-    let sql = balances_sql();
     assert!(
-        sql.contains("b.closed_at_ledger = 0"),
+        BALANCES_SQL.contains("b.closed_at_ledger = 0"),
         "the balances read must filter on the lifecycle column"
     );
     assert!(
-        !sql.contains("b.amount != 0"),
+        !BALANCES_SQL.contains("b.amount != 0"),
         "`amount != 0` hides every zero-balance trustline the account holds"
     );
     // A zero-amount row that is still open has to survive the predicate,
     // which is only true if `amount` is absent from the WHERE clause
     // entirely — a combined `amount != 0 OR ...` would pass the check above.
-    let where_clause = sql
+    let where_clause = BALANCES_SQL
         .split("WHERE")
         .nth(1)
         .expect("the read has a WHERE clause");

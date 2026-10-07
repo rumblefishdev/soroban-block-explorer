@@ -4,7 +4,6 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use crate::common::ch::{resolve_accounts, resolve_contracts};
-use crate::common::contract_metadata::CONTRACT_METADATA;
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
 use crate::liquidity_pools::dto::SharesCursor;
@@ -260,8 +259,8 @@ pub async fn fetch_soroban_participants(
                 toString(toDecimal256(amt, 7) * 100 / if(stored > 0, stored, total)) \
                     AS share_percentage, \
                 lul AS last_updated_ledger, \
-                (SELECT m.decimals FROM {CONTRACT_METADATA} m \
-                  WHERE m.contract_id = (SELECT contract_id FROM soroban_contracts \
+                (SELECT decimals FROM soroban_contract_metadata FINAL \
+                  WHERE contract_id = (SELECT contract_id FROM soroban_contracts \
                                          WHERE id = token_id LIMIT 1)) AS decimals \
          FROM ( \
              SELECT holder_id, amt, lul, sum(amt) OVER () AS total, \

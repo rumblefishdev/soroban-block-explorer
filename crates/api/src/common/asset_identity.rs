@@ -34,8 +34,6 @@ use clickhouse::Row;
 use domain::AssetFamily;
 use serde::Deserialize;
 
-use crate::common::contract_metadata::CONTRACT_METADATA;
-
 #[derive(Debug, Row, Deserialize)]
 pub(crate) struct AssetIdentityChRow {
     pub(crate) id: i64,
@@ -121,8 +119,8 @@ pub(crate) fn known_decimals(family: Option<i16>, published: Option<u32>) -> Opt
 /// granule seeks, and `soroban_contract_metadata` is 3 927 rows.
 /// `FINAL` is replaced by `LIMIT 1 BY id` on `assets` and `soroban_contracts` —
 /// exact here for the same reason as task 0344, and `FINAL` on these
-/// dimensions measured 4.7x the rows read. The metadata leg is the shared
-/// newest-row read, `FINAL` over its few thousand rows.
+/// dimensions measured 4.7x the rows read. The metadata leg reads `FINAL`:
+/// its few thousand rows make it cheap.
 ///
 /// `toBool(...)` on `known`, not the bare comparison: `a.id != 0` is `UInt8`
 /// on the wire and the driver decodes a Rust `bool` from CH `Bool`. The same
@@ -221,7 +219,7 @@ async fn fetch_identity_rows(
                     WHERE id IN ({in_list}) LIMIT 1 BY id) a ON a.id = ids.id \
          LEFT JOIN (SELECT id, contract_id FROM soroban_contracts \
                     WHERE id IN ({in_list}) LIMIT 1 BY id) sc ON sc.id = ids.id \
-         LEFT JOIN {CONTRACT_METADATA} m ON m.contract_id = sc.contract_id"
+         LEFT JOIN (SELECT contract_id, symbol, decimals FROM soroban_contract_metadata FINAL) m ON m.contract_id = sc.contract_id"
     );
 
     client.query(&sql).fetch_all::<AssetIdentityChRow>().await
