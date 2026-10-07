@@ -11,6 +11,7 @@ pub mod asset_identity;
 pub mod cache_control;
 pub mod ch;
 pub mod conditional;
+pub mod contract_metadata;
 pub mod cursor;
 pub mod edge_lock;
 pub mod errors;
