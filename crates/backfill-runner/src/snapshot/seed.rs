@@ -11,7 +11,7 @@
 //! | self-heal (snapshot newer) | ~25k | the entry's own ledger | 0 |
 //! | `claimable_balance_holdings`, same four kinds (task 0210, [`claimable`]) | not yet measured | as above | as above |
 //! | classic pools missing or stale on our side: `liquidity_pools` + `liquidity_pool_snapshots`, insert-only (task 0210, [`pools`]) | not yet measured | the entry's own ledger | — |
-//! | `account_entry_state` for live accounts newer than our newest row (task 0521, [`entry_state`]) | 0 of 10,909,433 on a repeat pass (2026-09-02) | the entry's own ledger | — |
+//! | `account_entry_state` for live accounts newer than our newest row (task 0521, [`entry_state`]); with `--refill-entry-state-older-than`, also those whose newest row is older than that ledger (task 0629) | 0 of 10,909,433 on a repeat pass (2026-09-02) | the entry's own ledger; a refill keeps our row's version | — |
 //! | `assets` / `accounts` dimension stubs | the referenced ids we lack | entry ledger | — |
 //!
 //! ## The versioning contract (the load-bearing part)
@@ -260,7 +260,8 @@ async fn build_corrections(
     }
 
     // Pass 4: signers, thresholds, flags and sponsorship counters for every
-    // live account newer than our newest row of it (and, on a refill, older).
+    // live account newer than our newest row of it, and on a refill every one
+    // whose newest row is older than the refill ledger.
     out.entry_states = entry_state::build_corrections(sink, state, refill_older_than).await?;
 
     Ok(out)

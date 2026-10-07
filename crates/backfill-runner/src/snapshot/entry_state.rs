@@ -1,4 +1,5 @@
-//! Signers, thresholds and flags in the checkpoint seed (task 0521).
+//! Signers, thresholds, flags and sponsorship counters in the checkpoint seed
+//! (task 0521, task 0629).
 //!
 //! `account_entry_state` versions an account on its entry's own
 //! `lastModifiedLedgerSeq`, and the live writer (deployed 2026-08-24) stamps
@@ -120,19 +121,20 @@ fn corrections(
                 out.stale += 1;
                 i64::from(e.ledger)
             }
-            Need::Current => match (our_newest, refill_older_than) {
+            Need::Current => {
                 // Our row is current but older than the columns it lacks.
                 // Rewritten at its own version: the merge then keeps this,
                 // the later insert, and any live write after it outranks both.
-                (Some(ours), Some(refill)) if ours < i64::from(refill) => {
+                if let (Some(ours), Some(refill)) = (our_newest, refill_older_than)
+                    && ours < i64::from(refill)
+                {
                     out.refilled += 1;
                     ours
-                }
-                _ => {
+                } else {
                     out.current += 1;
                     continue;
                 }
-            },
+            }
         };
         out.rows.push(AccountEntryStateRow {
             account_id: *id,

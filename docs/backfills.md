@@ -482,9 +482,9 @@ hand-exported-TSV transport were removed in the 2026-08-20 review;
 the seed's dry-run IS the four-way comparison — a separate `snapshot-compare`
 carried the same decode and the same verdict behind its own counting shell.)
 
-| Subcommand                                                                                 | What it does                                                                                                                                                                                                                                             | Writes                                                                                                                                                       |
-| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snapshot-seed [--artifacts <dir>] [--execute] [--refill-entry-state-older-than <ledger>]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                                                                 | What it does                                                                                                                                                                                                                                                                                                                                                   | Writes                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snapshot-seed [--artifacts <dir>] [--execute] [--refill-entry-state-older-than <ledger>]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers and sponsorship counters, dimension stubs; with the refill option also rewrites entry-state rows older than `<ledger>`); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
 **The decision table.** Every one of our rows falls into exactly one verdict,
 and the verdict alone decides what (if anything) is written. Read the report's
@@ -524,7 +524,10 @@ later insert) and any live write after it still wins. Give the first ledger
 the new writer wrote (for the sponsorship counters: 64,816,029, the first
 ledger after the 2026-10-07 deploy). The run refuses a checkpoint older than
 `<ledger>`. The summary line reads `… N refilled; M unchanged`; a normal pass
-afterwards writes ~0 again.
+afterwards writes ~0 again. A refilled row keeps its old version, so a later
+`run --reindex` of an old range with a binary older than the new column would
+write the default back at the same version and win as the later insert — use
+a current build.
 
 ```bash
 backfill-runner snapshot-seed --refill-entry-state-older-than 64816029            # dry-run
