@@ -45,7 +45,10 @@ needs a new table.
 - Done: #638 merged; seed `--execute` at checkpoint 64,819,327 (2026-10-07):
   11,046,717 rows, 2,674,015 repaired (same ledger, other counters),
   8,358,413 identical, 14,289 ours newer. RPC sample 21/21 equal.
-- Next: 1c — API + page (two Summary rows).
+- Done: #643 (1c, API + page) merged 2026-10-07; ships with the next weekly
+  release.
+- Next: after that release — verify on sorobanscan, reply on #454 via
+  `/issues`, tick stage 1; stage 2 (the list) not started.
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
