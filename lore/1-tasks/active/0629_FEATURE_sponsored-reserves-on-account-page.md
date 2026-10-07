@@ -42,8 +42,8 @@ needs a new table.
 - Done: #625, #626, #627 live in `production-2026.10.07-1` (testnet since
   2026-10-07); ALTERs on `default` and `testnet`. Mainnet wallet
   `GAUA7…PNJU` 4,051,315 / 0 equals RPC.
-- Next: #638 (1b, the refill) in review; then build backfill-runner on the
-  box and run the seed with `--refill-entry-state-older-than 64816029`.
+- Next: #638 (1b) in review; then a `snapshot-seed` dry-run and `--execute`
+  from a current build.
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
