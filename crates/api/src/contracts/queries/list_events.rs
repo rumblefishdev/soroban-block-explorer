@@ -1,5 +1,7 @@
 //! `GET /v1/contracts/:id/events` — the contract's Events tab.
 
+use std::collections::HashSet;
+
 use clickhouse::Row;
 use serde::Deserialize;
 
@@ -70,21 +72,10 @@ pub struct ChEvent {
     pub item: EventItem,
 }
 
-fn map_event_row(r: EventChRow) -> ChEvent {
-    // `topics` is a JSON array of ScVals; mirror the PG `expand_events` shaping
-    // (array → its elements, scalar → singleton). A decode failure degrades to
-    // empty/null rather than dropping the row.
-    let topics = serde_json::from_str::<serde_json::Value>(&r.topics_xdr)
-        .map(|v| match v {
-            serde_json::Value::Array(a) => a,
-            other => vec![other],
-        })
-        .unwrap_or_default();
-    let data =
-        serde_json::from_str::<serde_json::Value>(&r.data_xdr).unwrap_or(serde_json::Value::Null);
-    let event_type = ContractEventType::try_from(r.event_type)
-        .map(|e| e.to_string())
-        .unwrap_or_default();
+/// The indexer writes `topics_xdr` / `data_xdr` with `serde_json` and
+/// `event_type` from an exhaustive match, so a value that does not decode is a
+/// broken row: the page fails rather than show an invented one.
+fn map_event_row(r: EventChRow) -> Result<ChEvent, clickhouse::error::Error> {
     let id = xdr_parser::EventId {
         ledger_sequence: u32::try_from(r.ledger_sequence)
             .expect("a ledger sequence is a u32 by protocol"),
@@ -92,12 +83,31 @@ fn map_event_row(r: EventChRow) -> ChEvent {
         operation_index: r.operation_index,
         event_index: r.event_index,
     };
-    ChEvent {
+    let id = id.to_rpc_string();
+    // `topics` is a JSON array of ScVals; mirror the PG `expand_events` shaping
+    // (array → its elements, scalar → singleton).
+    let topics = match serde_json::from_str::<serde_json::Value>(&r.topics_xdr) {
+        Ok(serde_json::Value::Array(a)) => a,
+        Ok(other) => vec![other],
+        Err(e) => return Err(broken_event(&id, &format!("topics are not JSON: {e}"))),
+    };
+    let data = serde_json::from_str::<serde_json::Value>(&r.data_xdr)
+        .map_err(|e| broken_event(&id, &format!("data is not JSON: {e}")))?;
+    let event_type = match ContractEventType::try_from(r.event_type) {
+        Ok(t) => t.to_string(),
+        Err(_) => {
+            return Err(broken_event(
+                &id,
+                &format!("unknown event_type {}", r.event_type),
+            ));
+        }
+    };
+    Ok(ChEvent {
         transaction_index: r.transaction_index,
         operation_index: r.operation_index,
         event_index: r.event_index,
         item: EventItem {
-            id: id.to_rpc_string(),
+            id,
             transaction_hash: r.transaction_hash,
             ledger_sequence: r.ledger_sequence,
             successful: r.successful,
@@ -106,7 +116,32 @@ fn map_event_row(r: EventChRow) -> ChEvent {
             topics,
             data,
         },
-    }
+    })
+}
+
+/// A stored event that breaks a rule the indexer keeps.
+fn broken_event(id: &str, what: &str) -> clickhouse::error::Error {
+    clickhouse::error::Error::Custom(format!("soroban_events row {id}: {what}"))
+}
+
+/// Which of `ledgers` have their `ledgers` row — the marker the writer adds
+/// once everything else of the ledger is written.
+async fn fetch_landed_ledgers(
+    client: &clickhouse::Client,
+    ledgers: &[i64],
+) -> Result<HashSet<i64>, clickhouse::error::Error> {
+    let in_list = ledgers
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let landed = client
+        .query(&format!(
+            "SELECT DISTINCT sequence FROM ledgers WHERE sequence IN ({in_list})"
+        ))
+        .fetch_all::<i64>()
+        .await?;
+    Ok(landed.into_iter().collect())
 }
 
 /// `contract_surrogate_id` is from [`fetch_contract`]; caller passes the
@@ -177,30 +212,51 @@ pub async fn fetch_events(
         })
         .collect();
 
-    // Rebuild full event rows in page order, then map. A missing tx lookup
-    // defaults rather than drops the row, so the page count (and the peek `+1`
-    // next-page detection) is preserved.
-    Ok(raw
-        .into_iter()
-        .map(|r| {
-            let (transaction_hash, successful, created_at) = txs
-                .get(&(r.ledger_sequence, r.application_order))
-                .cloned()
-                .unwrap_or_default();
-            map_event_row(EventChRow {
-                ledger_sequence: r.ledger_sequence,
-                transaction_index: r.transaction_index,
-                operation_index: r.operation_index,
-                event_index: r.event_index,
-                event_type: r.event_type,
-                topics_xdr: r.topics_xdr,
-                data_xdr: r.data_xdr,
-                transaction_hash,
-                successful,
-                created_at,
-            })
-        })
-        .collect())
+    // An event's transaction is written in the same ledger batch, and the
+    // `ledgers` row last. So a missing transaction in a ledger whose `ledgers`
+    // row has landed is a broken row; in one that has not, the ledger is still
+    // being written (a backfill fills ranges below the tip) and its events show
+    // once it lands. The landed check runs only when a transaction is missing.
+    let missing: Vec<i64> = raw
+        .iter()
+        .filter(|r| !txs.contains_key(&(r.ledger_sequence, r.application_order)))
+        .map(|r| r.ledger_sequence)
+        .collect();
+    let landed = if missing.is_empty() {
+        HashSet::new()
+    } else {
+        fetch_landed_ledgers(client, &missing).await?
+    };
+
+    // Rebuild full event rows in page order, then map.
+    let mut out = Vec::with_capacity(raw.len());
+    for r in raw {
+        let Some((transaction_hash, successful, created_at)) =
+            txs.get(&(r.ledger_sequence, r.application_order)).cloned()
+        else {
+            if landed.contains(&r.ledger_sequence) {
+                let at = format!(
+                    "at ledger {} application_order {}",
+                    r.ledger_sequence, r.application_order
+                );
+                return Err(broken_event(&at, "no transaction"));
+            }
+            continue;
+        };
+        out.push(map_event_row(EventChRow {
+            ledger_sequence: r.ledger_sequence,
+            transaction_index: r.transaction_index,
+            operation_index: r.operation_index,
+            event_index: r.event_index,
+            event_type: r.event_type,
+            topics_xdr: r.topics_xdr,
+            data_xdr: r.data_xdr,
+            transaction_hash,
+            successful,
+            created_at,
+        })?);
+    }
+    Ok(out)
 }
 
 /// Step 1 of [`fetch_events`]: one page of a contract's events in rpc id
@@ -268,6 +324,9 @@ fn event_transactions_sql(positions: &[(i64, i16)]) -> String {
          LIMIT 1 BY t.ledger_sequence, t.application_order"
     )
 }
+
+#[cfg(test)]
+mod ch_tests;
 
 #[cfg(test)]
 mod tests;

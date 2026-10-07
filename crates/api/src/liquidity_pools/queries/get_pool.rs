@@ -130,7 +130,7 @@ pub async fn fetch_pool_by_id(
 
     // A classic pool's legs are its two snapshot columns in order; a soroban
     // pool has no snapshot row, so its reserves come from its state rows.
-    let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
+    let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind)?;
     let (reserves, total_shares) = match pool_kind {
         domain::PoolKind::Classic => (
             vec![r.reserve_a.clone(), r.reserve_b.clone()],

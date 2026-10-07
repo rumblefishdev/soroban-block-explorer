@@ -186,7 +186,7 @@ pub async fn fetch_pool_chart_context(
                 .collect(),
             fee_bps: r.fee_bps,
         },
-        pool_kind: crate::common::strkey::decode_pool_kind(pool_id_hex, r.pool_kind),
+        pool_kind: crate::common::strkey::decode_pool_kind(pool_id_hex, r.pool_kind)?,
         leg_decimals: r
             .legs
             .iter()

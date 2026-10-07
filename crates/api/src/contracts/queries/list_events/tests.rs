@@ -21,7 +21,8 @@ fn map_event_row_decodes_payload_type_and_index() {
         1, // contract
         r#"[{"type":"sym","value":"transfer"},{"type":"address","value":"GABC"}]"#,
         r#"{"type":"i128","value":"1000"}"#,
-    ));
+    ))
+    .expect("a valid row decodes");
     assert_eq!(ev.event_index, 2); // cursor part, carried beside the wire id
     assert_eq!(ev.item.event_type, "contract");
     assert_eq!(ev.item.topics.len(), 2); // JSON array → its elements
@@ -37,7 +38,7 @@ fn map_event_row_exposes_the_rpc_id() {
     row.ledger_sequence = 64_450_000;
     row.transaction_index = 0;
     row.event_index = 0;
-    let ev = map_event_row(row);
+    let ev = map_event_row(row).expect("a valid row decodes");
     // Ledger 64,450,000's first fee charge as mainnet getEvents returns it.
     assert_eq!(ev.item.id, "0276810642227200000-0000000000");
     assert_eq!(
@@ -90,36 +91,31 @@ fn event_transactions_resolve_by_position() {
 
 #[test]
 fn map_event_row_scalar_topics_wraps_singleton() {
-    let ev = map_event_row(event_row(0 /* system */, r#""solo""#, "null"));
+    let ev =
+        map_event_row(event_row(0 /* system */, r#""solo""#, "null")).expect("a valid row decodes");
     assert_eq!(ev.item.event_type, "system");
     assert_eq!(ev.item.topics.len(), 1); // scalar JSON → singleton vec
     assert!(ev.item.data.is_null());
 }
 
-#[test]
-fn map_event_row_event_type_labels_and_out_of_range() {
-    assert_eq!(
-        map_event_row(event_row(0, "[]", "null")).item.event_type,
-        "system"
-    );
-    assert_eq!(
-        map_event_row(event_row(1, "[]", "null")).item.event_type,
-        "contract"
-    );
-    assert_eq!(
-        map_event_row(event_row(2, "[]", "null")).item.event_type,
-        "diagnostic"
-    );
-    // Out-of-range discriminant → empty string (try_from fails, default).
-    assert_eq!(
-        map_event_row(event_row(99, "[]", "null")).item.event_type,
-        ""
-    );
+fn label(event_type: i16) -> String {
+    map_event_row(event_row(event_type, "[]", "null"))
+        .expect("a valid row decodes")
+        .item
+        .event_type
 }
 
 #[test]
-fn map_event_row_malformed_payload_degrades_not_drops() {
-    let ev = map_event_row(event_row(1, "not json", "also not json"));
-    assert!(ev.item.topics.is_empty()); // decode fail → empty, row still emitted
-    assert!(ev.item.data.is_null());
+fn map_event_row_event_type_labels_and_out_of_range() {
+    assert_eq!(label(0), "system");
+    assert_eq!(label(1), "contract");
+    assert_eq!(label(2), "diagnostic");
+    // No such type exists; the row is broken, not "unknown".
+    assert!(map_event_row(event_row(99, "[]", "null")).is_err());
+}
+
+#[test]
+fn map_event_row_malformed_payload_is_an_error() {
+    assert!(map_event_row(event_row(1, "not json", "null")).is_err());
+    assert!(map_event_row(event_row(1, "[]", "also not json")).is_err());
 }
