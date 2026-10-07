@@ -486,7 +486,8 @@ types, return types).
 
 **`GET /contracts/:contract_id/decompiled`** - On-demand decompilation of the contract's
 WASM (task 0465, issue #374). No persistence: the handler resolves `wasm_hash`, fetches
-the code bytes live from Soroban RPC (`getLedgerEntries`, pool from `SOROBAN_RPC_URLS`),
+the code bytes live from Soroban RPC (`getLedgerEntries`, pool from `SOROBAN_RPC_URLS` — the
+network's `sorobanRpcUrls`, required, no default in code),
 and runs the pinned `soroban-ret` crate on the blocking pool with a 10 s in-handler
 timeout. `?format=rust` (default) returns reconstructed Rust with completeness markers
 (`functions`, `todo_holes`, `unknown_vars` — counts, not percentages, per the

@@ -32,10 +32,14 @@ fn test_app_with(config: &AppConfig) -> Router {
         // tests below never reach get_asset, so the client never makes a
         // real request.
         sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
-        nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
-            .expect("build nft_token_uri fetcher"),
-        wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()
-            .expect("build wasm_code fetcher"),
+        nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::with_rpc_url(
+            "http://unused".to_owned(),
+        )
+        .expect("build nft_token_uri fetcher"),
+        wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::with_rpc_urls(vec![
+            "http://unused".to_owned(),
+        ])
+        .expect("build wasm_code fetcher"),
     };
     app(config, AppState::for_tests(ch, runtime_enrichment))
 }
