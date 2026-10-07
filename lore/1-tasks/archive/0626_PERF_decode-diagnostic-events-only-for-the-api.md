@@ -2,7 +2,7 @@
 id: '0626'
 title: 'PERF: decode diagnostic events only where the API reads them'
 type: PERF
-status: backlog
+status: canceled
 related_adr: []
 related_tasks: ['0573', '0604']
 tags: ['xdr-parsing', 'indexer', 'performance', 'effort-small', 'priority-low']
@@ -22,6 +22,12 @@ history:
       Measured: skipping the diagnostic decode saves ~8-12% of `parse_ledger`,
       which is ~5% of a backfill's time. Decision on whether to implement
       pending. Frontmatter type corrected to PERF.
+  - date: 2026-10-07
+    status: canceled
+    who: claude
+    note: >
+      Not worth doing: under 1% of a backfill, nothing for live ingest. The
+      measurement below is the record.
 ---
 
 # Decode diagnostic events only where the API reads them
@@ -47,9 +53,8 @@ This is not a regression: the extraction before 0573 decoded them too.
 
 ## Acceptance Criteria
 
-- [ ] The measurement is recorded here, with the command.
-- [ ] If implemented: the indexer path decodes no diagnostic event; the
-      transaction page still shows them; golden test unchanged.
+- [x] The measurement is recorded here, with the command.
+- N/A — not implemented; the task is canceled on the measurement.
 
 ## Measurement (2026-10-07)
 
