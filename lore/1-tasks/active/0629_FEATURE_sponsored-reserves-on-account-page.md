@@ -39,8 +39,11 @@ needs a new table.
 
 - Done: scope measured; decided 2026-10-06 — the literal ask (counts, then
   the list), counts stored by the indexer, not read live from RPC.
-- Done: #625 (structure, merged), #626 (1a, in review).
-- Next: production ALTER + indexer deploy, then PR 1b — the refill mode.
+- Done: #625, #626, #627 live in `production-2026.10.07-1` (testnet since
+  2026-10-07); ALTERs on `default` and `testnet`. Mainnet wallet
+  `GAUA7…PNJU` 4,051,315 / 0 equals RPC.
+- Next: PR 1b — the seed refill for rows written before 2026-10-07; the
+  boundary is the first ledger the new indexer wrote.
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
