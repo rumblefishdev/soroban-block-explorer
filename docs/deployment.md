@@ -109,8 +109,8 @@ and region. What differs from production:
   newest indexed ledger older than 60 s for 3 minutes — also how a testnet
   reset shows up, then follow
   [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md); and
-  `testnet-indexer-runaway-wakeups`, over 400 indexer invocations in 15
-  minutes twice in a row, standing in for the loop guard.
+  `testnet-indexer-runaway-wakeups`, over 400 wake-up messages sent to the
+  indexer queue in 15 minutes twice in a row, standing in for the loop guard.
 - **No ClickHouse DNS record and no cost monitor** — both belong to
   production (`provisionChDns`, `provisionCostAnomalyMonitor`).
 

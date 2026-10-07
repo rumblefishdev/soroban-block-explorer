@@ -231,22 +231,24 @@ export function addIngestionAlarms(
     // ---------------------
     // Alarm 1e: runaway wake-ups (task 0553)
     // The indexer reading the lake wakes itself, and AWS's loop guard is off
-    // for it (compute-stack.ts), so this alarm takes the guard's place. One
-    // chain plus the keepalive is ~13 wake-ups a minute, ~195 per 15 min;
-    // 400 means wake-ups are breeding. Reserved concurrency 1 caps the cost
-    // meanwhile. NOT_BREACHING: no wake-ups at all is the stall alarm's job.
+    // for it (compute-stack.ts), so this alarm takes the guard's place. It
+    // counts wake-up messages SENT to the ingest queue: one chain plus the
+    // keepalive is ~13 a minute, ~195 per 15 min, and 400 means chains are
+    // breeding. Not invocations: after a long catch-up the keepalives that
+    // piled up are consumed in a burst (629 invocations in 15 min on
+    // 2026-10-06) while sends stay at 10-14 a minute. Reserved concurrency 1
+    // caps the cost meanwhile. NOT_BREACHING: no wake-ups at all is the stall
+    // alarm's job.
     // ---------------------
     withActions(
       new cloudwatch.Alarm(scope, 'IndexerRunawayAlarm', {
         alarmName: `${config.envName}-indexer-runaway-wakeups`,
         alarmDescription:
-          'The indexer was invoked over 400 times in 15 minutes twice in a row - its self-paced wake-ups are multiplying. Check the ingest queue and the indexer logs for several chains.',
+          'Over 400 wake-up messages were sent to the indexer queue in 15 minutes twice in a row - its self-paced wake-ups are multiplying. Check the indexer logs for several chains.',
         metric: new cloudwatch.Metric({
-          namespace: 'AWS/Lambda',
-          metricName: 'Invocations',
-          dimensionsMap: {
-            FunctionName: `${config.envName}-soroban-explorer-indexer`,
-          },
+          namespace: 'AWS/SQS',
+          metricName: 'NumberOfMessagesSent',
+          dimensionsMap: { QueueName: ingestQueue.queueName },
           period: cdk.Duration.minutes(15),
           statistic: cloudwatch.Stats.SUM,
         }),

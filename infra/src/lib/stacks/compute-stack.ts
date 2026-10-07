@@ -365,7 +365,8 @@ export class ComputeStack extends cdk.Stack {
       // Reading the public data lake, the indexer wakes itself through its own
       // queue, one message per ledger (lake_pacing.rs). AWS counts that as a
       // loop and drops the 17th hop of each chain, so the chain died every
-      // ~80 s and ~300 messages an hour went to the DLQ (measured 2026-10-07,
+      // ~80 s: ~300 deliveries an hour were blocked and ~30 messages an hour
+      // reached the DLQ after 10 tries each (measured 2026-10-07,
       // `RecursiveInvocationsDropped`). The loop is intended, and reserved
       // concurrency 1 bounds it; the runaway alarm in ingestion-alarms.ts
       // replaces the guard. Mainnet's doorbells come from S3 and keep it.
