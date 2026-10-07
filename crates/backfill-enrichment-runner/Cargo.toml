@@ -10,7 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 enrichment-shared = { path = "../enrichment-shared" }
-db-clickhouse = { path = "../db-clickhouse" }
+# `aws-mtls` exposes `mtls::client_from_cli_flags`, the plain-or-mTLS client
+# backfill-runner builds from the same flags (the production ClickHouse only
+# accepts client certificates).
+db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
 clickhouse = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "signal", "time"] }

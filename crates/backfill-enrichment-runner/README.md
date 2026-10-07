@@ -131,38 +131,73 @@ SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org CLICKHOUSE_DATABASE=testnet
 
 ## Usage
 
-The runner reads `DATABASE_URL` from the environment (or `--database-url`
-explicitly). Pool size is `concurrency + 2` for drain subcommands (default
-`10 + 2 = 12`) and `2` for `status`. Sized at the `match cli.command`
-boundary so the requested fan-out is not throttled at the pool — each
-spawned task holds a connection across SELECT seed-row + HTTP fetch +
-UPDATE. The `+2` slack covers the chunk-cursor SELECT and the report-time
-queries running alongside the in-flight tasks.
+### Connection
+
+The runner takes the same ClickHouse flags as `backfill-runner` and builds
+its client with the same function (`db_clickhouse::mtls::client_from_cli_flags`):
+
+| Mode | Flags (env) | For |
+| ---- | ----------- | --- |
+| plain HTTP | `--clickhouse-url` (`CLICKHOUSE_URL`), `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` | a local ClickHouse |
+| mTLS | `--clickhouse-url https://<ch host>` plus `--ch-cert` / `--ch-key` / `--ch-ca` (`CLICKHOUSE_CERT` / `CLICKHOUSE_KEY` / `CLICKHOUSE_CA`), all three together | the production ClickHouse behind Caddy, which accepts only client certificates and maps the certificate's CN to a ClickHouse user |
+
+`CLICKHOUSE_DATABASE` picks the database: unset for mainnet (`default`),
+`testnet` for the testnet explorer. The certificate's user needs write
+access to that database's `asset_enrichment` / `nft_enrichment`.
+
+Concurrency is bounded by `--concurrency` (a `Semaphore`, default 10);
+each in-flight key holds one fetch and one INSERT.
 
 ```bash
-# Default drain — `sep1-assets` kind, standard filter
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/soroban_block_explorer \
-  cargo run -p backfill-enrichment-runner -- sep1-assets
+# Default drain — `sep1-assets` kind, standard filter, local ClickHouse
+CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- sep1-assets
 
 # Tuned concurrency / chunk size
-DATABASE_URL=... cargo run -p backfill-enrichment-runner -- \
+CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- \
   sep1-assets --concurrency 20 --chunk-size 500
 
 # Test mode — cap at 10 rows
-DATABASE_URL=... cargo run -p backfill-enrichment-runner -- sep1-assets --limit 10
-
-# Surgical mode — single row by id
-DATABASE_URL=... cargo run -p backfill-enrichment-runner -- sep1-assets --id 4242
+CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- sep1-assets --limit 10
 
 # γ-overwrite — re-walk every assets row, ignore sentinels
-DATABASE_URL=... cargo run -p backfill-enrichment-runner -- sep1-assets --force-retry
+CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- sep1-assets --force-retry
 
-# NFT drain
-DATABASE_URL=... cargo run -p backfill-enrichment-runner -- nft-metadata
+# NFT drain — needs the network's RPC pool
+CLICKHOUSE_URL=... SOROBAN_RPC_URLS=<rpc urls> cargo run -p backfill-enrichment-runner -- nft-metadata
 
 # Aggregate status across kinds — cheap point-in-time query
-DATABASE_URL=... cargo run -p backfill-enrichment-runner -- status
+CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- status
 ```
+
+### Testnet, from a laptop
+
+The testnet explorer lives in the `testnet` database of the production
+ClickHouse, so a laptop run uses the mTLS mode. `<ch host>` is the Caddy
+host of the ClickHouse; the three PEM files are the operator write cert
+(`dev_shared`, the one the ledger backfill uses —
+[`clickhouse-rbac.md`](../../docs/architecture/security/clickhouse-rbac.md))
+and the CA that signed it. Forgetting `CLICKHOUSE_DATABASE` writes into
+mainnet's `default`. The same step is part of the testnet build
+([`docs/runbooks/testnet-reset.md`](../../docs/runbooks/testnet-reset.md),
+step 8).
+
+```bash
+# the flags' env names, so every command below carries them
+export CLICKHOUSE_URL=https://<ch host>
+export CLICKHOUSE_CERT=<user>.crt CLICKHOUSE_KEY=<user>.key CLICKHOUSE_CA=ca.crt
+export CLICKHOUSE_DATABASE=testnet
+export SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org
+
+cargo run --release -p backfill-enrichment-runner -- status
+cargo run --release -p backfill-enrichment-runner -- sep1-assets
+cargo run --release -p backfill-enrichment-runner -- nft-metadata
+# rows written while the worker asked the wrong network are all-'' sentinels:
+cargo run --release -p backfill-enrichment-runner -- nft-metadata --retry-sentinels
+cargo run --release -p backfill-enrichment-runner -- status
+```
+
+The same with flags instead of env:
+`enrich --clickhouse-url https://<ch host> --ch-cert <user>.crt --ch-key <user>.key --ch-ca ca.crt nft-metadata --retry-sentinels`.
 
 Operator-chainable: exit code is `0` on a clean run (every processed
 row reached a terminal outcome — real value or sentinel), `1` on any
@@ -221,13 +256,13 @@ against the column.
 
 ```bash
 # 1. Sanity — DB reachable, schema present
-DATABASE_URL=... cargo run -p backfill-enrichment-runner -- status
+CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- status
 
-# 2. Smoke — drain 10 rows, watch the log
-DATABASE_URL=... RUST_LOG=info cargo run -p backfill-enrichment-runner -- sep1-assets --limit 10
+# 2. Smoke — drain 10 rows, watch the per-row log
+CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- --verbose sep1-assets --limit 10
 
 # 3. Full drain — leave running; cargo run inherits a non-fd-locking stdin
-DATABASE_URL=... cargo run --release -p backfill-enrichment-runner -- sep1-assets
+CLICKHOUSE_URL=... cargo run --release -p backfill-enrichment-runner -- sep1-assets
 ```
 
 **Watch:** `tracing` events at `info` level for per-chunk progress

@@ -152,7 +152,13 @@ An empty `testnet` database needs the indexer **paused**
 disables the keepalive): an indexer with nothing to continue from would only
 keep the stall alarm firing. Build it with
 [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md), steps 2 and
-4–7: pause, backfill from genesis, resume.
+4–8: pause, backfill from genesis, `repair-tier1`, resume, then the
+enrichment backfill (`enrich sep1-assets`, `enrich nft-metadata` with
+`CLICKHOUSE_DATABASE=testnet`, `SOROBAN_RPC_URLS` = testnet's RPC and the
+operator write cert, `--clickhouse-url` / `--ch-cert` / `--ch-key` /
+`--ch-ca` as for `backfill-runner`). The backfill writes straight to
+ClickHouse and queues nothing for the enrichment worker, so without that last
+step the backfilled assets and NFTs stay without icons, names and metadata.
 
 ---
 
