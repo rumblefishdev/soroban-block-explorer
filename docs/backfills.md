@@ -1115,31 +1115,65 @@ SELECT * REPLACE (
         CAST(NULL, 'Nullable(String)')
     ) AS signature
 )
-FROM soroban_events
-WHERE signature IS NULL
-  AND intDiv(ledger_sequence, 500000) = {P}
-  AND multiIf(
-        JSONExtractString(topics_xdr,1,'type') = 'string'
-          AND JSONExtractString(topics_xdr,2,'type') = 'sym'
-          AND JSONExtractString(topics_xdr,2,'value') != '',
-            JSONExtractString(topics_xdr,2,'value'),
-        JSONExtractString(topics_xdr,1,'type') = 'string'
-          AND JSONExtractString(topics_xdr,1,'value') != '',
-            JSONExtractString(topics_xdr,1,'value'),
-        CAST(NULL, 'Nullable(String)')
-    ) IS NOT NULL
+FROM (
+    SELECT * FROM soroban_events
+    WHERE signature IS NULL
+      AND intDiv(ledger_sequence, 500000) = {P}
+      AND multiIf(
+            JSONExtractString(topics_xdr,1,'type') = 'string'
+              AND JSONExtractString(topics_xdr,2,'type') = 'sym'
+              AND JSONExtractString(topics_xdr,2,'value') != '',
+                JSONExtractString(topics_xdr,2,'value'),
+            JSONExtractString(topics_xdr,1,'type') = 'string'
+              AND JSONExtractString(topics_xdr,1,'value') != '',
+                JSONExtractString(topics_xdr,1,'value'),
+            CAST(NULL, 'Nullable(String)')
+        ) IS NOT NULL
+)
 ```
 
-The trailing filter keeps still-unresolvable rows OUT of the insert — their
+**The filter must stay in the subquery.** Next to `REPLACE (… AS signature)`,
+a `WHERE signature IS NULL` on the same level reads the alias — the NEW value —
+not the stored column. Measured on partition 101 (2026-10-07): that form
+matches 414,386,502 rows instead of 744; with the trailing filter as well the
+two conditions contradict and the insert writes nothing, and without it every
+named event of the partition would be rewritten with `NULL`.
+
+The last filter keeps still-unresolvable rows OUT of the insert — their
 NULL row already exists, and re-inserting an identical NULL row would only
-churn the merge. **Verification** (after all partitions):
+churn the merge.
+
+**Verification**, per partition. A plain `count() … WHERE signature IS NULL`
+stays above zero until the table merges, because the old `NULL` row lives next
+to its named replacement. Count events (keys), not rows: an event is done when
+any of its rows carries a name. Must be zero:
 
 ```sql
--- the resolvable NULL population MUST be zero
-SELECT count() FROM soroban_events
-WHERE signature IS NULL
-  AND JSONExtractString(topics_xdr,1,'type') = 'string'
-  AND JSONExtractString(topics_xdr,1,'value') != ''
+SELECT count() FROM (
+    SELECT contract_id, ledger_sequence, transaction_index, operation_index,
+           event_index, max(signature IS NOT NULL) AS named
+    FROM soroban_events
+    WHERE intDiv(ledger_sequence, 500000) = {P}
+      AND (contract_id, ledger_sequence, transaction_index, operation_index,
+           event_index) IN (
+          SELECT contract_id, ledger_sequence, transaction_index,
+                 operation_index, event_index
+          FROM soroban_events
+          WHERE intDiv(ledger_sequence, 500000) = {P}
+            AND signature IS NULL
+            AND multiIf(
+                JSONExtractString(topics_xdr,1,'type') = 'string'
+                  AND JSONExtractString(topics_xdr,2,'type') = 'sym'
+                  AND JSONExtractString(topics_xdr,2,'value') != '',
+                    JSONExtractString(topics_xdr,2,'value'),
+                JSONExtractString(topics_xdr,1,'type') = 'string'
+                  AND JSONExtractString(topics_xdr,1,'value') != '',
+                    JSONExtractString(topics_xdr,1,'value'),
+                CAST(NULL, 'Nullable(String)')
+            ) IS NOT NULL)
+    GROUP BY contract_id, ledger_sequence, transaction_index, operation_index,
+             event_index)
+WHERE named = 0
 ```
 
 Verification criteria for the deployed result live in task 0374's

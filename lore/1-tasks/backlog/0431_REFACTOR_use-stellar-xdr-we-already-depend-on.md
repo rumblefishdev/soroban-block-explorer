@@ -2,7 +2,7 @@
 id: '0431'
 title: 'REFACTOR/TEST: use the stellar-xdr API we already depend on +differential oracle against the official CLI'
 type: REFACTOR
-status: active
+status: backlog
 related_adr: []
 related_tasks: ['0430', '0380', '0088', '0406']
 tags:

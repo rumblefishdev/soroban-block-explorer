@@ -21,8 +21,8 @@
 //! 4. `CAST(… AS Array(Int64))`, because ClickHouse types an array literal from
 //!    its values and an all-positive page yields `Array(UInt64)` — a 500 on
 //!    exactly those accounts and no others.
-//! 5. `LIMIT 1 BY id` / `argMax(…, version)` instead of `FINAL`, measured at
-//!    4.7x fewer rows.
+//! 5. `LIMIT 1 BY id` instead of `FINAL` on `assets` and `soroban_contracts`,
+//!    measured at 4.7x fewer rows.
 //!
 //! The output is the RAW identity. Each consumer projects it into its own wire
 //! shape (the account read builds a `CODE-ISSUER` link, a pool leg builds an
@@ -117,9 +117,10 @@ pub(crate) fn known_decimals(family: Option<i16>, published: Option<u32>) -> Opt
 /// `assets.id` carries no skip index (`id` is not in its `ORDER BY`), so its
 /// leg is a scan; `soroban_contracts.id` and `accounts.id` are bloom-indexed
 /// granule seeks, and `soroban_contract_metadata` is 3 927 rows.
-/// `FINAL` is replaced by `LIMIT 1 BY id` / `argMax(…, version)` throughout —
+/// `FINAL` is replaced by `LIMIT 1 BY id` on `assets` and `soroban_contracts` —
 /// exact here for the same reason as task 0344, and `FINAL` on these
-/// dimensions measured 4.7x the rows read.
+/// dimensions measured 4.7x the rows read. The metadata leg reads `FINAL`:
+/// its few thousand rows make it cheap.
 ///
 /// `toBool(...)` on `known`, not the bare comparison: `a.id != 0` is `UInt8`
 /// on the wire and the driver decodes a Rust `bool` from CH `Bool`. The same
@@ -218,11 +219,7 @@ async fn fetch_identity_rows(
                     WHERE id IN ({in_list}) LIMIT 1 BY id) a ON a.id = ids.id \
          LEFT JOIN (SELECT id, contract_id FROM soroban_contracts \
                     WHERE id IN ({in_list}) LIMIT 1 BY id) sc ON sc.id = ids.id \
-         LEFT JOIN (SELECT contract_id, \
-                           argMax(symbol, version)   AS symbol, \
-                           argMax(tuple(decimals), version).1 AS decimals \
-                    FROM soroban_contract_metadata GROUP BY contract_id) m \
-                ON m.contract_id = sc.contract_id"
+         LEFT JOIN (SELECT contract_id, symbol, decimals FROM soroban_contract_metadata FINAL) m ON m.contract_id = sc.contract_id"
     );
 
     client.query(&sql).fetch_all::<AssetIdentityChRow>().await

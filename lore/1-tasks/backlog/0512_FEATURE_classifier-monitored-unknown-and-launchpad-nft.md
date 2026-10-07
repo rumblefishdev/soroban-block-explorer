@@ -2,7 +2,7 @@
 id: '0512'
 title: 'FEATURE: classifier 80/20 — monitored-UNKNOWN + launchpad-NFT discriminator (drain the pending residual)'
 type: FEATURE
-status: active
+status: backlog
 related_adr: []
 related_tasks: ['0309', '0294', '0308', '0303']
 tags:

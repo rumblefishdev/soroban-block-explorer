@@ -2,7 +2,7 @@
 id: '0430'
 title: 'BUG: deployer_id stores the inner-tx source instead of the op source on fee-bump envelopes'
 type: BUG
-status: active
+status: backlog
 related_adr: []
 related_tasks: ['0255', '0256', '0252']
 tags:
