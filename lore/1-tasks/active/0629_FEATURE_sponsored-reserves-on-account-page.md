@@ -91,8 +91,8 @@ Each PR is one production step. Stage 2 starts only after stage 1 ships.
 | 1b  | Seed writes `account_entry_state` for every live account (drops task 0521's narrowing) — #638                                                 | `snapshot-seed --execute`; check counts vs RPC     |
 | 1c  | API `account` detail exposes both counts; the page shows them (two rows in Summary, prototype variant A)                                      | API + SPA deploy                                   |
 
-1c waits for the seed run after #638 (`account_entry_state` ≈ every live
-account) and for a stratified RPC sample (top
+1c waits for the seed run after #638 (its `same ledger with other counters`
+count is the repair) and for a stratified RPC sample (top
 sponsors, sponsored accounts, an account with neither, one last changed
 before our floor) to match. A refilled row keeps its old version by design,
 so "no row older than 1a" can never be the gate. Shipped earlier, the page
@@ -121,14 +121,15 @@ table by owner — not asked for in #454; decide when stage 2 is designed.
 - [ ] Stage 1: for a stratified sample (top sponsors, a sponsored account, an
       account with neither, an account last changed before our floor) both
       counters equal RPC `getLedgerEntries`.
-- [ ] Stage 1: the seed refill reports how many rows it rewrote; a second
-      normal seed pass writes ~0 entry-state rows (the 0521 signal still works).
+- [ ] Stage 1: the seed's `same ledger with other counters` count on the
+      first pass ≈ the sponsored accounts written before 1a, and ~0 on the
+      next pass.
 - [ ] Stage 1: account page shows both counts; no account shows a 0 that the
       chain contradicts.
 - [ ] Stage 2: list for `GAUA7XL5…PNJU` paginates, and its reserves per kind
       sum to the counter.
 - [ ] **Docs updated** — `docs/architecture/**` schema and API pages for the
-      new columns, endpoint and table; `docs/backfills.md` for the refill mode.
+      new columns, endpoint and table; `docs/backfills.md` for the counted entry-state pass.
 - [ ] **API types regenerated** — 1c and stage 2 touch `crates/api/**`.
 
 ## Notes
