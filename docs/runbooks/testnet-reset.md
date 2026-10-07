@@ -115,11 +115,14 @@ no icons, asset names or NFT metadata until the enrichment backfill
 (`crates/backfill-enrichment-runner`, binary `enrich`) drains it. It runs
 from a laptop with the same operator write cert as step 6, after
 `repair-tier1`; the indexer may already be running. `SOROBAN_RPC_URLS` must
-name the testnet RPC — the NFT calls go to whatever pool it holds.
+name the testnet RPC — the NFT calls go to whatever pool it holds. The NFT
+subcommands ask that RPC for its network and refuse to start unless it,
+`STELLAR_NETWORK_PASSPHRASE` and the database all say testnet.
 
 ```bash
 CLICKHOUSE_DATABASE=testnet \
 SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org \
+STELLAR_NETWORK_PASSPHRASE='Test SDF Network ; September 2015' \
 enrich --clickhouse-url https://<ch-host> \
   --ch-cert <cert.pem> --ch-key <key.pem> --ch-ca infra-hetzner/ca/ca.crt \
   sep1-assets

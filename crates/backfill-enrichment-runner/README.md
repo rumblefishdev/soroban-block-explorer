@@ -69,7 +69,8 @@ and so match neither the default "no row yet" drain nor `--retry-sentinels`
 rows.
 
 ```bash
-CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- nft-collection-name
+CLICKHOUSE_URL=http://localhost:8123 SOROBAN_RPC_URLS=<rpc urls> STELLAR_NETWORK_PASSPHRASE=<passphrase> \
+  cargo run -p backfill-enrichment-runner -- nft-collection-name
 ```
 
 ## Standard filter vs `--force-retry`
@@ -124,8 +125,33 @@ holds — `sorobanRpcUrls` in `infra/envs/production.json` for mainnet,
 `infra/envs/testnet.json` for testnet. `sep1-assets` and `status` do not
 read it.
 
+Before any write, these two subcommands also check that the RPC pool, the
+passphrase and the database name one network. They need
+`STELLAR_NETWORK_PASSPHRASE`, ask every URL of the pool for its network
+(JSON-RPC `getNetwork` → `passphrase`), and refuse to start unless each
+answer equals the passphrase and the database belongs to that network:
+`default` (or `CLICKHOUSE_DATABASE` unset) is mainnet, `testnet` is testnet,
+any other name belongs to no network.
+
+| RPC network | `STELLAR_NETWORK_PASSPHRASE` | `CLICKHOUSE_DATABASE` | Result |
+| ----------- | ---------------------------- | --------------------- | ------ |
+| testnet | testnet | `testnet` | runs |
+| testnet | testnet | unset | refused: `default` is mainnet |
+| testnet | testnet | `default` | refused: `default` is mainnet |
+| mainnet | mainnet | `default` or unset | runs |
+| testnet | mainnet | any | refused: RPC and passphrase differ |
+| any | unset | any | refused: passphrase required |
+| any | matching | another name | refused: no known network |
+
+Without the guard, a testnet pool with `CLICKHOUSE_DATABASE` forgotten would
+find none of mainnet's NFTs and write empty sentinels into `default` — with
+`--force-retry`, over real rows. The passphrases are
+`Public Global Stellar Network ; September 2015` (mainnet) and
+`Test SDF Network ; September 2015` (testnet).
+
 ```bash
 SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org CLICKHOUSE_DATABASE=testnet \
+  STELLAR_NETWORK_PASSPHRASE='Test SDF Network ; September 2015' \
   cargo run -p backfill-enrichment-runner -- nft-metadata
 ```
 
@@ -162,8 +188,8 @@ CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- sep1-assets --limi
 # γ-overwrite — re-walk every assets row, ignore sentinels
 CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- sep1-assets --force-retry
 
-# NFT drain — needs the network's RPC pool
-CLICKHOUSE_URL=... SOROBAN_RPC_URLS=<rpc urls> cargo run -p backfill-enrichment-runner -- nft-metadata
+# NFT drain — needs the network's RPC pool and passphrase (see Network)
+CLICKHOUSE_URL=... SOROBAN_RPC_URLS=<rpc urls> STELLAR_NETWORK_PASSPHRASE=<passphrase> cargo run -p backfill-enrichment-runner -- nft-metadata
 
 # Aggregate status across kinds — cheap point-in-time query
 CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- status
@@ -176,8 +202,9 @@ ClickHouse, so a laptop run uses the mTLS mode. `<ch host>` is the Caddy
 host of the ClickHouse; the three PEM files are the operator write cert
 (`dev_shared`, the one the ledger backfill uses —
 [`clickhouse-rbac.md`](../../docs/architecture/security/clickhouse-rbac.md))
-and the CA that signed it. Forgetting `CLICKHOUSE_DATABASE` writes into
-mainnet's `default`. The same step is part of the testnet build
+and the CA that signed it. Forgetting `CLICKHOUSE_DATABASE` would target
+mainnet's `default`: the NFT subcommands refuse it (see Network), but
+`sep1-assets` has no RPC to check and runs. The same step is part of the testnet build
 ([`docs/runbooks/testnet-reset.md`](../../docs/runbooks/testnet-reset.md),
 step 8).
 
@@ -187,6 +214,7 @@ export CLICKHOUSE_URL=https://<ch host>
 export CLICKHOUSE_CERT=<user>.crt CLICKHOUSE_KEY=<user>.key CLICKHOUSE_CA=ca.crt
 export CLICKHOUSE_DATABASE=testnet
 export SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org
+export STELLAR_NETWORK_PASSPHRASE='Test SDF Network ; September 2015'
 
 cargo run --release -p backfill-enrichment-runner -- status
 cargo run --release -p backfill-enrichment-runner -- sep1-assets
