@@ -20,7 +20,7 @@ history:
     who: claude
     note: >
       Measured: skipping the diagnostic decode saves ~8-12% of `parse_ledger`,
-      which is ~6% of a backfill's time. Decision on whether to implement
+      which is ~5% of a backfill's time. Decision on whether to implement
       pending. Frontmatter type corrected to PERF.
 ---
 
@@ -68,7 +68,7 @@ no diagnostic events (the archive's protocol-20 export); the other three carry
 
 - The diagnostic decode is about half of `extract`, and 8–12% of `parse_ledger`:
   ~2–3 ms of ~27 ms per ledger.
-- A backfill spends ~6% of its time parsing (laptop1 run, range
+- A backfill spends ~5% of its time parsing (laptop1 run, range
   50,457,424–55,103,999: parse 6,735,881 ms of 130,696 s elapsed; persist
   100,653,662 ms), so the saving there is under 1%.
 - Live ingest closes a ledger every ~5 s; 3 ms of it is not a constraint.
