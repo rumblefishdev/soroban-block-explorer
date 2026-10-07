@@ -78,7 +78,7 @@ use crate::snapshot::report::Report;
 use crate::snapshot::slices::key_slices;
 use crate::util::insert_rows;
 use db_clickhouse::persist::ids;
-use db_clickhouse::persist::rows::{AccountRow, AssetRow};
+use db_clickhouse::persist::rows::{AccountEntryStateRow, AccountRow, AssetRow};
 
 /// Insert batch size. RowBinary streams; this only bounds peak buffering.
 const INSERT_CHUNK: usize = 500_000;
@@ -97,7 +97,7 @@ const INSERT_CHUNK: usize = 500_000;
 #[derive(Default)]
 struct Corrections {
     balances: balances::BalanceCorrections,
-    entry_states: Vec<db_clickhouse::persist::rows::AccountEntryStateRow>,
+    entry_states: Vec<AccountEntryStateRow>,
     asset_stubs: Vec<AssetRow>,
     account_stubs: Vec<AccountRow>,
     claimable: claimable::ClaimableCorrections,

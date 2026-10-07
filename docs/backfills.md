@@ -516,7 +516,8 @@ narrowed the pass to accounts newer than our row, so a repeat pass wrote ~0
 and a jump would show the live writer stopping; task 0629 went back to every
 account, because a column added with `ALTER … DEFAULT` reads its default on
 every row written before its writer went live, and only rewriting the
-current rows fills it — now on any ordinary pass. Keep the binary current: a
+current rows fills it — now on any ordinary pass. Run the seed from a checkpoint taken
+after the writer of such a column is deployed, and keep the binary current: a
 `run --reindex` of an old range with a build older than such a column writes
 the default back at the same version and wins as the later insert.
 
