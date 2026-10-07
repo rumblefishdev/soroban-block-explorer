@@ -55,21 +55,20 @@ pub(crate) struct EntryState {
     pub(crate) ours_newer: u64,
 }
 
-/// Our newest row per account, sliced on `account_id` like every other read
-/// of ours here: the server's `max_execution_time` counts the time spent
-/// sending rows. `argMax` picks the counters of the newest version; a version
-/// map plus two counters for 11.2M accounts costs ~350 MB of the run's peak.
+/// Our row per account as the page reads it: `FINAL`, so a version tie
+/// between unmerged parts resolves the way it does for every reader (the last
+/// insert) — an `argMax` would take whichever part it met first and count a
+/// repaired account as unrepaired until the merge. Sliced on `account_id` like
+/// every other read of ours here: the server's `max_execution_time` counts the
+/// time spent sending rows (~0.25 s a slice on production). A map of 11.2M
+/// accounts holds ~550 MB, ~830 MB while it grows.
 async fn our_rows(sink: &Sink) -> Result<HashMap<i64, OurRow>, BackfillError> {
     let mut out = HashMap::new();
     for (from, to) in key_slices() {
         let sql = format!(
-            "SELECT account_id, \
-                    max(last_updated_ledger) AS ledger, \
-                    argMax(num_sponsoring, last_updated_ledger) AS num_sponsoring, \
-                    argMax(num_sponsored, last_updated_ledger) AS num_sponsored \
-             FROM account_entry_state \
-             WHERE account_id BETWEEN {from} AND {to} \
-             GROUP BY account_id"
+            "SELECT account_id, last_updated_ledger AS ledger, num_sponsoring, num_sponsored \
+             FROM account_entry_state FINAL \
+             WHERE account_id BETWEEN {from} AND {to}"
         );
         let mut cursor = sink.client().query(&sql).fetch::<OurRow>()?;
         while let Some(r) = cursor.next().await? {
