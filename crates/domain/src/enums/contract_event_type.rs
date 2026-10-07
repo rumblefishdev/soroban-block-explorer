@@ -1,10 +1,9 @@
 //! Soroban `ContractEventType` discriminator (3 variants).
 //!
-//! ADR 0033 removed the DB column `soroban_events.event_type`; this enum is
-//! still the canonical in-memory classifier. The indexer uses it to filter
-//! diagnostic events out of the appearance aggregate, and the API uses it
-//! at read time to tag events extracted from the ledger XDR. Values mirror
-//! the XDR enum (`System = 0`, `Contract = 1`, `Diagnostic = 2`).
+//! Stored as `soroban_events.event_type` (only consensus events: system and
+//! contract; diagnostic events are not stored). The API labels events with
+//! it, both from that column and from the ledger XDR. Values mirror the XDR
+//! enum (`System = 0`, `Contract = 1`, `Diagnostic = 2`).
 
 use serde::{Deserialize, Serialize};
 

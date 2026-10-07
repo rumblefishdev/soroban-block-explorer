@@ -297,10 +297,7 @@ async fn search_pools_by_asset_code(
 
     let leg_ids: BTreeSet<i64> = rows.iter().flat_map(|p| p.legs.iter().copied()).collect();
     let identities = resolve_asset_identities(client, &leg_ids).await?;
-    Ok(rows
-        .into_iter()
-        .map(|p| pool_hit(&p, &identities))
-        .collect())
+    rows.iter().map(|p| pool_hit(p, &identities)).collect()
 }
 
 /// Fires only for a hash-shaped query. `pool_id` is the full ORDER BY key, so
@@ -332,13 +329,16 @@ async fn search_pool_by_id(
 
     let leg_ids: BTreeSet<i64> = p.legs.iter().copied().collect();
     let identities = resolve_asset_identities(client, &leg_ids).await?;
-    Ok(vec![pool_hit(&p, &identities)])
+    Ok(vec![pool_hit(&p, &identities)?])
 }
 
 /// Shared by both pool arms so an id hit and a code hit cannot describe the
 /// same pool differently.
-fn pool_hit(p: &PoolRow, identities: &HashMap<i64, ResolvedAsset>) -> (String, SearchHit) {
-    (
+fn pool_hit(
+    p: &PoolRow,
+    identities: &HashMap<i64, ResolvedAsset>,
+) -> Result<(String, SearchHit), clickhouse::error::Error> {
+    Ok((
         "pool".to_string(),
         SearchHit {
             entity_type: EntityType::Pool,
@@ -348,7 +348,7 @@ fn pool_hit(p: &PoolRow, identities: &HashMap<i64, ResolvedAsset>) -> (String, S
             // one — and the wrong encoding is well-formed, not an error.
             identifier: pool_id_hex_to_strkey(
                 &p.pool_hex,
-                decode_pool_kind(&p.pool_hex, p.pool_kind),
+                decode_pool_kind(&p.pool_hex, p.pool_kind)?,
             ),
             label: p
                 .legs
@@ -362,7 +362,7 @@ fn pool_hit(p: &PoolRow, identities: &HashMap<i64, ResolvedAsset>) -> (String, S
             contract_id: None,
             token_id: None,
         },
-    )
+    ))
 }
 
 // ---------------------------------------------------------------------------
