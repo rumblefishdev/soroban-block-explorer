@@ -17,8 +17,8 @@ use crate::transactions::dto::TxListCursor;
 
 use super::dto::{
     AccountBalance, AccountBalanceChange, AccountDetailResponse, AccountListItem, AccountSigner,
-    AccountSigning, AccountTransactionItem, AccountTxListParams, AccountsListCursor,
-    AccountsListParams,
+    AccountSigning, AccountSponsorship, AccountTransactionItem, AccountTxListParams,
+    AccountsListCursor, AccountsListParams,
 };
 use super::queries::{
     self, AccountBalanceRow, AccountEntryStateRow, AccountHeaderRow, AccountListRow, AccountTxRow,
@@ -189,31 +189,45 @@ pub async fn get_account(
         }
     };
 
-    let signing = match signing_res {
-        Ok(row) => row.map(|r| AccountSigning {
-            // Zip the three parallel arrays the table stores. They cannot be
-            // ragged — the writer pushes to all three adjacently, after every
-            // `continue` (`stage.rs`), and the whole table measures 0 ragged
-            // rows out of 10.9M — so `zip` truncating to the shortest is a
-            // safe default for a shape that does not occur, not a decision
-            // about one that does.
-            signers: r
-                .signer_keys
-                .into_iter()
-                .zip(r.signer_weights)
-                .zip(r.signer_types)
-                .map(|((key, weight), signer_type)| AccountSigner {
-                    key,
-                    weight,
-                    signer_type,
-                })
-                .collect(),
-            master_weight: u32::from(r.master_weight),
-            threshold_low: u32::from(r.threshold_low),
-            threshold_med: u32::from(r.threshold_med),
-            threshold_high: u32::from(r.threshold_high),
-            last_updated_ledger: r.last_updated_ledger,
-        }),
+    // One `account_entry_state` row carries both the signing configuration
+    // and the sponsorship counters.
+    let (signing, sponsorship) = match signing_res {
+        Ok(row) => {
+            // A closed account keeps its last row from before the merge, so its
+            // counters describe reserves that no longer exist: none are shown.
+            let sponsorship = match (&row, deleted) {
+                (Some(r), false) => Some(AccountSponsorship {
+                    num_sponsoring: r.num_sponsoring,
+                    num_sponsored: r.num_sponsored,
+                }),
+                _ => None,
+            };
+            let signing = row.map(|r| AccountSigning {
+                // Zip the three parallel arrays the table stores. They cannot be
+                // ragged — the writer pushes to all three adjacently, after every
+                // `continue` (`stage.rs`), and the whole table measures 0 ragged
+                // rows out of 10.9M — so `zip` truncating to the shortest is a
+                // safe default for a shape that does not occur, not a decision
+                // about one that does.
+                signers: r
+                    .signer_keys
+                    .into_iter()
+                    .zip(r.signer_weights)
+                    .zip(r.signer_types)
+                    .map(|((key, weight), signer_type)| AccountSigner {
+                        key,
+                        weight,
+                        signer_type,
+                    })
+                    .collect(),
+                master_weight: u32::from(r.master_weight),
+                threshold_low: u32::from(r.threshold_low),
+                threshold_med: u32::from(r.threshold_med),
+                threshold_high: u32::from(r.threshold_high),
+                last_updated_ledger: r.last_updated_ledger,
+            });
+            (signing, sponsorship)
+        }
         Err(e) => {
             tracing::error!(account_id = %account_id, error = %e, "DB error fetching account entry state");
             return errors::internal_error(errors::DB_ERROR, "database error");
@@ -229,6 +243,7 @@ pub async fn get_account(
         last_seen_ledger: header.last_seen_ledger,
         deleted,
         signing,
+        sponsorship,
     };
 
     let mut resp = Json(body).into_response();

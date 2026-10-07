@@ -2177,6 +2177,17 @@
                 "description": "Signing configuration, or `null` when we have never observed this\naccount's entry state.\n\n**`null` is NOT \"no extra signers\".** 25% of indexed accounts carry no\nrow, so a client that renders `null` as \"single signature\" is making a\nsecurity claim the data does not support. Render the unknown as\nunknown."
               }
             ]
+          },
+          "sponsorship": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AccountSponsorship",
+                "description": "Sponsored reserves (CAP-33), or `null` when the account has no entry\non the ledger — closed (`deleted`), or never an account (no\n`account_entry_state` row) — so it holds no reserves to count. Render\nnothing for `null`."
+              }
+            ]
           }
         }
       },
@@ -2268,6 +2279,25 @@
           "threshold_med": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "AccountSponsorship": {
+        "type": "object",
+        "description": "The CAP-33 counters the network keeps on the account itself, copied as\nstored. A reserve is the base reserve the network locks per ledger entry\n(2 for the account, 1 per sub-entry, 1 per claimant of a claimable\nbalance); a sponsor can pay it for someone else.",
+        "required": ["num_sponsoring", "num_sponsored"],
+        "properties": {
+          "num_sponsored": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reserves of this account paid by others.",
+            "minimum": 0
+          },
+          "num_sponsoring": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reserves this account pays for other accounts and claimable balances.",
             "minimum": 0
           }
         }

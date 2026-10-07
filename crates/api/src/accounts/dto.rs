@@ -119,6 +119,23 @@ pub struct AccountDetailResponse {
     /// security claim the data does not support. Render the unknown as
     /// unknown.
     pub signing: Option<AccountSigning>,
+    /// Sponsored reserves (CAP-33), or `null` when the account has no entry
+    /// on the ledger — closed (`deleted`), or never an account (no
+    /// `account_entry_state` row) — so it holds no reserves to count. Render
+    /// nothing for `null`.
+    pub sponsorship: Option<AccountSponsorship>,
+}
+
+/// The CAP-33 counters the network keeps on the account itself, copied as
+/// stored. A reserve is the base reserve the network locks per ledger entry
+/// (2 for the account, 1 per sub-entry, 1 per claimant of a claimable
+/// balance); a sponsor can pay it for someone else.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountSponsorship {
+    /// Reserves this account pays for other accounts and claimable balances.
+    pub num_sponsoring: u32,
+    /// Reserves of this account paid by others.
+    pub num_sponsored: u32,
 }
 
 /// One entry of an account's signer list, exactly as the ledger stores it.

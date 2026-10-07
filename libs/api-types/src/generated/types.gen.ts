@@ -152,6 +152,7 @@ export type AccountDetailResponse = {
   last_seen_ledger: number;
   sequence_number: number;
   signing?: null | AccountSigning;
+  sponsorship?: null | AccountSponsorship;
 };
 
 /**
@@ -220,6 +221,23 @@ export type AccountSigning = {
   threshold_high: number;
   threshold_low: number;
   threshold_med: number;
+};
+
+/**
+ * The CAP-33 counters the network keeps on the account itself, copied as
+ * stored. A reserve is the base reserve the network locks per ledger entry
+ * (2 for the account, 1 per sub-entry, 1 per claimant of a claimable
+ * balance); a sponsor can pay it for someone else.
+ */
+export type AccountSponsorship = {
+  /**
+   * Reserves of this account paid by others.
+   */
+  num_sponsored: number;
+  /**
+   * Reserves this account pays for other accounts and claimable balances.
+   */
+  num_sponsoring: number;
 };
 
 /**
