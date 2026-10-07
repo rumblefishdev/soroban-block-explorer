@@ -42,8 +42,10 @@ needs a new table.
 - Done: #625, #626, #627 live in `production-2026.10.07-1` (testnet since
   2026-10-07); ALTERs on `default` and `testnet`. Mainnet wallet
   `GAUA7…PNJU` 4,051,315 / 0 equals RPC.
-- Next: #638 (1b) in review; then a `snapshot-seed` dry-run and `--execute`
-  from a current build.
+- Done: #638 merged; seed `--execute` at checkpoint 64,819,327 (2026-10-07):
+  11,046,717 rows, 2,674,015 repaired (same ledger, other counters),
+  8,358,413 identical, 14,289 ours newer. RPC sample 21/21 equal.
+- Next: 1c — API + page (two Summary rows).
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
