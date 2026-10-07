@@ -66,3 +66,115 @@ fn wat_direct_request() {
     assert_eq!(d.representation, "wat");
     assert!(d.rust_error.is_none());
 }
+
+// ---- RPC pool failover, against local endpoints --------------------------
+
+const HASH: [u8; 32] = [7; 32];
+
+/// A `getLedgerEntries` answer holding one CONTRACT_CODE entry for `HASH`.
+fn code_answer() -> serde_json::Value {
+    let entry = LedgerEntryData::ContractCode(stellar_xdr::ContractCodeEntry {
+        ext: stellar_xdr::ContractCodeEntryExt::V0,
+        hash: Hash(HASH),
+        code: b"\0asm".to_vec().try_into().unwrap(),
+    });
+    let xdr = BASE64.encode(entry.to_xdr(Limits::none()).unwrap());
+    serde_json::json!({ "jsonrpc": "2.0", "id": 1,
+        "result": { "entries": [ { "xdr": xdr } ], "latestLedger": 1 } })
+}
+
+fn empty_answer() -> serde_json::Value {
+    serde_json::json!({ "jsonrpc": "2.0", "id": 1,
+        "result": { "entries": [], "latestLedger": 1 } })
+}
+
+/// Serves each path with a fixed (status, body); returns the base URL.
+async fn serve(routes: Vec<(&'static str, u16, serde_json::Value)>) -> String {
+    let mut app = axum::Router::new();
+    for (path, status, body) in routes {
+        app = app.route(
+            path,
+            axum::routing::post(move || {
+                let body = body.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        axum::Json(body),
+                    )
+                }
+            }),
+        );
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+/// A failing endpoint is skipped; the next one's entry is returned.
+#[tokio::test]
+async fn failover_returns_the_next_endpoints_entry() {
+    let base = serve(vec![
+        ("/down", 500, empty_answer()),
+        ("/up", 200, code_answer()),
+    ])
+    .await;
+    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/down"), format!("{base}/up")]);
+    let code = fetcher.fetch_wasm(&hex::encode(HASH)).await.unwrap();
+    assert_eq!(code.as_deref(), Some(&b"\0asm"[..]));
+}
+
+/// An empty answer is not believed until every endpoint gives it.
+#[tokio::test]
+async fn empty_everywhere_is_not_live_empty_once_asks_on() {
+    let base = serve(vec![
+        ("/a", 200, empty_answer()),
+        ("/b", 200, code_answer()),
+    ])
+    .await;
+    let mixed = WasmCodeFetcher::with_urls(vec![format!("{base}/a"), format!("{base}/b")]);
+    assert!(
+        mixed
+            .fetch_wasm(&hex::encode(HASH))
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let all_empty = WasmCodeFetcher::with_urls(vec![format!("{base}/a"), format!("{base}/a")]);
+    assert!(
+        all_empty
+            .fetch_wasm(&hex::encode(HASH))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Empty on one endpoint and a failure on another is an error, not "gone".
+#[tokio::test]
+async fn empty_plus_failure_is_an_error() {
+    let base = serve(vec![
+        ("/a", 200, empty_answer()),
+        ("/down", 503, empty_answer()),
+    ])
+    .await;
+    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/a"), format!("{base}/down")]);
+    assert!(matches!(
+        fetcher.fetch_wasm(&hex::encode(HASH)).await,
+        Err(FetchError::Rpc(_))
+    ));
+}
+
+/// An RPC error object stops at once, without asking the rest of the pool.
+#[tokio::test]
+async fn rpc_error_object_stops_at_once() {
+    let err = serde_json::json!({ "jsonrpc": "2.0", "id": 1,
+        "error": { "code": -32600, "message": "bad" } });
+    let base = serve(vec![("/err", 200, err), ("/up", 200, code_answer())]).await;
+    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/err"), format!("{base}/up")]);
+    assert!(matches!(
+        fetcher.fetch_wasm(&hex::encode(HASH)).await,
+        Err(FetchError::RpcError(_))
+    ));
+}

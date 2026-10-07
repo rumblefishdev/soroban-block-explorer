@@ -84,6 +84,16 @@ impl WasmCodeFetcher {
         })
     }
 
+    /// A fetcher over a fixed RPC pool — for tests that stand up their own
+    /// endpoints.
+    #[cfg(test)]
+    pub(crate) fn with_urls(rpc_urls: Vec<String>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            rpc_urls: Arc::new(rpc_urls),
+        }
+    }
+
     /// Fetch the contract code bytes for a lowercase-hex wasm hash.
     ///
     /// `Ok(None)` means the RPC answered but holds no live `CONTRACT_CODE`
