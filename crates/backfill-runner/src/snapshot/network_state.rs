@@ -443,15 +443,14 @@ fn trustline_identity(rec: &SnapshotRecord) -> Option<(String, String)> {
 
 /// Build the per-account detail the seed needs (signers, thresholds, identity).
 fn account_detail(a: &stellar_xdr::AccountEntry) -> AccountDetail {
-    let (num_sponsoring, num_sponsored) = xdr_parser::ledger_entry_changes::sponsorship_counts(a);
     AccountDetail {
         strkey: a.account_id.to_string(),
         seq_num: i64::from(a.seq_num.clone()),
         home_domain: String::from_utf8_lossy(a.home_domain.as_slice()).to_string(),
         thresholds: a.thresholds.0,
         flags: a.flags,
-        num_sponsoring,
-        num_sponsored,
+        num_sponsoring: xdr_parser::ledger_entry_changes::num_sponsoring(a),
+        num_sponsored: xdr_parser::ledger_entry_changes::num_sponsored(a),
         signers: a
             .signers
             .iter()

@@ -612,11 +612,13 @@ fn v2(num_sponsoring: u32, num_sponsored: u32) -> AccountEntryExtensionV1Ext {
 /// and an account whose 3 reserves a sponsor pays. lore-0629.
 #[test]
 fn sponsorship_counts_copy_the_v2_extension() {
-    assert_eq!(
-        sponsorship_counts(&account_with_ext(v2(4_044_091, 0))),
-        (4_044_091, 0)
-    );
-    assert_eq!(sponsorship_counts(&account_with_ext(v2(0, 3))), (0, 3));
+    let wallet = account_with_ext(v2(4_044_091, 0));
+    assert_eq!(num_sponsoring(&wallet), 4_044_091);
+    assert_eq!(num_sponsored(&wallet), 0);
+
+    let sponsored = account_with_ext(v2(0, 3));
+    assert_eq!(num_sponsoring(&sponsored), 0);
+    assert_eq!(num_sponsored(&sponsored), 3);
 }
 
 /// Without the V2 extension the account never took part in sponsorship: the
@@ -626,11 +628,12 @@ fn sponsorship_counts_are_zero_without_the_v2_extension() {
     let LedgerEntryData::Account(v0) = make_account_entry(make_account_id(0xC2), 0).data else {
         unreachable!()
     };
-    assert_eq!(sponsorship_counts(&v0), (0, 0));
-    assert_eq!(
-        sponsorship_counts(&account_with_ext(AccountEntryExtensionV1Ext::V0)),
-        (0, 0)
-    );
+    assert_eq!(num_sponsoring(&v0), 0);
+    assert_eq!(num_sponsored(&v0), 0);
+
+    let v1_only = account_with_ext(AccountEntryExtensionV1Ext::V0);
+    assert_eq!(num_sponsoring(&v1_only), 0);
+    assert_eq!(num_sponsored(&v1_only), 0);
 }
 
 #[test]
