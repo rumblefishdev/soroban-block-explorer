@@ -609,8 +609,8 @@ the API saying what the chain says. `master_weight = 0` renders as `master key �
 — a permanently disabled key, not a low-weight signer, and the second most common shape
 on pubnet. An account no key can sign for gets its own marker. The footer states total
 weight beside all three thresholds rather than one "N of M", which would pick one
-threshold and hide two. `preauth_tx` and `hash_x` signers render unlinked; they are not
-accounts.
+threshold and hide two. Signers render unlinked: a key is not an account — an `ed25519`
+key often has no account on the ledger, and `preauth_tx` / `hash_x` keys never do.
 
 A missing signing configuration is stated as a fact about the ledger, not as thin
 coverage: after the checkpoint seed every live account has one, and accounts without a
@@ -640,7 +640,7 @@ describe reserves that no longer exist) — and the page then hides the row.
 
 **Sponsored reserves card** (task 0629, stage 2): for an account with sponsored reserves,
 a card after Signers lists which of its entries another account pays for — the account's
-base reserve, each sponsored trustline and signer — in one folding group per sponsor (header: the sponsor and its total; a lone sponsor opens folded out, several start folded), with the number of sponsors in the card header; when the chain's
+base reserve, each sponsored trustline and signer — in one folding group per sponsor (header: the sponsor and its total; every group starts folded), with the number of sponsors in the card header; when the chain's
 `num_sponsored` is larger than what the list shows (offers, data entries, pool-share
 trustlines — none of which are listed), a line
 under the list says how many reserves are not named. It comes from `GET /v1/accounts/{id}/sponsorship`, which the API answers live

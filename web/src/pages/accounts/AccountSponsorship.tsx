@@ -19,6 +19,7 @@ import {
   classifyError,
   formatAmount,
   IdentifierDisplay,
+  IdentifierWithCopy,
   isMissingResource,
   PaginationControls,
   QueryErrorState,
@@ -47,8 +48,9 @@ function EntryLabel({ entry }: { entry: AccountSponsoredEntry }) {
       <Stack direction="row" spacing={1} alignItems="baseline">
         <span>Signer</span>
         {/* A signer is a key, not an account: most have no account entry
-            on the ledger, so a link would land on a missing page. */}
-        <IdentifierDisplay
+            on the ledger, so a link would land on a missing page. The copy
+            button gives the full key the truncation hides. */}
+        <IdentifierWithCopy
           value={entry.signer}
           type="account"
           linked={false}
@@ -97,11 +99,9 @@ function bySponsor(entries: AccountSponsoredEntry[]) {
 function SponsorGroup({
   sponsor,
   entries,
-  defaultExpanded,
 }: {
   sponsor: string;
   entries: AccountSponsoredEntry[];
-  defaultExpanded: boolean;
 }) {
   const [page, setPage] = useState(0);
   const reserves = entries.reduce((sum, e) => sum + e.reserves, 0);
@@ -113,7 +113,6 @@ function SponsorGroup({
       disableGutters
       square
       elevation={0}
-      defaultExpanded={defaultExpanded}
       sx={(theme) => ({
         backgroundColor: 'transparent',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
@@ -140,7 +139,10 @@ function SponsorGroup({
           <Typography variant="bodySmRegular" component="span">
             Paid by
           </Typography>
-          <IdentifierDisplay value={sponsor} type="account" fontSize={13} />
+          {/* The link opens the sponsor; it must not also fold the group. */}
+          <Box component="span" onClick={(e) => e.stopPropagation()}>
+            <IdentifierDisplay value={sponsor} type="account" fontSize={13} />
+          </Box>
         </Stack>
         <Typography variant="bodySmRegular" component="span">
           {formatAmount(reserves)} {reserves === 1 ? 'reserve' : 'reserves'}
@@ -174,8 +176,8 @@ function SponsorGroup({
 /**
  * The card's body once the answer is in. Exported for tests.
  *
- * One folding group per sponsor. A single sponsor opens folded out — there is
- * nothing to choose between; several start folded, their totals in view.
+ * One folding group per sponsor, folded at first: the sponsors and their
+ * totals in view, the entries a click away.
  */
 export function SponsorshipList({
   data,
@@ -205,12 +207,7 @@ export function SponsorshipList({
   return (
     <Box>
       {groups.map(([sponsor, entries]) => (
-        <SponsorGroup
-          key={sponsor}
-          sponsor={sponsor}
-          entries={entries}
-          defaultExpanded={groups.length === 1}
-        />
+        <SponsorGroup key={sponsor} sponsor={sponsor} entries={entries} />
       ))}
       {unlisted > 0 && (
         <Line>

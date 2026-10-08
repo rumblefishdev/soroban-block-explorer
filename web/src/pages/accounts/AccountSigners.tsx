@@ -1,6 +1,9 @@
 import { Box, Stack, Typography } from '@mui/material';
 import type { AccountSigning } from '@rumblefish/api-types';
-import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  Chip,
+  IdentifierWithCopy,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../detail/SectionCard.js';
 
@@ -10,8 +13,6 @@ interface SignerRow {
   weight: number;
   /** `true` for the account's own key — it gets the badge and sorts first. */
   master: boolean;
-  /** `ed25519` signers are accounts and link; the hash types are not. */
-  linked: boolean;
   note?: string;
 }
 
@@ -34,7 +35,6 @@ function rows(accountId: string, signing: AccountSigning): SignerRow[] {
     key: accountId,
     weight: signing.master_weight,
     master: true,
-    linked: false,
     note: signing.master_weight === 0 ? 'master key — disabled' : 'master key',
   };
   return [
@@ -43,10 +43,6 @@ function rows(accountId: string, signing: AccountSigning): SignerRow[] {
       key: s.key,
       weight: s.weight,
       master: false,
-      // Only `ed25519` signers are accounts (`G…`). `preauth_tx` (`T…`) and
-      // `hash_x` (`X…`) are not, and linking them would route to an account
-      // page that cannot exist.
-      linked: s.type === 'ed25519',
     })),
   ];
 }
@@ -69,10 +65,14 @@ function SignerLine({ row, alt }: { row: SignerRow; alt: boolean }) {
       })}
     >
       <Stack sx={{ minWidth: 0 }}>
-        <IdentifierDisplay
+        {/* A signer is a key, not an account: a `G…` key often has no
+            account on the ledger, and `T…` / `X…` never do, so a link would
+            land on a missing page. The copy button gives the full key the
+            truncation hides. */}
+        <IdentifierWithCopy
           value={row.key}
           type="account"
-          linked={row.linked}
+          linked={false}
           fontSize={14}
         />
         {row.note && (
