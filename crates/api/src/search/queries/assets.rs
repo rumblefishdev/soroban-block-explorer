@@ -6,6 +6,7 @@ use clickhouse::Row;
 use serde::Deserialize;
 
 use super::{IncludeFlags, asset_family_name, asset_route_token};
+use crate::common::asset_identity::{ResolvedAsset, leg_label};
 use crate::search::classifier::Classified;
 use crate::search::dto::{EntityType, SearchHit};
 
@@ -22,6 +23,8 @@ pub(super) struct AssetPhase1Row {
     pub(super) contract_strkey: Option<String>,
     /// Surrogate `accounts.id`; `0` = no issuer (native / soroban-native).
     pub(super) issuer_id: i64,
+    /// A Soroban token's self-declared symbol, `nullIf`-collapsed.
+    pub(super) symbol: Option<String>,
 }
 
 #[derive(Debug, Row, Deserialize)]
@@ -82,7 +85,10 @@ pub(super) async fn search_assets(
     // compare it — never the stored value. Native XLM stores an EMPTY code and
     // renders as `XLM`, so comparing what is stored returned thousands of
     // impostor codes and missed the one asset everybody meant. That is also why
-    // there is no `native` arm: the alias IS the comparison.
+    // there is no `native` arm: the alias IS the comparison. A Soroban token
+    // stores no code at all, so its self-declared symbol and name match too,
+    // as in the assets list, and an exact or prefix symbol ranks like a code
+    // (task 0636).
     //
     // The same expression appears in `assets::queries` (the list) and in
     // `common::pool_asset_codes` (the legs). It was briefly a shared builder;
@@ -103,18 +109,22 @@ pub(super) async fn search_assets(
     // The trailing PK columns make the order total: holder counts are NULL for
     // most rows, and "same query, same answer" is half of what this fixes.
     //
-    // The exact arm deliberately takes none of this: a qualified pair names one
-    // row, so there is nothing to rank and nothing to pay the join for.
+    // The exact arm deliberately takes none of the ranking: a qualified pair
+    // names one row, so there is nothing to rank and no holders to join. It
+    // shares the head's metadata join (a 4.3k-row table) for the hit's label.
     const ASSET_HEAD: &str = "SELECT \
             a.asset_type AS asset_type, \
             nullIf(a.asset_code, '') AS asset_code, \
             nullIf(sc.contract_id, '') AS contract_strkey, \
-            a.issuer_id AS issuer_id \
+            a.issuer_id AS issuer_id, \
+            nullIf(m.symbol, '') AS symbol \
          FROM assets a FINAL \
          LEFT JOIN ( \
              SELECT id, any(contract_id) AS contract_id \
              FROM soroban_contracts GROUP BY id \
-         ) sc ON sc.id = a.contract_id ";
+         ) sc ON sc.id = a.contract_id \
+         LEFT JOIN (SELECT contract_id, name, symbol FROM soroban_contract_metadata FINAL) m \
+             ON m.contract_id = sc.contract_id ";
     let rows = if let Some((code, issuer)) = classified.code_issuer.as_ref() {
         let sql = format!(
             "{ASSET_HEAD} \
@@ -133,17 +143,24 @@ pub(super) async fn search_assets(
             "{ASSET_HEAD} \
              LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
              WHERE position({shown}, lower(?)) > 0 \
-             ORDER BY multiIf({shown} = lower(?), 0, \
-                              startsWith({shown}, lower(?)), 1, \
+                OR positionCaseInsensitiveUTF8(coalesce(m.symbol, ''), ?) > 0 \
+                OR positionCaseInsensitiveUTF8(coalesce(m.name, ''), ?) > 0 \
+             ORDER BY multiIf({shown} = lower(?) OR {symbol} = lower(?), 0, \
+                              startsWith({shown}, lower(?)) OR startsWith({symbol}, lower(?)), 1, \
                               2) ASC, \
                  bagg.holder_count DESC NULLS LAST, \
                  a.asset_type ASC, a.asset_code ASC, a.issuer_id ASC \
              LIMIT {per_group_limit}",
             shown = crate::common::asset_identity::shown_code_sql("a."),
+            symbol = "lower(coalesce(m.symbol, ''))",
         );
-        // One bind for the match, two for the tier — left to right, same needle.
+        // Three binds for the match, four for the tier — left to right, same needle.
         client
             .query(&sql)
+            .bind(q)
+            .bind(q)
+            .bind(q)
+            .bind(q)
             .bind(q)
             .bind(q)
             .bind(q)
@@ -200,9 +217,18 @@ pub(super) async fn search_assets(
                 "asset".to_string(),
                 SearchHit {
                     entity_type: EntityType::Asset,
-                    // Display id is the asset code; native (no code) shows XLM,
-                    // matching the PG `COALESCE(asset_code, 'XLM')`.
-                    identifier: r.asset_code.unwrap_or_else(|| "XLM".to_string()),
+                    // What the asset is CALLED, by the one ladder the API uses:
+                    // its code (native: XLM), a Soroban token's symbol, else
+                    // its contract (task 0636).
+                    identifier: leg_label(Some(&ResolvedAsset {
+                        known: true,
+                        asset_type: r.asset_type,
+                        asset_code: r.asset_code,
+                        issuer: None,
+                        contract_strkey: r.contract_strkey,
+                        symbol: r.symbol,
+                        decimals: None,
+                    })),
                     label: asset_family_name(r.asset_type).unwrap_or_default(),
                     route_token,
                     successful: None,

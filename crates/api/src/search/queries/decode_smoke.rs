@@ -177,7 +177,7 @@ async fn a_strkey_shaped_query_never_scans_the_pools_table() {
 /// which read as the 0440 fix not working.
 ///
 /// This does NOT re-test the matching rule: both surfaces call
-/// `common::pool_asset_codes::asset_codes_predicate`, so they cannot
+/// `common::pool_asset_codes::pool_asset_filter`, so they cannot
 /// disagree, and that module's unit tests pin the pair semantics and the
 /// native arm. What is only testable against a real ClickHouse is the rest
 /// of this arm — that the grouped subquery parses, that `PoolRow` decodes
