@@ -1,6 +1,9 @@
 import { Box, Stack, Typography } from '@mui/material';
 import type { AccountSigning } from '@rumblefish/api-types';
-import { Chip, IdentifierDisplay } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  Chip,
+  IdentifierWithCopy,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { SectionCard } from '../detail/SectionCard.js';
 
@@ -64,8 +67,9 @@ function SignerLine({ row, alt }: { row: SignerRow; alt: boolean }) {
       <Stack sx={{ minWidth: 0 }}>
         {/* A signer is a key, not an account: a `G…` key often has no
             account on the ledger, and `T…` / `X…` never do, so a link would
-            land on a missing page. */}
-        <IdentifierDisplay
+            land on a missing page. The copy button gives the full key the
+            truncation hides. */}
+        <IdentifierWithCopy
           value={row.key}
           type="account"
           linked={false}
