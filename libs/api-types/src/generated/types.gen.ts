@@ -42,7 +42,7 @@ export type AccountBalance = {
   /**
    * Asset display `name`, from two disjoint sources by asset type: classic /
    * native → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic
-   * assets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. "USDC-EURC
+   * assets carry one); Soroban (type-3) → the token's own `name()` (e.g. "USDC-EURC
    * Soroswap LP Token", 100% coverage). Distinct from the `symbol` ticker.
    * `null` when neither source has a name.
    */
@@ -63,7 +63,7 @@ export type AccountBalance = {
    */
   sac_deployed: boolean;
   /**
-   * On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
+   * On-chain token `symbol` (type-3, its own `symbol()`, e.g. "SMOL") — the short
    * ticker. `null` for native / classic (they carry `asset_code`).
    */
   symbol?: string | null;
@@ -407,7 +407,7 @@ export type AssetDetailResponse = {
    */
   sac_deployed?: boolean | null;
   /**
-   * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+   * On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic
    * (use `asset_code`) and native.
    */
   symbol?: string | null;
@@ -505,7 +505,7 @@ export type AssetItem = {
    */
   sac_deployed?: boolean | null;
   /**
-   * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+   * On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic
    * (use `asset_code`) and native.
    */
   symbol?: string | null;
@@ -1558,7 +1558,7 @@ export type PaginatedAssetItem = {
      */
     sac_deployed?: boolean | null;
     /**
-     * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+     * On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic
      * (use `asset_code`) and native.
      */
     symbol?: string | null;

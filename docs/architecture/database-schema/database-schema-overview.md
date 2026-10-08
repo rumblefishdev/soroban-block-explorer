@@ -912,7 +912,7 @@ CREATE TABLE soroban_contracts (
     is_sac                  BOOLEAN     NOT NULL DEFAULT false,
     executable_owner_id     BIGINT      REFERENCES soroban_contracts(id),   -- CAP-85 / 0548
     executable_tag          TEXT,                                           -- CAP-85 / 0548
-    name                    VARCHAR(256),                                   -- ADR 0042; legacy/empirically empty — on-chain token name lives in instance-storage METADATA, see task 0297
+    name                    VARCHAR(256),                                   -- ADR 0042; legacy/empirically empty — a token's name lives in `soroban_contract_metadata`, read from its own functions (task 0620)
     search_vector           TSVECTOR GENERATED ALWAYS AS (
                                 to_tsvector('simple', COALESCE(name, '') || ' ' || contract_id)
                             ) STORED,

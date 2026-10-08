@@ -144,11 +144,14 @@ pub async fn ledger_metadata_writes(
         declares.insert(hash, declared);
         entries.insert(code_key(hash), code_entry(hash, p.code.clone()));
     }
-    let unknown: Vec<String> = changed
+    // Many contracts share a program; each hash once keeps the query short.
+    let mut unknown: Vec<String> = changed
         .values()
         .filter(|h| !declares.contains_key(*h))
         .map(hex::encode)
         .collect();
+    unknown.sort();
+    unknown.dedup();
     if !unknown.is_empty() {
         // Only the interface first: most changed instances have no metadata
         // (a farm contract rewrites its instance every ledger), and their

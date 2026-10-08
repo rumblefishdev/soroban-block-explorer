@@ -170,6 +170,10 @@ pub struct PartitionWriterHandle {
 impl PartitionWriterHandle {
     pub async fn write_ledger(&mut self, meta: &LedgerCloseMeta) -> Result<(), BackfillError> {
         let writes_balances = self.only.as_ref().is_none_or(|t| t.contains("balances"));
+        let writes_metadata = self
+            .only
+            .as_ref()
+            .is_none_or(|t| t.contains("soroban_contract_metadata"));
         let pw = &mut self.writer;
         {
             let parsed = indexer::handler::process::parse_ledger(meta);
@@ -177,11 +181,12 @@ impl PartitionWriterHandle {
             // writes. A program uploaded earlier in this partition is not in
             // `wasm_programs` yet, so its contracts get no write here;
             // `contract-metadata-backfill` fills them afterwards.
-            let metadata_writes = indexer::token_metadata_by_functions::contract_metadata_writes(
-                pw.client(),
-                &parsed,
-            )
-            .await?;
+            let metadata_writes = if writes_metadata {
+                indexer::token_metadata_by_functions::contract_metadata_writes(pw.client(), &parsed)
+                    .await?
+            } else {
+                Vec::new()
+            };
             // ADR 0051 — contract-held SAC balances and soroban pool legs key
             // onto the wrapped classic/native asset through this map; the
             // balances only matter when this write persists `balances`.

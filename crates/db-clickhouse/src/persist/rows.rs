@@ -223,11 +223,11 @@ pub struct ContractInstanceRow {
     pub ledger: i64,
 }
 
-/// `soroban_contract_metadata` — on-chain Soroban token metadata
-/// (name/symbol/decimals) from the instance-storage `Symbol("METADATA")`
-/// struct. RMT(version); `version` = observed ledger (latest wins). Per
-/// `contract_id`; SACs are excluded by the producer
-/// (`xdr_parser::extract_contract_metadata_writes`). Separate table — never
+/// `soroban_contract_metadata` — Soroban token and NFT metadata
+/// (name/symbol/decimals): what the contract's own functions return (task
+/// 0620). RMT(version); `version` = the ledger the functions ran at (latest
+/// wins). Per `contract_id`; a SAC has no Wasm program, so it never gets a
+/// row. Separate table — never
 /// columns on `soroban_contracts` — to dodge the RMT whole-row clobber across
 /// that table's many writers (deploy / rebuild EXCHANGE / stubs / db-merge).
 /// See task 0297.
