@@ -31,17 +31,17 @@ fn empty_and_blank_yield_no_needles() {
 
 #[test]
 fn no_needles_means_no_clause() {
-    assert!(asset_codes_predicate(&[]).is_none());
+    assert!(asset_codes_predicate(&[], &[]).is_none());
 }
 
 #[test]
 fn a_single_needle_asks_the_legs_once() {
-    let (sql, binds) = asset_codes_predicate(&codes("kale")).expect("clause");
-    assert_eq!(binds, vec!["KALE"]);
-    assert_eq!(sql.matches('?').count(), 1);
-    assert!(sql.contains("arrayExists"), "{sql}");
+    let f = asset_codes_predicate(&codes("kale"), &[vec![]]).expect("clause");
+    assert_eq!(f.binds, vec!["KALE"]);
+    assert_eq!(f.sql.matches('?').count(), 1);
+    assert!(f.sql.contains("arrayExists"), "{}", f.sql);
     assert!(
-        !sql.contains("arrayCount"),
+        !f.sql.contains("arrayCount"),
         "one needle needs no distinctness"
     );
 }
@@ -50,12 +50,13 @@ fn a_single_needle_asks_the_legs_once() {
 /// they are tied to DISTINCT legs, which the count enforces.
 #[test]
 fn a_pair_needs_two_distinct_legs() {
-    let (sql, binds) = asset_codes_predicate(&codes("xlm/kale")).expect("clause");
-    assert_eq!(binds, vec!["XLM", "KALE", "XLM", "KALE"]);
-    assert_eq!(sql.matches('?').count(), 4);
+    let f = asset_codes_predicate(&codes("xlm/kale"), &[vec![], vec![]]).expect("clause");
+    assert_eq!(f.binds, vec!["XLM", "KALE", "XLM", "KALE"]);
+    assert_eq!(f.sql.matches('?').count(), 4);
     assert!(
-        sql.contains(">= 2"),
-        "the distinctness clause is missing: {sql}"
+        f.sql.contains(">= 2"),
+        "the distinctness clause is missing: {}",
+        f.sql
     );
 }
 
@@ -63,16 +64,18 @@ fn a_pair_needs_two_distinct_legs() {
 /// halves of `USDC/USDC`.
 #[test]
 fn a_repeated_needle_still_needs_two_legs() {
-    let (sql, binds) = asset_codes_predicate(&codes("usdc/usdc")).expect("clause");
-    assert_eq!(binds, vec!["USDC", "USDC", "USDC", "USDC"]);
-    assert!(sql.contains("arrayCount"), "{sql}");
+    let f = asset_codes_predicate(&codes("usdc/usdc"), &[vec![], vec![]]).expect("clause");
+    assert_eq!(f.binds, vec!["USDC", "USDC", "USDC", "USDC"]);
+    assert!(f.sql.contains("arrayCount"), "{}", f.sql);
 }
 
 /// Load-bearing: without the `type = 0` arm, `XLM` matches impostor codes
 /// and misses every real XLM pool (task 0440).
 #[test]
 fn native_is_matched_by_type_not_by_code() {
-    let (sql, _) = asset_codes_predicate(&codes("xlm")).expect("clause");
+    let sql = asset_codes_predicate(&codes("xlm"), &[vec![]])
+        .expect("clause")
+        .sql;
     assert!(
         sql.contains("if(asset_type = 0, 'XLM'"),
         "the native alias is gone: {sql}"
@@ -83,8 +86,28 @@ fn native_is_matched_by_type_not_by_code() {
 /// what makes it answer for a soroban pool at all.
 #[test]
 fn it_reads_legs_and_not_the_pair_columns() {
-    let (sql, _) = asset_codes_predicate(&codes("usdc")).expect("clause");
+    let sql = asset_codes_predicate(&codes("usdc"), &[vec![]])
+        .expect("clause")
+        .sql;
     assert!(sql.contains("lp.legs"), "{sql}");
     assert!(!sql.contains("asset_a_"), "{sql}");
     assert!(!sql.contains("asset_b_"), "{sql}");
+}
+
+/// A Soroban token stores no code: the ids `soroban_token_ids` found for a
+/// needle join its leg match as a server parameter — and a needle matching too
+/// many tokens (a single letter) reads them in the query instead (task 0636).
+#[test]
+fn a_needles_soroban_tokens_join_its_own_leg_match() {
+    let f = asset_codes_predicate(&codes("xlm/solvbtc"), &[vec![], vec![-42, 7]]).expect("clause");
+    assert!(f.sql.contains("x IN {tokens_1:Array(Int64)}"), "{}", f.sql);
+    assert!(!f.sql.contains("tokens_0"), "{}", f.sql);
+    assert_eq!(f.params, vec![("tokens_1".to_string(), vec![-42, 7])]);
+    assert_eq!(f.binds.len(), 4);
+
+    let broad = vec![1; MAX_TOKEN_IDS_AS_PARAM + 1];
+    let f = asset_codes_predicate(&codes("s"), &[broad]).expect("clause");
+    assert!(f.params.is_empty());
+    assert!(f.sql.contains("soroban_contract_metadata"), "{}", f.sql);
+    assert_eq!(f.binds, vec!["S"; 3]);
 }

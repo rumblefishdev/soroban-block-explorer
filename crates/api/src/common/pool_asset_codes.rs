@@ -30,36 +30,142 @@ pub fn normalize_asset_codes(raw: Option<String>) -> Vec<String> {
         .collect()
 }
 
-/// Boolean expression matching pools against `codes`, plus its bind values in
-/// left-to-right `?` order. `None` when there is nothing to match on — the
-/// caller then adds no clause at all.
+/// The pool filter for `codes`, Soroban tokens included: reads each needle's
+/// tokens ([`soroban_token_ids`]) and builds [`asset_codes_predicate`]. `None`
+/// when there is nothing to match on. Shared by the pools list and search.
+pub async fn pool_asset_filter(
+    client: &clickhouse::Client,
+    codes: &[String],
+) -> Result<Option<PoolAssetFilter>, clickhouse::error::Error> {
+    let mut token_ids = Vec::new();
+    for code in codes {
+        token_ids.push(soroban_token_ids(client, code).await?);
+    }
+    Ok(asset_codes_predicate(codes, &token_ids))
+}
+
+/// The Soroban tokens whose self-declared name or symbol contains `needle`,
+/// as asset ids (a Soroban token's asset id is its contract surrogate). A
+/// Soroban token stores no code, so its symbol and name are what a user types
+/// (task 0636). One past [`MAX_TOKEN_IDS_AS_PARAM`] is enough to choose the
+/// in-query read, so no more are fetched.
+pub async fn soroban_token_ids(
+    client: &clickhouse::Client,
+    needle: &str,
+) -> Result<Vec<i64>, clickhouse::error::Error> {
+    let contracts: Vec<String> = client
+        .query(&format!(
+            "SELECT contract_id FROM soroban_contract_metadata FINAL \
+             WHERE positionCaseInsensitive(coalesce(name, ''), ?) > 0 \
+                OR positionCaseInsensitive(coalesce(symbol, ''), ?) > 0 \
+             LIMIT {}",
+            MAX_TOKEN_IDS_AS_PARAM + 1
+        ))
+        .bind(needle)
+        .bind(needle)
+        .fetch_all()
+        .await?;
+    Ok(contracts
+        .iter()
+        .map(|c| db_clickhouse::persist::ids::contract_id(c))
+        .collect())
+}
+
+/// Most Soroban tokens one needle may pass as a server parameter. Parameters
+/// travel in the request URI, which the HTTP client caps at 64 KiB (~23 bytes
+/// per id); 1,000 ids per needle keeps two needles near 46 KB, under the cap.
+/// Real symbols and names stay far below (`USD` matches 282 tokens, `XRP` 15);
+/// a single letter matches 3,000–3,700 (measured 2026-10-08).
+const MAX_TOKEN_IDS_AS_PARAM: usize = 1_000;
+
+/// A pool filter: the boolean expression, its `?` binds in left-to-right
+/// order, and the server parameters (`{tokens_i:Array(Int64)}`) it reads.
+pub struct PoolAssetFilter {
+    pub sql: String,
+    pub binds: Vec<String>,
+    pub params: Vec<(String, Vec<i64>)>,
+}
+
+/// The filter matching pools against `codes`; `None` when there is nothing to
+/// match on — the caller then adds no clause at all. `token_ids[i]` are
+/// [`soroban_token_ids`] of `codes[i]`.
 ///
-/// One code: some leg's asset displays a code containing it (native as `XLM`).
+/// One code: some leg's asset displays a code containing it (native as
+/// `XLM`), or is one of its Soroban tokens.
 ///
 /// Two codes: each on its OWN leg — both match somewhere, and at least two
 /// different legs match between them. Without the last clause one USDC leg
 /// would satisfy `USDC/USDC` (or `USD/USDC`) on its own.
-pub fn asset_codes_predicate(codes: &[String]) -> Option<(String, Vec<String>)> {
-    let leg_matches = format!(
-        "x IN (SELECT id FROM assets WHERE position({}, lower(?)) > 0)",
-        crate::common::asset_identity::shown_code_sql(""),
-    );
-    let m = &leg_matches;
-    match codes {
-        [one] => Some((format!("arrayExists(x -> {m}, lp.legs)"), vec![one.clone()])),
-        [first, second] => Some((
-            format!(
-                "(arrayExists(x -> {m}, lp.legs) AND arrayExists(x -> {m}, lp.legs) \
-                  AND arrayCount(x -> {m} OR {m}, lp.legs) >= 2)"
+///
+/// The token ids go in as a server parameter — a constant set, hashed once.
+/// Measured on production data 2026-10-08: read inside the query they cost
+/// +2.5M rows and +0.25 s per pool-list call (the subquery is re-read per
+/// block inside the lambda); inlined, two short needles exceed
+/// `max_query_size`; as a `has()` array, 9–33 s. Only a needle matching more
+/// than [`MAX_TOKEN_IDS_AS_PARAM`] tokens takes the in-query subquery.
+pub fn asset_codes_predicate(codes: &[String], token_ids: &[Vec<i64>]) -> Option<PoolAssetFilter> {
+    let mut params = Vec::new();
+    let mut legs = Vec::new();
+    for (i, code) in codes.iter().enumerate() {
+        legs.push(leg_matches(i, code, &token_ids[i], &mut params));
+    }
+    match legs.as_slice() {
+        [(m, b)] => Some(PoolAssetFilter {
+            sql: format!("arrayExists(x -> {m}, lp.legs)"),
+            binds: b.clone(),
+            params,
+        }),
+        [(m0, b0), (m1, b1)] => Some(PoolAssetFilter {
+            sql: format!(
+                "(arrayExists(x -> {m0}, lp.legs) AND arrayExists(x -> {m1}, lp.legs) \
+                  AND arrayCount(x -> {m0} OR {m1}, lp.legs) >= 2)"
             ),
             // One bind per `?`, left to right.
-            vec![first.clone(), second.clone(), first.clone(), second.clone()],
-        )),
+            binds: [b0.clone(), b1.clone(), b0.clone(), b1.clone()].concat(),
+            params,
+        }),
         // `normalize_asset_codes` yields at most two needles; zero means no
         // filter was asked for.
         _ => None,
     }
 }
 
+/// One leg matching needle `i`: its asset displays a code containing the
+/// needle, or it is one of the needle's Soroban tokens. Returns the
+/// expression and its binds; adds the server parameter it reads to `params`.
+fn leg_matches(
+    i: usize,
+    code: &str,
+    token_ids: &[i64],
+    params: &mut Vec<(String, Vec<i64>)>,
+) -> (String, Vec<String>) {
+    let by_code = format!(
+        "x IN (SELECT id FROM assets WHERE position({}, lower(?)) > 0)",
+        crate::common::asset_identity::shown_code_sql(""),
+    );
+    if token_ids.is_empty() {
+        return (by_code, vec![code.to_string()]);
+    }
+    if token_ids.len() <= MAX_TOKEN_IDS_AS_PARAM {
+        params.push((format!("tokens_{i}"), token_ids.to_vec()));
+        return (
+            format!("({by_code} OR x IN {{tokens_{i}:Array(Int64)}})"),
+            vec![code.to_string()],
+        );
+    }
+    (
+        format!(
+            "({by_code} OR x IN (SELECT id FROM soroban_contracts WHERE contract_id IN ( \
+                 SELECT contract_id FROM soroban_contract_metadata FINAL \
+                 WHERE positionCaseInsensitive(coalesce(name, ''), ?) > 0 \
+                    OR positionCaseInsensitive(coalesce(symbol, ''), ?) > 0)))"
+        ),
+        vec![code.to_string(), code.to_string(), code.to_string()],
+    )
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod ch_tests;

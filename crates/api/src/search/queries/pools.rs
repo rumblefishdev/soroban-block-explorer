@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::IncludeFlags;
 use crate::common::asset_identity::{ResolvedAsset, leg_label, resolve_asset_identities};
-use crate::common::pool_asset_codes::{asset_codes_predicate, normalize_asset_codes};
+use crate::common::pool_asset_codes::{normalize_asset_codes, pool_asset_filter};
 use crate::common::strkey::{decode_pool_kind, pool_id_hex_to_strkey};
 use crate::search::classifier::Classified;
 use crate::search::dto::{EntityType, SearchHit};
@@ -52,10 +52,6 @@ pub(super) async fn search_pools(
     }
 }
 
-/// Longest Stellar asset code (`alphanum12`); `alphanum4` is the 1–4 case.
-/// Anything longer cannot be a code, so it cannot match a pool.
-const MAX_ASSET_CODE_LEN: usize = 12;
-
 /// Pools whose displayed asset codes match the query. Full scan of
 /// `liquidity_pools` — 52 472 pools / 73 880 rows, measured at 47 ms and
 /// 3.3 MiB on production, on the arm that previously did nothing for this
@@ -78,15 +74,19 @@ async fn search_pools_by_asset_code(
     per_group_limit: i32,
 ) -> Result<Vec<(String, SearchHit)>, clickhouse::error::Error> {
     let codes = normalize_asset_codes(Some(q.to_string()));
-    // A Stellar asset code is 1–12 characters (alphanum4 / alphanum12), so a
-    // longer needle cannot match any pool. Without this gate every
-    // account- or contract-shaped query — a 56-character StrKey — paid the
-    // scan below for a guaranteed-empty result, and `/v1/search` runs its six
-    // buckets in parallel, so that cost lands on the tail of every such search.
-    if codes.iter().any(|c| c.chars().count() > MAX_ASSET_CODE_LEN) {
+    // An account- or contract-shaped query (a StrKey) names no asset code,
+    // symbol or name. Without this gate it paid the scan below for a
+    // guaranteed-empty result, and `/v1/search` runs its six buckets in
+    // parallel, so that cost lands on the tail of every such search. (The gate
+    // used to be "longer than a 12-character code", which since task 0636
+    // would also drop a Soroban token's longer name.)
+    if codes
+        .iter()
+        .any(|c| stellar_strkey::Strkey::from_string(c).is_ok())
+    {
         return Ok(Vec::new());
     }
-    let Some((clause, binds)) = asset_codes_predicate(&codes) else {
+    let Some(filter) = pool_asset_filter(client, &codes).await? else {
         return Ok(Vec::new());
     };
     let sql = format!(
@@ -100,14 +100,18 @@ async fn search_pools_by_asset_code(
             FROM liquidity_pools \
             GROUP BY pool_id \
          ) AS lp \
-         WHERE {clause} \
+         WHERE {} \
          ORDER BY newest DESC \
-         LIMIT ?"
+         LIMIT ?",
+        filter.sql
     );
 
     let mut query = client.query(&sql);
-    for bind in &binds {
+    for bind in &filter.binds {
         query = query.bind(bind);
+    }
+    for (name, ids) in &filter.params {
+        query = query.param(name, ids);
     }
     let rows = query.bind(per_group_limit).fetch_all::<PoolRow>().await?;
 

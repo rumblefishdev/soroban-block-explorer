@@ -527,8 +527,9 @@ quality may vary significantly.
 **`GET /liquidity-pools`** - Paginated list of pools. Query params: `limit`, `cursor`,
 `filter[asset_code]` (case-insensitive **substring** of either leg, so `USD`
 matches the `USDC` pools; `A/B` is a pair query where each needle claims its own
-leg in either order; native legs match on `XLM` despite storing an empty code —
-tasks 0246/0440. The same parameter also accepts a pool **identifier** in the
+leg in either order; native legs match on `XLM` despite storing an empty code;
+a Soroban token, whose stored code is empty, matches on its self-declared
+symbol or name — tasks 0246/0440/0636. The same parameter also accepts a pool **identifier** in the
 `L…` SEP-23 form, which selects that one pool instead of matching codes —
 task 0470), `filter[pool_kind]` (`classic` | `soroban`; an unknown value is
 **rejected with 400**, never ignored — a silently dropped filter returns a page
@@ -689,7 +690,9 @@ prefix branches). The raw `q` is also fed to the trigram / FTS branches (`assets
 `pool_id`, the full ORDER BY key. Anything else is treated as an asset code and matched
 with the SAME rule the pools list uses — case-insensitive substring against either leg,
 `A/B` pair syntax where each needle claims its own leg in either order, and native XLM
-resolved by `asset_type = 0` rather than by its (empty) stored code. The predicate is
+resolved by `asset_type = 0` rather than by its (empty) stored code, and a Soroban
+token by its symbol or name (task 0636; the search asset bucket matches the same and
+labels such a hit by its symbol). The predicate is
 defined once in `crates/api/src/common/pool_asset_codes.rs` and called by both
 `/v1/search` and `/v1/liquidity-pools`, so the two surfaces cannot answer the same
 question differently. Before this, a non-hash query matched no pool at all: `KALE`
