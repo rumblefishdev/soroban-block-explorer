@@ -17,9 +17,12 @@
 //! should not leak details across each other. The one deliberate
 //! exception is [`http_transient`]: transient-vs-permanent classification
 //! of a transport error is source-independent by design, and per-source
-//! copies of it drifted apart (task 0455).
+//! copies of it drifted apart (task 0455). [`soroban_rpc`] is the other: the
+//! RPC pool is network configuration that every Soroban RPC consumer reads the
+//! same way, the API's WASM fetcher included.
 
 pub mod enrich_and_persist;
 pub(crate) mod http_transient;
 pub mod nft_token_uri;
 pub mod sep1;
+pub mod soroban_rpc;
