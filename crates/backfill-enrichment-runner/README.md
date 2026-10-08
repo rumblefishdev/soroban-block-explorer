@@ -149,6 +149,12 @@ find none of mainnet's NFTs and write empty sentinels into `default` — with
 `Public Global Stellar Network ; September 2015` (mainnet) and
 `Test SDF Network ; September 2015` (testnet).
 
+The check asks every URL of the pool, so one unreachable endpoint stops the
+run at start (after a 15 s timeout) even though the fetcher would later fail
+over past it: drop that URL from `SOROBAN_RPC_URLS` and run again. The refusal
+message names the URL it asked; a provider that puts its API key in the URL
+path would show the key in the terminal.
+
 ```bash
 SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org CLICKHOUSE_DATABASE=testnet \
   STELLAR_NETWORK_PASSPHRASE='Test SDF Network ; September 2015' \
