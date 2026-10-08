@@ -111,3 +111,15 @@ fn unsponsored_entries_are_skipped_and_a_missing_account_is_none() {
     });
     assert_eq!(sponsors(vec![(usdc, None)]), None);
 }
+
+/// A stored code that is no asset code names no trustline: refused, so the
+/// caller drops it instead of failing the answer.
+#[test]
+fn a_code_that_is_no_asset_code_is_refused() {
+    assert!(trustline_asset("USDC", USDC_ISSUER).is_ok());
+    assert!(trustline_asset("yXLM2025ABCD", USDC_ISSUER).is_ok());
+    assert!(trustline_asset("0x00ff", USDC_ISSUER).is_ok()); // alphanumeric bytes
+    assert!(trustline_asset("", USDC_ISSUER).is_err());
+    assert!(trustline_asset("US-DC", USDC_ISSUER).is_err());
+    assert!(trustline_asset("ABCDEFGHIJKLM", USDC_ISSUER).is_err());
+}

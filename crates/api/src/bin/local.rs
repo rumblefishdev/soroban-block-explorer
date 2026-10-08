@@ -83,7 +83,7 @@ async fn main() {
         wasm_code: api::runtime_enrichment::wasm_code::WasmCodeFetcher::new()
             .expect("failed to build wasm-code RPC client"),
         account_sponsors: api::runtime_enrichment::account_sponsors::AccountSponsorsFetcher::new()
-            .expect("account sponsors fetcher"),
+            .expect("failed to build account sponsors RPC client"),
     };
 
     let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE")

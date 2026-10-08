@@ -15,9 +15,6 @@ use crate::state::AppState;
 use super::dto::{AccountSponsoredEntry, AccountSponsorshipResponse};
 use super::queries;
 
-/// Classic credit — the only holdings that are trustlines with a sponsor.
-const CLASSIC_CREDIT: i16 = 1;
-
 #[utoipa::path(
     get,
     path = "/accounts/{account_id}/sponsorship",
@@ -54,7 +51,8 @@ pub async fn get_account_sponsorship(
         match queries::fetch_balances(&state.ch(), header.id).await {
             Ok(rows) => rows
                 .into_iter()
-                .filter(|r| r.asset_type == CLASSIC_CREDIT)
+                // Classic credit: the only holdings that are trustlines.
+                .filter(|r| r.asset_type == domain::AssetFamily::ClassicCredit as i16)
                 .filter_map(|r| Some((r.asset_code?, r.asset_issuer?)))
                 .collect(),
             Err(e) => {

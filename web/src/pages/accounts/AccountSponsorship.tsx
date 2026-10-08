@@ -6,6 +6,7 @@ import type {
 } from '@rumblefish/api-types';
 import {
   Chip,
+  classifyError,
   formatAmount,
   IdentifierDisplay,
 } from '@rumblefish/soroban-block-explorer-ui';
@@ -82,6 +83,15 @@ export function SponsorshipList({
 }: {
   data: AccountSponsorshipResponse;
 }) {
+  // Our index counted sponsored reserves the network no longer holds: the
+  // account changed since. The network is the newer word.
+  if (data.entries.length === 0) {
+    return (
+      <Line>
+        The network reports no sponsored entries for this account now.
+      </Line>
+    );
+  }
   const groups = bySponsor(data.entries);
   return (
     <Box>
@@ -149,6 +159,8 @@ export function AccountSponsorship({
   let body: ReactNode;
   if (query.isLoading) {
     body = <Line>Reading sponsors from the network…</Line>;
+  } else if (classifyError(query.error) === 'not-found') {
+    body = <Line>The network holds no entry for this account now.</Line>;
   } else if (query.isError || query.data == null) {
     body = (
       <Line>

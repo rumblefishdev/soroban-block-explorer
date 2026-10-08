@@ -16,10 +16,12 @@ use stellar_xdr::{
 
 use super::rpc_pool::{RpcFailure, RpcPool};
 
-/// `getLedgerEntries` accepts at most 200 keys: the account plus 199
-/// trustlines. An account with more lists the first 199 and says so through
-/// the reserve count.
-const MAX_TRUSTLINES: usize = 199;
+/// `getLedgerEntries` accepts at most 200 keys a call.
+const KEYS_PER_CALL: usize = 200;
+
+/// Five calls at most: the account plus 999 trustlines. An account with more
+/// lists the first 999 and says so through the reserve count.
+const MAX_TRUSTLINES: usize = 999;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
@@ -80,9 +82,14 @@ impl AccountSponsorsFetcher {
             account_id: account_id.clone(),
         })];
         for (code, issuer) in trustlines.iter().take(MAX_TRUSTLINES) {
+            // A stored code that is no valid asset code names no trustline we
+            // could ask for; it drops out of the list, not the whole answer.
+            let Ok(asset) = trustline_asset(code, issuer) else {
+                continue;
+            };
             keys.push(LedgerKey::Trustline(LedgerKeyTrustLine {
                 account_id: account_id.clone(),
-                asset: trustline_asset(code, issuer)?,
+                asset,
             }));
         }
         let mut keys_b64 = Vec::with_capacity(keys.len());
@@ -92,7 +99,10 @@ impl AccountSponsorsFetcher {
                 .map_err(|e| FetchError::Xdr(e.to_string()))?;
             keys_b64.push(BASE64.encode(bytes));
         }
-        let entries = self.rpc.get_ledger_entries(keys_b64).await?;
+        let mut entries = Vec::new();
+        for chunk in keys_b64.chunks(KEYS_PER_CALL) {
+            entries.extend(self.rpc.get_ledger_entries(chunk.to_vec()).await?);
+        }
         let mut decoded = Vec::with_capacity(entries.len());
         for e in &entries {
             let Some(xdr) = e["xdr"].as_str() else {
@@ -109,6 +119,9 @@ impl AccountSponsorsFetcher {
 
 fn trustline_asset(code: &str, issuer: &str) -> Result<TrustLineAsset, FetchError> {
     let issuer: AccountId = issuer.parse().map_err(|_| FetchError::Key(issuer.into()))?;
+    if code.is_empty() || !code.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(FetchError::Key(code.into()));
+    }
     if code.len() <= 4 {
         let mut bytes = [0u8; 4];
         bytes[..code.len()].copy_from_slice(code.as_bytes());
