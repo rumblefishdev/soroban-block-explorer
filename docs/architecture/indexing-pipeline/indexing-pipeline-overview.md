@@ -252,16 +252,17 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    for `asset_transfers`; a token event the decoder rejects is logged as an
    `error!` for the ledger (per-event detail on the
    `xdr_parser::asset_transfers` target) and never becomes a row
-3. for every token whose instance changed in the ledger (its program declares
-   `decimals`), run `decimals` / `name` / `symbol` locally
-   (`indexer::token_metadata_by_functions`, `crates/contract-executor`) over
-   this ledger's instances and programs plus `wasm_programs` /
-   `contract_instances`; an answer replaces the storage-key metadata write for
-   that contract. One extra ClickHouse read per ledger with a changed
-   instance (the programs' interfaces); a read error costs only this ledger's
-   function values (task 0620,
-   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
-4. for each ledger in the batch: call
+3. for each ledger in the batch: first, for every token whose instance
+   changed in the ledger (its program declares `decimals`), run `decimals` /
+   `name` / `symbol` locally (`indexer::token_metadata_by_functions::apply`,
+   `crates/contract-executor`) over this ledger's instances and programs plus
+   `wasm_programs` / `contract_instances`; an answer replaces the storage-key
+   metadata write for that contract. ClickHouse reads: one per ledger for the
+   changed programs' interfaces, then per token its program's bytes and any
+   other contract's instance a run asks for; a read error costs only this
+   ledger's function values (task 0620,
+   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)).
+   `backfill-runner run` does the same. Then call
    `db_clickhouse::persist::persist_ledger_clickhouse(&client, &parsed.*)`
    — the same wrapper backfill's `Sink::persist_ledger` fallback drives.
    It stages rows via
@@ -274,7 +275,7 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    tables use natural composite keys with `LowCardinality(String)`
    dictionary encoding (per
    [ADR 0044](../../../lore/2-adrs/0044_clickhouse-pilot-parallel-store.md))
-5. retry envelope per ledger: transient errors retry with backoff
+4. retry envelope per ledger: transient errors retry with backoff
    `[50, 200, 800] ms`. `Error::Network` / `Error::TimedOut` always
    retry. `Error::BadResponse` is classified by a **denylist**, not an
    allowlist — the `clickhouse` 0.15 crate carries the raw response
@@ -289,10 +290,10 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    cost on an unrecognised permanent error (3 wasted retries → same DLQ
    terminal state). See `is_retryable_bad_response` /
    `CH_PERMANENT_CODES` in `crates/indexer/src/handler/mod.rs`
-6. emit a CW custom metric `LastProcessedLedgerSequence` after each
+5. emit a CW custom metric `LastProcessedLedgerSequence` after each
    ledger's commit — fire-and-forget; failures are warn-logged but do not
    abort the batch
-7. **enrichment SQS publish is stubbed** (task 0241) — re-enablement
+6. **enrichment SQS publish is stubbed** (task 0241) — re-enablement
    awaits the paired CH-aware rewrite of producer + `enrichment-worker`
    write path. See [`enrichment.md`](./enrichment.md) for the design intent
    The per-table column-by-column write order, FK dependencies, and the

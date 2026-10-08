@@ -1,8 +1,9 @@
 //! Reading a token's `decimals`, `name` and `symbol` by running its own
 //! functions (task 0620): the run over the program bytes and instances, and
 //! the loading of whatever else a run asks for from `wasm_programs` and
-//! `contract_instances`. Used live by the indexer ([`ledger_metadata_writes`])
-//! and once over all tokens by `backfill-runner contract-metadata-backfill`.
+//! `contract_instances`. Used per ledger by the indexer and by
+//! `backfill-runner run` ([`apply`]), and once over all tokens by
+//! `backfill-runner contract-metadata-backfill`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -23,7 +24,44 @@ use xdr_parser::types::ExtractedWasmProgram;
 #[derive(Row, Deserialize)]
 struct StoredInterface {
     wasm_hash: [u8; 32],
-    metadata: String,
+    /// The functions among `decimals`, `name`, `symbol` the program declares.
+    declares: Vec<String>,
+}
+
+/// Token metadata read by running each token's functions takes the place of
+/// what the storage-key read found for the same contract; a token the run does
+/// not answer keeps the storage-key value. A database error costs only this
+/// ledger's function values, never the ledger.
+pub async fn apply(client: &clickhouse::Client, parsed: &mut crate::handler::process::ParseOutput) {
+    let ledger = Ledger {
+        sequence: parsed.ledger.sequence,
+        timestamp: parsed.ledger.closed_at as u64,
+        protocol_version: parsed.ledger.protocol_version,
+        network_id: *crate::handler::process::network_id(),
+    };
+    let writes = match ledger_metadata_writes(
+        client,
+        &ledger,
+        &parsed.contract_instances,
+        &parsed.programs,
+    )
+    .await
+    {
+        Ok(writes) => writes,
+        Err(e) => {
+            tracing::warn!(
+                ledger = ledger.sequence,
+                "token metadata from functions skipped: {e}"
+            );
+            return;
+        }
+    };
+    for write in writes {
+        parsed
+            .contract_metadata_writes
+            .retain(|w| w.contract_id != write.contract_id);
+        parsed.contract_metadata_writes.push(write);
+    }
 }
 
 /// The metadata of every token whose instance changed in this ledger — a
@@ -52,10 +90,9 @@ pub async fn ledger_metadata_writes(
     }
     let mut changed: Vec<([u8; 32], [u8; 32])> = Vec::new();
     for (contract, stored) in &instances {
-        let Some((data_xdr, _)) = stored else {
-            continue;
-        };
-        if let Some(wasm_hash) = wasm_hash_of(data_xdr) {
+        if let Some((data_xdr, _)) = stored
+            && let Some(wasm_hash) = wasm_hash_of(data_xdr)
+        {
             changed.push((*contract, wasm_hash));
         }
     }
@@ -80,20 +117,22 @@ pub async fn ledger_metadata_writes(
         declares.insert(hash, declared(names));
         programs.insert(hash, Some(p.code.clone()));
     }
-    let mut unknown: Vec<String> = changed
+    let unknown: Vec<String> = changed
         .iter()
         .filter(|(_, h)| !declares.contains_key(h))
         .map(|(_, h)| hex::encode(h))
         .collect();
-    unknown.sort();
-    unknown.dedup();
     if !unknown.is_empty() {
         // Only the interface first: most changed instances are not tokens
         // (a farm contract rewrites its instance every ledger), and their
         // bytes are not needed. `toFixedString`: see `load_instances`.
         for row in client
             .query(
-                "SELECT wasm_hash, metadata FROM wasm_programs \
+                "SELECT wasm_hash, \
+                        arrayIntersect(['decimals', 'name', 'symbol'], \
+                            arrayMap(f -> JSONExtractString(f, 'name'), \
+                                     JSONExtractArrayRaw(metadata, 'functions'))) AS declares \
+                 FROM wasm_programs \
                  WHERE wasm_hash IN (SELECT toFixedString(unhex(arrayJoin(?)), 32)) \
                  LIMIT 1 BY wasm_hash",
             )
@@ -101,7 +140,7 @@ pub async fn ledger_metadata_writes(
             .fetch_all::<StoredInterface>()
             .await?
         {
-            declares.insert(row.wasm_hash, declared(function_names(&row.metadata)));
+            declares.insert(row.wasm_hash, row.declares);
         }
     }
 
@@ -113,12 +152,11 @@ pub async fn ledger_metadata_writes(
         if !declared.iter().any(|d| d == "decimals") {
             continue;
         }
-        let declared = declared.clone();
         let answer = read_metadata(
             client,
             ledger,
             contract,
-            &declared,
+            declared,
             &mut programs,
             &mut instances,
         )
@@ -158,22 +196,6 @@ fn wasm_hash_of(data_xdr: &[u8]) -> Option<[u8; 32]> {
         ContractExecutable::Wasm(Hash(hash)) => Some(hash),
         _ => None,
     }
-}
-
-/// Function names in a stored `wasm_programs.metadata` JSON; none for an
-/// empty or unreadable one (a program without an interface section).
-fn function_names(metadata: &str) -> Vec<String> {
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return Vec::new();
-    };
-    let Some(functions) = json["functions"].as_array() else {
-        return Vec::new();
-    };
-    functions
-        .iter()
-        .filter_map(|f| f["name"].as_str())
-        .map(str::to_string)
-        .collect()
 }
 
 /// The functions among `decimals`, `name`, `symbol` a program declares.

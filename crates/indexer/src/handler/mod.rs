@@ -395,7 +395,7 @@ async fn process_s3_object(
         let mut parsed = process::parse_ledger(ledger_meta);
         let ledger_sequence = parsed.ledger.sequence;
         let ledger_closed_at = parsed.ledger.closed_at;
-        metadata_from_functions(&state.ch_client, &mut parsed).await;
+        crate::token_metadata_by_functions::apply(&state.ch_client, &mut parsed).await;
 
         persist_with_retry(&state.ch_client, &parsed, &state.classification_cache).await?;
         publish_indexer_metrics(&state.cw_client, ledger_sequence, ledger_closed_at).await;
@@ -424,42 +424,6 @@ async fn process_s3_object(
         .await;
 
     Ok(())
-}
-
-/// Token metadata read by running each token's functions (task 0620) takes
-/// the place of what the storage-key read found for the same contract; a token
-/// the run does not answer keeps the storage-key value. A database error here
-/// only costs this ledger's function values, never the ledger.
-async fn metadata_from_functions(client: &clickhouse::Client, parsed: &mut process::ParseOutput) {
-    let ledger = contract_executor::Ledger {
-        sequence: parsed.ledger.sequence,
-        timestamp: parsed.ledger.closed_at as u64,
-        protocol_version: parsed.ledger.protocol_version,
-        network_id: *process::network_id(),
-    };
-    let writes = match crate::token_metadata_by_functions::ledger_metadata_writes(
-        client,
-        &ledger,
-        &parsed.contract_instances,
-        &parsed.programs,
-    )
-    .await
-    {
-        Ok(writes) => writes,
-        Err(e) => {
-            warn!(
-                ledger = ledger.sequence,
-                "token metadata from functions skipped: {e}"
-            );
-            return;
-        }
-    };
-    for write in writes {
-        parsed
-            .contract_metadata_writes
-            .retain(|w| w.contract_id != write.contract_id);
-        parsed.contract_metadata_writes.push(write);
-    }
 }
 
 /// Wrap one `persist_ledger_clickhouse` call in the retry envelope.

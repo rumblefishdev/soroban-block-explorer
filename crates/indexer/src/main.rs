@@ -5,10 +5,7 @@
 //!
 //! Task 0241 — PG → CH hard swap.
 
-mod handler;
-// The handler reaches it as `crate::token_metadata_by_functions` in both the
-// library and this binary; here it is the library's copy, not a second one.
-use indexer::token_metadata_by_functions;
+use indexer::handler;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
 use aws_sdk_s3::Client as S3Client;
