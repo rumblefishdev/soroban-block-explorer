@@ -113,8 +113,10 @@ queues every new asset and NFT for the enrichment worker; `backfill-runner`
 writes straight to ClickHouse and queues nothing, so the backfilled range has
 no icons, asset names or NFT metadata until the enrichment backfill
 (`crates/backfill-enrichment-runner`, binary `enrich`) drains it. It runs
-from a laptop with the same operator write cert as step 6, after
-`repair-tier1`; the indexer may already be running. `SOROBAN_RPC_URLS` must
+from a laptop with the testnet enrichment Lambda's certificate (secret
+`soroban/testnet/mtls/lambda-enrichment-testnet`, user `testnet_writer`,
+which can write nothing outside `testnet.*`), after `repair-tier1`; the
+indexer may already be running. `SOROBAN_RPC_URLS` must
 name the testnet RPC — the NFT calls go to whatever pool it holds.
 
 ```bash

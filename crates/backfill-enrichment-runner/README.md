@@ -173,11 +173,13 @@ CLICKHOUSE_URL=... cargo run -p backfill-enrichment-runner -- status
 
 The testnet explorer lives in the `testnet` database of the production
 ClickHouse, so a laptop run uses the mTLS mode. `<ch host>` is the Caddy
-host of the ClickHouse; the three PEM files are the operator write cert
-(`dev_shared`, the one the ledger backfill uses —
-[`clickhouse-rbac.md`](../../docs/architecture/security/clickhouse-rbac.md))
-and the CA that signed it. Forgetting `CLICKHOUSE_DATABASE` writes into
-mainnet's `default`. The same step is part of the testnet build
+host of the ClickHouse; the three PEM files are the testnet enrichment
+Lambda's certificate (secret `soroban/testnet/mtls/lambda-enrichment-testnet`,
+JSON fields `cert`, `key`, `ca`). Its CN maps to `testnet_writer`, which may
+only read and insert in `testnet.*`
+([`clickhouse-rbac.md`](../../docs/architecture/security/clickhouse-rbac.md)),
+so a run that forgets `CLICKHOUSE_DATABASE` is refused by ClickHouse instead
+of writing into mainnet's `default`. The same step is part of the testnet build
 ([`docs/runbooks/testnet-reset.md`](../../docs/runbooks/testnet-reset.md),
 step 8).
 
