@@ -96,8 +96,8 @@ export function SponsorshipList({
   if (data.entries.length === 0) {
     return (
       <Line>
-        The sponsored reserves are on offers or data entries, which are not
-        listed here.
+        None of the sponsored entries can be listed here — they are offers, data
+        entries, pool shares, or trustlines the network did not return.
       </Line>
     );
   }

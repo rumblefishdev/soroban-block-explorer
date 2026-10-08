@@ -118,6 +118,6 @@ describe('AccountSponsorship', () => {
     renderWithProviders(
       <SponsorshipList data={{ num_sponsored: 1, entries: [] }} />
     );
-    expect(screen.getByText(/offers or data entries/)).toBeInTheDocument();
+    expect(screen.getByText(/can be listed here/)).toBeInTheDocument();
   });
 });

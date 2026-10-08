@@ -126,7 +126,7 @@ impl AccountSponsorsFetcher {
             match self.rpc.get_ledger_entries(chunk.to_vec()).await {
                 Ok(more) => decoded.extend(decode_entries(&more)?),
                 Err(e) => {
-                    tracing::warn!(account, error = %e, "sponsors: a trustline batch failed; listing what was read");
+                    tracing::warn!(account_id = account, error = %e, "sponsors: a trustline batch failed; listing what was read");
                     break;
                 }
             }
