@@ -12,20 +12,54 @@ use clickhouse::Row;
 use contract_executor::{Ledger, ViewOutcome, call_view};
 use serde::Deserialize;
 use stellar_xdr::{
-    ContractDataDurability, ContractExecutable, ContractId, Hash, LedgerEntry, LedgerEntryData,
-    LedgerEntryExt, LedgerKey, LedgerKeyContractCode, LedgerKeyContractData, Limits, ReadXdr,
-    ScAddress, ScVal,
+    ContractCodeEntry, ContractCodeEntryExt, ContractDataDurability, ContractExecutable,
+    ContractId, Hash, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
+    LedgerKeyContractCode, LedgerKeyContractData, Limits, ReadXdr, ScAddress, ScVal,
 };
 use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::contract_instance::ExtractedContractInstance;
 use xdr_parser::token_metadata::TokenMetadata;
 use xdr_parser::types::ExtractedWasmProgram;
 
+/// The ledger entries a run may ask for, keyed as the host asks for them: the
+/// entry, or `None` for one known not to exist. It grows as runs ask for more.
+pub type Entries = BTreeMap<LedgerKey, Option<LedgerEntry>>;
+
+/// What reading one contract's three values came to.
+pub enum Answer {
+    Metadata(TokenMetadata),
+    /// A function asked for persistent contract data, which is not stored
+    /// (task 0633).
+    NeedsContractData,
+    /// A function failed, or returned a value of the wrong type.
+    Failed,
+}
+
+/// A run that keeps asking for entries is given up after this many rounds.
+const MAX_ROUNDS: usize = 5;
+
+/// The functions read, in the order they are run.
+const FUNCTIONS: [&str; 3] = ["decimals", "name", "symbol"];
+
 #[derive(Row, Deserialize)]
 struct StoredInterface {
     wasm_hash: [u8; 32],
     /// The functions among `decimals`, `name`, `symbol` the program declares.
     declares: Vec<String>,
+}
+
+#[derive(Row, Deserialize)]
+struct StoredProgram {
+    #[serde(with = "serde_bytes")]
+    code: Vec<u8>,
+}
+
+#[derive(Row, Deserialize)]
+struct StoredInstance {
+    contract: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    latest_xdr: Vec<u8>,
+    latest_ledger: i64,
 }
 
 /// Token metadata read by running each token's functions takes the place of
@@ -79,30 +113,24 @@ pub async fn ledger_metadata_writes(
     changed_instances: &[ExtractedContractInstance],
     new_programs: &[ExtractedWasmProgram],
 ) -> Result<Vec<ExtractedContractMetadata>, clickhouse::error::Error> {
-    // The last instance of each contract this ledger; `changed_instances` is
-    // in application order.
-    let mut instances: HashMap<[u8; 32], Option<(Vec<u8>, i64)>> = HashMap::new();
+    // This ledger's instances, the last of each contract (`changed_instances`
+    // is in application order), and the programs they run.
+    let mut entries = Entries::new();
+    let mut changed: BTreeMap<[u8; 32], [u8; 32]> = BTreeMap::new();
     for i in changed_instances {
-        instances.insert(
-            i.contract,
-            Some((i.data_xdr.clone(), i64::from(i.ledger_sequence))),
-        );
-    }
-    let mut changed: Vec<([u8; 32], [u8; 32])> = Vec::new();
-    for (contract, stored) in &instances {
-        if let Some((data_xdr, _)) = stored
-            && let Some(wasm_hash) = wasm_hash_of(data_xdr)
-        {
-            changed.push((*contract, wasm_hash));
+        let Some(entry) = instance_entry(&i.data_xdr, i64::from(i.ledger_sequence)) else {
+            continue;
+        };
+        if let Some(wasm_hash) = wasm_hash_of(&entry) {
+            changed.insert(i.contract, wasm_hash);
         }
+        entries.insert(instance_key(i.contract), Some(entry));
     }
     if changed.is_empty() {
         return Ok(Vec::new());
     }
-    changed.sort();
 
     let mut declares: HashMap<[u8; 32], Vec<String>> = HashMap::new();
-    let mut programs: HashMap<[u8; 32], Option<Vec<u8>>> = HashMap::new();
     for p in new_programs {
         let Ok(bytes) = hex::decode(&p.wasm_hash) else {
             continue;
@@ -110,17 +138,21 @@ pub async fn ledger_metadata_writes(
         let Ok(hash) = <[u8; 32]>::try_from(bytes) else {
             continue;
         };
-        let names = match &p.functions {
+        let names: Vec<String> = match &p.functions {
             Some(functions) => functions.iter().map(|f| f.name.clone()).collect(),
             None => Vec::new(),
         };
-        declares.insert(hash, declared(names));
-        programs.insert(hash, Some(p.code.clone()));
+        let declared = names
+            .into_iter()
+            .filter(|n| FUNCTIONS.contains(&n.as_str()))
+            .collect();
+        declares.insert(hash, declared);
+        entries.insert(code_key(hash), code_entry(hash, p.code.clone()));
     }
     let unknown: Vec<String> = changed
-        .iter()
-        .filter(|(_, h)| !declares.contains_key(h))
-        .map(|(_, h)| hex::encode(h))
+        .values()
+        .filter(|h| !declares.contains_key(*h))
+        .map(hex::encode)
         .collect();
     if !unknown.is_empty() {
         // Only the interface first: most changed instances are not tokens
@@ -144,6 +176,7 @@ pub async fn ledger_metadata_writes(
         }
     }
 
+    let mut entries = Rc::new(entries);
     let mut writes = Vec::new();
     for (contract, wasm_hash) in changed {
         let Some(declared) = declares.get(&wasm_hash) else {
@@ -152,28 +185,12 @@ pub async fn ledger_metadata_writes(
         if !declared.iter().any(|d| d == "decimals") {
             continue;
         }
-        let answer = read_metadata(
-            client,
-            ledger,
-            contract,
-            declared,
-            &mut programs,
-            &mut instances,
-        )
-        .await?;
-        if let Answer::Values {
-            name,
-            symbol,
-            decimals,
-        } = answer
+        if let Answer::Metadata(metadata) =
+            read_metadata(client, ledger, contract, declared, &mut entries).await?
         {
             writes.push(ExtractedContractMetadata {
                 contract_id: ScAddress::Contract(ContractId(Hash(contract))).to_string(),
-                metadata: TokenMetadata {
-                    name,
-                    symbol,
-                    decimals,
-                },
+                metadata,
                 ledger: ledger.sequence,
             });
         }
@@ -181,83 +198,21 @@ pub async fn ledger_metadata_writes(
     Ok(writes)
 }
 
-/// The program an instance runs, when it is a Wasm program of its own (not a
-/// Stellar asset contract, not an external reference).
-fn wasm_hash_of(data_xdr: &[u8]) -> Option<[u8; 32]> {
-    let LedgerEntryData::ContractData(data) =
-        LedgerEntryData::from_xdr(data_xdr, Limits::none()).ok()?
-    else {
-        return None;
-    };
-    let ScVal::ContractInstance(instance) = data.val else {
-        return None;
-    };
-    match instance.executable {
-        ContractExecutable::Wasm(Hash(hash)) => Some(hash),
-        _ => None,
-    }
-}
-
-/// The functions among `decimals`, `name`, `symbol` a program declares.
-fn declared(names: Vec<String>) -> Vec<String> {
-    names
-        .into_iter()
-        .filter(|n| FUNCTIONS.contains(&n.as_str()))
-        .collect()
-}
-
-/// A run that keeps asking for entries is given up after this many rounds.
-const MAX_ROUNDS: usize = 5;
-
-/// The functions read, in the order they are run.
-const FUNCTIONS: [&str; 3] = ["decimals", "name", "symbol"];
-
-#[derive(Row, Deserialize)]
-pub struct ProgramRow {
-    pub wasm_hash: [u8; 32],
-    #[serde(with = "serde_bytes")]
-    pub code: Vec<u8>,
-}
-
-#[derive(Row, Deserialize)]
-struct InstanceRow {
-    contract: [u8; 32],
-    #[serde(with = "serde_bytes")]
-    latest_xdr: Vec<u8>,
-    latest_ledger: i64,
-}
-
-/// What reading one contract's three values came to.
-pub enum Answer {
-    Values {
-        name: Option<String>,
-        symbol: Option<String>,
-        decimals: Option<u32>,
-    },
-    NeedsContractData,
-    Failed,
-}
-
 /// Run the declared functions among `decimals`, `name`, `symbol` for one
-/// contract, adding the programs and instances a run asks for.
+/// contract over `entries`, loading into it the programs and instances a run
+/// asks for. The contract's own instance must already be in `entries`.
 pub async fn read_metadata(
     client: &clickhouse::Client,
     ledger: &Ledger,
     contract: [u8; 32],
     declares: &[String],
-    programs: &mut HashMap<[u8; 32], Option<Vec<u8>>>,
-    instances: &mut HashMap<[u8; 32], Option<(Vec<u8>, i64)>>,
+    entries: &mut Rc<Entries>,
 ) -> Result<Answer, clickhouse::error::Error> {
-    let mut entries: BTreeMap<LedgerKey, Option<LedgerEntry>> = BTreeMap::new();
-    entries.insert(
-        instance_key(contract),
-        instance_entry(instances.get(&contract)),
-    );
-    // The program is not seeded: the run asks for it, and `load_entry` takes
-    // it from `programs` or, when not there yet, from `wasm_programs`.
-    let mut entries = Rc::new(entries);
-
-    let (mut name, mut symbol, mut decimals) = (None, None, None);
+    let mut metadata = TokenMetadata {
+        name: None,
+        symbol: None,
+        decimals: None,
+    };
     for function in FUNCTIONS {
         if !declares.iter().any(|d| d == function) {
             continue;
@@ -271,13 +226,10 @@ pub async fn read_metadata(
                 }
                 ViewOutcome::Failed(_) => return Ok(Answer::Failed),
                 ViewOutcome::Missing(keys) => {
-                    let map = Rc::make_mut(&mut entries);
                     for key in keys {
-                        let Some(entry) = load_entry(client, &key, programs, instances).await?
-                        else {
+                        if !load_entry(client, &key, Rc::make_mut(entries)).await? {
                             return Ok(Answer::NeedsContractData);
-                        };
-                        map.insert(key, entry);
+                        }
                     }
                 }
             }
@@ -286,64 +238,61 @@ pub async fn read_metadata(
             return Ok(Answer::Failed);
         };
         match (function, value) {
-            ("decimals", ScVal::U32(d)) => decimals = Some(d),
+            ("decimals", ScVal::U32(d)) => metadata.decimals = Some(d),
             ("name", ScVal::String(s)) => match String::from_utf8(s.0.to_vec()) {
-                Ok(text) => name = Some(text),
+                Ok(text) => metadata.name = Some(text),
                 Err(_) => return Ok(Answer::Failed),
             },
             ("symbol", ScVal::String(s)) => match String::from_utf8(s.0.to_vec()) {
-                Ok(text) => symbol = Some(text),
+                Ok(text) => metadata.symbol = Some(text),
                 Err(_) => return Ok(Answer::Failed),
             },
             _ => return Ok(Answer::Failed),
         }
     }
-    Ok(Answer::Values {
-        name,
-        symbol,
-        decimals,
-    })
+    Ok(Answer::Metadata(metadata))
 }
 
-/// The entry for a key a run asked for, from the stored programs and
-/// instances: `Some(Some(_))` found, `Some(None)` known not to exist, `None`
-/// not something the database holds.
+/// Add the entry a run asked for to `entries`, from `wasm_programs` or
+/// `contract_instances` — found, or known not to exist. `false` when it is
+/// something the database does not hold (persistent contract data).
 async fn load_entry(
     client: &clickhouse::Client,
     key: &LedgerKey,
-    programs: &mut HashMap<[u8; 32], Option<Vec<u8>>>,
-    instances: &mut HashMap<[u8; 32], Option<(Vec<u8>, i64)>>,
-) -> Result<Option<Option<LedgerEntry>>, clickhouse::error::Error> {
+    entries: &mut Entries,
+) -> Result<bool, clickhouse::error::Error> {
     match key {
         LedgerKey::ContractCode(LedgerKeyContractCode { hash: Hash(hash) }) => {
-            if !programs.contains_key(hash) {
-                let row = client
-                    .query("SELECT wasm_hash, code FROM wasm_programs WHERE wasm_hash = unhex(?) AND code != '' LIMIT 1")
-                    .bind(hex::encode(hash))
-                    .fetch_optional::<ProgramRow>()
-                    .await?;
-                programs.insert(*hash, row.map(|r| r.code));
-            }
-            Ok(Some(code_entry(*hash, programs.get(hash))))
+            let row = client
+                .query("SELECT code FROM wasm_programs WHERE wasm_hash = unhex(?) AND code != '' LIMIT 1")
+                .bind(hex::encode(hash))
+                .fetch_optional::<StoredProgram>()
+                .await?;
+            let entry = match row {
+                Some(row) => code_entry(*hash, row.code),
+                None => None,
+            };
+            entries.insert(key.clone(), entry);
+            Ok(true)
         }
         LedgerKey::ContractData(LedgerKeyContractData {
             contract: ScAddress::Contract(ContractId(Hash(contract))),
             key: ScVal::LedgerKeyContractInstance,
             ..
         }) => {
-            if !instances.contains_key(contract) {
-                load_instances(client, &[*contract], instances).await?;
-            }
-            Ok(Some(instance_entry(instances.get(contract))))
+            load_instances(client, &[*contract], entries).await?;
+            Ok(true)
         }
-        _ => Ok(None),
+        _ => Ok(false),
     }
 }
 
+/// Add the stored instances of `contracts` to `entries`; a contract without
+/// one is added as known not to exist.
 pub async fn load_instances(
     client: &clickhouse::Client,
     contracts: &[[u8; 32]],
-    instances: &mut HashMap<[u8; 32], Option<(Vec<u8>, i64)>>,
+    entries: &mut Entries,
 ) -> Result<(), clickhouse::error::Error> {
     let hexes: Vec<String> = contracts.iter().map(hex::encode).collect();
     let rows = client
@@ -359,39 +308,55 @@ pub async fn load_instances(
              GROUP BY contract",
         )
         .bind(hexes)
-        .fetch_all::<InstanceRow>()
+        .fetch_all::<StoredInstance>()
         .await?;
     for contract in contracts {
-        instances.insert(*contract, None);
+        entries.insert(instance_key(*contract), None);
     }
     for row in rows {
-        instances.insert(row.contract, Some((row.latest_xdr, row.latest_ledger)));
+        entries.insert(
+            instance_key(row.contract),
+            instance_entry(&row.latest_xdr, row.latest_ledger),
+        );
     }
     Ok(())
 }
 
-/// A stored instance as a ledger entry; `None` when the contract has none.
-fn instance_entry(stored: Option<&Option<(Vec<u8>, i64)>>) -> Option<LedgerEntry> {
-    let (data_xdr, ledger) = stored?.as_ref()?;
+/// An instance as a ledger entry, from its `LedgerEntryData` XDR.
+pub fn instance_entry(data_xdr: &[u8], ledger: i64) -> Option<LedgerEntry> {
     Some(LedgerEntry {
-        last_modified_ledger_seq: *ledger as u32,
+        last_modified_ledger_seq: ledger as u32,
         data: LedgerEntryData::from_xdr(data_xdr, Limits::none()).ok()?,
         ext: LedgerEntryExt::V0,
     })
 }
 
-/// A stored program as a ledger entry; `None` when its bytes are not stored.
-fn code_entry(hash: [u8; 32], stored: Option<&Option<Vec<u8>>>) -> Option<LedgerEntry> {
-    let code = stored?.as_ref()?;
+/// A program as a ledger entry.
+pub fn code_entry(hash: [u8; 32], code: Vec<u8>) -> Option<LedgerEntry> {
     Some(LedgerEntry {
         last_modified_ledger_seq: 0,
-        data: LedgerEntryData::ContractCode(stellar_xdr::ContractCodeEntry {
-            ext: stellar_xdr::ContractCodeEntryExt::V0,
+        data: LedgerEntryData::ContractCode(ContractCodeEntry {
+            ext: ContractCodeEntryExt::V0,
             hash: Hash(hash),
-            code: code.clone().try_into().ok()?,
+            code: code.try_into().ok()?,
         }),
         ext: LedgerEntryExt::V0,
     })
+}
+
+/// The program an instance runs, when it is a Wasm program of its own (not a
+/// Stellar asset contract, not an external reference).
+fn wasm_hash_of(entry: &LedgerEntry) -> Option<[u8; 32]> {
+    let LedgerEntryData::ContractData(data) = &entry.data else {
+        return None;
+    };
+    let ScVal::ContractInstance(instance) = &data.val else {
+        return None;
+    };
+    match instance.executable {
+        ContractExecutable::Wasm(Hash(hash)) => Some(hash),
+        _ => None,
+    }
 }
 
 /// The ledger key of a contract's instance: its persistent contract-data
@@ -401,5 +366,12 @@ pub fn instance_key(contract: [u8; 32]) -> LedgerKey {
         contract: ScAddress::Contract(ContractId(Hash(contract))),
         key: ScVal::LedgerKeyContractInstance,
         durability: ContractDataDurability::Persistent,
+    })
+}
+
+/// The ledger key of a program.
+pub fn code_key(wasm_hash: [u8; 32]) -> LedgerKey {
+    LedgerKey::ContractCode(LedgerKeyContractCode {
+        hash: Hash(wasm_hash),
     })
 }
