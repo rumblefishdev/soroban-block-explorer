@@ -2,7 +2,7 @@
 id: '0620'
 title: 'Execute contract view functions locally: token decimals, name and symbol from the standard, not from storage keys'
 type: FEATURE
-status: done
+status: completed
 related_adr: ['0061']
 related_tasks: ['0617', '0621', '0473', '0340', '0297', '0325']
 tags: ['effort-large', 'priority-high', 'soroban', 'tokens', 'liquidity-pools']
@@ -22,7 +22,7 @@ history:
       PR split agreed: 1 `wasm_code` + live write + backfill command;
       2 executor + metadata from functions; 3 remove the METADATA reader.
   - date: 2026-10-08
-    status: done
+    status: completed
     who: karolkow
     note: >
       Shipped in production-2026.10.08-2 (#616-#653; #655 structure follows).

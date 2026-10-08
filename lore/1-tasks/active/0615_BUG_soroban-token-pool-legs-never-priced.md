@@ -2,7 +2,7 @@
 id: '0615'
 title: 'BUG: pool legs that are Soroban tokens are never priced (price key lacks the contract address)'
 type: BUG
-status: backlog
+status: active
 related_adr: ['0053', '0058']
 related_tasks: ['0374']
 tags: [priority-medium, effort-small, layer-api, liquidity-pools]
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Found in the architecture review re-check of 2026-10-04; 0374 already closed, so its own task.'
+  - date: 2026-10-08
+    status: active
+    who: karolkow
+    note: 'Started: the prices views are rescaled and 0620 gave the legs decimals, so only the price key is missing.'
 ---
 
 # Pool legs that are Soroban tokens are never priced
