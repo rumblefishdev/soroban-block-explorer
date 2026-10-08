@@ -32,6 +32,13 @@ Soroban leg gets the empty price key. Prices exist for XRP (`CB7OOP3V…`,
 fresh) and HITZ (`CBAPZAZN…`, last bucket 2026-10-02); none for USST. Done
 when these pools show TVL wherever both legs price.
 
+**The views are rescaled (measured 2026-10-08)**, so the blocker below is
+gone: contract closes now match market scale — SolvBTC `CBIJBDNZ…` 82,299,
+XAUM `CC2RBGYN…` 4,145, XRP `CB7OOP3V…` 1.33 (was 8,537 / 41.92 / 14.78 on
+2026-10-05). Six contract tokens price in the last day. `CCKQASCN…` (XLM/XRP)
+would read about $2,227 (6,188.97 XLM × 0.1984 + 752.12 XRP × 1.3282); the
+API serves null.
+
 ## Start after (checked 2026-10-05)
 
 `feat/0374-volume-priceable` edits `usd_analytics.rs` and its tests; start
