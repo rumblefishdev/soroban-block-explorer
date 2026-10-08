@@ -7,6 +7,8 @@ import {
   IdentifierWithCopy,
 } from '@rumblefish/soroban-block-explorer-ui';
 
+import { SoranPrimaryName } from '../../search/SoranPrimaryName.js';
+import { SoranAccountMemo } from '../../search/SoranAccountMemo.js';
 import { useFederatedName } from '../../search/useFederation.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
@@ -56,6 +58,7 @@ export function AccountSummary({
                   linked={false}
                   truncate={false}
                 />
+                <SoranPrimaryName address={account.account_id} />
                 {federatedName != null && (
                   <Typography
                     variant="bodySmRegular"
@@ -78,6 +81,7 @@ export function AccountSummary({
           },
         ]}
       />
+      <SoranAccountMemo address={account.account_id} />
       {/* `null` when the address has no account entry on the ledger —
           closed, or never an account — and so no reserves to show. */}
       {account.sponsorship != null && (

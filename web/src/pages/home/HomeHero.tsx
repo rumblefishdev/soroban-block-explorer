@@ -1,10 +1,15 @@
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, Paper, Stack, Typography } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { routes } from '../../router/routes.js';
 import { directRouteFor } from '../../search/directRouteFor.js';
+import { getSoranSearchStatus } from '../../search/SoranSearchStatus.js';
+import { SearchResultsView } from '../../search/SearchResultsView.js';
+import { useSearchResults } from '../../search/useSearchResults.js';
+import { useSoranSearchResults } from '../../search/useSoranSearchResults.js';
+import { useSoranLookup } from '../../search/useSoranLookup.js';
 
 import { HeroSearch } from './HeroSearch.js';
 
@@ -45,6 +50,11 @@ const heroAccentWordSx = (theme: Theme) => {
 export function HomeHero() {
   const navigate = useNavigate();
   const [value, setValue] = useState('');
+  const soran = useSoranLookup(value);
+  const indexed = useSearchResults({
+    q: soran.name && soran.supported ? value : '',
+  });
+  const state = useSoranSearchResults(value, indexed, soran);
 
   const submit = () => {
     const q = value.trim();
@@ -88,6 +98,14 @@ export function HomeHero() {
         </Stack>
         <Box sx={{ width: '100%', maxWidth: 632 }}>
           <HeroSearch value={value} onChange={setValue} onSubmit={submit} />
+          {soran.name != null && soran.supported && (
+            <Paper variant="outlined" sx={{ mt: 1, overflow: 'hidden' }}>
+              <SearchResultsView
+                state={state}
+                status={getSoranSearchStatus(soran)}
+              />
+            </Paper>
+          )}
         </Box>
       </Stack>
     </Box>

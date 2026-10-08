@@ -9,6 +9,9 @@ import { SearchResultsView } from '../search/SearchResultsView.js';
 import { FederationStatus } from '../search/FederationStatus.js';
 import { useFederatedLookup } from '../search/useFederation.js';
 import { useSearchResults } from '../search/useSearchResults.js';
+import { getSoranSearchStatus } from '../search/SoranSearchStatus.js';
+import { useSoranSearchResults } from '../search/useSoranSearchResults.js';
+import { useSoranLookup } from '../search/useSoranLookup.js';
 
 export default function SearchResultsPage() {
   const [params, setParams] = useSearchParams();
@@ -38,7 +41,12 @@ export default function SearchResultsPage() {
   // The search hook classifies the query too and suppresses its own request
   // for a federated address, so the two never disagree about what the buckets
   // should be asked.
-  const state = useSearchResults({ q });
+  const indexed = useSearchResults({ q });
+  // Soran namespaces are open-ended. Keep ordinary results for dotted token
+  // names as well, rather than claiming every dotted query belongs to Soran.
+  // Resolve a pasted search immediately, then debounce subsequent edits.
+  const soran = useSoranLookup(q, true);
+  const state = useSoranSearchResults(q, indexed, soran);
 
   // SEP-2 federated address (`name*domain`) typed into search — task 0443.
   // `directRouteFor` cannot carry this: it is synchronous, and the resolve is
@@ -105,6 +113,9 @@ export default function SearchResultsPage() {
           value={text}
           onChange={writeQuery}
           onClear={() => writeQuery('')}
+          onSubmit={
+            soran.name != null && soran.supported ? soran.ask : undefined
+          }
         />
       </Box>
 
@@ -130,7 +141,12 @@ export default function SearchResultsPage() {
         })}
       >
         {federatedFor == null ? (
-          <SearchResultsView state={state} />
+          <>
+            <SearchResultsView
+              state={state}
+              status={getSoranSearchStatus(soran)}
+            />
+          </>
         ) : (
           <Stack spacing={1} sx={{ px: 2, py: 1.5 }}>
             <Stack direction="row" spacing={1.5} alignItems="center">
