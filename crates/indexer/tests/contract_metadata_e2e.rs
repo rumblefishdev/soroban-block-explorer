@@ -11,7 +11,7 @@
 
 use contract_executor::Ledger;
 use db_clickhouse::{Config, apply_init_sql, client};
-use indexer::token_metadata_by_functions::ledger_metadata_writes;
+use indexer::contract_metadata::ledger_metadata_writes;
 use stellar_xdr::{LedgerEntryData, Limits, ReadXdr, WriteXdr};
 use xdr_parser::contract_instance::ExtractedContractInstance;
 

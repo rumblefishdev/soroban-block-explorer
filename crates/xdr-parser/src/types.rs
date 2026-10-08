@@ -284,20 +284,6 @@ pub struct ExtractedLedgerEntryChange {
     pub created_at: i64,
 }
 
-/// One `soroban_contract_metadata` write for a contract: what its `name`,
-/// `symbol` and `decimals` functions returned when its instance changed. Made
-/// by the indexer, not the parser (`indexer::token_metadata_by_functions`,
-/// task 0620). A separate per-contract table, composed at read time — never
-/// mixed into `soroban_contracts` (RMT whole-row clobber + different update
-/// clocks).
-#[derive(Debug, Clone)]
-pub struct ExtractedContractMetadata {
-    pub contract_id: String,
-    pub metadata: crate::token_metadata::TokenMetadata,
-    /// Ledger the functions were run at — the side table's RMT version slot.
-    pub ledger: u32,
-}
-
 /// A per-holder Soroban token balance recovered from a `ContractData`
 /// `Balance(Address)` ledger-entry change (task 0331).
 ///

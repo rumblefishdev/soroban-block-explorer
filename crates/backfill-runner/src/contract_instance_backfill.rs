@@ -23,7 +23,7 @@ use serde::Deserialize;
 use stellar_xdr::{ContractId, Hash, LedgerEntryData, LedgerKey, Limits, ScAddress, WriteXdr};
 use tracing::{info, warn};
 
-use indexer::token_metadata_by_functions::instance_key;
+use indexer::contract_state::instance_key;
 
 use crate::error::BackfillError;
 use crate::rpc_snapshot::{LedgerEntryRecord, RpcClient, RpcError};

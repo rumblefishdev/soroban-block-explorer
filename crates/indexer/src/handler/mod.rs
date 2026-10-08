@@ -396,7 +396,7 @@ async fn process_s3_object(
         let ledger_sequence = parsed.ledger.sequence;
         let ledger_closed_at = parsed.ledger.closed_at;
         let metadata_writes =
-            crate::token_metadata_by_functions::contract_metadata_writes(&state.ch_client, &parsed)
+            crate::contract_metadata::contract_metadata_writes(&state.ch_client, &parsed)
                 .await
                 .map_err(|e| HandlerError::ClickHouse(e.into()))?;
 
@@ -444,7 +444,7 @@ async fn process_s3_object(
 async fn persist_with_retry(
     client: &clickhouse::Client,
     parsed: &process::ParseOutput,
-    metadata_writes: &[xdr_parser::ExtractedContractMetadata],
+    metadata_writes: &[db_clickhouse::persist::contract_metadata::ExtractedContractMetadata],
     classification_cache: &ClassificationCache,
 ) -> Result<(), HandlerError> {
     let ledger_sequence = parsed.ledger.sequence;

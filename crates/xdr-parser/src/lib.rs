@@ -37,7 +37,6 @@ pub mod public_archive;
 pub mod sac;
 pub mod scval;
 pub mod state;
-pub mod token_metadata;
 pub mod transaction;
 pub mod types;
 
@@ -74,15 +73,14 @@ pub use state::{
     extract_contract_deployments, extract_liquidity_pools, extract_lp_positions,
     extract_nft_ownership_events, extract_soroban_token_balances, native_asset_singleton,
 };
-pub use token_metadata::TokenMetadata;
 pub use transaction::{collect_tx_results, extract_transactions};
 pub use types::{
     ContractFunction, EventBody, EventOrigin, ExtractedAccountState, ExtractedAsset,
-    ExtractedContractDeployment, ExtractedContractMetadata, ExtractedEvent, ExtractedInvocation,
-    ExtractedLedger, ExtractedLedgerEntryChange, ExtractedLiquidityPool,
-    ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft, ExtractedNftEvent,
-    ExtractedOperation, ExtractedSorobanBalance, ExtractedTransaction, ExtractedWasmProgram,
-    NftEvent, SacAssetIdentity,
+    ExtractedContractDeployment, ExtractedEvent, ExtractedInvocation, ExtractedLedger,
+    ExtractedLedgerEntryChange, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
+    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, ExtractedOperation,
+    ExtractedSorobanBalance, ExtractedTransaction, ExtractedWasmProgram, NftEvent,
+    SacAssetIdentity,
 };
 
 use stellar_xdr::{LedgerCloseMetaBatch, ReadXdr};

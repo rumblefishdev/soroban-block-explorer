@@ -44,7 +44,6 @@ use std::collections::{HashMap, HashSet};
 use domain::{AssetType, ContractEventType, ContractType, OperationType};
 use serde_json::Value;
 use xdr_parser::ExtractedAssetTransfer;
-use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::claimable_balance::ExtractedClaimableBalance;
@@ -63,6 +62,7 @@ use xdr_parser::executable_update::{ExecutableUpdate, extract_executable_update}
 use xdr_parser::pool_config_factory::PoolConfig;
 use xdr_parser::pool_family::PoolFamilyWrite;
 
+use super::contract_metadata::ExtractedContractMetadata;
 use super::ids;
 use super::rows::*;
 use crate::SchemaError;
@@ -485,7 +485,7 @@ pub fn build_wasm_upgrade_rows(
     by_contract.into_values().collect()
 }
 
-/// Map the metadata writes (`indexer::token_metadata_by_functions`, task 0620)
+/// Map the metadata writes (`indexer::contract_metadata`, task 0620)
 /// to `soroban_contract_metadata` rows. Called inside
 /// [`prepare_with_sac_overrides`] from the `StageInputs.contract_metadata_writes`
 /// slice; `version` = the ledger the functions ran at.

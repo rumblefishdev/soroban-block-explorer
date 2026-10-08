@@ -25,10 +25,8 @@ use tracing::{info, warn};
 use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::util::insert_rows;
-use indexer::token_metadata_by_functions::{
-    Answer, Entries, code_entry, code_key, has_metadata, instance_key, load_instances,
-    read_metadata,
-};
+use indexer::contract_metadata::{Answer, has_metadata, read_metadata};
+use indexer::contract_state::{Entries, code_entry, code_key, instance_key, load_instances};
 
 /// Contracts per instance query and rows per insert.
 const CHUNK: usize = 1_000;
