@@ -2,7 +2,7 @@
 id: '0620'
 title: 'Execute contract view functions locally: token decimals, name and symbol from the standard, not from storage keys'
 type: FEATURE
-status: active
+status: done
 related_adr: ['0061']
 related_tasks: ['0617', '0621', '0473', '0340', '0297', '0325']
 tags: ['effort-large', 'priority-high', 'soroban', 'tokens', 'liquidity-pools']
@@ -21,6 +21,15 @@ history:
     note: >
       PR split agreed: 1 `wasm_code` + live write + backfill command;
       2 executor + metadata from functions; 3 remove the METADATA reader.
+  - date: 2026-10-08
+    status: done
+    who: karolkow
+    note: >
+      Shipped in production-2026.10.08-2 (#616-#653; #655 structure follows).
+      Production fills: 5,269/5,269 programs with bytes, 156,699/156,699
+      instances, 4,320 metadata rows written (367 new; 3,951 equal). TVL of
+      the four 0617 pools moved to 0615: their legs have decimals now, but
+      Soroban-token legs are never priced.
 ---
 
 # Execute contract view functions locally
@@ -90,16 +99,7 @@ is the deploy/upgrade ledger despite its name).
 
 ## Rejected at research
 
-- **Learn a per-program layout descriptor** (which key holds the value):
-  reproduces 4,054 of 4,151 contracts, 0 mismatches, but needs the bytes and
-  one initialised instance anyway, cannot be learned at upload (285 of 330
-  programs trap on an empty instance), breaks on 27 cross-contract programs,
-  and adds a second interpreter of storage that goes stale on upgrade.
-- **Compute at upload:** only 45 of 330 token programs return decimals
-  without state.
-- **Cache by (program, storage hash):** 16% hit rate.
-- **RPC simulation per contract:** an external dependency with rate limits
-  (~50% of calls answered 429 during the census).
+See `notes/R-rejected-at-research.md`.
 
 ## Implementation
 
@@ -129,16 +129,20 @@ is the deploy/upgrade ledger despite its name).
    three) keep their stored row and get no new write. A ClickHouse read error
    now fails the ledger, as a write error does; the executor no longer catches
    host panics (none in any run).
-5. Backfill `soroban_contract_metadata` for every token contract.
+5. Backfill `soroban_contract_metadata` for every token and NFT contract
+   (done on production 2026-10-08, see history).
 6. Protocol upgrades: bump `soroban-env-host` with `stellar-xdr`.
 
 ## Acceptance Criteria
 
-- [ ] Decimals, name and symbol of every token contract come from its
+- [x] Decimals, name and symbol of every token contract come from its
       functions; 0 differences against RPC simulation on one contract per
-      program.
-- [ ] The four Aquarius pools of 0617 show TVL.
+      program (299/299).
+- [ ] The four Aquarius pools of 0617 show TVL — moved to 0615: decimals and
+      reserves of both legs are served (local API at the release tag on
+      production data), TVL stays null because Soroban-token legs are never
+      priced.
 - [x] `token_metadata.rs` storage-key reading removed.
-- [ ] Program bytes stored for every known program; new uploads written live.
-- [ ] **Docs updated** — `database-schema-overview.md` (`wasm_programs.code`),
+- [x] Program bytes stored for every known program; new uploads written live.
+- [x] **Docs updated** — `database-schema-overview.md` (`wasm_programs.code`),
       `indexing-pipeline-overview.md`, `xdr-parsing-overview.md`.

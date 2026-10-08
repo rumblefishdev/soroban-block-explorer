@@ -23,6 +23,15 @@ maps only native (0) and classic credit (1|2); a Soroban-token leg (family 3)
 gets the empty key, so its pool's TVL, volume and fees read null even when the
 prices views carry a price for that token.
 
+## Carried from 0620 (2026-10-08)
+
+The four Aquarius pools of 0617 (`CCYMZTOJ…` USST/USDC, `CCKQASCN…` XLM/XRP,
+`CCCDPF74…` and `CBMOEJUO…` with HITZ) now serve decimals and reserves for
+both legs (0620, production since 2026-10-08), yet `tvl` is null: the
+Soroban leg gets the empty price key. Prices exist for XRP (`CB7OOP3V…`,
+fresh) and HITZ (`CBAPZAZN…`, last bucket 2026-10-02); none for USST. Done
+when these pools show TVL wherever both legs price.
+
 ## Start after (checked 2026-10-05)
 
 `feat/0374-volume-priceable` edits `usd_analytics.rs` and its tests; start
