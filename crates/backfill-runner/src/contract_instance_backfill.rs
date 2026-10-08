@@ -20,11 +20,10 @@ use std::time::Duration;
 use clickhouse::Row;
 use db_clickhouse::persist::rows::ContractInstanceRow;
 use serde::Deserialize;
-use stellar_xdr::{
-    ContractDataDurability, ContractId, Hash, LedgerEntryData, LedgerKey, LedgerKeyContractData,
-    Limits, ScAddress, ScVal, WriteXdr,
-};
+use stellar_xdr::{ContractId, Hash, LedgerEntryData, LedgerKey, Limits, ScAddress, WriteXdr};
 use tracing::{info, warn};
+
+use indexer::token_metadata_by_functions::instance_key;
 
 use crate::error::BackfillError;
 use crate::rpc_snapshot::{LedgerEntryRecord, RpcClient, RpcError};
@@ -145,16 +144,6 @@ pub async fn execute(
         );
     }
     Ok(stats)
-}
-
-/// The ledger key of a contract's instance: its persistent contract-data
-/// entry under the instance key.
-fn instance_key(contract: [u8; 32]) -> LedgerKey {
-    LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId(Hash(contract))),
-        key: ScVal::LedgerKeyContractInstance,
-        durability: ContractDataDurability::Persistent,
-    })
 }
 
 /// One `getLedgerEntries` call, retried on 429 after each wait in

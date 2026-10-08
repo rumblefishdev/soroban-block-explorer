@@ -110,16 +110,19 @@ account with no `account_entry_state` row shows "unknown", as Signers does.
 RPC at request time, a second source of truth beside the index, and stage 2
 needs the stored data anyway.
 
-### Stage 2 — what a sponsor pays for (needs its own design)
+### Stage 2 — who pays each sponsored entry (decided 2026-10-07)
 
-New table keyed by sponsor: one row per sponsored ledger entry (account,
-trustline, offer, data, claimable balance, signer) with its owner and reserve
-count, filled from `LedgerEntry.ext.v1.sponsoring_id` and
-`AccountEntry` `signer_sponsoring_ids`, versioned on the entry's ledger,
-closed when the entry or its sponsorship goes. Seeded from the checkpoint
-snapshot, then live. Paginated endpoint and the expandable list (prototype
-variant B). The reverse direction ("sponsored by", variant C) reads the same
-table by owner — not asked for in #454; decide when stage 2 is designed.
+Shaped like stellar.expert, which lists sponsors on the **sponsored**
+account ("Account base reserve sponsored by X", "USDC trustline sponsored by
+X") and shows only a count on the sponsor's side. Read **live from RPC**, not
+indexed: `getLedgerEntries` returns each entry's `sponsoring_id` in `extXdr`,
+the account's `signer_sponsoring_ids` cover signers, and our `balances` name
+the trustlines to ask for. PR 2a (#646) shares the RPC pool of the WASM
+fetcher; PR 2b (#647) adds `GET /v1/accounts/{id}/sponsorship` and a
+"Sponsored reserves" card grouped by sponsor. **Not delivered:** a list on
+the sponsor's side ("whom GAUA7… pays for") — it needs an index over the
+whole network (4M entries for one wallet), stellar.expert does not offer
+it, and nobody asked again; dropped, not deferred.
 
 ## Acceptance Criteria
 
@@ -131,8 +134,9 @@ table by owner — not asked for in #454; decide when stage 2 is designed.
       next pass.
 - [ ] Stage 1: account page shows both counts; no account shows a 0 that the
       chain contradicts.
-- [ ] Stage 2: list for `GAUA7XL5…PNJU` paginates, and its reserves per kind
-      sum to the counter.
+- [ ] Stage 2: on a sponsored account the listed reserves sum to the
+      chain's `num_sponsored` when every sponsored entry is an account,
+      trustline or signer (GBEEFP 6/6, GBIIXI 7/7, GA3WEM 3/3 on 2026-10-07).
 - [ ] **Docs updated** — `docs/architecture/**` schema and API pages for the
       new columns, endpoint and table; `docs/backfills.md` for the counted entry-state pass.
 - [ ] **API types regenerated** — 1c and stage 2 touch `crates/api/**`.

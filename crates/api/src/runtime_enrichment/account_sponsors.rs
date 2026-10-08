@@ -61,18 +61,18 @@ pub struct AccountSponsorsFetcher {
 }
 
 impl AccountSponsorsFetcher {
-    pub fn new() -> Result<Self, reqwest::Error> {
+    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (required).
+    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self {
             rpc: RpcPool::new()?,
         })
     }
 
-    /// A fetcher over fixed RPC endpoints — for tests that stand up their own.
-    #[cfg(test)]
-    pub(crate) fn with_urls(rpc_urls: Vec<String>) -> Self {
-        Self {
-            rpc: RpcPool::with_urls(rpc_urls),
-        }
+    /// Explicit RPC pool — tests, and anything that already holds the list.
+    pub fn with_rpc_urls(rpc_urls: Vec<String>) -> Result<Self, reqwest::Error> {
+        Ok(Self {
+            rpc: RpcPool::with_rpc_urls(rpc_urls)?,
+        })
     }
 
     /// The sponsored entries of `account` among itself and the given classic

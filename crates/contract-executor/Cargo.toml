@@ -1,0 +1,12 @@
+[package]
+name = "contract-executor"
+version = "0.1.0"
+edition = "2024"
+description = "Runs a Soroban contract's read-only function locally with the official host (task 0620, ADR 0061)"
+
+[dependencies]
+# Pinned to the network's protocol (29). It pins `stellar-xdr =28.0.0`, the
+# workspace's own version, so both share one copy of the XDR types — bump the
+# two together.
+soroban-env-host = { version = "=29.0.0", features = ["recording_mode"] }
+stellar-xdr = { workspace = true }

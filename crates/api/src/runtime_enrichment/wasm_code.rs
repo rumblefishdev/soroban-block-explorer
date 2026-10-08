@@ -3,8 +3,8 @@
 //! Two halves, both fail-soft at the handler boundary:
 //!
 //! - [`WasmCodeFetcher`] — transport: `getLedgerEntries` against a Soroban
-//!   RPC pool (`SOROBAN_RPC_URLS` comma-sep → `SOROBAN_RPC_URL` → SDF
-//!   default, same convention as `enrichment-shared::nft_token_uri`).
+//!   RPC pool (`SOROBAN_RPC_URLS`, required — read by
+//!   `enrichment_shared::soroban_rpc`, as for `nft_token_uri`).
 //!   Contract code is content-addressed, so a fetched blob is verified
 //!   against the requested hash before use.
 //! - [`decompile_blocking`] — CPU: `soroban-ret` (pinned `=0.0.4`) Rust
@@ -32,7 +32,7 @@ use stellar_xdr::{
 pub const SOROBAN_RET_VERSION: &str = "0.0.4";
 
 /// Errors from the WASM fetch path. The handler maps every variant to a
-/// 5xx except [`FetchError::NotLive`] (archived/expired entry → 404).
+/// 5xx; code that is not live (archived/expired) is `Ok(None)` → 404.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
     #[error("invalid wasm hash: {0}")]
@@ -53,20 +53,19 @@ pub struct WasmCodeFetcher {
 }
 
 impl WasmCodeFetcher {
-    /// Production constructor over the shared pool ([`RpcPool::new`]).
-    pub fn new() -> Result<Self, reqwest::Error> {
+    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (required —
+    /// `enrichment_shared::soroban_rpc::rpc_urls_from_env`).
+    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self {
             rpc: RpcPool::new()?,
         })
     }
 
-    /// A fetcher over a fixed RPC pool — for tests that stand up their own
-    /// endpoints.
-    #[cfg(test)]
-    pub(crate) fn with_urls(rpc_urls: Vec<String>) -> Self {
-        Self {
-            rpc: RpcPool::with_urls(rpc_urls),
-        }
+    /// Explicit RPC pool — tests, and anything that already holds the list.
+    pub fn with_rpc_urls(rpc_urls: Vec<String>) -> Result<Self, reqwest::Error> {
+        Ok(Self {
+            rpc: RpcPool::with_rpc_urls(rpc_urls)?,
+        })
     }
 
     /// Fetch the contract code bytes for a lowercase-hex wasm hash.

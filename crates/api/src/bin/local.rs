@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! # 1. API against prod CH (this binary)
-//! cargo run -p api --bin local
+//! SOROBAN_RPC_URLS=https://mainnet.sorobanrpc.com cargo run -p api --bin local
 //!
 //! # 2. point the SPA's dev proxy at it — web/.env.development.local
 //! #    (gitignored; DEV_API_KEY is only needed for the prod-API target)
@@ -25,7 +25,12 @@
 //! CORS) and Vite forwards `/v1` here. Both local pieces are machine-scoped
 //! and deliberately untracked — nothing to commit to run this.
 //!
-//! Env (all optional):
+//! Env, required:
+//! - `SOROBAN_RPC_URLS` — comma-separated Soroban RPC endpoints of the
+//!   network the ClickHouse holds (production's list: `sorobanRpcUrls` in
+//!   `infra/envs/production.json`)
+//!
+//! Env, optional:
 //! - `LOCAL_MTLS_DIR` — dir with `<user>.crt`, `<user>.key`, `ca.crt`
 //!   (default `infra-hetzner/ca/out/$USER`)
 //! - `LOCAL_CH_DOMAIN` — Caddy mTLS host (default `ch.sorobanscan.rumblefish.dev`)
@@ -79,11 +84,11 @@ async fn main() {
         stellar_archive: StellarArchiveFetcher::new(aws_sdk_s3::Client::new(&aws_config)),
         sep1: Sep1Fetcher::new().expect("failed to build SEP-1 fetcher"),
         nft_token_uri: api::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
-            .expect("failed to build NFT token_uri fetcher"),
+            .unwrap_or_else(|e| panic!("failed to build NFT token_uri fetcher: {e}")),
         wasm_code: api::runtime_enrichment::wasm_code::WasmCodeFetcher::new()
-            .expect("failed to build wasm-code RPC client"),
+            .unwrap_or_else(|e| panic!("failed to build wasm-code RPC client: {e}")),
         account_sponsors: api::runtime_enrichment::account_sponsors::AccountSponsorsFetcher::new()
-            .expect("failed to build account sponsors RPC client"),
+            .unwrap_or_else(|e| panic!("failed to build account sponsors RPC client: {e}")),
     };
 
     let passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE")

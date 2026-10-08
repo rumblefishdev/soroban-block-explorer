@@ -50,7 +50,8 @@ fn garbage_bytes_fail_both_paths() {
 #[tokio::test]
 #[ignore = "hits live mainnet RPC"]
 async fn fetches_real_wasm_by_hash() {
-    let fetcher = WasmCodeFetcher::new().expect("build fetcher");
+    let fetcher = WasmCodeFetcher::with_rpc_urls(vec!["https://mainnet.sorobanrpc.com".to_owned()])
+        .expect("build fetcher");
     let code = fetcher
         .fetch_wasm("07097f83dae3b746db7dba3263d9cc334efb88a9a7d5450fb96ca19f33d284b0")
         .await
@@ -119,7 +120,8 @@ async fn failover_returns_the_next_endpoints_entry() {
         ("/up", 200, code_answer()),
     ])
     .await;
-    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/down"), format!("{base}/up")]);
+    let fetcher =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/down"), format!("{base}/up")]).unwrap();
     let code = fetcher.fetch_wasm(&hex::encode(HASH)).await.unwrap();
     assert_eq!(code.as_deref(), Some(&b"\0asm"[..]));
 }
@@ -132,7 +134,8 @@ async fn empty_everywhere_is_not_live_empty_once_asks_on() {
         ("/b", 200, code_answer()),
     ])
     .await;
-    let mixed = WasmCodeFetcher::with_urls(vec![format!("{base}/a"), format!("{base}/b")]);
+    let mixed =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/a"), format!("{base}/b")]).unwrap();
     assert!(
         mixed
             .fetch_wasm(&hex::encode(HASH))
@@ -141,7 +144,8 @@ async fn empty_everywhere_is_not_live_empty_once_asks_on() {
             .is_some()
     );
 
-    let all_empty = WasmCodeFetcher::with_urls(vec![format!("{base}/a"), format!("{base}/a")]);
+    let all_empty =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/a"), format!("{base}/a")]).unwrap();
     assert!(
         all_empty
             .fetch_wasm(&hex::encode(HASH))
@@ -159,7 +163,8 @@ async fn empty_plus_failure_is_an_error() {
         ("/down", 503, empty_answer()),
     ])
     .await;
-    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/a"), format!("{base}/down")]);
+    let fetcher =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/a"), format!("{base}/down")]).unwrap();
     assert!(matches!(
         fetcher.fetch_wasm(&hex::encode(HASH)).await,
         Err(FetchError::Rpc(_))
@@ -172,7 +177,8 @@ async fn rpc_error_object_stops_at_once() {
     let err = serde_json::json!({ "jsonrpc": "2.0", "id": 1,
         "error": { "code": -32600, "message": "bad" } });
     let base = serve(vec![("/err", 200, err), ("/up", 200, code_answer())]).await;
-    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/err"), format!("{base}/up")]);
+    let fetcher =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/err"), format!("{base}/up")]).unwrap();
     assert!(matches!(
         fetcher.fetch_wasm(&hex::encode(HASH)).await,
         Err(FetchError::RpcError(_))
@@ -185,7 +191,7 @@ async fn null_error_field_is_not_an_error() {
     let mut answer = code_answer();
     answer["error"] = serde_json::Value::Null;
     let base = serve(vec![("/up", 200, answer)]).await;
-    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/up")]);
+    let fetcher = WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/up")]).unwrap();
     assert!(
         fetcher
             .fetch_wasm(&hex::encode(HASH))
@@ -202,7 +208,7 @@ async fn refused_connection_fails_over() {
     let dead = format!("http://{}", closed.local_addr().unwrap());
     drop(closed);
     let base = serve(vec![("/up", 200, code_answer())]).await;
-    let fetcher = WasmCodeFetcher::with_urls(vec![dead, format!("{base}/up")]);
+    let fetcher = WasmCodeFetcher::with_rpc_urls(vec![dead, format!("{base}/up")]).unwrap();
     assert!(
         fetcher
             .fetch_wasm(&hex::encode(HASH))
@@ -210,4 +216,25 @@ async fn refused_connection_fails_over() {
             .unwrap()
             .is_some()
     );
+}
+
+/// A bad answer from the first endpoint — here a code entry for another hash —
+/// stops the fetch: it is a broken RPC, not a reason to ask the next one.
+#[tokio::test]
+async fn a_wrong_entry_stops_without_failover() {
+    let mut other = code_answer();
+    let entry = LedgerEntryData::ContractCode(stellar_xdr::ContractCodeEntry {
+        ext: stellar_xdr::ContractCodeEntryExt::V0,
+        hash: Hash([9; 32]),
+        code: b"\0asm".to_vec().try_into().unwrap(),
+    });
+    other["result"]["entries"][0]["xdr"] =
+        serde_json::Value::String(BASE64.encode(entry.to_xdr(Limits::none()).unwrap()));
+    let base = serve(vec![("/bad", 200, other), ("/up", 200, code_answer())]).await;
+    let fetcher =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/bad"), format!("{base}/up")]).unwrap();
+    assert!(matches!(
+        fetcher.fetch_wasm(&hex::encode(HASH)).await,
+        Err(FetchError::RpcError(_))
+    ));
 }

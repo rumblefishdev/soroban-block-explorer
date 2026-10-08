@@ -132,7 +132,8 @@ async fn smoke_ch_nft_real_and_sentinel() {
     }
 
     let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
-    let fetcher = NftTokenUriFetcher::new().expect("build fetcher");
+    let fetcher = NftTokenUriFetcher::with_rpc_url("https://mainnet.sorobanrpc.com".to_owned())
+        .expect("build fetcher");
 
     // --- REAL: seed a known mainnet NFT contract (0-arg token_uri; the
     // fetcher's arity fallback handles it) ---

@@ -1,13 +1,10 @@
 //! The Soroban RPC pool the runtime fetchers share: `getLedgerEntries` with
-//! failover across `SOROBAN_RPC_URLS` (comma-sep) → `SOROBAN_RPC_URL` → the SDF
-//! mainnet default.
+//! failover across `SOROBAN_RPC_URLS` (required — read by
+//! `enrichment_shared::soroban_rpc`, as for `nft_token_uri`; an RPC answers for
+//! one network only, so there is no default).
 
 use std::sync::Arc;
 use std::time::Duration;
-
-/// SDF public mainnet RPC — the single default when no `SOROBAN_RPC_URLS` /
-/// `SOROBAN_RPC_URL` env is set.
-const DEFAULT_SOROBAN_RPC_URL: &str = "https://mainnet.sorobanrpc.com";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RpcFailure {
@@ -25,18 +22,14 @@ pub struct RpcPool {
 }
 
 impl RpcPool {
-    pub fn new() -> Result<Self, reqwest::Error> {
-        let rpc_urls = std::env::var("SOROBAN_RPC_URLS")
-            .ok()
-            .map(|v| {
-                v.split(',')
-                    .map(|s| s.trim().to_owned())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|v| !v.is_empty())
-            .or_else(|| std::env::var("SOROBAN_RPC_URL").ok().map(|u| vec![u]))
-            .unwrap_or_else(|| vec![DEFAULT_SOROBAN_RPC_URL.to_owned()]);
+    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (required).
+    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let rpc_urls = enrichment_shared::soroban_rpc::rpc_urls_from_env()?;
+        Ok(Self::with_rpc_urls(rpc_urls)?)
+    }
+
+    /// Explicit RPC pool — tests, and anything that already holds the list.
+    pub fn with_rpc_urls(rpc_urls: Vec<String>) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_secs(10))
@@ -47,15 +40,6 @@ impl RpcPool {
             client,
             rpc_urls: Arc::new(rpc_urls),
         })
-    }
-
-    /// A pool over fixed endpoints — for tests that stand up their own.
-    #[cfg(test)]
-    pub(crate) fn with_urls(rpc_urls: Vec<String>) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            rpc_urls: Arc::new(rpc_urls),
-        }
     }
 
     /// The entries `getLedgerEntries` returns for `keys` (base64 `LedgerKey`
@@ -105,9 +89,7 @@ impl RpcPool {
             if !entries.iter().any(|e| e["xdr"].is_string()) {
                 // An empty result means "no live entry" — but a lagging or
                 // pruned node reports the same thing for an entry that does
-                // exist. Ask the rest of the pool before believing it; the
-                // mainnet sweep found 0 genuinely archived binaries, so a
-                // single empty answer is more likely a bad node than truth.
+                // exist. Ask the rest of the pool before believing it.
                 empty_answers += 1;
                 last_err = format!("{url}: no entries for these keys");
                 continue;

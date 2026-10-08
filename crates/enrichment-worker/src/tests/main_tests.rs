@@ -181,7 +181,7 @@ async fn handle_record_sep1_writes_real_enrichment() {
     let state = WorkerState {
         client: client.clone(),
         sep1: Sep1Fetcher::new().expect("sep1"),
-        nft_token_uri: NftTokenUriFetcher::new().expect("nft"),
+        nft_token_uri: NftTokenUriFetcher::with_rpc_url("http://unused".to_owned()).expect("nft"),
     };
     let issuer = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
     let issuer_id = db_clickhouse::persist::ids::account_id(issuer);
@@ -244,7 +244,10 @@ async fn handle_record_nft_writes_real_enrichment() {
     let state = WorkerState {
         client: client.clone(),
         sep1: Sep1Fetcher::new().expect("sep1"),
-        nft_token_uri: NftTokenUriFetcher::new().expect("nft"),
+        nft_token_uri: NftTokenUriFetcher::with_rpc_url(
+            "https://mainnet.sorobanrpc.com".to_owned(),
+        )
+        .expect("nft"),
     };
     let contract = "CDA5FGE4LZP4S45LP6AJLWMLKWHVWMKFSIKVYEBSIYOB25NWLKCLL7RY";
     let contract_id = db_clickhouse::persist::ids::contract_id(contract);

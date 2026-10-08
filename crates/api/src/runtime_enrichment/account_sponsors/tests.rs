@@ -206,7 +206,7 @@ fn many_trustlines() -> Vec<(String, String)> {
 #[tokio::test]
 async fn no_account_stops_after_the_first_call() {
     let (url, calls) = rpc(vec![(200, answer(vec![]))]).await;
-    let fetcher = AccountSponsorsFetcher::with_urls(vec![url]);
+    let fetcher = AccountSponsorsFetcher::with_rpc_urls(vec![url]).unwrap();
 
     let out = fetcher.fetch(WALLET, &many_trustlines()).await.unwrap();
 
@@ -222,7 +222,7 @@ async fn a_failed_later_call_keeps_what_was_read() {
         (503, answer(vec![])),
     ])
     .await;
-    let fetcher = AccountSponsorsFetcher::with_urls(vec![url]);
+    let fetcher = AccountSponsorsFetcher::with_rpc_urls(vec![url]).unwrap();
 
     let out = fetcher
         .fetch(WALLET, &many_trustlines())
