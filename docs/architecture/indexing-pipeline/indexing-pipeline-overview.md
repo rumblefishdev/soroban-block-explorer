@@ -256,7 +256,7 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    changed in the ledger and whose program declares `decimals` (SEP-41
    token) or `name` and `symbol` (SEP-50 NFT), run the declared functions
    among `decimals` / `name` / `symbol` locally
-   (`indexer::token_metadata_by_functions::contract_metadata_writes`,
+   (`indexer::contract_metadata::contract_metadata_writes`,
    `crates/contract-executor`) over this ledger's instances and programs plus
    `wasm_programs` / `contract_instances`. These are the only
    `soroban_contract_metadata` writes; the parser reads no metadata. A

@@ -19,13 +19,12 @@
 //!     CLICKHOUSE_PASSWORD=clickhouse cargo test -p db-clickhouse --test metadata_e2e
 
 use clickhouse::Row;
+use db_clickhouse::persist::contract_metadata::{ExtractedContractMetadata, TokenMetadata};
 use db_clickhouse::persist::ids;
 use db_clickhouse::persist::rows::SorobanContractMetadataRow;
 use db_clickhouse::persist::stage::build_metadata_rows;
 use db_clickhouse::{Config, apply_init_sql, client};
 use serde::Deserialize;
-use xdr_parser::token_metadata::TokenMetadata;
-use xdr_parser::types::ExtractedContractMetadata;
 
 const CONTRACT: &str = "CMETAE2E0000000000000000000000000000000000000000000000001";
 const E2E_LEDGER: u32 = 99_999_777;

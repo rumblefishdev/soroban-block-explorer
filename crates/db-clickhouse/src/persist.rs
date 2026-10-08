@@ -49,6 +49,7 @@ use crate::SchemaError;
 
 pub mod claimable_balances;
 pub mod classic_pools;
+pub mod contract_metadata;
 pub mod enrichment;
 pub mod ids;
 pub mod rows;
@@ -88,7 +89,7 @@ pub async fn persist_ledger_clickhouse(
     nfts: &[ExtractedNft],
     nft_events: &[ExtractedNftEvent],
     lp_positions: &[ExtractedLpPosition],
-    contract_metadata_writes: &[xdr_parser::ExtractedContractMetadata],
+    contract_metadata_writes: &[contract_metadata::ExtractedContractMetadata],
     executable_ref_targets: &[xdr_parser::executable_ref::ExtractedExecutableRefTarget],
     contract_instances: &[xdr_parser::contract_instance::ExtractedContractInstance],
     soroban_token_balances: &[xdr_parser::ExtractedSorobanBalance],

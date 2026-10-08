@@ -182,8 +182,7 @@ impl PartitionWriterHandle {
             // `wasm_programs` yet, so its contracts get no write here;
             // `contract-metadata-backfill` fills them afterwards.
             let metadata_writes = if writes_metadata {
-                indexer::token_metadata_by_functions::contract_metadata_writes(pw.client(), &parsed)
-                    .await?
+                indexer::contract_metadata::contract_metadata_writes(pw.client(), &parsed).await?
             } else {
                 Vec::new()
             };
