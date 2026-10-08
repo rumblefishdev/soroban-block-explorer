@@ -47,13 +47,12 @@ bad row never tears down the drain.
 `nft_enrichment.collection_name` is served (list / detail / search). The
 `token_uri` JSON `"collection"` field that `nft-metadata` reads is emitted
 by no real-world Stellar NFT (0/68 collections). The **primary** source is
-the ledger: the parser captures the OZ NFT collection name from the contract
-instance-storage metadata into `soroban_contract_metadata` (#330), and the
-read path serves it via `COALESCE(soroban_contract_metadata.name,
-nft_enrichment.collection_name)` (#331). The contract-level SEP-50 `name()`
-view function (a separate RPC `simulateTransaction`) is a **FALLBACK** only,
-for the ledger-uncovered remainder — hand-rolled contracts with empty
-instance storage but a WASM-baked `name()`.
+the indexer: it runs the contract's own SEP-50 `name()` locally into
+`soroban_contract_metadata` (task 0620), and the read path serves it via
+`COALESCE(soroban_contract_metadata.name, nft_enrichment.collection_name)`
+(#331). The `name()` RPC `simulateTransaction` is a **FALLBACK** only, for
+contracts the indexer does not answer — a program declaring `name()` without
+`symbol()`, or a `name()` that reads persistent data.
 
 This subcommand walks DISTINCT **contracts** whose `nft_enrichment` rows
 still lack a collection name AND that have **no** ledger-sourced name in

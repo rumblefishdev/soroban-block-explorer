@@ -1,5 +1,5 @@
 //! Per-CONTRACT `collection_name` backfill from the SEP-50 `name()` RPC
-//! simulate — the FALLBACK path (task 0340 parser-first redirect).
+//! simulate — the FALLBACK path (task 0340; the indexer is primary, 0620).
 //!
 //! Primary is the indexer: it runs the contract's own `name()` locally into
 //! `soroban_contract_metadata` (task 0620), served via COALESCE (Fix B /
