@@ -48,6 +48,7 @@ use xdr_parser::ExtractedContractMetadata;
 use xdr_parser::ExtractedSorobanBalance;
 use xdr_parser::SacOverride;
 use xdr_parser::claimable_balance::ExtractedClaimableBalance;
+use xdr_parser::contract_instance::ExtractedContractInstance;
 use xdr_parser::executable_ref::ExtractedExecutableRefTarget;
 use xdr_parser::types::{
     ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedEvent,
@@ -227,6 +228,8 @@ pub struct StagedLedger {
     /// executable tag points at as of this ledger. A fleet re-point is ONE row
     /// here, never a rewrite of the members that follow it.
     pub executable_ref_rows: Vec<ContractExecutableRefRow>,
+    /// `contract_instances` rows (task 0620), one per contract.
+    pub contract_instance_rows: Vec<ContractInstanceRow>,
     pub transaction_rows: Vec<TransactionRow>,
     pub hash_prefix_rows: Vec<TransactionHashPrefixRow>,
     pub participant_rows: Vec<TransactionParticipantRow>,
@@ -312,6 +315,8 @@ pub struct StageInputs<'a> {
     pub contract_metadata_writes: &'a [ExtractedContractMetadata],
     /// CAP-85 (task 0548) — see [`StagedLedger::executable_ref_rows`].
     pub executable_ref_targets: &'a [ExtractedExecutableRefTarget],
+    /// Contract instance entries (task 0620) — see `contract_instances.rs`.
+    pub contract_instances: &'a [ExtractedContractInstance],
     /// Per-holder Soroban token (type-3) balances from `ContractData`
     /// `Balance(Address)` entries (task 0331). Threaded to the unified
     /// `unified_balance_rows` via [`build_balance_rows`]. Empty `&[]` for
@@ -392,6 +397,7 @@ pub fn prepare(
         lp_positions,
         contract_metadata_writes: &[],
         executable_ref_targets: &[],
+        contract_instances: &[],
         pool_family_writes: &[],
         soroban_token_balances: &[],
         claimable_balances: &[],
@@ -479,11 +485,10 @@ pub fn build_wasm_upgrade_rows(
     by_contract.into_values().collect()
 }
 
-/// Map parser-extracted token-metadata writes to `soroban_contract_metadata`
-/// rows (task 0297). Called inside [`prepare_with_sac_overrides`] from the
-/// `StageInputs.contract_metadata_writes` slice. SAC filtering already happened
-/// in the producer (`xdr_parser::extract_contract_metadata_writes`); `version` =
-/// observed ledger.
+/// Map the metadata writes (`indexer::token_metadata_by_functions`, task 0620)
+/// to `soroban_contract_metadata` rows. Called inside
+/// [`prepare_with_sac_overrides`] from the `StageInputs.contract_metadata_writes`
+/// slice; `version` = the ledger the functions ran at.
 pub fn build_metadata_rows(
     writes: &[ExtractedContractMetadata],
 ) -> Vec<SorobanContractMetadataRow> {
@@ -623,6 +628,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         lp_positions,
         contract_metadata_writes,
         executable_ref_targets,
+        contract_instances,
         soroban_token_balances,
         claimable_balances,
         pool_family_writes,
@@ -964,6 +970,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // 0244; the dead-column DROP is task 0304 / 0310.)
     out.metadata_rows = build_metadata_rows(contract_metadata_writes);
     out.executable_ref_rows = build_executable_ref_rows(executable_ref_targets);
+    out.contract_instance_rows = contract_instances::contract_instance_rows(contract_instances);
     out.claimable_balance_rows =
         super::claimable_balances::build_claimable_balance_rows(claimable_balances);
     // `sac_map` (seeded above with this-ledger SAC carriers, before the value
@@ -2446,6 +2453,7 @@ pub fn ledger_deltas_net_settled(
 
 mod account_entry_state;
 mod contract_activity;
+mod contract_instances;
 mod lp_positions;
 mod nfts;
 mod operations;

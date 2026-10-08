@@ -11,6 +11,7 @@ import {
 import { client } from '../client.gen.js';
 import {
   getAccount,
+  getAccountSponsorship,
   getAsset,
   getContract,
   getDecompiled,
@@ -44,6 +45,9 @@ import type {
   GetAccountData,
   GetAccountError,
   GetAccountResponse,
+  GetAccountSponsorshipData,
+  GetAccountSponsorshipError,
+  GetAccountSponsorshipResponse,
   GetAssetData,
   GetAssetError,
   GetAssetResponse,
@@ -360,6 +364,31 @@ export const getAccountOptions = (options: Options<GetAccountData>) =>
       return data;
     },
     queryKey: getAccountQueryKey(options),
+  });
+
+export const getAccountSponsorshipQueryKey = (
+  options: Options<GetAccountSponsorshipData>
+) => createQueryKey('getAccountSponsorship', options);
+
+export const getAccountSponsorshipOptions = (
+  options: Options<GetAccountSponsorshipData>
+) =>
+  queryOptions<
+    GetAccountSponsorshipResponse,
+    GetAccountSponsorshipError,
+    GetAccountSponsorshipResponse,
+    ReturnType<typeof getAccountSponsorshipQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await getAccountSponsorship({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: getAccountSponsorshipQueryKey(options),
   });
 
 export const listAccountTransactionsQueryKey = (
@@ -712,9 +741,11 @@ export const getDecompiledQueryKey = (options: Options<GetDecompiledData>) =>
 /**
  * Decompile the contract's WASM on demand (task 0465, refs #374).
  *
- * No persistence: bytes are fetched from Soroban RPC and decompiled per
- * request. The output is immutable per (`wasm_hash`, decompiler version),
- * which justifies the `LONG` cache header even without a server-side cache.
+ * The bytes come from `wasm_programs.code`, so a program archived on the
+ * ledger still decompiles (task 0620); Soroban RPC answers only for a
+ * program whose bytes are not indexed yet. The output is immutable per
+ * (`wasm_hash`, decompiler version), which justifies the `LONG` cache header
+ * even without a server-side cache.
  */
 export const getDecompiledOptions = (options: Options<GetDecompiledData>) =>
   queryOptions<

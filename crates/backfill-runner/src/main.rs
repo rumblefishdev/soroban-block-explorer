@@ -8,6 +8,8 @@
 mod balance_seed;
 mod bootstrap;
 mod ch_staging;
+mod contract_instance_backfill;
+mod contract_metadata_backfill;
 mod contract_type_rebuild;
 mod dashboard;
 mod error;
@@ -271,6 +273,27 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Task 0620 — one-shot fill of `contract_instances` for every known
+    /// contract without a row, read from Soroban RPC (`getLedgerEntries`,
+    /// the contract's instance entry) and versioned by the entry's own
+    /// last-modified ledger. Requires `--soroban-rpc-url`. Idempotent.
+    /// `--dry-run` fetches without writing.
+    ContractInstanceBackfill {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Task 0620 — `decimals`, `name` and `symbol` of every token and NFT
+    /// contract (`has_metadata`), read by running its own functions
+    /// locally over `wasm_programs.code` and `contract_instances`, written to
+    /// `soroban_contract_metadata`. Run after `wasm-code-backfill` and
+    /// `contract-instance-backfill`. Idempotent. `--dry-run` compares with
+    /// the stored rows without writing.
+    ContractMetadataBackfill {
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Post-merge NFT reclassification on the Hetzner CH (task 0228
     /// Phase 5; combines task 0118 Phase 3 cleanup with task 0217
     /// quarantine promotion):
@@ -435,6 +458,37 @@ async fn main() {
                 stats.written,
             );
         }
+        Command::ContractInstanceBackfill { dry_run } => {
+            let stats =
+                contract_instance_backfill::execute(&sink, cli.soroban_rpc_url.as_deref(), dry_run)
+                    .await
+                    .expect("contract_instance_backfill failed — idempotent, safe to re-run");
+            println!(
+                "contract_instance_backfill completed (dry_run={}): missing={} fetched={} \
+                 not_returned={} written={}",
+                stats.dry_run, stats.missing, stats.fetched, stats.not_returned, stats.written,
+            );
+        }
+        Command::ContractMetadataBackfill { dry_run } => {
+            let s = contract_metadata_backfill::execute(&sink, dry_run)
+                .await
+                .expect("contract_metadata_backfill failed — idempotent, safe to re-run");
+            println!(
+                "contract_metadata_backfill completed (dry_run={}): contracts={} no_instance={} \
+                 no_program={} needs_contract_data={} failed={} same={} different={} new={} \
+                 written={}",
+                s.dry_run,
+                s.contracts,
+                s.no_instance,
+                s.no_program,
+                s.needs_contract_data,
+                s.failed,
+                s.same,
+                s.different,
+                s.new,
+                s.written,
+            );
+        }
         Command::SorobanPoolAmounts { dry_run } => {
             let stats = soroban_pool_amounts::execute(&sink, dry_run)
                 .await
@@ -462,55 +516,20 @@ async fn main() {
     }
 }
 
-/// Build the ClickHouse `Sink`. Panics loudly at startup on a bad config
-/// (mismatched mTLS flags, unreadable PEM) — same posture as the existing
-/// pre-flight panics.
-///
-/// Reads ClickHouse env vars (user, password, database) via
-/// `db_clickhouse::Config::from_env`; the `--clickhouse-url` CLI flag already
-/// overrides `CLICKHOUSE_URL` for the URL field because clap reads the same
-/// env var.
-///
-/// When `ch_cert` + `ch_key` + `ch_ca` are all supplied (task 0307), the sink
-/// connects over mTLS to the Caddy-fronted endpoint: the PEMs are read into an
-/// `MtlsBundle` and `client_with_mtls` presents the client cert (whose CN Caddy
-/// maps to a CH user via `CLICKHOUSE_CN_USER_MAP`). `cfg.url` must be the https
-/// Caddy host; user/password are ignored on that path.
+/// Build the ClickHouse `Sink` on the operator-CLI client
+/// ([`db_clickhouse::mtls::client_from_cli_flags`]: plain, or mTLS when
+/// `--ch-cert` / `--ch-key` / `--ch-ca` are all set). Panics loudly at
+/// startup on a bad config — same posture as the existing pre-flight panics.
 fn build_sink(
     clickhouse_url: Option<&str>,
     ch_cert: Option<&Path>,
     ch_key: Option<&Path>,
     ch_ca: Option<&Path>,
 ) -> sink::Sink {
-    let mut cfg = db_clickhouse::Config::from_env();
-    if let Some(url) = clickhouse_url {
-        cfg.url = url.to_string();
-    }
-    match (ch_cert, ch_key, ch_ca) {
-        (Some(cert), Some(key), Some(ca)) => {
-            let read = |p: &Path| {
-                std::fs::read_to_string(p)
-                    .unwrap_or_else(|e| panic!("read mTLS PEM {}: {e}", p.display()))
-            };
-            let bundle = db_clickhouse::mtls::MtlsBundle {
-                cert_pem: read(cert),
-                key_pem: read(key),
-                ca_pem: read(ca),
-            };
-            // `client_with_mtls` prepends `https://`, so hand it the
-            // bare host — strip any scheme / trailing slash from cfg.url.
-            let domain = cfg
-                .url
-                .trim_start_matches("https://")
-                .trim_start_matches("http://")
-                .trim_end_matches('/');
-            let client = db_clickhouse::mtls::client_with_mtls(domain, &bundle, &cfg.database)
-                .unwrap_or_else(|e| panic!("mTLS client build failed: {e}"));
-            sink::Sink::new(client)
-        }
-        (None, None, None) => sink::Sink::new(db_clickhouse::client(&cfg)),
-        _ => {
-            panic!("--ch-cert / --ch-key / --ch-ca must all be set together (mTLS) or all omitted")
-        }
-    }
+    sink::Sink::new(db_clickhouse::mtls::client_from_cli_flags(
+        clickhouse_url,
+        ch_cert,
+        ch_key,
+        ch_ca,
+    ))
 }

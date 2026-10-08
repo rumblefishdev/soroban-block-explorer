@@ -84,18 +84,17 @@ pub(crate) fn pool_id_from_text(raw: &str) -> Option<String> {
 /// A pool row's stored `pool_kind`, decoded ONCE where it leaves the database;
 /// everything downstream holds a [`domain::PoolKind`].
 ///
-/// The writer only ever stores 0 or 1 (every one of 58,095 physical rows on
-/// production, 2026-09-23), so the error arm is schema drift. It is logged,
-/// and answers classic — the form all but ~1.3% of pools take — because a
-/// row still needs an identifier.
-pub(crate) fn decode_pool_kind(pool_id_hex: &str, raw_kind: i16) -> domain::PoolKind {
-    domain::PoolKind::try_from(raw_kind).unwrap_or_else(|_| {
-        tracing::error!(
-            pool_id_hex,
-            raw_kind,
-            "pool_kind outside PoolKind; read as classic"
-        );
-        domain::PoolKind::Classic
+/// The writer only ever stores 0 or 1 (54,505 of 54,505 pools on production,
+/// 2026-10-07), so any other value is a broken row. The request fails rather
+/// than guess a kind: the wrong kind renders a well-formed but wrong address.
+pub(crate) fn decode_pool_kind(
+    pool_id_hex: &str,
+    raw_kind: i16,
+) -> Result<domain::PoolKind, clickhouse::error::Error> {
+    domain::PoolKind::try_from(raw_kind).map_err(|_| {
+        clickhouse::error::Error::Custom(format!(
+            "liquidity_pools row {pool_id_hex}: pool_kind {raw_kind} is not a PoolKind"
+        ))
     })
 }
 

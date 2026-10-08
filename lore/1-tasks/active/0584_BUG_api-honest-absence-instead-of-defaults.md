@@ -36,6 +36,12 @@ history:
       Metadata criterion done: #536 merged. Every read takes the newest row
       with `FINAL`, written in place; the shared constant was dropped in
       review. Remaining: null on a miss, decode_pool_kind, fee drift.
+  - date: '2026-10-07'
+    status: active
+    who: karolkow
+    note: >
+      #639: broken rows fail, not null (prod has none); fees: 0632; whole
+      ledger: 0634. Next: PR B, SAC addresses in resolve_contracts.
 ---
 
 # BUG: API renders defaults where a lookup missed

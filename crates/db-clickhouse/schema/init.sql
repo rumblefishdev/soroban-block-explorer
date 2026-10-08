@@ -68,7 +68,8 @@
 -- - **`LowCardinality(String)`** on bounded-cardinality columns:
 --   asset codes, event signatures, home_domain.
 -- - **`ZSTD(3)` codecs** on JSON-ish columns: `soroban_events.topics_xdr`,
---   `soroban_events.data_xdr`, `wasm_programs.metadata`, `wasm_programs.code`.
+--   `soroban_events.data_xdr`, `wasm_programs.metadata`, `wasm_programs.code`,
+--   `contract_instances.data_xdr`.
 -- - **Empty-string sentinel** for composite-PK "no value" slots
 --   (`assets.asset_code = ''` for native, etc.). CH `ORDER BY` on
 --   plain `String` is significantly faster than `Nullable(String)`.
@@ -334,21 +335,48 @@ CREATE TABLE IF NOT EXISTS contract_executable_refs (
 ENGINE = ReplacingMergeTree(ledger)
 ORDER BY (owner_id, tag);
 
--- On-chain Soroban token metadata (name/symbol/decimals) read from the
--- contract's instance-storage `Symbol("METADATA")` struct. Per-contract,
+-- contract_instances: each contract's instance entry — its executable and its
+-- instance storage — kept as the XDR of the entry's `LedgerEntryData`, so the
+-- contract's own functions can be run locally (task 0620, ADR 0061). Not
+-- decoded into columns: running a contract needs the entry exactly as the
+-- network stores it.
+--
+-- `contract` is the 32-byte contract id (as in `pool_instance_state`). RMT
+-- versioned on `ledger`, the ledger the entry last changed in; reads need
+-- `FINAL` or `argMax(data_xdr, ledger)`. The indexer writes every created,
+-- updated or restored instance; instances changed before the table existed
+-- were filled once from Soroban RPC by `backfill-runner
+-- contract-instance-backfill`, versioned by the entry's own last-modified
+-- ledger, so the fill never overrides a newer write. ~150k contracts measured
+-- ~375 B each (~57 MB raw).
+-- PROD: created by hand BEFORE the writer ships — a missing table fails every
+-- ledger's insert that changes an instance and stalls ingestion.
+CREATE TABLE IF NOT EXISTS contract_instances (
+    contract  FixedString(32),
+    data_xdr  String CODEC(ZSTD(3)),
+    ledger    Int64
+)
+ENGINE = ReplacingMergeTree(ledger)
+ORDER BY (contract);
+
+-- On-chain Soroban token and NFT metadata (name/symbol/decimals): what the
+-- contract's own functions return, run locally (task 0620). Per-contract,
 -- INDEXER-derived (NOT the off-chain enrichment family). A SEPARATE table, not
 -- columns on `soroban_contracts`, because: (1) RMT whole-row replace +
 -- soroban_contracts' many writers (deploy / contract_type_rebuild EXCHANGE /
 -- stub INSERTs / db-merge) would clobber in-row metadata to NULL (the G5 bug
 -- class); (2) deploy identity (wasm_hash/deployer, from the deploy tx, NOT in
 -- the instance entry) and metadata live on DIFFERENT update clocks, which one
--- RMT version column cannot track. Written by the parser on contract-instance
--- `created` / `updated` / `restored` changes; SACs skipped (name=CODE:ISSUER /
+-- RMT version column cannot track. Written when a contract's instance changes
+-- and its program declares `decimals` (SEP-41 token) or `name` and `symbol`
+-- (SEP-50 NFT): the declared functions among the three, run locally. A
+-- contract whose run fails or needs persistent data (task 0633) gets no write
+-- and keeps its row. SACs skipped (name=CODE:ISSUER /
 -- symbol=code / decimals=7 already derivable from SAC identity). `version` =
 -- observed ledger (deterministic/replay-safe; latest wins). `decimals` is
 -- rendered as 7 at read for classic/SAC.
 -- INVARIANT: every row is a WHOLE-struct snapshot at one ledger (name+symbol+
--- decimals all set from the same METADATA at that version) — never a partial
+-- decimals all set from one source at that version) — never a partial
 -- single-column write. Read with `FINAL` (latest whole row per contract_id) —
 -- the direct, frankenstein-proof RMT collapse for a whole-row read; the table is
 -- bounded (Soroban-native tokens only) so the read-time merge is cheap. Read

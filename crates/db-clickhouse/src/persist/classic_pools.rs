@@ -54,7 +54,7 @@ pub fn build_pool_rows(
             asset_b_issuer_id,
             fee_bps: pool.fee_bps,
             last_updated_ledger,
-            pool_kind: 0,
+            pool_kind: domain::PoolKind::Classic as u8,
             deployment_id: 0,
             pool_type_raw: String::new(),
         };

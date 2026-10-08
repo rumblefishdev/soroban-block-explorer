@@ -609,8 +609,8 @@ the API saying what the chain says. `master_weight = 0` renders as `master key �
 — a permanently disabled key, not a low-weight signer, and the second most common shape
 on pubnet. An account no key can sign for gets its own marker. The footer states total
 weight beside all three thresholds rather than one "N of M", which would pick one
-threshold and hide two. `preauth_tx` and `hash_x` signers render unlinked; they are not
-accounts.
+threshold and hide two. Signers render unlinked: a key is not an account — an `ed25519`
+key often has no account on the ledger, and `preauth_tx` / `hash_x` keys never do.
 
 A missing signing configuration is stated as a fact about the ledger, not as thin
 coverage: after the checkpoint seed every live account has one, and accounts without a
@@ -628,6 +628,26 @@ predate any account. Reading all holdings fired the alarm on 10,713 accounts who
 correct (100% Soroban rows, 350/350 probed ABSENT on chain while 60/60 of their token
 balances probed PRESENT with matching amounts). Restricted to classic it measures zero and
 still cannot miss a live account, since every live account carries a native XLM row.
+
+**Sponsored reserves** (issue #454, task 0629) are two cells in the Summary card:
+`Sponsoring` (reserves this account pays for others) and `Sponsored by others`
+(reserves of this account paid by others), with their XLM at the 0.5 XLM base reserve.
+Both come from the API's `sponsorship` — the CAP-33 counters the ledger keeps on the
+`AccountEntry`, read from the same `account_entry_state` row as the signers. The API
+returns `null` for an address with no account entry — never an account (no row, as
+above) or closed (`deleted`: the row from before the merge is kept, and its counters
+describe reserves that no longer exist) — and the page then hides the row.
+
+**Sponsored reserves card** (task 0629, stage 2): for an account with sponsored reserves,
+a card after Signers lists which of its entries another account pays for — the account's
+base reserve, each sponsored trustline and signer — in one folding group per sponsor (header: the sponsor and its total; every group starts folded), with the number of sponsors in the card header; when the chain's
+`num_sponsored` is larger than what the list shows (offers, data entries, pool-share
+trustlines — none of which are listed), a line
+under the list says how many reserves are not named. It comes from `GET /v1/accounts/{id}/sponsorship`, which the API answers live
+from Soroban RPC (`getLedgerEntries`, each entry's `sponsoring_id`) with the account's
+open classic trustlines from `balances` as keys (calls of 200 keys, at most six: the protocol caps an account at 1,000 sub-entries;
+20 s wall-clock cap). The card loads after the page with the shared skeleton and error state; a group longer
+than `PAGE_SIZE` pages inside itself.
 
 ### 6.8 Assets (`/assets`)
 

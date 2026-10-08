@@ -42,7 +42,7 @@ export type AccountBalance = {
   /**
    * Asset display `name`, from two disjoint sources by asset type: classic /
    * native → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic
-   * assets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. "USDC-EURC
+   * assets carry one); Soroban (type-3) → the token's own `name()` (e.g. "USDC-EURC
    * Soroswap LP Token", 100% coverage). Distinct from the `symbol` ticker.
    * `null` when neither source has a name.
    */
@@ -63,7 +63,7 @@ export type AccountBalance = {
    */
   sac_deployed: boolean;
   /**
-   * On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
+   * On-chain token `symbol` (type-3, its own `symbol()`, e.g. "SMOL") — the short
    * ticker. `null` for native / classic (they carry `asset_code`).
    */
   symbol?: string | null;
@@ -152,6 +152,7 @@ export type AccountDetailResponse = {
   last_seen_ledger: number;
   sequence_number: number;
   signing?: null | AccountSigning;
+  sponsorship?: null | AccountSponsorship;
 };
 
 /**
@@ -220,6 +221,63 @@ export type AccountSigning = {
   threshold_high: number;
   threshold_low: number;
   threshold_med: number;
+};
+
+/**
+ * One sponsored entry of the account.
+ */
+export type AccountSponsoredEntry = {
+  /**
+   * `CODE-ISSUER` for a trustline.
+   */
+  asset?: string | null;
+  /**
+   * `account` | `trustline` | `signer`.
+   */
+  kind: string;
+  /**
+   * Reserves the entry costs: 2 for the account, 1 otherwise.
+   */
+  reserves: number;
+  /**
+   * The signer's key for a signer.
+   */
+  signer?: string | null;
+  /**
+   * The account paying them.
+   */
+  sponsor: string;
+};
+
+/**
+ * The CAP-33 counters the network keeps on the account itself, copied as
+ * stored. A reserve is the base reserve the network locks per ledger entry
+ * (2 for the account, 1 per sub-entry, 1 per claimant of a claimable
+ * balance); a sponsor can pay it for someone else.
+ */
+export type AccountSponsorship = {
+  /**
+   * Reserves of this account paid by others.
+   */
+  num_sponsored: number;
+  /**
+   * Reserves this account pays for other accounts and claimable balances.
+   */
+  num_sponsoring: number;
+};
+
+/**
+ * `GET /v1/accounts/{id}/sponsorship` — the account's sponsored entries and
+ * who pays each, read live from RPC (CAP-33, task 0629).
+ */
+export type AccountSponsorshipResponse = {
+  entries: Array<AccountSponsoredEntry>;
+  /**
+   * Reserves of this account paid by others, as the chain holds it now.
+   * Larger than the sum of `entries[].reserves` when some sponsored
+   * entries are not listed (offers, data entries, pool-share trustlines).
+   */
+  num_sponsored: number;
 };
 
 /**
@@ -349,7 +407,7 @@ export type AssetDetailResponse = {
    */
   sac_deployed?: boolean | null;
   /**
-   * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+   * On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic
    * (use `asset_code`) and native.
    */
   symbol?: string | null;
@@ -447,7 +505,7 @@ export type AssetItem = {
    */
   sac_deployed?: boolean | null;
   /**
-   * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+   * On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic
    * (use `asset_code`) and native.
    */
   symbol?: string | null;
@@ -489,13 +547,14 @@ export type AssetTransactionItem = {
  * One row from the chart endpoint. All money fields are **USD decimal
  * strings with exactly two decimals**, computed at read from on-chain
  * quantities × the in-cluster price series (task 0199, ADR 0053):
- * - `tvl` — "TVL at close of bucket": last priceable snapshot's
- * `reserve_a·price_a + reserve_b·price_b`. A leg with no candle in its
- * own bucket falls back to its most recent close within 48 h, so a
- * pool whose second leg has not traded today still reports; `null`
- * when either leg has no price within that window (untracked asset,
- * pre-listing history, or a provider-side gap such as the
- * 2026-07-21..08-03 freeze).
+ * - `tvl` — "TVL at close of bucket": the bucket's last pool state,
+ * Σ reserve·price over every leg, priced at that state's own hour or
+ * day (`1w`: the day of the week's last change). A leg with no candle
+ * then falls back to its most recent close within 48 h, so a pool whose
+ * second leg has not traded today still reports; `null` when any leg
+ * has no price within that window (untracked asset, pre-listing
+ * history, or a provider-side gap such as the 2026-07-21..08-03 freeze)
+ * or no known reserve.
  * - `volume` — SUM over the bucket of per-ledger gross trade volume ×
  * the leg-A price at that ledger's time. `null` for no-swap buckets, for
  * buckets where a swap couldn't be priced (never a partial sum), and in
@@ -1499,7 +1558,7 @@ export type PaginatedAssetItem = {
      */
     sac_deployed?: boolean | null;
     /**
-     * On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+     * On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic
      * (use `asset_code`) and native.
      */
     symbol?: string | null;
@@ -2786,6 +2845,46 @@ export type GetAccountResponses = {
 
 export type GetAccountResponse = GetAccountResponses[keyof GetAccountResponses];
 
+export type GetAccountSponsorshipData = {
+  body?: never;
+  path: {
+    /**
+     * Stellar account StrKey (G…, 56 chars)
+     */
+    account_id: string;
+  };
+  query?: never;
+  url: '/v1/accounts/{account_id}/sponsorship';
+};
+
+export type GetAccountSponsorshipErrors = {
+  /**
+   * Invalid account_id
+   */
+  400: ErrorEnvelope;
+  /**
+   * Account not found, or no entry on the ledger
+   */
+  404: ErrorEnvelope;
+  /**
+   * Database or RPC failure
+   */
+  500: ErrorEnvelope;
+};
+
+export type GetAccountSponsorshipError =
+  GetAccountSponsorshipErrors[keyof GetAccountSponsorshipErrors];
+
+export type GetAccountSponsorshipResponses = {
+  /**
+   * The account's sponsored entries and who pays them
+   */
+  200: AccountSponsorshipResponse;
+};
+
+export type GetAccountSponsorshipResponse =
+  GetAccountSponsorshipResponses[keyof GetAccountSponsorshipResponses];
+
 export type ListAccountTransactionsData = {
   body?: never;
   path: {
@@ -3095,7 +3194,7 @@ export type GetDecompiledErrors = {
    */
   400: ErrorEnvelope;
   /**
-   * Contract not found, has no WASM (SAC / pre-upload), or code no longer live
+   * Contract not found, has no WASM (SAC / pre-upload), or code neither indexed nor live
    */
   404: ErrorEnvelope;
   /**

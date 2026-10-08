@@ -67,11 +67,11 @@ pub struct AccountBalance {
     pub contract_id: Option<String>,
     /// Asset display `name`, from two disjoint sources by asset type: classic /
     /// native → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic
-    /// assets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. "USDC-EURC
+    /// assets carry one); Soroban (type-3) → the token's own `name()` (e.g. "USDC-EURC
     /// Soroswap LP Token", 100% coverage). Distinct from the `symbol` ticker.
     /// `null` when neither source has a name.
     pub name: Option<String>,
-    /// On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
+    /// On-chain token `symbol` (type-3, its own `symbol()`, e.g. "SMOL") — the short
     /// ticker. `null` for native / classic (they carry `asset_code`).
     pub symbol: Option<String>,
     /// RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331
@@ -119,6 +119,23 @@ pub struct AccountDetailResponse {
     /// security claim the data does not support. Render the unknown as
     /// unknown.
     pub signing: Option<AccountSigning>,
+    /// Sponsored reserves (CAP-33), or `null` when the account has no entry
+    /// on the ledger — closed (`deleted`), or never an account (no
+    /// `account_entry_state` row) — so it holds no reserves to count. Render
+    /// nothing for `null`.
+    pub sponsorship: Option<AccountSponsorship>,
+}
+
+/// The CAP-33 counters the network keeps on the account itself, copied as
+/// stored. A reserve is the base reserve the network locks per ledger entry
+/// (2 for the account, 1 per sub-entry, 1 per claimant of a claimable
+/// balance); a sponsor can pay it for someone else.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountSponsorship {
+    /// Reserves this account pays for other accounts and claimable balances.
+    pub num_sponsoring: u32,
+    /// Reserves of this account paid by others.
+    pub num_sponsored: u32,
 }
 
 /// One entry of an account's signer list, exactly as the ledger stores it.
@@ -254,4 +271,30 @@ pub struct AccountTransactionItem {
 pub struct AccountsListCursor {
     pub last_seen_ledger: i64,
     pub id: i64,
+}
+
+/// `GET /v1/accounts/{id}/sponsorship` — the account's sponsored entries and
+/// who pays each, read live from RPC (CAP-33, task 0629).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountSponsorshipResponse {
+    /// Reserves of this account paid by others, as the chain holds it now.
+    /// Larger than the sum of `entries[].reserves` when some sponsored
+    /// entries are not listed (offers, data entries, pool-share trustlines).
+    pub num_sponsored: u32,
+    pub entries: Vec<AccountSponsoredEntry>,
+}
+
+/// One sponsored entry of the account.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AccountSponsoredEntry {
+    /// `account` | `trustline` | `signer`.
+    pub kind: String,
+    /// `CODE-ISSUER` for a trustline.
+    pub asset: Option<String>,
+    /// The signer's key for a signer.
+    pub signer: Option<String>,
+    /// Reserves the entry costs: 2 for the account, 1 otherwise.
+    pub reserves: u32,
+    /// The account paying them.
+    pub sponsor: String,
 }

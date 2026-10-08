@@ -10,6 +10,7 @@ pub mod asset_code;
 pub mod claimable_balance;
 pub mod classification;
 pub mod contract;
+pub mod contract_instance;
 pub mod error;
 pub mod event;
 pub mod event_filters;
@@ -70,9 +71,8 @@ pub use scval::scval_to_typed_json;
 pub use state::{
     SacBalanceValue, decode_sac_balance_value, dedup_final_pool_snapshots, detect_assets,
     detect_classic_credit_assets, detect_nfts, extract_account_states,
-    extract_contract_deployments, extract_contract_metadata_writes, extract_liquidity_pools,
-    extract_lp_positions, extract_nft_ownership_events, extract_soroban_token_balances,
-    native_asset_singleton,
+    extract_contract_deployments, extract_liquidity_pools, extract_lp_positions,
+    extract_nft_ownership_events, extract_soroban_token_balances, native_asset_singleton,
 };
 pub use token_metadata::TokenMetadata;
 pub use transaction::{collect_tx_results, extract_transactions};

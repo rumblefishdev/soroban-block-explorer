@@ -395,8 +395,18 @@ async fn process_s3_object(
         let parsed = process::parse_ledger(ledger_meta);
         let ledger_sequence = parsed.ledger.sequence;
         let ledger_closed_at = parsed.ledger.closed_at;
+        let metadata_writes =
+            crate::token_metadata_by_functions::contract_metadata_writes(&state.ch_client, &parsed)
+                .await
+                .map_err(|e| HandlerError::ClickHouse(e.into()))?;
 
-        persist_with_retry(&state.ch_client, &parsed, &state.classification_cache).await?;
+        persist_with_retry(
+            &state.ch_client,
+            &parsed,
+            &metadata_writes,
+            &state.classification_cache,
+        )
+        .await?;
         publish_indexer_metrics(&state.cw_client, ledger_sequence, ledger_closed_at).await;
 
         // Mint = the token_uri-set event → the enrichment candidate. Non-mint
@@ -434,6 +444,7 @@ async fn process_s3_object(
 async fn persist_with_retry(
     client: &clickhouse::Client,
     parsed: &process::ParseOutput,
+    metadata_writes: &[xdr_parser::ExtractedContractMetadata],
     classification_cache: &ClassificationCache,
 ) -> Result<(), HandlerError> {
     let ledger_sequence = parsed.ledger.sequence;
@@ -460,8 +471,9 @@ async fn persist_with_retry(
                 &parsed.nfts,
                 &parsed.nft_events,
                 &parsed.lp_positions,
-                &parsed.contract_metadata_writes,
+                metadata_writes,
                 &parsed.executable_ref_targets,
+                &parsed.contract_instances,
                 &parsed.soroban_token_balances,
                 &parsed.claimable_balances,
                 &parsed.pool_family_writes,

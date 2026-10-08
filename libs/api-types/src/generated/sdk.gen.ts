@@ -10,6 +10,9 @@ import type {
   GetAccountData,
   GetAccountErrors,
   GetAccountResponses,
+  GetAccountSponsorshipData,
+  GetAccountSponsorshipErrors,
+  GetAccountSponsorshipResponses,
   GetAssetData,
   GetAssetErrors,
   GetAssetResponses,
@@ -184,6 +187,22 @@ export const getAccount = <ThrowOnError extends boolean = false>(
     ...options,
   });
 
+export const getAccountSponsorship = <ThrowOnError extends boolean = false>(
+  options: Options<GetAccountSponsorshipData, ThrowOnError>
+) =>
+  (options.client ?? client).get<
+    GetAccountSponsorshipResponses,
+    GetAccountSponsorshipErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/accounts/{account_id}/sponsorship',
+    ...options,
+  });
+
 /**
  * Paginated transactions involving the account (source or participant).
  * 404 when the StrKey is unknown — distinct from "indexed account, no
@@ -293,9 +312,11 @@ export const getContract = <ThrowOnError extends boolean = false>(
 /**
  * Decompile the contract's WASM on demand (task 0465, refs #374).
  *
- * No persistence: bytes are fetched from Soroban RPC and decompiled per
- * request. The output is immutable per (`wasm_hash`, decompiler version),
- * which justifies the `LONG` cache header even without a server-side cache.
+ * The bytes come from `wasm_programs.code`, so a program archived on the
+ * ledger still decompiles (task 0620); Soroban RPC answers only for a
+ * program whose bytes are not indexed yet. The output is immutable per
+ * (`wasm_hash`, decompiler version), which justifies the `LONG` cache header
+ * even without a server-side cache.
  */
 export const getDecompiled = <ThrowOnError extends boolean = false>(
   options: Options<GetDecompiledData, ThrowOnError>

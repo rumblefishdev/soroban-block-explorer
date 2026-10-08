@@ -411,8 +411,8 @@ struct AccountBalanceChRow {
     sac_deployed: bool,
 }
 
-/// One account's signing configuration as the ledger states it (task 0463,
-/// ADR 0055). `None` when the account has no `account_entry_state` row.
+/// One account's signing configuration and sponsorship counters as the ledger
+/// states them (tasks 0463, 0629). `None` when the account has no row.
 #[derive(Debug, clickhouse::Row, serde::Deserialize)]
 pub struct AccountEntryStateRow {
     pub signer_keys: Vec<String>,
@@ -422,10 +422,12 @@ pub struct AccountEntryStateRow {
     pub threshold_low: u8,
     pub threshold_med: u8,
     pub threshold_high: u8,
+    pub num_sponsoring: u32,
+    pub num_sponsored: u32,
     pub last_updated_ledger: i64,
 }
 
-/// Read the account's signers + thresholds. First read of
+/// Read the account's signers, thresholds and sponsorship counters. First read of
 /// `account_entry_state` from the API — the table is written by the indexer
 /// (whole-set replacement per observed `AccountEntry`) and seeded for accounts
 /// that predate our ledger floor.
@@ -452,7 +454,7 @@ pub async fn fetch_entry_state(
         .query(
             "SELECT signer_keys, signer_weights, signer_types, \
                     master_weight, threshold_low, threshold_med, threshold_high, \
-                    last_updated_ledger \
+                    num_sponsoring, num_sponsored, last_updated_ledger \
              FROM account_entry_state FINAL \
              WHERE account_id = ?",
         )

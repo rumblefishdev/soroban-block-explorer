@@ -99,13 +99,18 @@ and region. What differs from production:
   `publicArchivePrefix`). The lake publishes no events, so the indexer paces
   itself: after each ledger it queues one message delayed to when the next
   file should have landed. A once-a-minute EventBridge Scheduler keepalive
-  (`public-lake-keepalive.ts`) restarts that chain if it stops.
+  (`public-lake-keepalive.ts`) restarts that chain if it stops. Lambda's
+  recursive-loop guard is off for this function only (`recursiveLoop`
+  set to allow): it would drop every 17th hop of the chain.
 - **Its own ClickHouse database**, `testnet` on the production box, reached as
   `testnet_reader` / `testnet_writer` through certs under
   `soroban/testnet/mtls/*` (`docs/architecture/security/clickhouse-rbac.md`).
-- **One ingestion alarm**, `testnet-ingestion-stall`: the newest indexed
-  ledger older than 60 s for 3 minutes. It is also how a testnet reset shows
-  up — then follow [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md).
+- **Ingestion alarms in place of Galexie's**: `testnet-ingestion-stall`, the
+  newest indexed ledger older than 60 s for 3 minutes — also how a testnet
+  reset shows up, then follow
+  [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md); and
+  `testnet-indexer-runaway-wakeups`, over 400 wake-up messages sent to the
+  indexer queue in 15 minutes twice in a row, standing in for the loop guard.
 - **No ClickHouse DNS record and no cost monitor** — both belong to
   production (`provisionChDns`, `provisionCostAnomalyMonitor`).
 
@@ -152,7 +157,13 @@ An empty `testnet` database needs the indexer **paused**
 disables the keepalive): an indexer with nothing to continue from would only
 keep the stall alarm firing. Build it with
 [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md), steps 2 and
-4–7: pause, backfill from genesis, resume.
+4–8: pause, backfill from genesis, `repair-tier1`, resume, then the
+enrichment backfill (`enrich sep1-assets`, `enrich nft-metadata` with
+`CLICKHOUSE_DATABASE=testnet`, `SOROBAN_RPC_URLS` = testnet's RPC and the
+operator write cert, `--clickhouse-url` / `--ch-cert` / `--ch-key` /
+`--ch-ca` as for `backfill-runner`). The backfill writes straight to
+ClickHouse and queues nothing for the enrichment worker, so without that last
+step the backfilled assets and NFTs stay without icons, names and metadata.
 
 ---
 

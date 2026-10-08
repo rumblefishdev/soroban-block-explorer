@@ -157,3 +157,16 @@ fn a_contract_address_is_a_pool_id_too() {
     let soroban = pool_id_hex_to_strkey(&hex, domain::PoolKind::Soroban);
     assert_eq!(pool_id_from_text(&soroban).as_deref(), Some(hex.as_str()));
 }
+
+#[test]
+fn decode_pool_kind_refuses_a_kind_it_does_not_know() {
+    assert_eq!(
+        decode_pool_kind("ab", 0).expect("classic"),
+        domain::PoolKind::Classic
+    );
+    assert_eq!(
+        decode_pool_kind("ab", 1).expect("soroban"),
+        domain::PoolKind::Soroban
+    );
+    assert!(decode_pool_kind("ab", 7).is_err());
+}

@@ -282,35 +282,19 @@ pub struct ExtractedLedgerEntryChange {
     pub ledger_sequence: u32,
     /// Timestamp from parent ledger close time (Unix seconds).
     pub created_at: i64,
-    /// Token metadata (`name` / `symbol` / `decimals`) recovered from the
-    /// instance-storage `Symbol("METADATA")` struct, for a **non-SAC**
-    /// contract-instance entry that carries one; `None` for every other entry
-    /// type/change AND for SACs (skipped at extraction — a SAC's name/symbol/
-    /// decimals derive from the asset identity, so no row is stored). Populated
-    /// on entry-bearing changes (created / updated / state / restored); the
-    /// producer consumes it on created / updated / restored.
-    ///
-    /// Chain-verified location (task 0297) — distinct from, and replaces, the
-    /// dead standalone `Symbol("name")` path. Derived in-memory only; NOT
-    /// serialized into `data` JSON, so it does not bloat persisted entry rows.
-    pub token_metadata: Option<crate::token_metadata::TokenMetadata>,
 }
 
-/// One token-metadata write for a contract, derived from a contract-instance
-/// `created` / `updated` / `restored` change carrying a `Symbol("METADATA")`
-/// struct.
-///
-/// Maps to a `soroban_contract_metadata` side-table row (task 0297): a separate
-/// per-contract table, written by the indexer, composed at read time — never
+/// One `soroban_contract_metadata` write for a contract: what its `name`,
+/// `symbol` and `decimals` functions returned when its instance changed. Made
+/// by the indexer, not the parser (`indexer::token_metadata_by_functions`,
+/// task 0620). A separate per-contract table, composed at read time — never
 /// mixed into `soroban_contracts` (RMT whole-row clobber + different update
-/// clocks). SACs never reach here — `entry_token_metadata` returns `None` for
-/// them at extraction (their name/symbol/decimals derive from the asset
-/// identity).
+/// clocks).
 #[derive(Debug, Clone)]
 pub struct ExtractedContractMetadata {
     pub contract_id: String,
     pub metadata: crate::token_metadata::TokenMetadata,
-    /// Ledger the metadata was observed — the side table's RMT version slot.
+    /// Ledger the functions were run at — the side table's RMT version slot.
     pub ledger: u32,
 }
 

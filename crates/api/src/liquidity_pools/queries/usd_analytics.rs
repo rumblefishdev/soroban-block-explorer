@@ -186,7 +186,7 @@ pub async fn fetch_pool_chart_context(
                 .collect(),
             fee_bps: r.fee_bps,
         },
-        pool_kind: crate::common::strkey::decode_pool_kind(pool_id_hex, r.pool_kind),
+        pool_kind: crate::common::strkey::decode_pool_kind(pool_id_hex, r.pool_kind)?,
         leg_decimals: r
             .legs
             .iter()
@@ -513,25 +513,6 @@ pub(super) async fn fetch_last_closes(
             Some(((*leg).clone(), close))
         })
         .collect())
-}
-
-/// The pool's two legs, or `None` for a pool that does not have exactly two.
-///
-/// The price join is CLASSIC-shaped: two reserves, two closes, summed. A pool
-/// with three or four legs is soroban, and pricing its first two would report a
-/// TVL that understates the pool while looking like a real number — the
-/// misleading-fallback class. `None` degrades the analytics to NULL, the same
-/// answer an untracked asset gets.
-///
-/// This is the property [`PoolPriceContext`] promises ("a pool prices only when
-/// ALL of them do"), so it lives on the context rather than at its caller, the
-/// classic chart. It used to be a per-index accessor whose own doc claimed
-/// this guarantee while `get(0)` / `get(1)` quietly provided the opposite.
-pub(super) fn priced_pair(ctx: &PoolPriceContext) -> Option<(&PriceLeg, &PriceLeg)> {
-    match ctx.legs.as_slice() {
-        [a, b] => Some((a, b)),
-        _ => None,
-    }
 }
 
 /// The two legs of a pool as a `fetch_last_closes` input, with unpriceable

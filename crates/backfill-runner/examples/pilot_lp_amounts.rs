@@ -61,8 +61,9 @@ fn main() {
                 nfts: &parsed.nfts,
                 nft_events: &parsed.nft_events,
                 lp_positions: &parsed.lp_positions,
-                contract_metadata_writes: &parsed.contract_metadata_writes,
+                contract_metadata_writes: &[],
                 executable_ref_targets: &parsed.executable_ref_targets,
+                contract_instances: &parsed.contract_instances,
                 soroban_token_balances: &parsed.soroban_token_balances,
                 // Empty for the pilot: SAC re-keying touches balances, never
                 // the LP amounts this measures.

@@ -212,11 +212,22 @@ pub struct ContractExecutableRefRow {
     pub ledger: i64,
 }
 
-/// `soroban_contract_metadata` — on-chain Soroban token metadata
-/// (name/symbol/decimals) from the instance-storage `Symbol("METADATA")`
-/// struct. RMT(version); `version` = observed ledger (latest wins). Per
-/// `contract_id`; SACs are excluded by the producer
-/// (`xdr_parser::extract_contract_metadata_writes`). Separate table — never
+/// `contract_instances` — a contract's instance entry as the XDR of its
+/// `LedgerEntryData`, for running the contract's own functions (task 0620).
+/// RMT(`ledger`); one row per `contract`.
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
+pub struct ContractInstanceRow {
+    pub contract: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    pub data_xdr: Vec<u8>,
+    pub ledger: i64,
+}
+
+/// `soroban_contract_metadata` — Soroban token and NFT metadata
+/// (name/symbol/decimals): what the contract's own functions return (task
+/// 0620). RMT(version); `version` = the ledger the functions ran at (latest
+/// wins). Per `contract_id`; a SAC has no Wasm program, so it never gets a
+/// row. Separate table — never
 /// columns on `soroban_contracts` — to dodge the RMT whole-row clobber across
 /// that table's many writers (deploy / rebuild EXCHANGE / stubs / db-merge).
 /// See task 0297.
@@ -310,8 +321,8 @@ pub struct LiquidityPoolRow {
     pub asset_b_issuer_id: i64,
     pub fee_bps: i32,
     pub last_updated_ledger: i64,
-    /// 0 = classic (pool_id: CAP-38 hash), 1 = soroban contract (pool_id:
-    /// the 32-byte payload of the C… address). Registry columns below are
+    /// `domain::PoolKind as u8`: 0 = classic (pool_id: CAP-38 hash), 1 =
+    /// soroban contract (pool_id: the 32-byte payload of the C… address). Registry columns below are
     /// meaningful only for kind 1; classic writers set the defaults.
     pub pool_kind: u8,
     /// One surrogate per leg, in a PER-KIND id space (`pool_kind` says

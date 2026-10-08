@@ -103,32 +103,34 @@ is the deploy/upgrade ledger despite its name).
 
 ## Implementation
 
-1. Program bytes in `wasm_programs.code` (the table renamed from
-   `wasm_interface_metadata`; a separate `wasm_code` table was folded in
-   before reaching production). The indexer writes the whole row from every
-   `ContractCode` change, `Restored` and spec-less programs included; a
-   one-off backfill fills the 5,235 known programs from `getLedgerEntries`,
-   verified by hash. Production order: `RENAME TABLE` (+ a compatibility
-   view for the old name), `ALTER TABLE wasm_programs ADD COLUMN IF NOT
-EXISTS code String DEFAULT '' CODEC(ZSTD(3))` — both BEFORE the deploy,
-   or the indexer's typed insert fails — then deploy, drop the view, run
-   the backfill. The backfill rewrites every existing row with metadata
-   recomputed by today's parser. Local run 2026-10-06 (46 programs drawn
-   from production: 40 random with an interface + all 6 without one): 46/46
-   fetched, sha256 46/46, byte length = `wasm_byte_len` 40/40, metadata
-   identical to production 40/40, the 6 spec-less rows have empty metadata;
-   a second run found nothing missing. Production holds no row without the
-   `upgradeable` key (0 of 5,238), so none changes on that account.
-2. Executor module wrapping `soroban-env-host` (pinned to the network's
-   protocol): `call_view(contract, fn) -> Result<ScVal, …>` over a snapshot
-   source fed by the current ledger's changes, `wasm_programs.code` and the
-   contract-instance table (decided 2026-10-06: execution runs in the
-   indexer, ADR 0043 — no network round trip).
-3. On token deploy, instance change and WASM upgrade: run `decimals`, `name`,
-   `symbol`; write `soroban_contract_metadata` with the ledger. Remove the
-   `METADATA` storage read once the backfilled values match.
-4. Backfill `soroban_contract_metadata` for every token contract.
-5. Protocol upgrades: bump `soroban-env-host` with `stellar-xdr`.
+1. Program bytes in `wasm_programs.code` (renamed from
+   `wasm_interface_metadata`). The indexer writes the whole row from every
+   `ContractCode` change; `wasm-code-backfill` fills known programs from
+   `getLedgerEntries`, verified by hash. Production: `RENAME TABLE` (+ view
+   for the old name) and `ADD COLUMN code` before the deploy, then deploy,
+   drop the view, run the backfill.
+2. Contract instances in `contract_instances` (decided 2026-10-07: all
+   contracts, raw `LedgerEntryData` XDR, filled from RPC). The indexer writes
+   every created, updated or restored instance; `contract-instance-backfill`
+   fills the rest, versioned by the entry's last-modified ledger. Production:
+   `CREATE TABLE` before the deploy, the backfill after it (mainnet and
+   testnet). Evidence for both: `notes/R-stored-bytes-and-instances.md`.
+3. `crates/contract-executor` (`soroban-env-host =29.0.0` with its default
+   budget — the heaviest call measured 12.5 M of 100 M instructions) and `contract-metadata-backfill`, which
+   runs the declared `decimals`/`name`/`symbol` of every token over the two
+   tables (PR 3a, split from the live path). Contracts whose functions read persistent data: task 0633.
+   Live in the indexer (PR 3b): every token whose instance changed in the
+   ledger; checked on 8 token-deploy ledgers, 9/9 equal to RPC.
+4. The functions are the only source (PR 4, decided 2026-10-08): the parser
+   no longer reads `METADATA`, and NFTs (program declares `name` and `symbol`)
+   are run as tokens are. Measured over the 3,955 contracts with a stored row:
+   the functions return the same for 3,864 of 3,872 tokens and 77 of 78 NFTs;
+   12 contracts (5 needing persistent data, 2 failing, 5 declaring none of the
+   three) keep their stored row and get no new write. A ClickHouse read error
+   now fails the ledger, as a write error does; the executor no longer catches
+   host panics (none in any run).
+5. Backfill `soroban_contract_metadata` for every token contract.
+6. Protocol upgrades: bump `soroban-env-host` with `stellar-xdr`.
 
 ## Acceptance Criteria
 
@@ -136,7 +138,7 @@ EXISTS code String DEFAULT '' CODEC(ZSTD(3))` — both BEFORE the deploy,
       functions; 0 differences against RPC simulation on one contract per
       program.
 - [ ] The four Aquarius pools of 0617 show TVL.
-- [ ] `token_metadata.rs` storage-key reading removed.
+- [x] `token_metadata.rs` storage-key reading removed.
 - [ ] Program bytes stored for every known program; new uploads written live.
 - [ ] **Docs updated** — `database-schema-overview.md` (`wasm_programs.code`),
       `indexing-pipeline-overview.md`, `xdr-parsing-overview.md`.

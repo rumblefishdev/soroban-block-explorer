@@ -42,13 +42,11 @@ pub struct ParseOutput {
     pub nfts: Vec<ExtractedNft>,
     pub nft_events: Vec<ExtractedNftEvent>,
     pub lp_positions: Vec<ExtractedLpPosition>,
-    /// On-chain Soroban token metadata (name/symbol/decimals) from
-    /// instance-storage `METADATA`, for the `soroban_contract_metadata` side
-    /// table (task 0297). SACs already excluded by the producer.
-    pub contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata>,
     /// CAP-85 (task 0548) — `(owner, tag) → wasm_hash` mappings written by
     /// owner contracts this batch. Empty before protocol 28.
     pub executable_ref_targets: Vec<xdr_parser::executable_ref::ExtractedExecutableRefTarget>,
+    /// Contract instance entries, whole, for running contracts (task 0620).
+    pub contract_instances: Vec<xdr_parser::contract_instance::ExtractedContractInstance>,
     /// Per-holder Soroban token balances from `ContractData` `Balance(Address)`
     /// ledger entries, persisted into the unified `balances` table (task 0331; the
     /// field name is leftover Option-A naming — no `soroban_token_balances` table exists).
@@ -146,7 +144,7 @@ pub fn init_network_id() -> Result<&'static [u8; 32], NetworkIdError> {
 /// not run [`init_network_id`] in their cold-start path (legacy tests, dev tools).
 /// Production Lambda always pre-inits, so this lazy branch is dead code in the hot
 /// path.
-fn network_id() -> &'static [u8; 32] {
+pub(crate) fn network_id() -> &'static [u8; 32] {
     xdr_parser::net_id().unwrap_or_else(|| {
         panic!(
             "STELLAR_NETWORK_PASSPHRASE env not set; call \
@@ -183,6 +181,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     let mut all_invocations = Vec::new();
     let mut all_operation_trees: Vec<(String, serde_json::Value)> = Vec::new();
     let mut all_programs = Vec::new();
+    let mut all_contract_instances = Vec::new();
     let mut all_ledger_entry_changes = Vec::new();
     let mut all_nft_events = Vec::new();
     let mut all_asset_transfers = Vec::new();
@@ -249,6 +248,9 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
 
             let interfaces = xdr_parser::extract_wasm_programs(tm);
             all_programs.extend(interfaces);
+            all_contract_instances.extend(
+                xdr_parser::contract_instance::extract_contract_instances(tm, ledger_sequence),
+            );
 
             let changes = xdr_parser::extract_ledger_entry_changes(
                 tm,
@@ -303,7 +305,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         })
         .collect();
 
-    let mut all_contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata> = Vec::new();
     let mut all_executable_ref_targets: Vec<
         xdr_parser::executable_ref::ExtractedExecutableRefTarget,
     > = Vec::new();
@@ -340,7 +341,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         let lp_pos = xdr_parser::extract_lp_positions(changes);
         all_lp_positions.extend(lp_pos);
 
-        all_contract_metadata_writes.extend(xdr_parser::extract_contract_metadata_writes(changes));
         all_executable_ref_targets.extend(
             xdr_parser::executable_ref::extract_executable_ref_targets(changes),
         );
@@ -409,8 +409,8 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         nfts: all_nfts,
         nft_events,
         lp_positions: all_lp_positions,
-        contract_metadata_writes: all_contract_metadata_writes,
         executable_ref_targets: all_executable_ref_targets,
+        contract_instances: all_contract_instances,
         soroban_token_balances: all_soroban_token_balances,
         claimable_balances: all_claimable_balances,
         // Plane writes and instance images pass through unfolded: staging

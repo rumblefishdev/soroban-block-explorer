@@ -26,19 +26,37 @@ describe('Footer', () => {
   // label being present.
   it('queues showBanner for HubSpot when Cookie Settings is clicked', async () => {
     const user = userEvent.setup();
-    render(withTheme(<Footer logo={<span>logo</span>} navItems={[]} />));
+    render(
+      withTheme(
+        <Footer
+          logo={<span>logo</span>}
+          navItems={[]}
+          pricesApiUrl="/prices-api/"
+        />
+      )
+    );
 
     await user.click(screen.getByRole('link', { name: 'Cookie Settings' }));
 
     expect(window._hsp).toEqual([['showBanner']]);
   });
 
-  it('links the Prices API portal under /prices-api/', () => {
-    render(withTheme(<Footer logo={<span>logo</span>} navItems={[]} />));
+  // The app decides the link per network (testnet points at mainnet's
+  // portal), so the footer must render the one it is given.
+  it('links the Prices API portal at the URL it is given', () => {
+    render(
+      withTheme(
+        <Footer
+          logo={<span>logo</span>}
+          navItems={[]}
+          pricesApiUrl="https://mainnet.example/prices-api/"
+        />
+      )
+    );
 
     expect(screen.getByRole('link', { name: 'Prices API' })).toHaveAttribute(
       'href',
-      '/prices-api/'
+      'https://mainnet.example/prices-api/'
     );
   });
 
@@ -51,7 +69,11 @@ describe('Footer', () => {
     render(
       withTheme(
         <LinkComponentProvider value={RouterLink}>
-          <Footer logo={<span>logo</span>} navItems={[]} />
+          <Footer
+            logo={<span>logo</span>}
+            navItems={[]}
+            pricesApiUrl="/prices-api/"
+          />
         </LinkComponentProvider>
       )
     );

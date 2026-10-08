@@ -6,7 +6,7 @@ network starts again from ledger 1, under the same passphrase. Nothing in the
 `testnet` database survives it: every table is keyed on the ledger sequence,
 so the new chain's ledger N would overwrite the old one's.
 
-The same steps build the database the first time (steps 2 and 4–7): pause
+The same steps build the database the first time (steps 2 and 4–8): pause
 first (`indexerLambdaConcurrency: 0`), so the deploy starts nothing until the
 database is ready.
 
@@ -108,10 +108,37 @@ Ranges run in parallel as separate processes; after a parallel run,
 This also enables the keepalive; its first wake continues from
 `max(sequence) + 1`, or from ledger 2 when step 6 was skipped.
 
+**8. Enrich the backfilled rows** — only after step 6. The live indexer
+queues every new asset and NFT for the enrichment worker; `backfill-runner`
+writes straight to ClickHouse and queues nothing, so the backfilled range has
+no icons, asset names or NFT metadata until the enrichment backfill
+(`crates/backfill-enrichment-runner`, binary `enrich`) drains it. It runs
+from a laptop with the testnet enrichment Lambda's certificate (secret
+`soroban/testnet/mtls/lambda-enrichment-testnet`, user `testnet_writer`,
+which can write nothing outside `testnet.*`), after `repair-tier1`; the
+indexer may already be running. `SOROBAN_RPC_URLS` must
+name the testnet RPC — the NFT calls go to whatever pool it holds.
+
+```bash
+CLICKHOUSE_DATABASE=testnet \
+SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org \
+enrich --clickhouse-url https://<ch-host> \
+  --ch-cert <cert.pem> --ch-key <key.pem> --ch-ca infra-hetzner/ca/ca.crt \
+  sep1-assets
+```
+
+Then the same with `nft-metadata`, and `status` to read the coverage. Rows
+an earlier run filled with empty sentinels (an RPC of the wrong network, an
+upstream outage) are retried with `nft-metadata --retry-sentinels`. A
+transient failure leaves the key for the next run; rerun until `status` stops
+moving.
+
 ## Done when
 
 - `testnet-ingestion-stall` is back to OK;
 - `SELECT max(sequence) FROM testnet.ledgers` follows the RPC tip within
   seconds;
 - one recent transaction resolves on the testnet site under the hash testnet
-  RPC reports for it.
+  RPC reports for it;
+- after step 8, `enrich status` (with `CLICKHOUSE_DATABASE=testnet`) shows
+  the backfilled assets and NFTs enriched.

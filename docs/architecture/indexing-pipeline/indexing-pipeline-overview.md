@@ -126,7 +126,11 @@ as "process this object":
   only when it stored new ledgers itself (the chain had died), and a chain
   message whose ledger another chain already stored is dropped, so two chains
   merge. About one wake per ledger; per wake one extra ClickHouse read, a
-  primary-key lookup of the newest close time. On mainnet the body stays
+  primary-key lookup of the newest close time. Lambda's recursive-loop
+  detection would drop every 17th hop of a chain, so it is switched off for
+  this indexer only (`recursiveLoop`, `compute-stack.ts`); the alarm
+  `<env>-indexer-runaway-wakeups` (over 400 wake-up messages sent per 15
+  minutes, twice in a row) stands in for it. On mainnet the body stays
   ignored. An empty database reading the lake starts at the network's first
   closed ledger (2), so testnet rebuilds itself after a reset; an empty
   database reading our own bucket (mainnet) waits for a seeding backfill.
@@ -248,7 +252,21 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    for `asset_transfers`; a token event the decoder rejects is logged as an
    `error!` for the ledger (per-event detail on the
    `xdr_parser::asset_transfers` target) and never becomes a row
-3. for each ledger in the batch: call
+3. for each ledger in the batch: first, for every contract whose instance
+   changed in the ledger and whose program declares `decimals` (SEP-41
+   token) or `name` and `symbol` (SEP-50 NFT), run the declared functions
+   among `decimals` / `name` / `symbol` locally
+   (`indexer::token_metadata_by_functions::contract_metadata_writes`,
+   `crates/contract-executor`) over this ledger's instances and programs plus
+   `wasm_programs` / `contract_instances`. These are the only
+   `soroban_contract_metadata` writes; the parser reads no metadata. A
+   contract whose run fails or needs persistent data writes nothing and keeps
+   its row. ClickHouse reads: one per ledger for the changed programs'
+   interfaces, then per contract its program's bytes and any other contract's
+   instance a run asks for; a read error fails the ledger, as a write error
+   does (task 0620,
+   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)).
+   `backfill-runner run` does the same. Then call
    `db_clickhouse::persist::persist_ledger_clickhouse(&client, &parsed.*)`
    — the same wrapper backfill's `Sink::persist_ledger` fallback drives.
    It stages rows via
@@ -363,6 +381,7 @@ schema on Hetzner. That write includes both:
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
   `wasm_programs` (each program's bytes and interface,
   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)),
+  `contract_instances` (each contract's instance entry, whole),
   `assets`, `nfts`, `nfts_pending`, the
   ownership changes located by each change's source event
   `nft_ownership_changes{,_pending}` (task 0424), `liquidity_pools`,

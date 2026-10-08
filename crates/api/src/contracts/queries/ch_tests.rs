@@ -252,3 +252,70 @@ async fn contract_reads_dedup_wasm_metadata_written_twice() {
         .await
         .expect("drop throwaway db");
 }
+
+const DB_0620: &str = "api_test_0620_program_code";
+
+/// The Code tab reads a program's bytes from `wasm_programs.code`. A program
+/// can sit in two unmerged rows — the one written before bytes were stored,
+/// and the one the fill wrote with them — so the read must find the bytes
+/// whichever row comes first, and report `None` only when no row has them.
+#[tokio::test]
+async fn program_code_is_read_from_whichever_row_holds_it() {
+    let Some(base) = crate::common::ch::test_client_from_env() else {
+        eprintln!("CH_URL unset — skipping program code read check");
+        return;
+    };
+    base.query(&format!("DROP DATABASE IF EXISTS {DB_0620}"))
+        .execute()
+        .await
+        .expect("drop leftover throwaway db");
+    base.query(&format!("CREATE DATABASE {DB_0620}"))
+        .execute()
+        .await
+        .expect("create throwaway db");
+    let ch = base.clone().with_database(DB_0620);
+    db_clickhouse::apply_init_sql(&ch)
+        .await
+        .expect("apply init.sql");
+    ch.query(&format!("SYSTEM STOP MERGES {DB_0620}.wasm_programs"))
+        .execute()
+        .await
+        .expect("stop merges on the throwaway table");
+
+    for sql in [
+        // Two INSERTs = two parts: metadata only, then the fill's whole row.
+        r#"INSERT INTO wasm_programs (wasm_hash, metadata) VALUES
+           (unhex(repeat('aa', 32)), '{"functions":[]}')"#,
+        r#"INSERT INTO wasm_programs (wasm_hash, metadata, code) VALUES
+           (unhex(repeat('aa', 32)), '{"functions":[]}', unhex('0061736d01000000'))"#,
+        // Known only by its metadata row.
+        r#"INSERT INTO wasm_programs (wasm_hash, metadata) VALUES
+           (unhex(repeat('bb', 32)), '{"functions":[]}')"#,
+    ] {
+        ch.query(sql).execute().await.expect("seed row");
+    }
+
+    let stored = fetch_program_code(&ch, &hash_hex("aa"))
+        .await
+        .expect("program code query must execute");
+    assert_eq!(
+        stored.as_deref(),
+        Some(b"\0asm\x01\0\0\0".as_slice()),
+        "the bytes come back whole, from the row that has them"
+    );
+
+    let not_indexed = fetch_program_code(&ch, &hash_hex("bb"))
+        .await
+        .expect("program code query must execute");
+    assert_eq!(not_indexed, None, "a row without bytes is not a program");
+
+    let unknown = fetch_program_code(&ch, &hash_hex("cc"))
+        .await
+        .expect("program code query must execute");
+    assert_eq!(unknown, None);
+
+    base.query(&format!("DROP DATABASE IF EXISTS {DB_0620}"))
+        .execute()
+        .await
+        .expect("drop throwaway db");
+}

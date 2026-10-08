@@ -17,6 +17,7 @@ import { useAccountDetail } from '../api/index.js';
 import { AccountBalances } from './accounts/AccountBalances.js';
 import { AccountDetailSkeleton } from './accounts/AccountDetailSkeleton.js';
 import { AccountSigners } from './accounts/AccountSigners.js';
+import { AccountSponsorship } from './accounts/AccountSponsorship.js';
 import { AccountSummary } from './accounts/AccountSummary.js';
 import { AccountTransactions } from './accounts/AccountTransactions.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
@@ -114,6 +115,14 @@ export default function AccountDetailPage() {
       {signers != null && (
         <SectionErrorBoundary sectionName="account-signers">
           {signers}
+        </SectionErrorBoundary>
+      )}
+      {account.data?.sponsorship != null && (
+        <SectionErrorBoundary sectionName="account-sponsorship">
+          <AccountSponsorship
+            accountId={accountId}
+            numSponsored={account.data.sponsorship.num_sponsored}
+          />
         </SectionErrorBoundary>
       )}
       {/* Gate on resolved parent data (not just `!isError`) so the

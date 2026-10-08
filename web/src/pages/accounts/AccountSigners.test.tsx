@@ -155,9 +155,9 @@ describe('AccountSigners', () => {
     expect(screen.queryByText('No account')).not.toBeInTheDocument();
   });
 
-  it('links an ed25519 signer and leaves a pre-auth transaction unlinked', () => {
-    // `preauth_tx` (`T…`) and `hash_x` (`X…`) are not accounts; linking one
-    // would route to an account page that cannot exist.
+  it('links no signer — a key is not an account', () => {
+    // An ed25519 key often has no account on the ledger (three signers of
+    // GBEEFP…CT56 have none), and `T…` / `X…` keys never do.
     renderWithProviders(
       <AccountSigners
         accountId={ACCOUNT}
@@ -174,8 +174,8 @@ describe('AccountSigners', () => {
     );
 
     expect(
-      screen.getByRole('link', { name: new RegExp(SIGNER_A.slice(0, 6)) })
-    ).toBeInTheDocument();
+      screen.queryByRole('link', { name: new RegExp(SIGNER_A.slice(0, 6)) })
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('link', { name: new RegExp(PREAUTH.slice(0, 6)) })
     ).not.toBeInTheDocument();

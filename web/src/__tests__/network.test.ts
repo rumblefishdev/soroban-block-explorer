@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { markTestnetTab, networkFrom } from '../network.js';
+import { markTestnetTab, networkFrom, pricesApiUrlFor } from '../network.js';
 
 describe('networkFrom', () => {
   it('reads mainnet when the build sets nothing, as production always has', () => {
@@ -52,6 +52,18 @@ describe('markTestnetTab', () => {
     expect(document.title).toBe('Soroban Block Explorer');
     expect(document.querySelector('link')?.getAttribute('href')).toBe(
       '/favicon.svg'
+    );
+  });
+});
+
+describe('pricesApiUrlFor', () => {
+  it("links the portal on mainnet's own host", () => {
+    expect(pricesApiUrlFor('mainnet')).toBe('/prices-api/');
+  });
+
+  it("sends testnet to mainnet's portal, since testnet has none", () => {
+    expect(pricesApiUrlFor('testnet')).toBe(
+      'https://sorobanscan.rumblefish.dev/prices-api/'
     );
   });
 });
