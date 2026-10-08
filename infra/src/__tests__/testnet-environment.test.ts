@@ -125,6 +125,26 @@ describe('testnet environment', () => {
     expect(ofType('CloudWatch', 'AWS::CE::AnomalyMonitor')).toHaveLength(0);
   });
 
+  // The indexer wakes itself through its own queue; AWS's loop guard would
+  // drop every 17th hop of that chain, so it is off for this function only
+  // and a runaway alarm takes its place.
+  it('lets the self-paced indexer loop, and alarms if its wake-ups multiply', () => {
+    const indexer = ofType('Compute', 'AWS::Lambda::Function', resumed).find(
+      (f) => f.Properties['FunctionName'] === 'testnet-soroban-explorer-indexer'
+    );
+    expect(indexer?.Properties['RecursiveLoop']).toBe('Allow');
+    const others = ofType('Compute', 'AWS::Lambda::Function', resumed).filter(
+      (f) => f !== indexer
+    );
+    for (const f of others) {
+      expect(f.Properties['RecursiveLoop']).toBeUndefined();
+    }
+    const names = ofType('CloudWatch', 'AWS::CloudWatch::Alarm').map(
+      (a) => a.Properties['AlarmName']
+    );
+    expect(names).toContain('testnet-indexer-runaway-wakeups');
+  });
+
   it('refuses a lake folder next to an own ledger bucket', () => {
     expect(() =>
       validateConfig({ ...testnet, ledgerSource: 'galexie' })
