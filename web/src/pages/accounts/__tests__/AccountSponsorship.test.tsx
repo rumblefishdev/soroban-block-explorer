@@ -1,6 +1,6 @@
 import type { AccountSponsorshipResponse } from '@rumblefish/api-types';
 import { screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../../test-utils.js';
 import {
@@ -8,6 +8,9 @@ import {
   SponsorshipList,
   sponsorshipMeta,
 } from '../AccountSponsorship.js';
+
+const hook = vi.hoisted(() => ({ useAccountSponsorship: vi.fn() }));
+vi.mock('../../../api/index.js', () => hook);
 
 const SPONSOR_A = 'GCUISJEWU2TZ4QIJNGNVU4BSZ5CQS3KE6A3N3ETOV7XHCBVO4GLTLGOQ';
 const SPONSOR_B = 'GCNPDPJLTEAPL2FOAYXSSYF6VB6EPP2KFUMXGAJKLIIC3XQLWIY6GQLX';
@@ -71,6 +74,7 @@ describe('AccountSponsorship', () => {
   });
 
   it('is not shown for an account nobody sponsors', () => {
+    hook.useAccountSponsorship.mockReturnValue({ isLoading: false });
     const { container } = renderWithProviders(
       <AccountSponsorship accountId="GA" numSponsored={0} />
     );
@@ -84,5 +88,36 @@ describe('AccountSponsorship', () => {
     expect(
       screen.getByText(/no sponsored entries for this account now/)
     ).toBeInTheDocument();
+  });
+
+  it('says the network holds no entry when the API answers 404', () => {
+    hook.useAccountSponsorship.mockReturnValue({
+      isLoading: false,
+      isError: true,
+      error: { status: 404 },
+      data: undefined,
+    });
+    renderWithProviders(<AccountSponsorship accountId="GA" numSponsored={3} />);
+    expect(
+      screen.getByText(/holds no entry for this account now/)
+    ).toBeInTheDocument();
+  });
+
+  it('says the network did not answer on any other failure', () => {
+    hook.useAccountSponsorship.mockReturnValue({
+      isLoading: false,
+      isError: true,
+      error: { status: 500 },
+      data: undefined,
+    });
+    renderWithProviders(<AccountSponsorship accountId="GA" numSponsored={3} />);
+    expect(screen.getByText(/did not answer/)).toBeInTheDocument();
+  });
+
+  it('names offers and data entries when nothing listable is sponsored', () => {
+    renderWithProviders(
+      <SponsorshipList data={{ num_sponsored: 1, entries: [] }} />
+    );
+    expect(screen.getByText(/offers or data entries/)).toBeInTheDocument();
   });
 });

@@ -3,7 +3,7 @@
 //! the `sponsoring_id` each entry carries in its extension (`extXdr`).
 //!
 //! Live rather than indexed: the answer sits on the account's own entries, a
-//! single RPC call holds all of them, and it is never stale — a closed account
+//! few RPC calls hold all of them, and it is never stale — a closed account
 //! simply returns no entry.
 
 use base64::Engine;
@@ -67,6 +67,14 @@ impl AccountSponsorsFetcher {
         })
     }
 
+    /// A fetcher over fixed RPC endpoints — for tests that stand up their own.
+    #[cfg(test)]
+    pub(crate) fn with_urls(rpc_urls: Vec<String>) -> Self {
+        Self {
+            rpc: RpcPool::with_urls(rpc_urls),
+        }
+    }
+
     /// The sponsored entries of `account` among itself and the given classic
     /// trustlines (`code`, `issuer`). `None` when the account has no entry on
     /// the ledger.
@@ -99,22 +107,49 @@ impl AccountSponsorsFetcher {
                 .map_err(|e| FetchError::Xdr(e.to_string()))?;
             keys_b64.push(BASE64.encode(bytes));
         }
-        let mut entries = Vec::new();
-        for chunk in keys_b64.chunks(KEYS_PER_CALL) {
-            entries.extend(self.rpc.get_ledger_entries(chunk.to_vec()).await?);
+        let mut chunks = keys_b64.chunks(KEYS_PER_CALL);
+        let Some(first) = chunks.next() else {
+            return Ok(None);
+        };
+        // The account rides in the first call; without it there is nothing to
+        // list, and no reason to ask for the rest.
+        let mut decoded = decode_entries(&self.rpc.get_ledger_entries(first.to_vec()).await?)?;
+        if !decoded
+            .iter()
+            .any(|(data, _)| matches!(data, LedgerEntryData::Account(_)))
+        {
+            return Ok(None);
         }
-        let mut decoded = Vec::with_capacity(entries.len());
-        for e in &entries {
-            let Some(xdr) = e["xdr"].as_str() else {
-                continue;
-            };
-            decoded.push((
-                decode::<LedgerEntryData>(xdr)?,
-                sponsor_of(e["extXdr"].as_str())?,
-            ));
+        for chunk in chunks {
+            // A later call failing leaves the list shorter, not the answer
+            // gone: the page's "N of M reserves" shows what is missing.
+            match self.rpc.get_ledger_entries(chunk.to_vec()).await {
+                Ok(more) => decoded.extend(decode_entries(&more)?),
+                Err(e) => {
+                    tracing::warn!(account, error = %e, "sponsors: a trustline batch failed; listing what was read");
+                    break;
+                }
+            }
         }
         Ok(sponsors(decoded))
     }
+}
+
+/// Each entry's data and sponsor, as RPC returned them.
+fn decode_entries(
+    entries: &[serde_json::Value],
+) -> Result<Vec<(LedgerEntryData, Option<String>)>, FetchError> {
+    let mut decoded = Vec::with_capacity(entries.len());
+    for e in entries {
+        let Some(xdr) = e["xdr"].as_str() else {
+            continue;
+        };
+        decoded.push((
+            decode::<LedgerEntryData>(xdr)?,
+            sponsor_of(e["extXdr"].as_str())?,
+        ));
+    }
+    Ok(decoded)
 }
 
 fn trustline_asset(code: &str, issuer: &str) -> Result<TrustLineAsset, FetchError> {

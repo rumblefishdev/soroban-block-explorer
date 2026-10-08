@@ -85,10 +85,19 @@ export function SponsorshipList({
 }) {
   // Our index counted sponsored reserves the network no longer holds: the
   // account changed since. The network is the newer word.
-  if (data.entries.length === 0) {
+  if (data.num_sponsored === 0) {
     return (
       <Line>
         The network reports no sponsored entries for this account now.
+      </Line>
+    );
+  }
+  // Sponsored, but only in entries this list cannot name.
+  if (data.entries.length === 0) {
+    return (
+      <Line>
+        The sponsored reserves are on offers or data entries, which are not
+        listed here.
       </Line>
     );
   }
