@@ -16,7 +16,7 @@ use super::dto::{AccountSponsoredEntry, AccountSponsorshipResponse};
 use super::queries;
 
 /// Wall-clock cap on the RPC reads of one request.
-const FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+const FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[utoipa::path(
     get,
@@ -63,9 +63,10 @@ pub async fn get_account_sponsorship(
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
-    // Each RPC call may try every endpoint of the pool at 10 s each, and an
-    // account may need five calls: the wall-clock cap keeps the request well
-    // under the API Gateway's 29 s ceiling, as the NFT metadata fetch does.
+    // One RPC endpoint may hold a call for 10 s before the pool tries the
+    // next, so 20 s leaves room for one failover. Uncapped, four endpoints at
+    // 10 s each, times up to five calls, would pass the API Gateway's 29 s
+    // ceiling.
     let fetched = tokio::time::timeout(
         FETCH_DEADLINE,
         state
