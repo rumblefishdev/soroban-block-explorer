@@ -58,7 +58,7 @@ describe('AccountSponsorship', () => {
     renderWithProviders(<SponsorshipList data={GBEEFP} />);
 
     expect(screen.getAllByText('Paid by')).toHaveLength(2);
-    // Two sponsors: both groups start folded, totals in view.
+    // Groups start folded, totals in view.
     for (const header of screen.getAllByRole('button', { expanded: false })) {
       fireEvent.click(header);
     }
@@ -136,13 +136,13 @@ describe('AccountSponsorship', () => {
     expect(screen.getByText(/can be listed here/)).toBeInTheDocument();
   });
 
-  it('opens a lone sponsor folded out', () => {
+  it('starts folded even for a lone sponsor', () => {
     renderWithProviders(
       <SponsorshipList
         data={{ num_sponsored: 2, entries: GBEEFP.entries.slice(0, 1) }}
       />
     );
-    expect(screen.getByRole('button', { expanded: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { expanded: false })).toBeInTheDocument();
   });
 
   it('pages a long group, its total kept', () => {
@@ -159,6 +159,7 @@ describe('AccountSponsorship', () => {
       ],
     };
     renderWithProviders(<SponsorshipList data={many} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
 
     expect(
       screen.getByText(`1–${PAGE_SIZE} of ${PAGE_SIZE + 2}`)

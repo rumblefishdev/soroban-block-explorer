@@ -640,7 +640,7 @@ describe reserves that no longer exist) — and the page then hides the row.
 
 **Sponsored reserves card** (task 0629, stage 2): for an account with sponsored reserves,
 a card after Signers lists which of its entries another account pays for — the account's
-base reserve, each sponsored trustline and signer — in one folding group per sponsor (header: the sponsor and its total; a lone sponsor opens folded out, several start folded), with the number of sponsors in the card header; when the chain's
+base reserve, each sponsored trustline and signer — in one folding group per sponsor (header: the sponsor and its total; every group starts folded), with the number of sponsors in the card header; when the chain's
 `num_sponsored` is larger than what the list shows (offers, data entries, pool-share
 trustlines — none of which are listed), a line
 under the list says how many reserves are not named. It comes from `GET /v1/accounts/{id}/sponsorship`, which the API answers live
