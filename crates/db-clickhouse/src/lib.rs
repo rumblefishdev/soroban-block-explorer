@@ -40,17 +40,6 @@ pub fn database_from_env() -> String {
         .unwrap_or_else(|| PROD_DATABASE.to_string())
 }
 
-/// The passphrase of the Stellar network whose data `database` holds:
-/// mainnet in [`PROD_DATABASE`], testnet in `testnet` (ADR 0052). `None` for
-/// any other name — a scratch or unknown database belongs to no network.
-pub fn database_network_passphrase(database: &str) -> Option<&'static str> {
-    match database {
-        PROD_DATABASE => Some(xdr_parser::MAINNET_PASSPHRASE),
-        "testnet" => Some(xdr_parser::TESTNET_PASSPHRASE),
-        _ => None,
-    }
-}
-
 /// Configuration for a ClickHouse client, sourced from environment variables
 /// with safe local-dev defaults.
 #[derive(Debug, Clone)]

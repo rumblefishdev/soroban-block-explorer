@@ -56,10 +56,20 @@
 //!
 //! `CLICKHOUSE_DATABASE` picks the database (`testnet` for the testnet
 //! explorer, unset for mainnet's `default`). `nft-metadata` and
-//! `nft-collection-name` also need `SOROBAN_RPC_URLS` and
-//! `STELLAR_NETWORK_PASSPHRASE`, and refuse to start unless the RPC, the
-//! passphrase and the database name one network (`network_guard`).
-//! Examples: the crate README.
+//! `nft-collection-name` also need `SOROBAN_RPC_URLS`, the Soroban RPC pool
+//! of the same network.
+//!
+//! ```bash
+//! CLICKHOUSE_URL=http://localhost:8123 SOROBAN_RPC_URLS=<rpc urls> cargo run -p backfill-enrichment-runner -- nft-metadata --force-retry
+//! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- sep1-assets --concurrency 10
+//! CLICKHOUSE_URL=http://localhost:8123 SOROBAN_RPC_URLS=<rpc urls> cargo run -p backfill-enrichment-runner -- nft-collection-name
+//! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- status
+//!
+//! # production ClickHouse over mTLS, testnet database
+//! CLICKHOUSE_DATABASE=testnet SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org \
+//!   cargo run -p backfill-enrichment-runner -- --clickhouse-url https://<ch host> \
+//!   --ch-cert <user>.crt --ch-key <user>.key --ch-ca ca.crt nft-metadata --retry-sentinels
+//! ```
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,8 +84,6 @@ use enrichment_shared::enrich_and_persist::{AssetKey, EnrichError, EnrichOutcome
 use enrichment_shared::nft_token_uri::NftTokenUriFetcher;
 use enrichment_shared::sep1::Sep1Fetcher;
 use tokio::sync::Semaphore;
-
-mod network_guard;
 
 #[derive(Parser)]
 #[command(name = "enrich", about)]
@@ -239,13 +247,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         cli.ch_key.as_deref(),
         cli.ch_ca.as_deref(),
     );
-
-    if matches!(
-        cli.command,
-        Command::NftMetadata(_) | Command::NftCollectionName(_)
-    ) {
-        network_guard::check_configured_network().await?;
-    }
 
     let report = match cli.command {
         Command::Sep1Assets(args) => {

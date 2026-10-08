@@ -984,14 +984,11 @@ dependencies = [
  "db-clickhouse",
  "enrichment-shared",
  "indicatif",
- "reqwest",
  "serde",
- "serde_json",
  "tokio",
  "tracing",
  "tracing-indicatif",
  "tracing-subscriber",
- "xdr-parser",
 ]
 
 [[package]]

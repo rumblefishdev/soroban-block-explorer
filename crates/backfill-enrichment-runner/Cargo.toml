@@ -15,9 +15,6 @@ enrichment-shared = { path = "../enrichment-shared" }
 # accepts client certificates).
 db-clickhouse = { path = "../db-clickhouse", features = ["aws-mtls"] }
 clickhouse = { workspace = true }
-# `getNetwork` on the RPC pool at start (network_guard.rs).
-reqwest = { workspace = true }
-serde_json = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "signal", "time"] }
 clap = { version = "4", features = ["derive", "env"] }
@@ -25,7 +22,3 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 indicatif = "0.18"
 tracing-indicatif = "0.3"
-
-[dev-dependencies]
-# The canonical passphrases the network-guard tests feed in.
-xdr-parser = { path = "../xdr-parser" }
