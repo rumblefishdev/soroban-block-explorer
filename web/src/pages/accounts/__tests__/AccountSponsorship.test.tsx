@@ -2,6 +2,7 @@ import type { AccountSponsorshipResponse } from '@rumblefish/api-types';
 import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { PAGE_SIZE } from '../../../api/polling.js';
 import { renderWithProviders } from '../../../test-utils.js';
 import {
   AccountSponsorship,
@@ -103,7 +104,7 @@ describe('AccountSponsorship', () => {
     ).toBeInTheDocument();
   });
 
-  it('says the network did not answer on any other failure', () => {
+  it('shows the shared error state with a retry on any other failure', () => {
     hook.useAccountSponsorship.mockReturnValue({
       isLoading: false,
       isError: true,
@@ -111,7 +112,9 @@ describe('AccountSponsorship', () => {
       data: undefined,
     });
     renderWithProviders(<AccountSponsorship accountId="GA" numSponsored={3} />);
-    expect(screen.getByText(/did not answer/)).toBeInTheDocument();
+    // The shared section error state, with its retry, as every other card.
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    expect(screen.getByText('Try again')).toBeInTheDocument();
   });
 
   it('names offers and data entries when nothing listable is sponsored', () => {
@@ -119,5 +122,27 @@ describe('AccountSponsorship', () => {
       <SponsorshipList data={{ num_sponsored: 1, entries: [] }} />
     );
     expect(screen.getByText(/can be listed here/)).toBeInTheDocument();
+  });
+
+  it('pages long lists like the Assets card, totals per sponsor kept', () => {
+    const many: AccountSponsorshipResponse = {
+      num_sponsored: PAGE_SIZE + 2 + 1,
+      entries: [
+        { kind: 'account', reserves: 2, sponsor: SPONSOR_A },
+        ...Array.from({ length: PAGE_SIZE + 1 }, (_, i) => ({
+          kind: 'trustline',
+          asset: `T${i}-${USDC_ISSUER}`,
+          reserves: 1,
+          sponsor: SPONSOR_A,
+        })),
+      ],
+    };
+    renderWithProviders(<SponsorshipList data={many} />);
+
+    expect(
+      screen.getByText(`1–${PAGE_SIZE} of ${PAGE_SIZE + 2}`)
+    ).toBeInTheDocument();
+    // The sponsor's header counts all its reserves, not just this page's.
+    expect(screen.getByText(`${PAGE_SIZE + 3} reserves`)).toBeInTheDocument();
   });
 });

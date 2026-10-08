@@ -5,13 +5,19 @@ import type {
   AccountSponsorshipResponse,
 } from '@rumblefish/api-types';
 import {
+  CardSkeleton,
   Chip,
   classifyError,
   formatAmount,
   IdentifierDisplay,
+  isMissingResource,
+  PaginationControls,
+  QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
+import { useSearchParams } from 'react-router-dom';
 
 import { useAccountSponsorship } from '../../api/index.js';
+import { PAGE_SIZE } from '../../api/polling.js';
 import { SectionCard } from '../detail/SectionCard.js';
 
 /** What the entry is, in words: the account itself, a trustline, a signer. */
@@ -77,12 +83,19 @@ function bySponsor(entries: AccountSponsoredEntry[]) {
   return [...groups.entries()];
 }
 
-/** The card's body once the answer is in. Exported for tests. */
+/**
+ * The card's body once the answer is in. Exported for tests.
+ *
+ * Paged like the Assets card: a page of `PAGE_SIZE` entries, sliced in the
+ * order RPC listed them grouped by sponsor, its position in `?sponsors=`. A
+ * sponsor whose entries straddle two pages heads both, with its full total.
+ */
 export function SponsorshipList({
   data,
 }: {
   data: AccountSponsorshipResponse;
 }) {
+  const [params, setParams] = useSearchParams();
   // Our index counted sponsored reserves the network no longer holds: the
   // account changed since. The network is the newer word.
   if (data.num_sponsored === 0) {
@@ -102,10 +115,37 @@ export function SponsorshipList({
     );
   }
   const groups = bySponsor(data.entries);
+  const totals = new Map(
+    groups.map(([sponsor, entries]) => [
+      sponsor,
+      entries.reduce((sum, e) => sum + e.reserves, 0),
+    ])
+  );
+  const ordered = groups.flatMap(([, entries]) => entries);
+  const paged = ordered.length > PAGE_SIZE;
+  const lastPage = Math.max(0, Math.ceil(ordered.length / PAGE_SIZE) - 1);
+  // Clamped, not trusted, like `?assets=`.
+  const asked = Number(params.get('sponsors') ?? '1');
+  const page = Number.isSafeInteger(asked)
+    ? Math.min(Math.max(asked - 1, 0), lastPage)
+    : 0;
+  const goTo = (next: number) =>
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (next <= 0) p.delete('sponsors');
+        else p.set('sponsors', String(next + 1));
+        return p;
+      },
+      { replace: true }
+    );
+  const start = page * PAGE_SIZE;
+  const shown = paged ? ordered.slice(start, start + PAGE_SIZE) : ordered;
+
   return (
     <Box>
-      {groups.map(([sponsor, entries]) => {
-        const reserves = entries.reduce((sum, e) => sum + e.reserves, 0);
+      {bySponsor(shown).map(([sponsor, entries]) => {
+        const reserves = totals.get(sponsor) ?? 0;
         return (
           <Box key={sponsor}>
             <Line header>
@@ -135,6 +175,15 @@ export function SponsorshipList({
           </Box>
         );
       })}
+      {paged && (
+        <PaginationControls
+          caption={`${start + 1}–${start + shown.length} of ${ordered.length}`}
+          canPrev={page > 0}
+          canNext={page < lastPage}
+          onPrev={() => goTo(page - 1)}
+          onNext={() => goTo(page + 1)}
+        />
+      )}
     </Box>
   );
 }
@@ -166,15 +215,16 @@ export function AccountSponsorship({
     return null;
   }
   let body: ReactNode;
-  if (query.isLoading) {
-    body = <Line>Reading sponsors from the network…</Line>;
-  } else if (classifyError(query.error) === 'not-found') {
+  if (query.isPending) {
+    body = <CardSkeleton />;
+  } else if (query.isError && isMissingResource(classifyError(query.error))) {
     body = <Line>The network holds no entry for this account now.</Line>;
   } else if (query.isError || query.data == null) {
     body = (
-      <Line>
-        Sponsors are unavailable right now — the network did not answer.
-      </Line>
+      <QueryErrorState
+        error={query.error}
+        onRetry={() => void query.refetch()}
+      />
     );
   } else {
     body = <SponsorshipList data={query.data} />;

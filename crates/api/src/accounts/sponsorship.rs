@@ -15,6 +15,9 @@ use crate::state::AppState;
 use super::dto::{AccountSponsoredEntry, AccountSponsorshipResponse};
 use super::queries;
 
+/// Wall-clock cap on the RPC reads of one request.
+const FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[utoipa::path(
     get,
     path = "/accounts/{account_id}/sponsorship",
@@ -60,19 +63,32 @@ pub async fn get_account_sponsorship(
                 return errors::internal_error(errors::DB_ERROR, "database error");
             }
         };
-    let sponsors = match state
-        .runtime_enrichment
-        .account_sponsors
-        .fetch(&account_id, &trustlines)
-        .await
-    {
-        Ok(Some(s)) => s,
-        Ok(None) => return errors::not_found("the account has no entry on the ledger"),
-        Err(e) => {
+    // Each RPC call may try every endpoint of the pool at 10 s each, and an
+    // account may need five calls: the wall-clock cap keeps the request well
+    // under the API Gateway's 29 s ceiling, as the NFT metadata fetch does.
+    let fetched = tokio::time::timeout(
+        FETCH_DEADLINE,
+        state
+            .runtime_enrichment
+            .account_sponsors
+            .fetch(&account_id, &trustlines),
+    )
+    .await;
+    let sponsors = match fetched {
+        Ok(Ok(Some(s))) => s,
+        Ok(Ok(None)) => return errors::not_found("the account has no entry on the ledger"),
+        Ok(Err(e)) => {
             tracing::error!(account_id = %account_id, error = %e, "RPC error fetching sponsors");
             return errors::internal_error(
                 errors::SPONSORSHIP_FETCH_FAILED,
                 "could not read sponsors from RPC",
+            );
+        }
+        Err(_elapsed) => {
+            tracing::error!(account_id = %account_id, "RPC timed out fetching sponsors");
+            return errors::internal_error(
+                errors::SPONSORSHIP_FETCH_FAILED,
+                "could not read sponsors from RPC in time",
             );
         }
     };
@@ -91,6 +107,8 @@ pub async fn get_account_sponsorship(
             .collect(),
     };
     let mut resp = Json(body).into_response();
-    cache_control::attach(&mut resp, cache_control::SHORT);
+    // MEDIUM like the other runtime fetches (NFT metadata, SEP-1): each miss
+    // costs RPC calls, and sponsorships change far less often than a minute.
+    cache_control::attach(&mut resp, cache_control::MEDIUM);
     resp
 }

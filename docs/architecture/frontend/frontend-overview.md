@@ -645,8 +645,9 @@ base reserve, each sponsored trustline and signer — grouped by sponsor, with
 less when offers, data entries or pool-share trustlines are sponsored, which are not
 listed). It comes from `GET /v1/accounts/{id}/sponsorship`, which the API answers live
 from Soroban RPC (`getLedgerEntries`, each entry's `sponsoring_id`) with the account's
-open classic trustlines from `balances` as keys, so the card loads after the page and
-says so when RPC does not answer.
+open classic trustlines from `balances` as keys (calls of 200 keys, 10 s wall-clock
+cap). The card loads after the page with the shared skeleton and error state, and pages
+like the Assets card (`PAGE_SIZE`, position in `?sponsors=`).
 
 ### 6.8 Assets (`/assets`)
 
