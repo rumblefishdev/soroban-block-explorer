@@ -113,6 +113,22 @@ Use it after upstream fixes (issuer republishes a corrected TOML, an
 RPC outage clears, an IPFS gateway recovers) to refresh rows the live
 worker classified as permanent-fail before the fix.
 
+## Network
+
+`nft-metadata` and `nft-collection-name` ask a Soroban RPC, and an RPC
+answers for one network only. The runner therefore takes the pool from
+`SOROBAN_RPC_URLS` (comma-separated, tried in turn on failure) and has no
+default: without it these two subcommands stop at start with an error
+naming the variable. Use the list of the network the ClickHouse database
+holds — `sorobanRpcUrls` in `infra/envs/production.json` for mainnet,
+`infra/envs/testnet.json` for testnet. `sep1-assets` and `status` do not
+read it.
+
+```bash
+SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org CLICKHOUSE_DATABASE=testnet \
+  cargo run -p backfill-enrichment-runner -- nft-metadata
+```
+
 ## Usage
 
 The runner reads `DATABASE_URL` from the environment (or `--database-url`

@@ -28,3 +28,29 @@ backfill's recomputed metadata changes nothing on that account.
 - Persistent entries a few token functions read (17 contracts on 10
   programs, re-measured 2026-10-07) are not stored; where they come from is
   deferred to task 0633.
+
+## Local executor and metadata backfill (2026-10-07)
+
+Local ClickHouse with production's `soroban_contracts`, `wasm_programs`
+metadata, `soroban_contract_metadata` and latest ledger; bytes (5,262 of
+5,263 programs) and instances (156,312 of 156,312) filled from RPC.
+`contract-metadata-backfill` over the 4,360 non-SAC contracts whose program
+declares `decimals` (26 s):
+
+| Outcome                                           | Contracts |
+| ------------------------------------------------- | --------- |
+| equal to the stored row                           | 3,864     |
+| differs — stored `decimals` NULL, function says 0 | 2         |
+| no stored row before                              | 347       |
+| needs persistent contract data (task 0633)        | 45        |
+| function fails (also fails on RPC)                | 102       |
+
+Against RPC `simulateTransaction` on one contract per token program (330):
+299 equal on all three values, 0 different; 23 fail on RPC too; the other 8
+are task 0633 contracts. The three tokens behind the four Aquarius pools of
+0617 now have decimals: XRP 6, HITZ 7, USST 18.
+
+Trap found: `contract IN (SELECT unhex(…))` against a `FixedString(32)`
+column drops a trailing zero byte and misses every id ending in `0x00` (22
+contracts here); `toFixedString(…, 32)` in the subquery fixes it. Plain
+`= unhex(?)` is not affected.
