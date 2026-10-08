@@ -13,6 +13,7 @@
 //! ```
 
 use super::super::classifier;
+use super::assets::{AssetPhase1Row, IssuerRow};
 use super::*;
 
 #[derive(Debug, Row, Deserialize)]

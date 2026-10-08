@@ -14,20 +14,20 @@ use crate::search::dto::{EntityType, SearchHit};
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Row, Deserialize)]
-struct AssetPhase1Row {
-    asset_type: i16,
-    asset_code: Option<String>,
+pub(super) struct AssetPhase1Row {
+    pub(super) asset_type: i16,
+    pub(super) asset_code: Option<String>,
     /// `soroban_contracts.contract_id` (C-StrKey) via the in-statement join,
     /// `nullIf`-collapsed on a miss.
-    contract_strkey: Option<String>,
+    pub(super) contract_strkey: Option<String>,
     /// Surrogate `accounts.id`; `0` = no issuer (native / soroban-native).
-    issuer_id: i64,
+    pub(super) issuer_id: i64,
 }
 
 #[derive(Debug, Row, Deserialize)]
-struct IssuerRow {
-    id: i64,
-    account_id: String,
+pub(super) struct IssuerRow {
+    pub(super) id: i64,
+    pub(super) account_id: String,
 }
 
 /// Fires whenever the query is NOT hash-shaped (a 64-hex / 56-char needle can
