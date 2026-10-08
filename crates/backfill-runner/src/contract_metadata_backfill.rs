@@ -25,7 +25,9 @@ use tracing::{info, warn};
 use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::util::insert_rows;
-use indexer::token_metadata_by_functions::{Answer, ProgramRow, load_instances, read_metadata};
+use indexer::token_metadata_by_functions::{
+    Answer, Entries, code_entry, code_key, instance_key, load_instances, read_metadata,
+};
 
 /// Contracts per instance query and rows per insert.
 const CHUNK: usize = 1_000;
@@ -58,6 +60,13 @@ struct TokenRow {
     contract_id: String,
     wasm_hash: [u8; 32],
     declares: Vec<String>,
+}
+
+#[derive(Row, Deserialize)]
+struct ProgramRow {
+    wasm_hash: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    code: Vec<u8>,
 }
 
 #[derive(Row, Deserialize)]
@@ -123,7 +132,9 @@ pub async fn execute(
     let mut token_programs: Vec<String> = tokens.iter().map(|t| hex::encode(t.wasm_hash)).collect();
     token_programs.sort();
     token_programs.dedup();
-    let mut programs: HashMap<[u8; 32], Option<Vec<u8>>> = HashMap::new();
+    // Every token's program and instance, loaded once; a run that asks for
+    // another contract's adds it here.
+    let mut entries = Entries::new();
     for row in client
         .query(
             "SELECT wasm_hash, code FROM wasm_programs \
@@ -135,18 +146,17 @@ pub async fn execute(
         .fetch_all::<ProgramRow>()
         .await?
     {
-        programs.insert(row.wasm_hash, Some(row.code));
+        entries.insert(code_key(row.wasm_hash), code_entry(row.wasm_hash, row.code));
     }
-
-    let mut instances: HashMap<[u8; 32], Option<(Vec<u8>, i64)>> = HashMap::new();
     let ids: Vec<[u8; 32]> = tokens
         .iter()
         .filter_map(|t| stellar_strkey::Contract::from_string(&t.contract_id).ok())
         .map(|c| c.0)
         .collect();
     for chunk in ids.chunks(CHUNK) {
-        load_instances(client, chunk, &mut instances).await?;
+        load_instances(client, chunk, &mut entries).await?;
     }
+    let mut entries = std::rc::Rc::new(entries);
 
     let stored: HashMap<String, StoredMetadata> = client
         .query(
@@ -176,38 +186,28 @@ pub async fn execute(
             warn!(contract_id = %token.contract_id, "not a contract StrKey, skipped");
             continue;
         };
-        let Some(Some((_, instance_ledger))) = instances.get(&id.0).cloned() else {
+        let Some(Some(instance)) = entries.get(&instance_key(id.0)) else {
             stats.no_instance += 1;
             continue;
         };
-        if !matches!(programs.get(&token.wasm_hash), Some(Some(_))) {
+        let instance_ledger = i64::from(instance.last_modified_ledger_seq);
+        if !matches!(entries.get(&code_key(token.wasm_hash)), Some(Some(_))) {
             stats.no_program += 1;
             continue;
         }
-        let answer = read_metadata(
-            client,
-            &ledger,
-            id.0,
-            &token.declares,
-            &mut programs,
-            &mut instances,
-        )
-        .await?;
-        let (name, symbol, decimals) = match answer {
-            Answer::Values {
-                name,
-                symbol,
-                decimals,
-            } => (name, symbol, decimals),
-            Answer::NeedsContractData => {
-                stats.needs_contract_data += 1;
-                continue;
-            }
-            Answer::Failed => {
-                stats.failed += 1;
-                continue;
-            }
-        };
+        let metadata =
+            match read_metadata(client, &ledger, id.0, &token.declares, &mut entries).await? {
+                Answer::Metadata(metadata) => metadata,
+                Answer::NeedsContractData => {
+                    stats.needs_contract_data += 1;
+                    continue;
+                }
+                Answer::Failed => {
+                    stats.failed += 1;
+                    continue;
+                }
+            };
+        let (name, symbol, decimals) = (metadata.name, metadata.symbol, metadata.decimals);
         let computed = StoredMetadata {
             contract_id: token.contract_id.clone(),
             name: name.clone(),
