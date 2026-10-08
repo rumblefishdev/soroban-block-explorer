@@ -130,13 +130,6 @@ pub async fn execute(
         Some(id) => *id,
         None => xdr_parser::sac::network_id(xdr_parser::MAINNET_PASSPHRASE),
     };
-    if latest.protocol_version as u32 > contract_executor::PROTOCOL_VERSION {
-        return Err(BackfillError::Incomplete(format!(
-            "the network is on protocol {}, the executor runs up to {} — bump soroban-env-host first",
-            latest.protocol_version,
-            contract_executor::PROTOCOL_VERSION
-        )));
-    }
     let ledger = Ledger {
         sequence: latest.sequence as u32,
         timestamp: u64::from(latest.closed_at),

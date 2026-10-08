@@ -4,7 +4,8 @@
 
 use super::*;
 use soroban_env_host::xdr::{
-    ContractDataDurability, LedgerEntryExt, LedgerKeyContractCode, LedgerKeyContractData, ScString,
+    ContractDataDurability, LedgerEntryData, LedgerEntryExt, LedgerKeyContractCode,
+    LedgerKeyContractData, Limits, ReadXdr, ScString,
 };
 
 const CONTRACT: [u8; 32] = [

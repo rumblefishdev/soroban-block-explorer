@@ -22,18 +22,10 @@ use soroban_env_host::e2e_invoke::{
 };
 use soroban_env_host::storage::{EntryWithLiveUntil, SnapshotSource};
 use soroban_env_host::xdr::{
-    AccountId, ConfigSettingEntry, ContractCostParams, ContractId, Hash, HostFunction,
-    InvokeContractArgs, LedgerEntry, LedgerEntryData, LedgerKey, Limits, PublicKey, ReadXdr,
-    ScAddress, ScSymbol, ScVal, Uint256,
+    AccountId, ContractId, Hash, HostFunction, InvokeContractArgs, LedgerEntry, LedgerKey,
+    PublicKey, ScAddress, ScSymbol, ScVal, Uint256,
 };
 use soroban_env_host::{HostError, LedgerInfo};
-
-mod network;
-
-/// The newest network protocol this host runs. A ledger on a later protocol
-/// needs a newer `soroban-env-host`; callers refuse rather than report every
-/// call as failed.
-pub const PROTOCOL_VERSION: u32 = 29;
 
 /// The ledger the function runs "at".
 #[derive(Debug, Clone, Copy)]
@@ -64,9 +56,12 @@ pub enum ViewOutcome {
 /// `entries` maps a ledger key to its entry, or to `None` for a key the
 /// caller knows does not exist on the ledger (a contract may test for an
 /// optional entry). A key absent from the map is unknown and is reported as
-/// missing. Every entry is treated as live: the host requires an expiry for
-/// each one, and for a read-only call an archived entry reads exactly like a
-/// live one.
+/// missing. Every entry is treated as live through this ledger: the host
+/// requires an expiry for each one, and for a read-only call an archived entry
+/// reads exactly like a live one.
+///
+/// The library's default budget (100 M instructions) is the limit: the
+/// heaviest `decimals`/`name`/`symbol` on mainnet measured 12.5 M.
 pub fn call_view(
     entries: Rc<BTreeMap<LedgerKey, Option<LedgerEntry>>>,
     ledger: &Ledger,
@@ -83,28 +78,23 @@ pub fn call_view(
     });
     let snapshot = Rc::new(Snapshot {
         entries,
-        live_until: ledger.sequence.saturating_add(network::MIN_PERSISTENT_TTL),
+        live_until: ledger.sequence,
         missing: RefCell::new(Vec::new()),
     });
-    let budget = match budget() {
-        Ok(budget) => budget,
-        Err(e) => return ViewOutcome::Failed(format!("budget: {e:?}")),
-    };
     // A read-only call has no signer; the source account is never read.
     let source = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])));
+    // Reserve and TTL settings are read only by calls that create or extend
+    // entries; a read-only call leaves them at their defaults.
     let ledger_info = LedgerInfo {
         protocol_version: ledger.protocol_version,
         sequence_number: ledger.sequence,
         timestamp: ledger.timestamp,
         network_id: ledger.network_id,
-        base_reserve: network::BASE_RESERVE,
-        min_temp_entry_ttl: network::MIN_TEMPORARY_TTL,
-        min_persistent_entry_ttl: network::MIN_PERSISTENT_TTL,
-        max_entry_ttl: network::MAX_ENTRY_TTL,
+        ..Default::default()
     };
 
     let result = invoke_host_function_in_recording_mode(
-        &budget,
+        &Budget::default(),
         false,
         &host_function,
         &source,
@@ -128,30 +118,6 @@ pub fn call_view(
             Err(e) => ViewOutcome::Failed(format!("{e:?}")),
         },
         Err(e) => ViewOutcome::Failed(format!("{e:?}")),
-    }
-}
-
-/// The network's own limits and cost model for one transaction.
-fn budget() -> Result<Budget, HostError> {
-    Budget::try_from_configs(
-        network::TX_MAX_INSTRUCTIONS,
-        network::TX_MEMORY_LIMIT,
-        cost_params(network::COST_PARAMS_CPU_XDR),
-        cost_params(network::COST_PARAMS_MEM_XDR),
-    )
-}
-
-/// Decode a config-setting entry holding cost parameters. The inputs are the
-/// constants in `network.rs`, so a failure is a broken build, not bad data.
-fn cost_params(base64: &str) -> ContractCostParams {
-    let data = LedgerEntryData::from_xdr_base64(base64.trim(), Limits::none())
-        .expect("network cost params decode");
-    match data {
-        LedgerEntryData::ConfigSetting(ConfigSettingEntry::ContractCostParamsCpuInstructions(
-            p,
-        ))
-        | LedgerEntryData::ConfigSetting(ConfigSettingEntry::ContractCostParamsMemoryBytes(p)) => p,
-        other => panic!("not a cost-params config setting: {other:?}"),
     }
 }
 
