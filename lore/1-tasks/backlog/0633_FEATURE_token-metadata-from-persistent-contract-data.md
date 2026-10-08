@@ -19,6 +19,20 @@ history:
 
 # Token metadata for contracts whose functions read persistent contract data
 
+## Decided 2026-10-08 (W331 A, not scheduled yet)
+
+Full copy of persistent contract data: the indexer writes every persistent
+`ContractData` change, and the starting state comes from the SDF
+history-archive snapshot (the `snapshot` tooling in `backfill-runner`).
+Measured that day: the network's live Soroban state is 1.76 GiB
+(`live_soroban_state_size_window`), of which our stored programs are 108 MiB
+and instances 58 MiB, so contract data is ~1.2–1.6 GiB raw, ~0.4–0.6 GiB in
+ClickHouse (estimate, ~3× compression as `contract_instances`). Over 200
+consecutive ledgers (64,833,000–64,833,199): 4.4 persistent writes per ledger
+(~2.2 KB); temporary data, 352 writes per ledger, is not kept. Rejected:
+fetch on demand from RPC (an RPC dependency in the indexer, no archived
+entries) and the live-only hybrid (no full state for audits).
+
 ## Summary
 
 Task 0620 runs a token's `decimals()` / `name()` / `symbol()` locally over the
