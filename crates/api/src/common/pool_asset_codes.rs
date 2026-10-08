@@ -56,8 +56,8 @@ pub async fn soroban_token_ids(
     let contracts: Vec<String> = client
         .query(&format!(
             "SELECT contract_id FROM soroban_contract_metadata FINAL \
-             WHERE positionCaseInsensitive(coalesce(name, ''), ?) > 0 \
-                OR positionCaseInsensitive(coalesce(symbol, ''), ?) > 0 \
+             WHERE positionCaseInsensitiveUTF8(coalesce(name, ''), ?) > 0 \
+                OR positionCaseInsensitiveUTF8(coalesce(symbol, ''), ?) > 0 \
              LIMIT {}",
             MAX_TOKEN_IDS_AS_PARAM + 1
         ))
@@ -157,8 +157,8 @@ fn leg_matches(
         format!(
             "({by_code} OR x IN (SELECT id FROM soroban_contracts WHERE contract_id IN ( \
                  SELECT contract_id FROM soroban_contract_metadata FINAL \
-                 WHERE positionCaseInsensitive(coalesce(name, ''), ?) > 0 \
-                    OR positionCaseInsensitive(coalesce(symbol, ''), ?) > 0)))"
+                 WHERE positionCaseInsensitiveUTF8(coalesce(name, ''), ?) > 0 \
+                    OR positionCaseInsensitiveUTF8(coalesce(symbol, ''), ?) > 0)))"
         ),
         vec![code.to_string(), code.to_string(), code.to_string()],
     )

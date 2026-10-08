@@ -65,6 +65,26 @@ async fn soroban_leg_matched_by_symbol() {
     // A classic code still matches as before.
     assert_eq!(matched(&ch, &["USDC"]).await, vec![OTHER.to_uppercase()]);
 
+    // A needle naming more tokens than a server parameter carries takes the
+    // in-query read, and still finds the pool: 1,001 more tokens named
+    // "Bulk …" join the one in the pool.
+    ch.query(
+        "INSERT INTO soroban_contract_metadata (contract_id, name, symbol, decimals, version) \
+         SELECT concat('CBULK', toString(number)), concat('Bulk ', toString(number)), 'BLK', 7, 1 \
+         FROM numbers(1001)",
+    )
+    .execute()
+    .await
+    .expect("seed bulk tokens");
+    ch.query(&format!(
+        "INSERT INTO soroban_contract_metadata (contract_id, name, symbol, decimals, version) VALUES \
+         ('{TOKEN}', 'Bulk Solv BTC', 'SolvBTC', 8, 2)"
+    ))
+    .execute()
+    .await
+    .expect("rename the pooled token");
+    assert_eq!(matched(&ch, &["BULK"]).await, vec![POOL.to_uppercase()]);
+
     base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
         .execute()
         .await

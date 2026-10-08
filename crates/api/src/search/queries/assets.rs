@@ -143,8 +143,8 @@ pub(super) async fn search_assets(
             "{ASSET_HEAD} \
              LEFT JOIN balance_aggregates bagg ON bagg.asset_id = a.id \
              WHERE position({shown}, lower(?)) > 0 \
-                OR positionCaseInsensitive(coalesce(m.symbol, ''), ?) > 0 \
-                OR positionCaseInsensitive(coalesce(m.name, ''), ?) > 0 \
+                OR positionCaseInsensitiveUTF8(coalesce(m.symbol, ''), ?) > 0 \
+                OR positionCaseInsensitiveUTF8(coalesce(m.name, ''), ?) > 0 \
              ORDER BY multiIf({shown} = lower(?) OR {symbol} = lower(?), 0, \
                               startsWith({shown}, lower(?)) OR startsWith({symbol}, lower(?)), 1, \
                               2) ASC, \
