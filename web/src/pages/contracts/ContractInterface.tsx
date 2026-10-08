@@ -192,8 +192,10 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
 
 /**
  * Interface tab — the contract's declared public functions, rendered as a
- * readable accordion list. SAC and pre-upload contracts carry no WASM
- * interface metadata and show an empty state instead.
+ * readable accordion list. SAC and pre-upload contracts have no program, and
+ * a few programs carry no interface section (`contractspecv0`): both show an
+ * empty state, the latter pointing to the Code tab, which reconstructs the
+ * functions from the program itself.
  */
 export function ContractInterface({ contractId }: { contractId: string }) {
   const { data, isLoading, isError, error, refetch } =
@@ -211,14 +213,24 @@ export function ContractInterface({ contractId }: { contractId: string }) {
     return <QueryErrorState error={error} onRetry={() => void refetch()} />;
   }
 
-  // `interface_metadata` is `null` for SAC / pre-upload / stub rows.
+  // `interface_metadata` is `null` for SAC / pre-upload / stub rows, and for
+  // a program without an interface section (or one not indexed yet).
   const parsed = data?.interface_metadata ?? null;
   if (parsed == null || parsed.functions.length === 0) {
+    if (data?.wasm_hash == null) {
+      return (
+        <EmptyState
+          icon={<InfoOutlinedIcon fontSize="small" />}
+          title="No public interface"
+          description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
+        />
+      );
+    }
     return (
       <EmptyState
         icon={<InfoOutlinedIcon fontSize="small" />}
-        title="No public interface"
-        description="Stellar Asset Contracts and pre-upload contracts expose no WASM interface metadata."
+        title="No interface metadata"
+        description="No function list is available for this contract's WASM. The Code tab reconstructs its functions from the WASM itself."
       />
     );
   }

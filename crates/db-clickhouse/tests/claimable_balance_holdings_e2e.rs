@@ -65,6 +65,7 @@ async fn persist(cl: &clickhouse::Client, sequence: u32, balances: &[ExtractedCl
         &[],
         &[],
         &[],
+        &[],
         balances,
         &[],
         &[],

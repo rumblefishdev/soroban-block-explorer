@@ -39,8 +39,16 @@ needs a new table.
 
 - Done: scope measured; decided 2026-10-06 — the literal ask (counts, then
   the list), counts stored by the indexer, not read live from RPC.
-- Done: #625 (structure, merged), #626 (1a, in review).
-- Next: production ALTER + indexer deploy, then PR 1b — the refill mode.
+- Done: #625, #626, #627 live in `production-2026.10.07-1` (testnet since
+  2026-10-07); ALTERs on `default` and `testnet`. Mainnet wallet
+  `GAUA7…PNJU` 4,051,315 / 0 equals RPC.
+- Done: #638 merged; seed `--execute` at checkpoint 64,819,327 (2026-10-07):
+  11,046,717 rows, 2,674,015 repaired (same ledger, other counters),
+  8,358,413 identical, 14,289 ours newer. RPC sample 21/21 equal.
+- Done: #643 (1c, API + page) merged 2026-10-07; ships with the next weekly
+  release.
+- Next: after that release — verify on sorobanscan, reply on #454 via
+  `/issues`, tick stage 1; stage 2 (the list) not started.
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
@@ -66,14 +74,15 @@ network enforces and what stellar.expert shows. A list of sponsored entries
 `GAUA7XL5…PNJU` sponsors 4,043,490 reserves, `GDB3RSSW…6CU` 111,104 — so a
 list must be paginated and keyed by sponsor.
 
-**Trap for the refill.** The seed writes an `account_entry_state` row only when
-the network's entry is newer than our newest row (task 0521). After the
-columns are added, almost every account already has a row at the same
-version, so the seed would skip them and the counters would stay 0. The
-refill rewrites only accounts whose newest row predates 1a going live — not
-every account, which would re-insert ~11M identical rows and blind the 0521
-"cannot move" signal. Rows carry the entry's own `lastModifiedLedgerSeq`, so a
-live write that lands meanwhile still wins.
+**Trap for the refill.** The seed wrote an `account_entry_state` row only
+when the network's entry was newer than our newest row (task 0521), so rows
+written before the columns existed — current, only incomplete — were never
+rewritten. Decided 2026-10-07: the seed writes every live account at the
+entry's own ledger and the version rule decides (equal version: the seed's
+later insert wins; newer live write: ours wins). Rejected: a refill flag with
+a hand-typed ledger floor — more code, a number to get wrong, and the next
+new column would need it again. Given up: 0521's "repeat pass writes ~0"
+signal.
 
 ## Implementation Plan
 
@@ -81,15 +90,19 @@ Each PR is one production step. Stage 2 starts only after stage 1 ships.
 
 ### Stage 1 — counts (certain: the data and both writers exist)
 
-| PR  | Scope                                                                                                                                         | Production acts after merge                                 |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| 1a  | Parser reads `num_sponsoring` / `num_sponsored`; `account_entry_state` gains two columns (`DEFAULT 0`); live writer and seed fill them — #626 | `ALTER TABLE … ADD COLUMN` ×2, then indexer deploy          |
-| 1b  | Seed: a one-off mode that rewrites accounts whose newest row predates 1a                                                                      | `snapshot-seed --execute` in that mode; check counts vs RPC |
-| 1c  | API `account` detail exposes both counts; the page shows them (two rows in Summary, prototype variant A)                                      | API + SPA deploy                                            |
+| PR  | Scope                                                                                                                                         | Production acts after merge                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| 1a  | Parser reads `num_sponsoring` / `num_sponsored`; `account_entry_state` gains two columns (`DEFAULT 0`); live writer and seed fill them — #626 | `ALTER TABLE … ADD COLUMN` ×2, then indexer deploy |
+| 1b  | Seed writes `account_entry_state` for every live account (drops task 0521's narrowing) — #638                                                 | `snapshot-seed --execute`; check counts vs RPC     |
+| 1c  | API `account` detail exposes both counts; the page shows them (two rows in Summary, prototype variant A)                                      | API + SPA deploy                                   |
 
-1c waits until one `chq` count says no row older than 1a's go-live is left
-without a newer version: shipped earlier, the page would show 0 for accounts
-not changed since the column appeared — a wrong number, not a missing one. An
+1c waits for the seed run after #638 (its `same ledger with other counters`
+count is the repair) and for a stratified RPC sample (top
+sponsors, sponsored accounts, an account with neither, one last changed
+before our floor) to match. A refilled row keeps its old version by design,
+so "no row older than 1a" can never be the gate. Shipped earlier, the page
+would show 0 where the chain says otherwise — a wrong number, not a missing
+one. An
 account with no `account_entry_state` row shows "unknown", as Signers does.
 
 **Rejected: reading the counters live via RPC on each page load** — cheaper
@@ -97,30 +110,35 @@ account with no `account_entry_state` row shows "unknown", as Signers does.
 RPC at request time, a second source of truth beside the index, and stage 2
 needs the stored data anyway.
 
-### Stage 2 — what a sponsor pays for (needs its own design)
+### Stage 2 — who pays each sponsored entry (decided 2026-10-07)
 
-New table keyed by sponsor: one row per sponsored ledger entry (account,
-trustline, offer, data, claimable balance, signer) with its owner and reserve
-count, filled from `LedgerEntry.ext.v1.sponsoring_id` and
-`AccountEntry` `signer_sponsoring_ids`, versioned on the entry's ledger,
-closed when the entry or its sponsorship goes. Seeded from the checkpoint
-snapshot, then live. Paginated endpoint and the expandable list (prototype
-variant B). The reverse direction ("sponsored by", variant C) reads the same
-table by owner — not asked for in #454; decide when stage 2 is designed.
+Shaped like stellar.expert, which lists sponsors on the **sponsored**
+account ("Account base reserve sponsored by X", "USDC trustline sponsored by
+X") and shows only a count on the sponsor's side. Read **live from RPC**, not
+indexed: `getLedgerEntries` returns each entry's `sponsoring_id` in `extXdr`,
+the account's `signer_sponsoring_ids` cover signers, and our `balances` name
+the trustlines to ask for. PR 2a (#646) shares the RPC pool of the WASM
+fetcher; PR 2b (#647) adds `GET /v1/accounts/{id}/sponsorship` and a
+"Sponsored reserves" card grouped by sponsor. **Not delivered:** a list on
+the sponsor's side ("whom GAUA7… pays for") — it needs an index over the
+whole network (4M entries for one wallet), stellar.expert does not offer
+it, and nobody asked again; dropped, not deferred.
 
 ## Acceptance Criteria
 
 - [ ] Stage 1: for a stratified sample (top sponsors, a sponsored account, an
       account with neither, an account last changed before our floor) both
       counters equal RPC `getLedgerEntries`.
-- [ ] Stage 1: the seed refill reports how many rows it rewrote; a second
-      normal seed pass writes ~0 entry-state rows (the 0521 signal still works).
+- [ ] Stage 1: the seed's `same ledger with other counters` count on the
+      first pass ≈ the sponsored accounts written before 1a, and ~0 on the
+      next pass.
 - [ ] Stage 1: account page shows both counts; no account shows a 0 that the
       chain contradicts.
-- [ ] Stage 2: list for `GAUA7XL5…PNJU` paginates, and its reserves per kind
-      sum to the counter.
+- [ ] Stage 2: on a sponsored account the listed reserves sum to the
+      chain's `num_sponsored` when every sponsored entry is an account,
+      trustline or signer (GBEEFP 6/6, GBIIXI 7/7, GA3WEM 3/3 on 2026-10-07).
 - [ ] **Docs updated** — `docs/architecture/**` schema and API pages for the
-      new columns, endpoint and table; `docs/backfills.md` for the refill mode.
+      new columns, endpoint and table; `docs/backfills.md` for the counted entry-state pass.
 - [ ] **API types regenerated** — 1c and stage 2 touch `crates/api/**`.
 
 ## Notes

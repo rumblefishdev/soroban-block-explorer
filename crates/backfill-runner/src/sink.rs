@@ -220,6 +220,7 @@ impl PartitionWriterHandle {
                     lp_positions: &parsed.lp_positions,
                     contract_metadata_writes: &parsed.contract_metadata_writes,
                     executable_ref_targets: &parsed.executable_ref_targets,
+                    contract_instances: &parsed.contract_instances,
                     // Task 0331 — backfill reprocesses ledger ContractData
                     // changes through the shared `process.rs`, so this is
                     // populated for free: the historical-balance seed pass is

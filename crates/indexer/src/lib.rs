@@ -2,3 +2,4 @@
 //! (e.g. backfill-runner). The Lambda entry point remains in main.rs.
 
 pub mod handler;
+pub mod token_metadata_by_functions;

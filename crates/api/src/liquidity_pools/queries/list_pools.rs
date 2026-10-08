@@ -388,10 +388,15 @@ pub async fn fetch_pool_list(
 
     // A soroban pool writes no snapshot; its reserves are its newest
     // `pool_state_changes` row, read for the page's soroban pools only.
+    let kinds = rows
+        .iter()
+        .map(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind))
+        .collect::<Result<Vec<_>, _>>()?;
     let soroban_ids: Vec<&str> = rows
         .iter()
-        .filter(|r| decode_pool_kind(&r.pool_id_hex, r.pool_kind) == domain::PoolKind::Soroban)
-        .map(|r| r.pool_id_hex.as_str())
+        .zip(&kinds)
+        .filter(|(_, kind)| **kind == domain::PoolKind::Soroban)
+        .map(|(r, _)| r.pool_id_hex.as_str())
         .collect();
     let soroban_raw = fetch_raw_reserves(client, &soroban_ids).await?;
     let soroban_shares = fetch_total_shares(client, &soroban_ids).await?;
@@ -430,11 +435,11 @@ pub async fn fetch_pool_list(
     Ok(rows
         .into_iter()
         .zip(page_legs)
-        .map(|(r, legs)| {
+        .zip(kinds)
+        .map(|((r, legs), pool_kind)| {
             // A classic pool's snapshot columns are its two legs, in order; a
             // soroban pool's reserves come from its state rows (see
             // `soroban_reserves` for which legs carry a value).
-            let pool_kind = decode_pool_kind(&r.pool_id_hex, r.pool_kind);
             let raw = soroban_raw
                 .get(&r.pool_id_hex)
                 .map_or(&[][..], Vec::as_slice);

@@ -9,7 +9,10 @@ fn reads_a_trimmed_comma_separated_pool() {
 #[test]
 fn unset_is_an_error_naming_the_variable() {
     let err = parse_rpc_urls(None).unwrap_err();
-    assert!(err.starts_with("SOROBAN_RPC_URLS is not set"), "{err}");
+    assert!(
+        err.starts_with("SOROBAN_RPC_URLS is unset or empty"),
+        "{err}"
+    );
 }
 
 #[test]

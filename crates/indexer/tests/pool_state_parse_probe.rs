@@ -63,6 +63,7 @@ fn parse_ledger_surfaces_pool_state() {
                 lp_positions: &parsed.lp_positions,
                 contract_metadata_writes: &parsed.contract_metadata_writes,
                 executable_ref_targets: &[],
+                contract_instances: &[],
                 soroban_token_balances: &parsed.soroban_token_balances,
                 claimable_balances: &parsed.claimable_balances,
                 pool_family_writes: &parsed.pool_family_writes,

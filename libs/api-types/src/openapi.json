@@ -690,7 +690,7 @@
       "get": {
         "tags": ["contracts"],
         "summary": "Decompile the contract's WASM on demand (task 0465, refs #374).",
-        "description": "No persistence: bytes are fetched from Soroban RPC and decompiled per\nrequest. The output is immutable per (`wasm_hash`, decompiler version),\nwhich justifies the `LONG` cache header even without a server-side cache.",
+        "description": "The bytes come from `wasm_programs.code`, so a program archived on the\nledger still decompiles (task 0620); Soroban RPC answers only for a\nprogram whose bytes are not indexed yet. The output is immutable per\n(`wasm_hash`, decompiler version), which justifies the `LONG` cache header\neven without a server-side cache.",
         "operationId": "get_decompiled",
         "parameters": [
           {
@@ -734,7 +734,7 @@
             }
           },
           "404": {
-            "description": "Contract not found, has no WASM (SAC / pre-upload), or code no longer live",
+            "description": "Contract not found, has no WASM (SAC / pre-upload), or code neither indexed nor live",
             "content": {
               "application/json": {
                 "schema": {
@@ -2177,6 +2177,17 @@
                 "description": "Signing configuration, or `null` when we have never observed this\naccount's entry state.\n\n**`null` is NOT \"no extra signers\".** 25% of indexed accounts carry no\nrow, so a client that renders `null` as \"single signature\" is making a\nsecurity claim the data does not support. Render the unknown as\nunknown."
               }
             ]
+          },
+          "sponsorship": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AccountSponsorship",
+                "description": "Sponsored reserves (CAP-33), or `null` when the account has no entry\non the ledger — closed (`deleted`), or never an account (no\n`account_entry_state` row) — so it holds no reserves to count. Render\nnothing for `null`."
+              }
+            ]
           }
         }
       },
@@ -2268,6 +2279,25 @@
           "threshold_med": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "AccountSponsorship": {
+        "type": "object",
+        "description": "The CAP-33 counters the network keeps on the account itself, copied as\nstored. A reserve is the base reserve the network locks per ledger entry\n(2 for the account, 1 per sub-entry, 1 per claimant of a claimable\nbalance); a sponsor can pay it for someone else.",
+        "required": ["num_sponsoring", "num_sponsored"],
+        "properties": {
+          "num_sponsored": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reserves of this account paid by others.",
+            "minimum": 0
+          },
+          "num_sponsoring": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Reserves this account pays for other accounts and claimable balances.",
             "minimum": 0
           }
         }
@@ -2549,7 +2579,7 @@
       },
       "ChartDataPoint": {
         "type": "object",
-        "description": "One row from the chart endpoint. All money fields are **USD decimal\nstrings with exactly two decimals**, computed at read from on-chain\nquantities × the in-cluster price series (task 0199, ADR 0053):\n- `tvl` — \"TVL at close of bucket\": last priceable snapshot's\n  `reserve_a·price_a + reserve_b·price_b`. A leg with no candle in its\n  own bucket falls back to its most recent close within 48 h, so a\n  pool whose second leg has not traded today still reports; `null`\n  when either leg has no price within that window (untracked asset,\n  pre-listing history, or a provider-side gap such as the\n  2026-07-21..08-03 freeze).\n- `volume` — SUM over the bucket of per-ledger gross trade volume ×\n  the leg-A price at that ledger's time. `null` for no-swap buckets, for\n  buckets where a swap couldn't be priced (never a partial sum), and in\n  every bucket of a pool whose volume is not priced (three or four legs,\n  or a leg A with no known decimals).\n- `fee_revenue` — `volume × fee_bps / 10000`.",
+        "description": "One row from the chart endpoint. All money fields are **USD decimal\nstrings with exactly two decimals**, computed at read from on-chain\nquantities × the in-cluster price series (task 0199, ADR 0053):\n- `tvl` — \"TVL at close of bucket\": the bucket's last pool state,\n  Σ reserve·price over every leg, priced at that state's own hour or\n  day (`1w`: the day of the week's last change). A leg with no candle\n  then falls back to its most recent close within 48 h, so a pool whose\n  second leg has not traded today still reports; `null` when any leg\n  has no price within that window (untracked asset, pre-listing\n  history, or a provider-side gap such as the 2026-07-21..08-03 freeze)\n  or no known reserve.\n- `volume` — SUM over the bucket of per-ledger gross trade volume ×\n  the leg-A price at that ledger's time. `null` for no-swap buckets, for\n  buckets where a swap couldn't be priced (never a partial sum), and in\n  every bucket of a pool whose volume is not priced (three or four legs,\n  or a leg A with no known decimals).\n- `fee_revenue` — `volume × fee_bps / 10000`.",
         "required": ["bucket", "samples_in_bucket"],
         "properties": {
           "bucket": {

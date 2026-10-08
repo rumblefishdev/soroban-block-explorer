@@ -79,6 +79,7 @@ fn raw_registration_ledger_stages_the_exact_rows() {
         lp_positions: &[],
         contract_metadata_writes: &[],
         executable_ref_targets: &[],
+        contract_instances: &[],
         soroban_token_balances: &[],
         claimable_balances: &[],
         pool_family_writes: &writes,

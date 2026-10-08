@@ -629,6 +629,15 @@ correct (100% Soroban rows, 350/350 probed ABSENT on chain while 60/60 of their 
 balances probed PRESENT with matching amounts). Restricted to classic it measures zero and
 still cannot miss a live account, since every live account carries a native XLM row.
 
+**Sponsored reserves** (issue #454, task 0629) are two cells in the Summary card:
+`Sponsoring` (reserves this account pays for others) and `Sponsored by others`
+(reserves of this account paid by others), with their XLM at the 0.5 XLM base reserve.
+Both come from the API's `sponsorship` — the CAP-33 counters the ledger keeps on the
+`AccountEntry`, read from the same `account_entry_state` row as the signers. The API
+returns `null` for an address with no account entry — never an account (no row, as
+above) or closed (`deleted`: the row from before the merge is kept, and its counters
+describe reserves that no longer exist) — and the page then hides the row.
+
 ### 6.8 Assets (`/assets`)
 
 List of all known assets (native XLM, classic credit assets, SACs, and Soroban-native assets).

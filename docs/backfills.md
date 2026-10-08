@@ -280,9 +280,9 @@ The dividing line is **`EXCHANGE TABLES`**. A subcommand that builds a staging
 table and swaps it will **lose any live write** that lands between build and
 swap.
 
-| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify`, `wasm-code-backfill` |
+| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                                                                            |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify`, `wasm-code-backfill`, `contract-instance-backfill`, `contract-metadata-backfill` |
 
 **Grey zone:**
 
@@ -417,7 +417,14 @@ Gotchas, all recorded:
 **Subcommands:** `run`, `status`, `bootstrap`, `repair-tier1`,
 `contract-type-rebuild`, `balance-seed`, `nft-reclassify`,
 `soroban-pool-amounts`, `wasm-code-backfill` (program bytes for `wasm_programs.code`,
-read from RPC and checked against their hash). Most one-shot ops
+read from RPC and checked against their hash), `contract-instance-backfill`
+(each contract's instance entry for `contract_instances`, read from RPC and
+versioned by the entry's own last-modified ledger; run it only **after** the
+indexer that writes the table is deployed, or an instance changed in between
+is written by neither), `contract-metadata-backfill` (`decimals`, `name`,
+`symbol` of every token contract, read by running its own functions locally
+over the two tables above, into `soroban_contract_metadata`; run it after both
+fills). Most one-shot ops
 subcommands take `--dry-run`. No separate bins remain.
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),
@@ -482,9 +489,9 @@ hand-exported-TSV transport were removed in the 2026-08-20 review;
 the seed's dry-run IS the four-way comparison — a separate `snapshot-compare`
 carried the same decode and the same verdict behind its own counting shell.)
 
-| Subcommand                                      | What it does                                                                                                                                                                                                                                             | Writes                                                                                                                                                       |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, signers, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
+| Subcommand                                      | What it does                                                                                                                                                                                                                                                                       | Writes                                                                                                                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snapshot-seed [--artifacts <dir>] [--execute]` | build ALL corrections (missing holdings, closure stamps, ghost zeroing, entry state of every live account, dimension stubs); dry-run by default; always decodes the freshest checkpoint, writing into `<artifacts>/<checkpoint_ledger>/` (default root `.artifacts/snapshot-seed`) | `balances`, `claimable_balance_holdings`, `liquidity_pools`, `liquidity_pool_snapshots`, `account_entry_state`, `assets`, `accounts` — only with `--execute` |
 
 **The decision table.** Every one of our rows falls into exactly one verdict,
 and the verdict alone decides what (if anything) is written. Read the report's
@@ -505,22 +512,40 @@ buckets against this:
 | open             | live                      | differ, ours newer        | `divergent ours newer`        | nothing — the live parser saw more                          |
 | open             | live                      | differ, SAME ledger       | **`divergent SAME ledger`**   | nothing — defect signal                                     |
 
-**Signers are gated on version, not on a verdict.** `account_entry_state`
-gets a row only for a live account whose entry is newer than our newest row
-of it (task 0521) — the rule the classic-pool pass uses. The summary line
-reports new, changed and unchanged, and the three sum to the snapshot's live
-accounts. On a first seed nearly all are new; on any later pass nearly all
-are unchanged (0 written of 10,909,433 on 2026-09-02). **A later pass that
-writes millions again is the signal** that the live signers writer stopped
-stamping.
+**Entry state is written for every live account, and counted.**
+`account_entry_state` (signers, thresholds, flags, sponsorship counters) gets
+one row per live account in the snapshot, at the entry's own ledger, and the
+version rule decides the rest: where our row is at the same ledger the seed's
+row is the later insert and replaces it (ClickHouse keeps the most recently
+inserted row on a version tie — pinned by `rmt_version_tie_e2e`); where the
+live writer stamped a newer change, ours wins. ~10.9M rows per pass, identical
+where nothing changed. Task 0521 had narrowed the pass to accounts newer than
+our row; task 0629 went back to every account, because a column added with
+`ALTER … DEFAULT` reads its default on every row written before its writer
+went live, and only rewriting the current rows fills it.
+
+The summary line splits the rows by what each does to ours: new, changed,
+**same ledger with other counters**, same ledger identical, ours newer. The
+bold one is the repair — on the first pass after the sponsorship columns, the
+sponsored accounts written before them; ~0 on the next pass. A jump on a later
+pass means the live writer stopped stamping the counters. Only the counters
+are compared: signers at one ledger are not read (an audit, task 0503).
+
+**This is the one table where a same-ledger difference is adopted, not left
+alone** (contrast the defect signals below): a row from before a column holds
+that column's default, not a misreading, and the snapshot is the network's
+own value. Run the seed from a checkpoint taken after the writer of such a
+column is deployed, and keep the binary current: a `run --reindex` of an old
+range with a build older than the column writes the default back at the same
+version and wins as the later insert.
 
 **Version discipline:** a live fact versions on the entry's own
 `lastModifiedLedgerSeq`; an absence fact (closure, ghost) on the run's
 checkpoint ledger, meaning "true at or before". Never a synthetic stamp. The
 `≥ checkpoint` guard is deliberate, not an off-by-one: a checkpoint-versioned
 correction written against a row already AT that ledger would be a
-same-version ReplacingMergeTree tie, resolved arbitrarily — the exact
-nondeterminism this tool exists to remove.
+same-version ReplacingMergeTree tie, won by whichever row was inserted last
+rather than by the truth — the nondeterminism this tool exists to remove.
 
 The `missing` split is reported for BOTH populations — trustlines and native
 accounts — each with its own below/above-floor counts, 2M-ledger bands and
@@ -543,8 +568,9 @@ the closures under test are the seed's own previous output or the live
 writer's.
 
 **Same-version ties are superseded, with one known exception.** A re-parse can
-write two rows for one key at one ledger; ReplacingMergeTree then resolves them
-arbitrarily and so does the API's own `argMax`. The seed supersedes both sides
+write two rows for one key at one ledger; ReplacingMergeTree then keeps the
+last inserted, an order a parallel re-parse makes accidental, and the API's own
+`argMax` picks either. The seed supersedes both sides
 by writing at the checkpoint version, which is strictly higher. That works for
 every tie measured so far (1,238,583 keys, all merged accounts, all carrying
 `closed_at_ledger = 0` on both sides — they predate the column), because such a
@@ -740,7 +766,8 @@ row the seed zeroed.
 A re-parse of already-ingested ledgers with CHANGED writer code writes rows at
 the SAME ReplacingMergeTree versions the old code used. Where the new code
 emits different content, the table holds two rows at one version and the merge
-picks a winner **arbitrarily** — and `argMax` reads flip the same coin. This is
+keeps whichever was **inserted last** — an accident of worker timing, not a
+judgement — and `argMax` reads flip a coin. This is
 not hypothetical: the 2026-06-23 merge-tombstone fix plus a re-parse of
 54M–63.04M left **1,238,583** such keys in `balances`, every one a merged
 account randomly showing 0 or its stale pre-merge balance.

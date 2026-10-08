@@ -67,10 +67,10 @@ pub async fn fetch_pool_asset_ids(
         .bind(pool_id_hex)
         .fetch_all::<PoolLegsChRow>()
         .await?;
-    Ok(rows
-        .into_iter()
-        .next()
-        .map(|r| (decode_pool_kind(pool_id_hex, r.pool_kind), r.legs)))
+    let Some(r) = rows.into_iter().next() else {
+        return Ok(None);
+    };
+    Ok(Some((decode_pool_kind(pool_id_hex, r.pool_kind)?, r.legs)))
 }
 
 /// One raw leg from `pool_operation_amounts` — the table's own grain, read in

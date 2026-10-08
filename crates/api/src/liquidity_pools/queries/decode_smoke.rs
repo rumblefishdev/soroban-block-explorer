@@ -1,5 +1,5 @@
 use super::ResolvedPoolListParams;
-use super::get_pool_chart::ChartChRow;
+use super::get_pool_chart::ClassicBucketChRow;
 use super::*;
 
 /// Every leg's DISPLAYED code, upper-cased. Native renders as `XLM`, which
@@ -34,16 +34,16 @@ fn client() -> Option<clickhouse::Client> {
     Some(c)
 }
 
-/// `ChartChRow` reads money as `Nullable(Float64)` (task 0199 moved
-/// formatting to Rust so chart and detail share one wire shape). That is
-/// precisely the wire-type↔struct contract a pure-Rust test cannot check,
-/// so assert it against a real server — including the NULL arm, which is
-/// what an unpriced bucket returns.
+/// `ClassicBucketChRow` reads reserves as `Array(Nullable(Float64))` and money
+/// as `Nullable(Float64)`; formatting is Rust's (task 0199). That is the
+/// wire-type↔struct contract a pure-Rust test cannot check, so assert it
+/// against a real server — including the NULL arms, which an unknown reserve
+/// and an unpriced bucket return.
 ///
 /// Needs no schema, so any ClickHouse will do:
 /// `docker run -d --rm -p 8123:8123 -e CLICKHOUSE_PASSWORD=probe clickhouse/clickhouse-server:26.3`
 #[tokio::test]
-async fn chart_row_decodes_nullable_floats() {
+async fn chart_row_decodes_nullable_values() {
     let Some(ch) = client() else {
         eprintln!("CH_URL unset — skipping chart row decode smoke");
         return;
@@ -54,31 +54,34 @@ async fn chart_row_decodes_nullable_floats() {
     // visible (`Unknown expression identifier`).
     let rows = ch
         .query(
-            "SELECT bucket_ms, tvl, volume, samples_in_bucket FROM ( \
+            "SELECT bucket_ms, reserves, price_bucket_s, samples_in_bucket, volume FROM ( \
                  SELECT toInt64(1700000000000)     AS bucket_ms, \
-                        CAST(?, 'Nullable(Float64)')    AS tvl, \
-                        CAST(?, 'Nullable(Float64)')    AS volume, \
-                        toUInt64(7)                AS samples_in_bucket \
+                        [toNullable(toFloat64(25.31)), toNullable(toFloat64(2))] AS reserves, \
+                        toInt64(1699920000)        AS price_bucket_s, \
+                        toUInt64(7)                AS samples_in_bucket, \
+                        CAST(?, 'Nullable(Float64)')    AS volume \
                  UNION ALL \
                  SELECT toInt64(1700000086400000)  AS bucket_ms, \
-                        CAST(NULL, 'Nullable(Float64)') AS tvl, \
-                        CAST(NULL, 'Nullable(Float64)') AS volume, \
-                        toUInt64(0)                AS samples_in_bucket \
+                        [CAST(NULL, 'Nullable(Float64)'), toNullable(toFloat64(3))] AS reserves, \
+                        toInt64(1700006400)        AS price_bucket_s, \
+                        toUInt64(0)                AS samples_in_bucket, \
+                        CAST(NULL, 'Nullable(Float64)') AS volume \
              ) ORDER BY bucket_ms",
         )
-        .bind(25.31_f64)
         .bind(1.985_f64)
-        .fetch_all::<ChartChRow>()
+        .fetch_all::<ClassicBucketChRow>()
         .await
-        .expect("ChartChRow decodes Nullable(Float64) from a real CH");
+        .expect("ClassicBucketChRow decodes from a real CH");
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].tvl, Some(25.31));
+    assert_eq!(rows[0].reserves, vec![Some(25.31), Some(2.0)]);
+    assert_eq!(rows[0].price_bucket_s, 1_699_920_000);
     assert_eq!(rows[0].volume, Some(1.985));
     assert_eq!(rows[0].samples_in_bucket, 7);
-    // The unpriced bucket: NULL must survive as None, not decode as 0.0.
-    assert_eq!(rows[1].tvl, None);
+    // NULL must survive as None, not decode as 0.0.
+    assert_eq!(rows[1].reserves, vec![None, Some(3.0)]);
     assert_eq!(rows[1].volume, None);
+    assert_eq!(rows[1].bucket_ms, 1_700_000_086_400_000);
 }
 
 /// Every LP CH row struct must decode the rows a real CH emits.
@@ -162,14 +165,14 @@ async fn lp_ch_rows_decode() {
     .await
     .expect("usd-analytics rows decode");
 
-    // chart — `ChartChRow`, incl. the `samples_in_bucket` UInt64.
+    // chart — `ClassicBucketChRow`, `LegCloseChRow`.
     let to = chrono::Utc::now();
     let from = to - chrono::Duration::days(90);
-    fetch_pool_chart(&ch, &pool, &ctx.price, "1d", from, to)
+    fetch_pool_chart(&ch, &pool, &ctx, "1d", from, to)
         .await
         .expect("chart rows decode");
 
-    // soroban chart — `SorobanChartChRow`, on the pool with the newest
+    // soroban chart — `SorobanBucketChRow`, on the pool with the newest
     // reserve change, so the window has rows to decode.
     #[derive(clickhouse::Row, serde::Deserialize)]
     struct SorobanPoolRow {
@@ -191,7 +194,7 @@ async fn lp_ch_rows_decode() {
         .await
         .expect("soroban chart context decodes")
         .expect("soroban pool exists");
-    let points = fetch_soroban_pool_chart(
+    let points = fetch_pool_chart(
         &ch,
         &soroban.pool,
         &soroban_ctx,

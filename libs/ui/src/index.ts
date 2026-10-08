@@ -121,6 +121,7 @@ export {
   Footer,
   type FooterProps,
   type FooterNavItem,
+  PRICES_API_URL,
   PRIVACY_POLICY_URL,
   PageGridBackdrop,
 } from './layout/index.js';

@@ -168,19 +168,9 @@ pub async fn get_pool_chart(
         }
     };
 
-    // A soroban pool's reserves are its state rows, raw per leg; a classic
-    // pool's are its snapshots.
-    let fetched = match ctx.pool_kind {
-        domain::PoolKind::Classic => {
-            queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx.price, &interval, from, to)
-                .await
-        }
-        domain::PoolKind::Soroban => {
-            queries::fetch_soroban_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
-                .await
-        }
-    }
-    .map_err(|e| e.to_string());
+    let fetched = queries::fetch_pool_chart(&state.ch(), &pool_id_hex, &ctx, &interval, from, to)
+        .await
+        .map_err(|e| e.to_string());
     let data_points = match fetched {
         Ok(r) => r,
         Err(e) => {

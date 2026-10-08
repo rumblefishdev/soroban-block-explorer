@@ -32,4 +32,7 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 stellar-xdr = { workspace = true }
 hex = { workspace = true }
+contract-executor = { path = "../contract-executor" }
+# Reads binary `String` columns (`wasm_programs.code`, `contract_instances.data_xdr`).
+serde_bytes = "0.11"
 percent-encoding = "2"

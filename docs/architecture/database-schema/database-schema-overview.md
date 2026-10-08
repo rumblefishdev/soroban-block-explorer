@@ -149,6 +149,10 @@ Stellar archive, not stored in the DB):
 - `wasm_programs` — one row per WASM program keyed by `wasm_hash`: its bytes
   (`code`, so a contract's own functions can be executed,
   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)) and the interface read from them (`metadata`)
+- `contract_instances` — each contract's instance entry (executable and
+  instance storage) as the XDR of its `LedgerEntryData`, keyed by the 32-byte
+  contract id, latest per contract — what running a contract's functions reads
+  ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
 - `soroban_events_appearances` — contract-event appearance index (partitioned)
 - contract invocations — folded into `contract_activity` (task 0586)
 

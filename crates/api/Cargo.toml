@@ -50,6 +50,8 @@ stellar-strkey = "0.0.16"
 thiserror = { workspace = true }
 futures = "0.3"
 hex = { workspace = true }
+# Reads `wasm_programs.code` (a binary `String` column) into `Vec<u8>`.
+serde_bytes = "0.11"
 bytes = "1"
 moka = { version = "0.12", features = ["sync", "future"] }
 

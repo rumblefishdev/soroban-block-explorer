@@ -8,7 +8,7 @@
 //! deployed lists live in `infra/envs/<env>.json` as `sorobanRpcUrls`.
 
 /// Name of the env var that carries the pool.
-pub const RPC_URLS_ENV: &str = "SOROBAN_RPC_URLS";
+const RPC_URLS_ENV: &str = "SOROBAN_RPC_URLS";
 
 /// The pool from `SOROBAN_RPC_URLS`, or an error naming the variable when it
 /// is unset or holds no URL.
@@ -26,7 +26,7 @@ fn parse_rpc_urls(raw: Option<&str>) -> Result<Vec<String>, String> {
         .collect();
     if urls.is_empty() {
         return Err(format!(
-            "{RPC_URLS_ENV} is not set: give the comma-separated Soroban RPC \
+            "{RPC_URLS_ENV} is unset or empty: give the comma-separated Soroban RPC \
              endpoints of the network this program serves (the deployed lists \
              are `sorobanRpcUrls` in infra/envs/<env>.json)"
         ));

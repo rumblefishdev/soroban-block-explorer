@@ -290,7 +290,13 @@ entities:
   rejected in 0283). The classification cache is evicted for upgraded
   `contract_id`s so the new verdict takes effect.
 - contract token metadata → `soroban_contract_metadata` side table (ClickHouse,
-  task 0297). `name` / `symbol` / `decimals` are read from the contract instance
+  task 0297). Being replaced by running the token's own `decimals` / `name` /
+  `symbol` functions locally (`crates/contract-executor`, the network's own
+  `soroban-env-host`, over `wasm_programs.code` + `contract_instances`;
+  [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)):
+  `backfill-runner contract-metadata-backfill` writes every token this way;
+  the indexer still uses the storage read below until it runs the functions
+  live (task 0620). `name` / `symbol` / `decimals` are read from the contract instance
   entry's metadata struct (`{decimal?, name, symbol}`) via
   `token_metadata::extract_token_metadata`, collected by
   `state::extract_contract_metadata_writes` on `created` + `updated` instance
@@ -309,6 +315,9 @@ entities:
   by wasm_hash: the program bytes and the SEP-48-derived interface JSON,
   empty when the program has no `contractspecv0` section
   ([ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
+- contract instance (created, updated or restored) → `contract_instances` row:
+  the entry's `LedgerEntryData` re-encoded as XDR, not decoded, so the
+  contract can be run on exactly what the network stores
 - account state → `accounts` row + `account_balances_current` entries per
   trustline / native (balances are typed `NUMERIC(28,7)` per-asset rows, not a
   JSONB blob on `accounts`)

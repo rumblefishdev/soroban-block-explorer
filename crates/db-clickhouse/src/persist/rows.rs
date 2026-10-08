@@ -212,6 +212,17 @@ pub struct ContractExecutableRefRow {
     pub ledger: i64,
 }
 
+/// `contract_instances` — a contract's instance entry as the XDR of its
+/// `LedgerEntryData`, for running the contract's own functions (task 0620).
+/// RMT(`ledger`); one row per `contract`.
+#[derive(Debug, Clone, Row, Serialize, Deserialize)]
+pub struct ContractInstanceRow {
+    pub contract: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    pub data_xdr: Vec<u8>,
+    pub ledger: i64,
+}
+
 /// `soroban_contract_metadata` — on-chain Soroban token metadata
 /// (name/symbol/decimals) from the instance-storage `Symbol("METADATA")`
 /// struct. RMT(version); `version` = observed ledger (latest wins). Per
@@ -310,8 +321,8 @@ pub struct LiquidityPoolRow {
     pub asset_b_issuer_id: i64,
     pub fee_bps: i32,
     pub last_updated_ledger: i64,
-    /// 0 = classic (pool_id: CAP-38 hash), 1 = soroban contract (pool_id:
-    /// the 32-byte payload of the C… address). Registry columns below are
+    /// `domain::PoolKind as u8`: 0 = classic (pool_id: CAP-38 hash), 1 =
+    /// soroban contract (pool_id: the 32-byte payload of the C… address). Registry columns below are
     /// meaningful only for kind 1; classic writers set the defaults.
     pub pool_kind: u8,
     /// One surrogate per leg, in a PER-KIND id space (`pool_kind` says

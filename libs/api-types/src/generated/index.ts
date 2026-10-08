@@ -38,6 +38,7 @@ export type {
   AccountListItem,
   AccountSigner,
   AccountSigning,
+  AccountSponsorship,
   AccountTransactionItem,
   AssetDetailResponse,
   AssetItem,

@@ -126,7 +126,11 @@ as "process this object":
   only when it stored new ledgers itself (the chain had died), and a chain
   message whose ledger another chain already stored is dropped, so two chains
   merge. About one wake per ledger; per wake one extra ClickHouse read, a
-  primary-key lookup of the newest close time. On mainnet the body stays
+  primary-key lookup of the newest close time. Lambda's recursive-loop
+  detection would drop every 17th hop of a chain, so it is switched off for
+  this indexer only (`recursiveLoop`, `compute-stack.ts`); the alarm
+  `<env>-indexer-runaway-wakeups` (over 400 wake-up messages sent per 15
+  minutes, twice in a row) stands in for it. On mainnet the body stays
   ignored. An empty database reading the lake starts at the network's first
   closed ledger (2), so testnet rebuilds itself after a reset; an empty
   database reading our own bucket (mainnet) waits for a seeding backfill.
@@ -363,6 +367,7 @@ schema on Hetzner. That write includes both:
 - derived explorer-facing state (`accounts`, `soroban_contracts`,
   `wasm_programs` (each program's bytes and interface,
   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)),
+  `contract_instances` (each contract's instance entry, whole),
   `assets`, `nfts`, `nfts_pending`, the
   ownership changes located by each change's source event
   `nft_ownership_changes{,_pending}` (task 0424), `liquidity_pools`,

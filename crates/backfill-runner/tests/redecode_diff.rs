@@ -186,6 +186,7 @@ fn stage_ledger(cache: &Path, seq: u32) -> Vec<StagedLedger> {
                 lp_positions: &parsed.lp_positions,
                 contract_metadata_writes: &parsed.contract_metadata_writes,
                 executable_ref_targets: &parsed.executable_ref_targets,
+                contract_instances: &parsed.contract_instances,
                 soroban_token_balances: &parsed.soroban_token_balances,
                 claimable_balances: &parsed.claimable_balances,
                 pool_family_writes: &parsed.pool_family_writes,

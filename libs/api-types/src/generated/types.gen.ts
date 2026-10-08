@@ -152,6 +152,7 @@ export type AccountDetailResponse = {
   last_seen_ledger: number;
   sequence_number: number;
   signing?: null | AccountSigning;
+  sponsorship?: null | AccountSponsorship;
 };
 
 /**
@@ -220,6 +221,23 @@ export type AccountSigning = {
   threshold_high: number;
   threshold_low: number;
   threshold_med: number;
+};
+
+/**
+ * The CAP-33 counters the network keeps on the account itself, copied as
+ * stored. A reserve is the base reserve the network locks per ledger entry
+ * (2 for the account, 1 per sub-entry, 1 per claimant of a claimable
+ * balance); a sponsor can pay it for someone else.
+ */
+export type AccountSponsorship = {
+  /**
+   * Reserves of this account paid by others.
+   */
+  num_sponsored: number;
+  /**
+   * Reserves this account pays for other accounts and claimable balances.
+   */
+  num_sponsoring: number;
 };
 
 /**
@@ -489,13 +507,14 @@ export type AssetTransactionItem = {
  * One row from the chart endpoint. All money fields are **USD decimal
  * strings with exactly two decimals**, computed at read from on-chain
  * quantities × the in-cluster price series (task 0199, ADR 0053):
- * - `tvl` — "TVL at close of bucket": last priceable snapshot's
- * `reserve_a·price_a + reserve_b·price_b`. A leg with no candle in its
- * own bucket falls back to its most recent close within 48 h, so a
- * pool whose second leg has not traded today still reports; `null`
- * when either leg has no price within that window (untracked asset,
- * pre-listing history, or a provider-side gap such as the
- * 2026-07-21..08-03 freeze).
+ * - `tvl` — "TVL at close of bucket": the bucket's last pool state,
+ * Σ reserve·price over every leg, priced at that state's own hour or
+ * day (`1w`: the day of the week's last change). A leg with no candle
+ * then falls back to its most recent close within 48 h, so a pool whose
+ * second leg has not traded today still reports; `null` when any leg
+ * has no price within that window (untracked asset, pre-listing
+ * history, or a provider-side gap such as the 2026-07-21..08-03 freeze)
+ * or no known reserve.
  * - `volume` — SUM over the bucket of per-ledger gross trade volume ×
  * the leg-A price at that ledger's time. `null` for no-swap buckets, for
  * buckets where a swap couldn't be priced (never a partial sum), and in
@@ -3095,7 +3114,7 @@ export type GetDecompiledErrors = {
    */
   400: ErrorEnvelope;
   /**
-   * Contract not found, has no WASM (SAC / pre-upload), or code no longer live
+   * Contract not found, has no WASM (SAC / pre-upload), or code neither indexed nor live
    */
   404: ErrorEnvelope;
   /**

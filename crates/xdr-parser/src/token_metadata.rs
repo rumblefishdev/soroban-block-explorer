@@ -14,8 +14,8 @@
 //! entry the older name-write path looked for (`state.rs::is_symbol_name_key`),
 //! which real tokens do not write — hence `soroban_contracts.name` was a false
 //! zero. The instance value reaches this module via `cd.val` (an
-//! `ScVal::ContractInstance`) in `ledger_entry_changes.rs`; `scval_to_typed_json`
-//! drops `inst.storage`, so the struct must be pulled from the raw `ScVal`.
+//! `ScVal::ContractInstance`) in `ledger_entry_changes.rs`; the struct is read
+//! from the raw `ScVal`, not from its JSON rendering.
 //!
 //! OpenZeppelin **NFTs** use the same instance-storage mechanism under a
 //! DIFFERENT key: the `NFTStorageKey::Metadata` enum variant serializes as
