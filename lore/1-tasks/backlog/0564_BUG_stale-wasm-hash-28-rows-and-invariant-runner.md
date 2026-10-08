@@ -66,3 +66,9 @@ landing, so nothing repaired or reported it.
 
 - Reclassification on upgrade and the pool registry that still lists an upgraded-away pool — task 0325.
 - The RMT whole-row clobber class — task 0316.
+
+## 2026-10-08 — invariant re-run
+
+The 0320 invariant (`G-invariant-wasm-hash-current.sql`) reads **0** on
+production. The repair criterion is met; the scheduled runner is what
+remains.

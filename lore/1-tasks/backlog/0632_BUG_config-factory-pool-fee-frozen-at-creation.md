@@ -74,3 +74,14 @@ rewritten to another shape (ledger 63,767,534).
 - [ ] A `CONFIG` rewrite after deploy updates the stored fee without a manual step
 - [ ] The no-longer-a-pool case has a recorded outcome
 - [ ] **Docs updated** — `docs/architecture/**` where pool fees are described
+
+## 2026-10-08 — why running the pool's own functions does not fix it
+
+The contract executor (task 0620) is given a contract's instance and code
+only. A config-factory pool keeps nothing in its instance: the newest stored
+instance of `C2D85230…B16F` decodes to 0 storage keys, so `CONFIG` and the
+reserves are persistent entries, and `query_config` would answer "needs
+contract data" (task 0633). The fix stays a re-read of `CONFIG` whenever a
+ledger writes that persistent entry; the write itself is in the ledger's
+changes, which is also when the current metadata trigger (an instance
+change) would never fire.
