@@ -183,9 +183,9 @@ pub async fn fetch_list(
     } else {
         ""
     };
-    // Filter must match the SERVED value: coalesce(ledger METADATA name,
-    // enrichment collection), ledger-precedence. Branch 1 — contract's latest
-    // METADATA name = ?. Branch 2 — enrichment collection = ?, but only for
+    // Filter must match the SERVED value: coalesce(ledger name, enrichment
+    // collection), ledger-precedence. Branch 1 — contract's latest ledger
+    // name (`soroban_contract_metadata`) = ?. Branch 2 — enrichment collection = ?, but only for
     // contracts with NO ledger name (else coalesce would serve the ledger name,
     // not the enrichment one). Keeps filter[collection] consistent with the
     // collection_name the list displays.

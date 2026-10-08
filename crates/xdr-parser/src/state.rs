@@ -11,10 +11,9 @@ use tracing::{instrument, warn};
 
 use crate::classification::{ContractClassification, classify_contract_from_wasm_spec};
 use crate::types::{
-    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedContractMetadata,
-    ExtractedLedgerEntryChange, ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot,
-    ExtractedLpPosition, ExtractedNft, ExtractedNftEvent, ExtractedSorobanBalance,
-    ExtractedWasmProgram, NftEvent, SacAssetIdentity,
+    ExtractedAccountState, ExtractedAsset, ExtractedContractDeployment, ExtractedLedgerEntryChange,
+    ExtractedLiquidityPool, ExtractedLiquidityPoolSnapshot, ExtractedLpPosition, ExtractedNft,
+    ExtractedNftEvent, ExtractedSorobanBalance, ExtractedWasmProgram, NftEvent, SacAssetIdentity,
 };
 use domain::{AssetFamily, ContractType, NftEventType};
 
@@ -119,60 +118,7 @@ pub fn extract_contract_deployments(
     deployments
 }
 
-/// Extract token-metadata writes from contract-instance `created` / `updated`
-/// changes that carry a `Symbol("METADATA")` struct in instance storage.
-///
-/// Reads the typed `change.token_metadata` (populated in `ledger_entry_changes`,
-/// chain-verified location — task 0297) rather than re-decoding. Emits one
-/// [`ExtractedContractMetadata`] per qualifying change, for the
-/// `soroban_contract_metadata` side table (task 0297).
-///
-/// - `created` + `updated` + `restored` carry the current value and are kept;
-///   `state` (pre-image) and `removed` are ignored. `restored` matters because
-///   an instance restored from archival is the first time live ingestion may
-///   see a contract's METADATA — dropping it would leave a cold-start hole.
-/// - **SACs are skipped at extraction**: `entry_token_metadata` already returns
-///   `None` for SAC instances (their name/symbol/decimals derive from the asset
-///   identity), so a SAC change simply has no `token_metadata` to emit here.
-pub fn extract_contract_metadata_writes(
-    changes: &[ExtractedLedgerEntryChange],
-) -> Vec<ExtractedContractMetadata> {
-    let mut out = Vec::new();
-    for change in changes {
-        // Cheap structural guards first, so we never clone metadata for a
-        // change we then drop.
-        if change.entry_type != "contract_data" {
-            continue;
-        }
-        if !matches!(
-            change.change_type.as_str(),
-            "created" | "updated" | "restored"
-        ) {
-            continue;
-        }
-        if !is_contract_instance_key(&change.key) {
-            continue;
-        }
-        let Some(contract_id) = extract_contract_id_from_key(&change.key) else {
-            continue;
-        };
-        // `None` for SACs (skipped at extraction) and for instances without a
-        // METADATA struct — both correctly drop out here.
-        let Some(metadata) = change.token_metadata.clone() else {
-            continue;
-        };
-        out.push(ExtractedContractMetadata {
-            contract_id,
-            metadata,
-            ledger: change.ledger_sequence,
-        });
-    }
-    out
-}
-
-/// Pull the `contract` StrKey from a ContractData ledger key. Used by
-/// `extract_contract_metadata_writes` to dispatch instance-storage METADATA
-/// writes to the right contract row.
+/// Pull the `contract` StrKey from a ContractData ledger key.
 fn extract_contract_id_from_key(key: &Value) -> Option<String> {
     key.get("contract")
         .and_then(|v| v.as_str())

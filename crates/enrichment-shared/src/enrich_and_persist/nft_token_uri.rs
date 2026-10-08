@@ -110,12 +110,12 @@ pub async fn enrich_nft_token_uri(
         }
     };
 
-    // task 0340 (parser-first redirect): the OZ NFT collection name is now
-    // captured from the ledger into `soroban_contract_metadata` (Fix A / #330)
-    // and served via COALESCE over this column (Fix B / #331). The `name()` RPC
-    // here is a FALLBACK for contracts the ledger can't reach — hand-rolled ones
-    // with empty instance storage but a WASM-baked `name()` (e.g. the 0308
-    // custom-ABI family). Its write lands in `nft_enrichment.collection_name`,
+    // The NFT collection name is written by the indexer, which runs the
+    // contract's own `name()` locally into `soroban_contract_metadata` (task
+    // 0620), and served via COALESCE over this column (Fix B / #331). The
+    // `name()` RPC here is a FALLBACK for contracts the indexer does not answer
+    // — a program declaring `name()` without `symbol()`, or a `name()` that
+    // reads persistent data. Its write lands in `nft_enrichment.collection_name`,
     // which the read path COALESCEs UNDER the ledger name, so for a ledger-
     // covered contract this write is simply ignored at read time (harmless;
     // cached one RPC per contract; the worker runs at conc=0 regardless). No

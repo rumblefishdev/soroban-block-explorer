@@ -359,18 +359,19 @@ CREATE TABLE IF NOT EXISTS contract_instances (
 ENGINE = ReplacingMergeTree(ledger)
 ORDER BY (contract);
 
--- On-chain Soroban token metadata (name/symbol/decimals) read from the
--- contract's instance-storage `Symbol("METADATA")` struct. Per-contract,
+-- On-chain Soroban token and NFT metadata (name/symbol/decimals): what the
+-- contract's own functions return, run locally (task 0620). Per-contract,
 -- INDEXER-derived (NOT the off-chain enrichment family). A SEPARATE table, not
 -- columns on `soroban_contracts`, because: (1) RMT whole-row replace +
 -- soroban_contracts' many writers (deploy / contract_type_rebuild EXCHANGE /
 -- stub INSERTs / db-merge) would clobber in-row metadata to NULL (the G5 bug
 -- class); (2) deploy identity (wasm_hash/deployer, from the deploy tx, NOT in
 -- the instance entry) and metadata live on DIFFERENT update clocks, which one
--- RMT version column cannot track. Written on contract-instance `created` /
--- `updated` / `restored` changes: for a token (program declares `decimals`)
--- from its own `decimals` / `name` / `symbol` functions run locally (task
--- 0620), otherwise from the instance's `METADATA` struct; SACs skipped (name=CODE:ISSUER /
+-- RMT version column cannot track. Written when a contract's instance changes
+-- and its program declares `decimals` (SEP-41 token) or `name` and `symbol`
+-- (SEP-50 NFT): the declared functions among the three, run locally. A
+-- contract whose run fails or needs persistent data (task 0633) gets no write
+-- and keeps its row. SACs skipped (name=CODE:ISSUER /
 -- symbol=code / decimals=7 already derivable from SAC identity). `version` =
 -- observed ledger (deterministic/replay-safe; latest wins). `decimals` is
 -- rendered as 7 at read for classic/SAC.

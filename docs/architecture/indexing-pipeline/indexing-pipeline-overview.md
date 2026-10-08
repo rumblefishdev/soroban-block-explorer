@@ -252,15 +252,19 @@ duplicate `ledgers` rows for those sequences (see §5.3 note).
    for `asset_transfers`; a token event the decoder rejects is logged as an
    `error!` for the ledger (per-event detail on the
    `xdr_parser::asset_transfers` target) and never becomes a row
-3. for each ledger in the batch: first, for every token whose instance
-   changed in the ledger (its program declares `decimals`), run `decimals` /
-   `name` / `symbol` locally (`indexer::token_metadata_by_functions::apply`,
+3. for each ledger in the batch: first, for every contract whose instance
+   changed in the ledger and whose program declares `decimals` (SEP-41
+   token) or `name` and `symbol` (SEP-50 NFT), run the declared functions
+   among `decimals` / `name` / `symbol` locally
+   (`indexer::token_metadata_by_functions::contract_metadata_writes`,
    `crates/contract-executor`) over this ledger's instances and programs plus
-   `wasm_programs` / `contract_instances`; an answer replaces the storage-key
-   metadata write for that contract. ClickHouse reads: one per ledger for the
-   changed programs' interfaces, then per token its program's bytes and any
-   other contract's instance a run asks for; a read error costs only this
-   ledger's function values (task 0620,
+   `wasm_programs` / `contract_instances`. These are the only
+   `soroban_contract_metadata` writes; the parser reads no metadata. A
+   contract whose run fails or needs persistent data writes nothing and keeps
+   its row. ClickHouse reads: one per ledger for the changed programs'
+   interfaces, then per contract its program's bytes and any other contract's
+   instance a run asks for; a read error fails the ledger, as a write error
+   does (task 0620,
    [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)).
    `backfill-runner run` does the same. Then call
    `db_clickhouse::persist::persist_ledger_clickhouse(&client, &parsed.*)`

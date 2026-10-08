@@ -67,11 +67,11 @@ pub struct AccountBalance {
     pub contract_id: Option<String>,
     /// Asset display `name`, from two disjoint sources by asset type: classic /
     /// native → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic
-    /// assets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. "USDC-EURC
+    /// assets carry one); Soroban (type-3) → the token's own `name()` (e.g. "USDC-EURC
     /// Soroswap LP Token", 100% coverage). Distinct from the `symbol` ticker.
     /// `null` when neither source has a name.
     pub name: Option<String>,
-    /// On-chain token `symbol` (type-3, from `METADATA`, e.g. "SMOL") — the short
+    /// On-chain token `symbol` (type-3, its own `symbol()`, e.g. "SMOL") — the short
     /// ticker. `null` for native / classic (they carry `asset_code`).
     pub symbol: Option<String>,
     /// RAW integer balance as a string (`Int128`) — scale by `decimals` (task 0331

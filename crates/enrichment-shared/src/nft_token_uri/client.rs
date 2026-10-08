@@ -50,10 +50,9 @@ pub(super) const DEFAULT_IPFS_GATEWAYS: &[&str] = &[
 const TOKEN_URI_FN: &str = "token_uri";
 
 /// SEP-50 contract-level `name()` — the collection name (task 0340). Used as a
-/// FALLBACK only: the OZ NFT name lives in instance storage and is captured by
-/// the parser into `soroban_contract_metadata` (#330) + served via COALESCE
-/// (#331). `name()` covers the ledger-uncovered remainder — hand-rolled
-/// contracts with empty instance storage but a WASM-baked `name()`.
+/// FALLBACK only: the indexer runs `name()` locally into
+/// `soroban_contract_metadata` (task 0620) + served via COALESCE (#331). This
+/// call covers the remainder the indexer does not answer.
 const NAME_FN: &str = "name";
 
 /// Char cap for a fetched collection name — a generous bound that only

@@ -155,8 +155,8 @@ fn asset_type_name(asset_type: i16) -> Option<String> {
 // name}` placeholders (dropped, task 0231 step 8). Per Option C the name has a
 // single owner per `asset_type`, composed disjointly at read:
 //   classic/SAC (1,2) → `asset_enrichment.name`
-//   soroban (3)       → `soroban_contract_metadata.name` (on-chain instance
-//                       `METADATA` struct; the legacy `soroban_contracts.name`
+//   soroban (3)       → `soroban_contract_metadata.name` (the token's own
+//                       `name()`; the legacy `soroban_contracts.name`
 //                       column is dead — no writer since task 0297)
 //   native (0)        → the `"Stellar Lumens"` literal
 // `asset_enrichment` is `ReplacingMergeTree(version)`; the `argMax(_, version)`

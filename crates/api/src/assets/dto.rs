@@ -72,7 +72,7 @@ pub struct AssetItem {
     /// (render the contract link non-clickable).
     pub sac_deployed: Option<bool>,
     pub name: Option<String>,
-    /// On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic
+    /// On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic
     /// (use `asset_code`) and native.
     pub symbol: Option<String>,
     /// Display decimals — 7 for native and classic (Stellar precision), a

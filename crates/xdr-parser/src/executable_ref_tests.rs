@@ -24,7 +24,6 @@ fn change(change_type: &str, key: Value, val: Value) -> ExtractedLedgerEntryChan
         operation_index: Some(0),
         ledger_sequence: 64_400_000,
         created_at: 1_789_000_000,
-        token_metadata: None,
     }
 }
 

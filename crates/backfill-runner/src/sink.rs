@@ -170,12 +170,23 @@ pub struct PartitionWriterHandle {
 impl PartitionWriterHandle {
     pub async fn write_ledger(&mut self, meta: &LedgerCloseMeta) -> Result<(), BackfillError> {
         let writes_balances = self.only.as_ref().is_none_or(|t| t.contains("balances"));
+        let writes_metadata = self
+            .only
+            .as_ref()
+            .is_none_or(|t| t.contains("soroban_contract_metadata"));
         let pw = &mut self.writer;
         {
-            let mut parsed = indexer::handler::process::parse_ledger(meta);
+            let parsed = indexer::handler::process::parse_ledger(meta);
             // Task 0620: the same function-read metadata the live indexer
-            // writes, so a re-run never brings back the storage-key value.
-            indexer::token_metadata_by_functions::apply(pw.client(), &mut parsed).await;
+            // writes. A program uploaded earlier in this partition is not in
+            // `wasm_programs` yet, so its contracts get no write here;
+            // `contract-metadata-backfill` fills them afterwards.
+            let metadata_writes = if writes_metadata {
+                indexer::token_metadata_by_functions::contract_metadata_writes(pw.client(), &parsed)
+                    .await?
+            } else {
+                Vec::new()
+            };
             // ADR 0051 — contract-held SAC balances and soroban pool legs key
             // onto the wrapped classic/native asset through this map; the
             // balances only matter when this write persists `balances`.
@@ -221,7 +232,7 @@ impl PartitionWriterHandle {
                     nfts: &parsed.nfts,
                     nft_events: &parsed.nft_events,
                     lp_positions: &parsed.lp_positions,
-                    contract_metadata_writes: &parsed.contract_metadata_writes,
+                    contract_metadata_writes: &metadata_writes,
                     executable_ref_targets: &parsed.executable_ref_targets,
                     contract_instances: &parsed.contract_instances,
                     // Task 0331 — backfill reprocesses ledger ContractData

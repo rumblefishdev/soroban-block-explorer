@@ -42,10 +42,6 @@ pub struct ParseOutput {
     pub nfts: Vec<ExtractedNft>,
     pub nft_events: Vec<ExtractedNftEvent>,
     pub lp_positions: Vec<ExtractedLpPosition>,
-    /// On-chain Soroban token metadata (name/symbol/decimals) from
-    /// instance-storage `METADATA`, for the `soroban_contract_metadata` side
-    /// table (task 0297). SACs already excluded by the producer.
-    pub contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata>,
     /// CAP-85 (task 0548) — `(owner, tag) → wasm_hash` mappings written by
     /// owner contracts this batch. Empty before protocol 28.
     pub executable_ref_targets: Vec<xdr_parser::executable_ref::ExtractedExecutableRefTarget>,
@@ -309,7 +305,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         })
         .collect();
 
-    let mut all_contract_metadata_writes: Vec<xdr_parser::ExtractedContractMetadata> = Vec::new();
     let mut all_executable_ref_targets: Vec<
         xdr_parser::executable_ref::ExtractedExecutableRefTarget,
     > = Vec::new();
@@ -346,7 +341,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         let lp_pos = xdr_parser::extract_lp_positions(changes);
         all_lp_positions.extend(lp_pos);
 
-        all_contract_metadata_writes.extend(xdr_parser::extract_contract_metadata_writes(changes));
         all_executable_ref_targets.extend(
             xdr_parser::executable_ref::extract_executable_ref_targets(changes),
         );
@@ -415,7 +409,6 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         nfts: all_nfts,
         nft_events,
         lp_positions: all_lp_positions,
-        contract_metadata_writes: all_contract_metadata_writes,
         executable_ref_targets: all_executable_ref_targets,
         contract_instances: all_contract_instances,
         soroban_token_balances: all_soroban_token_balances,

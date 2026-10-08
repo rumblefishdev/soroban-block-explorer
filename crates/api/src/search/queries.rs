@@ -39,8 +39,8 @@
 //!   with metadata NULL; task 0231). A `nfts.name` predicate would
 //!   silently match nothing. We collapse the enrichment with
 //!   `argMax(_, version)` (never `FINAL`) exactly like [`crate::nfts::queries`].
-//! - **Contract name** lives in `soroban_contract_metadata` (on-chain METADATA
-//!   struct), NOT the dead `soroban_contracts.name` (no writer since task 0297).
+//! - **Contract name** lives in `soroban_contract_metadata` (the contract's own
+//!   `name()`), NOT the dead `soroban_contracts.name` (no writer since task 0297).
 //!   Contract free-text therefore matches Soroban-native tokens by their
 //!   on-chain name; SACs are excluded from that table by design.
 //! - **Asset issuer / contract StrKey** are resolved without a full-table hash

@@ -485,11 +485,10 @@ pub fn build_wasm_upgrade_rows(
     by_contract.into_values().collect()
 }
 
-/// Map parser-extracted token-metadata writes to `soroban_contract_metadata`
-/// rows (task 0297). Called inside [`prepare_with_sac_overrides`] from the
-/// `StageInputs.contract_metadata_writes` slice. SAC filtering already happened
-/// in the producer (`xdr_parser::extract_contract_metadata_writes`); `version` =
-/// observed ledger.
+/// Map the metadata writes (`indexer::token_metadata_by_functions`, task 0620)
+/// to `soroban_contract_metadata` rows. Called inside
+/// [`prepare_with_sac_overrides`] from the `StageInputs.contract_metadata_writes`
+/// slice; `version` = the ledger the functions ran at.
 pub fn build_metadata_rows(
     writes: &[ExtractedContractMetadata],
 ) -> Vec<SorobanContractMetadataRow> {

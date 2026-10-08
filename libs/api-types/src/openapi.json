@@ -2136,7 +2136,7 @@
           },
           "name": {
             "type": ["string", "null"],
-            "description": "Asset display `name`, from two disjoint sources by asset type: classic /\nnative → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic\nassets carry one); Soroban (type-3) → on-chain `METADATA` (e.g. \"USDC-EURC\nSoroswap LP Token\", 100% coverage). Distinct from the `symbol` ticker.\n`null` when neither source has a name."
+            "description": "Asset display `name`, from two disjoint sources by asset type: classic /\nnative → off-chain SEP-1 enrichment (`asset_enrichment`, only ~3% of classic\nassets carry one); Soroban (type-3) → the token's own `name()` (e.g. \"USDC-EURC\nSoroswap LP Token\", 100% coverage). Distinct from the `symbol` ticker.\n`null` when neither source has a name."
           },
           "sac_deployed": {
             "type": "boolean",
@@ -2144,7 +2144,7 @@
           },
           "symbol": {
             "type": ["string", "null"],
-            "description": "On-chain token `symbol` (type-3, from `METADATA`, e.g. \"SMOL\") — the short\nticker. `null` for native / classic (they carry `asset_code`)."
+            "description": "On-chain token `symbol` (type-3, its own `symbol()`, e.g. \"SMOL\") — the short\nticker. `null` for native / classic (they carry `asset_code`)."
           },
           "type": {
             "type": "integer",
@@ -2537,7 +2537,7 @@
               },
               "symbol": {
                 "type": ["string", "null"],
-                "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
+                "description": "On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic\n(use `asset_code`) and native."
               },
               "total_supply": {
                 "type": ["string", "null"],
@@ -2623,7 +2623,7 @@
           },
           "symbol": {
             "type": ["string", "null"],
-            "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
+            "description": "On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic\n(use `asset_code`) and native."
           },
           "total_supply": {
             "type": ["string", "null"],
@@ -3958,7 +3958,7 @@
                 },
                 "symbol": {
                   "type": ["string", "null"],
-                  "description": "On-chain SEP-41 token symbol (Soroban `METADATA`). `null` for classic\n(use `asset_code`) and native."
+                  "description": "On-chain SEP-41 token symbol (the token's own `symbol()`). `null` for classic\n(use `asset_code`) and native."
                 },
                 "total_supply": {
                   "type": ["string", "null"],
