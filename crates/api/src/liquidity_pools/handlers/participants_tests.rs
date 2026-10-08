@@ -35,6 +35,11 @@ fn app(ch: clickhouse::Client) -> axum::Router {
             "http://unused".to_owned(),
         ])
         .expect("build wasm_code fetcher"),
+        account_sponsors:
+            crate::runtime_enrichment::account_sponsors::AccountSponsorsFetcher::with_rpc_urls(
+                vec!["http://unused".to_owned()],
+            )
+            .expect("build account_sponsors fetcher"),
     };
     let (router, _spec) = OpenApiRouter::new()
         .nest("/v1", crate::liquidity_pools::router())

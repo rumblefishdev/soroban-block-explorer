@@ -638,6 +638,17 @@ returns `null` for an address with no account entry — never an account (no row
 above) or closed (`deleted`: the row from before the merge is kept, and its counters
 describe reserves that no longer exist) — and the page then hides the row.
 
+**Sponsored reserves card** (task 0629, stage 2): for an account with sponsored reserves,
+a card after Signers lists which of its entries another account pays for — the account's
+base reserve, each sponsored trustline and signer — in one folding group per sponsor (header: the sponsor and its total; a lone sponsor opens folded out, several start folded), with the number of sponsors in the card header; when the chain's
+`num_sponsored` is larger than what the list shows (offers, data entries, pool-share
+trustlines — none of which are listed), a line
+under the list says how many reserves are not named. It comes from `GET /v1/accounts/{id}/sponsorship`, which the API answers live
+from Soroban RPC (`getLedgerEntries`, each entry's `sponsoring_id`) with the account's
+open classic trustlines from `balances` as keys (calls of 200 keys, at most six: the protocol caps an account at 1,000 sub-entries;
+20 s wall-clock cap). The card loads after the page with the shared skeleton and error state; a group longer
+than `PAGE_SIZE` pages inside itself.
+
 ### 6.8 Assets (`/assets`)
 
 List of all known assets (native XLM, classic credit assets, SACs, and Soroban-native assets).

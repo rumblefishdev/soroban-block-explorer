@@ -40,6 +40,11 @@ fn test_app_with(config: &AppConfig) -> Router {
             "http://unused".to_owned(),
         ])
         .expect("build wasm_code fetcher"),
+        account_sponsors:
+            runtime_enrichment::account_sponsors::AccountSponsorsFetcher::with_rpc_urls(vec![
+                "http://unused".to_owned(),
+            ])
+            .expect("build account_sponsors fetcher"),
     };
     app(config, AppState::for_tests(ch, runtime_enrichment))
 }

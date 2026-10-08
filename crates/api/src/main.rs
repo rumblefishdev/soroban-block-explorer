@@ -201,6 +201,8 @@ async fn main() {
             .unwrap_or_else(|e| panic!("failed to build NFT token_uri HTTP client: {e}")),
         wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()
             .unwrap_or_else(|e| panic!("failed to build wasm-code RPC client: {e}")),
+        account_sponsors: runtime_enrichment::account_sponsors::AccountSponsorsFetcher::new()
+            .unwrap_or_else(|e| panic!("failed to build account sponsors RPC client: {e}")),
     };
 
     let raw_passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {

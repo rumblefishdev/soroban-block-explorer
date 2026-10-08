@@ -11,6 +11,7 @@ import {
 import { client } from '../client.gen.js';
 import {
   getAccount,
+  getAccountSponsorship,
   getAsset,
   getContract,
   getDecompiled,
@@ -44,6 +45,9 @@ import type {
   GetAccountData,
   GetAccountError,
   GetAccountResponse,
+  GetAccountSponsorshipData,
+  GetAccountSponsorshipError,
+  GetAccountSponsorshipResponse,
   GetAssetData,
   GetAssetError,
   GetAssetResponse,
@@ -360,6 +364,31 @@ export const getAccountOptions = (options: Options<GetAccountData>) =>
       return data;
     },
     queryKey: getAccountQueryKey(options),
+  });
+
+export const getAccountSponsorshipQueryKey = (
+  options: Options<GetAccountSponsorshipData>
+) => createQueryKey('getAccountSponsorship', options);
+
+export const getAccountSponsorshipOptions = (
+  options: Options<GetAccountSponsorshipData>
+) =>
+  queryOptions<
+    GetAccountSponsorshipResponse,
+    GetAccountSponsorshipError,
+    GetAccountSponsorshipResponse,
+    ReturnType<typeof getAccountSponsorshipQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await getAccountSponsorship({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: getAccountSponsorshipQueryKey(options),
   });
 
 export const listAccountTransactionsQueryKey = (

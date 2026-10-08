@@ -5,6 +5,7 @@ export { useLatestLedgers } from './useLatestLedgers.js';
 export { useTransactionsList } from './useTransactionsList.js';
 export { useTransactionDetail } from './useTransactionDetail.js';
 export { useAccountDetail } from './useAccountDetail.js';
+export { useAccountSponsorship } from './useAccountSponsorship.js';
 export { useAccountTransactions } from './useAccountTransactions.js';
 export { useAccountsList } from './useAccountsList.js';
 export { useAssetsList } from './useAssetsList.js';

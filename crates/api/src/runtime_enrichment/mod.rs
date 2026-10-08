@@ -12,12 +12,14 @@
 //!   the workspace; the wire response field stays `metadata` and is
 //!   mapped at the handler boundary.
 
+pub mod account_sponsors;
 pub mod nft_token_uri;
 pub mod rpc_pool;
 pub mod sep1;
 pub mod stellar_archive;
 pub mod wasm_code;
 
+use account_sponsors::AccountSponsorsFetcher;
 use nft_token_uri::NftTokenUriFetcher;
 use sep1::Sep1Fetcher;
 use stellar_archive::StellarArchiveFetcher;
@@ -40,4 +42,5 @@ pub struct RuntimeEnrichment {
     pub sep1: Sep1Fetcher,
     pub nft_token_uri: NftTokenUriFetcher,
     pub wasm_code: WasmCodeFetcher,
+    pub account_sponsors: AccountSponsorsFetcher,
 }
