@@ -2,8 +2,8 @@
 //! account-scoped transaction history
 //! (`GET /v1/accounts/:account_id/transactions`).
 //!
-//! Pure DB — no read-time XDR. Account scope is intentionally limited to
-//! summary + balances + transactions per ADR 0025 / task 0048.
+//! Pure DB — no read-time XDR — except `sponsorship`, which reads who pays
+//! each sponsored reserve live from Soroban RPC (task 0629).
 //!
 //! The SQL behind both is in `queries` (balance changes in `balance_changes`).
 
@@ -11,6 +11,7 @@ mod balance_changes;
 pub mod dto;
 mod handlers;
 mod queries;
+mod sponsorship;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -23,4 +24,5 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::list_accounts))
         .routes(routes!(handlers::get_account))
         .routes(routes!(handlers::list_account_transactions))
+        .routes(routes!(sponsorship::get_account_sponsorship))
 }

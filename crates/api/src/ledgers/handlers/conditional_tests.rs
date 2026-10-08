@@ -28,6 +28,11 @@ fn test_state(ch: clickhouse::Client) -> AppState {
             "http://unused".to_owned(),
         ])
         .expect("build wasm_code fetcher"),
+        account_sponsors:
+            crate::runtime_enrichment::account_sponsors::AccountSponsorsFetcher::with_rpc_urls(
+                vec!["http://unused".to_owned()],
+            )
+            .expect("build account_sponsors fetcher"),
     };
     AppState::for_tests(ch, runtime_enrichment)
 }
