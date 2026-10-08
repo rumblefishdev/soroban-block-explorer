@@ -105,9 +105,7 @@ impl RpcPool {
             if !entries.iter().any(|e| e["xdr"].is_string()) {
                 // An empty result means "no live entry" — but a lagging or
                 // pruned node reports the same thing for an entry that does
-                // exist. Ask the rest of the pool before believing it; the
-                // mainnet sweep found 0 genuinely archived binaries, so a
-                // single empty answer is more likely a bad node than truth.
+                // exist. Ask the rest of the pool before believing it.
                 empty_answers += 1;
                 last_err = format!("{url}: no entries for these keys");
                 continue;

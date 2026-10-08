@@ -32,7 +32,7 @@ use stellar_xdr::{
 pub const SOROBAN_RET_VERSION: &str = "0.0.4";
 
 /// Errors from the WASM fetch path. The handler maps every variant to a
-/// 5xx except [`FetchError::NotLive`] (archived/expired entry → 404).
+/// 5xx; code that is not live (archived/expired) is `Ok(None)` → 404.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
     #[error("invalid wasm hash: {0}")]

@@ -211,3 +211,23 @@ async fn refused_connection_fails_over() {
             .is_some()
     );
 }
+
+/// A bad answer from the first endpoint — here a code entry for another hash —
+/// stops the fetch: it is a broken RPC, not a reason to ask the next one.
+#[tokio::test]
+async fn a_wrong_entry_stops_without_failover() {
+    let mut other = code_answer();
+    let entry = LedgerEntryData::ContractCode(stellar_xdr::ContractCodeEntry {
+        ext: stellar_xdr::ContractCodeEntryExt::V0,
+        hash: Hash([9; 32]),
+        code: b"\0asm".to_vec().try_into().unwrap(),
+    });
+    other["result"]["entries"][0]["xdr"] =
+        serde_json::Value::String(BASE64.encode(entry.to_xdr(Limits::none()).unwrap()));
+    let base = serve(vec![("/bad", 200, other), ("/up", 200, code_answer())]).await;
+    let fetcher = WasmCodeFetcher::with_urls(vec![format!("{base}/bad"), format!("{base}/up")]);
+    assert!(matches!(
+        fetcher.fetch_wasm(&hex::encode(HASH)).await,
+        Err(FetchError::RpcError(_))
+    ));
+}
