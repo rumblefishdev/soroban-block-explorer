@@ -50,7 +50,8 @@ fn garbage_bytes_fail_both_paths() {
 #[tokio::test]
 #[ignore = "hits live mainnet RPC"]
 async fn fetches_real_wasm_by_hash() {
-    let fetcher = WasmCodeFetcher::new().expect("build fetcher");
+    let fetcher = WasmCodeFetcher::with_rpc_urls(vec!["https://mainnet.sorobanrpc.com".to_owned()])
+        .expect("build fetcher");
     let code = fetcher
         .fetch_wasm("07097f83dae3b746db7dba3263d9cc334efb88a9a7d5450fb96ca19f33d284b0")
         .await

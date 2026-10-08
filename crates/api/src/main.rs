@@ -198,9 +198,9 @@ async fn main() {
         stellar_archive: StellarArchiveFetcher::new(s3_client),
         sep1: Sep1Fetcher::new().expect("failed to build SEP-1 stellar.toml HTTP client"),
         nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
-            .expect("failed to build NFT token_uri HTTP client"),
+            .unwrap_or_else(|e| panic!("failed to build NFT token_uri HTTP client: {e}")),
         wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()
-            .expect("failed to build wasm-code RPC client"),
+            .unwrap_or_else(|e| panic!("failed to build wasm-code RPC client: {e}")),
     };
 
     let raw_passphrase = std::env::var("STELLAR_NETWORK_PASSPHRASE").unwrap_or_else(|_| {

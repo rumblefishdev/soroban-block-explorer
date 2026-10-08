@@ -52,7 +52,8 @@ export interface EnvironmentConfig {
   readonly stellarNetworkPassphrase: string;
   /**
    * Soroban RPC endpoints of this network, tried in order on failure. The API
-   * receives them as `SOROBAN_RPC_URLS`.
+   * and the enrichment worker receive them as `SOROBAN_RPC_URLS`; the code
+   * holds no default, so this list is the only source.
    */
   readonly sorobanRpcUrls: readonly string[];
   /**

@@ -31,23 +31,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const CACHE_CAPACITY: u64 = 1024;
 const USER_AGENT: &str = concat!("soroban-block-explorer/", env!("CARGO_PKG_VERSION"));
-/// Default Soroban RPC pool — round-robin + failover-on-transient across all
-/// four (task 0311; a single endpoint hits the per-IP 429 wall under
-/// enrichment bursts, and every Lambda shares one NAT egress IP). Keyless,
-/// in-sync endpoints from the 2026-06-22 box sieve. Lives in code, not env,
-/// for the same reason as [`DEFAULT_IPFS_GATEWAYS`]: one good list every
-/// consumer (worker, API, backfill CLI) gets by construction — previously
-/// only the worker's env carried the pool and the other two silently ran on
-/// the single SDF endpoint (lore-0455). `SOROBAN_RPC_URLS` env overrides for
-/// ad-hoc runs.
-pub(super) const DEFAULT_SOROBAN_RPC_URLS: &[&str] = &[
-    "https://mainnet.sorobanrpc.com",
-    "https://soroban-rpc.mainnet.stellar.gateway.fm/",
-    "https://rpc.ankr.com/stellar_soroban",
-    "https://stellar.api.onfinality.io/public",
-];
-/// Default IPFS gateways, tried in order with failover. Both serve path-style
-/// `/ipfs/<CID>` with HTTP 200 in one hop (no redirect needed; since
+/// Default IPFS gateways, tried in order with failover. Unlike the Soroban RPC
+/// pool, which belongs to one network and so has no default
+/// ([`crate::soroban_rpc`]), a gateway serves any network's content. Both
+/// serve path-style `/ipfs/<CID>` with HTTP 200 in one hop (no redirect needed; since
 /// lore-0455 the client follows same-registrable-domain https redirects
 /// with a bounded budget, so a trailing-slash `301` no longer loses
 /// content) and are reachable from the prod box
@@ -117,23 +104,18 @@ fn env_list(key: &str) -> Option<Vec<String>> {
 }
 
 impl NftTokenUriFetcher {
-    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (comma-sep,
-    /// ad-hoc override) → [`DEFAULT_SOROBAN_RPC_URLS`]; IPFS gateway pool from
+    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (required —
+    /// [`crate::soroban_rpc::rpc_urls_from_env`]); IPFS gateway pool from
     /// `IPFS_GATEWAY_BASES` (comma-sep) → [`DEFAULT_IPFS_GATEWAYS`].
-    pub fn new() -> Result<Self, reqwest::Error> {
-        let rpc_urls = env_list("SOROBAN_RPC_URLS").unwrap_or_else(|| {
-            DEFAULT_SOROBAN_RPC_URLS
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        });
+    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let rpc_urls = crate::soroban_rpc::rpc_urls_from_env()?;
         let ipfs_gateways = env_list("IPFS_GATEWAY_BASES").unwrap_or_else(|| {
             DEFAULT_IPFS_GATEWAYS
                 .iter()
                 .map(|s| s.to_string())
                 .collect()
         });
-        Self::build(rpc_urls, ipfs_gateways)
+        Ok(Self::build(rpc_urls, ipfs_gateways)?)
     }
 
     /// Test / advanced hook: a single RPC endpoint + the default IPFS gateways.

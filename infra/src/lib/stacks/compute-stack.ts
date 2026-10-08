@@ -310,10 +310,10 @@ export class ComputeStack extends cdk.Stack {
         // need Access-Control-Allow-Origin (task 0277). `domainName` is the SPA host.
         CORS_ALLOW_ORIGIN: `https://${config.domainName}`,
         MTLS_SECRET_NAME: apiSecretName,
-        // Soroban RPC pool for the on-demand decompiled-code endpoint
-        // (task 0465): WasmCodeFetcher round-robins these on failure. Same
-        // keyless pool the enrichment worker uses (see its block below);
-        // without this env the fetcher falls back to the single SDF default.
+        // Soroban RPC pool of this network for the NFT detail page and the
+        // on-demand decompiled-code endpoint (task 0465), tried in turn on
+        // failure. Same list the enrichment worker gets (see its block
+        // below). Required: the Lambda refuses to start without it.
         SOROBAN_RPC_URLS: config.sorobanRpcUrls.join(','),
         // Origin lock (task 0277), phase 2: arm the middleware by injecting the
         // shared secret as EDGE_SECRET. The Lambda's edge_lock middleware then
@@ -362,6 +362,15 @@ export class ComputeStack extends cdk.Stack {
       memorySize: config.indexerLambdaMemory,
       timeout: cdk.Duration.seconds(config.indexerLambdaTimeout),
       reservedConcurrentExecutions: config.indexerLambdaConcurrency,
+      // Reading the public data lake, the indexer wakes itself through its own
+      // queue, one message per ledger (lake_pacing.rs). AWS counts that as a
+      // loop and drops the 17th hop of each chain, so the chain died every
+      // ~80 s: ~300 deliveries an hour were blocked and ~30 messages an hour
+      // reached the DLQ after 10 tries each (measured 2026-10-07,
+      // `RecursiveInvocationsDropped`). The loop is intended, and reserved
+      // concurrency 1 bounds it; the runaway alarm in ingestion-alarms.ts
+      // replaces the guard. Mainnet's doorbells come from S3 and keep it.
+      ...(!ledgerBucket && { recursiveLoop: lambda.RecursiveLoop.ALLOW }),
       environment: {
         ...sharedEnv,
         ...archivePrefixEnv,
@@ -492,13 +501,12 @@ export class ComputeStack extends cdk.Stack {
           ...sharedEnv,
           RUST_LOG: 'info',
           MTLS_SECRET_NAME: enrichmentSecretName,
-          // The Soroban RPC pool (task 0311) is NOT set here anymore: the
-          // 4-endpoint list moved into code as DEFAULT_SOROBAN_RPC_URLS
-          // (lore-0455) so the worker, the API and the backfill CLI share it
-          // by construction — this env used to configure only the worker,
-          // leaving the other two consumers on the single SDF endpoint.
-          // SOROBAN_RPC_URLS remains an ad-hoc override, same as
-          // IPFS_GATEWAY_BASES.
+          // Soroban RPC pool of this network for the NFT `token_uri()` /
+          // `name()` simulations — the same list the API gets. Required: the
+          // code holds no default, because an RPC answers for one network
+          // only and a mainnet default sent the testnet worker to mainnet
+          // (lore-0553).
+          SOROBAN_RPC_URLS: config.sorobanRpcUrls.join(','),
         },
       }
     );

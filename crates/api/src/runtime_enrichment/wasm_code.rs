@@ -3,8 +3,8 @@
 //! Two halves, both fail-soft at the handler boundary:
 //!
 //! - [`WasmCodeFetcher`] — transport: `getLedgerEntries` against a Soroban
-//!   RPC pool (`SOROBAN_RPC_URLS` comma-sep → `SOROBAN_RPC_URL` → SDF
-//!   default, same convention as `enrichment-shared::nft_token_uri`).
+//!   RPC pool (`SOROBAN_RPC_URLS`, required — read by
+//!   `enrichment_shared::soroban_rpc`, as for `nft_token_uri`).
 //!   Contract code is content-addressed, so a fetched blob is verified
 //!   against the requested hash before use.
 //! - [`decompile_blocking`] — CPU: `soroban-ret` (pinned `=0.0.4`) Rust
@@ -31,10 +31,6 @@ use stellar_xdr::{
 /// `soroban-ret = "=0.0.4"` pin in `Cargo.toml` on every bump.
 pub const SOROBAN_RET_VERSION: &str = "0.0.4";
 
-/// SDF public mainnet RPC — the single default when no `SOROBAN_RPC_URLS` /
-/// `SOROBAN_RPC_URL` env is set.
-const DEFAULT_SOROBAN_RPC_URL: &str = "https://mainnet.sorobanrpc.com";
-
 /// Errors from the WASM fetch path. The handler maps every variant to a
 /// 5xx except [`FetchError::NotLive`] (archived/expired entry → 404).
 #[derive(Debug, thiserror::Error)]
@@ -58,20 +54,15 @@ pub struct WasmCodeFetcher {
 }
 
 impl WasmCodeFetcher {
-    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (comma-sep)
-    /// → single `SOROBAN_RPC_URL` → SDF default.
-    pub fn new() -> Result<Self, reqwest::Error> {
-        let rpc_urls = std::env::var("SOROBAN_RPC_URLS")
-            .ok()
-            .map(|v| {
-                v.split(',')
-                    .map(|s| s.trim().to_owned())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|v| !v.is_empty())
-            .or_else(|| std::env::var("SOROBAN_RPC_URL").ok().map(|u| vec![u]))
-            .unwrap_or_else(|| vec![DEFAULT_SOROBAN_RPC_URL.to_owned()]);
+    /// Production constructor. RPC pool from `SOROBAN_RPC_URLS` (required —
+    /// `enrichment_shared::soroban_rpc::rpc_urls_from_env`).
+    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let rpc_urls = enrichment_shared::soroban_rpc::rpc_urls_from_env()?;
+        Ok(Self::with_rpc_urls(rpc_urls)?)
+    }
+
+    /// Explicit RPC pool — tests, and anything that already holds the list.
+    pub fn with_rpc_urls(rpc_urls: Vec<String>) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_secs(10))
