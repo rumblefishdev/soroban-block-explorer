@@ -294,9 +294,11 @@ entities:
   `symbol` functions locally (`crates/contract-executor`, the network's own
   `soroban-env-host`, over `wasm_programs.code` + `contract_instances`;
   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)):
-  `backfill-runner contract-metadata-backfill` writes every token this way;
-  the indexer still uses the storage read below until it runs the functions
-  live (task 0620). `name` / `symbol` / `decimals` are read from the contract instance
+  `backfill-runner contract-metadata-backfill` writes every token this way,
+  and the indexer does it live for every token whose instance changed in the
+  ledger (deploy, upgrade, storage write), taking the place of the storage
+  read below for that contract; a token the run does not answer keeps the
+  storage read (task 0620). `name` / `symbol` / `decimals` are read from the contract instance
   entry's metadata struct (`{decimal?, name, symbol}`) via
   `token_metadata::extract_token_metadata`, collected by
   `state::extract_contract_metadata_writes` on `created` + `updated` instance

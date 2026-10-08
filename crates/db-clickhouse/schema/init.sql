@@ -367,13 +367,15 @@ ORDER BY (contract);
 -- stub INSERTs / db-merge) would clobber in-row metadata to NULL (the G5 bug
 -- class); (2) deploy identity (wasm_hash/deployer, from the deploy tx, NOT in
 -- the instance entry) and metadata live on DIFFERENT update clocks, which one
--- RMT version column cannot track. Written by the parser on contract-instance
--- `created` / `updated` / `restored` changes; SACs skipped (name=CODE:ISSUER /
+-- RMT version column cannot track. Written on contract-instance `created` /
+-- `updated` / `restored` changes: for a token (program declares `decimals`)
+-- from its own `decimals` / `name` / `symbol` functions run locally (task
+-- 0620), otherwise from the instance's `METADATA` struct; SACs skipped (name=CODE:ISSUER /
 -- symbol=code / decimals=7 already derivable from SAC identity). `version` =
 -- observed ledger (deterministic/replay-safe; latest wins). `decimals` is
 -- rendered as 7 at read for classic/SAC.
 -- INVARIANT: every row is a WHOLE-struct snapshot at one ledger (name+symbol+
--- decimals all set from the same METADATA at that version) — never a partial
+-- decimals all set from one source at that version) — never a partial
 -- single-column write. Read with `FINAL` (latest whole row per contract_id) —
 -- the direct, frankenstein-proof RMT collapse for a whole-row read; the table is
 -- bounded (Soroban-native tokens only) so the read-time merge is cheap. Read

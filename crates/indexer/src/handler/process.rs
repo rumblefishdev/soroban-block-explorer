@@ -148,7 +148,7 @@ pub fn init_network_id() -> Result<&'static [u8; 32], NetworkIdError> {
 /// not run [`init_network_id`] in their cold-start path (legacy tests, dev tools).
 /// Production Lambda always pre-inits, so this lazy branch is dead code in the hot
 /// path.
-fn network_id() -> &'static [u8; 32] {
+pub(crate) fn network_id() -> &'static [u8; 32] {
     xdr_parser::net_id().unwrap_or_else(|| {
         panic!(
             "STELLAR_NETWORK_PASSPHRASE env not set; call \

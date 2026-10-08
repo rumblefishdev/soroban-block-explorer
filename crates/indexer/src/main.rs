@@ -5,7 +5,7 @@
 //!
 //! Task 0241 — PG → CH hard swap.
 
-mod handler;
+use indexer::handler;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
 use aws_sdk_s3::Client as S3Client;

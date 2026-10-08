@@ -172,7 +172,10 @@ impl PartitionWriterHandle {
         let writes_balances = self.only.as_ref().is_none_or(|t| t.contains("balances"));
         let pw = &mut self.writer;
         {
-            let parsed = indexer::handler::process::parse_ledger(meta);
+            let mut parsed = indexer::handler::process::parse_ledger(meta);
+            // Task 0620: the same function-read metadata the live indexer
+            // writes, so a re-run never brings back the storage-key value.
+            indexer::token_metadata_by_functions::apply(pw.client(), &mut parsed).await;
             // ADR 0051 — contract-held SAC balances and soroban pool legs key
             // onto the wrapped classic/native asset through this map; the
             // balances only matter when this write persists `balances`.

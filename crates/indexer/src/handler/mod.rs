@@ -392,9 +392,10 @@ async fn process_s3_object(
     let mut batch_minted_nfts: Vec<xdr_parser::types::ExtractedNft> = Vec::new();
 
     for ledger_meta in batch.ledger_close_metas.iter() {
-        let parsed = process::parse_ledger(ledger_meta);
+        let mut parsed = process::parse_ledger(ledger_meta);
         let ledger_sequence = parsed.ledger.sequence;
         let ledger_closed_at = parsed.ledger.closed_at;
+        crate::token_metadata_by_functions::apply(&state.ch_client, &mut parsed).await;
 
         persist_with_retry(&state.ch_client, &parsed, &state.classification_cache).await?;
         publish_indexer_metrics(&state.cw_client, ledger_sequence, ledger_closed_at).await;
