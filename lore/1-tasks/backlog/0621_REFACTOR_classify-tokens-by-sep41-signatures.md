@@ -37,6 +37,12 @@ Measured 2026-10-05 on `wasm_interface_metadata` (all programs):
 
 `Result<T, E>` counts as `T`; `transfer` to `Address` or `MuxedAddress`.
 
+Metadata (0620) runs `decimals`/`name`/`symbol` for programs declaring
+`decimals`, or `name` and `symbol` (`has_metadata`). Measured 2026-10-08: 14
+programs declare only `name` (7) or only `symbol` (7) — reward claims, pools,
+invoices, memberships — and get no metadata; none had a stored row. Whether
+any of them is a token or NFT is this task's classification question.
+
 ## Implementation
 
 - Signature rule in `classification.rs`, one place; rebuild
