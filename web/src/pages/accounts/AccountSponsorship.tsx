@@ -97,11 +97,9 @@ function bySponsor(entries: AccountSponsoredEntry[]) {
 function SponsorGroup({
   sponsor,
   entries,
-  defaultExpanded,
 }: {
   sponsor: string;
   entries: AccountSponsoredEntry[];
-  defaultExpanded: boolean;
 }) {
   const [page, setPage] = useState(0);
   const reserves = entries.reduce((sum, e) => sum + e.reserves, 0);
@@ -113,7 +111,6 @@ function SponsorGroup({
       disableGutters
       square
       elevation={0}
-      defaultExpanded={defaultExpanded}
       sx={(theme) => ({
         backgroundColor: 'transparent',
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
@@ -174,8 +171,8 @@ function SponsorGroup({
 /**
  * The card's body once the answer is in. Exported for tests.
  *
- * One folding group per sponsor. A single sponsor opens folded out — there is
- * nothing to choose between; several start folded, their totals in view.
+ * One folding group per sponsor, folded at first: the sponsors and their
+ * totals in view, the entries a click away.
  */
 export function SponsorshipList({
   data,
@@ -205,12 +202,7 @@ export function SponsorshipList({
   return (
     <Box>
       {groups.map(([sponsor, entries]) => (
-        <SponsorGroup
-          key={sponsor}
-          sponsor={sponsor}
-          entries={entries}
-          defaultExpanded={groups.length === 1}
-        />
+        <SponsorGroup key={sponsor} sponsor={sponsor} entries={entries} />
       ))}
       {unlisted > 0 && (
         <Line>
