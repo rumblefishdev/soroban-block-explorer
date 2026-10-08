@@ -44,16 +44,34 @@
 //!
 //! ## Connection
 //!
-//! Reads `CLICKHOUSE_URL` / `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` /
-//! `CLICKHOUSE_DATABASE` (`db_clickhouse::Config::from_env`).
+//! The same flags as `backfill-runner`, built by the same
+//! `db_clickhouse::mtls::client_from_cli_flags`:
+//!
+//! - plain HTTP — `--clickhouse-url` / `CLICKHOUSE_URL` plus
+//!   `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` (a local ClickHouse);
+//! - mTLS — `--ch-cert` / `--ch-key` / `--ch-ca` (or `CLICKHOUSE_CERT` /
+//!   `CLICKHOUSE_KEY` / `CLICKHOUSE_CA`), all three together, with
+//!   `--clickhouse-url https://<ch host>`: the production ClickHouse behind
+//!   Caddy, which maps the certificate's CN to a ClickHouse user.
+//!
+//! `CLICKHOUSE_DATABASE` picks the database (`testnet` for the testnet
+//! explorer, unset for mainnet's `default`). `nft-metadata` and
+//! `nft-collection-name` also need `SOROBAN_RPC_URLS`, the Soroban RPC pool
+//! of the same network.
 //!
 //! ```bash
+//! CLICKHOUSE_URL=http://localhost:8123 SOROBAN_RPC_URLS=<rpc urls> cargo run -p backfill-enrichment-runner -- nft-metadata --force-retry
 //! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- sep1-assets --concurrency 10
-//! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- nft-metadata --force-retry
-//! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- nft-collection-name
+//! CLICKHOUSE_URL=http://localhost:8123 SOROBAN_RPC_URLS=<rpc urls> cargo run -p backfill-enrichment-runner -- nft-collection-name
 //! CLICKHOUSE_URL=http://localhost:8123 cargo run -p backfill-enrichment-runner -- status
+//!
+//! # production ClickHouse over mTLS, testnet database
+//! CLICKHOUSE_DATABASE=testnet SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org \
+//!   cargo run -p backfill-enrichment-runner -- --clickhouse-url https://<ch host> \
+//!   --ch-cert <user>.crt --ch-key <user>.key --ch-ca ca.crt nft-metadata --retry-sentinels
 //! ```
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -76,6 +94,26 @@ struct Cli {
     /// `debug`, so verbose maps to `debug` (not `info`).
     #[arg(long, short, global = true)]
     verbose: bool,
+
+    /// ClickHouse HTTP endpoint (e.g. `http://localhost:8123`, or the https
+    /// Caddy host with the mTLS flags). Overrides `CLICKHOUSE_URL`. Same flag
+    /// as `backfill-runner`.
+    #[arg(long, env = "CLICKHOUSE_URL", global = true)]
+    clickhouse_url: Option<String>,
+
+    /// Client certificate (PEM) for mTLS to the Caddy-fronted ClickHouse.
+    /// `--ch-cert` / `--ch-key` / `--ch-ca` go together; all three absent →
+    /// plain client.
+    #[arg(long, env = "CLICKHOUSE_CERT", global = true)]
+    ch_cert: Option<PathBuf>,
+
+    /// Client private key (PEM) — pairs with `--ch-cert`.
+    #[arg(long, env = "CLICKHOUSE_KEY", global = true)]
+    ch_key: Option<PathBuf>,
+
+    /// CA cert (PEM) that signed the client cert — pairs with `--ch-cert`.
+    #[arg(long, env = "CLICKHOUSE_CA", global = true)]
+    ch_ca: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -203,7 +241,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_env_filter(filter)
         .with_writer(writer)
         .init();
-    let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+    let client = db_clickhouse::mtls::client_from_cli_flags(
+        cli.clickhouse_url.as_deref(),
+        cli.ch_cert.as_deref(),
+        cli.ch_key.as_deref(),
+        cli.ch_ca.as_deref(),
+    );
 
     let report = match cli.command {
         Command::Sep1Assets(args) => {
