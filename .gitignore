@@ -99,3 +99,4 @@ web/playwright-report/
 # findings across sessions, and at least one of them concerns data that
 # must not be described in a public repo. Local-only by design.
 .wayfinder/
+web/public/prototype-w341-pools.json

@@ -2,11 +2,13 @@ import { Stack } from '@mui/material';
 import type { ListPoolsData } from '@rumblefish/api-types';
 import { useCursorPagination } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { PAGE_SIZE, usePoolsList, usePagedRows } from '../api/index.js';
 
 import { DataListCard } from './detail/DataListCard.js';
 import { PageHeader } from './detail/PageHeader.js';
+import { PoolSearchPrototype } from './liquidity-pools/PoolSearchPrototype.js';
 import { PoolsFilterBar } from './liquidity-pools/PoolsFilterBar.js';
 import { PoolsTable } from './liquidity-pools/PoolsTable.js';
 
@@ -20,6 +22,25 @@ type Filters = NonNullable<ListPoolsData['query']>;
  * by task 0246.
  */
 export default function LiquidityPoolsListPage() {
+  // PROTOTYPE (W341): ?variant=A|B|C swaps the list for the search prototype.
+  // Dev only.
+  const [protoParams] = useSearchParams();
+  const protoVariant = protoParams.get('variant');
+  if (import.meta.env.DEV && protoVariant) {
+    return (
+      <Stack spacing={3}>
+        <PageHeader
+          title="Liquidity Pools"
+          subtitle="PROTOTYPE W341 — pool search variants (all production pools, local fixture)"
+        />
+        <PoolSearchPrototype variant={protoVariant} />
+      </Stack>
+    );
+  }
+  return <RealLiquidityPoolsListPage />;
+}
+
+function RealLiquidityPoolsListPage() {
   const { state, cursor, goNext, goPrev, setFilter, clearFilters } =
     useCursorPagination({
       filterKeys: ['asset', 'kind', 'min_tvl'],
