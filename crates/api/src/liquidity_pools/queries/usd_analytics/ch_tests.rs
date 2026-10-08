@@ -6,7 +6,7 @@
 //!   CH_URL=http://localhost:8123 CH_USER=default CH_PASSWORD=… \
 //!     cargo test -p api soroban_volume_24h
 
-use super::{LegVolume, fetch_pool_volume_24h};
+use super::{LegVolume, fetch_last_closes, fetch_pool_volume_24h, price_leg};
 
 const DB: &str = "api_test_0374_soroban_volume";
 const POOL: &str = "5858585858585858585858585858585858585858585858585858585858585858";
@@ -124,4 +124,71 @@ async fn soroban_volume_24h() {
         .execute()
         .await
         .expect("drop throwaway db");
+}
+
+/// A Soroban token's last hourly close is found by its contract address
+/// (task 0615): the prices views key it as ('contract', '', '', C…), so two
+/// tokens differ only in that column. The prices series is a view on
+/// production; a test ClickHouse without one gets a plain table of the same
+/// key columns, created here and dropped after.
+///
+///   CH_URL=http://localhost:8123 CH_USER=default CH_PASSWORD=… \
+///     cargo test -p api soroban_token_close_by_contract
+#[tokio::test]
+async fn soroban_token_close_by_contract() {
+    let Some(base) = crate::common::ch::test_client_from_env() else {
+        eprintln!("CH_URL unset — skipping soroban token price check");
+        return;
+    };
+    let engine: Vec<String> = base
+        .query("SELECT engine FROM system.tables WHERE database = 'prices' AND name = 'price_usd_series_1h'")
+        .fetch_all()
+        .await
+        .expect("read system.tables");
+    if engine.iter().any(|e| e != "MergeTree") {
+        eprintln!("prices.price_usd_series_1h is a real view here — skipping");
+        return;
+    }
+    let created = engine.is_empty();
+    for sql in [
+        "CREATE DATABASE IF NOT EXISTS prices",
+        "CREATE TABLE IF NOT EXISTS prices.price_usd_series_1h (asset_kind String, asset_code String, \
+         issuer_address String, contract_address String, bucket DateTime, close_usd Decimal(38, 14)) \
+         ENGINE = MergeTree ORDER BY (asset_kind, contract_address, bucket)",
+    ] {
+        base.query(sql).execute().await.expect("prices table");
+    }
+    // Two Soroban tokens two hours back: only the contract tells them apart.
+    const XRP: &str = "CB7OOP3VSAWBZOOTOG2YEFANVU45GVWYUUM5HI32DKLHVKUDOFVQ37XP";
+    const OTHER: &str = "CBIJBDNZNF4X35BJ4FFZWCDBSCKOP5NB4PLG4SNENRMLAPYG4P5FM6VN";
+    base.query(&format!(
+        "INSERT INTO prices.price_usd_series_1h \
+         (asset_kind, asset_code, issuer_address, contract_address, bucket, close_usd) VALUES \
+         ('contract', '', '', '{XRP}', toStartOfHour(now()) - INTERVAL 2 HOUR, 1.25), \
+         ('contract', '', '', '{OTHER}', toStartOfHour(now()) - INTERVAL 2 HOUR, 80000)"
+    ))
+    .execute()
+    .await
+    .expect("seed prices");
+
+    let xrp = price_leg(3, Some("XRP"), None, Some(XRP));
+    let closes = fetch_last_closes(&base, &[&xrp])
+        .await
+        .expect("last closes");
+
+    assert_eq!(closes.get(&xrp), Some(&1.25));
+
+    if created {
+        base.query("DROP TABLE IF EXISTS prices.price_usd_series_1h")
+            .execute()
+            .await
+            .expect("drop test prices table");
+    } else {
+        base.query(&format!(
+            "ALTER TABLE prices.price_usd_series_1h DELETE WHERE contract_address IN ('{XRP}', '{OTHER}')"
+        ))
+        .execute()
+        .await
+        .expect("remove test prices rows");
+    }
 }

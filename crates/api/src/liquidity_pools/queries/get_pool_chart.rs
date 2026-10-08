@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::usd_analytics::{
-    MAX_PRICE_CARRY_SECONDS, PoolChartContext, PriceLeg, fee_revenue_usd, price_leg, usd_str,
+    MAX_PRICE_CARRY_SECONDS, PoolChartContext, PriceLeg, fee_revenue_usd, usd_str,
 };
 use crate::common::ch::millis_to_utc;
 use crate::liquidity_pools::dto::ChartDataPoint;
@@ -143,7 +143,7 @@ struct LegCloseChRow {
 /// [`MAX_PRICE_CARRY_SECONDS`] so the first bucket can carry a price too.
 ///
 /// - Contract (prices views.sql, pinned 2026-06-16): key
-///   `(asset_kind, asset_code, issuer_address)`; the rows carry the leg they
+///   `(asset_kind, asset_code, issuer_address, contract_address)`; the rows carry the leg they
 ///   price (`indexOf` of their identity in the pool's leg list), so one read
 ///   prices every leg, however many. An unpriceable leg (empty kind) matches
 ///   no row.
@@ -163,7 +163,7 @@ async fn fetch_leg_closes(
 ) -> Result<Vec<Vec<(i64, f64)>>, clickhouse::error::Error> {
     let (_, series_view, price_bucket_fn) = chart_grain(interval);
     let sql = format!(
-        "SELECT toUInt64(indexOf(arrayZip(?, ?, ?), (asset_kind, asset_code, issuer_address))) AS leg, \
+        "SELECT toUInt64(indexOf(arrayZip(?, ?, ?, ?), (asset_kind, asset_code, issuer_address, contract_address))) AS leg, \
                 toInt64(toUnixTimestamp(bucket)) AS bucket_s, \
                 toFloat64(close_usd) AS close \
          FROM {series_view} \
@@ -179,6 +179,7 @@ async fn fetch_leg_closes(
         .bind(legs.iter().map(|l| l.kind).collect::<Vec<_>>()) // leg identities
         .bind(legs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>())
         .bind(legs.iter().map(|l| l.issuer.as_str()).collect::<Vec<_>>())
+        .bind(legs.iter().map(|l| l.contract.as_str()).collect::<Vec<_>>())
         .bind(from.timestamp_millis()) // bucket >= floor(from) - carry
         .bind(to.timestamp_millis()) // bucket < to
         .fetch_all::<LegCloseChRow>()
@@ -260,7 +261,7 @@ async fn fetch_classic_series(
              ASOF LEFT JOIN ( \
                  SELECT 1 AS k, bucket, close_usd \
                  FROM {series_view} \
-                 WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? \
+                 WHERE asset_kind = ? AND asset_code = ? AND issuer_address = ? AND contract_address = ? \
                    AND bucket >= {price_bucket_fn}(fromUnixTimestamp64Milli(?)) - INTERVAL {carry} SECOND \
                    AND bucket <  least(fromUnixTimestamp64Milli(?), {price_bucket_fn}(now())) \
                    AND close_usd > 0 \
@@ -270,7 +271,7 @@ async fn fetch_classic_series(
          ORDER BY bucket_ms ASC",
         carry = MAX_PRICE_CARRY_SECONDS,
     );
-    let unpriceable = price_leg(-1, None, None);
+    let unpriceable = PriceLeg::default();
     let leg_a = legs.first().unwrap_or(&unpriceable);
     let buckets = client
         .query(&sql)
@@ -283,6 +284,7 @@ async fn fetch_classic_series(
         .bind(leg_a.kind) // leg-A price identity
         .bind(leg_a.code.as_str())
         .bind(leg_a.issuer.as_str())
+        .bind(leg_a.contract.as_str())
         .bind(from.timestamp_millis()) // prices: bucket >= floor(from)
         .bind(to.timestamp_millis()) // prices: bucket < to
         .fetch_all::<ClassicBucketChRow>()
@@ -464,7 +466,7 @@ async fn fetch_soroban_volume_series(
                  LIMIT 1 BY sequence \
              ) l ON l.sequence = t.ledger_sequence \
              ASOF LEFT JOIN ( \
-                 SELECT toUInt64(indexOf(arrayZip(?, ?, ?), (asset_kind, asset_code, issuer_address))) AS leg, \
+                 SELECT toUInt64(indexOf(arrayZip(?, ?, ?, ?), (asset_kind, asset_code, issuer_address, contract_address))) AS leg, \
                         bucket, close_usd \
                  FROM {series_view} \
                  WHERE leg > 0 \
@@ -497,6 +499,7 @@ async fn fetch_soroban_volume_series(
         .bind(legs.iter().map(|l| l.kind).collect::<Vec<_>>()) // leg identities
         .bind(legs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>())
         .bind(legs.iter().map(|l| l.issuer.as_str()).collect::<Vec<_>>())
+        .bind(legs.iter().map(|l| l.contract.as_str()).collect::<Vec<_>>())
         .bind(from.timestamp_millis()) // prices: bucket >= floor(from)
         .bind(to.timestamp_millis()) // prices: bucket < to
         .fetch_all::<SorobanVolumeChRow>()
