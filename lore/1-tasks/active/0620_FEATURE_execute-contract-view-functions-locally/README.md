@@ -119,7 +119,8 @@ is the deploy/upgrade ledger despite its name).
    budget — the heaviest call measured 12.5 M of 100 M instructions) and `contract-metadata-backfill`, which
    runs the declared `decimals`/`name`/`symbol` of every token over the two
    tables (PR 3a, split from the live path). Contracts whose functions read persistent data: task 0633.
-   Live in the indexer: PR 3b.
+   Live in the indexer (PR 3b): every token whose instance changed in the
+   ledger; checked on 8 token-deploy ledgers, 9/9 equal to RPC.
 4. On token deploy, instance change and WASM upgrade: run `decimals`, `name`,
    `symbol`; write `soroban_contract_metadata` with the ledger. Remove the
    `METADATA` storage read once the backfilled values match.

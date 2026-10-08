@@ -188,7 +188,6 @@ pub async fn execute(
             client,
             &ledger,
             id.0,
-            token.wasm_hash,
             &token.declares,
             &mut programs,
             &mut instances,
