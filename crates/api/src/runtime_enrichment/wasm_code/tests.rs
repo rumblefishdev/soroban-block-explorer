@@ -67,3 +67,174 @@ fn wat_direct_request() {
     assert_eq!(d.representation, "wat");
     assert!(d.rust_error.is_none());
 }
+
+// ---- RPC pool failover, against local endpoints --------------------------
+
+const HASH: [u8; 32] = [7; 32];
+
+/// A `getLedgerEntries` answer holding one CONTRACT_CODE entry for `HASH`.
+fn code_answer() -> serde_json::Value {
+    let entry = LedgerEntryData::ContractCode(stellar_xdr::ContractCodeEntry {
+        ext: stellar_xdr::ContractCodeEntryExt::V0,
+        hash: Hash(HASH),
+        code: b"\0asm".to_vec().try_into().unwrap(),
+    });
+    let xdr = BASE64.encode(entry.to_xdr(Limits::none()).unwrap());
+    serde_json::json!({ "jsonrpc": "2.0", "id": 1,
+        "result": { "entries": [ { "xdr": xdr } ], "latestLedger": 1 } })
+}
+
+fn empty_answer() -> serde_json::Value {
+    serde_json::json!({ "jsonrpc": "2.0", "id": 1,
+        "result": { "entries": [], "latestLedger": 1 } })
+}
+
+/// Serves each path with a fixed (status, body); returns the base URL.
+async fn serve(routes: Vec<(&'static str, u16, serde_json::Value)>) -> String {
+    let mut app = axum::Router::new();
+    for (path, status, body) in routes {
+        app = app.route(
+            path,
+            axum::routing::post(move || {
+                let body = body.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        axum::Json(body),
+                    )
+                }
+            }),
+        );
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+/// A failing endpoint is skipped; the next one's entry is returned.
+#[tokio::test]
+async fn failover_returns_the_next_endpoints_entry() {
+    let base = serve(vec![
+        ("/down", 500, empty_answer()),
+        ("/up", 200, code_answer()),
+    ])
+    .await;
+    let fetcher =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/down"), format!("{base}/up")]).unwrap();
+    let code = fetcher.fetch_wasm(&hex::encode(HASH)).await.unwrap();
+    assert_eq!(code.as_deref(), Some(&b"\0asm"[..]));
+}
+
+/// An empty answer is not believed until every endpoint gives it.
+#[tokio::test]
+async fn empty_everywhere_is_not_live_empty_once_asks_on() {
+    let base = serve(vec![
+        ("/a", 200, empty_answer()),
+        ("/b", 200, code_answer()),
+    ])
+    .await;
+    let mixed =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/a"), format!("{base}/b")]).unwrap();
+    assert!(
+        mixed
+            .fetch_wasm(&hex::encode(HASH))
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let all_empty =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/a"), format!("{base}/a")]).unwrap();
+    assert!(
+        all_empty
+            .fetch_wasm(&hex::encode(HASH))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Empty on one endpoint and a failure on another is an error, not "gone".
+#[tokio::test]
+async fn empty_plus_failure_is_an_error() {
+    let base = serve(vec![
+        ("/a", 200, empty_answer()),
+        ("/down", 503, empty_answer()),
+    ])
+    .await;
+    let fetcher =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/a"), format!("{base}/down")]).unwrap();
+    assert!(matches!(
+        fetcher.fetch_wasm(&hex::encode(HASH)).await,
+        Err(FetchError::Rpc(_))
+    ));
+}
+
+/// An RPC error object stops at once, without asking the rest of the pool.
+#[tokio::test]
+async fn rpc_error_object_stops_at_once() {
+    let err = serde_json::json!({ "jsonrpc": "2.0", "id": 1,
+        "error": { "code": -32600, "message": "bad" } });
+    let base = serve(vec![("/err", 200, err), ("/up", 200, code_answer())]).await;
+    let fetcher =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/err"), format!("{base}/up")]).unwrap();
+    assert!(matches!(
+        fetcher.fetch_wasm(&hex::encode(HASH)).await,
+        Err(FetchError::RpcError(_))
+    ));
+}
+
+/// A server that always sends `"error": null` is answering, not failing.
+#[tokio::test]
+async fn null_error_field_is_not_an_error() {
+    let mut answer = code_answer();
+    answer["error"] = serde_json::Value::Null;
+    let base = serve(vec![("/up", 200, answer)]).await;
+    let fetcher = WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/up")]).unwrap();
+    assert!(
+        fetcher
+            .fetch_wasm(&hex::encode(HASH))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+/// An endpoint that refuses the connection is skipped like any failure.
+#[tokio::test]
+async fn refused_connection_fails_over() {
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    let base = serve(vec![("/up", 200, code_answer())]).await;
+    let fetcher = WasmCodeFetcher::with_rpc_urls(vec![dead, format!("{base}/up")]).unwrap();
+    assert!(
+        fetcher
+            .fetch_wasm(&hex::encode(HASH))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+/// A bad answer from the first endpoint — here a code entry for another hash —
+/// stops the fetch: it is a broken RPC, not a reason to ask the next one.
+#[tokio::test]
+async fn a_wrong_entry_stops_without_failover() {
+    let mut other = code_answer();
+    let entry = LedgerEntryData::ContractCode(stellar_xdr::ContractCodeEntry {
+        ext: stellar_xdr::ContractCodeEntryExt::V0,
+        hash: Hash([9; 32]),
+        code: b"\0asm".to_vec().try_into().unwrap(),
+    });
+    other["result"]["entries"][0]["xdr"] =
+        serde_json::Value::String(BASE64.encode(entry.to_xdr(Limits::none()).unwrap()));
+    let base = serve(vec![("/bad", 200, other), ("/up", 200, code_answer())]).await;
+    let fetcher =
+        WasmCodeFetcher::with_rpc_urls(vec![format!("{base}/bad"), format!("{base}/up")]).unwrap();
+    assert!(matches!(
+        fetcher.fetch_wasm(&hex::encode(HASH)).await,
+        Err(FetchError::RpcError(_))
+    ));
+}

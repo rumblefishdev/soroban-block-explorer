@@ -13,6 +13,7 @@
 //!   mapped at the handler boundary.
 
 pub mod nft_token_uri;
+pub mod rpc_pool;
 pub mod sep1;
 pub mod stellar_archive;
 pub mod wasm_code;
