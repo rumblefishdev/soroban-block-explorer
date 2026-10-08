@@ -120,16 +120,11 @@ impl AccountSponsorsFetcher {
         {
             return Ok(None);
         }
+        // A later call failing fails the answer: a shorter list would read as
+        // complete, its missing trustlines blamed on offers and data entries.
         for chunk in chunks {
-            // A later call failing leaves the list shorter, not the answer
-            // gone: the page's "N of M reserves" shows what is missing.
-            match self.rpc.get_ledger_entries(chunk.to_vec()).await {
-                Ok(more) => decoded.extend(decode_entries(&more)?),
-                Err(e) => {
-                    tracing::warn!(account_id = account, error = %e, "sponsors: a trustline batch failed; listing what was read");
-                    break;
-                }
-            }
+            let more = self.rpc.get_ledger_entries(chunk.to_vec()).await?;
+            decoded.extend(decode_entries(&more)?);
         }
         Ok(sponsors(decoded))
     }

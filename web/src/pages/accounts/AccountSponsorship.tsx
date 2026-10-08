@@ -196,7 +196,7 @@ export function SponsorshipList({
     return (
       <Line>
         None of the sponsored entries can be listed here — they are offers, data
-        entries, pool shares, or trustlines the network did not return.
+        entries or pool shares.
       </Line>
     );
   }
@@ -230,7 +230,7 @@ export function sponsorshipMeta(data: AccountSponsorshipResponse): string {
 }
 
 /** Sponsored reserves the list cannot name — offers, data entries, pool
- * shares, or a batch RPC did not return. */
+ * shares. */
 export function unlistedReserves(data: AccountSponsorshipResponse): number {
   const listed = data.entries.reduce((sum, e) => sum + e.reserves, 0);
   return Math.max(0, data.num_sponsored - listed);

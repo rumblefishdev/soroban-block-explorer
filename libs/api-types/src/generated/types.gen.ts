@@ -275,8 +275,7 @@ export type AccountSponsorshipResponse = {
   /**
    * Reserves of this account paid by others, as the chain holds it now.
    * Larger than the sum of `entries[].reserves` when some sponsored
-   * entries are not listed (offers, data entries, pool-share trustlines,
-   * a batch of trustlines RPC did not answer).
+   * entries are not listed (offers, data entries, pool-share trustlines).
    */
   num_sponsored: number;
 };

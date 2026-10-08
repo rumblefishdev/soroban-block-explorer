@@ -214,9 +214,9 @@ async fn no_account_stops_after_the_first_call() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
-/// A later call failing keeps what the first one read.
+/// A later call failing fails the answer, never a shorter list.
 #[tokio::test]
-async fn a_failed_later_call_keeps_what_was_read() {
+async fn a_failed_later_call_fails_the_answer() {
     let (url, calls) = rpc(vec![
         (200, answer(vec![account_entry_json()])),
         (503, answer(vec![])),
@@ -224,17 +224,8 @@ async fn a_failed_later_call_keeps_what_was_read() {
     .await;
     let fetcher = AccountSponsorsFetcher::with_rpc_urls(vec![url]).unwrap();
 
-    let out = fetcher
-        .fetch(WALLET, &many_trustlines())
-        .await
-        .unwrap()
-        .unwrap();
+    let out = fetcher.fetch(WALLET, &many_trustlines()).await;
 
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(out.num_sponsored, 3);
-    assert_eq!(out.entries.len(), 1);
-    assert_eq!(
-        (out.entries[0].kind, out.entries[0].sponsor.as_str()),
-        ("account", WALLET)
-    );
+    assert!(matches!(out, Err(FetchError::Rpc(_))));
 }

@@ -2404,7 +2404,7 @@
           "num_sponsored": {
             "type": "integer",
             "format": "int32",
-            "description": "Reserves of this account paid by others, as the chain holds it now.\nLarger than the sum of `entries[].reserves` when some sponsored\nentries are not listed (offers, data entries, pool-share trustlines,\na batch of trustlines RPC did not answer).",
+            "description": "Reserves of this account paid by others, as the chain holds it now.\nLarger than the sum of `entries[].reserves` when some sponsored\nentries are not listed (offers, data entries, pool-share trustlines).",
             "minimum": 0
           }
         }
