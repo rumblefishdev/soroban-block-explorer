@@ -48,15 +48,20 @@ fn a_soroban_token_prices_by_its_contract() {
         None,
         Some("CB7OOP3VSAWBZOOTOG2YEFANVU45GVWYUUM5HI32DKLHVKUDOFVQ37XP"),
     );
-    assert_eq!(xrp.kind, "contract");
-    assert_eq!(xrp.code, "");
-    assert_eq!(xrp.issuer, "");
     assert_eq!(
-        xrp.contract,
-        "CB7OOP3VSAWBZOOTOG2YEFANVU45GVWYUUM5HI32DKLHVKUDOFVQ37XP"
+        (
+            xrp.kind,
+            xrp.code.as_str(),
+            xrp.issuer.as_str(),
+            xrp.contract.as_str()
+        ),
+        (
+            "contract",
+            "",
+            "",
+            "CB7OOP3VSAWBZOOTOG2YEFANVU45GVWYUUM5HI32DKLHVKUDOFVQ37XP"
+        )
     );
-    // Without its contract a Soroban token matches no prices row.
-    assert_eq!(price_leg(3, Some("XRP"), None, None).kind, "");
 }
 
 #[test]

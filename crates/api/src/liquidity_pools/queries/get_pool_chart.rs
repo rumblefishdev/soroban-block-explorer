@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::usd_analytics::{
-    MAX_PRICE_CARRY_SECONDS, PoolChartContext, PriceLeg, fee_revenue_usd, price_leg, usd_str,
+    MAX_PRICE_CARRY_SECONDS, PoolChartContext, PriceLeg, fee_revenue_usd, usd_str,
 };
 use crate::common::ch::millis_to_utc;
 use crate::liquidity_pools::dto::ChartDataPoint;
@@ -271,7 +271,7 @@ async fn fetch_classic_series(
          ORDER BY bucket_ms ASC",
         carry = MAX_PRICE_CARRY_SECONDS,
     );
-    let unpriceable = price_leg(-1, None, None, None);
+    let unpriceable = PriceLeg::default();
     let leg_a = legs.first().unwrap_or(&unpriceable);
     let buckets = client
         .query(&sql)

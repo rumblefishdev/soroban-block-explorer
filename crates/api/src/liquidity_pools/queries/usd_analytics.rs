@@ -16,7 +16,7 @@ pub(super) fn price_leg_of(id: i64, identities: &HashMap<i64, ResolvedAsset>) ->
             r.issuer.as_deref(),
             r.contract_strkey.as_deref(),
         ),
-        None => price_leg(-1, None, None, None),
+        None => PriceLeg::default(),
     }
 }
 
@@ -29,11 +29,13 @@ pub(super) fn price_leg_of(id: i64, identities: &HashMap<i64, ResolvedAsset>) ->
 // cluster. Nothing is materialized back into `liquidity_pool_snapshots`
 // (the RMT has no version column; a write-back would race live inserts).
 //
-// JOIN interop contract (prices views.sql header, pinned 2026-06-16):
+// JOIN interop contract (prices views.sql header, pinned 2026-06-16; the
+// contract address joined the key in task 0615, checked 2026-10-08):
 // key = (asset_kind, asset_code, issuer_address, contract_address) with
 // asset_kind ∈ ('native','credit','contract'); native XLM is
-// ('native','XLM','',''); a Soroban token is ('contract','','',C…); bucket is a grain-floored DateTime. Grains provided:
-// 1h + 1d only — the 1w chart interval joins the DAILY series.
+// ('native','XLM','',''); a Soroban token is ('contract','','',C…); bucket
+// is a grain-floored DateTime. Grains provided: 1h + 1d only — the 1w chart
+// interval joins the DAILY series.
 //
 // Two deliberate traps documented in the task
 // (notes/R-prices-freeze-incident-and-current-price-usd-v13.md):
@@ -89,7 +91,8 @@ pub(super) const MAX_PRICE_CARRY_SECONDS: i64 = 48 * 3600;
 ///
 /// `Hash` so it can key the [`fetch_last_closes`] result directly — the
 /// per-row lookup on the list path then costs no allocation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// `Default` is the unpriceable identity: an empty kind matches no prices row.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct PriceLeg {
     pub kind: &'static str,
     pub code: String,
@@ -123,7 +126,7 @@ pub fn price_leg(
                 issuer: i.to_string(),
                 contract: String::new(),
             },
-            _ => unpriceable(),
+            _ => PriceLeg::default(),
         },
         3 => match contract {
             Some(c) if !c.is_empty() => PriceLeg {
@@ -132,19 +135,9 @@ pub fn price_leg(
                 issuer: String::new(),
                 contract: c.to_string(),
             },
-            _ => unpriceable(),
+            _ => PriceLeg::default(),
         },
-        _ => unpriceable(),
-    }
-}
-
-/// The identity that matches no prices row.
-fn unpriceable() -> PriceLeg {
-    PriceLeg {
-        kind: "",
-        code: String::new(),
-        issuer: String::new(),
-        contract: String::new(),
+        _ => PriceLeg::default(),
     }
 }
 

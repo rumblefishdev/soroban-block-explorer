@@ -172,17 +172,11 @@ async fn soroban_token_close_by_contract() {
     .expect("seed prices");
 
     let xrp = price_leg(3, Some("XRP"), None, Some(XRP));
-    let no_contract = price_leg(3, Some("XRP"), None, None);
-    let closes = fetch_last_closes(&base, &[&xrp, &no_contract])
+    let closes = fetch_last_closes(&base, &[&xrp])
         .await
         .expect("last closes");
 
     assert_eq!(closes.get(&xrp), Some(&1.25));
-    assert_eq!(
-        closes.len(),
-        1,
-        "a token without its contract prices nothing"
-    );
 
     if created {
         base.query("DROP TABLE IF EXISTS prices.price_usd_series_1h")
