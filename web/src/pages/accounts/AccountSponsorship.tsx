@@ -38,11 +38,12 @@ function EntryLabel({ entry }: { entry: AccountSponsoredEntry }) {
     return (
       <Stack direction="row" spacing={1} alignItems="center">
         <span>Signer</span>
-        {/* Only `G…` signers are accounts; hash signers link nowhere. */}
+        {/* A signer is a key, not an account: most have no account entry
+            on the ledger, so a link would land on a missing page. */}
         <IdentifierDisplay
           value={entry.signer}
           type="account"
-          linked={entry.signer.startsWith('G')}
+          linked={false}
           fontSize={12}
         />
       </Stack>
@@ -175,6 +176,13 @@ export function SponsorshipList({
           </Box>
         );
       })}
+      {unlistedReserves(data) > 0 && (
+        <Line>
+          {`${formatAmount(unlistedReserves(data))} more sponsored ${
+            unlistedReserves(data) === 1 ? 'reserve is' : 'reserves are'
+          } on offers, data entries or pool shares, which are not listed here.`}
+        </Line>
+      )}
       {paged && (
         <PaginationControls
           caption={`${start + 1}–${start + shown.length} of ${ordered.length}`}
@@ -190,11 +198,15 @@ export function SponsorshipList({
 
 /** `6 of 6 reserves paid by 2 sponsors` — and says when some are not listed. */
 export function sponsorshipMeta(data: AccountSponsorshipResponse): string {
-  const listed = data.entries.reduce((sum, e) => sum + e.reserves, 0);
   const sponsors = new Set(data.entries.map((e) => e.sponsor)).size;
-  return `${formatAmount(listed)} of ${formatAmount(
-    data.num_sponsored
-  )} reserves paid by ${sponsors} ${sponsors === 1 ? 'sponsor' : 'sponsors'}`;
+  return `${sponsors} ${sponsors === 1 ? 'sponsor' : 'sponsors'}`;
+}
+
+/** Sponsored reserves the list cannot name — offers, data entries, pool
+ * shares, or a batch RPC did not return. */
+export function unlistedReserves(data: AccountSponsorshipResponse): number {
+  const listed = data.entries.reduce((sum, e) => sum + e.reserves, 0);
+  return Math.max(0, data.num_sponsored - listed);
 }
 
 /**

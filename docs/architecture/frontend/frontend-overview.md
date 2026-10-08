@@ -640,13 +640,13 @@ describe reserves that no longer exist) — and the page then hides the row.
 
 **Sponsored reserves card** (task 0629, stage 2): for an account with sponsored reserves,
 a card after Signers lists which of its entries another account pays for — the account's
-base reserve, each sponsored trustline and signer — grouped by sponsor, with
-`N of M reserves paid by K sponsors` in the header (M is the chain's `num_sponsored`; N is
-less when offers, data entries or pool-share trustlines are sponsored, more than 999
-trustlines are held, or a trustline batch RPC did not answer — none of which are listed). It comes from `GET /v1/accounts/{id}/sponsorship`, which the API answers live
+base reserve, each sponsored trustline and signer — grouped by sponsor, with the number of sponsors in the header; when the chain's
+`num_sponsored` is larger than what the list shows (offers, data entries, pool-share
+trustlines, or a trustline batch RPC did not answer — none of which are listed), a line
+under the list says how many reserves are not named. It comes from `GET /v1/accounts/{id}/sponsorship`, which the API answers live
 from Soroban RPC (`getLedgerEntries`, each entry's `sponsoring_id`) with the account's
-open classic trustlines from `balances` as keys (calls of 200 keys, 20 s wall-clock
-cap). The card loads after the page with the shared skeleton and error state, and pages
+open classic trustlines from `balances` as keys (calls of 200 keys, at most six: the protocol caps an account at 1,000 sub-entries;
+20 s wall-clock cap). The card loads after the page with the shared skeleton and error state, and pages
 like the Assets card (`PAGE_SIZE`, position in `?sponsors=`).
 
 ### 6.8 Assets (`/assets`)

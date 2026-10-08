@@ -19,9 +19,9 @@ use super::rpc_pool::{RpcFailure, RpcPool};
 /// `getLedgerEntries` accepts at most 200 keys a call.
 const KEYS_PER_CALL: usize = 200;
 
-/// Five calls at most: the account plus 999 trustlines. An account with more
-/// lists the first 999 and says so through the reserve count.
-const MAX_TRUSTLINES: usize = 999;
+/// The protocol caps an account at 1,000 sub-entries, so it never holds more
+/// trustlines than this — every one is asked for, in six calls at most.
+const MAX_TRUSTLINES: usize = 1000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {

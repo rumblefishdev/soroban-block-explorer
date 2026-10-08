@@ -66,12 +66,20 @@ describe('AccountSponsorship', () => {
     expect(screen.getByText('1 reserve')).toBeInTheDocument();
   });
 
-  it('counts what is listed against what the chain holds', () => {
-    expect(sponsorshipMeta(GBEEFP)).toBe('6 of 6 reserves paid by 2 sponsors');
-    // An offer or data entry the list cannot name.
-    expect(sponsorshipMeta({ ...GBEEFP, num_sponsored: 7 })).toBe(
-      '6 of 7 reserves paid by 2 sponsors'
+  it('heads the card with the number of sponsors', () => {
+    expect(sponsorshipMeta(GBEEFP)).toBe('2 sponsors');
+    expect(
+      sponsorshipMeta({ ...GBEEFP, entries: GBEEFP.entries.slice(0, 1) })
+    ).toBe('1 sponsor');
+  });
+
+  it('says how many sponsored reserves the list cannot name', () => {
+    renderWithProviders(
+      <SponsorshipList data={{ ...GBEEFP, num_sponsored: 7 }} />
     );
+    expect(
+      screen.getByText(/1 more sponsored reserve is on offers/)
+    ).toBeInTheDocument();
   });
 
   it('is not shown for an account nobody sponsors', () => {
