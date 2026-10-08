@@ -1,7 +1,7 @@
-//! Task 0620 — `decimals`, `name` and `symbol` of every token contract, from
-//! its own functions, into `soroban_contract_metadata`.
+//! Task 0620 — `decimals`, `name` and `symbol` of every token and NFT
+//! contract, from its own functions, into `soroban_contract_metadata`.
 //!
-//! For each non-SAC contract whose program declares `decimals`, the functions
+//! For each non-SAC contract whose program `has_metadata`, the functions
 //! its program declares among the three are run locally (`contract-executor`)
 //! over the program bytes (`wasm_programs.code`) and the instance entry
 //! (`contract_instances`). A run that asks for another contract's instance or
@@ -26,7 +26,8 @@ use crate::error::BackfillError;
 use crate::sink::Sink;
 use crate::util::insert_rows;
 use indexer::token_metadata_by_functions::{
-    Answer, Entries, code_entry, code_key, instance_key, load_instances, read_metadata,
+    Answer, Entries, code_entry, code_key, has_metadata, instance_key, load_instances,
+    read_metadata,
 };
 
 /// Contracts per instance query and rows per insert.
@@ -34,8 +35,8 @@ const CHUNK: usize = 1_000;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ContractMetadataBackfillStats {
-    /// Token contracts considered (program declares `decimals`).
-    pub tokens: u64,
+    /// Contracts considered (program `has_metadata`).
+    pub contracts: u64,
     /// No instance row yet (`contract-instance-backfill` not run for it).
     pub no_instance: u64,
     /// The program's bytes are not stored (`wasm-code-backfill` not run).
@@ -56,7 +57,7 @@ pub struct ContractMetadataBackfillStats {
 }
 
 #[derive(Row, Deserialize)]
-struct TokenRow {
+struct ContractRow {
     contract_id: String,
     wasm_hash: [u8; 32],
     declares: Vec<String>,
@@ -109,9 +110,9 @@ pub async fn execute(
         network_id,
     };
 
-    // Every non-SAC contract whose program declares `decimals`, with the
-    // functions its program declares among the three.
-    let tokens = client
+    // Every non-SAC contract whose program `has_metadata`, with the functions
+    // its program declares among the three.
+    let mut contracts = client
         .query(
             "SELECT sc.contract_id AS contract_id, \
                     assumeNotNull(sc.wasm_hash) AS wasm_hash, \
@@ -121,18 +122,19 @@ pub async fn execute(
              FROM soroban_contracts AS sc FINAL \
              INNER JOIN (SELECT wasm_hash, metadata FROM wasm_programs FINAL) AS wp \
                  ON wp.wasm_hash = assumeNotNull(sc.wasm_hash) \
-             WHERE NOT sc.is_sac AND sc.wasm_hash IS NOT NULL AND has(declares, 'decimals') \
+             WHERE NOT sc.is_sac AND sc.wasm_hash IS NOT NULL AND notEmpty(declares) \
              ORDER BY contract_id",
         )
-        .fetch_all::<TokenRow>()
+        .fetch_all::<ContractRow>()
         .await?;
+    contracts.retain(|c| has_metadata(&c.declares));
 
-    // The token programs' bytes, once each. `toFixedString`: see
+    // Their programs' bytes, once each. `toFixedString`: see
     // `load_instances`.
-    let mut token_programs: Vec<String> = tokens.iter().map(|t| hex::encode(t.wasm_hash)).collect();
-    token_programs.sort();
-    token_programs.dedup();
-    // Every token's program and instance, loaded once; a run that asks for
+    let mut programs: Vec<String> = contracts.iter().map(|c| hex::encode(c.wasm_hash)).collect();
+    programs.sort();
+    programs.dedup();
+    // Every contract's program and instance, loaded once; a run that asks for
     // another contract's adds it here.
     let mut entries = Entries::new();
     for row in client
@@ -142,15 +144,15 @@ pub async fn execute(
                AND wasm_hash IN (SELECT toFixedString(unhex(arrayJoin(?)), 32)) \
              LIMIT 1 BY wasm_hash",
         )
-        .bind(token_programs)
+        .bind(programs)
         .fetch_all::<ProgramRow>()
         .await?
     {
         entries.insert(code_key(row.wasm_hash), code_entry(row.wasm_hash, row.code));
     }
-    let ids: Vec<[u8; 32]> = tokens
+    let ids: Vec<[u8; 32]> = contracts
         .iter()
-        .filter_map(|t| stellar_strkey::Contract::from_string(&t.contract_id).ok())
+        .filter_map(|c| stellar_strkey::Contract::from_string(&c.contract_id).ok())
         .map(|c| c.0)
         .collect();
     for chunk in ids.chunks(CHUNK) {
@@ -170,20 +172,20 @@ pub async fn execute(
         .collect();
 
     let mut stats = ContractMetadataBackfillStats {
-        tokens: tokens.len() as u64,
+        contracts: contracts.len() as u64,
         dry_run,
         ..Default::default()
     };
     info!(
-        tokens = stats.tokens,
+        contracts = stats.contracts,
         ledger = ledger.sequence,
         "contract_metadata_backfill: start"
     );
 
     let mut rows = Vec::new();
-    for token in &tokens {
-        let Ok(id) = stellar_strkey::Contract::from_string(&token.contract_id) else {
-            warn!(contract_id = %token.contract_id, "not a contract StrKey, skipped");
+    for contract in &contracts {
+        let Ok(id) = stellar_strkey::Contract::from_string(&contract.contract_id) else {
+            warn!(contract_id = %contract.contract_id, "not a contract StrKey, skipped");
             continue;
         };
         let Some(Some(instance)) = entries.get(&instance_key(id.0)) else {
@@ -191,12 +193,12 @@ pub async fn execute(
             continue;
         };
         let instance_ledger = i64::from(instance.last_modified_ledger_seq);
-        if !matches!(entries.get(&code_key(token.wasm_hash)), Some(Some(_))) {
+        if !matches!(entries.get(&code_key(contract.wasm_hash)), Some(Some(_))) {
             stats.no_program += 1;
             continue;
         }
         let metadata =
-            match read_metadata(client, &ledger, id.0, &token.declares, &mut entries).await? {
+            match read_metadata(client, &ledger, id.0, &contract.declares, &mut entries).await? {
                 Answer::Metadata(metadata) => metadata,
                 Answer::NeedsContractData => {
                     stats.needs_contract_data += 1;
@@ -209,18 +211,18 @@ pub async fn execute(
             };
         let (name, symbol, decimals) = (metadata.name, metadata.symbol, metadata.decimals);
         let computed = StoredMetadata {
-            contract_id: token.contract_id.clone(),
+            contract_id: contract.contract_id.clone(),
             name: name.clone(),
             symbol: symbol.clone(),
             decimals,
         };
-        match stored.get(&token.contract_id) {
+        match stored.get(&contract.contract_id) {
             None => stats.new += 1,
             Some(before) if *before == computed => stats.same += 1,
             Some(before) => {
                 stats.different += 1;
                 info!(
-                    contract_id = %token.contract_id,
+                    contract_id = %contract.contract_id,
                     stored = ?(&before.name, &before.symbol, before.decimals),
                     computed = ?(&name, &symbol, decimals),
                     "contract_metadata_backfill: differs from the stored row"
@@ -228,7 +230,7 @@ pub async fn execute(
             }
         }
         rows.push(SorobanContractMetadataRow {
-            contract_id: token.contract_id.clone(),
+            contract_id: contract.contract_id.clone(),
             name,
             symbol,
             decimals,

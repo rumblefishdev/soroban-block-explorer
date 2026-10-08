@@ -422,9 +422,11 @@ read from RPC and checked against their hash), `contract-instance-backfill`
 versioned by the entry's own last-modified ledger; run it only **after** the
 indexer that writes the table is deployed, or an instance changed in between
 is written by neither), `contract-metadata-backfill` (`decimals`, `name`,
-`symbol` of every token contract, read by running its own functions locally
-over the two tables above, into `soroban_contract_metadata`; run it after both
-fills). Most one-shot ops
+`symbol` of every token and NFT contract, read by running its own functions
+locally over the two tables above, into `soroban_contract_metadata`; run it
+after both fills, and after any `run` over history: during `run` a program
+uploaded earlier in the same partition is not readable yet, so its contracts
+get no metadata until this command fills them). Most one-shot ops
 subcommands take `--dry-run`. No separate bins remain.
 
 Seven spent one-shots were removed in lore 0425 — `wasm-upgrade-backfill` (0320),

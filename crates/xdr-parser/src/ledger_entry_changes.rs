@@ -11,9 +11,6 @@ use serde_json::{Value, json};
 use stellar_xdr::*;
 
 use crate::scval::scval_to_typed_json;
-use crate::token_metadata::{
-    TokenMetadata, extract_token_metadata, has_metadata_key, is_stellar_asset_instance,
-};
 use crate::types::ExtractedLedgerEntryChange;
 
 /// Extract all ledger entry changes from a transaction's metadata.
@@ -158,26 +155,26 @@ fn extract_single_change(
     created_at: i64,
     change_index: u32,
 ) -> Option<ExtractedLedgerEntryChange> {
-    let (change_type, entry_type, key, data, token_metadata) = match change {
+    let (change_type, entry_type, key, data) = match change {
         LedgerEntryChange::Created(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            ("created", et, k, Some(d), entry_token_metadata(entry))
+            ("created", et, k, Some(d))
         }
         LedgerEntryChange::Updated(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            ("updated", et, k, Some(d), entry_token_metadata(entry))
+            ("updated", et, k, Some(d))
         }
         LedgerEntryChange::Removed(ledger_key) => {
             let (et, k) = extract_key_info(ledger_key);
-            ("removed", et, k, None, None)
+            ("removed", et, k, None)
         }
         LedgerEntryChange::State(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            ("state", et, k, Some(d), entry_token_metadata(entry))
+            ("state", et, k, Some(d))
         }
         LedgerEntryChange::Restored(entry) => {
             let (et, k, d) = extract_entry_info(entry);
-            ("restored", et, k, Some(d), entry_token_metadata(entry))
+            ("restored", et, k, Some(d))
         }
     };
 
@@ -191,47 +188,7 @@ fn extract_single_change(
         operation_index,
         ledger_sequence,
         created_at,
-        token_metadata,
     })
-}
-
-/// Pull token metadata (`name`/`symbol`/`decimals`) from a contract-instance
-/// entry's stored value. Returns `None` for any non-`ContractData` entry, a
-/// value that is not a contract instance carrying a `METADATA` struct, OR a SAC
-/// instance.
-///
-/// SACs are skipped here on purpose: a SAC *does* carry METADATA on-chain, but
-/// its name (`CODE:ISSUER`) / symbol (= asset code) / decimals (= 7) derive from
-/// the asset identity, so we never store a `soroban_contract_metadata` row for
-/// it. Returning `None` is the single signal the producer
-/// (`state::extract_contract_metadata_writes`) keys off — no separate `is_sac`
-/// flag is threaded on the change. See `crate::token_metadata`.
-fn entry_token_metadata(entry: &LedgerEntry) -> Option<TokenMetadata> {
-    let LedgerEntryData::ContractData(cd) = &entry.data else {
-        return None;
-    };
-    // SAC: carries METADATA on-chain, but name/symbol/decimals derive from the
-    // asset identity — skip silently (an expected non-store, not a miss).
-    if is_stellar_asset_instance(&cd.val) {
-        return None;
-    }
-    match extract_token_metadata(&cd.val) {
-        Some(md) => Some(md),
-        // A METADATA key is present but yielded nothing usable (non-Map struct,
-        // or name/symbol/decimals in a shape we don't decode). Surface the
-        // contract instead of silently dropping it — a non-standard token we'd
-        // otherwise never know we missed ("monitored UNKNOWN"). Broaden the
-        // decoder only once a real shape shows up here.
-        None if has_metadata_key(&cd.val) => {
-            tracing::warn!(
-                contract = %cd.contract,
-                "contract instance carries Symbol(\"METADATA\") but no usable \
-                 name/symbol/decimals decoded — non-standard shape, skipped"
-            );
-            None
-        }
-        None => None,
-    }
 }
 
 // ---------------------------------------------------------------------------

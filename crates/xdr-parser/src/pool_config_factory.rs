@@ -555,7 +555,6 @@ mod tests {
             operation_index: Some(0),
             ledger_sequence: 64_030_567,
             created_at: 0,
-            token_metadata: None,
         }
     }
 

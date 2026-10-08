@@ -289,30 +289,18 @@ entities:
   whole-row RMT replace never clobbers deploy identity (the naive filter-flip
   rejected in 0283). The classification cache is evicted for upgraded
   `contract_id`s so the new verdict takes effect.
-- contract token metadata → `soroban_contract_metadata` side table (ClickHouse,
-  task 0297). Being replaced by running the token's own `decimals` / `name` /
-  `symbol` functions locally (`crates/contract-executor`, the network's own
-  `soroban-env-host`, over `wasm_programs.code` + `contract_instances`;
-  [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md)):
-  `backfill-runner contract-metadata-backfill` writes every token this way,
-  and the indexer does it live for every token whose instance changed in the
-  ledger (deploy, upgrade, storage write), taking the place of the storage
-  read below for that contract; a token the run does not answer keeps the
-  storage read (task 0620). `name` / `symbol` / `decimals` are read from the contract instance
-  entry's metadata struct (`{decimal?, name, symbol}`) via
-  `token_metadata::extract_token_metadata`, collected by
-  `state::extract_contract_metadata_writes` on `created` + `updated` instance
-  changes (SACs skipped — derivable from the SAC identity). Two on-chain key
-  shapes are matched (`token_metadata::is_metadata_key`): fungible SEP-41 / OZ
-  tokens use `Symbol("METADATA")`; OpenZeppelin **NFTs** use the
-  `NFTStorageKey::Metadata` enum variant, which serializes as
-  `Vec([Symbol("Metadata")])` — so an NFT collection name is captured straight
-  from the ledger (lore-0340). The earlier `Symbol("METADATA")`-only match missed
-  the NFT key: the false "0%" that had wrongly implied a `name()` RPC was needed.
-  This also corrects the legacy assumption that token names are a standalone
-  `Symbol("name")` entry — they are not (that path matched 0 contracts); the name
-  lives nested in the metadata struct in instance storage, which
-  `scval_to_typed_json` used to drop.
+- contract token and NFT metadata → `soroban_contract_metadata` side table
+  (ClickHouse, task 0297) — **not parsed from the ledger**. The indexer runs the
+  contract's own `decimals` / `name` / `symbol` functions locally
+  (`crates/contract-executor`, the network's own `soroban-env-host`, over
+  `wasm_programs.code` + `contract_instances`;
+  [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
+  for every contract whose instance changed and whose program declares
+  `decimals` or `name` and `symbol`; `backfill-runner contract-metadata-backfill`
+  does it once for all of them (task 0620). The parser no longer reads the
+  instance-storage `METADATA` struct: that key is a convention of one contract
+  library, not a standard, and the functions answer for 3,864 of the 3,872
+  tokens and 77 of the 78 NFTs it covered (measured 2026-10-08).
 - WASM program (uploaded, rewritten or restored) → `wasm_programs` row keyed
   by wasm_hash: the program bytes and the SEP-48-derived interface JSON,
   empty when the program has no `contractspecv0` section

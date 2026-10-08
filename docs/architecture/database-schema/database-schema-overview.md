@@ -971,14 +971,14 @@ CREATE INDEX idx_contracts_prefix ON soroban_contracts (contract_id text_pattern
 > No backfill exists or can exist: references are impossible before the
 > protocol-28 vote, so the table is complete from its first row.
 
-> **On-chain token metadata (task 0297, ClickHouse).** `name` / `symbol` /
-> `decimals` for Soroban tokens are on-ledger in the contract's instance storage
-> under `Symbol("METADATA")` (a `{decimal, name, symbol}` struct — NOT a
-> standalone `Symbol("name")` entry; the `name` column above is empirically
-> empty). On the CH datastore the parser recovers them into a dedicated side
-> table `soroban_contract_metadata(contract_id, name, symbol, decimals, version)`
+> **On-chain token metadata (tasks 0297, 0620, ClickHouse).** `name` / `symbol`
+> / `decimals` of Soroban tokens (SEP-41) and NFTs (SEP-50) are what the
+> contract's own functions return; the indexer runs them locally whenever the
+> contract's instance changes (the `name` column above is empirically empty).
+> They land in a dedicated side table
+> `soroban_contract_metadata(contract_id, name, symbol, decimals, version)`
 > — `ReplacingMergeTree(version)`, key `contract_id` — written by the indexer
-> (`created` + `updated`, SACs skipped) and composed at read (`LEFT JOIN`;
+> (SACs skipped) and composed at read (`LEFT JOIN`;
 > `decimals` is 7 for native and classic/SAC, `null` for a Soroban token that
 > publishes none — never a guessed 7). It is a separate table, not columns
 > on `soroban_contracts`: RMT whole-row replace + that table's multiple writers

@@ -283,8 +283,8 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Task 0620 — `decimals`, `name` and `symbol` of every token contract
-    /// (program declares `decimals`), read by running its own functions
+    /// Task 0620 — `decimals`, `name` and `symbol` of every token and NFT
+    /// contract (`has_metadata`), read by running its own functions
     /// locally over `wasm_programs.code` and `contract_instances`, written to
     /// `soroban_contract_metadata`. Run after `wasm-code-backfill` and
     /// `contract-instance-backfill`. Idempotent. `--dry-run` compares with
@@ -474,11 +474,11 @@ async fn main() {
                 .await
                 .expect("contract_metadata_backfill failed — idempotent, safe to re-run");
             println!(
-                "contract_metadata_backfill completed (dry_run={}): tokens={} no_instance={} \
+                "contract_metadata_backfill completed (dry_run={}): contracts={} no_instance={} \
                  no_program={} needs_contract_data={} failed={} same={} different={} new={} \
                  written={}",
                 s.dry_run,
-                s.tokens,
+                s.contracts,
                 s.no_instance,
                 s.no_program,
                 s.needs_contract_data,

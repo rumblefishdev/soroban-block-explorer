@@ -93,24 +93,17 @@ pub fn call_view(
         ..Default::default()
     };
 
-    // A panic inside the host is reported as a failure of this one call: the
-    // caller is the indexer, and one contract must never stop a ledger.
-    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        invoke_host_function_in_recording_mode(
-            &Budget::default(),
-            false,
-            &host_function,
-            &source,
-            RecordingInvocationAuthMode::recording(true, false),
-            ledger_info,
-            snapshot.clone(),
-            [0; 32],
-            &mut Vec::new(),
-        )
-    }));
-    let Ok(result) = run else {
-        return ViewOutcome::Failed("the host panicked".to_string());
-    };
+    let result = invoke_host_function_in_recording_mode(
+        &Budget::default(),
+        false,
+        &host_function,
+        &source,
+        RecordingInvocationAuthMode::recording(true, false),
+        ledger_info,
+        snapshot.clone(),
+        [0; 32],
+        &mut Vec::new(),
+    );
 
     // The host may ask for the same key more than once in a run.
     let mut missing = snapshot.missing.take();

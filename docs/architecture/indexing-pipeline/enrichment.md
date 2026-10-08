@@ -43,9 +43,10 @@ beyond the indexer's standard stream:
   produced by the contract's `token_uri(token_id)` view function
   returning a URL to a JSON document hosted on IPFS or HTTPS.
 - **NFT collection name — ledger-primary, `name()` fallback** (task 0340
-  parser-first redirect). The collection name is captured from the contract
-  instance-storage metadata struct into `soroban_contract_metadata` by the
-  indexer (the OpenZeppelin `NFTStorageKey::Metadata` key — Fix A / #330) and
+  parser-first redirect). The indexer writes the collection name into
+  `soroban_contract_metadata` by running the contract's own SEP-50 `name()`
+  locally whenever its instance changes (task 0620; until then it read the
+  OpenZeppelin `NFTStorageKey::Metadata` struct — Fix A / #330), and it is
   served on `nfts.collection_name` via
   `COALESCE(soroban_contract_metadata.name, nft_enrichment.collection_name)`
   (Fix B / #331). It is **not** in the `token_uri()` JSON (no real-world

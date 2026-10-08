@@ -121,9 +121,14 @@ is the deploy/upgrade ledger despite its name).
    tables (PR 3a, split from the live path). Contracts whose functions read persistent data: task 0633.
    Live in the indexer (PR 3b): every token whose instance changed in the
    ledger; checked on 8 token-deploy ledgers, 9/9 equal to RPC.
-4. On token deploy, instance change and WASM upgrade: run `decimals`, `name`,
-   `symbol`; write `soroban_contract_metadata` with the ledger. Remove the
-   `METADATA` storage read once the backfilled values match.
+4. The functions are the only source (PR 4, decided 2026-10-08): the parser
+   no longer reads `METADATA`, and NFTs (program declares `name` and `symbol`)
+   are run as tokens are. Measured over the 3,955 contracts with a stored row:
+   the functions return the same for 3,864 of 3,872 tokens and 77 of 78 NFTs;
+   12 contracts (5 needing persistent data, 2 failing, 5 declaring none of the
+   three) keep their stored row and get no new write. A ClickHouse read error
+   now fails the ledger, as a write error does; the executor no longer catches
+   host panics (none in any run).
 5. Backfill `soroban_contract_metadata` for every token contract.
 6. Protocol upgrades: bump `soroban-env-host` with `stellar-xdr`.
 
@@ -133,7 +138,7 @@ is the deploy/upgrade ledger despite its name).
       functions; 0 differences against RPC simulation on one contract per
       program.
 - [ ] The four Aquarius pools of 0617 show TVL.
-- [ ] `token_metadata.rs` storage-key reading removed.
+- [x] `token_metadata.rs` storage-key reading removed.
 - [ ] Program bytes stored for every known program; new uploads written live.
 - [ ] **Docs updated** — `database-schema-overview.md` (`wasm_programs.code`),
       `indexing-pipeline-overview.md`, `xdr-parsing-overview.md`.

@@ -1,8 +1,7 @@
-//! Full end-to-end for the on-chain token-metadata pipeline (task 0297), all
+//! Full end-to-end for the token-metadata write and read paths (task 0297), all
 //! THREE fields (`name` / `symbol` / `decimals`) against a live ClickHouse:
 //!
-//!   raw `ScVal` METADATA struct (as `ledger_entry_changes` produces it)
-//!     → `xdr_parser::extract_token_metadata`        (parse all 3)
+//!   a metadata write (what a token's functions returned, task 0620)
 //!     → `db_clickhouse::build_metadata_rows`        (map to the side-table row)
 //!     → INSERT `soroban_contract_metadata`          (real CH write)
 //!     → read back two ways:
@@ -12,7 +11,7 @@
 //!
 //! Uses a Soroban token with `decimals = 6` (NOT the protocol default 7) so the
 //! read provably surfaces the stored value, not the fallback. The whole chain —
-//! parse → write → read-compose — runs against a real server, closing the gap
+//! write → read-compose — runs against a real server, closing the gap
 //! the per-layer unit tests cannot.
 //!
 //! Gated on `CLICKHOUSE_URL` (skips cleanly when unset). Run locally:
@@ -25,56 +24,11 @@ use db_clickhouse::persist::rows::SorobanContractMetadataRow;
 use db_clickhouse::persist::stage::build_metadata_rows;
 use db_clickhouse::{Config, apply_init_sql, client};
 use serde::Deserialize;
-use stellar_xdr::{
-    ContractExecutable, Hash, ScContractInstance, ScMap, ScMapEntry, ScString, ScSymbol, ScVal,
-};
-use xdr_parser::token_metadata::extract_token_metadata;
+use xdr_parser::token_metadata::TokenMetadata;
 use xdr_parser::types::ExtractedContractMetadata;
 
 const CONTRACT: &str = "CMETAE2E0000000000000000000000000000000000000000000000001";
 const E2E_LEDGER: u32 = 99_999_777;
-
-fn sym(s: &str) -> ScVal {
-    ScVal::Symbol(ScSymbol(s.try_into().unwrap()))
-}
-fn sstr(s: &str) -> ScVal {
-    ScVal::String(ScString(s.try_into().unwrap()))
-}
-
-/// A contract-instance `ScVal` carrying the SEP-41/OZ `METADATA` struct, exactly
-/// the shape `ledger_entry_changes` hands to `extract_token_metadata`.
-fn instance_with_metadata(name: &str, symbol: &str, decimals: u32) -> ScVal {
-    let meta = ScVal::Map(Some(ScMap(
-        vec![
-            ScMapEntry {
-                key: sym("decimal"),
-                val: ScVal::U32(decimals),
-            },
-            ScMapEntry {
-                key: sym("name"),
-                val: sstr(name),
-            },
-            ScMapEntry {
-                key: sym("symbol"),
-                val: sstr(symbol),
-            },
-        ]
-        .try_into()
-        .unwrap(),
-    )));
-    let storage = ScMap(
-        vec![ScMapEntry {
-            key: sym("METADATA"),
-            val: meta,
-        }]
-        .try_into()
-        .unwrap(),
-    );
-    ScVal::ContractInstance(ScContractInstance {
-        executable: ContractExecutable::Wasm(Hash([0xAB; 32])),
-        storage: Some(storage),
-    })
-}
 
 #[derive(Debug, Row, Deserialize)]
 struct MetaRow {
@@ -112,14 +66,13 @@ async fn token_metadata_three_fields_end_to_end() {
         let _ = cl.query(stmt).execute().await;
     }
 
-    // 1) PARSE — recover all three fields from the raw on-chain METADATA ScVal
-    //    (the exact value `ledger_entry_changes` feeds the producer). decimals = 6
-    //    (a non-default) so the stored value provably flows end to end.
-    let val = instance_with_metadata("liquidFi bridge token", "lUSDC", 6);
-    let md = extract_token_metadata(&val).expect("METADATA parsed from raw ScVal");
-    assert_eq!(md.name.as_deref(), Some("liquidFi bridge token"));
-    assert_eq!(md.symbol.as_deref(), Some("lUSDC"));
-    assert_eq!(md.decimals, Some(6));
+    // 1) A write as a token's functions return it. decimals = 6 (a
+    //    non-default) so the stored value provably flows end to end.
+    let md = TokenMetadata {
+        name: Some("liquidFi bridge token".to_string()),
+        symbol: Some("lUSDC".to_string()),
+        decimals: Some(6),
+    };
 
     let writes = vec![ExtractedContractMetadata {
         contract_id: CONTRACT.to_string(),

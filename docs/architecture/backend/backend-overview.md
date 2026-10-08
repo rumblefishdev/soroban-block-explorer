@@ -449,8 +449,8 @@ verbatim. A bare numeric is rejected with `400 invalid_id`.
 
 The displayed `name`, `symbol`, and `decimals` are **read-composed from side
 tables**, not from the `assets` row — `assets.name` has had no writer since task 0297. On the ClickHouse read path `name` resolves `asset_enrichment.name`
-(classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (on-chain
-SEP-41 `METADATA`, task 0297) → `'Stellar Lumens'` for native; `symbol` /
+(classic/SAC enrichment, task 0231) → `soroban_contract_metadata.name` (the
+contract's own SEP-41 / SEP-50 `name()`, run by the indexer, tasks 0297/0620) → `'Stellar Lumens'` for native; `symbol` /
 `decimals` come from `soroban_contract_metadata`. `decimals` is 7 for native
 and classic/SAC (fixed by the protocol) and `null` for a Soroban token that
 publishes none we could read — its raw amounts then render as "—", never

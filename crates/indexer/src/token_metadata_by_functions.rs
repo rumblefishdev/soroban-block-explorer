@@ -1,8 +1,9 @@
-//! Reading a token's `decimals`, `name` and `symbol` by running its own
-//! functions (task 0620): the run over the program bytes and instances, and
-//! the loading of whatever else a run asks for from `wasm_programs` and
-//! `contract_instances`. Used per ledger by the indexer and by
-//! `backfill-runner run` ([`apply`]), and once over all tokens by
+//! Reading a contract's `decimals`, `name` and `symbol` by running its own
+//! functions (task 0620): the only source of `soroban_contract_metadata`.
+//! The run over the program bytes and instances, and the loading of whatever
+//! else a run asks for from `wasm_programs` and `contract_instances`. Used per
+//! ledger by the indexer and by `backfill-runner run`
+//! ([`contract_metadata_writes`]), and once over all contracts by
 //! `backfill-runner contract-metadata-backfill`.
 
 use std::collections::{BTreeMap, HashMap};
@@ -24,6 +25,17 @@ use xdr_parser::types::ExtractedWasmProgram;
 /// The ledger entries a run may ask for, keyed as the host asks for them: the
 /// entry, or `None` for one known not to exist. It grows as runs ask for more.
 pub type Entries = BTreeMap<LedgerKey, Option<LedgerEntry>>;
+
+/// Whether a program's contracts get metadata: a SEP-41 token declares
+/// `decimals`, a SEP-50 NFT declares `name` and `symbol`. A program declaring
+/// only `name` or only `symbol` is left out — on mainnet those are mostly
+/// contracts of other kinds (a reward claim, a pool) with a `name` of their own.
+pub fn has_metadata(declares: &[String]) -> bool {
+    let decimals = declares.iter().any(|d| d == "decimals");
+    let name = declares.iter().any(|d| d == "name");
+    let symbol = declares.iter().any(|d| d == "symbol");
+    decimals || (name && symbol)
+}
 
 /// What reading one contract's three values came to.
 pub enum Answer {
@@ -62,51 +74,34 @@ struct StoredInstance {
     latest_ledger: i64,
 }
 
-/// Token metadata read by running each token's functions takes the place of
-/// what the storage-key read found for the same contract; a token the run does
-/// not answer keeps the storage-key value. A database error costs only this
-/// ledger's function values, never the ledger.
-pub async fn apply(client: &clickhouse::Client, parsed: &mut crate::handler::process::ParseOutput) {
+/// The `soroban_contract_metadata` writes of a parsed ledger.
+pub async fn contract_metadata_writes(
+    client: &clickhouse::Client,
+    parsed: &crate::handler::process::ParseOutput,
+) -> Result<Vec<ExtractedContractMetadata>, clickhouse::error::Error> {
     let ledger = Ledger {
         sequence: parsed.ledger.sequence,
         timestamp: parsed.ledger.closed_at as u64,
         protocol_version: parsed.ledger.protocol_version,
         network_id: *crate::handler::process::network_id(),
     };
-    let writes = match ledger_metadata_writes(
+    ledger_metadata_writes(
         client,
         &ledger,
         &parsed.contract_instances,
         &parsed.programs,
     )
     .await
-    {
-        Ok(writes) => writes,
-        Err(e) => {
-            tracing::warn!(
-                ledger = ledger.sequence,
-                "token metadata from functions skipped: {e}"
-            );
-            return;
-        }
-    };
-    for write in writes {
-        parsed
-            .contract_metadata_writes
-            .retain(|w| w.contract_id != write.contract_id);
-        parsed.contract_metadata_writes.push(write);
-    }
 }
 
-/// The metadata of every token whose instance changed in this ledger — a
-/// deploy, a program upgrade or a storage write — read by running its
-/// functions.
+/// The metadata of every contract whose instance changed in this ledger — a
+/// deploy, a program upgrade or a storage write — and whose program
+/// [`has_metadata`], read by running its functions.
 ///
-/// A token is a contract whose program declares `decimals`. Programs and
-/// instances come from this ledger first (they may be new), then from
-/// `wasm_programs` and `contract_instances`. A token whose run fails or needs
-/// data we do not store (task 0633) is left out, so the caller keeps whatever
-/// it had for it.
+/// Programs and instances come from this ledger first (they may be new), then
+/// from `wasm_programs` and `contract_instances`. A contract whose run fails or
+/// needs data we do not store (task 0633) gets no write, so its stored row, if
+/// any, stays.
 pub async fn ledger_metadata_writes(
     client: &clickhouse::Client,
     ledger: &Ledger,
@@ -155,7 +150,7 @@ pub async fn ledger_metadata_writes(
         .map(hex::encode)
         .collect();
     if !unknown.is_empty() {
-        // Only the interface first: most changed instances are not tokens
+        // Only the interface first: most changed instances have no metadata
         // (a farm contract rewrites its instance every ledger), and their
         // bytes are not needed. `toFixedString`: see `load_instances`.
         for row in client
@@ -182,7 +177,7 @@ pub async fn ledger_metadata_writes(
         let Some(declared) = declares.get(&wasm_hash) else {
             continue;
         };
-        if !declared.iter().any(|d| d == "decimals") {
+        if !has_metadata(declared) {
             continue;
         }
         if let Answer::Metadata(metadata) =
