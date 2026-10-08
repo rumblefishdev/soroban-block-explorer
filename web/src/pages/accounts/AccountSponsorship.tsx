@@ -1,4 +1,13 @@
-import { Box, Stack, Typography } from '@mui/material';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Box,
+  Stack,
+  Typography,
+} from '@mui/material';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
   AccountSponsoredEntry,
@@ -14,7 +23,6 @@ import {
   PaginationControls,
   QueryErrorState,
 } from '@rumblefish/soroban-block-explorer-ui';
-import { useSearchParams } from 'react-router-dom';
 
 import { useAccountSponsorship } from '../../api/index.js';
 import { PAGE_SIZE } from '../../api/polling.js';
@@ -28,7 +36,7 @@ function EntryLabel({ entry }: { entry: AccountSponsoredEntry }) {
   if (entry.kind === 'trustline' && entry.asset != null) {
     const [code, issuer = ''] = entry.asset.split('-');
     return (
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} alignItems="baseline">
         <span>Trustline {code}</span>
         <IdentifierDisplay value={issuer} type="account" fontSize={12} />
       </Stack>
@@ -36,7 +44,7 @@ function EntryLabel({ entry }: { entry: AccountSponsoredEntry }) {
   }
   if (entry.kind === 'signer' && entry.signer != null) {
     return (
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} alignItems="baseline">
         <span>Signer</span>
         {/* A signer is a key, not an account: most have no account entry
             on the ledger, so a link would land on a missing page. */}
@@ -52,7 +60,7 @@ function EntryLabel({ entry }: { entry: AccountSponsoredEntry }) {
   return <>{entry.kind}</>;
 }
 
-function Line({ children, header }: { children: ReactNode; header?: boolean }) {
+function Line({ children }: { children: ReactNode }) {
   return (
     <Box
       sx={(theme) => ({
@@ -62,10 +70,7 @@ function Line({ children, header }: { children: ReactNode; header?: boolean }) {
         gap: 2,
         px: 2,
         py: 1.25,
-        backgroundColor: header
-          ? theme.palette.surface.grayMainAlt
-          : theme.palette.surface.grayMain,
-        color: header ? theme.palette.text.tertiary : undefined,
+        backgroundColor: theme.palette.surface.grayMain,
         borderBottom: `1px solid ${theme.palette.stroke.default}`,
         '&:last-of-type': { borderBottom: 'none' },
       })}
@@ -85,18 +90,98 @@ function bySponsor(entries: AccountSponsoredEntry[]) {
 }
 
 /**
+ * One sponsor: a header with its total, folding open to the entries it pays.
+ * A sponsor can pay for up to 1,000 trustlines, so its entries are paged
+ * `PAGE_SIZE` at a time.
+ */
+function SponsorGroup({
+  sponsor,
+  entries,
+  defaultExpanded,
+}: {
+  sponsor: string;
+  entries: AccountSponsoredEntry[];
+  defaultExpanded: boolean;
+}) {
+  const [page, setPage] = useState(0);
+  const reserves = entries.reduce((sum, e) => sum + e.reserves, 0);
+  const lastPage = Math.max(0, Math.ceil(entries.length / PAGE_SIZE) - 1);
+  const start = page * PAGE_SIZE;
+  const shown = entries.slice(start, start + PAGE_SIZE);
+  return (
+    <Accordion
+      disableGutters
+      square
+      elevation={0}
+      defaultExpanded={defaultExpanded}
+      sx={(theme) => ({
+        backgroundColor: 'transparent',
+        borderBottom: `1px solid ${theme.palette.stroke.default}`,
+        '&::before': { display: 'none' },
+        '&:last-of-type': { borderBottom: 'none' },
+      })}
+    >
+      <AccordionSummary
+        expandIcon={<KeyboardArrowDownIcon fontSize="small" />}
+        sx={(theme) => ({
+          flexDirection: 'row-reverse',
+          gap: 1,
+          backgroundColor: theme.palette.surface.grayMainAlt,
+          color: theme.palette.text.tertiary,
+          '& .MuiAccordionSummary-content': {
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 2,
+            minWidth: 0,
+          },
+        })}
+      >
+        <Stack direction="row" spacing={1} alignItems="baseline">
+          <Typography variant="bodySmRegular" component="span">
+            Paid by
+          </Typography>
+          <IdentifierDisplay value={sponsor} type="account" fontSize={13} />
+        </Stack>
+        <Typography variant="bodySmRegular" component="span">
+          {formatAmount(reserves)} {reserves === 1 ? 'reserve' : 'reserves'}
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails sx={{ p: 0 }}>
+        {shown.map((e) => (
+          <Line key={`${e.kind}-${e.asset ?? e.signer ?? ''}`}>
+            <EntryLabel entry={e} />
+            <Typography variant="bodyMedium" component="span">
+              {e.reserves}
+            </Typography>
+          </Line>
+        ))}
+        {entries.length > PAGE_SIZE && (
+          <PaginationControls
+            caption={`${start + 1}–${start + shown.length} of ${
+              entries.length
+            }`}
+            canPrev={page > 0}
+            canNext={page < lastPage}
+            onPrev={() => setPage(page - 1)}
+            onNext={() => setPage(page + 1)}
+          />
+        )}
+      </AccordionDetails>
+    </Accordion>
+  );
+}
+
+/**
  * The card's body once the answer is in. Exported for tests.
  *
- * Paged like the Assets card: a page of `PAGE_SIZE` entries, sliced in the
- * order RPC listed them grouped by sponsor, its position in `?sponsors=`. A
- * sponsor whose entries straddle two pages heads both, with its full total.
+ * One folding group per sponsor. A single sponsor opens folded out — there is
+ * nothing to choose between; several start folded, their totals in view.
  */
 export function SponsorshipList({
   data,
 }: {
   data: AccountSponsorshipResponse;
 }) {
-  const [params, setParams] = useSearchParams();
   // Our index counted sponsored reserves the network no longer holds: the
   // account changed since. The network is the newer word.
   if (data.num_sponsored === 0) {
@@ -116,87 +201,29 @@ export function SponsorshipList({
     );
   }
   const groups = bySponsor(data.entries);
-  const totals = new Map(
-    groups.map(([sponsor, entries]) => [
-      sponsor,
-      entries.reduce((sum, e) => sum + e.reserves, 0),
-    ])
-  );
-  const ordered = groups.flatMap(([, entries]) => entries);
-  const paged = ordered.length > PAGE_SIZE;
-  const lastPage = Math.max(0, Math.ceil(ordered.length / PAGE_SIZE) - 1);
-  // Clamped, not trusted, like `?assets=`.
-  const asked = Number(params.get('sponsors') ?? '1');
-  const page = Number.isSafeInteger(asked)
-    ? Math.min(Math.max(asked - 1, 0), lastPage)
-    : 0;
-  const goTo = (next: number) =>
-    setParams(
-      (prev) => {
-        const p = new URLSearchParams(prev);
-        if (next <= 0) p.delete('sponsors');
-        else p.set('sponsors', String(next + 1));
-        return p;
-      },
-      { replace: true }
-    );
-  const start = page * PAGE_SIZE;
-  const shown = paged ? ordered.slice(start, start + PAGE_SIZE) : ordered;
-
+  const unlisted = unlistedReserves(data);
   return (
     <Box>
-      {bySponsor(shown).map(([sponsor, entries]) => {
-        const reserves = totals.get(sponsor) ?? 0;
-        return (
-          <Box key={sponsor}>
-            <Line header>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Typography variant="bodySmRegular" component="span">
-                  Paid by
-                </Typography>
-                <IdentifierDisplay
-                  value={sponsor}
-                  type="account"
-                  fontSize={13}
-                />
-              </Stack>
-              <Typography variant="bodySmRegular" component="span">
-                {formatAmount(reserves)}{' '}
-                {reserves === 1 ? 'reserve' : 'reserves'}
-              </Typography>
-            </Line>
-            {entries.map((e) => (
-              <Line key={`${e.kind}-${e.asset ?? e.signer ?? ''}`}>
-                <EntryLabel entry={e} />
-                <Typography variant="bodyMedium" component="span">
-                  {e.reserves}
-                </Typography>
-              </Line>
-            ))}
-          </Box>
-        );
-      })}
-      {unlistedReserves(data) > 0 && (
+      {groups.map(([sponsor, entries]) => (
+        <SponsorGroup
+          key={sponsor}
+          sponsor={sponsor}
+          entries={entries}
+          defaultExpanded={groups.length === 1}
+        />
+      ))}
+      {unlisted > 0 && (
         <Line>
-          {`${formatAmount(unlistedReserves(data))} more sponsored ${
-            unlistedReserves(data) === 1 ? 'reserve is' : 'reserves are'
+          {`${formatAmount(unlisted)} more sponsored ${
+            unlisted === 1 ? 'reserve is' : 'reserves are'
           } on offers, data entries or pool shares, which are not listed here.`}
         </Line>
-      )}
-      {paged && (
-        <PaginationControls
-          caption={`${start + 1}–${start + shown.length} of ${ordered.length}`}
-          canPrev={page > 0}
-          canNext={page < lastPage}
-          onPrev={() => goTo(page - 1)}
-          onNext={() => goTo(page + 1)}
-        />
       )}
     </Box>
   );
 }
 
-/** `6 of 6 reserves paid by 2 sponsors` — and says when some are not listed. */
+/** The card header: how many accounts pay this account's reserves. */
 export function sponsorshipMeta(data: AccountSponsorshipResponse): string {
   const sponsors = new Set(data.entries.map((e) => e.sponsor)).size;
   return `${sponsors} ${sponsors === 1 ? 'sponsor' : 'sponsors'}`;

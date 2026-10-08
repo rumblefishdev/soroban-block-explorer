@@ -1,5 +1,5 @@
 import type { AccountSponsorshipResponse } from '@rumblefish/api-types';
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { PAGE_SIZE } from '../../../api/polling.js';
@@ -58,6 +58,10 @@ describe('AccountSponsorship', () => {
     renderWithProviders(<SponsorshipList data={GBEEFP} />);
 
     expect(screen.getAllByText('Paid by')).toHaveLength(2);
+    // Two sponsors: both groups start folded, totals in view.
+    for (const header of screen.getAllByRole('button', { expanded: false })) {
+      fireEvent.click(header);
+    }
     expect(screen.getByText('Account (base reserve)')).toBeInTheDocument();
     expect(screen.getByText('Trustline USDC')).toBeInTheDocument();
     expect(screen.getAllByText('Signer')).toHaveLength(3);
@@ -132,7 +136,16 @@ describe('AccountSponsorship', () => {
     expect(screen.getByText(/can be listed here/)).toBeInTheDocument();
   });
 
-  it('pages long lists like the Assets card, totals per sponsor kept', () => {
+  it('opens a lone sponsor folded out', () => {
+    renderWithProviders(
+      <SponsorshipList
+        data={{ num_sponsored: 2, entries: GBEEFP.entries.slice(0, 1) }}
+      />
+    );
+    expect(screen.getByRole('button', { expanded: true })).toBeInTheDocument();
+  });
+
+  it('pages a long group, its total kept', () => {
     const many: AccountSponsorshipResponse = {
       num_sponsored: PAGE_SIZE + 2 + 1,
       entries: [
@@ -152,5 +165,9 @@ describe('AccountSponsorship', () => {
     ).toBeInTheDocument();
     // The sponsor's header counts all its reserves, not just this page's.
     expect(screen.getByText(`${PAGE_SIZE + 3} reserves`)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /next/i }));
+    expect(
+      screen.getByText(`${PAGE_SIZE + 1}–${PAGE_SIZE + 2} of ${PAGE_SIZE + 2}`)
+    ).toBeInTheDocument();
   });
 });
