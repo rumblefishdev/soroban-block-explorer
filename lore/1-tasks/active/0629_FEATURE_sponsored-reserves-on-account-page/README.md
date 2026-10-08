@@ -47,42 +47,18 @@ needs a new table.
   8,358,413 identical, 14,289 ours newer. RPC sample 21/21 equal.
 - Done: #643 (1c, API + page) merged 2026-10-07; ships with the next weekly
   release.
-- Next: after that release — verify on sorobanscan, reply on #454 via
-  `/issues`, tick stage 1; stage 2 (the list) not started.
+- Done: stage 2 — #646, #647, #652 merged 2026-10-08 (card folds by
+  sponsor, signer keys unlinked with a copy button). Checked on 81 accounts
+  against RPC + `stellar xdr decode` (9,082 entries, 0 differences) and on
+  83 against Horizon for trustline completeness (0 missing).
+- Next: after the weekly release — verify both stages on sorobanscan, reply
+  on #454 via `/issues`, close this task.
 - In force: the count shown is the ledger's own counter, copied 1:1, never a
   row count; the list (stage 2) is committed, not optional.
 
 ## Context
 
-**Where the numbers live.** `AccountEntry.ext.v1.ext.v2` carries
-`num_sponsoring` (reserves this account pays for others) and `num_sponsored`
-(reserves of this account paid by others). They change only together with the
-`AccountEntry`, which the live writer already turns into an
-`account_entry_state` row (`persist/stage.rs`, whole-row per observed entry),
-and which the checkpoint seed already covers for accounts older than our
-ledger floor (`backfill-runner/src/snapshot/entry_state.rs`, task 0521). Today
-both counters are read past and dropped.
-
-**Why the counter and not a count of rows.** One sponsored account costs 2
-reserves, a claimable balance one per claimant; the counter is what the
-network enforces and what stellar.expert shows. A list of sponsored entries
-(stage 2) would not sum to it row by row.
-
-**Who is sponsoring, measured 2026-10-06.** Last 7 days on production:
-69,266 `BEGIN_SPONSORING_FUTURE_RESERVES` operations from 100 source accounts,
-56 `REVOKE_SPONSORSHIP` from 4. Read live via RPC `getLedgerEntries`:
-`GAUA7XL5…PNJU` sponsors 4,043,490 reserves, `GDB3RSSW…6CU` 111,104 — so a
-list must be paginated and keyed by sponsor.
-
-**Trap for the refill.** The seed wrote an `account_entry_state` row only
-when the network's entry was newer than our newest row (task 0521), so rows
-written before the columns existed — current, only incomplete — were never
-rewritten. Decided 2026-10-07: the seed writes every live account at the
-entry's own ledger and the version rule decides (equal version: the seed's
-later insert wins; newer live write: ours wins). Rejected: a refill flag with
-a hand-typed ledger floor — more code, a number to get wrong, and the next
-new column would need it again. Given up: 0521's "repeat pass writes ~0"
-signal.
+Where the counters live and why stage 1 indexes them: [notes/R-where-the-counters-live.md](notes/R-where-the-counters-live.md).
 
 ## Implementation Plan
 
@@ -123,6 +99,13 @@ fetcher; PR 2b (#647) adds `GET /v1/accounts/{id}/sponsorship` and a
 the sponsor's side ("whom GAUA7… pays for") — it needs an index over the
 whole network (4M entries for one wallet), stellar.expert does not offer
 it, and nobody asked again; dropped, not deferred.
+
+Re-checked 2026-10-08: Horizon answers it (`accounts?sponsor=X`, 200
+accounts a page in ~1.9 s, sponsor per trustline and signer, none per data
+entry, no total). Declined: it would make the page depend on a public
+service SDF is winding down (no new features, RPC preferred), behind a rate
+limit our Lambdas share through AWS egress. If asked for, build our own
+index instead.
 
 ## Acceptance Criteria
 
