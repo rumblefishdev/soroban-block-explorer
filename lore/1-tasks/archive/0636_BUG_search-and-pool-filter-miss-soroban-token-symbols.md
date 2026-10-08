@@ -2,7 +2,7 @@
 id: '0636'
 title: 'BUG: search and the pool asset filter never match a Soroban token by symbol or name'
 type: BUG
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0615', '0620', '0470', '0371', '0546']
 tags: [priority-high, effort-small, layer-api, search, liquidity-pools]
@@ -16,6 +16,10 @@ history:
     status: active
     who: karolkow
     note: 'Started after 0615 merged.'
+  - date: 2026-10-08
+    status: completed
+    who: karolkow
+    note: 'Merged #658 ([structure only]) and #659. Local API on production data: search and the pool filter find Soroban tokens by symbol/name (SolvBTC first; XLM/SolvBTC 0 → 3 pools); classic results unchanged; every needle incl. single letters 200; non-ASCII names in both cases. Follow-up 0637 (one ticker rule) in backlog. Ships with the next release.'
 ---
 
 # Search and the pool asset filter miss Soroban token symbols
