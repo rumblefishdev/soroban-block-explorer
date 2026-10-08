@@ -1,6 +1,6 @@
 //! The Soroban RPC pool the runtime fetchers share: `getLedgerEntries` with
-//! failover across `SOROBAN_RPC_URLS` (comma-sep) → `SOROBAN_RPC_URL` → SDF
-//! default — the same convention as `enrichment-shared::nft_token_uri`.
+//! failover across `SOROBAN_RPC_URLS` (comma-sep) → `SOROBAN_RPC_URL` → the SDF
+//! mainnet default.
 
 use std::sync::Arc;
 use std::time::Duration;
