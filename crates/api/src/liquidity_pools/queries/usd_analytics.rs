@@ -10,8 +10,13 @@ use crate::common::asset_identity::{ResolvedAsset, resolve_asset_identities};
 /// The prices identity of one leg, from the identity already resolved for it.
 pub(super) fn price_leg_of(id: i64, identities: &HashMap<i64, ResolvedAsset>) -> PriceLeg {
     match identities.get(&id).filter(|r| r.known) {
-        Some(r) => price_leg(r.asset_type, r.asset_code.as_deref(), r.issuer.as_deref()),
-        None => price_leg(-1, None, None),
+        Some(r) => price_leg(
+            r.asset_type,
+            r.asset_code.as_deref(),
+            r.issuer.as_deref(),
+            r.contract_strkey.as_deref(),
+        ),
+        None => price_leg(-1, None, None, None),
     }
 }
 
@@ -25,9 +30,9 @@ pub(super) fn price_leg_of(id: i64, identities: &HashMap<i64, ResolvedAsset>) ->
 // (the RMT has no version column; a write-back would race live inserts).
 //
 // JOIN interop contract (prices views.sql header, pinned 2026-06-16):
-// key = (asset_kind, asset_code, issuer_address) with
+// key = (asset_kind, asset_code, issuer_address, contract_address) with
 // asset_kind ∈ ('native','credit','contract'); native XLM is
-// ('native','XLM',''); bucket is a grain-floored DateTime. Grains provided:
+// ('native','XLM','',''); a Soroban token is ('contract','','',C…); bucket is a grain-floored DateTime. Grains provided:
 // 1h + 1d only — the 1w chart interval joins the DAILY series.
 //
 // Two deliberate traps documented in the task
@@ -89,36 +94,57 @@ pub struct PriceLeg {
     pub kind: &'static str,
     pub code: String,
     pub issuer: String,
+    /// `C…` StrKey of a Soroban token; empty for every other kind.
+    pub contract: String,
 }
 
-/// Map an LP leg (XDR `AssetType` + code + issuer G-strkey) to its prices
-/// identity. LP legs are classic-only (`LiquidityPoolEntry`), so only
-/// native (0) and credit_alphanum4/12 (1|2) occur; anything else — or a
-/// credit leg missing its code/issuer — is unpriceable by construction.
-pub fn price_leg(asset_type: i16, code: Option<&str>, issuer: Option<&str>) -> PriceLeg {
+/// Map a pool leg (asset family + code + issuer G-strkey + contract C-strkey)
+/// to its prices identity: native (0), classic credit (1|2) and a Soroban
+/// token (3, by its contract — task 0615). A SAC leg resolves to its classic
+/// asset's family, so it prices as that asset. Anything else — or a leg
+/// missing the part its kind is keyed by — is unpriceable by construction.
+pub fn price_leg(
+    asset_type: i16,
+    code: Option<&str>,
+    issuer: Option<&str>,
+    contract: Option<&str>,
+) -> PriceLeg {
     match asset_type {
         0 => PriceLeg {
             kind: "native",
             code: "XLM".to_string(),
             issuer: String::new(),
+            contract: String::new(),
         },
         1 | 2 => match (code, issuer) {
             (Some(c), Some(i)) if !c.is_empty() && !i.is_empty() => PriceLeg {
                 kind: "credit",
                 code: c.to_string(),
                 issuer: i.to_string(),
+                contract: String::new(),
             },
-            _ => PriceLeg {
-                kind: "",
+            _ => unpriceable(),
+        },
+        3 => match contract {
+            Some(c) if !c.is_empty() => PriceLeg {
+                kind: "contract",
                 code: String::new(),
                 issuer: String::new(),
+                contract: c.to_string(),
             },
+            _ => unpriceable(),
         },
-        _ => PriceLeg {
-            kind: "",
-            code: String::new(),
-            issuer: String::new(),
-        },
+        _ => unpriceable(),
+    }
+}
+
+/// The identity that matches no prices row.
+fn unpriceable() -> PriceLeg {
+    PriceLeg {
+        kind: "",
+        code: String::new(),
+        issuer: String::new(),
+        contract: String::new(),
     }
 }
 
@@ -444,6 +470,7 @@ struct LastCloseChRow {
     asset_kind: String,
     asset_code: String,
     issuer_address: String,
+    contract_address: String,
     close_usd: Option<String>,
 }
 
@@ -466,7 +493,7 @@ struct LastCloseChRow {
 /// then. Cost of the guard is up to one hour of freshness against a
 /// [`MAX_PRICE_CARRY_SECONDS`] budget — nothing.
 ///
-/// Returns `(kind, code, issuer) → close_usd`; identities with no priced
+/// Returns `(kind, code, issuer, contract) → close_usd`; identities with no priced
 /// candle in the window are simply absent.
 pub(super) async fn fetch_last_closes(
     client: &clickhouse::Client,
@@ -476,19 +503,19 @@ pub(super) async fn fetch_last_closes(
         return Ok(std::collections::HashMap::new());
     }
     let identity_or = std::iter::repeat_n(
-        "(asset_kind = ? AND asset_code = ? AND issuer_address = ?)",
+        "(asset_kind = ? AND asset_code = ? AND issuer_address = ? AND contract_address = ?)",
         legs.len(),
     )
     .collect::<Vec<_>>()
     .join(" OR ");
     let sql = format!(
-        "SELECT asset_kind, asset_code, issuer_address, \
+        "SELECT asset_kind, asset_code, issuer_address, contract_address, \
                 toString(nullIf(argMaxIf(close_usd, bucket, close_usd > 0), 0)) AS close_usd \
          FROM prices.price_usd_series_1h \
          WHERE ({identity_or}) \
            AND bucket >= now() - INTERVAL {carry} SECOND \
            AND bucket <  toStartOfHour(now()) \
-         GROUP BY asset_kind, asset_code, issuer_address",
+         GROUP BY asset_kind, asset_code, issuer_address, contract_address",
         carry = MAX_PRICE_CARRY_SECONDS,
     );
     let mut query = client.query(&sql);
@@ -496,7 +523,8 @@ pub(super) async fn fetch_last_closes(
         query = query
             .bind(leg.kind)
             .bind(leg.code.as_str())
-            .bind(leg.issuer.as_str());
+            .bind(leg.issuer.as_str())
+            .bind(leg.contract.as_str());
     }
     let rows = query.fetch_all::<LastCloseChRow>().await?;
     // Key by the CALLER's `PriceLeg`, not by the returned strings: the leg
@@ -508,7 +536,10 @@ pub(super) async fn fetch_last_closes(
         .filter_map(|r| {
             let close = r.close_usd.as_deref().and_then(parse_f64)?;
             let leg = legs.iter().find(|l| {
-                l.kind == r.asset_kind && l.code == r.asset_code && l.issuer == r.issuer_address
+                l.kind == r.asset_kind
+                    && l.code == r.asset_code
+                    && l.issuer == r.issuer_address
+                    && l.contract == r.contract_address
             })?;
             Some(((*leg).clone(), close))
         })
