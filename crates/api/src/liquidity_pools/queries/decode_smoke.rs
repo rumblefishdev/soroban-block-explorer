@@ -34,7 +34,8 @@ fn client() -> Option<clickhouse::Client> {
     Some(c)
 }
 
-/// `ClassicBucketChRow` reads reserves as `Array(Nullable(Float64))` and money
+/// `ClassicBucketChRow` reads its states as
+/// `Array(Tuple(Int64, Array(Nullable(Float64))))` and money
 /// as `Nullable(Float64)`; formatting is Rust's (task 0199). That is the
 /// wire-type↔struct contract a pure-Rust test cannot check, so assert it
 /// against a real server — including the NULL arms, which an unknown reserve
@@ -54,16 +55,15 @@ async fn chart_row_decodes_nullable_values() {
     // visible (`Unknown expression identifier`).
     let rows = ch
         .query(
-            "SELECT bucket_ms, reserves, price_bucket_s, samples_in_bucket, volume FROM ( \
+            "SELECT bucket_ms, states, samples_in_bucket, volume FROM ( \
                  SELECT toInt64(1700000000000)     AS bucket_ms, \
-                        [toNullable(toFloat64(25.31)), toNullable(toFloat64(2))] AS reserves, \
-                        toInt64(1699920000)        AS price_bucket_s, \
+                        [(toInt64(1699920000), [toNullable(toFloat64(25.31)), toNullable(toFloat64(2))]), \
+                         (toInt64(1699833600), [toNullable(toFloat64(1)), toNullable(toFloat64(1))])] AS states, \
                         toUInt64(7)                AS samples_in_bucket, \
                         CAST(?, 'Nullable(Float64)')    AS volume \
                  UNION ALL \
                  SELECT toInt64(1700000086400000)  AS bucket_ms, \
-                        [CAST(NULL, 'Nullable(Float64)'), toNullable(toFloat64(3))] AS reserves, \
-                        toInt64(1700006400)        AS price_bucket_s, \
+                        [(toInt64(1700006400), [CAST(NULL, 'Nullable(Float64)'), toNullable(toFloat64(3))])] AS states, \
                         toUInt64(0)                AS samples_in_bucket, \
                         CAST(NULL, 'Nullable(Float64)') AS volume \
              ) ORDER BY bucket_ms",
@@ -74,12 +74,17 @@ async fn chart_row_decodes_nullable_values() {
         .expect("ClassicBucketChRow decodes from a real CH");
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].reserves, vec![Some(25.31), Some(2.0)]);
-    assert_eq!(rows[0].price_bucket_s, 1_699_920_000);
+    assert_eq!(
+        rows[0].states,
+        vec![
+            (1_699_920_000, vec![Some(25.31), Some(2.0)]),
+            (1_699_833_600, vec![Some(1.0), Some(1.0)]),
+        ]
+    );
     assert_eq!(rows[0].volume, Some(1.985));
     assert_eq!(rows[0].samples_in_bucket, 7);
     // NULL must survive as None, not decode as 0.0.
-    assert_eq!(rows[1].reserves, vec![None, Some(3.0)]);
+    assert_eq!(rows[1].states, vec![(1_700_006_400, vec![None, Some(3.0)])]);
     assert_eq!(rows[1].volume, None);
     assert_eq!(rows[1].bucket_ms, 1_700_000_086_400_000);
 }
