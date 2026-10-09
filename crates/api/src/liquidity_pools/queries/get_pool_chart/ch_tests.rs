@@ -50,8 +50,10 @@ async fn soroban_volume_series() {
     for sql in [
         "CREATE DATABASE IF NOT EXISTS prices",
         "CREATE TABLE IF NOT EXISTS prices.price_usd_series (asset_kind String, asset_code String, \
-         issuer_address String, bucket DateTime, close_usd Decimal(38, 14)) \
+         issuer_address String, contract_address String, bucket DateTime, close_usd Decimal(38, 14)) \
          ENGINE = MergeTree ORDER BY (asset_kind, asset_code, issuer_address, bucket)",
+        // A table left by a run from before the key carried the contract.
+        "ALTER TABLE prices.price_usd_series ADD COLUMN IF NOT EXISTS contract_address String AFTER issuer_address",
     ] {
         base.query(sql).execute().await.expect("prices table");
     }
@@ -104,7 +106,8 @@ async fn soroban_volume_series() {
              (unhex('{POOL}'), 200, 1, 0, 0, 0, 101, 40000000)"
         ),
         format!(
-            "INSERT INTO prices.price_usd_series VALUES ('credit', '{CODE}', '{ISSUER}', {day_a}, 0.5), \
+            "INSERT INTO prices.price_usd_series (asset_kind, asset_code, issuer_address, bucket, close_usd) \
+             VALUES ('credit', '{CODE}', '{ISSUER}', {day_a}, 0.5), \
              ('credit', '{CODE_B}', '{ISSUER}', {day_a}, 2.0)"
         ),
     ] {
@@ -115,6 +118,7 @@ async fn soroban_volume_series() {
         kind: "credit",
         code: CODE.to_string(),
         issuer: ISSUER.to_string(),
+        contract: String::new(),
     };
     let ctx = |legs: Vec<PriceLeg>, decimals: Vec<Option<u32>>| PoolChartContext {
         price: PoolPriceContext { legs, fee_bps: 30 },
@@ -125,6 +129,7 @@ async fn soroban_volume_series() {
         kind: "native",
         code: "XLM".to_string(),
         issuer: String::new(),
+        contract: String::new(),
     };
     let (from, to) = (Utc::now() - Duration::days(10), Utc::now());
 
@@ -150,6 +155,7 @@ async fn soroban_volume_series() {
         kind: "credit",
         code: CODE_B.to_string(),
         issuer: ISSUER.to_string(),
+        contract: String::new(),
     };
     let three = ctx(
         vec![leg_a.clone(), leg_b.clone(), xlm.clone()],
@@ -179,6 +185,7 @@ async fn soroban_volume_series() {
                 kind: "",
                 code: String::new(),
                 issuer: String::new(),
+                contract: String::new(),
             },
         ],
         vec![None, Some(7)],

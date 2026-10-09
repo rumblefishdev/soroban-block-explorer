@@ -821,7 +821,8 @@ Paginated table of all liquidity pools.
 - Filters - asset (`filter[asset_code]`, case-insensitive **substring** of any
   leg, so `USD` matches the `USDC` pools; `A/B` is a pair query requiring both
   codes on two DIFFERENT legs, in either order; native legs match on `XLM`
-  despite storing an empty code; task 0440). The same box also accepts a pool
+  despite storing an empty code; a Soroban token on its symbol or name; tasks
+  0440/0636). The same box also accepts a pool
   **identifier** and then selects that one pool — pasting an id used to be
   matched as an asset-code substring, so the page answered "no pools" about a
   pool that exists (task 0470). A chip row filters by **pool kind**

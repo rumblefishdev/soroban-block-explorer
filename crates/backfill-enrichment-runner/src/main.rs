@@ -513,11 +513,11 @@ async fn select_nft_chunk(
 
 /// Candidate predicate: enrichment rows still lacking a collection name AND
 /// whose contract has NO ledger-sourced name — the `name()` RPC is a FALLBACK
-/// only (task 0340 redirect). The parser now captures the OZ NFT collection
-/// name into `soroban_contract_metadata` from the ledger (Fix A / #330) and the
-/// read path serves it via COALESCE (Fix B / #331), so those contracts need no
-/// RPC. This drains only the ledger-uncovered remainder — hand-rolled contracts
-/// (empty instance storage, name baked in WASM). The drain walks DISTINCT
+/// only. The indexer runs the contract's own `name()` locally into
+/// `soroban_contract_metadata` (task 0620) and the read path serves it via
+/// COALESCE (Fix B / #331), so those contracts need no RPC. This drains only
+/// the remainder the indexer does not answer (a program declaring `name()`
+/// without `symbol()`, or a `name()` that reads persistent data). The drain walks DISTINCT
 /// contracts; the per-contract INSERT-SELECT re-applies the predicate, so a
 /// re-run is a no-op for already-stamped rows (idempotent).
 ///

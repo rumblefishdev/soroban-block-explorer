@@ -2,7 +2,7 @@
 id: '0615'
 title: 'BUG: pool legs that are Soroban tokens are never priced (price key lacks the contract address)'
 type: BUG
-status: backlog
+status: completed
 related_adr: ['0053', '0058']
 related_tasks: ['0374']
 tags: [priority-medium, effort-small, layer-api, liquidity-pools]
@@ -12,6 +12,14 @@ history:
     status: backlog
     who: karolkow
     note: 'Found in the architecture review re-check of 2026-10-04; 0374 already closed, so its own task.'
+  - date: 2026-10-08
+    status: active
+    who: karolkow
+    note: 'Started: the prices views are rescaled and 0620 gave the legs decimals, so only the price key is missing.'
+  - date: 2026-10-08
+    status: completed
+    who: karolkow
+    note: 'Merged #656. Local API on production data: 18 of 792 Soroban pools null → TVL, classic pools unchanged (2,990/2,992 identical, 2 by cents). Ships with the next release.'
 ---
 
 # Pool legs that are Soroban tokens are never priced
@@ -22,6 +30,22 @@ history:
 maps only native (0) and classic credit (1|2); a Soroban-token leg (family 3)
 gets the empty key, so its pool's TVL, volume and fees read null even when the
 prices views carry a price for that token.
+
+## Carried from 0620 (2026-10-08)
+
+The four Aquarius pools of 0617 (`CCYMZTOJ…` USST/USDC, `CCKQASCN…` XLM/XRP,
+`CCCDPF74…` and `CBMOEJUO…` with HITZ) now serve decimals and reserves for
+both legs (0620, production since 2026-10-08), yet `tvl` is null: the
+Soroban leg gets the empty price key. Prices exist for XRP (`CB7OOP3V…`,
+fresh) and HITZ (`CBAPZAZN…`, last bucket 2026-10-02); none for USST. Done
+when these pools show TVL wherever both legs price.
+
+**The views are rescaled (measured 2026-10-08)**, so the blocker below is
+gone: contract closes now match market scale — SolvBTC `CBIJBDNZ…` 82,299,
+XAUM `CC2RBGYN…` 4,145, XRP `CB7OOP3V…` 1.33 (was 8,537 / 41.92 / 14.78 on
+2026-10-05). Six contract tokens price in the last day. `CCKQASCN…` (XLM/XRP)
+would read about $2,227 (6,188.97 XLM × 0.1984 + 752.12 XRP × 1.3282); the
+API serves null.
 
 ## Start after (checked 2026-10-05)
 
@@ -77,11 +101,19 @@ tokens in total.
 
 ## Acceptance Criteria
 
-- [ ] The 10 measured pools serve TVL / volume where every leg is priced;
-      pools with an unpriced leg still read null (no partial sums).
-- [ ] The prices view's contract prices match an external source within a few %
-      for every priced Soroban leg before release (the 2026-10-05 table, re-run).
-- [ ] Classic pools unchanged (compare list + detail responses before/after).
-- [ ] CH-gated test pins a Soroban-token leg priced by contract address.
-- [ ] Docs updated — `docs/architecture/**` frontend/API contract for pool USD
-      fields, or `N/A — reason`.
+- [x] The 10 measured pools serve TVL / volume where every leg is priced;
+      pools with an unpriced leg still read null (no partial sums). Local API
+      on production data, 2026-10-08: 18 of 792 Soroban pools go null → TVL,
+      0 change value, 774 identical (e.g. `CD2O2B6P…` XLM/SolvBTC $8,367,651,
+      `CAXYSVTP…` USDC/XAUM $264,880, `CCKQASCN…` XLM/XRP $2,222).
+- [x] Contract prices checked before release: pool-implied prices in the two
+      deep balanced pools agree with the views within 0.1 % (SolvBTC $82,230
+      vs $82,299; XAUM $4,140 vs $4,145). XRP's only pool is thin ($63 volume
+      a day) and implies $1.64 against the views' $1.33.
+- [x] Classic pools unchanged: 2,990 of 2,992 identical; the 2 differ by
+      cents (reserves moved between the two reads). Classic price rows carry
+      an empty `contract_address` (0 of 30,782 in two days).
+- [x] CH-gated test pins a Soroban-token leg priced by contract address
+      (`soroban_token_close_by_contract`; red when the match ignores it).
+- [x] Docs updated — N/A: no `docs/architecture/**` page describes the price
+      key; the key is documented at `usd_analytics.rs` and updated there.

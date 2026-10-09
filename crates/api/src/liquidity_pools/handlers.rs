@@ -375,7 +375,14 @@ pub async fn get_pool(State(state): State<AppState>, Path(pool_id): Path<String>
         legs: row
             .legs
             .iter()
-            .map(|l| queries::price_leg(l.family, l.asset_code.as_deref(), l.issuer.as_deref()))
+            .map(|l| {
+                queries::price_leg(
+                    l.family,
+                    l.asset_code.as_deref(),
+                    l.issuer.as_deref(),
+                    l.contract_id.as_deref(),
+                )
+            })
             .collect(),
         fee_bps: row.fee_bps,
     };

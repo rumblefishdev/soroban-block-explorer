@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use crate::common::asset_identity::resolve_identities_and_icons;
 use crate::common::ch::millis_to_utc;
 use crate::common::cursor::{Direction, keyset_sql_desc};
-use crate::common::pool_asset_codes::asset_codes_predicate;
+use crate::common::pool_asset_codes::pool_asset_filter;
 use crate::common::strkey::decode_pool_kind;
 
 use super::soroban_reserves::{fetch_raw_reserves, leg_reserves};
@@ -163,6 +163,7 @@ pub async fn fetch_pool_list(
     // a rule. A tier over the legs was built and taken back out: 46 lines of
     // the densest SQL in the change, for five look-alikes on page one.
     let mut binds: Vec<String> = Vec::new();
+    let mut token_params: Vec<(String, Vec<i64>)> = Vec::new();
     let mut filters = String::new();
     // The per-leg POSITIONAL filters (`filter[asset_a_code]` + its issuer, and
     // the same for `b`) are gone. They named a leg by its position in a pair,
@@ -208,11 +209,10 @@ pub async fn fetch_pool_list(
     if let Some(pool_hex) = params.pool_id_hex.as_ref() {
         filters.push_str(" AND lp.pool_id = unhex(?)");
         binds.push(pool_hex.clone());
-    } else if let Some((clause, clause_binds)) =
-        asset_codes_predicate(params.asset_codes.as_slice())
-    {
-        filters.push_str(&format!(" AND {clause}"));
-        binds.extend(clause_binds);
+    } else if let Some(filter) = pool_asset_filter(client, &params.asset_codes).await? {
+        filters.push_str(&format!(" AND {}", filter.sql));
+        binds.extend(filter.binds);
+        token_params = filter.params;
     }
 
     // Latest-snapshot fields via `argMax(...) GROUP BY pool_id` over a bounded
@@ -377,6 +377,9 @@ pub async fn fetch_pool_list(
     let mut query = client.query(&sql);
     for b in &binds {
         query = query.bind(b.as_str());
+    }
+    for (name, ids) in &token_params {
+        query = query.param(name, ids);
     }
     let rows = query.fetch_all::<PoolListChRow>().await?;
 

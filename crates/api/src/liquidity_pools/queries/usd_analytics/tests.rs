@@ -7,34 +7,61 @@ use super::*;
 /// activation note, bogus 96.4% coverage).
 #[test]
 fn price_leg_mapping() {
-    let native = price_leg(0, None, None);
+    let native = price_leg(0, None, None, None);
     assert_eq!(
         (native.kind, native.code.as_str(), native.issuer.as_str()),
         ("native", "XLM", "")
     );
     // Native ignores whatever code/issuer the row carries ('' / surrogate-0 artifacts).
-    let native2 = price_leg(0, Some(""), Some(""));
+    let native2 = price_leg(0, Some(""), Some(""), None);
     assert_eq!(native2.kind, "native");
 
     let usdc = price_leg(
         1,
         Some("USDC"),
         Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+        None,
     );
     assert_eq!(usdc.kind, "credit");
     assert_eq!(usdc.code, "USDC");
     assert!(usdc.issuer.starts_with('G'));
 
-    let alphanum12 = price_leg(2, Some("WGUARDIAN"), Some("GABC"));
+    let alphanum12 = price_leg(2, Some("WGUARDIAN"), Some("GABC"), None);
     assert_eq!(alphanum12.kind, "credit");
 
     // Unpriceable degradations: missing identity parts or unexpected type
     // must match NO prices row (empty kind), never guess.
-    assert_eq!(price_leg(1, None, Some("GABC")).kind, "");
-    assert_eq!(price_leg(1, Some("USDC"), None).kind, "");
-    assert_eq!(price_leg(1, Some(""), Some("GABC")).kind, "");
-    assert_eq!(price_leg(3, Some("X"), Some("G")).kind, "");
-    assert_eq!(price_leg(9, None, None).kind, "");
+    assert_eq!(price_leg(1, None, Some("GABC"), None).kind, "");
+    assert_eq!(price_leg(1, Some("USDC"), None, None).kind, "");
+    assert_eq!(price_leg(1, Some(""), Some("GABC"), None).kind, "");
+    assert_eq!(price_leg(3, Some("X"), Some("G"), None).kind, "");
+    assert_eq!(price_leg(9, None, None, None).kind, "");
+}
+
+#[test]
+fn a_soroban_token_prices_by_its_contract() {
+    // XRP on Soroban (`CB7OOP3V…`): the prices views key it as
+    // ('contract', '', '', C…), the contract address carrying the identity.
+    let xrp = price_leg(
+        3,
+        Some("XRP"),
+        None,
+        Some("CB7OOP3VSAWBZOOTOG2YEFANVU45GVWYUUM5HI32DKLHVKUDOFVQ37XP"),
+    );
+    assert_eq!(
+        (
+            xrp.kind,
+            xrp.code.as_str(),
+            xrp.issuer.as_str(),
+            xrp.contract.as_str()
+        ),
+        (
+            "contract",
+            "",
+            "",
+            "CB7OOP3VSAWBZOOTOG2YEFANVU45GVWYUUM5HI32DKLHVKUDOFVQ37XP"
+        )
+    );
 }
 
 #[test]
@@ -75,11 +102,12 @@ fn fee_revenue_math() {
 /// a partial sum would understate the pool while looking like a real number.
 #[test]
 fn tvl_needs_every_leg_priced_and_reserved() {
-    let xlm = price_leg(0, None, None);
+    let xlm = price_leg(0, None, None, None);
     let usdc = price_leg(
         1,
         Some("USDC"),
         Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+        None,
     );
     let closes: HashMap<PriceLeg, f64> = [(xlm.clone(), 0.5), (usdc.clone(), 1.0)].into();
     let legs = [xlm, usdc];
@@ -91,6 +119,7 @@ fn tvl_needs_every_leg_priced_and_reserved() {
         1,
         Some("DAI"),
         Some("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"),
+        None,
     );
     let three = [legs[0].clone(), legs[1].clone(), dai];
     assert_eq!(
