@@ -1,5 +1,5 @@
 //! Unit tests for `validate_host` and the redirect policy, plus the outbound
-//! guard's refusal, which stops before any connection (task 0643). The rest
+//! guard's refusal, which stops before any connection (task 0644). The rest
 //! of the HTTP path (`fetch_uncached`, `capped_body`, error mapping, cache
 //! wrap) is intentionally not covered by automated tests in-tree — see task 0188 §"Out of Scope" for the
 //! rationale. A real-issuer smoke test against e.g. `ultrastellar.com`
@@ -111,7 +111,7 @@ fn redirect_allowed_blocks_unsafe_targets() {
     }
 }
 
-/// `localhost` passes `validate_host` (a plain DNS name), so before task 0643
+/// `localhost` passes `validate_host` (a plain DNS name), so before task 0644
 /// the fetcher would have asked it for `/.well-known/stellar.toml`. The
 /// client's resolver now refuses it before any connection, and the refusal
 /// is permanent for the worker: no retry loop on a hostile `home_domain`.

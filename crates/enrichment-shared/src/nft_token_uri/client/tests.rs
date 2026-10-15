@@ -648,7 +648,7 @@ async fn live_mainnet_zero_arg_token_uri_success() {
     );
 }
 
-/// The host of a metadata URL comes from the contract (task 0643): the
+/// The host of a metadata URL comes from the contract (task 0644): the
 /// fetcher's metadata client refuses a name that resolves to loopback before
 /// connecting, while its RPC client — configured hosts — still reaches one.
 #[tokio::test]

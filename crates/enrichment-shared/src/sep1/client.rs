@@ -30,7 +30,7 @@
 //!   - A `home_domain` that resolves to a non-public address (loopback,
 //!     RFC 1918, link-local, CGNAT, …) is refused before any connection, on
 //!     the first request and on every redirect hop: the client resolves
-//!     through `crate::outbound_guard` (task 0643).
+//!     through `crate::outbound_guard` (task 0644).
 
 use std::net::IpAddr;
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-//! Outbound-host guard for fetches whose URL comes from chain data (task 0643).
+//! Outbound-host guard for fetches whose URL comes from chain data (task 0644).
 //!
 //! An issuer's `home_domain` and an NFT contract's `token_uri` are written by
 //! whoever controls the account or contract. A name that resolves to
