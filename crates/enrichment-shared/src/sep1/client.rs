@@ -27,9 +27,10 @@
 //!     (permanent → sentinel); the follow budget is `MAX_REDIRECTS` hops.
 //!     This re-enables the apex↔www issuer class (Circle USDC/EURC etc.)
 //!     that `Policy::limited(0)` used to drop to null enrichment.
-//!   - DNS-resolved private addresses are NOT blocked at this layer; deeper
-//!     SSRF protection (resolve + check against RFC 1918 / 6598 / link-local
-//!     ranges) is a follow-up if the threat model demands it.
+//!   - A `home_domain` that resolves to a non-public address (loopback,
+//!     RFC 1918, link-local, CGNAT, …) is refused before any connection, on
+//!     the first request and on every redirect hop: the client resolves
+//!     through `crate::outbound_guard` (task 0643).
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -94,6 +95,7 @@ impl Sep1Fetcher {
             // gate `validate_host` closes. A refused 3xx flows back as a
             // redirection response and maps to `Sep1Error::RedirectBlocked`.
             .redirect(same_etld1_redirect_policy())
+            .dns_resolver(crate::outbound_guard::resolver())
             .user_agent(USER_AGENT)
             .build()?;
         let cache = FutureCache::builder()

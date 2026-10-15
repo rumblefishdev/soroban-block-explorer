@@ -38,6 +38,12 @@ psl = "2"
 # Base32 decode of an `ipfs://` CIDv1, to refuse a CID that cannot exist
 # before asking any gateway. Already in the tree via stellar-strkey.
 data-encoding = "2"
+# Outbound-host guard (task 0643): `RFC6890` is a pinned snapshot of the IANA
+# IPv4/IPv6 Special-Purpose Address Space registries — the list of addresses
+# that are not public. std's `IpAddr::is_global` is still unstable.
+iprfc = "1"
+# `lookup_host` for the guard's resolver; already in the tree via reqwest.
+tokio = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
 # Mock Soroban RPC + IPFS gateway for fetcher integration tests
