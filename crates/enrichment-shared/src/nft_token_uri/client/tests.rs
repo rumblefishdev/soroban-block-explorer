@@ -678,3 +678,31 @@ async fn metadata_client_refuses_a_loopback_name_and_rpc_client_does_not() {
     let resp = fetcher.client.get(&url).send().await.unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+/// The metadata client keeps the shared settings next to the guard: a
+/// redirect to an IP literal is still refused, not followed.
+#[tokio::test]
+async fn metadata_client_keeps_the_redirect_policy() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/a"))
+        .respond_with(
+            ResponseTemplate::new(301).insert_header("location", format!("{}/b", server.uri())),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/b"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let fetcher = NftTokenUriFetcher::with_rpc_url("http://unused".to_owned()).unwrap();
+    let err = super::fetch_one_metadata(&fetcher.metadata_client, &format!("{}/a", server.uri()))
+        .await
+        .expect_err("a redirect to an IP literal must not be followed");
+    assert!(
+        matches!(err, NftTokenUriError::HttpStatus { status: 301, .. }),
+        "got {err:?}"
+    );
+}

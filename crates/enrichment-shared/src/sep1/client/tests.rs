@@ -1,6 +1,7 @@
-//! Unit tests for `validate_host`. The full HTTP path (`fetch_uncached`,
-//! `capped_body`, error mapping, cache wrap) is intentionally not covered
-//! by automated tests in-tree — see task 0188 §"Out of Scope" for the
+//! Unit tests for `validate_host` and the redirect policy, plus the outbound
+//! guard's refusal, which stops before any connection (task 0643). The rest
+//! of the HTTP path (`fetch_uncached`, `capped_body`, error mapping, cache
+//! wrap) is intentionally not covered by automated tests in-tree — see task 0188 §"Out of Scope" for the
 //! rationale. A real-issuer smoke test against e.g. `ultrastellar.com`
 //! is deferred to a follow-up.
 
@@ -108,4 +109,23 @@ fn redirect_allowed_blocks_unsafe_targets() {
             "expected redirect to {bad} to be blocked",
         );
     }
+}
+
+/// `localhost` passes `validate_host` (a plain DNS name), so before task 0643
+/// the fetcher would have asked it for `/.well-known/stellar.toml`. The
+/// client's resolver now refuses it before any connection, and the refusal
+/// is permanent for the worker: no retry loop on a hostile `home_domain`.
+#[tokio::test]
+async fn a_home_domain_resolving_to_loopback_is_refused() {
+    assert!(validate_host("localhost").is_ok());
+    let fetcher = Sep1Fetcher::new().unwrap();
+    let err = fetcher.fetch("localhost").await.unwrap_err();
+    let Sep1Error::Http { source, .. } = &*err else {
+        panic!("expected Http, got {err:?}");
+    };
+    let refused = std::iter::successors(Some(source as &dyn std::error::Error), |e| (*e).source())
+        .find_map(|e| e.downcast_ref::<crate::outbound_guard::HostRefused>())
+        .expect("the guard's refusal is in the error chain");
+    assert_eq!(refused.host, "localhost");
+    assert!(!crate::enrich_and_persist::sep1_assets::is_transient(&err));
 }

@@ -58,23 +58,50 @@ re-resolves between the check and the connect.
 3. NFT client: metadata fetches on their own guarded client; Soroban RPC
    calls keep the unguarded client (configured hosts, local dev on
    `localhost`).
-4. Refusal is a distinct error variant, logged with its cause.
+4. Refusal: a `HostRefused { host, addr }` error in the reqwest error chain
+   plus a `warn!` with host and address; classified permanent (sentinel, no
+   SQS retry) by the existing connect-error rule.
 
 ## Acceptance Criteria
 
-- [ ] A host resolving to loopback / private / link-local / CGNAT / other
+- [x] A host resolving to loopback / private / link-local / CGNAT / other
       IANA special-purpose addresses (v4 and v6, IPv4-mapped too) is refused
       before any connection, with an error naming the host and address.
-- [ ] The connection uses exactly the addresses that were checked.
-- [ ] SEP-1 and NFT metadata fetches use the guard; RPC calls are unchanged.
-- [ ] Tests in their own files; cargo test / clippy / fmt green;
+- [x] The connection uses exactly the addresses that were checked.
+- [x] SEP-1 and NFT metadata fetches use the guard; RPC calls are unchanged.
+- [x] Tests in their own files; cargo test / clippy / fmt green;
       cargo-mutants over the diff with every survivor answered.
-- [ ] **Docs updated** — `N/A — no change to schema, endpoints, pipeline or
-    topology; an internal check on outbound requests`.
-- [ ] **API types regenerated** — run (Cargo.lock changes); diff expected empty.
+- [x] **Docs updated** — `docs/architecture/indexing-pipeline/enrichment.md`
+      §4 (new guard row), `docs/architecture/backend/backend-overview.md`
+      (SEP-1 safeguards).
+- [x] **API types regenerated** — run (Cargo.lock changes); diff empty.
 
 ## Notes
 
 - IP literals never reach a `Resolve` (hyper skips DNS for them); both clients
   already refuse IP-literal hosts and redirect targets (`validate_host`,
   `validate_uri`), so the two checks together cover every host form.
+
+## Design Decisions
+
+### Emerged
+
+1. **`iprfc` for the address list**: std `IpAddr::is_global` is still
+   unstable (`feature = "ip"`, Rust 1.97). `reqwest-ssrf-guard` needs
+   reqwest 0.13 (we are on 0.12) and carries a hand-written table that misses
+   198.18/15, 240/4 and multicast. `iprfc::RFC6890` is generated from the
+   IANA registries; multicast is added with std `is_multicast`.
+2. **One bad address refuses the whole host**, rather than filtering it out:
+   the DNS answer is written by the attacker.
+3. **NFT metadata gets its own client**; Soroban RPC keeps the unguarded one
+   (configured hosts).
+4. **No new error variant**: the refusal travels as the source of the
+   existing `Http` variants; the connect-error rule already makes it
+   permanent, and the guard logs it.
+5. **SEP-1 tests moved out of `client.rs` first**, in their own
+   `[structure only]` PR.
+
+## Future Work
+
+- Task 0639's verified-source client (PR 661) takes the same resolver once
+  both are on `develop`: one `.dns_resolver(...)` line in that PR.
