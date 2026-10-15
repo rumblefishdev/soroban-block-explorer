@@ -10,13 +10,13 @@ Deep-dive runbooks are linked, not duplicated.
 
 ## Which situation are you in?
 
-| Situation                                                                 | What to run                                                                                                                     |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| **Gap** — ledgers missing (after a restore, an outage, a stalled indexer) | `backfill-runner run --start <gap> --end <tip>` — `run` is a **gap-filler**, it skips ledgers already in `ledgers`              |
-| **New derived table** over history — the data exists only in XDR          | from-S3 re-parse: `run --reindex` (see [§ On the box](#path-a--directly-on-the-hetzner-box-current-default))                    |
-| **New derived table** computable from columns already in CH               | cheap in-DB `INSERT … SELECT` (no re-parse)                                                                                     |
-| **Bad data in place** (range already in `ledgers`)                        | `run --reindex` — a plain `run` would **no-op**; the range must end at or after the claimable balance writer deploy (see below) |
-| Tier-1 columns wrong after any of the above                               | `repair-tier1` (**mandatory** — see below)                                                                                      |
+| Situation                                                                 | What to run                                                                                                                              |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Gap** — ledgers missing (after a restore, an outage, a stalled indexer) | `backfill-runner run --start <gap> --end <tip>` — `run` is a **gap-filler**, it skips ledgers already in `ledgers`                       |
+| **New derived table** over history — the data exists only in XDR          | from-S3 re-parse: `run --reindex` (see [§ On the box](#path-a--directly-on-the-hetzner-box-current-default))                             |
+| **New derived table** computable from columns already in CH               | cheap in-DB `INSERT … SELECT` (no re-parse)                                                                                              |
+| **Bad data in place** (range already in `ledgers`)                        | `run --reindex` — a plain `run` would **no-op**; the range must end at or after the claimable balance writer deploy (see below)          |
+| After any of the above                                                    | the steps in [§ After any backfill](#after-any-backfill) — `repair-tier1`, contract upgrades, classification, NFTs, metadata, enrichment |
 
 ---
 
@@ -121,13 +121,15 @@ Two related wins, both bigger than the split itself:
   end usable days early; the worker whose range it duplicates re-does the slice
   later at no cost beyond time.
 
-### 3. The MIN-semantics trap — 10 Tier-1 columns corrupt silently
+### 3. The MIN-semantics trap — Tier-1 columns corrupt silently
 
 RMT keeps the **highest-version whole row**, so it **cannot express MIN
 semantics**. Worker N stamps `first_seen_ledger` with the first ledger of _its_
 range, with no visibility into earlier workers' ranges — so the surviving value
-reflects the latest-touching worker, not the true minimum. **Ten Tier-1
-columns corrupt this way, silently.**
+reflects the latest-touching worker, not the true minimum. **Every such column
+corrupts this way, silently.** One is left today, `accounts.first_seen_ledger`,
+rebuilt by `repair-tier1`; the others were dropped or moved off their RMT copy
+(the note below).
 
 Scale, measured: the 0228 repair moved `first_seen_ledger` for **10.13M
 accounts**.
@@ -280,9 +282,9 @@ The dividing line is **`EXCHANGE TABLES`**. A subcommand that builds a staging
 table and swaps it will **lose any live write** that lands between build and
 swap.
 
-| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                                                                            |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `nft-reclassify`, `wasm-code-backfill`, `contract-instance-backfill`, `contract-metadata-backfill` |
+| Must **STOP** the indexer (staging + `EXCHANGE TABLES`) | No stop needed (RMT, idempotent)                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `contract-type-rebuild`, **`repair-tier1`**             | `run` (disjoint ranges), `balance-seed`, `wasm-code-backfill`, `contract-instance-backfill`, `contract-metadata-backfill` |
 
 **Grey zone:**
 
@@ -465,27 +467,40 @@ rows); `BACKFILL_TEMP_DIR` (default `.temp/backfill-runner`).
 
 ## After any backfill
 
-1. **`repair-tier1`** — mandatory after parallel or `--reindex` runs (rule 3).
-   Stop the indexer first.
-2. **Contract upgrades** — mandatory after **any** `run`, parallel or not,
-   until task 0640 ships its fix. `run` writes each contract as deployed and
-   drops every later `executable_update` (`crates/backfill-runner/src/sink.rs`),
-   so a contract upgraded inside the range keeps its deploy-time `wasm_hash`
-   (testnet, 2026-10-14: 18,136 contracts). Run the read-only
-   [`G-executable-repair-select.sql`](../lore/1-tasks/backlog/0640_BUG_backfill-drops-executable-updates/notes/G-executable-repair-select.sql)
-   with the target database in its table names; any row means: run the paired
-   `G-executable-repair-insert.sql`, then the select again (0 rows). The
-   indexer may keep running.
-3. **Validate** — coverage gap-scan + a sample compare against raw ledger
-   entries (`getLedgerEntries` XDR) or stellar.expert. NOT Horizon: it is
-   legacy, and it synthesises fields the ledger does not carry.
-   Re-run the same slice: the RMT-deduped count must stay identical.
-4. **Only then** drop the pre-op snapshot ([`docs/backups.md`](backups.md)).
+`run` gives the database the live indexer would give **only together with the
+steps below**. The live writer looks things up in ClickHouse before each
+ledger; `run` passes empty maps for those lookups and cannot see rows written
+earlier in its own 64k partition (task 0641 tracks retiring these steps). Run
+them in this order, against the database the backfill wrote
+(`CLICKHOUSE_DATABASE`), testnet first when both networks are concerned.
+Steps 1 and 3 swap or rewrite tables: do them in one window with the indexer
+**stopped**.
 
-> Steps 1–3 are not bookkeeping. A re-parse that skips `repair-tier1` leaves the
-> 10 Tier-1 columns wrong (rule 3), and the damage is invisible until someone
-> reads `first_seen_ledger` — which is why "the write finished" is not the same
-> as "the backfill is done".
+| #   | Step                                                                                                                                                                                                                                                                           | When                                                         | Why `run` leaves it                                                                                                                          |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `repair-tier1`                                                                                                                                                                                                                                                                 | after a parallel or `--reindex` run                          | MIN semantics across ranges (rule 3)                                                                                                         |
+| 2   | **Contract upgrades:** [`G-executable-repair-select.sql`](../lore/1-tasks/backlog/0640_BUG_backfill-drops-executable-updates/notes/G-executable-repair-select.sql), any row → the paired `G-executable-repair-insert.sql`, then the select again (0 rows); the indexer may run | after **any** `run`                                          | every `executable_update` is dropped; testnet 2026-10-14: 18,136 contracts kept their deploy-time code                                       |
+| 3   | `contract-type-rebuild` (`--dry-run` first)                                                                                                                                                                                                                                    | after any `run`, after step 2 (it classifies by `wasm_hash`) | a contract whose code was uploaded in an earlier ledger stays `Other`, and a fungible gets no type-3 `assets` row; testnet: 32,012 contracts |
+| 4   | `nft-reclassify` (`--dry-run` first)                                                                                                                                                                                                                                           | after step 3                                                 | NFT events of contracts classified later stay in `nfts_pending`; testnet: 12,119 tokens                                                      |
+| 5   | `contract-metadata-backfill`                                                                                                                                                                                                                                                   | after any `run`                                              | code uploaded earlier in the same partition is not readable yet                                                                              |
+| 6   | `enrich sep1-assets` / `nft-metadata`, with the network's enrichment certificate                                                                                                                                                                                               | after any `run`                                              | `run` queues no enrichment                                                                                                                   |
+| 7   | **Validate** — coverage gap-scan + a sample compare against raw ledger entries (`getLedgerEntries` XDR) or stellar.expert, never Horizon; re-run the same slice, the RMT-deduped count must stay identical                                                                     | always                                                       | —                                                                                                                                            |
+| 8   | **Only then** drop the pre-op snapshot ([`docs/backups.md`](backups.md))                                                                                                                                                                                                       | always                                                       | —                                                                                                                                            |
+
+`wasm-code-backfill` and `contract-instance-backfill` (both read RPC) are needed
+only for history written before their writers existed (2026-10-05 and
+2026-10-07) or a database that does not start at genesis; a `run` today writes
+both tables itself.
+
+**Not covered by any step:** a contract-held balance of a SAC registered
+earlier in the same partition is keyed under the SAC's own id instead of the
+classic asset (task 0571); testnet holds ~22k such rows from its backfill.
+
+> These steps are not bookkeeping. Skip one and the damage is silent: the
+> testnet backfill of 2026-10-05 skipped steps 2–5 and served pre-upgrade code,
+> 30k fungibles missing from the token list and 190k NFT rows in quarantine
+> until 2026-10-15 — which is why "the write finished" is not the same as "the
+> backfill is done".
 
 ## Checkpoint-snapshot passes (task 0463 / ADR 0055)
 
@@ -1224,6 +1239,10 @@ final-phase notes.
 
 ## Canonical event location fill (task 0541) — in-DB, per 5k-ledger slice
 
+> **Spent on mainnet.** A one-time history fill into a table the writer now
+> fills itself, so a new `run` needs none of it. Kept for a restore from a
+> backup older than the change ([`docs/backups.md`](backups.md)).
+
 Two new tables are filled from what ClickHouse already holds — no S3, no
 re-parse — before the task-0541 window, one partition at a time, in the same
 5,000-ledger slices (20k exceeds the read profile's memory cap for the gates).
@@ -1264,6 +1283,10 @@ that statement run over the same range must return exactly the writer's rows
 
 ## Presence tables by transaction position (task 0575) — in-DB, per 50k-ledger slice
 
+> **Spent on mainnet.** A one-time history fill into a table the writer now
+> fills itself, so a new `run` needs none of it. Kept for a restore from a
+> backup older than the change ([`docs/backups.md`](backups.md)).
+
 `transaction_participants` and `operation_asset_appearances` are rebuilt keyed
 by the transaction's position `(ledger_sequence, application_order)` instead of
 the `transaction_id` surrogate. Each gets a staging copy, created from the
@@ -1292,6 +1315,10 @@ row's surrogate is joined to `transactions` for the position.
   "Presence tables by position").
 
 ## Operations by transaction position (task 0372) — in-DB, per 50k-ledger slice
+
+> **Spent on mainnet.** A one-time history fill into a table the writer now
+> fills itself, so a new `run` needs none of it. Kept for a restore from a
+> backup older than the change ([`docs/backups.md`](backups.md)).
 
 `transaction_operations` and `pool_operation_amounts` hold what
 `operations_appearances` and `lp_operation_amounts` hold, located by the
@@ -1322,6 +1349,10 @@ both collapse in the ReplacingMergeTrees.
   the amounts).
 
 ## Contract activity (task 0586) — in-DB, per 10k-ledger slice
+
+> **Spent on mainnet.** A one-time history fill into a table the writer now
+> fills itself, so a new `run` needs none of it. Kept for a restore from a
+> backup older than the change ([`docs/backups.md`](backups.md)).
 
 `contract_activity` holds the pairs of `contract_transactions` with the
 caller of `soroban_invocations_appearances` attached, located by the

@@ -75,8 +75,9 @@ environment (`eu-central-1`). Its leftovers were removed by task 0390:
 `.github/workflows/deploy-staging.yml` (it pointed at `bin/staging.js` and
 `envs/staging.json`, both long gone) and `scripts/staging-deploy.sh` with the
 `staging-*` git-tag trigger behind it (ADR 0009, now superseded).
-`pnpm run infra:{deploy,diff,synth}:staging` and any `make deploy-staging*`
-target **do not exist** and error immediately.
+`package.json` still defines `pnpm run infra:{deploy,diff,synth}:staging`, but
+the `*-staging` targets they call are gone from `infra/Makefile`, so each one
+**errors immediately**. Deleting the three scripts is task 0643.
 
 If you find a `staging` command in an old README or your shell history, it is
 stale. The pre-mainnet tier is the **testnet** environment below (ADR 0052) —

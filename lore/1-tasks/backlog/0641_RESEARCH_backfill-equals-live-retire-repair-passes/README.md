@@ -59,11 +59,18 @@ identically by live and backfill, with the "current" value derived by version
 
 ## Decisions so far
 
-- 2026-10-14 (W24): no big redesign now. First walk every pass in the table
+- 2026-10-14: no big redesign now. First walk every pass in the table
   above: what is spent, what live already covers, what is still needed. The
   "facts with a ledger version, state derived" shape (all writes read
   nothing) is a candidate for later, not a decision. A two-phase `run` (reads
   only after the earlier ranges are in) was weighed as the middle option.
+
+- 2026-10-15: per group, one pass at a time. Done first: no subcommand is
+  spent (`enrich nft-collection-name` still has 25 testnet / 7 mainnet
+  candidates); "After any backfill" now lists every step in order and the
+  testnet reset runs them as step 6a (`18f290ba8`). Next by user impact:
+  SAC balance keys (task 0571), classification and NFTs, upgrades,
+  metadata, enrichment queueing.
 
 ## Notes
 

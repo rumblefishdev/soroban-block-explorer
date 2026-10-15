@@ -104,7 +104,7 @@ up source for the wrong hash.
       (read-only, expect 18,136), then
       [notes/G-executable-repair-insert.sql](notes/G-executable-repair-insert.sql)
       (`chw`), then the select again (expect 0). The indexer may keep running.
-- [ ] **Code fix**: deferred to task 0641 (W24, 2026-10-14), which walks every
+- [ ] **Code fix**: deferred to task 0641 (2026-10-14), which walks every
       post-backfill pass first. Until then the manual step in the docs holds.
 - [ ] Re-check `contract_type` of the repaired contracts. The repair carries the
       class forward, like the live path. Reclassification on upgrade is 0325.
@@ -113,7 +113,7 @@ up source for the wrong hash.
 
 ## Decisions so far
 
-- 2026-10-14 (W24): the code fix waits for task 0641's walk over all
+- 2026-10-14: the code fix waits for task 0641's walk over all
   post-backfill passes. Options weighed: executables as their own versioned
   facts (no writer reads a prior row), a two-phase `run`, sequential `run`
   with reads (loses parallelism), or a subcommand run after `run`. A prefetch
