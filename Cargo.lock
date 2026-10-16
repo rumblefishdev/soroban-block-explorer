@@ -1821,6 +1821,7 @@ dependencies = [
  "clickhouse",
  "data-encoding",
  "db-clickhouse",
+ "iprfc",
  "moka",
  "psl",
  "reqwest",
@@ -2653,6 +2654,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
+name = "iprfc"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29ab9fb3724c3be005a8bf66c373ed1d6438f770e04008dccd136cbd446dbb8b"
+dependencies = [
+ "bitflags",
+ "ipnet",
+ "pastey",
+ "serde",
+]
+
+[[package]]
 name = "iri-string"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3176,6 +3189,12 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "pem"

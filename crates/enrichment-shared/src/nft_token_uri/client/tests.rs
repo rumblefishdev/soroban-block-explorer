@@ -388,6 +388,7 @@ async fn fetch_uncached_rejects_non_u32_token_id() {
     let client = reqwest::Client::new();
     let err = super::fetch_uncached(
         &client,
+        &client,
         &["http://unused".to_owned()],
         &["https://gw/ipfs/".to_owned()],
         0,
@@ -406,6 +407,7 @@ async fn fetch_uncached_rejects_non_u32_token_id() {
 async fn fetch_uncached_rejects_bad_contract_strkey() {
     let client = reqwest::Client::new();
     let err = super::fetch_uncached(
+        &client,
         &client,
         &["http://unused".to_owned()],
         &["https://gw/ipfs/".to_owned()],
@@ -643,5 +645,64 @@ async fn live_mainnet_zero_arg_token_uri_success() {
     assert!(
         uri.starts_with("https://") || uri.starts_with("ipfs://"),
         "URI scheme not recognised: {uri}"
+    );
+}
+
+/// The host of a metadata URL comes from the contract (task 0644): the
+/// fetcher's metadata client refuses a name that resolves to loopback before
+/// connecting, while its RPC client — configured hosts — still reaches one.
+#[tokio::test]
+async fn metadata_client_refuses_a_loopback_name_and_rpc_client_does_not() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .mount(&server)
+        .await;
+    let url = format!("http://localhost:{}/meta.json", server.address().port());
+    let fetcher = NftTokenUriFetcher::with_rpc_url("http://unused".to_owned()).unwrap();
+
+    let err = super::fetch_one_metadata(&fetcher.metadata_client, &url)
+        .await
+        .expect_err("a loopback name must be refused");
+    let NftTokenUriError::Http { source, .. } = &err else {
+        panic!("expected Http, got {err:?}");
+    };
+    let refused = std::iter::successors(Some(source as &dyn std::error::Error), |e| (*e).source())
+        .find_map(|e| e.downcast_ref::<crate::outbound_guard::HostRefused>())
+        .expect("the guard's refusal is in the error chain");
+    assert_eq!(refused.host, "localhost");
+    // A refused host is permanent: no SQS retry loop on a hostile URI.
+    assert!(!super::super::errors::is_transient(&err));
+    assert!(server.received_requests().await.unwrap().is_empty());
+
+    let resp = fetcher.client.get(&url).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// The metadata client keeps the shared settings next to the guard: a
+/// redirect to an IP literal is still refused, not followed.
+#[tokio::test]
+async fn metadata_client_keeps_the_redirect_policy() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/a"))
+        .respond_with(
+            ResponseTemplate::new(301).insert_header("location", format!("{}/b", server.uri())),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/b"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let fetcher = NftTokenUriFetcher::with_rpc_url("http://unused".to_owned()).unwrap();
+    let err = super::fetch_one_metadata(&fetcher.metadata_client, &format!("{}/a", server.uri()))
+        .await
+        .expect_err("a redirect to an IP literal must not be followed");
+    assert!(
+        matches!(err, NftTokenUriError::HttpStatus { status: 301, .. }),
+        "got {err:?}"
     );
 }
