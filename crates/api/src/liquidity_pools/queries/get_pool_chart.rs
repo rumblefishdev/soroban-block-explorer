@@ -1,9 +1,9 @@
 //! `GET /v1/liquidity-pools/:id/chart` — the time-bucketed USD series.
 //!
 //! One shape for both pool kinds. The database answers three questions — the
-//! pool's last state in each bucket where it changed; each leg's price per
-//! price bucket; the traded volume per bucket — and [`assemble_chart`] turns
-//! the answers into points.
+//! pool's last state in each hour or day it changed, grouped by bucket; each
+//! leg's price per price bucket; the traded volume per bucket — and
+//! [`assemble_chart`] turns the answers into points.
 
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
@@ -16,17 +16,19 @@ use super::usd_analytics::{
 use crate::common::ch::millis_to_utc;
 use crate::liquidity_pools::dto::ChartDataPoint;
 
+/// A pool state and where it is priced: `(price bucket start in epoch
+/// seconds, each leg's reserve)`.
+type PricedState = (i64, Vec<Option<f64>>);
+
 /// What the database says about one pool over the window, in display units —
 /// the input of [`assemble_chart`].
 #[derive(Debug, Default)]
 struct ChartInputs {
-    /// Each bucket in which the pool's state changed: the last state's
-    /// reserves. Keyed by bucket start, epoch millis, as the next three maps.
-    /// `None` inside: that leg's reserve is not known.
-    states: BTreeMap<i64, Vec<Option<f64>>>,
-    /// The price bucket of each of those last states, epoch seconds: the
-    /// state is priced there.
-    state_price_buckets: BTreeMap<i64, i64>,
+    /// Each bucket in which the pool's state changed: its last state in each
+    /// price bucket (hour or day) it changed in. Keyed by bucket start, epoch
+    /// millis, as the next two maps. `None` inside the reserves: that leg's
+    /// reserve is not known.
+    states: BTreeMap<i64, Vec<PricedState>>,
     /// How many state rows each of those buckets holds.
     samples: BTreeMap<i64, u64>,
     /// Traded volume per bucket, USD; `None` where a trade could not be
@@ -41,11 +43,12 @@ struct ChartInputs {
 /// bucket, USD computed at read (task 0199, ADR 0053).
 ///
 /// - **TVL** is a state: a bucket in which the pool changed gets its last
-///   state, each leg's reserve × that leg's close at the state's own price
-///   bucket, carried back at most [`MAX_PRICE_CARRY_SECONDS`]. `NULL` unless
-///   EVERY leg has a reserve and a price — a partial sum understates the pool
-///   while looking real. A weekly bucket therefore prices at the day of its
-///   last change: weekly candles are not provided.
+///   state that prices — each leg's reserve × that leg's close at the
+///   state's own price bucket, carried back at most
+///   [`MAX_PRICE_CARRY_SECONDS`]. `NULL` unless EVERY leg has a reserve and a
+///   price — a partial sum understates the pool while looking real. A weekly
+///   bucket prices at the latest day of the week that prices: weekly candles
+///   are not provided.
 /// - **Volume** is a flow: only buckets with trades carry it. Fee revenue is
 ///   derived from it.
 /// - A bucket appears when the pool changed or traded in it.
@@ -83,9 +86,9 @@ fn assemble_chart(inputs: &ChartInputs, fee_bps: i32) -> Vec<ChartDataPoint> {
         .collect();
     let mut points = Vec::new();
     for ms in buckets {
-        let tvl = match (inputs.states.get(&ms), inputs.state_price_buckets.get(&ms)) {
-            (Some(reserves), Some(at)) => tvl_usd(reserves, &inputs.prices, *at),
-            _ => None,
+        let tvl = match inputs.states.get(&ms) {
+            Some(states) => last_priced_tvl(states, &inputs.prices),
+            None => None,
         };
         let volume = inputs.volumes.get(&ms).copied().flatten();
         points.push(ChartDataPoint {
@@ -97,6 +100,21 @@ fn assemble_chart(inputs: &ChartInputs, fee_bps: i32) -> Vec<ChartDataPoint> {
         });
     }
     points
+}
+
+/// The TVL of a bucket's newest state that prices. Every state of one price
+/// bucket shares its closes, and a pool's reserves are all known or all
+/// unknown alike within it, so the newest price bucket that prices holds the
+/// bucket's last priceable state. The database returns them in no order.
+fn last_priced_tvl(states: &[PricedState], prices: &[Vec<(i64, f64)>]) -> Option<f64> {
+    let mut newest_first: Vec<&PricedState> = states.iter().collect();
+    newest_first.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    for (at, reserves) in newest_first {
+        if let Some(usd) = tvl_usd(reserves, prices, *at) {
+            return Some(usd);
+        }
+    }
+    None
 }
 
 /// Σ reserve × close over the legs, or `None` when any leg lacks either — or
@@ -195,14 +213,14 @@ async fn fetch_leg_closes(
 #[derive(Debug, Row, Deserialize)]
 pub(super) struct ClassicBucketChRow {
     pub(super) bucket_ms: i64,
-    pub(super) reserves: Vec<Option<f64>>,
-    pub(super) price_bucket_s: i64,
+    pub(super) states: Vec<PricedState>,
     pub(super) samples_in_bucket: u64,
     pub(super) volume: Option<f64>,
 }
 
 /// A classic pool's chart inputs from its snapshots — one row per change,
-/// reserves already in units — in one read.
+/// reserves already in units — in one read: per bucket, the last snapshot of
+/// each price bucket it holds.
 ///
 /// - **Volume** is `gross_volume_a` (the snapshot's sum of claim atoms on leg
 ///   A), each ledger priced at its OWN price bucket; a bucket with any swap
@@ -228,10 +246,17 @@ async fn fetch_classic_series(
     let sql = format!(
         "SELECT \
             bucket_ms, \
-            argMax(reserves, ledger_sequence)                  AS reserves, \
-            argMax(price_bucket_s, ledger_sequence)            AS price_bucket_s, \
-            count()                                            AS samples_in_bucket, \
-            if(countIf(unpriced_swap) > 0, NULL, sum(vol_row)) AS volume \
+            groupArray((price_bucket_s, reserves))   AS states, \
+            sum(samples)                             AS samples_in_bucket, \
+            if(sum(unpriced) > 0, NULL, sum(volume)) AS volume \
+         FROM ( \
+         SELECT \
+            bucket_ms, \
+            price_bucket_s, \
+            argMax(reserves, ledger_sequence) AS reserves, \
+            count()                           AS samples, \
+            countIf(unpriced_swap)            AS unpriced, \
+            sum(vol_row)                      AS volume \
          FROM ( \
              SELECT \
                 toUnixTimestamp64Milli(toDateTime64({bucket_fn}(l.closed_at), 3, 'UTC')) AS bucket_ms, \
@@ -267,6 +292,8 @@ async fn fetch_classic_series(
                    AND close_usd > 0 \
              ) pa ON pa.k = l.k AND pa.bucket <= l.price_bucket \
          ) \
+         GROUP BY bucket_ms, price_bucket_s \
+         ) \
          GROUP BY bucket_ms \
          ORDER BY bucket_ms ASC",
         carry = MAX_PRICE_CARRY_SECONDS,
@@ -293,10 +320,7 @@ async fn fetch_classic_series(
     let mut inputs = ChartInputs::default();
     for row in buckets {
         inputs.samples.insert(row.bucket_ms, row.samples_in_bucket);
-        inputs.states.insert(row.bucket_ms, row.reserves);
-        inputs
-            .state_price_buckets
-            .insert(row.bucket_ms, row.price_bucket_s);
+        inputs.states.insert(row.bucket_ms, row.states);
         inputs.volumes.insert(row.bucket_ms, row.volume);
     }
     Ok(inputs)
@@ -306,8 +330,7 @@ async fn fetch_classic_series(
 #[derive(Debug, Row, Deserialize)]
 struct SorobanBucketChRow {
     bucket_ms: i64,
-    reserves: Vec<Option<f64>>,
-    price_bucket_s: i64,
+    states: Vec<PricedState>,
     samples_in_bucket: u64,
 }
 
@@ -331,10 +354,15 @@ async fn fetch_soroban_series(
     let leg_count = ctx.price.legs.len() as u64;
     let sql = format!(
         "SELECT \
-            l.bucket_ms AS bucket_ms, \
+            bucket_ms, \
+            groupArray((price_bucket_s, reserves)) AS states, \
+            sum(samples)                           AS samples_in_bucket \
+         FROM ( \
+         SELECT \
+            l.bucket_ms      AS bucket_ms, \
+            l.price_bucket_s AS price_bucket_s, \
             argMax(arrayMap(x -> toNullable(toFloat64(x)), arraySlice(s.reserves, 1, ?)), s.ledger_sequence) AS reserves, \
-            argMax(l.price_bucket_s, s.ledger_sequence) AS price_bucket_s, \
-            count()     AS samples_in_bucket \
+            count()          AS samples \
          FROM ( \
              SELECT ledger_sequence, reserves \
              FROM pool_state_changes \
@@ -352,6 +380,8 @@ async fn fetch_soroban_series(
              WHERE closed_at >= fromUnixTimestamp64Milli(?) AND closed_at < fromUnixTimestamp64Milli(?) \
              LIMIT 1 BY sequence \
          ) l ON l.sequence = s.ledger_sequence \
+         GROUP BY bucket_ms, price_bucket_s \
+         ) \
          GROUP BY bucket_ms \
          ORDER BY bucket_ms ASC"
     );
@@ -370,12 +400,12 @@ async fn fetch_soroban_series(
 
     let mut inputs = ChartInputs::default();
     for row in buckets {
-        let reserves = scale_reserves(&row.reserves, &ctx.leg_decimals);
+        let mut states = Vec::new();
+        for (at, raw) in row.states {
+            states.push((at, scale_reserves(&raw, &ctx.leg_decimals)));
+        }
         inputs.samples.insert(row.bucket_ms, row.samples_in_bucket);
-        inputs.states.insert(row.bucket_ms, reserves);
-        inputs
-            .state_price_buckets
-            .insert(row.bucket_ms, row.price_bucket_s);
+        inputs.states.insert(row.bucket_ms, states);
     }
     for row in volumes {
         inputs.volumes.insert(row.bucket_ms, row.volume);
