@@ -283,6 +283,7 @@ export class CloudWatchStack extends cdk.Stack {
       ingestQueue,
       galexieCluster,
       galexieService,
+      indexerFunction: processorFunction,
       withActions,
     });
 

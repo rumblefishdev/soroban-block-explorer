@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import type * as ecs from 'aws-cdk-lib/aws-ecs';
+import type * as lambda from 'aws-cdk-lib/aws-lambda';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 
@@ -12,13 +13,15 @@ export interface IngestionAlarmsProps {
   readonly ingestQueue: sqs.IQueue;
   readonly galexieCluster?: ecs.ICluster;
   readonly galexieService?: ecs.IBaseService;
+  /** The indexer, whose `STELLAR_XDR_MAJOR` the protocol watch reads. */
+  readonly indexerFunction: lambda.IFunction;
   /** Attaches the stack's alarm and OK actions (Slack). */
   readonly withActions: (alarm: cloudwatch.Alarm) => cloudwatch.Alarm;
 }
 
 /**
  * Alarms on getting ledgers in: is our Galexie producing them (1, 1b) and is
- * a Galexie with a newer core out (1d) or, with the public data lake, is the
+ * a protocol upgrade coming that we are not ready for (1d) or, with the public data lake, is the
  * newest indexed ledger young (1c); and is the indexer consuming them (1a).
  * Part of `CloudWatchStack`; created in its scope, so the alarms keep their
  * construct ids.
@@ -30,6 +33,7 @@ export function addIngestionAlarms(
     ingestQueue,
     galexieCluster,
     galexieService,
+    indexerFunction,
     withActions,
   }: IngestionAlarmsProps
 ): void {
@@ -81,11 +85,13 @@ export function addIngestionAlarms(
       })
     );
 
-    // Alarm 1d: is a Galexie with a newer captive core out, ours not on it?
+    // Alarm 1d: is a Galexie with a newer captive core out, ours not on it,
+    // or a soroban-env-host on a stellar-xdr our indexer lacks?
     addGalexieProtocolWatch(scope, {
       config,
       galexieCluster,
       galexieService,
+      indexerFunction,
       withActions,
     });
   }

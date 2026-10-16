@@ -15,6 +15,7 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
+import { stellarXdrMajor } from '../stellar-xdr-pin.js';
 import { PublicLakeKeepalive } from './public-lake-keepalive.js';
 
 const DLQ_RETENTION_DAYS = 14;
@@ -383,6 +384,8 @@ export class ComputeStack extends cdk.Stack {
         RUST_LOG: 'info',
         ENRICHMENT_QUEUE_URL: enrichmentQueue.queueUrl,
         MTLS_SECRET_NAME: processorSecretName,
+        // Not read by the indexer: the protocol watch reads it (task 0646).
+        STELLAR_XDR_MAJOR: String(stellarXdrMajor(cargoWorkspacePath)),
       },
     });
     this.processorFunction = processorFunction;
