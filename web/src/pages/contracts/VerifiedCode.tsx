@@ -138,11 +138,17 @@ function Toolbar({
 }
 
 /** One label · value row of the recipe. */
-function RecipeRow({ label, value }: { label: string; value: ReactNode }) {
+function RecipeRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
   return (
     <Stack
       direction={{ xs: 'column', sm: 'row' }}
-      spacing={{ xs: 0.25, sm: 1 }}
+      spacing={{ xs: 0.5, sm: 1 }}
       alignItems={{ xs: 'flex-start', sm: 'baseline' }}
     >
       <Typography
@@ -155,26 +161,70 @@ function RecipeRow({ label, value }: { label: string; value: ReactNode }) {
       >
         {label}
       </Typography>
-      <Stack
-        direction="row"
-        spacing={0.5}
-        alignItems="center"
-        sx={{ minWidth: 0 }}
-      >
-        <Typography
-          variant="bodyXsRegular"
-          component="span"
-          sx={(theme) => ({
-            color: theme.palette.text.tertiary,
-            fontFamily: 'monospace',
-            // Wrap at spaces first, inside a long token only when it must.
-            overflowWrap: 'anywhere',
-          })}
-        >
-          {value}
-        </Typography>
+      <Stack spacing={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+        {children}
       </Stack>
     </Stack>
+  );
+}
+
+/**
+ * A value exactly as the verifier published it: every space and newline
+ * kept, its text direction isolated, inside a frame so nothing in it can
+ * pass for a label. An empty string still shows as an empty frame.
+ */
+function Value({ text }: { text: string }) {
+  return (
+    <Typography
+      variant="bodyXsRegular"
+      component="span"
+      sx={(theme) => ({
+        display: 'block',
+        minHeight: '1.5em',
+        minWidth: '2ch',
+        px: 0.75,
+        borderRadius: `${theme.shape.radius.s}px`,
+        borderLeft: `2px solid ${theme.palette.stroke.default}`,
+        backgroundColor: theme.palette.surface.grayMainAlt,
+        color: theme.palette.text.secondary,
+        fontFamily: 'monospace',
+        whiteSpace: 'pre-wrap',
+        // Visual break points only; the copied text is unchanged.
+        overflowWrap: 'anywhere',
+        unicodeBidi: 'isolate',
+      })}
+    >
+      {text}
+    </Typography>
+  );
+}
+
+/** Our own words for a missing value — never in a frame, so they cannot be
+ *  mistaken for something the verifier published. */
+function Missing({ children }: { children: ReactNode }) {
+  return (
+    <Typography
+      variant="bodyXsRegular"
+      component="span"
+      sx={(theme) => ({
+        color: theme.palette.text.tertiary,
+        fontStyle: 'italic',
+      })}
+    >
+      {children}
+    </Typography>
+  );
+}
+
+/** A published list: one frame per element, in order. */
+function ValueList({ items, empty }: { items: string[]; empty: string }) {
+  if (items.length === 0) return <Missing>{empty}</Missing>;
+  return (
+    <>
+      {items.map((item, i) => (
+        <Value key={i} text={item} />
+      ))}
+    </>
   );
 }
 
@@ -189,7 +239,6 @@ function BuildRecipeBox({
   sha256?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const args = build.arguments.join(' ');
   const report = safeHref(build.report_url);
   return (
     <Stack
@@ -207,45 +256,55 @@ function BuildRecipeBox({
       />
       <Collapse in={open} unmountOnExit>
         <Stack spacing={1.25}>
-          <RecipeRow
-            label="Verified at"
-            value={
-              build.verified_at != null ? (
-                <RelativeTimestamp
-                  timestamp={build.verified_at}
-                  variant="bodyXsRegular"
-                />
-              ) : (
-                '—'
-              )
-            }
-          />
-          <RecipeRow
-            label="Cargo manifest"
-            value={build.manifest_path ?? '— (workspace root)'}
-          />
-          <RecipeRow label="Build image" value={build.image ?? '—'} />
-          <RecipeRow
-            label="Build options"
-            value={
-              build.options.length === 0
-                ? '—'
-                : // One option per element: wrapped together they break
-                  // inside a flag. Each is text from the verifier, so a
-                  // newline inside one cannot start a fake row.
-                  build.options.map((option, i) => (
-                    <Box key={i} component="span" sx={{ display: 'block' }}>
-                      {option}
-                    </Box>
-                  ))
-            }
-          />
-          <RecipeRow
-            label="Build arguments"
-            value={args || 'contract build (default)'}
-          />
+          <RecipeRow label="Verified at">
+            {build.verified_at != null ? (
+              <Stack direction="row" spacing={1} alignItems="baseline">
+                <Value text={build.verified_at} />
+                <Missing>
+                  <RelativeTimestamp
+                    timestamp={build.verified_at}
+                    variant="bodyXsRegular"
+                  />
+                </Missing>
+              </Stack>
+            ) : (
+              <Missing>not published</Missing>
+            )}
+          </RecipeRow>
+          <RecipeRow label="Package">
+            {build.package != null ? (
+              <Value text={build.package} />
+            ) : (
+              <Missing>not given</Missing>
+            )}
+          </RecipeRow>
+          <RecipeRow label="Cargo manifest">
+            {build.manifest_path != null ? (
+              <Value text={build.manifest_path} />
+            ) : (
+              <Missing>not given — the workspace root</Missing>
+            )}
+          </RecipeRow>
+          <RecipeRow label="Build image">
+            {build.image != null ? (
+              <Value text={build.image} />
+            ) : (
+              <Missing>not published</Missing>
+            )}
+          </RecipeRow>
+          <RecipeRow label="Build options">
+            <ValueList items={build.options} empty="none" />
+          </RecipeRow>
+          <RecipeRow label="Build arguments">
+            <ValueList
+              items={build.arguments}
+              empty="empty list — the default, contract build"
+            />
+          </RecipeRow>
           {sha256 != null && (
-            <RecipeRow label="Source archive sha256" value={sha256} />
+            <RecipeRow label="Source archive sha256">
+              <Value text={sha256} />
+            </RecipeRow>
           )}
           {report != null && (
             <Typography variant="bodyXsRegular">

@@ -177,12 +177,81 @@ describe('VerifiedCode tab', () => {
     expect(screen.queryByText('Cargo manifest')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: /Build recipe/ }));
     expect(screen.getByText('Cargo manifest')).toBeInTheDocument();
-    expect(screen.getByText('contract build (default)')).toBeInTheDocument();
+    expect(
+      screen.getByText('empty list — the default, contract build')
+    ).toBeInTheDocument();
     // One element per build option, so each reads on its own line.
     expect(screen.getByText('--locked')).toBeInTheDocument();
     expect(screen.getByText('--package=verified-demo')).toBeInTheDocument();
     expect(
       screen.getByRole('link', { name: /Full verification report/ })
+    ).toBeInTheDocument();
+  });
+
+  it('shows every recipe value exactly as published', async () => {
+    // Values come from a third party: nothing collapsed, joined or replaced.
+    const exact = { normalizer: (t: string) => t };
+    renderWithProviders(
+      <VerifiedCode
+        contractId={CONTRACT}
+        verification={verification({
+          build: {
+            package: 'verified-demo',
+            manifest_path: '',
+            image: '—',
+            options: ['--features=a  b', '', '--x\n--y'],
+            arguments: ['a b', 'c'],
+            verified_at: '2026-10-01T12:00:00.123456+02:00',
+            report_url: null,
+          },
+        })}
+      />
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Build recipe/ }));
+
+    expect(screen.getByText('--features=a  b', exact)).toBeInTheDocument();
+    expect(screen.getByText('--x\n--y', exact)).toBeInTheDocument();
+    // Two arguments stay two, and `a b` stays one.
+    expect(screen.getByText('a b', exact)).toBeInTheDocument();
+    expect(screen.getByText('c', exact)).toBeInTheDocument();
+    // A published dash is a value, not our "missing" wording.
+    expect(screen.getByText('—', exact)).toBeInTheDocument();
+    expect(screen.queryByText('not published')).toBeNull();
+    // The timestamp as published, not re-formatted.
+    expect(
+      screen.getByText('2026-10-01T12:00:00.123456+02:00', exact)
+    ).toBeInTheDocument();
+    // The empty manifest and the empty option each still take a frame.
+    expect(screen.queryByText(/not given/)).toBeNull();
+  });
+
+  it('words a missing value apart from any published one', async () => {
+    renderWithProviders(
+      <VerifiedCode
+        contractId={CONTRACT}
+        verification={verification({
+          build: {
+            package: null,
+            manifest_path: null,
+            image: null,
+            options: [],
+            arguments: [],
+            verified_at: null,
+            report_url: null,
+          },
+        })}
+      />
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Build recipe/ }));
+
+    expect(screen.getAllByText('not published')).toHaveLength(2);
+    expect(screen.getByText('not given')).toBeInTheDocument();
+    expect(
+      screen.getByText('not given — the workspace root')
+    ).toBeInTheDocument();
+    expect(screen.getByText('none')).toBeInTheDocument();
+    expect(
+      screen.getByText('empty list — the default, contract build')
     ).toBeInTheDocument();
   });
 
