@@ -113,6 +113,7 @@ export function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
 
   const enterHandlerRef = useRef<() => boolean>(() => false);
+  const keyHandlerRef = useRef<(key: string) => boolean>(() => false);
 
   const isHome = pathname === routes.home;
 
@@ -195,7 +196,20 @@ export function AppShell() {
   }));
 
   return (
-    <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <Box
+      onKeyDownCapture={(event) => {
+        if (
+          showSearchOverlay &&
+          event.target instanceof Element &&
+          event.target.matches('header [data-global-search]') &&
+          keyHandlerRef.current(event.key)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+      sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}
+    >
       {/* Both nav bars stick to the top while the page scrolls. `zIndex` above
           the page content; each bar keeps its own internal z-order (TopNav's
           search dropdown over SecondaryNav). */}
@@ -219,6 +233,9 @@ export function AppShell() {
                 <GlobalSearchBar
                   q={searchValue}
                   onDismiss={() => setSearchOpen(false)}
+                  registerKeyHandler={(handler) => {
+                    keyHandlerRef.current = handler;
+                  }}
                   registerEnterHandler={(handler) => {
                     enterHandlerRef.current = handler;
                   }}

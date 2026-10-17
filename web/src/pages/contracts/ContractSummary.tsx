@@ -8,6 +8,7 @@ import {
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { routes } from '../../router/routes.js';
+import { SoranPrimaryName } from '../../search/SoranPrimaryName.js';
 import { KpiCell } from '../detail/KpiCell.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { SummaryRow } from '../detail/SummaryRow.js';
@@ -45,12 +46,20 @@ export function ContractSummary({
             {
               label: 'Contract ID',
               value: (
-                <IdentifierWithCopy
-                  value={contract.contract_id}
-                  type="contract"
-                  linked={false}
-                  truncate={false}
-                />
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                  flexWrap="wrap"
+                >
+                  <IdentifierWithCopy
+                    value={contract.contract_id}
+                    type="contract"
+                    linked={false}
+                    truncate={false}
+                  />
+                  <SoranPrimaryName address={contract.contract_id} />
+                </Stack>
               ),
             },
           ]}

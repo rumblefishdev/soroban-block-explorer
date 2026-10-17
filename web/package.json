@@ -6,6 +6,7 @@
   "dependencies": {
     "@rumblefish/api-types": "workspace:*",
     "@rumblefish/soroban-block-explorer-ui": "workspace:*",
+    "@stellar/stellar-sdk": "17.0.1",
     "tslib": "^2.3.0"
   },
   "nx": {

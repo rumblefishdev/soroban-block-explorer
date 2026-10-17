@@ -1,4 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
+import type { ReactNode } from 'react';
 
 import {
   QueryErrorState,
@@ -17,6 +18,7 @@ interface SearchResultsViewProps {
   onRowClick?: (index: number) => void;
   maxListHeight?: number | string;
   emptyCopy?: { title: string; description?: string };
+  status?: ReactNode;
 }
 
 export function SearchResultsView({
@@ -26,6 +28,7 @@ export function SearchResultsView({
   onRowClick,
   maxListHeight,
   emptyCopy,
+  status,
 }: SearchResultsViewProps) {
   const {
     effectiveQuery,
@@ -71,9 +74,11 @@ export function SearchResultsView({
             : {}
         }
       >
-        {isFetching && !showResults && <SearchSpinner />}
+        {status}
+        {isFetching && !showResults && !status && <SearchSpinner />}
         {isError && <QueryErrorState error={error} onRetry={refetch} py={4} />}
-        {!isFetching &&
+        {!status &&
+          !isFetching &&
           !isError &&
           effectiveQuery.length > 0 &&
           totalCount === 0 && (

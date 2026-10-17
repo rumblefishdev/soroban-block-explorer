@@ -1,4 +1,5 @@
 import type { SearchHit } from '@rumblefish/api-types';
+import type { ExplorerSearchHit } from './searchHit.js';
 import {
   getIdentifierHref,
   routeSegments,
@@ -13,7 +14,8 @@ import {
 type RoutableHit = Pick<
   SearchHit,
   'entity_type' | 'identifier' | 'route_token' | 'contract_id' | 'token_id'
->;
+> &
+  Pick<ExplorerSearchHit, 'soran'>;
 
 /**
  * Build a navigation URL from a search hit or redirect payload.
@@ -45,5 +47,8 @@ export function routeForHit(hit: RoutableHit): string {
     return `/${routeSegments.nft}`;
   }
   const idForUrl = hit.route_token ?? hit.identifier;
-  return getIdentifierHref(hit.entity_type, idForUrl);
+  const route = getIdentifierHref(hit.entity_type, idForUrl);
+  return hit.soran && hit.entity_type === 'account'
+    ? `${route}?soran=${encodeURIComponent(hit.soran.name)}`
+    : route;
 }

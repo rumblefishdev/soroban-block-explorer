@@ -1,26 +1,31 @@
 import { Box, ClickAwayListener, Paper, Typography } from '@mui/material';
-import { type KeyboardEvent, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import type { SearchHit } from '@rumblefish/api-types';
+import { isMuxedSoranHit, type ExplorerSearchHit } from './searchHit.js';
 
 import { FederationStatus } from './FederationStatus.js';
 import { routeForHit } from './routeForHit.js';
 import { SearchResultsView } from './SearchResultsView.js';
 import { useFederatedLookup } from './useFederation.js';
 import { useSearchResults } from './useSearchResults.js';
+import { getSoranSearchStatus } from './SoranSearchStatus.js';
+import { useSoranSearchResults } from './useSoranSearchResults.js';
+import { useSoranLookup } from './useSoranLookup.js';
 
 interface GlobalSearchBarProps {
   q: string;
   onDismiss: () => void;
 
   registerEnterHandler: (handler: () => boolean) => void;
+  registerKeyHandler?: (handler: (key: string) => boolean) => void;
 }
 
 export function GlobalSearchBar({
   q,
   onDismiss,
   registerEnterHandler,
+  registerKeyHandler,
 }: GlobalSearchBarProps) {
   const navigate = useNavigate();
 
@@ -29,7 +34,9 @@ export function GlobalSearchBar({
   // standard, so its zero hits would render as "No results for
   // karol*lobstr.co" — the one claim that is false, since the results page
   // goes on to resolve it (task 0443).
-  const state = useSearchResults({ q });
+  const indexed = useSearchResults({ q });
+  const soran = useSoranLookup(q);
+  const state = useSoranSearchResults(q, indexed, soran);
 
   // Resolved here rather than only on the results page, so a federated
   // address ends where every other query ends — a row in this dropdown. The
@@ -47,10 +54,11 @@ export function GlobalSearchBar({
 
   useEffect(() => {
     setHighlightedIndex(-1);
-  }, [state.activeTab, state.effectiveQuery]);
+  }, [q, state.activeTab, state.hitsForActiveTab]);
 
   const selectHitByKeyboard = useCallback(
-    (hit: SearchHit) => {
+    (hit: ExplorerSearchHit) => {
+      if (isMuxedSoranHit(hit)) return;
       navigate(routeForHit(hit));
       onDismiss();
     },
@@ -70,8 +78,14 @@ export function GlobalSearchBar({
         selectHitByKeyboard(picked);
         return true;
       }
+      if (soran.name != null && soran.supported) {
+        // Typing already schedules this lookup; Enter skips its debounce.
+        soran.ask();
+        return true;
+      }
       return false;
     });
+    return () => registerEnterHandler(() => false);
   }, [
     registerEnterHandler,
     federatedFor,
@@ -79,37 +93,45 @@ export function GlobalSearchBar({
     state.hitsForActiveTab,
     highlightedIndex,
     selectHitByKeyboard,
+    soran,
   ]);
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
+  const handleKey = useCallback(
+    (key: string) => {
       const max = state.hitsForActiveTab.length;
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
+      if (key === 'ArrowDown') {
         setHighlightedIndex((prev) => (max === 0 ? -1 : (prev + 1) % max));
-        return;
+        return true;
       }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
+      if (key === 'ArrowUp') {
         setHighlightedIndex((prev) =>
-          max === 0 ? -1 : (prev - 1 + max) % max
+          max === 0 ? -1 : prev < 0 ? max - 1 : (prev - 1 + max) % max
         );
-        return;
+        return true;
       }
-      if (event.key === 'Escape') {
-        event.preventDefault();
+      if (key === 'Escape') {
         onDismiss();
+        return true;
       }
+      return false;
     },
     [state.hitsForActiveTab.length, onDismiss]
   );
+
+  useEffect(() => {
+    registerKeyHandler?.(handleKey);
+    return () => registerKeyHandler?.(() => false);
+  }, [registerKeyHandler, handleKey]);
 
   const handleClickAway = (event: MouseEvent | TouchEvent) => {
     // A click on the search input itself must NOT dismiss the dropdown — the
     // same click also focuses the input, which re-opens the dropdown; without
     // this guard the click-away would fire on mouse-up and close it again.
     const target = event.target;
-    if (target instanceof Element && target.closest('[data-search-input]')) {
+    if (
+      target instanceof Element &&
+      target.closest('header [data-search-input]')
+    ) {
       return;
     }
     onDismiss();
@@ -117,7 +139,12 @@ export function GlobalSearchBar({
 
   return (
     <ClickAwayListener onClickAway={handleClickAway}>
-      <Box onKeyDown={handleKeyDown} role="listbox">
+      <Box
+        onKeyDown={(event) => {
+          if (handleKey(event.key)) event.preventDefault();
+        }}
+        role="listbox"
+      >
         <Paper
           variant="outlined"
           elevation={0}
@@ -172,13 +199,16 @@ export function GlobalSearchBar({
               />
             </Box>
           ) : (
-            <SearchResultsView
-              state={state}
-              highlightedIndex={highlightedIndex}
-              onRowMouseEnter={setHighlightedIndex}
-              onRowClick={onDismiss}
-              maxListHeight={480}
-            />
+            <>
+              <SearchResultsView
+                state={state}
+                status={getSoranSearchStatus(soran)}
+                highlightedIndex={highlightedIndex}
+                onRowMouseEnter={setHighlightedIndex}
+                onRowClick={onDismiss}
+                maxListHeight={480}
+              />
+            </>
           )}
         </Paper>
       </Box>
