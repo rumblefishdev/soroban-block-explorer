@@ -10,6 +10,7 @@ fn build_balance_rows_maps_holder_and_asset_surrogates() {
         balance: 800_009_446_178_i128,
         ledger: 100,
         closed: false,
+        sac_balance: false,
     }];
     // No SAC map → type-3 keying: asset_id == the token's contract surrogate.
     let rows = build_balance_rows(&extracted, &HashMap::new());
@@ -35,6 +36,7 @@ fn build_balance_rows_rekeys_sac_via_map_but_not_type3() {
                 balance: 100,
                 ledger: 10,
                 closed: false,
+                sac_balance: true,
             },
             ExtractedSorobanBalance {
                 contract_id: "CTOKEN3".into(),
@@ -42,6 +44,7 @@ fn build_balance_rows_rekeys_sac_via_map_but_not_type3() {
                 balance: 200,
                 ledger: 10,
                 closed: false,
+                sac_balance: false,
             },
         ],
         &sac_classic,
@@ -123,4 +126,32 @@ fn an_unknown_convention_keeps_null_and_an_empty_vector_stays_silent() {
     // Empty strings never become names.
     let empty = serde_json::json!([{"type": "string", "value": ""}]);
     assert_eq!(extract_event_signature(&empty), None);
+}
+
+/// Task 0571: a balance stored in a SAC (`sac_balance`) whose SAC the map does
+/// not know is the miss that keyed 300 mainnet balances on the SAC itself. It
+/// is reported; a mapped SAC and a token's own balance are not.
+#[test]
+fn sac_map_misses_reports_only_unmapped_sac_balances() {
+    let sac_classic = HashMap::from([(
+        ids::contract_id("CSACMAPPED"),
+        ids::asset_id(1, "USDC", 42, 0),
+    )]);
+    let balance = |contract: &str, sac_balance: bool| ExtractedSorobanBalance {
+        contract_id: contract.into(),
+        holder: "CPOOL".into(),
+        balance: 100,
+        ledger: 10,
+        closed: false,
+        sac_balance,
+    };
+    let balances = [
+        balance("CSACUNKNOWN", true),
+        balance("CSACMAPPED", true),
+        balance("CTOKEN3", false),
+    ];
+    assert_eq!(
+        sac_map_misses(&balances, &sac_classic),
+        vec!["CSACUNKNOWN".to_string()]
+    );
 }

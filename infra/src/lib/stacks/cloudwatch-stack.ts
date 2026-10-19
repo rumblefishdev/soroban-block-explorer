@@ -412,6 +412,55 @@ export class CloudWatchStack extends cdk.Stack {
     );
 
     // ---------------------
+    // Alarm 2c: balance held in a SAC the SAC map does not know (task 0571)
+    //
+    // The indexer still writes such a balance, keyed on the SAC's own id,
+    // which has no `assets` row: no asset page shows it. 300 mainnet
+    // balances sat that way for a month because the miss was silent. The
+    // log line names the SAC and the ledger; the re-key script in task 0571
+    // (`notes/G-sac-rekey-repair.sql`) moves the rows once the SAC map knows
+    // the SAC. Same `$.fields.alarm` contract as Alarm 2b.
+    // ---------------------
+    const sacMapMissFilter = new logs.MetricFilter(
+      this,
+      'IndexerSacMapMissFilter',
+      {
+        logGroup: logs.LogGroup.fromLogGroupName(
+          this,
+          'ProcessorLogGroupRefSacMapMiss',
+          `/aws/lambda/${processorFunction.functionName}`
+        ),
+        filterPattern: logs.FilterPattern.stringValue(
+          '$.fields.alarm',
+          '=',
+          'sac_map_miss'
+        ),
+        metricNamespace: 'SorobanBlockExplorer/Indexer',
+        metricName: 'SacMapMisses',
+        metricValue: '1',
+        defaultValue: 0,
+      }
+    );
+    withActions(
+      new cloudwatch.Alarm(this, 'IndexerSacMapMissAlarm', {
+        alarmName: `${config.envName}-indexer-sac-map-miss`,
+        alarmDescription:
+          'A balance held in a SAC was written under the SAC itself because the SAC map does not know it - the log line names the SAC and the ledger. Find why its asset_sac facet is missing, then run the re-key script of lore task 0571.',
+        metric: sacMapMissFilter.metric({
+          period: cdk.Duration.minutes(5),
+          statistic: cloudwatch.Stats.SUM,
+        }),
+        // One line = one wrong row: zero tolerance, like Alarm 2b.
+        threshold: 0,
+        comparisonOperator:
+          cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        // A counter: silence is its healthy state (same reason as Alarm 2b).
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+
+    // ---------------------
     // Alarm 3: DLQ depth
     //
     // A LEVEL alarm on purpose — the zero-tolerance shape (lore-0455, same

@@ -585,6 +585,22 @@ pub fn build_balance_rows(
     rows
 }
 
+/// SAC contracts holding a balance in this batch that `sac_classic` does not
+/// know. Such a balance keys on the SAC's own id, which has no `assets` row, so
+/// no asset page shows it; 300 mainnet balances sat there for a month unseen
+/// (task 0571). The row is still written — the re-key script in that task fixes
+/// it — but the caller logs every miss under the `sac_map_miss` alarm.
+pub fn sac_map_misses(
+    balances: &[ExtractedSorobanBalance],
+    sac_classic: &HashMap<i64, i64>,
+) -> Vec<String> {
+    balances
+        .iter()
+        .filter(|b| b.sac_balance && !sac_classic.contains_key(&ids::contract_id(&b.contract_id)))
+        .map(|b| b.contract_id.clone())
+        .collect()
+}
+
 /// Same as [`prepare`] but also consumes `sac_overrides` — the crypto-proven
 /// un-deployed-SAC emitters for this ledger (task 0323). An un-deployed SAC is
 /// modelled as an ASSET, not a contract: each override (a) suppresses the
@@ -976,6 +992,14 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     // `sac_map` (seeded above with this-ledger SAC carriers, before the value
     // reduction) re-keys a contract-held SAC balance onto its wrapped
     // classic/native asset.
+    for sac in sac_map_misses(soroban_token_balances, sac_map) {
+        tracing::error!(
+            alarm = "sac_map_miss",
+            sac,
+            ledger = ledger_sequence_i64,
+            "balance held in a SAC the SAC map does not know — keyed on the SAC itself"
+        );
+    }
     out.unified_balance_rows = build_balance_rows(soroban_token_balances, sac_map);
 
     // Task 0323 — un-deployed SACs are modelled as ASSETS, not contracts.
@@ -1066,7 +1090,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
         .iter()
         .filter_map(|sp| {
             let legs = [&sp.state.token_0, &sp.state.token_1]
-                .map(|t| contract_token_asset_id(t, sac_classic))
+                .map(|t| contract_token_asset_id(t, sac_map))
                 .to_vec();
             Some((ids::contract_payload(&sp.state.pair)?, legs))
         })
@@ -1974,8 +1998,7 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     out.transaction_memo_rows = value_flow.memos;
 
     // ---- pool_movements (0374, W1): from the event rows staged above ----
-    out.pool_movement_rows =
-        soroban_pool_amounts::pool_movement_rows(&out, &pair_legs, sac_classic);
+    out.pool_movement_rows = soroban_pool_amounts::pool_movement_rows(&out, &pair_legs, sac_map);
 
     Ok(out)
 }

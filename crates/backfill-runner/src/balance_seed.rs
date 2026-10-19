@@ -36,7 +36,7 @@
 
 use clickhouse::Client as ClickhouseClient;
 use clickhouse::Row;
-use db_clickhouse::persist::stage::build_balance_rows;
+use db_clickhouse::persist::stage::{build_balance_rows, sac_map_misses};
 use serde::Deserialize;
 use tracing::info;
 use xdr_parser::ExtractedSorobanBalance;
@@ -157,7 +157,7 @@ pub async fn execute(
 
     let mut balances: Vec<ExtractedSorobanBalance> = Vec::with_capacity(records.len());
     for rec in records {
-        if let Some((contract_id, holder, balance)) = decode_balance_entry(&rec.data) {
+        if let Some((contract_id, holder, balance, sac_balance)) = decode_balance_entry(&rec.data) {
             balances.push(ExtractedSorobanBalance {
                 contract_id,
                 holder,
@@ -168,6 +168,7 @@ pub async fn execute(
                 // omitted from the response. So a seeded row is live by
                 // construction. ADR 0055.
                 closed: false,
+                sac_balance,
             });
         }
     }
@@ -184,6 +185,12 @@ pub async fn execute(
     // own) via this map; type-3 tokens are absent and keep their own surrogate.
     let sac_classic =
         db_clickhouse::persist::fetch_sac_classic_map(client, !balances.is_empty()).await?;
+    for sac in sac_map_misses(&balances, &sac_classic) {
+        tracing::error!(
+            sac,
+            "balance held in a SAC the SAC map does not know — keyed on the SAC itself (task 0571)"
+        );
+    }
     let balance_rows = build_balance_rows(&balances, &sac_classic);
 
     if dry_run {

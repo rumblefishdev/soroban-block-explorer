@@ -268,6 +268,10 @@ fn extract_balance_entry_bare_i128() {
     assert_eq!(balances[0].holder, "GHOLDER1");
     assert_eq!(balances[0].balance, 800_009_446_178_i128);
     assert_eq!(balances[0].ledger, 100);
+    assert!(
+        !balances[0].sac_balance,
+        "a bare i128 is a token's own balance"
+    );
 }
 
 /// Real mainnet end-to-end (RPC `getLedgerEntries`, 2026-07-01): decodes the
@@ -435,6 +439,10 @@ fn extract_sac_struct_balance_real_mainnet() {
     assert_eq!(
         balances[0].holder, "CATUJXDUO7SSSTAKSUV5YU6RSTB4B5AVIHQDV26QTCXOB46T6SLMWNMY",
         "held by the pool contract"
+    );
+    assert!(
+        balances[0].sac_balance,
+        "a BalanceValue struct is a SAC balance"
     );
     assert_eq!(
         balances[0].balance, 11_635_129_310_963,

@@ -307,6 +307,11 @@ pub struct ExtractedSorobanBalance {
     /// than merely spent down to zero. Both emit `balance = 0`, so the flag is
     /// the only thing separating them — ADR 0055.
     pub closed: bool,
+    /// `true` when the stored value is a SAC `BalanceValue` struct
+    /// (`amount` / `authorized` / `clawback`), i.e. the balance sits in a SAC
+    /// and must key on the asset the SAC wraps; `false` for a token's own bare
+    /// `i128`. A removed entry carries no value: `false`.
+    pub sac_balance: bool,
 }
 
 /// Extracted contract deployment from LedgerEntryChanges.

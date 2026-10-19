@@ -3132,10 +3132,12 @@ fn soroban_removal_stamps_closed_at_ledger_but_a_spent_down_holder_does_not() {
         balance: 0,
         ledger: 100,
         closed: false,
+        sac_balance: false,
     };
     let removed = ExtractedSorobanBalance {
         holder: "GREMOVED".to_string(),
         closed: true,
+        sac_balance: false,
         ..spent.clone()
     };
 
@@ -3692,6 +3694,7 @@ fn a_ledger_registering_a_soroban_pool_needs_the_sac_map() {
         balance: 1,
         ledger: 1,
         closed: false,
+        sac_balance: true,
     }];
     assert!(crate::persist::sac_classic_map_needed(
         &balance,

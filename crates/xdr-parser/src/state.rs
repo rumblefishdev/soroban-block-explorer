@@ -156,10 +156,10 @@ pub fn extract_soroban_token_balances(
         // `closed` carries what the 0 cannot: the ENTRY is gone, as opposed to a
         // holder who spent down to zero but still has one. ADR 0055.
         let closed = change.change_type == "removed";
-        let balance = match change.change_type.as_str() {
+        let (balance, sac_balance) = match change.change_type.as_str() {
             // Holder fully spent / entry archived → 0, so the RMT supersedes the
             // stale positive balance (mirrors trustline-removal → 0).
-            "removed" => 0,
+            "removed" => (0, false),
             // `created` / `updated` / `restored` carry the current value.
             // `state` (pre-image) is ignored — it shares the change's ledger, so
             // emitting it would let the RMT clobber the real value with the old.
@@ -173,9 +173,9 @@ pub fn extract_soroban_token_balances(
                 // yet — the frozen-balance policy is open, task 0331.) Any other
                 // shape is skipped.
                 if let Some(b) = decode_scval_i128(data) {
-                    b
+                    (b, false)
                 } else if let Some(sac) = decode_sac_balance_value(data) {
-                    sac.amount
+                    (sac.amount, true)
                 } else {
                     continue;
                 }
@@ -188,6 +188,7 @@ pub fn extract_soroban_token_balances(
             balance,
             ledger: change.ledger_sequence,
             closed,
+            sac_balance,
         });
     }
     out

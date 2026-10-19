@@ -295,14 +295,15 @@ pub fn balance_ledger_key(token_strkey: &str, holder_strkey: &str) -> Option<Led
 /// `BalanceValue { amount, authorized, clawback }` struct (contract-held
 /// classic/native, held via the asset's SAC — ADR 0051). Returns `None`
 /// for non-ContractData variants,
-/// non-`Balance` keys, or any other value shape.
+/// non-`Balance` keys, or any other value shape. The last field says whether
+/// the value is a SAC `BalanceValue` struct (`ExtractedSorobanBalance::sac_balance`).
 ///
 /// The struct case is decoded by the SAME `xdr_parser::decode_sac_balance_value`
 /// the live parser uses (converting the value to the tagged JSON it expects), so
 /// seed and live share ONE strict decoder — lock-step by construction, not by a
 /// comment. The key-shape check stays on `ScVal` here (the RPC path holds an XDR
 /// entry); the bare-`i128` case is a one-liner not worth sharing.
-pub fn decode_balance_entry(data: &LedgerEntryData) -> Option<(String, String, i128)> {
+pub fn decode_balance_entry(data: &LedgerEntryData) -> Option<(String, String, i128, bool)> {
     let LedgerEntryData::ContractData(entry) = data else {
         return None;
     };
@@ -328,15 +329,20 @@ pub fn decode_balance_entry(data: &LedgerEntryData) -> Option<(String, String, i
     if sym.0.as_slice() != b"Balance" {
         return None;
     }
-    let balance = match &entry.val {
-        ScVal::I128(parts) => i128::from(parts),
+    let (balance, sac_balance) = match &entry.val {
+        ScVal::I128(parts) => (i128::from(parts), false),
         ScVal::Map(_) => {
             let json = json!({ "val": xdr_parser::scval_to_typed_json(&entry.val) });
-            xdr_parser::decode_sac_balance_value(&json)?.amount
+            (xdr_parser::decode_sac_balance_value(&json)?.amount, true)
         }
         _ => return None,
     };
-    Some((entry.contract.to_string(), holder.to_string(), balance))
+    Some((
+        entry.contract.to_string(),
+        holder.to_string(),
+        balance,
+        sac_balance,
+    ))
 }
 
 /// Parse a holder StrKey into an `ScAddress` — `G…` → account, `C…` → contract
@@ -756,8 +762,9 @@ mod tests {
         let entry_b64 = "AAAABgAAAAAAAAABpNLnsQaIecmK0DuR3iIEA4DUoHpK2z+hSQS0L4ntArUAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAAAAAAALOU/zUgs2L4DJx225wMqTkYuiH78AX+HaE65g2akcB4AAAABAAAACgAAAAAAAAAAAAAJGFDU+gA=";
         let bytes = BASE64.decode(entry_b64.as_bytes()).unwrap();
         let data = LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap();
-        let (token, holder, balance) =
+        let (token, holder, balance, sac_balance) =
             decode_balance_entry(&data).expect("standard bare-i128 balance entry");
+        assert!(!sac_balance);
         assert_eq!(
             token,
             "CCSNFZ5RA2EHTSMK2A5ZDXRCAQBYBVFAPJFNWP5BJECLIL4J5UBLLUQG"
@@ -779,8 +786,9 @@ mod tests {
         let entry_b64 = "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA";
         let bytes = BASE64.decode(entry_b64.as_bytes()).unwrap();
         let data = LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap();
-        let (token, holder, balance) =
+        let (token, holder, balance, sac_balance) =
             decode_balance_entry(&data).expect("SAC BalanceValue struct balance entry");
+        assert!(sac_balance);
         assert_eq!(
             token,
             "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
@@ -808,13 +816,14 @@ mod tests {
         let entry_b64 = "AAAABgAAAAAAAAABJbT82FmuwvpjSEOMSJs8PBDJi20hvk/TyzDLaJU++XcAAAAQAAAAAQAAAAIAAAAPAAAAB0JhbGFuY2UAAAAAEgAAAAEnRNx0d+UpTAqVK9xT0ZTDwPQVQeA669CYruDz0/SWywAAAAEAAAARAAAAAQAAAAMAAAAPAAAABmFtb3VudAAAAAAACgAAAAAAAAAAAAAKlQO/3vMAAAAPAAAACmF1dGhvcml6ZWQAAAAAAAAAAAABAAAADwAAAAhjbGF3YmFjawAAAAAAAAAA";
         let bytes = BASE64.decode(entry_b64.as_bytes()).unwrap();
         let data = LedgerEntryData::from_xdr(&bytes, Limits::none()).unwrap();
-        let (token, holder, balance) = decode_balance_entry(&data).expect("decodes");
+        let (token, holder, balance, sac_balance) = decode_balance_entry(&data).expect("decodes");
         let bal = ExtractedSorobanBalance {
             contract_id: token.clone(),
             holder,
             balance,
             ledger: 63_280_279,
             closed: false,
+            sac_balance,
         };
         let sac_surrogate = ids::contract_id(&token);
 
@@ -847,7 +856,7 @@ mod tests {
                 lo: 1_000_000,
             }),
         );
-        let (token_sk, holder_sk, bal) =
+        let (token_sk, holder_sk, bal, _) =
             decode_balance_entry(&data).expect("standard balance entry must decode");
         assert_eq!(
             token_sk,

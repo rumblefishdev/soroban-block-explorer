@@ -179,6 +179,9 @@ describe('custom metric names read from code-published namespaces exist in crate
     // Minted by `IndexerChWriteFailureFilter` in cloudwatch-stack.ts from
     // log lines carrying `$.fields.alarm = "ch_write_failure"`.
     'ChWriteFailures',
+    // Minted by `IndexerSacMapMissFilter` from log lines carrying
+    // `$.fields.alarm = "sac_map_miss"` (task 0571).
+    'SacMapMisses',
   ]);
 
   const names = new Set(
