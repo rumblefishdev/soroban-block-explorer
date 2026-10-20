@@ -87,7 +87,7 @@ function Node({ value, level }: { value: unknown; level: number }): ReactNode {
   if (value === null) return <Token kind="null">null</Token>;
   if (value === undefined) return <Token kind="null">undefined</Token>;
   if (typeof value === 'string') {
-    // A muxed M-address has no page of its own and stays a plain string.
+    // A muxed `M…` / `W…` links to the account / contract it stands for.
     const type = addressType(value);
     if (type != null) return <StrkeyString value={value} type={type} />;
     if (ASSET_RE.test(value)) return <AssetString value={value} />;

@@ -1967,7 +1967,6 @@ pub fn prepare_with_sac_overrides(input: &StageInputs<'_>) -> Result<StagedLedge
     let value_flow = super::value_flow::build_value_flow_rows(
         ledger_sequence_i64,
         transactions,
-        operations,
         asset_transfers,
     )?;
     out.asset_transfer_rows = value_flow.transfers;

@@ -782,9 +782,17 @@ Design notes (every figure measured — lore task 0540 and its research note):
 - **`amount` NULL means non-fungible** (`{token_id}`), and nothing else: an
   unrecognised payload never becomes a row — it is rejected, counted and raised
   as an ingest error (`xdr_parser::asset_transfers`).
-- **Endpoints are the underlying `G…`** even when the envelope named an `M…`;
-  the multiplexing id goes to `*_muxed_id` so the account page finds the row and
-  the exchange sub-account survives. `*_kind` is the StrKey's first letter
+- **Endpoints are the underlying `G…` / `C…`** even when the envelope or the
+  event named an `M…` / `W…` (CAP-0084 muxed contract); the multiplexing id
+  goes to `*_muxed_id` so the account or contract page finds the row and the
+  sub-account survives. A Soroban transfer's `to_muxed_id` comes from its
+  event — as the token contract emitted it: SEP-41 defines the field for every
+  token, and a token can only speak for its own transfers — a classic
+  operation's from the envelope. The parser resolves all of this
+  (`xdr_parser::asset_transfers`); staging only hashes the StrKeys. Rows written before task
+  0649 deployed hold NULL for a Soroban transfer to an `M…`; they gain the
+  id only when their range is re-ingested, so NULL there does not mean "no
+  sub-account". `*_kind` is the StrKey's first letter
   (measured: 84% `G`, 11–16% `L` classic pools, up to 5.8% `B` claimable
   balances, up to 1.2% `C` contracts). `G` resolves through `accounts`, `C`
   through `soroban_contracts`; `L` and `B` have no resolving table today — the

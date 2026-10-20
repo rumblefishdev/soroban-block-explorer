@@ -254,8 +254,9 @@ function shortPart(value: unknown): InlinePart | null {
   const { type, value: inner } = value as TypedVal;
   if (type === 'address' && typeof inner === 'string' && inner.length > 12) {
     const short = `${inner.slice(0, 4)}…${inner.slice(-4)}`;
-    // `ScAddress` also carries muxed accounts and claimable balances, which
-    // have no page: `addressType` gives them null.
+    // `ScAddress` also carries claimable balances, which have no page:
+    // `addressType` gives them null. A muxed `M…` / `W…` links to the
+    // account / contract it stands for.
     const kind = addressType(inner);
     // Unroutable address forms keep the same truncation but render as text —
     // an unclickable value is honest, a link to a page that does not exist is

@@ -64,6 +64,16 @@ pub fn classify(q: &str) -> Classified {
         return out;
     }
 
+    // An address with a sub-account id is its base address: an `M…` its
+    // account, a `W…` (CAP-0084) its contract. Only the full key: a partial
+    // one cannot be turned into its base.
+    if let Some(base) = crate::common::strkey::account_of_muxed(&upper)
+        .or_else(|| crate::common::strkey::contract_of_muxed(&upper))
+    {
+        out.strkey_prefix = Some(base);
+        return out;
+    }
+
     // StrKey shape (full or prefix of G… / C…). The DB index is
     // `text_pattern_ops` so prefix `LIKE 'PREFIX%'` is the served
     // branch — both the full StrKey and any non-empty prefix work
@@ -113,145 +123,4 @@ fn is_strkey_prefix(s: &str, prefix: char) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const FULL_G: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT";
-    const FULL_C: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ";
-
-    #[test]
-    fn classifies_64_hex_as_hash_bytes() {
-        let q = "a".repeat(64);
-        let out = classify(&q);
-        assert_eq!(out.hash_bytes.as_ref().map(Vec::len), Some(32));
-        assert!(out.strkey_prefix.is_none());
-    }
-
-    #[test]
-    fn classifies_full_g_strkey() {
-        let out = classify(FULL_G);
-        assert_eq!(out.strkey_prefix.as_deref(), Some(FULL_G));
-        assert!(out.hash_bytes.is_none());
-    }
-
-    #[test]
-    fn classifies_full_c_strkey() {
-        let out = classify(FULL_C);
-        assert_eq!(out.strkey_prefix.as_deref(), Some(FULL_C));
-    }
-
-    #[test]
-    fn classifies_strkey_prefix_lowercase_input() {
-        // Lowercase G prefix should normalise to upper-case; alphabet
-        // check happens after normalisation.
-        let q = "gaaa";
-        let out = classify(q);
-        assert_eq!(out.strkey_prefix.as_deref(), Some("GAAA"));
-    }
-
-    #[test]
-    fn rejects_garbage_text() {
-        let out = classify("hello world");
-        assert!(out.hash_bytes.is_none());
-        assert!(out.strkey_prefix.is_none());
-    }
-
-    #[test]
-    fn classifies_full_l_strkey_as_pool_hash_bytes() {
-        // Full L-strkey decodes to the same 32-byte hash the pool CTE
-        // matches on, so it must populate `hash_bytes` (not
-        // `strkey_prefix`) so `pool_hits` exact-match fires.
-        let strkey = stellar_strkey::LiquidityPool([0u8; 32]).to_string();
-        let out = classify(&strkey);
-        assert_eq!(out.hash_bytes.as_deref(), Some([0u8; 32].as_slice()));
-        assert!(out.strkey_prefix.is_none());
-    }
-
-    #[test]
-    fn rejects_partial_l_strkey() {
-        // Partial L-prefix is not a valid SEP-23 strkey (no CRC payload).
-        // Falls through to no classification — broad search has no pool
-        // text column to scan against (CH-era follow-up).
-        let out = classify("LAB");
-        assert!(out.hash_bytes.is_none());
-        assert!(out.strkey_prefix.is_none());
-    }
-
-    /// A CRC-valid account StrKey. `FULL_G` above is shape-only — the prefix arm
-    /// never checks the checksum — but the `CODE:ISSUER` arm does, so it needs a
-    /// key the decoder actually accepts.
-    fn valid_g() -> String {
-        // `format!` (Display), not the inherent `to_string()` — that one returns
-        // a `heapless::String`, the same trap `common::strkey` documents.
-        format!("{}", stellar_strkey::ed25519::PublicKey([0u8; 32]))
-    }
-
-    #[test]
-    fn classifies_code_issuer_on_both_separators() {
-        // `:` is the canonical SEP / SDK form; `-` is what our own
-        // `/assets/:id` routes emit, so users paste it straight back.
-        let g = valid_g();
-        for q in [format!("USDC:{g}"), format!("USDC-{g}")] {
-            let out = classify(&q);
-            assert_eq!(
-                out.code_issuer,
-                Some(("USDC".to_string(), g.clone())),
-                "failed for {q:?}"
-            );
-            // Must not also fire the substring / prefix arms.
-            assert!(out.strkey_prefix.is_none());
-            assert!(out.hash_bytes.is_none());
-        }
-    }
-
-    #[test]
-    fn code_issuer_keeps_code_case_and_uppercases_the_strkey() {
-        let g = valid_g();
-        let out = classify(&format!("uSdC:{}", g.to_lowercase()));
-        assert_eq!(out.code_issuer, Some(("uSdC".to_string(), g)));
-    }
-
-    #[test]
-    fn code_issuer_rejects_a_bad_issuer_checksum() {
-        // Last character flipped — valid base32, wrong CRC. Falls through to the
-        // ordinary search rather than answering with a confident empty page.
-        let g = valid_g();
-        let flipped = if g.ends_with('A') { 'B' } else { 'A' };
-        let bad = format!("{}{flipped}", &g[..g.len() - 1]);
-        let out = classify(&format!("USDC:{bad}"));
-        assert!(out.code_issuer.is_none());
-        assert!(out.strkey_prefix.is_none());
-    }
-
-    #[test]
-    fn code_issuer_rejects_a_code_longer_than_alphanum12() {
-        let out = classify(&format!("THIRTEENCHARS:{}", valid_g()));
-        assert!(out.code_issuer.is_none());
-    }
-
-    #[test]
-    fn code_issuer_rejects_a_non_alphanumeric_code() {
-        // A hyphenated word ahead of the key is not an asset code; splitting on
-        // the LAST separator keeps this from being read as one.
-        let out = classify(&format!("not_a_code:{}", valid_g()));
-        assert!(out.code_issuer.is_none());
-    }
-
-    #[test]
-    fn a_bare_strkey_is_still_a_prefix_not_a_code_issuer() {
-        // Regression guard: no separator, so the new arm must not shadow the
-        // account/contract prefix classification.
-        let g = valid_g();
-        let out = classify(&g);
-        assert!(out.code_issuer.is_none());
-        assert_eq!(out.strkey_prefix.as_deref(), Some(g.as_str()));
-    }
-
-    #[test]
-    fn short_strkey_prefix_under_two_chars_rejected() {
-        // Single-char "G" is too narrow — would force a full-table
-        // index range scan. Reject as garbage.
-        let out = classify("G");
-        assert!(out.strkey_prefix.is_none());
-    }
-}
+mod tests;

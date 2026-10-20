@@ -382,3 +382,18 @@ describe('ContractDetailPage source verification (task 0639)', () => {
     expect(screen.getByText('verified code tab body')).toBeInTheDocument();
   });
 });
+
+describe('ContractDetailPage muxed address (task 0649)', () => {
+  it('sends a W-address URL to the page of the contract it stands for', () => {
+    const c = 'CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA';
+    const w =
+      'WDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIAAAAAAAAAAAFLR56';
+    mockOk(makeContract({ contract_id: c }));
+    renderWithProviders(<ContractDetailPage />, {
+      initialEntries: [`/contracts/${w}?tab=events`],
+      routePath: '/contracts/:contractId',
+    });
+    expect(hookMocks.useContractDetail).toHaveBeenLastCalledWith(c);
+    expect(hookMocks.useContractDetail).not.toHaveBeenCalledWith(w);
+  });
+});

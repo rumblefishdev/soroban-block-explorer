@@ -21,6 +21,9 @@
 //!    with a null operation. Diagnostic events never arrive: they are a type
 //!    of their own.
 //!
+//! Each end also leaves with its sub-account id resolved ([`muxed`]): the
+//! event alone cannot tell an id from a memo, the transaction's envelope can.
+//!
 //! Rejects are returned to the caller, which raises them as ingest errors;
 //! they are a developer's problem, not something a reader of the account page
 //! can act on, so they never become rows. Per-event detail is logged at
@@ -30,13 +33,15 @@
 //! one line per ledger with [`RejectCounts`].
 
 use serde_json::Value;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::event::EventId;
 use crate::event_filters::{EventAsset, TokenEventKind, parse_token_event, token_verb};
 use crate::sac::sac_override_from_event_topics;
 use crate::scval::{map_get, typed, typed_str};
-use crate::types::{EventOrigin, ExtractedEvent};
+use crate::types::{EventOrigin, ExtractedEvent, ExtractedOperation};
+
+mod muxed;
 
 /// What a token event's `data` payload says about the amount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +93,13 @@ pub fn token_event_amount(data: &Value) -> TokenAmount {
     TokenAmount::Unrecognised
 }
 
+/// The `to_muxed_id` of a `map{amount, to_muxed_id}` payload, when it is a
+/// `u64`. A text or bytes value is a forwarded memo, never an id.
+fn event_to_muxed_id(data: &Value) -> Option<u64> {
+    let id = map_get(data, "to_muxed_id")?;
+    typed(id, "u64")?.as_u64()
+}
+
 fn unsigned_token_id(v: &Value) -> bool {
     match v.get("type").and_then(Value::as_str) {
         Some("u32") => typed(v, "u32")
@@ -111,8 +123,9 @@ fn scalar_i128(v: &Value) -> Option<i128> {
     typed_str(v, "u128")?.parse::<u128>().ok()?.try_into().ok()
 }
 
-/// Addresses are the StrKeys the event carried; the persistence layer resolves
-/// them to surrogates and splits an `M…` into its `G…` and id.
+/// Addresses are plain `G…` / `C…` (or `L…` / `B…`) StrKeys: an `M…` / `W…`
+/// is split into its address and id here, so the persistence layer only turns
+/// StrKeys into surrogates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedAssetTransfer {
     pub transaction_hash: String,
@@ -130,6 +143,14 @@ pub struct ExtractedAssetTransfer {
     pub emitter: String,
     /// `None` has exactly one meaning: a non-fungible movement.
     pub amount: Option<i128>,
+    /// The sender's sub-account id: from an `M…` / `W…` topic, else from the
+    /// envelope's muxed source of the operation or transaction.
+    pub from_muxed_id: Option<u64>,
+    /// The recipient's sub-account id: from an `M…` / `W…` topic; else in a
+    /// Soroban call the event's `to_muxed_id` (CAP-67, CAP-0084), and in a
+    /// classic operation the envelope's muxed destination — never the event's
+    /// field, which there may be the transaction's id memo.
+    pub to_muxed_id: Option<u64>,
 }
 
 /// An event with a token verb that did not become a row, and why.
@@ -228,8 +249,14 @@ impl AssetTransferExtraction {
 /// Events that are not token events are skipped silently. Everything that
 /// *is* a token verb either becomes a transfer or a reject; nothing with a
 /// token verb is dropped without a trace.
+///
+/// `operations` are the transaction's own, in envelope order, and the two
+/// `tx_source_*` its envelope source: they give each end its sub-account id.
 pub fn extract_asset_transfers(
     events: &[ExtractedEvent],
+    operations: &[ExtractedOperation],
+    tx_source_account: &str,
+    tx_source_muxed_id: Option<u64>,
     net_id: &[u8; 32],
 ) -> AssetTransferExtraction {
     let mut out = AssetTransferExtraction::default();
@@ -337,16 +364,38 @@ pub fn extract_asset_transfers(
             }
         };
 
+        // Both are the operation's 0-based envelope position (ADR 0059).
+        let op = operations
+            .get(usize::from(operation_index))
+            .filter(|op| op.operation_index == u32::from(operation_index));
+        // Every transfer comes from its operation's own events, so the op is
+        // there; without it neither end's sub-account id can be resolved.
+        if op.is_none() {
+            warn!(
+                tx = %ev.transaction_hash, op_index = operation_index,
+                "asset transfer without its operation — muxed ids left NULL"
+            );
+        }
+        let (from, from_muxed_id) = muxed::endpoint(token.from, |g| {
+            muxed::sender_id(op, tx_source_account, tx_source_muxed_id, g)
+        });
+        let event_muxed_id = event_to_muxed_id(&ev.body.data);
+        let (to, to_muxed_id) = muxed::endpoint(token.to, |g| {
+            muxed::recipient_id(op, &token.asset, event_muxed_id, g)
+        });
+
         out.transfers.push(ExtractedAssetTransfer {
             transaction_hash: ev.transaction_hash.clone(),
             op_index: u32::from(operation_index),
             event_pos_in_op: ev.event_id.event_index,
             kind: token.kind,
-            from: token.from,
-            to: token.to,
+            from,
+            to,
             asset: token.asset,
             emitter,
             amount,
+            from_muxed_id,
+            to_muxed_id,
         });
     }
     out

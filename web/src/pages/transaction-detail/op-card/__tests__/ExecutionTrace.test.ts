@@ -203,6 +203,21 @@ describe('argsSummary', () => {
     }
   });
 
+  it('shows a muxed address as itself, linkable like its base address', () => {
+    const w =
+      'WDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIAAAAAAAAAAAFLR56';
+    const summary = argsSummary({ type: 'address', value: w });
+    expect(summary.kind).toBe('inline');
+    if (summary.kind === 'inline') {
+      expect(summary.parts[0]).toMatchObject({
+        kind: 'id',
+        value: w,
+        type: 'contract',
+      });
+      expect(partsToText(summary.parts)).toBe('WDL7…LR56');
+    }
+  });
+
   it('falls back to a count for a single non-inlinable argument', () => {
     expect(argsSummary({ type: 'map', value: [] })).toEqual({
       kind: 'count',

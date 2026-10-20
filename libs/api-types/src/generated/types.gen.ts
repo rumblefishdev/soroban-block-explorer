@@ -2940,7 +2940,7 @@ export type GetAccountData = {
   body?: never;
   path: {
     /**
-     * Stellar account StrKey (G…, 56 chars)
+     * Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)
      */
     account_id: string;
   };
@@ -2978,7 +2978,7 @@ export type GetAccountSponsorshipData = {
   body?: never;
   path: {
     /**
-     * Stellar account StrKey (G…, 56 chars)
+     * Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)
      */
     account_id: string;
   };
@@ -3018,7 +3018,7 @@ export type ListAccountTransactionsData = {
   body?: never;
   path: {
     /**
-     * Stellar account StrKey (G…, 56 chars)
+     * Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)
      */
     account_id: string;
   };
@@ -3262,7 +3262,7 @@ export type GetContractData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3301,7 +3301,7 @@ export type GetDecompiledData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3348,7 +3348,7 @@ export type ListEventsData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3396,7 +3396,7 @@ export type GetInterfaceData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3435,7 +3435,7 @@ export type ListInvocationsData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3485,7 +3485,7 @@ export type GetVerificationData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3525,7 +3525,7 @@ export type GetVerifiedSourceData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -4158,11 +4158,13 @@ export type ListTransactionsData = {
      */
     cursor?: string;
     /**
-     * Filter by source account StrKey (G…).
+     * Filter by source account StrKey (G…, or M… for the same account with a
+     * sub-account id).
      */
     'filter[source_account]'?: string | null;
     /**
-     * Filter by contract StrKey (C…) — matches root op, nested call, or event emission.
+     * Filter by contract StrKey (C…, or W… for the same contract with a
+     * sub-account id) — matches root op, nested call, or event emission.
      */
     'filter[contract_id]'?: string | null;
     /**

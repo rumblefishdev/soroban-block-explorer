@@ -13,6 +13,7 @@ export {
   useLinkComponent,
 } from './LinkComponentContext.js';
 export { getIdentifierHref, routeSegments } from './routes.js';
+export { encodeStrkey, STRKEY_VERSION, unmuxed } from './strkey.js';
 export {
   DEFAULT_TRUNCATION,
   getDefaultTruncation,

@@ -26,7 +26,7 @@ db-clickhouse = { path = "../db-clickhouse" }
 stellar-xdr = { workspace = true }
 # Decode the `C...` contract StrKey from `soroban_contracts.contract_id`
 # into the 32-byte ContractId hash the XDR envelope expects.
-stellar-strkey = "0.0.16"
+stellar-strkey = "1.0"
 # Base64 encode/decode for the `transaction` param + `xdr` result of
 # simulateTransaction.
 base64 = { workspace = true }

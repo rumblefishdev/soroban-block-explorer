@@ -3,6 +3,7 @@ import {
   CardSkeleton,
   Chip,
   DetailErrorState,
+  getIdentifierHref,
   IdentifierWithCopy,
   isContractId,
   NotFoundState,
@@ -10,11 +11,12 @@ import {
   SectionErrorBoundary,
   Tabs,
   truncateMiddle,
+  unmuxed,
   useTabUrlState,
   type TabDefinition,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { type ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { Navigate, useLocation, useParams } from 'react-router-dom';
 
 import { useContractDetail, useContractVerification } from '../api/index.js';
 import { routes } from '../router/routes.js';
@@ -46,6 +48,7 @@ const TAB_KEYS = [
 
 export default function ContractDetailPage() {
   const { contractId = '' } = useParams<{ contractId: string }>();
+  const location = useLocation();
   const valid = isContractId(contractId);
   const contract = useContractDetail(valid ? contractId : '');
   const { activeKey, setActiveKey } = useTabUrlState({
@@ -64,6 +67,16 @@ export default function ContractDetailPage() {
     : null;
 
   if (!valid) {
+    // A `W…` (a contract with a sub-account id, CAP-0084) has its contract's
+    // page; the open tab rides along.
+    const base = unmuxed(contractId);
+    if (base != null && isContractId(base))
+      return (
+        <Navigate
+          to={getIdentifierHref('contract', base) + location.search}
+          replace
+        />
+      );
     return <NotFoundState entity="contract" identifier={contractId} />;
   }
 

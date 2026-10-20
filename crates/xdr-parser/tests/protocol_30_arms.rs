@@ -16,8 +16,8 @@
 use base64::Engine;
 use stellar_xdr::{
     ContractId, Hash, LedgerCloseMeta, LedgerCloseValueSignature, Limits, MuxedContract, NodeId,
-    PublicKey, ReadXdr, ScAddress, ScVal, Signature, StellarValueExt, StellarValueSignedMsValue,
-    TimePointMs, Uint256, WriteXdr,
+    PublicKey, ReadXdr, ScAddress, ScVal, Signature, StellarValueExt, StellarValueProposedMsValue,
+    StellarValueSignedMsValue, TimePointMs, Uint256, WriteXdr,
 };
 use xdr_parser::ledger::extract_ledger;
 use xdr_parser::scval::scval_to_typed_json;
@@ -48,7 +48,7 @@ fn cap_88_millisecond_arm_decodes_and_close_time_stays_in_seconds() {
 
     let bytes = meta.to_xdr(Limits::none()).expect("encodes");
     let decoded = LedgerCloseMeta::from_xdr(&bytes, Limits::none())
-        .expect("stellar-xdr 28 cannot decode this arm; 30 must");
+        .expect("a ledger with the millisecond arm decodes");
     let extracted = extract_ledger(&decoded);
 
     assert_eq!(extracted.sequence, 4_601_991);
@@ -56,6 +56,34 @@ fn cap_88_millisecond_arm_decodes_and_close_time_stays_in_seconds() {
         extracted.closed_at, close_time as i64,
         "`closed_at` stays whole seconds: CAP-0088 keeps `closeTime == closeTimeMs / 1000`"
     );
+}
+
+#[test]
+fn cap_88_empty_tx_set_millisecond_arm_decodes_too() {
+    // The other arm CAP-0088 adds: a ledger closed with an empty transaction
+    // set carries the proposed value, now with the close time in ms.
+    let mut meta = testnet_ledger();
+    let LedgerCloseMeta::V2(v2) = &mut meta else {
+        panic!("the fixture closes as LedgerCloseMeta V2");
+    };
+    let close_time = v2.ledger_header.header.scp_value.close_time.0;
+    v2.ledger_header.header.scp_value.ext =
+        StellarValueExt::EmptyTxSetMs(StellarValueProposedMsValue {
+            close_time_ms: TimePointMs(close_time * 1000 + 750),
+            tx_set_hash: Hash([0x00; 32]),
+            previous_ledger_hash: Hash([0xAB; 32]),
+            previous_ledger_version: 29,
+            lc_value_signature: LedgerCloseValueSignature {
+                node_id: NodeId(PublicKey::PublicKeyTypeEd25519(Uint256([0x01; 32]))),
+                signature: Signature(vec![0x02; 64].try_into().expect("64-byte signature")),
+            },
+        });
+
+    let bytes = meta.to_xdr(Limits::none()).expect("encodes");
+    let decoded = LedgerCloseMeta::from_xdr(&bytes, Limits::none())
+        .expect("a ledger with the empty-tx-set millisecond arm decodes");
+
+    assert_eq!(extract_ledger(&decoded).closed_at, close_time as i64);
 }
 
 #[test]

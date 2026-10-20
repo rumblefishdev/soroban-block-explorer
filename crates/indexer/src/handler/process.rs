@@ -203,28 +203,33 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         let envelope = envelopes.get(tx_index).and_then(Option::as_ref);
         let tx_meta = tx_metas.get(tx_index).copied();
 
-        if let Some(env) = envelope {
+        let ops = envelope.map(|env| {
             let inner = xdr_parser::envelope::inner_transaction(env);
             let op_results = tx_results
                 .get(tx_index)
                 .and_then(|r| xdr_parser::tx_op_results(r));
-            let ops = xdr_parser::extract_operations(
+            xdr_parser::extract_operations(
                 &inner,
                 tx_meta,
                 op_results,
                 &ext_tx.hash,
                 ledger_sequence,
                 tx_index,
-            );
-            all_operations.push((ext_tx.hash.clone(), ops));
-        }
+            )
+        });
 
         if let Some(tm) = tx_meta {
             // Consensus events only: nothing here reads the debug channel.
             let events = ledger_events.extract(tx_index, &ext_tx.hash).events;
             let nft_events = xdr_parser::detect_nft_events(&events, net_id);
             all_nft_events.extend(nft_events);
-            let edges = xdr_parser::extract_asset_transfers(&events, net_id);
+            let edges = xdr_parser::extract_asset_transfers(
+                &events,
+                ops.as_deref().unwrap_or_default(),
+                &ext_tx.source_account,
+                ext_tx.source_muxed_id,
+                net_id,
+            );
             transfer_rejects.absorb(edges.reject_counts());
             all_asset_transfers.extend(edges.transfers);
             all_events.push((ext_tx.hash.clone(), events));
@@ -263,6 +268,10 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
                 ext_tx.source_account.clone(),
                 changes,
             ));
+        }
+
+        if let Some(ops) = ops {
+            all_operations.push((ext_tx.hash.clone(), ops));
         }
     }
 

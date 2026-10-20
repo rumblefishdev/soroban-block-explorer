@@ -179,7 +179,7 @@
           {
             "name": "account_id",
             "in": "path",
-            "description": "Stellar account StrKey (G…, 56 chars)",
+            "description": "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)",
             "required": true,
             "schema": {
               "type": "string"
@@ -238,7 +238,7 @@
           {
             "name": "account_id",
             "in": "path",
-            "description": "Stellar account StrKey (G…, 56 chars)",
+            "description": "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)",
             "required": true,
             "schema": {
               "type": "string"
@@ -298,7 +298,7 @@
           {
             "name": "account_id",
             "in": "path",
-            "description": "Stellar account StrKey (G…, 56 chars)",
+            "description": "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)",
             "required": true,
             "schema": {
               "type": "string"
@@ -694,7 +694,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -755,7 +755,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -823,7 +823,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -903,7 +903,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -962,7 +962,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -1044,7 +1044,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -1105,7 +1105,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -2097,7 +2097,7 @@
           {
             "name": "filter[source_account]",
             "in": "query",
-            "description": "Filter by source account StrKey (G…).",
+            "description": "Filter by source account StrKey (G…, or M… for the same account with a\nsub-account id).",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -2106,7 +2106,7 @@
           {
             "name": "filter[contract_id]",
             "in": "query",
-            "description": "Filter by contract StrKey (C…) — matches root op, nested call, or event emission.",
+            "description": "Filter by contract StrKey (C…, or W… for the same contract with a\nsub-account id) — matches root op, nested call, or event emission.",
             "required": false,
             "schema": {
               "type": ["string", "null"]

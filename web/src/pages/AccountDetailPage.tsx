@@ -3,14 +3,16 @@ import {
   Chip,
   DetailErrorState,
   getDefaultTruncation,
+  getIdentifierHref,
   IdentifierWithCopy,
   isAccountId,
   NotFoundState,
   SectionErrorBoundary,
   truncateMiddle,
+  unmuxed,
 } from '@rumblefish/soroban-block-explorer-ui';
 import type { ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { Navigate, useParams } from 'react-router-dom';
 
 import { useAccountDetail } from '../api/index.js';
 
@@ -34,6 +36,10 @@ export default function AccountDetailPage() {
   const account = useAccountDetail(valid ? accountId : '');
 
   if (!valid) {
+    // An `M…` (an account with a sub-account id) has its account's page.
+    const base = unmuxed(accountId);
+    if (base != null && isAccountId(base))
+      return <Navigate to={getIdentifierHref('account', base)} replace />;
     return <NotFoundState entity="account" identifier={accountId} />;
   }
 

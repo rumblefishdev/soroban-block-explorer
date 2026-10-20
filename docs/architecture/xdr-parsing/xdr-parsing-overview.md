@@ -292,10 +292,11 @@ entities:
 - contract token and NFT metadata → `soroban_contract_metadata` side table
   (ClickHouse, task 0297) — **not parsed from the ledger**. The indexer runs the
   contract's own `decimals` / `name` / `symbol` functions locally
-  (`crates/contract-executor`, the network's own `soroban-env-host`, over
+  (`crates/contract-executor`, the official `soroban-env-host` validators run, over
   `wasm_programs.code` + `contract_instances`; every run states the host's own
-  protocol, because the host refuses any other and a read-only call pays no
-  fee, so one host serves ledgers of every protocol;
+  protocol, because the host refuses any other so as never to replay a
+  contract with another protocol's execution costs, which a read-only call
+  is not charged for; one host answers before a protocol vote and after it;
   [ADR 0061](../../../lore/2-adrs/0061_execute-contract-view-functions-locally.md))
   for every contract whose instance changed and whose program declares
   `decimals` or `name` and `symbol`; `backfill-runner contract-metadata-backfill`
@@ -783,8 +784,21 @@ Two identity fields were added for this table:
   keep the id that reduction dropped, so the persistence layer can store an
   exchange sub-account losslessly (`*_muxed_id` columns) while the surrogate
   stays the `G…`'s. CAP-67 puts the id in the event **merged with the memo**
-  (`to_muxed_id` is 98.5% memo text on mainnet), which is why it is taken from
-  the envelope instead.
+  (`to_muxed_id` is 98.5% memo text on mainnet), which is why a classic
+  operation's id is taken from the envelope instead.
+- `ExtractedAssetTransfer.from_muxed_id` / `to_muxed_id` — each end's
+  sub-account id, resolved in the parser (`asset_transfers::muxed`), so
+  `from` / `to` always leave it as a plain `G…` / `C…` (or `L…` / `B…`).
+  `extract_asset_transfers` takes the transaction's operations and envelope
+  source for this. A topic that is itself an `M…` / `W…` is split into its
+  address and id. Otherwise the recipient's id in a Soroban call is the event's
+  `to_muxed_id` when it is a `u64`: the topic keeps the plain `G…` or `C…` and
+  the id rides in the event (CAP-67; CAP-0084 adds the `W…` muxed contract). In
+  a classic operation that `u64` may be an id memo, so the id comes from the
+  envelope: the operation's muxed destination, only for the transfer that
+  delivers the operation's asset to it. The sender's id is the operation's
+  muxed source, else the transaction's. An `M…` / `W…` topic that does not
+  decode stays as it came, with no id, and logs a `warn`.
 
 ## 6. Storage Contract
 

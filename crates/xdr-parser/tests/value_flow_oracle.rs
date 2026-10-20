@@ -157,7 +157,8 @@ fn reconcile_tx(
     let events = ledger
         .extract(tx_index, &format!("{seq}:{tx_index}"))
         .events;
-    let decoded = extract_asset_transfers(&events, net);
+    // The oracle sums amounts only; sub-account ids play no part in it.
+    let decoded = extract_asset_transfers(&events, &[], "", None, net);
     tally.rejects += decoded.rejects.len();
     tally.edges += decoded.transfers.len();
 

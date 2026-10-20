@@ -53,7 +53,7 @@ struct Lookup {
 }
 
 async fn lookup(state: &AppState, contract_id: &str) -> Result<Lookup, Response> {
-    path::strkey(contract_id, 'C', "contract_id")?;
+    let contract_id = &path::contract_id(contract_id)?;
     // Unset on networks without a verifier service. `/verification` answers
     // `unavailable` before getting here; for the files it is a 404.
     let Some(fetcher) = state.runtime_enrichment.source_verification.clone() else {
@@ -193,7 +193,7 @@ fn archive_error(contract_id: &str, e: ArchiveError) -> Response {
     get,
     path = "/contracts/{contract_id}/verification",
     tag = "contracts",
-    params(("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)")),
+    params(("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)")),
     responses(
         (status = 200, description = "Verification status", body = SourceVerificationResponse),
         (status = 400, description = "Invalid contract_id", body = ErrorEnvelope),
@@ -267,9 +267,10 @@ pub async fn get_verification(
 /// cached, because it changes only with a deploy. Neither the database nor
 /// the service is asked.
 fn unavailable(contract_id: String) -> Response {
-    if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
-        return resp;
-    }
+    let contract_id = match path::contract_id(&contract_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let mut resp = Json(SourceVerificationResponse {
         contract_id,
         wasm_hash: None,
@@ -298,7 +299,7 @@ fn unavailable(contract_id: String) -> Response {
     get,
     path = "/contracts/{contract_id}/verified-source",
     tag = "contracts",
-    params(("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)")),
+    params(("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)")),
     responses(
         (status = 200, description = "Unpacked source archive", body = VerifiedSourceResponse),
         (status = 400, description = "Invalid contract_id", body = ErrorEnvelope),

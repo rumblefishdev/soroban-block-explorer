@@ -367,6 +367,13 @@ fast, and cacheable with short TTLs.
 **`GET /transactions`** - Paginated list. Query params: `limit`, `cursor`,
 `filter[source_account]`, `filter[contract_id]`, `filter[operation_type]`.
 
+An address with a sub-account id is answered as its base address,
+checksum-checked: a `W…` (CAP-0084) as its `C…` wherever a contract id is
+taken — the `/contracts/:contract_id` paths, the transactions'
+`filter[contract_id]` and search — and
+an `M…` as its `G…` wherever an account id is taken — the `/accounts/:account_id`
+paths, `filter[source_account]` and search.
+
 **`GET /transactions/:hash`** - Full detail for a single transaction (supports both normal
 and advanced representations):
 

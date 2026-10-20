@@ -5,9 +5,9 @@
 //!   | Resource          | Shape                          | Helper                  |
 //!   | ----------------- | ------------------------------ | ----------------------- |
 //!   | `transactions`    | 64-char hex                    | [`parse_hash`]          |
-//!   | `contracts`       | StrKey, prefix `C`             | [`strkey`] with `'C'`   |
-//!   | `accounts`        | StrKey, prefix `G`             | [`strkey`] with `'G'`   |
-//!   | `liquidity-pools` | StrKey, prefix `L` (SEP-23)    | [`pool_id_strkey`]      |
+//!   | `contracts`       | StrKey `C…`, or `W…` → its `C…` | [`contract_id`]         |
+//!   | `accounts`        | StrKey `G…`, or `M…` → its `G…` | [`account_id`]          |
+//!   | `liquidity-pools` | StrKey `L…` or `C…`            | [`pool_id_strkey`]      |
 //!   | `ledgers`         | numeric `u32`                  | [`sequence`]            |
 //!
 //! Each helper short-circuits the handler before any DB / S3 call —
@@ -99,6 +99,28 @@ pub fn strkey(value: &str, prefix: char, param: &str) -> Result<(), Response> {
             serde_json::json!({ "param": param, "received": value, "expected_prefix": prefix.to_string() }),
         ))
     }
+}
+
+/// An account path parameter: its `G…`, or an `M…` — the same account with a
+/// sub-account id — which resolves to that `G…`. Anything else is the same
+/// `INVALID_ACCOUNT_ID` as [`strkey`].
+pub fn account_id(value: &str) -> Result<String, Response> {
+    if let Some(account) = super::strkey::account_of_muxed(value) {
+        return Ok(account);
+    }
+    strkey(value, 'G', "account_id")?;
+    Ok(value.to_string())
+}
+
+/// A contract path parameter: its `C…`, or a `W…` — the same contract with a
+/// sub-account id (CAP-0084) — which resolves to that `C…`. Anything else is
+/// the same `INVALID_CONTRACT_ID` as [`strkey`].
+pub fn contract_id(value: &str) -> Result<String, Response> {
+    if let Some(contract) = super::strkey::contract_of_muxed(value) {
+        return Ok(contract);
+    }
+    strkey(value, 'C', "contract_id")?;
+    Ok(value.to_string())
 }
 
 // ---------------------------------------------------------------------------

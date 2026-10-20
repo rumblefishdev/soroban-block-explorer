@@ -2,7 +2,7 @@
 id: '0646'
 title: "XDR protocol watch: page when our indexer's stellar-xdr lags the protocol core supports"
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0610', '0548', '0368']
 tags: [xdr, ingestion, alarms, resilience, priority-high, effort-small]
@@ -24,6 +24,13 @@ history:
     note: >
       Delivery moved from a GitHub workflow + issue to the 0610 Lambda and its
       Slack alarm: prices-api's issue was a workaround for a missing Slack path.
+  - date: '2026-10-19'
+    status: completed
+    who: karolkow
+    note: >
+      Shipped in #669 and #678, deployed with production-2026.10.19-1 (Compute,
+      STELLAR_XDR_MAJOR=30 on the indexer) and -2-CloudWatch. A manual run of
+      the watch logged "OK: our indexer's stellar-xdr 30". Infra suite 78/78.
 ---
 
 # XDR protocol watch
@@ -87,9 +94,35 @@ on 2026-10-15, we had nothing.
 
 ## Acceptance Criteria
 
-- [ ] `xdr.mjs` tier matrix and `stellarXdrMajor` tests pass; synth test
-      shows the indexer env and the watch's read permission.
-- [ ] Compute deployed before CloudWatch; the watch logs both lines.
+- [x] `xdr.mjs` cases and `stellarXdrMajor` tests pass (infra 78/78); the
+      synth test shows the indexer env and the watch's one read permission.
+- [x] Compute deployed before CloudWatch (tags `production-2026.10.19-1`,
+      `-2-CloudWatch`); a run logged both lines, `OK: … core 29.0.0` and
+      `OK: our indexer's stellar-xdr 30`.
 - [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
       §6, §8.2; runbooks `galexie-protocol-watch.md`, `health.md`.
-- [ ] **API types regenerated** — N/A — no `crates/api/**` or Cargo change.
+- [x] **API types regenerated** — N/A — no `crates/api/**` or Cargo change.
+
+## Implementation Notes
+
+- `infra/lambdas/galexie-protocol-watch/xdr.mjs` (pure verdict: OK /
+  WAITING / BUMP) and the I/O in `index.mjs`: the indexer's
+  `STELLAR_XDR_MAJOR` via `GetFunctionConfiguration`, Horizon, and the
+  crates.io listing of `soroban-env-common` (#678 cut the env-host hop).
+- `infra/src/lib/stellar-xdr-pin.ts` reads the workspace pin at synth;
+  `compute-stack.ts` sets it on the indexer; the watch gets the indexer from
+  Compute through the CloudWatch stack.
+
+## Issues Encountered
+
+- `vitest`'s 5 s default failed a CDK synth test on the release PR (5.1 s
+  beside the web tests); infra `testTimeout` raised to 30 s.
+
+## Design Decisions
+
+### Emerged
+
+1. **Both checks always run** and a thrown check becomes "not ok", so one
+   failing read never hides the other line.
+2. **The watch reads the indexer through Compute's existing export**, not a
+   copied function name.
