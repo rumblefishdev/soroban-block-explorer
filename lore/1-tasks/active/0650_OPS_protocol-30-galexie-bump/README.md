@@ -2,7 +2,7 @@
 id: '0650'
 title: 'Protocol 30: bump Galexie 29.0.0 → the first image with captive core 30, before the pubnet vote'
 type: OPS
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0605', '0610', '0649', '0367', '0560']
 tags: [ingestion, galexie, protocol-30, priority-high, effort-small]
@@ -19,6 +19,12 @@ history:
       No Galexie image with captive core 30 exists yet; the P30 code sits on
       upstream branch `protocol-next`, unpublished. Mirrors 0605, done ahead
       of the vote this time.
+  - date: '2026-10-21'
+    status: active
+    who: karolkow
+    note: >
+      Started on the 0610 NEW CORE alarm: Galexie 30.0.0 on Docker Hub
+      2026-10-20 21:59 UTC; steps 1-2 done.
 ---
 
 # Protocol 30: Galexie bump
@@ -36,11 +42,10 @@ deploying before the vote is safe.
 
 ## Stan teraz
 
-- Blocked upstream: no Galexie image with core 30 on Docker Hub (2026-10-19).
-- Running: Galexie 29.0.0, ECR digest `sha256:5269dfd9…d495a3`.
-- Signal: the 0610 watch Lambda (every 3 h) alarms to Slack when Hub has a
-  Galexie whose captive core is newer than ours — that is the trigger to start.
-- Next: owner steps 1–5 below once the image exists.
+- Steps 1–2 done 2026-10-21: `30.0.0` (core `30.0.0-3642.0e49751aa`, contains
+  `47e46de`) in ECR as `sha256:4c75a89b…9305d84` — single-arch amd64, so the
+  ECR digest equals Hub's. Running: 29.0.0 (`sha256:5269dfd9…d495a3`).
+- Pubnet vote 2026-11-23 17:00 UTC (SDF Bell guide). Next: step 3 PR, step 4.
 
 ## Context
 
@@ -51,8 +56,6 @@ Evidence: [notes/R-galexie-p30-image-status.md](notes/R-galexie-p30-image-status
   Not on Hub: upstream CI publishes only `main`, `release/**` and `galexie-v*`.
 - The image must contain `47e46de`: a core-30 package on `main`'s old SDK is
   not enough (CAP-0088 adds mandatory `StellarValueExt` arms).
-- For P29 the release tag came 3.5 h after the vote; the sha tag a week
-  before. Act on the sha tag, do not wait for the release.
 - Testnet runs no Galexie (`ledgerSource: public-lake`); only 0649 matters there.
 
 ## Implementation Plan — owner steps
@@ -69,8 +72,10 @@ TAG=<tag-from-hub>
 docker buildx imagetools inspect "stellar/stellar-galexie:$TAG" --format '{{json .Image.Config.Env}}'
 ```
 
-Expect `STELLAR_CORE_VERSION=30.0.0-…` — a final 30.0.0 build, not the
-`30.0.0-3642.0e49751aa` release candidate. Then check the image contains the
+Expect `STELLAR_CORE_VERSION=30.0.0-…`. `30.0.0-3642.0e49751aa` is the final
+build: `0e49751aa` is the commit of stellar-core's `v30.0.0` release tag
+(published 2026-10-16, not a prerelease), though PR #98 shipped it earlier as
+a release candidate. Then check the image contains the
 P30 SDK commit (for a sha tag `TAG` is the commit):
 
 ```bash
