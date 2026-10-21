@@ -6,12 +6,20 @@ status: backlog
 related_adr: ['0048']
 related_tasks: ['0277']
 tags: [phase-future, effort-medium, priority-low, frontend, ux, turnstile]
-links: []
+links: ['https://github.com/rumblefishdev/soroban-block-explorer/issues/675']
 history:
   - date: '2026-06-10'
     status: backlog
     who: fmazur
     note: 'Spawned from 0277 future work.'
+  - date: '2026-10-21'
+    status: backlog
+    who: karolkow
+    note: >
+      Linked issue #675 (explorer blocked behind Cloudflare WARP). Its second
+      acceptance criterion - a failed verification shows a retry state, not a
+      crash - is this task's 2026-09-24 section. Its first (WARP passes the
+      edge) has no reproduction yet; the issue waits for the reporter's setup.
 ---
 
 # Turnstile widget UX
