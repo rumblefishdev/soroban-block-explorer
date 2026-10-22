@@ -771,7 +771,12 @@ CREATE TABLE IF NOT EXISTS nft_enrichment (
     name             Nullable(String),
     media_url        Nullable(String),
     collection_name  Nullable(String),
-    version          DateTime64(3, 'UTC')
+    version          DateTime64(3, 'UTC'),
+    -- The token_uri metadata JSON as read, and the token_uri itself (task
+    -- 0655): the detail page is served from here, not re-read per request.
+    -- '' = nothing read. Added with DEFAULT so older builds keep inserting.
+    metadata         String DEFAULT '',
+    token_uri        String DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (contract_id, token_id);

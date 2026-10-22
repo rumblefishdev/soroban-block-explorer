@@ -64,8 +64,8 @@ const MAX_COLLECTION_NAME_CHARS: usize = 4096;
 /// Fetcher for the per-NFT `token_uri()` JSON metadata pipeline
 /// (Soroban RPC + HTTP / IPFS gateway).
 ///
-/// `cache_key` is `"{contract_id}:{token_id}"`. Cache stores the parsed
-/// `Option<Value>` (Some = real JSON or synthesised image-shape;
+/// `cache_key` is `"{contract_id}:{token_id}"`. Cache stores the raw
+/// `token_uri` with the parsed JSON (Some = real JSON or synthesised image-shape;
 /// `None` reserved for future "fetched, intentionally empty" cases).
 /// Errors are surfaced wrapped in `Arc` (moka's shared-failure idiom)
 /// so the worker can classify transient-vs-permanent via
@@ -81,7 +81,7 @@ pub struct NftTokenUriFetcher {
     /// Round-robin start cursor — spreads each request's first pick across the
     /// pools so no single endpoint is hammered first (proactive 429 avoidance).
     cursor: Arc<AtomicUsize>,
-    cache: FutureCache<String, Arc<Option<Value>>>,
+    cache: FutureCache<String, Arc<Option<(String, Value)>>>,
     /// Per-CONTRACT cache for the SEP-50 `name()` collection name (task 0340).
     /// Keyed by contract StrKey — `name()` is parameterless, so a full drain
     /// costs one RPC per collection, never per token. `None` = the contract
@@ -173,14 +173,13 @@ impl NftTokenUriFetcher {
         })
     }
 
-    /// Resolve `(contract_id, token_id)` → metadata JSON.
+    /// Resolve `(contract_id, token_id)` → the raw `token_uri` and its
+    /// metadata JSON.
     ///
-    /// Mirrors `Sep1Fetcher::fetch`: `Ok(Some(json))` on success
-    /// (JSON-metadata or synthesised `{"image": …}` shape for the
-    /// direct-image convention); `Err(Arc<NftTokenUriError>)` on any
-    /// failure path. The api detail handler folds errors fail-soft to
-    /// `null` via `.ok().flatten()`; the worker classifies via
-    /// [`super::errors::is_transient`] for SQS-retry-vs-sentinel-write.
+    /// `Ok(Some((token_uri, json)))` on success (JSON-metadata or synthesised
+    /// `{"image": …}` shape for the direct-image convention);
+    /// `Err(Arc<NftTokenUriError>)` on any failure path. The worker classifies
+    /// via [`super::errors::is_transient`] for SQS-retry-vs-sentinel-write.
     ///
     /// `moka::try_get_with` caches `Ok` only — neither transient nor
     /// permanent errors poison the slot. The trade-off is that a
@@ -194,7 +193,7 @@ impl NftTokenUriFetcher {
         &self,
         contract_id: &str,
         token_id: &str,
-    ) -> Result<Option<Value>, Arc<NftTokenUriError>> {
+    ) -> Result<Option<(String, Value)>, Arc<NftTokenUriError>> {
         let key = format!("{contract_id}:{token_id}");
         let client = self.client.clone();
         let rpc_urls = Arc::clone(&self.rpc_urls);
@@ -207,7 +206,7 @@ impl NftTokenUriFetcher {
         let cached = self
             .cache
             .try_get_with(key, async move {
-                let json = fetch_uncached(
+                let read = fetch_uncached(
                     &client,
                     &rpc_urls,
                     &ipfs_gateways,
@@ -216,7 +215,7 @@ impl NftTokenUriFetcher {
                     &token_id,
                 )
                 .await?;
-                Ok::<_, NftTokenUriError>(Arc::new(Some(json)))
+                Ok::<_, NftTokenUriError>(Arc::new(Some(read)))
             })
             .await?;
         Ok((*cached).clone())
@@ -313,7 +312,7 @@ async fn fetch_uncached(
     start: usize,
     contract_id: &str,
     token_id: &str,
-) -> Result<Value, NftTokenUriError> {
+) -> Result<(String, Value), NftTokenUriError> {
     let token_u32 = token_id
         .parse::<u32>()
         .map_err(|_| NftTokenUriError::MalformedInput {
@@ -327,11 +326,13 @@ async fn fetch_uncached(
 
     // The metadata is in the string itself: nothing to fetch, so no host to check.
     if uri.trim_start().to_ascii_lowercase().starts_with("data:") {
-        return metadata_from_data_uri(&uri);
+        let json = metadata_from_data_uri(&uri)?;
+        return Ok((uri, json));
     }
     validate_uri(&uri)?;
     debug!(uri = %uri, "nft token_uri resolved; fetching metadata");
-    fetch_metadata_with_failover(client, &uri, ipfs_gateways, start).await
+    let json = fetch_metadata_with_failover(client, &uri, ipfs_gateways, start).await?;
+    Ok((uri, json))
 }
 
 /// Try each RPC in the pool (round-robin from `start`) until one answers.
@@ -439,7 +440,7 @@ async fn fetch_one_metadata(
         // Direct-image convention (e.g. JamesBachini Soroban example):
         // `token_uri()` returns the image binary URL directly, no JSON
         // wrapper. Synthesise `{ "image": "<url>" }` so the worker's
-        // extract_columns + the api detail handler see a uniform shape.
+        // extract_columns and the stored metadata see a uniform shape.
         // `name` / `collection_name` are legitimately absent in source.
         Ok(json!({ "image": url }))
     } else {

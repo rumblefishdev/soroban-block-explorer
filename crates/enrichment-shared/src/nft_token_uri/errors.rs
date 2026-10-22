@@ -11,9 +11,6 @@
 //!   Caller surfaces `EnrichError::Transient` so the worker requests
 //!   an SQS retry → DLQ after the redrive policy max-receive count.
 //!
-//! At the API runtime type-2 call site (`runtime_enrichment::nft_token_uri`)
-//! every error variant collapses to `None` — the API never 5xx's because
-//! of an enrichment failure (matches the SEP-1 + stellar archive pattern).
 
 use thiserror::Error;
 

@@ -306,6 +306,9 @@ pub struct NftEnrichmentRow {
     pub media_url: Option<String>,
     pub collection_name: Option<String>,
     pub version: i64,
+    /// The `token_uri` metadata JSON as read (task 0655); `''` = nothing read.
+    pub metadata: String,
+    pub token_uri: String,
 }
 
 /// `liquidity_pools` — state, RMT(last_updated_ledger). PK = pool_id.

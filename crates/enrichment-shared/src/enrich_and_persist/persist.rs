@@ -56,9 +56,15 @@ pub(crate) async fn insert_nft(
     name: String,
     media_url: String,
     collection_name: String,
+    metadata: String,
+    token_uri: String,
 ) -> Result<EnrichOutcome, EnrichError> {
-    // Real iff any of the three columns landed a non-sentinel value.
-    let outcome = if !name.is_empty() || !media_url.is_empty() || !collection_name.is_empty() {
+    // Real iff any column landed a non-sentinel value.
+    let outcome = if !name.is_empty()
+        || !media_url.is_empty()
+        || !collection_name.is_empty()
+        || !metadata.is_empty()
+    {
         EnrichOutcome::Real
     } else {
         EnrichOutcome::Sentinel
@@ -70,6 +76,8 @@ pub(crate) async fn insert_nft(
         media_url: Some(media_url),
         collection_name: Some(collection_name),
         version: now_ms(),
+        metadata,
+        token_uri,
     };
     insert_nft_enrichment(client, std::slice::from_ref(&row)).await?;
     Ok(outcome)
@@ -78,7 +86,7 @@ pub(crate) async fn insert_nft(
 /// Stamp a fetched collection name onto EVERY existing `nft_enrichment` row of
 /// a contract that still lacks one (task 0340 backfill). The side table is an
 /// RMT with whole-row replace semantics, so a column-only update is impossible
-/// — each row is re-INSERTed with its `name` / `media_url` PRESERVED and a
+/// — each row is re-INSERTed with its other columns PRESERVED and a
 /// fresh `version`. One server-side INSERT-SELECT per contract; rows that
 /// already carry a collection name are left untouched (no clobber). Still
 /// INSERT-only into `nft_enrichment` — the write-surface contract of this file
@@ -91,8 +99,9 @@ pub(crate) async fn rewrite_nft_collection_name(
     client
         .query(
             "INSERT INTO nft_enrichment \
-                 (contract_id, token_id, name, media_url, collection_name, version) \
-             SELECT contract_id, token_id, name, media_url, ?, ? \
+                 (contract_id, token_id, name, media_url, collection_name, version, \
+                  metadata, token_uri) \
+             SELECT contract_id, token_id, name, media_url, ?, ?, metadata, token_uri \
              FROM nft_enrichment FINAL \
              WHERE contract_id = ? AND ifNull(collection_name, '') = ''",
         )
@@ -103,3 +112,6 @@ pub(crate) async fn rewrite_nft_collection_name(
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

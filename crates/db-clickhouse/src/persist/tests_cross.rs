@@ -216,6 +216,8 @@ fn column_order_nft_enrichment() {
             "media_url",
             "collection_name",
             "version",
+            "metadata",
+            "token_uri",
         ],
     );
 }

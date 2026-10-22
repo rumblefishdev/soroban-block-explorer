@@ -83,14 +83,31 @@ pub async fn enrich_nft_token_uri(
     let Some(contract_strkey) = lookup.and_then(|l| l.contract_strkey) else {
         warn!(key = %key, reason = "contract_strkey_not_found", "writing sentinel");
         let (name, media_url, collection_name) = permanent_fail_outcome();
-        return insert_nft(client, &key, name, media_url, collection_name).await;
+        return insert_nft(
+            client,
+            &key,
+            name,
+            media_url,
+            collection_name,
+            String::new(),
+            String::new(),
+        )
+        .await;
     };
 
+    // The whole JSON and the raw token_uri are stored too: the detail page is
+    // served from them, not read again per request (task 0655).
+    let mut metadata = String::new();
+    let mut token_uri = String::new();
     let (name, media_url, mut collection_name) = match fetcher
         .resolve(&contract_strkey, &key.token_id)
         .await
     {
-        Ok(Some(json)) => extract_columns(&json),
+        Ok(Some((uri, json))) => {
+            metadata = json.to_string();
+            token_uri = uri;
+            extract_columns(&json)
+        }
         // Fetcher honoured the convention but produced no JSON (reserved
         // for future variants). Permanent — sentinel write (was silent).
         Ok(None) => {
@@ -140,7 +157,16 @@ pub async fn enrich_nft_token_uri(
         }
     }
 
-    let outcome = insert_nft(client, &key, name, media_url, collection_name).await?;
+    let outcome = insert_nft(
+        client,
+        &key,
+        name,
+        media_url,
+        collection_name,
+        metadata,
+        token_uri,
+    )
+    .await?;
     debug!("nft_enrichment row written");
     Ok(outcome)
 }

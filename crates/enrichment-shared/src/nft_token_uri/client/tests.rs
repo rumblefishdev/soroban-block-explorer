@@ -678,5 +678,12 @@ async fn data_uri_metadata_is_read_without_asking_a_gateway() {
     )
     .await
     .expect("inline metadata resolves");
-    assert_eq!(got, json!({ "name": "Stroopies 0" }));
+    // The raw token_uri comes back with the JSON, for the worker to store (task 0655).
+    assert_eq!(
+        got,
+        (
+            "data:application/json,{\"name\":\"Stroopies 0\"}".to_owned(),
+            json!({ "name": "Stroopies 0" })
+        )
+    );
 }

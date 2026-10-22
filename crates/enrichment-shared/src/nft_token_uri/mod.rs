@@ -8,20 +8,12 @@
 //! pipeline), not after the dropped `nfts.metadata` schema column nor
 //! after the api response field — both of which would be ambiguous.
 //!
-//! Two consumers:
-//!
-//! - `enrichment-worker` Lambda (type-1 SQS-driven, `EnrichmentMessage::NftTokenUri`)
-//!   — extracts `name`, `image` → `media_url`, `collection` and writes the
-//!   three list-endpoint columns `nfts.{name, media_url, collection_name}`
-//!   to the DB. Those three are NOT derivable from the processed ledger
-//!   alone — the standard NFT pattern leaves them in the off-chain JSON
-//!   file referenced by `token_uri()`.
-//! - api crate `runtime_enrichment::nft_token_uri` (type-2 per-request,
-//!   thin shim over this module) — surfaces the full JSON blob on
-//!   `GET /v1/nfts/:id` for the detail-page attribute table (wire
-//!   field `metadata`). The blob is NOT persisted; the `nfts.metadata`
-//!   JSONB column was dropped in migration
-//!   `20260507120000_drop_nfts_metadata.up.sql` per ADR 0043.
+//! One consumer: the `enrichment-worker` Lambda (and the backfill runner,
+//! same code) — it stores the whole JSON and the raw `token_uri` in
+//! `nft_enrichment.{metadata, token_uri}` and extracts `name`, `image` →
+//! `media_url`, `collection` for the list. The API serves the stored JSON on
+//! `GET /v1/nfts/:id` and makes no `token_uri` call (task 0655, amended
+//! ADR 0043).
 //!
 //! ### Source vs SEP-1 (assets)
 //!
@@ -38,23 +30,21 @@
 //! ### Cache + fail-soft semantics
 //!
 //! Same as the SEP-1 fetcher: in-process `moka` LRU 24h, capacity 1024.
-//! `resolve()` returns `Result<Option<Value>, Arc<NftTokenUriError>>`;
-//! call sites decide whether to collapse `Err` to `None` (api detail
-//! handler) or classify transient-vs-permanent for SQS retry
-//! (enrichment worker, via [`errors::is_transient`]). `moka`'s
+//! `resolve()` returns `Result<Option<(String, Value)>, Arc<NftTokenUriError>>`
+//! (the raw `token_uri` and its JSON); the worker classifies an `Err` as
+//! transient or permanent for SQS retry (via [`errors::is_transient`]). `moka`'s
 //! `try_get_with` only caches `Ok` values, so neither transient nor
 //! permanent errors poison the slot — every failure call site keeps
 //! its warn log + retry semantics intact, at the cost of re-running
 //! the fetch on repeat traffic for a broken NFT. Self-healing on
 //! flaky upstreams (IPFS gateway 4xx blip) is preferred over the
-//! sub-ms cache-hit savings. The api never 5xx's because of an
-//! enrichment failure.
+//! sub-ms cache-hit savings.
 //!
 //! ### Two `token_uri` response conventions (Content-Type branch)
 //!
 //! - `application/json` — OpenZeppelin / OpenSea standard. Parse →
 //!   extract `name`, `image` (resolve `ipfs://` → HTTPS), `collection`.
-//!   Surface the rest as the JSON blob to the api detail handler.
+//!   The whole JSON is stored for the detail page.
 //! - `image/*` — direct-image convention (JamesBachini Soroban
 //!   example). The URI itself is the image; the fetcher synthesises
 //!   `{"image": "<url>"}` so the worker writes only `media_url` and
