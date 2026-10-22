@@ -175,7 +175,7 @@ pub async fn get_nft(
     };
 
     let fetched = queries::fetch_by_composite(&state.ch(), &contract_id, &token_id).await;
-    let row = match fetched {
+    let response = match fetched {
         Ok(Some(r)) => r,
         Ok(None) => return errors::not_found("nft not found"),
         Err(e) => {
@@ -189,55 +189,6 @@ pub async fn get_nft(
         }
     };
 
-    // NFT metadata (attributes / traits / description / animation_url)
-    // is detail-only per ADR 0043 — fetched at request time via
-    // `runtime_enrichment::nft_token_uri` (per-token Soroban RPC
-    // `token_uri()` + HTTP / IPFS gateway → JSON). Warm requests hit
-    // the in-process LRU (24 h, capacity 1024); cold requests pay the
-    // RPC + IPFS round trip. The `metadata` field on the wire response
-    // is independent of the fetcher module name — same convention as
-    // the SEP-1 fetcher serving `description` / `home_page`.
-    //
-    // 3 s wall-clock cap on the cold path so a slow IPFS gateway can't
-    // hold the request anywhere near the API Gateway 29 s ceiling.
-    // Internally `resolve()` is already capped per leg (2 s connect /
-    // 5 s request); this outer timeout bounds the combined RPC + HTTP
-    // worst case. Any failure (timeout, RPC error, malformed JSON,
-    // unsafe scheme) collapses to `metadata = null` — the API never
-    // 5xx's because of an enrichment failure.
-    let metadata = match tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        state
-            .runtime_enrichment
-            .nft_token_uri
-            .resolve(&row.contract_id, &row.token_id),
-    )
-    .await
-    {
-        Ok(Ok(value)) => value,
-        Ok(Err(err)) => {
-            tracing::warn!(
-                contract_id = %row.contract_id,
-                token_id = %row.token_id,
-                error = %err,
-                "nft_token_uri runtime fetch failed; serving metadata=null"
-            );
-            None
-        }
-        Err(_) => {
-            tracing::warn!(
-                contract_id = %row.contract_id,
-                token_id = %row.token_id,
-                "nft_token_uri runtime fetch timed out (>3s); serving metadata=null"
-            );
-            None
-        }
-    };
-
-    let response = NftDetailResponse {
-        item: row,
-        metadata,
-    };
     let mut resp = Json(response).into_response();
     cache_control::attach(&mut resp, cache_control::MEDIUM);
     resp

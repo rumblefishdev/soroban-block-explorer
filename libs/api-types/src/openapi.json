@@ -3718,12 +3718,12 @@
             "properties": {
               "metadata": {
                 "type": ["object", "null"],
-                "description": "Off-chain JSON metadata fetched at request time. Always present\non the wire — `null` indicates fetch failure / unsupported\ncontent-type, not field absence."
+                "description": "Off-chain JSON metadata as the enrichment worker stored it. Always\npresent on the wire — `null` means nothing was read for this token\n(yet), not field absence."
               }
             }
           }
         ],
-        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row), plus a\n`metadata` field fetched at request time via\n`runtime_enrichment::nft_token_uri` — full JSON blob from the\nper-token `token_uri()` IPFS / HTTP URL (attributes, traits,\ndescription, animation_url, etc.). `metadata` is always present\nin the response, set to `null` when the fetch fails or the contract\nreturns a non-JSON `image/*` URI (fail-soft per ADR 0043)."
+        "description": "Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are\nflattened in (same shape as the list-endpoint row), plus a\n`metadata` field: the full JSON from the per-token `token_uri()`\n(attributes, traits, description, animation_url, etc.) as the\nenrichment worker stored it (task 0655). `metadata` is always present\nin the response, set to `null` when the worker read nothing."
       },
       "NftItem": {
         "type": "object",

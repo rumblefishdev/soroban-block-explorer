@@ -20,10 +20,6 @@ fn test_state(ch: clickhouse::Client) -> AppState {
             crate::runtime_enrichment::stellar_archive::test_client(),
         ),
         sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
-        nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::with_rpc_url(
-            "http://unused".to_owned(),
-        )
-        .expect("build nft_token_uri fetcher"),
         wasm_code: crate::runtime_enrichment::wasm_code::WasmCodeFetcher::with_rpc_urls(vec![
             "http://unused".to_owned(),
         ])

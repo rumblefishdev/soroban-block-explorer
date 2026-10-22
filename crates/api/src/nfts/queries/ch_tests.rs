@@ -44,6 +44,13 @@ async fn seed(ch: &clickhouse::Client) {
          (1, 'held-by-contract', 100, 1, 0, 0, 10, 0), \
          (1, 'held-by-contract', 101, 1, 0, 0, 2,  1), \
          (1, 'held-by-account',  100, 2, 0, 0, 10, 0)",
+        // One token with its metadata read by the worker, one whose read found nothing.
+        "INSERT INTO nft_enrichment \
+         (contract_id, token_id, name, media_url, collection_name, version, metadata, token_uri) VALUES \
+         (1, 'held-by-contract', 'Stroopies 0', '', '', '2026-01-01 00:00:00', \
+          '{\"name\":\"Stroopies 0\",\"attributes\":[{\"trait_type\":\"Role\",\"value\":\"member\"}]}', \
+          'data:application/json,{\"name\":\"Stroopies 0\"}'), \
+         (1, 'held-by-account', '', '', '', '2026-01-01 00:00:00', '', '')",
     ] {
         ch.query(sql).execute().await.expect("seed row");
     }
@@ -95,7 +102,20 @@ async fn nft_held_by_a_contract_is_served_with_its_address() {
         .await
         .expect("detail must run")
         .expect("detail must find the token");
-    assert_eq!(detail.owner.as_deref(), Some(VAULT));
+    assert_eq!(detail.item.owner.as_deref(), Some(VAULT));
+    // The detail serves the metadata the worker stored; nothing is fetched (task 0655).
+    assert_eq!(
+        detail.metadata,
+        Some(serde_json::json!({
+            "name": "Stroopies 0",
+            "attributes": [{ "trait_type": "Role", "value": "member" }]
+        }))
+    );
+    let nothing_read = fetch_by_composite(&ch, COLLECTION, "held-by-account")
+        .await
+        .expect("detail must run")
+        .expect("detail must find the token");
+    assert_eq!(nothing_read.metadata, None, "'' is served as null");
 
     // ---- transfers: newest first; the move into the vault starts at Alice ----
     let transfers = fetch_transfers(

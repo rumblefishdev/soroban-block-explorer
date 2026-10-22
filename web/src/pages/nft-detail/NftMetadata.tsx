@@ -4,9 +4,8 @@ import { TableSectionHeader } from '@rumblefish/soroban-block-explorer-ui';
 
 interface NftMetadataProps {
   /**
-   * Off-chain JSON metadata. `null` means runtime enrichment could not
-   * resolve it (IPFS timeout / unsupported content-type, ADR 0043) — this
-   * is distinct from an NFT that simply has no attributes.
+   * Off-chain JSON metadata. `null` means the enrichment worker read none
+   * for this token — distinct from an NFT that simply has no attributes.
    */
   metadata?: Record<string, unknown> | null;
 }

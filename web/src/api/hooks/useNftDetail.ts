@@ -8,8 +8,8 @@ import { detailPolicy } from '../polling.js';
  * composite `(contract_id, token_id)` external path (ADR-aligned with
  * stellar.expert; no surrogate `nfts.id` leak in the URL).
  *
- * `metadata` is fetched at request time and is fail-soft: `null` means
- * the off-chain JSON could not be resolved, not that the NFT is missing.
+ * `metadata` is the off-chain JSON the enrichment worker stored: `null`
+ * means none was read for this token, not that the NFT is missing.
  */
 export const useNftDetail = (
   contractId: string,

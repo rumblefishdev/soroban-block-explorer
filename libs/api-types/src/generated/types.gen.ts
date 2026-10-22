@@ -1196,12 +1196,10 @@ export type NetworkStats = {
 /**
  * Detail response for `GET /v1/nfts/:id`. The `NftItem` fields are
  * flattened in (same shape as the list-endpoint row), plus a
- * `metadata` field fetched at request time via
- * `runtime_enrichment::nft_token_uri` — full JSON blob from the
- * per-token `token_uri()` IPFS / HTTP URL (attributes, traits,
- * description, animation_url, etc.). `metadata` is always present
- * in the response, set to `null` when the fetch fails or the contract
- * returns a non-JSON `image*` URI (fail-soft per ADR 0043).
+ * `metadata` field: the full JSON from the per-token `token_uri()`
+ * (attributes, traits, description, animation_url, etc.) as the
+ * enrichment worker stored it (task 0655). `metadata` is always present
+ * in the response, set to `null` when the worker read nothing.
  */
 export type NftDetailResponse = {
   collection_name?: string | null;
@@ -1225,9 +1223,9 @@ export type NftDetailResponse = {
   token_id: string;
 } & {
   /**
-   * Off-chain JSON metadata fetched at request time. Always present
-   * on the wire — `null` indicates fetch failure / unsupported
-   * content-type, not field absence.
+   * Off-chain JSON metadata as the enrichment worker stored it. Always
+   * present on the wire — `null` means nothing was read for this token
+   * (yet), not field absence.
    */
   metadata: {
     [key: string]: unknown;

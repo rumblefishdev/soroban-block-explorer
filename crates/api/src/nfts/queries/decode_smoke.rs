@@ -118,7 +118,8 @@ async fn clobbered_mint_ledger_is_served_from_ownership() {
     let item = fetch_by_composite(&ch, &contract_id, &token_id)
         .await
         .expect("detail must decode")
-        .expect("subject token must exist in nfts");
+        .expect("subject token must exist in nfts")
+        .item;
 
     assert_eq!(
         item.minted_at_ledger,

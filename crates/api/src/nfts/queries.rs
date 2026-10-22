@@ -82,7 +82,7 @@ use serde::Deserialize;
 use crate::common::ch::{millis_to_utc, resolve_accounts, resolve_contracts};
 use crate::common::cursor::{Direction, keyset_sql_desc};
 
-use super::dto::{NftItem, NftListCursor, NftTransferCursor, NftTransferItem};
+use super::dto::{NftDetailResponse, NftItem, NftListCursor, NftTransferCursor, NftTransferItem};
 
 /// Resolved, validated `GET /v1/nfts` list params handed to `fetch_list`.
 pub struct ResolvedListParams {
@@ -324,6 +324,7 @@ struct NftChRow {
     media_url: Option<String>,
     minted_at_ledger: Option<i64>,
     last_seen_ledger: Option<i64>,
+    metadata: String,
 }
 
 /// `GET /v1/nfts/{contract_id}/{token_id}` — single-row composite lookup.
@@ -336,11 +337,13 @@ struct NftChRow {
 /// the contract StrKey is echoed from the request input instead of a
 /// whole-`soroban_contracts` JOIN — the two joins that turned this into a
 /// ~25M-row dimension scan (task 0355; same swap as 0344/0345/0354).
+/// `metadata` is the `token_uri` JSON the enrichment worker stored (task
+/// 0655); `''` (nothing read yet, or nothing to read) is served as `null`.
 pub async fn fetch_by_composite(
     client: &clickhouse::Client,
     contract_id: &str,
     token_id: &str,
-) -> Result<Option<NftItem>, clickhouse::error::Error> {
+) -> Result<Option<NftDetailResponse>, clickhouse::error::Error> {
     let sql = "WITH cid AS ( \
                    SELECT id FROM soroban_contracts WHERE contract_id = ? LIMIT 1 \
                ) \
@@ -354,13 +357,15 @@ pub async fn fetch_by_composite(
                    nullIf(ne.name, '')               AS name, \
                    nullIf(ne.media_url, '')          AS media_url, \
                    nullIf(mi.minted_at_ledger, 0)    AS minted_at_ledger, \
-                   nullIf(n.current_owner_ledger, 0) AS last_seen_ledger \
+                   nullIf(n.current_owner_ledger, 0) AS last_seen_ledger, \
+                   ne.metadata                       AS metadata \
                FROM nfts n FINAL \
                LEFT JOIN ( \
                    SELECT contract_id, token_id, \
                           argMax(name, version)            AS name, \
                           argMax(media_url, version)       AS media_url, \
-                          argMax(collection_name, version) AS collection_name \
+                          argMax(collection_name, version) AS collection_name, \
+                          argMax(metadata, version)        AS metadata \
                    FROM nft_enrichment \
                    WHERE contract_id IN (SELECT id FROM cid) \
                    GROUP BY contract_id, token_id \
@@ -404,15 +409,32 @@ pub async fn fetch_by_composite(
         None => None,
     };
 
-    Ok(Some(NftItem {
-        contract_id: contract_id.to_string(),
-        token_id: r.token_id,
-        collection_name: r.collection_name,
-        name: r.name,
-        media_url: r.media_url,
-        minted_at_ledger: r.minted_at_ledger,
-        owner,
-        last_seen_ledger: r.last_seen_ledger,
+    // The worker stores only JSON it parsed, so a value that does not parse
+    // is a defect: logged, and served as null rather than failing the page.
+    let metadata = if r.metadata.is_empty() {
+        None
+    } else {
+        match serde_json::from_str(&r.metadata) {
+            Ok(value) => Some(value),
+            Err(e) => {
+                tracing::error!(contract_id, token_id, error = %e, "stored NFT metadata is not JSON");
+                None
+            }
+        }
+    };
+
+    Ok(Some(NftDetailResponse {
+        item: NftItem {
+            contract_id: contract_id.to_string(),
+            token_id: r.token_id,
+            collection_name: r.collection_name,
+            name: r.name,
+            media_url: r.media_url,
+            minted_at_ledger: r.minted_at_ledger,
+            owner,
+            last_seen_ledger: r.last_seen_ledger,
+        },
+        metadata,
     }))
 }
 
