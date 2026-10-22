@@ -202,20 +202,6 @@ The backend serves data from the block explorer's own database, adding:
     Query API call (body capped at 1 MB), 10 s per archive, no redirects, archive host pinned to the verifier's,
     sha256 and size caps checked before unpacking. Failures are errors the
     handlers report, not empty results.
-  - **`runtime_enrichment::nft_token_uri`** — drives the detail-only
-    `metadata` field on `GET /v1/nfts/:id` (task 0195 §2d). Per ADR 0043
-    detail-only carve-out — the `nfts.metadata` JSONB column was dropped
-    in migration `20260507120000_drop_nfts_metadata.up.sql`. Flow:
-    Soroban RPC `simulateTransaction` of `token_uri(token_id)`
-    (SEP-50 per-token form, falls back to zero-arg `token_uri()` form
-    for SEP-39 contracts on `MismatchingParameterLen` — see audit 0197
-    Bug #5), then IPFS gateway fetch + JSON parse. Built-in safeguards:
-    3 s wall-clock timeout, 256 KB body cap, scheme/hostname validation
-    (https / ipfs only), 24 h LRU (1024 entries). Fail-soft NULL on any
-    error class. Code is shared with the Lambda 2 write-side worker
-    (`crates/enrichment-shared::nft_token_uri`); only the persistence
-    half differs (handler returns the JSON inline, worker writes
-    `nfts.name` / `media_url` / `collection_name`).
 - **Surrogate-key resolution** — every StrKey that enters a route parameter
   (`G...`, `C...`) is resolved to the `BIGINT` surrogate via the relevant
   `UNIQUE` index at the request boundary

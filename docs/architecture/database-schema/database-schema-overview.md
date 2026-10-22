@@ -71,11 +71,11 @@ The current design implies the following principles:
   closed domain (enums as `SMALLINT` per ADR 0031, hashes as `BYTEA(32)` per
   ADR 0024, balances as `NUMERIC(28,7)`); JSONB is reserved for genuinely open
   metadata shapes (`soroban_contracts.metadata`, `wasm_programs.metadata`).
-  Detail-only NFT attributes (formerly `nfts.metadata` JSONB) are NOT persisted —
-  per ADR 0043 they are fetched at request time on `GET /v1/nfts/:id` via
-  `runtime_enrichment::nft_token_uri` (Soroban RPC `token_uri()` + IPFS gateway,
-  LRU 24h, fail-soft). The column was dropped in migration
-  `20260507120000_drop_nfts_metadata.up.sql` (task 0195 §2d).
+  Detail-only NFT attributes (formerly `nfts.metadata` JSONB) are stored by the
+  enrichment worker in `nft_enrichment.metadata` (the `token_uri` JSON as read,
+  with the raw `token_uri`) and served from there on `GET /v1/nfts/:id` — the
+  same read as the list fields, per amended ADR 0043 (task 0655). The `nfts`
+  column was dropped in migration `20260507120000_drop_nfts_metadata.up.sql`.
 - relational links are always surrogate `BIGINT` FKs to `accounts.id` /
   `soroban_contracts.id` (ADRs 0026 / 0030); StrKeys stay as public lookup keys but
   are not joined on internally
@@ -1420,8 +1420,8 @@ CREATE TABLE nfts (
     collection_name      VARCHAR(256),                                            -- task 0195 §2d (Lambda 2)
     name                 VARCHAR(256),                                            -- task 0195 §2d (Lambda 2)
     media_url            TEXT,                                                    -- task 0195 §2d (Lambda 2)
-    -- (`metadata JSONB` dropped per ADR 0043 / task 0195 §2d — detail-only,
-    --  served at request time via `runtime_enrichment::nft_token_uri`)
+    -- (`metadata JSONB` dropped per task 0195 §2d — now stored as
+    --  `nft_enrichment.metadata` by the enrichment worker, task 0655)
     -- (`minted_at_ledger` dropped per task 0497 — the mint is the
     --  `nft_ownership_changes` row with event_type = 0; a copy here drifted)
     current_owner_id     BIGINT       REFERENCES accounts(id),                    -- ADR 0026
