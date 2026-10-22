@@ -40,6 +40,15 @@ history:
       UPDATE (ReplacingMergeTree), so a write-back column is a racy
       read-modify-write. 0043 is unchanged for rare-change off-chain data; see
       ADR 0053 (status proposed, pending review).
+  - date: 2026-10-22
+    status: accepted
+    who: karolkow
+    note: >
+      Rule amended (task 0655): a detail-only field read from an off-chain
+      source the worker already reads for list fields is stored with them —
+      one source, one read. The NFT `token_uri` JSON and the SEP-1 TOML were
+      each read twice (worker + live per request) and the detail page mixed
+      the two reads. Runtime type-2 stays for sources nothing is stored from.
 ---
 
 # ADR 0043: How new fields reach the API — indexer column / enrichment Lambda column / runtime fetch (no column)
@@ -89,7 +98,8 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 
 - **List endpoint + on-chain** (data already in the processed ledger) → **indexer**. Populate at ingest time, never via enrichment.
 - **Off-chain** (HTTP fetch, oracle call, per-row RPC) → **enrichment Lambda 2** (the type-1 SQS-driven worker from task 0191). Persist to typed columns. List endpoints serve those columns directly; the worker keeps them populated.
-- **Detail-only** (returned only by `/:id` endpoints, never by list endpoints) → **runtime type-2 enrichment in the API handler**. **Never persist.** No dedicated DB column.
+- **Detail-only, from a source the enrichment worker already reads** (the same off-chain document a list field comes from) → **enrichment Lambda 2**, stored with the list fields. One source is read once; everything the API shows from it lands in typed columns (amended 2026-10-22, task 0655).
+- **Detail-only, from a source nothing is stored from** (returned only by `/:id` endpoints, never by list endpoints) → **runtime type-2 enrichment in the API handler**. **Never persist.** No dedicated DB column.
 
 "On-chain" here means _already in the processed ledger as it arrives at the indexer_ — i.e. derivable from XDR without an additional network round-trip. Per-token Soroban RPC calls (`token_uri()` for NFTs) are off-chain under this rule, even though the underlying data lives on Stellar, because they require an extra RPC per row outside the indexer's normal stream.
 
@@ -99,7 +109,7 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 
 1. **Latency parity for list endpoints.** A list endpoint returning N rows cannot afford N HTTP fetches per request. Anything required by a list response must be in a typed column at request time. Indexer (on-chain) and Lambda 2 (off-chain) both produce typed columns; runtime type-2 cannot.
 2. **Cost parity for off-chain reads.** Off-chain data is rare-change per row (SEP-1 TOML, USD price, NFT metadata). Paying the HTTP cost once at write time and serving thousands of reads from Postgres is dramatically cheaper than paying it per request.
-3. **Detail endpoints tolerate per-request fetch.** A single `/v1/assets/{id}` response with a 24 h LRU cache absorbs the SEP-1 fetch cost in the cold path and amortises it across warm requests. The data does not warrant the storage + invalidation cost of a column.
+3. **Detail endpoints tolerate per-request fetch — when nothing else reads the source.** A single detail response with a 24 h LRU cache absorbs a fetch cost no stored column pays already. When the worker reads the same document for list fields, a second live read buys no freshness for those fields and splits one page across two reads of different age; it is stored instead, and is as fresh as the last worker read (refreshed by a re-run, as the list fields are). Amended 2026-10-22, task 0655.
 4. **Anti-pattern prevention.** A column that is _only ever written by the detail handler and never read by list endpoints_ is a pure liability — schema bloat, index bloat, indexer write amplification — without any read benefit. The rule rejects this shape outright.
 5. **Audit doc Section 9.3 override.** The 2026-04-10 pipeline audit proposed a single scheduled cron Lambda for both LP TVL (off-chain, USD-denominated) and LP volume (on-chain, PathPayment delta). This ADR splits them: TVL → Lambda 2, volume → indexer. The cleaner allocation surfaces the cost asymmetry that the cron-bundled proposal hid.
 
@@ -181,21 +191,21 @@ Auxiliary columns trivially satisfy "indexer-written, on-chain-derived" by const
 
 Snapshot of current allocations under this rule. Updated by tasks 0194 / 0195 / 0197.
 
-| Field                                              | Path                                                   | Owning task                                       |
-| -------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------- |
-| `assets.name` (Soroban / SAC)                      | indexer (on-chain `ContractData`)                      | 0156                                              |
-| `assets.name` (classic credit)                     | Lambda 2 (SEP-1 TOML `CURRENCIES[].name`)              | 0195 §2a                                          |
-| `assets.icon_url`                                  | Lambda 2 (SEP-1 TOML `CURRENCIES[].image`)             | 0191                                              |
-| `assets.holder_count`                              | indexer (trustline delta — recompute)                  | 0194 §1c                                          |
-| `assets.total_supply` (classic credit)             | indexer (SUM of trustline balances — recompute)        | 0194 §1b                                          |
-| `assets.usd_price` + `usd_price_updated_at`        | n/a — deferred to future-work (column + population)    | future-work (0194 §1a + 0195 §2c removed from M2) |
-| `assets.description`, `assets.home_page`           | runtime type-2 (`runtime_enrichment::sep1`)            | 0188                                              |
-| `liquidity_pool_snapshots.tvl`                     | Lambda 2 (Reflector / StellarExpert oracle)            | 0195 §2b → 0199                                   |
-| `liquidity_pool_snapshots.volume`, `fee_revenue`   | indexer (per-op PathPayment) + Lambda 2 (USD oracle)   | 0199                                              |
-| `nfts.{collection_name, name, media_url}`          | Lambda 2 (Soroban RPC `token_uri()` + IPFS gateway)    | 0195 §2d                                          |
-| NFT detail `metadata` (attributes / traits / etc.) | runtime type-2 (`runtime_enrichment::nft_token_uri`)   | 0195 §2d                                          |
-| `account_balances_current` (trustline rows)        | indexer (TrustLine ledger entries)                     | 0119 (completed), verified by 0194 §1e            |
-| Transaction `envelope_xdr`, full `events` payload  | runtime type-2 (`runtime_enrichment::stellar_archive`) | per ADR 0029 / 0033 / 0034                        |
+| Field                                              | Path                                                                          | Owning task                                       |
+| -------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------- |
+| `assets.name` (Soroban / SAC)                      | indexer (on-chain `ContractData`)                                             | 0156                                              |
+| `assets.name` (classic credit)                     | Lambda 2 (SEP-1 TOML `CURRENCIES[].name`)                                     | 0195 §2a                                          |
+| `assets.icon_url`                                  | Lambda 2 (SEP-1 TOML `CURRENCIES[].image`)                                    | 0191                                              |
+| `assets.holder_count`                              | indexer (trustline delta — recompute)                                         | 0194 §1c                                          |
+| `assets.total_supply` (classic credit)             | indexer (SUM of trustline balances — recompute)                               | 0194 §1b                                          |
+| `assets.usd_price` + `usd_price_updated_at`        | n/a — deferred to future-work (column + population)                           | future-work (0194 §1a + 0195 §2c removed from M2) |
+| `assets.description`, `assets.home_page`           | runtime type-2 (`runtime_enrichment::sep1`) → Lambda 2 under the amended rule | 0188 → 0655                                       |
+| `liquidity_pool_snapshots.tvl`                     | Lambda 2 (Reflector / StellarExpert oracle)                                   | 0195 §2b → 0199                                   |
+| `liquidity_pool_snapshots.volume`, `fee_revenue`   | indexer (per-op PathPayment) + Lambda 2 (USD oracle)                          | 0199                                              |
+| `nfts.{collection_name, name, media_url}`          | Lambda 2 (Soroban RPC `token_uri()` + IPFS gateway)                           | 0195 §2d                                          |
+| NFT detail `metadata` (attributes / traits / etc.) | Lambda 2 (stored with the list fields, same read)                             | 0195 §2d → 0655                                   |
+| `account_balances_current` (trustline rows)        | indexer (TrustLine ledger entries)                                            | 0119 (completed), verified by 0194 §1e            |
+| Transaction `envelope_xdr`, full `events` payload  | runtime type-2 (`runtime_enrichment::stellar_archive`)                        | per ADR 0029 / 0033 / 0034                        |
 
 ---
 
