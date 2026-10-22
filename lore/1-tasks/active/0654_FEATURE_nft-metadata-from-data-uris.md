@@ -57,19 +57,19 @@ Measured 2026-10-21/22 on mainnet (details: 0520
 
 ## Decisions so far
 
-| Situation                                                                    | What happens                                                                                      | Date       |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------- |
-| `token_uri` is `data:application/json,<json>` (plain, percent-decoded)       | parsed locally as the metadata JSON, no request                                                   | 2026-10-22 |
-| `token_uri` is `data:application/json;base64,<b64>`                          | decoded and parsed the same way                                                                   | 2026-10-22 |
-| `token_uri` is `data:image/…`                                                | treated as the direct-image convention: `{"image": <the data: value>}`                            | 2026-10-22 |
-| `token_uri` is `data:` with any other media type (`text/html`, `text/plain`) | permanent error, empty row, as an unsupported content type today                                  | 2026-10-22 |
-| `data:` value that does not parse (no comma, bad base64, bad JSON)           | permanent error, empty row                                                                        | 2026-10-22 |
-| decoded `data:` body over the 256 KB metadata cap                            | permanent error (`BodyTooLarge`)                                                                  | 2026-10-22 |
-| `image` is `data:image/{png,jpeg,gif,webp,svg+xml}` within 8 KB              | stored as `media_url` as received                                                                 | 2026-10-22 |
-| `image` is any other `data:` type, `http:`, `javascript:`                    | empty `media_url`, as today                                                                       | 2026-10-22 |
-| `image` is `https://…` or `ipfs://…`                                         | unchanged                                                                                         | 2026-10-22 |
-| detail page gets a `data:image/…` `media_url`                                | renders it as an image                                                                            | 2026-10-22 |
-| `--retry-sentinels`                                                          | walks displayed NFTs (`nfts`) with empty `name` and `media_url`, whatever `collection_name` holds | 2026-10-22 |
+| Situation                                                                                        | What happens                                                                                      | Date       |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ---------- |
+| `token_uri` is `data:application/json,<json>` (plain, percent-decoded; `text/json` not accepted) | parsed locally as the metadata JSON, no request                                                   | 2026-10-22 |
+| `token_uri` is `data:application/json;base64,<b64>`                                              | decoded and parsed the same way                                                                   | 2026-10-22 |
+| `token_uri` is `data:image/…`                                                                    | treated as the direct-image convention: `{"image": <the data: value>}`                            | 2026-10-22 |
+| `token_uri` is `data:` with any other media type (`text/html`, `text/plain`)                     | permanent error, empty row, as an unsupported content type today                                  | 2026-10-22 |
+| `data:` value that does not parse (no comma, bad base64, bad JSON)                               | permanent error, empty row                                                                        | 2026-10-22 |
+| `data:` value (JSON or image) over the 256 KB metadata cap                                       | permanent error (`BodyTooLarge`), checked before decoding                                         | 2026-10-22 |
+| `image` is `data:image/{png,jpeg,gif,webp,svg+xml}` within 8 KB                                  | stored as `media_url` as received                                                                 | 2026-10-22 |
+| `image` is any other `data:` type, `http:`, `javascript:`                                        | empty `media_url`, as today                                                                       | 2026-10-22 |
+| `image` is `https://…` or `ipfs://…`                                                             | unchanged                                                                                         | 2026-10-22 |
+| detail page gets a `data:image/…` `media_url`                                                    | renders it as an image                                                                            | 2026-10-22 |
+| `--retry-sentinels`                                                                              | walks displayed NFTs (`nfts`) with empty `name` and `media_url`, whatever `collection_name` holds | 2026-10-22 |
 
 ## Not yet decided
 
