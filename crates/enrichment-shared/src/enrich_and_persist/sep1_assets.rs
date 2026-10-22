@@ -1,7 +1,8 @@
 //! `asset_enrichment` side-table fill from issuer SEP-1 stellar.toml.
 //!
-//! A single fetch yields both `image` and `name` from the matching
-//! `CURRENCIES[]` row; both land in one `asset_enrichment` row (ADR 0050).
+//! A single fetch yields `image` and `name` from the matching `CURRENCIES[]`
+//! row, plus the detail page's `desc` and `DOCUMENTATION.ORG_URL` (task 0655);
+//! all land in one `asset_enrichment` row (ADR 0050).
 //! The indexer-owned `assets` table is **never** written here, so the
 //! indexer's continuous whole-row re-inserts cannot clobber the
 //! enrichment.
@@ -93,7 +94,7 @@ pub async fn enrich_asset_from_sep1(
     let Some(issuer) = issuer else {
         warn!(key = %key, reason = "issuer_account_missing", "writing sentinel");
         let (icon, name) = permanent_fail_outcome(key.asset_type);
-        return insert_asset(client, &key, icon, name).await;
+        return insert_asset(client, &key, icon, name, None, None).await;
     };
 
     let Some(home_domain) = issuer
@@ -106,7 +107,7 @@ pub async fn enrich_asset_from_sep1(
         // debuggable by key (in the `#[instrument]` span) + reason.
         debug!(key = %key, reason = "issuer_home_domain_missing", "writing sentinel");
         let (icon, name) = permanent_fail_outcome(key.asset_type);
-        return insert_asset(client, &key, icon, name).await;
+        return insert_asset(client, &key, icon, name, None, None).await;
     };
 
     match fetcher.fetch(home_domain).await {
@@ -117,7 +118,12 @@ pub async fn enrich_asset_from_sep1(
                 issuer.issuer_strkey.as_deref(),
                 &parsed,
             );
-            let outcome = insert_asset(client, &key, icon, name).await?;
+            let (description, home_page) = resolve_detail_text(
+                Some(key.asset_code.as_str()),
+                issuer.issuer_strkey.as_deref(),
+                &parsed,
+            );
+            let outcome = insert_asset(client, &key, icon, name, description, home_page).await?;
             debug!("asset_enrichment row written");
             Ok(outcome)
         }
@@ -130,7 +136,7 @@ pub async fn enrich_asset_from_sep1(
             } else {
                 warn!(key = %key, reason = "sep1_fetch_permanent", error = %arc_err, "sentinel written");
                 let (icon, name) = permanent_fail_outcome(key.asset_type);
-                insert_asset(client, &key, icon, name).await
+                insert_asset(client, &key, icon, name, None, None).await
             }
         }
     }
@@ -148,6 +154,23 @@ fn resolve_currency_outcome(
 ) -> (String, Option<String>) {
     let entry = find_currency(parsed, asset_code, issuer_strkey);
     (resolve_icon(entry), resolve_name(asset_type, entry))
+}
+
+/// The asset detail page's text from the same SEP-1 read (task 0655): the
+/// matching currency's `desc`, and the issuing organisation's `ORG_URL`, which
+/// applies even when no currency matches. Stored as published, as the API
+/// served them when it read the TOML live.
+fn resolve_detail_text(
+    asset_code: Option<&str>,
+    issuer_strkey: Option<&str>,
+    parsed: &Sep1TomlParsed,
+) -> (Option<String>, Option<String>) {
+    let description = find_currency(parsed, asset_code, issuer_strkey).and_then(|c| c.desc.clone());
+    let home_page = parsed
+        .documentation
+        .as_ref()
+        .and_then(|d| d.org_url.clone());
+    (description, home_page)
 }
 
 /// The outcome to write when the issuer has no usable home_domain or the SEP-1

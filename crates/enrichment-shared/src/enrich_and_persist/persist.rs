@@ -25,9 +25,15 @@ pub(crate) async fn insert_asset(
     key: &AssetKey,
     icon_url: String,
     name: Option<String>,
+    description: Option<String>,
+    home_page: Option<String>,
 ) -> Result<EnrichOutcome, EnrichError> {
-    // Real iff a non-sentinel value landed in either column.
-    let outcome = if !icon_url.is_empty() || name.as_deref().is_some_and(|n| !n.is_empty()) {
+    // Real iff a non-sentinel value landed in any column.
+    let outcome = if !icon_url.is_empty()
+        || name.as_deref().is_some_and(|n| !n.is_empty())
+        || description.is_some()
+        || home_page.is_some()
+    {
         EnrichOutcome::Real
     } else {
         EnrichOutcome::Sentinel
@@ -40,6 +46,8 @@ pub(crate) async fn insert_asset(
         icon_url: Some(icon_url),
         name,
         version: now_ms(),
+        description,
+        home_page,
     };
     insert_asset_enrichment(client, std::slice::from_ref(&row)).await?;
     Ok(outcome)

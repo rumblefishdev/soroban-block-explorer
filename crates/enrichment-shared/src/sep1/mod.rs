@@ -1,13 +1,11 @@
 //! HTTP fetch of issuer stellar.toml files (SEP-1).
 //!
-//! Per-request, fail-soft, in-process LRU-cached. Resolves an issuer's on-chain
+//! In-process LRU-cached. Resolves an issuer's on-chain
 //! `home_domain` to `https://{home_domain}/.well-known/stellar.toml`, parses the
 //! TOML, and surfaces the relevant slice for downstream consumers.
 //!
-//! Originated in `api::runtime_enrichment::sep1` for task 0188 (per-request
-//! type-2 detail enrichment); moved here in task 0191 so the worker Lambda
-//! and a future backfill tool can share the same fetcher without a cyclic
-//! dependency on the api crate.
+//! Used by the enrichment worker and the backfill runner. The API read it per
+//! request until task 0655; it now serves what the worker stored.
 //!
 //! Reference: <https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0001.md>
 

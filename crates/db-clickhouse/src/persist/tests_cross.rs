@@ -123,6 +123,8 @@ fn column_order_asset_enrichment() {
             "icon_url",
             "name",
             "version",
+            "description",
+            "home_page",
         ],
     );
 }

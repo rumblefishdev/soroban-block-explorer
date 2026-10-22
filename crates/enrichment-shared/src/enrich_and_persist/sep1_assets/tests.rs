@@ -238,3 +238,32 @@ async fn smoke_ch_sep1_real_and_sentinel() {
         .await
         .expect("cleanup asset_enrichment");
 }
+
+// ---- task 0655: the detail page's SEP-1 text is stored with icon and name ----
+
+#[test]
+fn resolve_detail_text_takes_desc_and_org_url_from_the_same_read() {
+    let mut p = toml_with("USDC", "GA1", None, Some("USD Coin"));
+    p.currencies[0].desc = Some("A fully reserved stablecoin".to_owned());
+    p.documentation = Some(crate::sep1::dto::Sep1Documentation {
+        org_url: Some("https://www.circle.com".to_owned()),
+    });
+    assert_eq!(
+        resolve_detail_text(Some("USDC"), Some("GA1"), &p),
+        (
+            Some("A fully reserved stablecoin".to_owned()),
+            Some("https://www.circle.com".to_owned())
+        )
+    );
+    // No currency match: the organisation's page still applies, the description does not.
+    assert_eq!(
+        resolve_detail_text(Some("EURC"), Some("GA1"), &p),
+        (None, Some("https://www.circle.com".to_owned()))
+    );
+    // No [DOCUMENTATION] table.
+    p.documentation = None;
+    assert_eq!(
+        resolve_detail_text(Some("USDC"), Some("GA1"), &p),
+        (Some("A fully reserved stablecoin".to_owned()), None)
+    );
+}

@@ -163,6 +163,10 @@ pub struct AssetEnrichmentRow {
     pub icon_url: Option<String>,
     pub name: Option<String>,
     pub version: i64,
+    /// `CURRENCIES[].desc` of the same SEP-1 read (task 0655); `None` = none read.
+    pub description: Option<String>,
+    /// `DOCUMENTATION.ORG_URL` of the same SEP-1 read (task 0655).
+    pub home_page: Option<String>,
 }
 
 // `account_balances_current` — table retained (pending classic→`balances`

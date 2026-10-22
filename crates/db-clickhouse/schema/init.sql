@@ -550,7 +550,12 @@ CREATE TABLE IF NOT EXISTS asset_enrichment (
     contract_id  Int64,
     icon_url     Nullable(String),
     name         Nullable(String),
-    version      DateTime64(3, 'UTC')
+    version      DateTime64(3, 'UTC'),
+    -- The detail page's SEP-1 text, from the same stellar.toml read as icon and
+    -- name (task 0655): `CURRENCIES[].desc` and `DOCUMENTATION.ORG_URL`. NULL =
+    -- nothing read. Added with DEFAULT so older builds keep inserting.
+    description  Nullable(String) DEFAULT NULL,
+    home_page    Nullable(String) DEFAULT NULL
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (asset_type, asset_code, issuer_id, contract_id);

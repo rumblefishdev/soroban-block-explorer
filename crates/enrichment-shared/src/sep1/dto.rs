@@ -25,7 +25,7 @@ pub struct Sep1TomlParsed {
     #[serde(default, rename = "CURRENCIES")]
     pub currencies: Vec<Sep1Currency>,
     /// `[DOCUMENTATION]` — issuing organisation info. Only `ORG_URL` is
-    /// consumed today (mapped to `home_page` on the asset detail response).
+    /// consumed today (stored as `asset_enrichment.home_page`).
     #[serde(default, rename = "DOCUMENTATION")]
     pub documentation: Option<Sep1Documentation>,
 }
@@ -38,7 +38,7 @@ pub struct Sep1Currency {
     pub code: Option<String>,
     /// Used to match against the queried asset's issuer StrKey.
     pub issuer: Option<String>,
-    /// Mapped to `AssetDetailResponse::description` (api type-2, task 0188).
+    /// Stored as `asset_enrichment.description` (task 0655).
     pub desc: Option<String>,
     /// Mapped to `assets.icon_url` (worker type-1, task 0191).
     pub image: Option<String>,
@@ -47,8 +47,8 @@ pub struct Sep1Currency {
     pub name: Option<String>,
 }
 
-/// `[DOCUMENTATION]` table. Only `ORG_URL` is consumed today (mapped to
-/// `AssetDetailResponse::home_page`).
+/// `[DOCUMENTATION]` table. Only `ORG_URL` is consumed today (stored as
+/// `asset_enrichment.home_page`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub struct Sep1Documentation {
