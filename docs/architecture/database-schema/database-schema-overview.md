@@ -1322,15 +1322,14 @@ Design notes:
   matching `CURRENCIES[]` row, URL exceeding the column length) write an
   empty-string sentinel `''`, which the un-enriched-asset producer query
   treats as "already tried" — those rows are not re-emitted to the enrichment
-  queue. Distinct from **type-2 runtime enrichment** in
-  `crates/api/src/runtime_enrichment` (task 0188), which fetches per-request
-  for `description` / `home_page` and never writes to the DB.
-- asset-detail SEP-1 fields (`description`, `home_page`, `conditions`,
+  queue. The same read stores the detail page's `description`
+  (`CURRENCIES[].desc`) and `home_page` (`DOCUMENTATION.ORG_URL`) in
+  `asset_enrichment` (task 0655); the API serves them from there.
+- asset-detail SEP-1 fields are NOT stored on this row: `description` and
+  `home_page` live in `asset_enrichment`, written by the enrichment worker
+  from its stellar.toml read (task 0655); the rest (`conditions`,
   `is_asset_anchored`, `anchor_*`, `redemption_instructions`,
-  `display_decimals`, organisation info) are NOT stored on this row at all —
-  they are resolved at request time on `GET /v1/assets/{id}` by the
-  `runtime_enrichment::sep1` fetcher (task 0188), which reads
-  `accounts.home_domain` for the issuer and pulls `https://{home_domain}/.well-known/stellar.toml`.
+  `display_decimals`) is not served.
   This narrows the original typed-columns plan from
   [ADR 0023](../../../lore/2-adrs/0023_tokens-typed-metadata-columns.md) Part 3
   and supersedes the per-entity S3 hydration sketched under task 0164;

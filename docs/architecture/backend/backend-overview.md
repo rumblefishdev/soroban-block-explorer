@@ -185,15 +185,6 @@ The backend serves data from the block explorer's own database, adding:
     in production (request scatter across the Lambda fleet). The remaining
     server-side latency lever is edge caching (the response is already
     `public, max-age=300`).
-  - **`runtime_enrichment::sep1`** — issues HTTPS GETs to
-    `https://{issuer.home_domain}/.well-known/stellar.toml`, parses the SEP-1
-    schema, and merges `[[CURRENCIES]]` per-token fields plus
-    `[DOCUMENTATION]` org info into asset detail responses (task 0188).
-    Built-in safeguards: 100 KB body cap (per SEP-1 spec), 1 s connect / 2 s
-    request timeouts, RFC 1035 hostname validation rejecting IP literals, and
-    a 24 h LRU cache (1024 entries) keyed by lowercase home_domain. Currently
-    consumed only by `GET /v1/assets/{id}`; future detail endpoints
-    (accounts, etc.) will reuse the same fetcher
   - **`runtime_enrichment::source_verification`** — reads a verifier
     aggregator's Query API and the source archives it points to, for the
     contract page's Verified Code tab (task 0639). Configured per network by
@@ -889,11 +880,11 @@ ClickHouse store. Heavy-field detail endpoints (E3 `/transactions/:hash`,
 E14 `/contracts/:id/events`) additionally fetch raw `.xdr.zst` from the **public
 Stellar ledger archive** and re-parse it at request time per
 [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md).
-Detail-only off-chain fields exempt from persistence per
-[ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md) (§4 `runtime_enrichment`
-umbrella) are also fetched at request time — currently the SEP-1 issuer TOML
-(asset `description` / `home_page`, task 0188) and the NFT `token_uri()` JSON
-(`metadata`, task 0195). The API does not depend on Horizon or third-party
+The asset detail's SEP-1 `description` / `home_page` are stored by the
+enrichment worker from the same stellar.toml read as the icon and name, and
+served from `asset_enrichment` (task 0655, amended
+[ADR 0043](../../../lore/2-adrs/0043_field-allocation-rule.md)); the API makes
+no SEP-1 request. The API does not depend on Horizon or third-party
 indexers for any response.
 
 ### 7.2 Response Shaping
