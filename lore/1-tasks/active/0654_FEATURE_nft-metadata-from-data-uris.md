@@ -55,6 +55,16 @@ Measured 2026-10-21/22 on mainnet (details: 0520
 - SEP-50 (Draft 0.1.0) sets no rule on URI schemes; the WHATWG data-URL
   processor is the parsing reference (0520 note).
 
+## Census of all collections (2026-10-22)
+
+All 73 NFT contracts (14,395 NFTs), up to 3 tokens each (133 calls), live
+`token_uri` against what `nft_enrichment` holds. Stored empty while live data
+exists: ~1,555 NFTs in 11 contracts — 9 return `data:application/json`
+(SushiSwap 1,287 names, Stroopies 8 with SVG), 2 return https metadata that
+loads now (33 NFTs, the late-publication class of 0520). The re-run of this
+task covers all of them. Not recoverable by us: ~931 NFTs whose contracts
+revert, return an empty or dead URI, or have no `token_uri`.
+
 ## Decisions so far
 
 | Situation                                                                                        | What happens                                                                                      | Date       |
