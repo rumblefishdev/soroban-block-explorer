@@ -33,10 +33,10 @@
 //!   is idempotent — a later run upgrades a sentinel to a real value (or
 //!   clears a removed one) via a newer-`version` INSERT.
 //! - **`--retry-sentinels`** = re-attempt ONLY existing all-`''` sentinel rows
-//!   (candidate source flips to the side table itself). Real values — incl.
-//!   partials (one real column + one `''`) — are left untouched, so a retry
-//!   cannot clobber a good value with a regressed source. Mutually exclusive
-//!   with `--force-retry`.
+//!   (NFTs: empty `name` + `media_url` of keys in `nfts`), from the side table.
+//!   Real values — incl. partials (one real column + one `''`) — are left
+//!   untouched, so a retry cannot clobber a good value with a regressed
+//!   source. Mutually exclusive with `--force-retry`.
 //!
 //! There is no surrogate `id` on ClickHouse (PR #175), so unlike the old
 //! Postgres drain there is no `--id` single-row mode; address a single row
@@ -478,8 +478,8 @@ fn nft_base(mode: DrainMode) -> &'static str {
         }
         DrainMode::All => "FROM nfts FINAL WHERE 1 = 1",
         DrainMode::Sentinels => {
-            "FROM nft_enrichment FINAL \
-             WHERE name = '' AND media_url = '' AND collection_name = ''"
+            "FROM nft_enrichment FINAL WHERE name = '' AND media_url = '' \
+             AND (contract_id, token_id) IN (SELECT contract_id, token_id FROM nfts)"
         }
     }
 }
