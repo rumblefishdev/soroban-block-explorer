@@ -14,6 +14,13 @@ use super::errors::NftTokenUriError;
 /// Metadata JSON from a `data:` `token_uri`. A `data:image/…` value is the
 /// direct-image convention, as for a fetched `image/*` response.
 pub(super) fn metadata_from_data_uri(uri: &str) -> Result<Value, NftTokenUriError> {
+    // Same cap as a fetched body. Decoding never makes a value longer, so the
+    // decoded JSON is within it too.
+    if uri.len() > MAX_BODY_BYTES {
+        return Err(NftTokenUriError::BodyTooLarge {
+            limit: MAX_BODY_BYTES,
+        });
+    }
     let malformed = || NftTokenUriError::MalformedUri {
         uri: uri.to_owned(),
     };
@@ -22,18 +29,13 @@ pub(super) fn metadata_from_data_uri(uri: &str) -> Result<Value, NftTokenUriErro
     if mime.type_ == "image" {
         return Ok(json!({ "image": uri }));
     }
-    if !(mime.matches("application", "json") || mime.matches("text", "json")) {
+    if !mime.matches("application", "json") {
         return Err(NftTokenUriError::UnsupportedContentType(format!(
             "{}/{}",
             mime.type_, mime.subtype
         )));
     }
     let (body, _fragment) = data_url.decode_to_vec().map_err(|_| malformed())?;
-    if body.len() > MAX_BODY_BYTES {
-        return Err(NftTokenUriError::BodyTooLarge {
-            limit: MAX_BODY_BYTES,
-        });
-    }
     serde_json::from_slice(&body).map_err(NftTokenUriError::MalformedJson)
 }
 

@@ -35,6 +35,7 @@ fn other_media_types_are_unsupported() {
     for uri in [
         "data:text/html,<script>alert(1)</script>",
         "data:text/plain,hello",
+        "data:text/json,{}",
         "data:,no-media-type-means-text-plain",
     ] {
         let err = metadata_from_data_uri(uri).expect_err(uri);
@@ -73,6 +74,16 @@ fn a_body_over_the_metadata_cap_is_too_large() {
         "data:application/json,{{\"name\":\"{}\"}}",
         "a".repeat(MAX_BODY_BYTES)
     );
+    let err = metadata_from_data_uri(&uri).expect_err("over the cap");
+    assert!(
+        matches!(err, NftTokenUriError::BodyTooLarge { .. }),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_inline_image_over_the_cap_is_too_large() {
+    let uri = format!("data:image/png;base64,{}", "A".repeat(MAX_BODY_BYTES));
     let err = metadata_from_data_uri(&uri).expect_err("over the cap");
     assert!(
         matches!(err, NftTokenUriError::BodyTooLarge { .. }),

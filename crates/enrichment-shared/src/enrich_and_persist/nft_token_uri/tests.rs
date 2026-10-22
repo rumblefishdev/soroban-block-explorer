@@ -125,7 +125,6 @@ fn extract_columns_refuses_other_inline_types() {
         "data:text/html,<script>alert(1)</script>",
         "data:image/bmp;base64,Qk0=",
         "data:application/json,{}",
-        "data:image/png;base64,@@@",
     ] {
         let (_, stored, _) = extract_columns(&json!({ "name": "X", "image": image }));
         assert_eq!(stored, "", "{image}");

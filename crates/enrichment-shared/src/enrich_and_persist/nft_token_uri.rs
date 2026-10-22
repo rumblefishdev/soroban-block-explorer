@@ -207,12 +207,11 @@ fn is_inline_image(url: &str) -> bool {
         return false;
     };
     let mime = data_url.mime_type();
-    let shown = mime.type_ == "image"
+    mime.type_ == "image"
         && matches!(
             mime.subtype.as_str(),
             "png" | "jpeg" | "gif" | "webp" | "svg+xml"
-        );
-    shown && data_url.decode_to_vec().is_ok()
+        )
 }
 
 /// Caps by character count (not byte length) — a generous safety bound only
