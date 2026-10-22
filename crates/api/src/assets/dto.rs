@@ -56,8 +56,8 @@ pub struct AssetItem {
     /// nothing checks it. Render it as a claim, never as a badge implying we
     /// confirmed the domain owns the asset.
     ///
-    /// Distinct from the detail response's `home_page`, which is fetched from
-    /// the issuer's `stellar.toml` at request time.
+    /// Distinct from the detail response's `home_page`, which comes from the
+    /// issuer's `stellar.toml` (as the enrichment worker last read it).
     pub issuer_home_domain: Option<String>,
     /// Soroban contract StrKey (`C…`) — set ONLY for `soroban` (type=3), where
     /// the contract IS the asset. `null` for native / classic_credit (a wrapping
@@ -99,10 +99,10 @@ pub struct AssetItem {
 /// `CURRENCIES[].desc` field; `home_page` is populated from
 /// `DOCUMENTATION.ORG_URL` (SEP-1 has no per-currency `home_page` field —
 /// the org URL is the closest semantic match and preserves backward
-/// compatibility with the previous DB-sourced column). Both default to
-/// `null` for native XLM, assets without an issuer, issuers without an
-/// on-chain `home_domain`, fetch failures, and stellar.toml files with
-/// no matching `[[CURRENCIES]]` entry.
+/// compatibility with the previous DB-sourced column). Both are the enrichment
+/// worker's last read (task 0655) and default to `null` for native XLM, assets
+/// without an issuer, issuers without an on-chain `home_domain`, failed reads,
+/// and stellar.toml files with no matching `[[CURRENCIES]]` entry (`description`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetDetailResponse {
     #[serde(flatten)]

@@ -10,6 +10,7 @@
 pub mod dto;
 mod handlers;
 mod queries;
+mod sep1_detail_text;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;

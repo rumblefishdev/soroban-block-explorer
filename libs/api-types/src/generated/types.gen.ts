@@ -331,10 +331,10 @@ export type AccountTransactionItem = {
  * `CURRENCIES[].desc` field; `home_page` is populated from
  * `DOCUMENTATION.ORG_URL` (SEP-1 has no per-currency `home_page` field —
  * the org URL is the closest semantic match and preserves backward
- * compatibility with the previous DB-sourced column). Both default to
- * `null` for native XLM, assets without an issuer, issuers without an
- * on-chain `home_domain`, fetch failures, and stellar.toml files with
- * no matching `[[CURRENCIES]]` entry.
+ * compatibility with the previous DB-sourced column). Both are the enrichment
+ * worker's last read (task 0655) and default to `null` for native XLM, assets
+ * without an issuer, issuers without an on-chain `home_domain`, failed reads,
+ * and stellar.toml files with no matching `[[CURRENCIES]]` entry (`description`).
  */
 export type AssetDetailResponse = {
   asset_code?: string | null;
@@ -389,8 +389,8 @@ export type AssetDetailResponse = {
    * nothing checks it. Render it as a claim, never as a badge implying we
    * confirmed the domain owns the asset.
    *
-   * Distinct from the detail response's `home_page`, which is fetched from
-   * the issuer's `stellar.toml` at request time.
+   * Distinct from the detail response's `home_page`, which comes from the
+   * issuer's `stellar.toml` (as the enrichment worker last read it).
    */
   issuer_home_domain?: string | null;
   name?: string | null;
@@ -487,8 +487,8 @@ export type AssetItem = {
    * nothing checks it. Render it as a claim, never as a badge implying we
    * confirmed the domain owns the asset.
    *
-   * Distinct from the detail response's `home_page`, which is fetched from
-   * the issuer's `stellar.toml` at request time.
+   * Distinct from the detail response's `home_page`, which comes from the
+   * issuer's `stellar.toml` (as the enrichment worker last read it).
    */
   issuer_home_domain?: string | null;
   name?: string | null;
@@ -1571,8 +1571,8 @@ export type PaginatedAssetItem = {
      * nothing checks it. Render it as a claim, never as a badge implying we
      * confirmed the domain owns the asset.
      *
-     * Distinct from the detail response's `home_page`, which is fetched from
-     * the issuer's `stellar.toml` at request time.
+     * Distinct from the detail response's `home_page`, which comes from the
+     * issuer's `stellar.toml` (as the enrichment worker last read it).
      */
     issuer_home_domain?: string | null;
     name?: string | null;

@@ -31,7 +31,6 @@ fn test_app_with(config: &AppConfig) -> Router {
         // Real SEP-1 fetcher with a stub HTTP client. The spec / health
         // tests below never reach get_asset, so the client never makes a
         // real request.
-        sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
         nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::with_rpc_url(
             "http://unused".to_owned(),
         )

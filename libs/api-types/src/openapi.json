@@ -2644,7 +2644,7 @@
               },
               "issuer_home_domain": {
                 "type": ["string", "null"],
-                "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
+                "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which comes from the\nissuer's `stellar.toml` (as the enrichment worker last read it)."
               },
               "name": {
                 "type": ["string", "null"]
@@ -2684,7 +2684,7 @@
             }
           }
         ],
-        "description": "Detail response. `description` is populated from the issuer stellar.toml\n`CURRENCIES[].desc` field; `home_page` is populated from\n`DOCUMENTATION.ORG_URL` (SEP-1 has no per-currency `home_page` field —\nthe org URL is the closest semantic match and preserves backward\ncompatibility with the previous DB-sourced column). Both default to\n`null` for native XLM, assets without an issuer, issuers without an\non-chain `home_domain`, fetch failures, and stellar.toml files with\nno matching `[[CURRENCIES]]` entry."
+        "description": "Detail response. `description` is populated from the issuer stellar.toml\n`CURRENCIES[].desc` field; `home_page` is populated from\n`DOCUMENTATION.ORG_URL` (SEP-1 has no per-currency `home_page` field —\nthe org URL is the closest semantic match and preserves backward\ncompatibility with the previous DB-sourced column). Both are the enrichment\nworker's last read (task 0655) and default to `null` for native XLM, assets\nwithout an issuer, issuers without an on-chain `home_domain`, failed reads,\nand stellar.toml files with no matching `[[CURRENCIES]]` entry (`description`)."
       },
       "AssetItem": {
         "type": "object",
@@ -2730,7 +2730,7 @@
           },
           "issuer_home_domain": {
             "type": ["string", "null"],
-            "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
+            "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which comes from the\nissuer's `stellar.toml` (as the enrichment worker last read it)."
           },
           "name": {
             "type": ["string", "null"]
@@ -4105,7 +4105,7 @@
                 },
                 "issuer_home_domain": {
                   "type": ["string", "null"],
-                  "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which is fetched from\nthe issuer's `stellar.toml` at request time."
+                  "description": "The issuer account's on-chain `home_domain` (SEP-1 anchor domain), e.g.\n`centre.io`. Read from the same `accounts` key-seek that resolves\n`issuer`, so it costs no extra query (task 0450). `null` for native /\nSoroban-native assets (no issuer) and for issuers that never set one —\nmost do not.\n\nNOT a verified identity: the account holder sets this field itself and\nnothing checks it. Render it as a claim, never as a badge implying we\nconfirmed the domain owns the asset.\n\nDistinct from the detail response's `home_page`, which comes from the\nissuer's `stellar.toml` (as the enrichment worker last read it)."
                 },
                 "name": {
                   "type": ["string", "null"]

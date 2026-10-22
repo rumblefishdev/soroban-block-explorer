@@ -29,7 +29,6 @@ fn state(
         stellar_archive: runtime_enrichment::stellar_archive::StellarArchiveFetcher::new(
             runtime_enrichment::stellar_archive::test_client(),
         ),
-        sep1: runtime_enrichment::sep1::Sep1Fetcher::new().expect("build sep1 fetcher"),
         nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::with_rpc_url(
             "http://unused".to_owned(),
         )

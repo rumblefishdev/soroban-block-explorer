@@ -37,7 +37,6 @@
 //! - `LOCAL_PORT` — listen port (default 9100)
 
 use api::runtime_enrichment::RuntimeEnrichment;
-use api::runtime_enrichment::sep1::Sep1Fetcher;
 use api::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
 use api::{AppState, openapi};
 
@@ -82,7 +81,6 @@ async fn main() {
         .await;
     let runtime_enrichment = RuntimeEnrichment {
         stellar_archive: StellarArchiveFetcher::new(aws_sdk_s3::Client::new(&aws_config)),
-        sep1: Sep1Fetcher::new().expect("failed to build SEP-1 fetcher"),
         nft_token_uri: api::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
             .unwrap_or_else(|e| panic!("failed to build NFT token_uri fetcher: {e}")),
         wasm_code: api::runtime_enrichment::wasm_code::WasmCodeFetcher::new()

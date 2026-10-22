@@ -16,9 +16,9 @@ mod ops;
 mod search;
 pub mod state;
 mod transactions;
-// Runtime details enrichment — S3 archive reread + HTTP stellar.toml fetch.
+// Runtime details enrichment — S3 archive reread and per-request RPC reads.
 // stellar_archive submodule drives E3 (`/transactions/:hash`) and E14
-// (`/contracts/:id/events`); sep1 submodule drives E9 (`/assets/:id`).
+// (`/contracts/:id/events`).
 // Exposed as module so future handlers can call the extractors without
 // further wiring.
 mod runtime_enrichment;
@@ -31,7 +31,6 @@ use utoipa::openapi::OpenApi as OpenApiSpec;
 
 use crate::config::AppConfig;
 use crate::runtime_enrichment::RuntimeEnrichment;
-use crate::runtime_enrichment::sep1::Sep1Fetcher;
 use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
 use crate::state::AppState;
 
@@ -196,7 +195,6 @@ async fn main() {
     let s3_client = aws_sdk_s3::Client::new(&aws_config);
     let runtime_enrichment = RuntimeEnrichment {
         stellar_archive: StellarArchiveFetcher::new(s3_client),
-        sep1: Sep1Fetcher::new().expect("failed to build SEP-1 stellar.toml HTTP client"),
         nft_token_uri: runtime_enrichment::nft_token_uri::NftTokenUriFetcher::new()
             .unwrap_or_else(|e| panic!("failed to build NFT token_uri HTTP client: {e}")),
         wasm_code: runtime_enrichment::wasm_code::WasmCodeFetcher::new()

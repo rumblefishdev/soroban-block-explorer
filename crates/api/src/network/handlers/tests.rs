@@ -16,7 +16,6 @@ use utoipa_axum::router::OpenApiRouter;
 use crate::common::ch::test_client_from_env;
 use crate::network;
 use crate::runtime_enrichment::RuntimeEnrichment;
-use crate::runtime_enrichment::sep1::Sep1Fetcher;
 use crate::runtime_enrichment::stellar_archive::StellarArchiveFetcher;
 use crate::state::AppState;
 
@@ -25,7 +24,6 @@ fn app(ch: clickhouse::Client) -> Router {
         stellar_archive: StellarArchiveFetcher::new(
             crate::runtime_enrichment::stellar_archive::test_client(),
         ),
-        sep1: Sep1Fetcher::new().expect("build sep1 fetcher"),
         nft_token_uri: crate::runtime_enrichment::nft_token_uri::NftTokenUriFetcher::with_rpc_url(
             "http://unused".to_owned(),
         )
