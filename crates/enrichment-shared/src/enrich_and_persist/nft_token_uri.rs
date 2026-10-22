@@ -19,8 +19,9 @@
 //!   `Ok(None)` write the `''` sentinel, so the row records "fetch
 //!   attempted, no value" and the candidate query (`NOT IN nft_enrichment`)
 //!   skips the key on the next pass;
-//! - the shared `is_safe_https_url` replaces a non-`https://` `image` with
-//!   the sentinel — defence in depth against a smuggled scheme.
+//! - the shared `is_safe_https_url` (plus `is_inline_image` for a
+//!   `data:image/…` value) replaces any other `image` with the sentinel —
+//!   defence in depth against a smuggled scheme.
 //!
 //! The side table is `ReplacingMergeTree(version)`: every write is an
 //! INSERT with `version = now_ms`, latest-wins. A later DLQ replay /
@@ -163,10 +164,10 @@ fn permanent_fail_outcome() -> (String, String, String) {
 ///    `ipfs://Qm.../1.png`, so without this step `media_url` would be
 ///    the empty sentinel for most real-world collections.
 /// 2. The resolved value is then re-checked through the shared
-///    [`super::is_safe_https_url`]: the frontend renders it as `<img src>`, so
-///    anything other than `https://` (e.g. `http://`, `data:`, `javascript:`)
-///    is replaced with the empty-string sentinel to avoid mixed-content
-///    warnings and XSS vectors.
+///    [`super::is_safe_https_url`] or [`is_inline_image`]: the frontend
+///    renders it as `<img src>`, so anything else (e.g. `http://`,
+///    `data:text/html`, `javascript:`) is replaced with the empty-string
+///    sentinel to avoid mixed-content warnings and XSS vectors.
 ///
 /// Returns `(name, image, collection)`; `""` is the "tried, nothing" sentinel.
 fn extract_columns(json: &Value) -> (String, String, String) {
@@ -185,7 +186,10 @@ fn extract_columns(json: &Value) -> (String, String, String) {
         image_raw = trimmed_string_bytes(json.get("url"), MAX_MEDIA_URL_BYTES);
     }
     let image_resolved = resolve_ipfs_to_https(&image_raw);
-    let image = if image_resolved.is_empty() || super::is_safe_https_url(&image_resolved) {
+    let image = if image_resolved.is_empty()
+        || super::is_safe_https_url(&image_resolved)
+        || is_inline_image(&image_resolved)
+    {
         image_resolved
     } else {
         warn!(image = %image_raw, "unsafe media_url scheme; sentinel written");
@@ -193,6 +197,22 @@ fn extract_columns(json: &Value) -> (String, String, String) {
     };
     let collection = trimmed_string_chars(json.get("collection"), MAX_COLLECTION_CHARS);
     (name, image, collection)
+}
+
+/// An image carried in the value itself (`data:image/…`, task 0654), of a
+/// type browsers show in `<img>`, where an SVG cannot run scripts. The
+/// 8 KB cap above still applies.
+fn is_inline_image(url: &str) -> bool {
+    let Ok(data_url) = data_url::DataUrl::process(url) else {
+        return false;
+    };
+    let mime = data_url.mime_type();
+    let shown = mime.type_ == "image"
+        && matches!(
+            mime.subtype.as_str(),
+            "png" | "jpeg" | "gif" | "webp" | "svg+xml"
+        );
+    shown && data_url.decode_to_vec().is_ok()
 }
 
 /// Caps by character count (not byte length) — a generous safety bound only

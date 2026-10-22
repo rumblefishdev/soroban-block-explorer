@@ -1,8 +1,8 @@
 //! `NftTokenUriFetcher` — LRU-cached Soroban RPC + HTTP/IPFS client.
 //!
 //! Pipeline: `simulateTransaction(InvokeContract(token_uri, [ScVal::U32]))`
-//! → ScVal::String → `validate_uri` → `ipfs://` to gateway → HTTP GET
-//! → Content-Type branch. See `super::mod` for the side-by-side with
+//! → ScVal::String → (`data:` → read in place) → `validate_uri` → `ipfs://`
+//! to gateway → HTTP GET → Content-Type branch. See `super::mod` for the side-by-side with
 //! SEP-1, the rationale for source-naming, and the defensive-guard list.
 
 use std::sync::Arc;
@@ -22,6 +22,7 @@ use stellar_xdr::{
 use tracing::{debug, instrument};
 
 use super::errors::{NftTokenUriError, is_endpoint_fault};
+use super::inline_metadata::metadata_from_data_uri;
 use super::validate_uri::validate_uri;
 
 /// Body cap for NFT metadata JSON (typical files <10 KB).
@@ -324,6 +325,10 @@ async fn fetch_uncached(
         simulate_with_failover(client, rpc_urls, start, contract_id, token_u32).await?;
     let uri = decode_string_result(&result_xdr_b64, TOKEN_URI_FN)?;
 
+    // The metadata is in the string itself: nothing to fetch, so no host to check.
+    if uri.trim_start().to_ascii_lowercase().starts_with("data:") {
+        return metadata_from_data_uri(&uri);
+    }
     validate_uri(&uri)?;
     debug!(uri = %uri, "nft token_uri resolved; fetching metadata");
     fetch_metadata_with_failover(client, &uri, ipfs_gateways, start).await

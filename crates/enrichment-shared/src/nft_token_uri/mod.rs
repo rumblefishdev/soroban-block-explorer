@@ -63,6 +63,7 @@
 
 mod client;
 pub mod errors;
+mod inline_metadata;
 mod validate_uri;
 
 pub use client::NftTokenUriFetcher;
