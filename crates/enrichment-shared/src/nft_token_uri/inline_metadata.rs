@@ -29,7 +29,8 @@ pub(super) fn metadata_from_data_uri(uri: &str) -> Result<Value, NftTokenUriErro
     if mime.type_ == "image" {
         return Ok(json!({ "image": uri }));
     }
-    if !mime.matches("application", "json") {
+    // The same two JSON types the fetched-body branch accepts (`client.rs`).
+    if !(mime.matches("application", "json") || mime.matches("text", "json")) {
         return Err(NftTokenUriError::UnsupportedContentType(format!(
             "{}/{}",
             mime.type_, mime.subtype

@@ -24,6 +24,12 @@ fn base64_json_is_parsed_the_same_way() {
 }
 
 #[test]
+fn text_json_is_json_as_for_a_fetched_body() {
+    let json = metadata_from_data_uri("data:text/json,{\"name\":\"x\"}").expect("text/json parses");
+    assert_eq!(json["name"], "x");
+}
+
+#[test]
 fn inline_image_is_the_direct_image_convention() {
     let uri = "data:image/png;base64,iVBORw0KGgo=";
     let json = metadata_from_data_uri(uri).expect("data:image is accepted");
@@ -35,7 +41,6 @@ fn other_media_types_are_unsupported() {
     for uri in [
         "data:text/html,<script>alert(1)</script>",
         "data:text/plain,hello",
-        "data:text/json,{}",
         "data:,no-media-type-means-text-plain",
     ] {
         let err = metadata_from_data_uri(uri).expect_err(uri);
