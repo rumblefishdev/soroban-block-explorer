@@ -40,3 +40,9 @@ What the standards say (checked 2026-10-21):
 - Freighter fetches metadata only over `https:` and has a test "rejects data:
   URIs" (`@shared/api/helpers/fetchMetadataJson.ts`). stellar.expert and
   Lobstr: not found in public code.
+
+Measured 2026-10-23 (task 0655): 17.6% of a 148-token sample of stored-empty
+NFTs now have data (12.8% `data:`, fixed by 0654; 4.7% links that now load),
+so A2's retry of empty rows has a concrete target. Also: `--force-retry`
+writes a full sentinel row on a permanent read failure, which replaces a good
+stored row — a forced refill must not overwrite real values (A2/A3).

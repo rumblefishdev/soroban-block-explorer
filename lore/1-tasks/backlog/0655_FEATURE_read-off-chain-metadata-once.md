@@ -2,7 +2,7 @@
 id: '0655'
 title: 'FEATURE: read off-chain metadata once — store what the detail page shows, drop the live re-read'
 type: FEATURE
-status: active
+status: backlog
 related_adr: ['0043']
 related_tasks: ['0654', '0520', '0633', '0188', '0195']
 tags:
@@ -26,6 +26,15 @@ history:
       by the enrichment worker (stored list fields) and again live on every
       detail-page open (detail-only fields). The owner chose one read, for
       NFTs and assets together, and a rule change in ADR 0043.
+  - date: 2026-10-23
+    status: backlog
+    who: karolkow
+    note: >
+      Built and reviewed (PRs #688 NFT, #690 assets, #689 test move), then
+      not merged: a measurement found stored and live metadata almost never
+      differ, so one read buys little while losing the live read's
+      freshness. The owner kept the live detail read (0654 alone fixes
+      issue #684). PRs closed; parked here with the numbers.
 ---
 
 # FEATURE: read off-chain metadata once
@@ -42,9 +51,28 @@ worker; store what the detail page shows; the API serves it from the database.
 
 ## Stan teraz
 
-- Done: decisions below; census of NFT sources (0654).
-- Next: ADR 0043 amendment for review, then tests from the rows, then code.
-- In force: list endpoints unchanged; `#687` (0654) lands first.
+- Done: built and reviewed in PRs #688 (NFT), #690 (assets), #689 (test
+  move); closed unmerged 2026-10-23, branches kept
+  (`feat/0655-nft-metadata-once`, `feat/0655-asset-metadata-once`).
+- Decided 2026-10-23: keep the live detail read (ADR 0043 unchanged).
+- Revisit only if measured drift grows or the per-request read becomes a
+  cost or latency problem.
+
+## Measured 2026-10-23 — why it was parked
+
+Live source against what `nft_enrichment` / `asset_enrichment` hold:
+
+| What                                               | Sample                       | Result                                                         |
+| -------------------------------------------------- | ---------------------------- | -------------------------------------------------------------- |
+| NFT name/image, stored vs live                     | 68 tokens, 19 contracts      | 0 differ; 5 same file on another host; 11 unreadable now       |
+| Stored-empty NFTs that now have data               | 148 of 3,405, 62 contracts   | 17.6% (12.8% `data:`, fixed by 0654; 4.7% links that now load) |
+| Asset icon/name vs stellar.toml                    | 300 domains, 3,880 assets    | 1.3% differ where reachable; 36% unreachable                   |
+| Sentinel assets whose issuer now has a home_domain | 91,180 rows; 50 domains read | 0 of 50 list the asset                                         |
+
+Reviews of the built PRs also found what a stored-only design needs and the
+live read gives for free: a refresh trigger (the producer enqueues a key
+only once, `crates/indexer/src/handler/enrichment_publish.rs`), and a refill
+that does not overwrite good rows on a permanent read failure.
 
 ## Context
 
