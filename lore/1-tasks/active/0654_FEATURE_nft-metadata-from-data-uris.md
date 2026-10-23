@@ -30,8 +30,10 @@ the detail page, and make the existing empty rows re-runnable.
 
 ## Stan teraz
 
-- Done: decisions below; issue #684 answered by the team with this plan.
-- Next: tests from the decision rows, then the code, one PR.
+- Done: code and tests for every decision row (PR on
+  `feat/0654-nft-metadata-data-uris`); verified end to end against mainnet
+  RPC into a local ClickHouse.
+- Next: review, merge, deploy; then the operator re-run below.
 - In force: no network request for a `data:` value; the 8 KB `media_url` cap
   and the 256 KB metadata cap stay as they are.
 
@@ -53,25 +55,36 @@ Measured 2026-10-21/22 on mainnet (details: 0520
 - SEP-50 (Draft 0.1.0) sets no rule on URI schemes; the WHATWG data-URL
   processor is the parsing reference (0520 note).
 
+## Census of all collections (2026-10-22)
+
+All 73 NFT contracts (14,395 NFTs), up to 3 tokens each (133 calls), live
+`token_uri` against what `nft_enrichment` holds. Stored empty while live data
+exists: ~1,555 NFTs in 11 contracts — 9 return `data:application/json`
+(SushiSwap 1,287 names, Stroopies 8 with SVG), 2 return https metadata that
+loads now (33 NFTs, the late-publication class of 0520). The re-run of this
+task covers all of them. Not recoverable by us: ~931 NFTs whose contracts
+revert, return an empty or dead URI, or have no `token_uri`.
+
 ## Decisions so far
 
-| Situation                                                                    | What happens                                                                                      | Date       |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------- |
-| `token_uri` is `data:application/json,<json>` (plain, percent-decoded)       | parsed locally as the metadata JSON, no request                                                   | 2026-10-22 |
-| `token_uri` is `data:application/json;base64,<b64>`                          | decoded and parsed the same way                                                                   | 2026-10-22 |
-| `token_uri` is `data:image/…`                                                | treated as the direct-image convention: `{"image": <the data: value>}`                            | 2026-10-22 |
-| `token_uri` is `data:` with any other media type (`text/html`, `text/plain`) | permanent error, empty row, as an unsupported content type today                                  | 2026-10-22 |
-| `data:` value that does not parse (no comma, bad base64, bad JSON)           | permanent error, empty row                                                                        | 2026-10-22 |
-| decoded `data:` body over the 256 KB metadata cap                            | permanent error (`BodyTooLarge`)                                                                  | 2026-10-22 |
-| `image` is `data:image/{png,jpeg,gif,webp,svg+xml}` within 8 KB              | stored as `media_url` as received                                                                 | 2026-10-22 |
-| `image` is any other `data:` type, `http:`, `javascript:`                    | empty `media_url`, as today                                                                       | 2026-10-22 |
-| `image` is `https://…` or `ipfs://…`                                         | unchanged                                                                                         | 2026-10-22 |
-| detail page gets a `data:image/…` `media_url`                                | renders it as an image                                                                            | 2026-10-22 |
-| `--retry-sentinels`                                                          | walks displayed NFTs (`nfts`) with empty `name` and `media_url`, whatever `collection_name` holds | 2026-10-22 |
+| Situation                                                                                        | What happens                                                                                      | Date       |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ---------- |
+| `token_uri` is `data:application/json,<json>` (plain, percent-decoded; `text/json` not accepted) | parsed locally as the metadata JSON, no request                                                   | 2026-10-22 |
+| `token_uri` is `data:application/json;base64,<b64>`                                              | decoded and parsed the same way                                                                   | 2026-10-22 |
+| `token_uri` is `data:image/…`                                                                    | treated as the direct-image convention: `{"image": <the data: value>}`                            | 2026-10-22 |
+| `token_uri` is `data:` with any other media type (`text/html`, `text/plain`)                     | permanent error, empty row, as an unsupported content type today                                  | 2026-10-22 |
+| `data:` value that does not parse (no comma, bad base64, bad JSON)                               | permanent error, empty row                                                                        | 2026-10-22 |
+| `data:` value (JSON or image) over the 256 KB metadata cap                                       | permanent error (`BodyTooLarge`), checked before decoding                                         | 2026-10-22 |
+| `image` is `data:image/{png,jpeg,gif,webp,svg+xml}` within 8 KB                                  | stored as `media_url` as received                                                                 | 2026-10-22 |
+| `image` is any other `data:` type, `http:`, `javascript:`                                        | empty `media_url`, as today                                                                       | 2026-10-22 |
+| `image` is `https://…` or `ipfs://…`                                                             | unchanged                                                                                         | 2026-10-22 |
+| detail page gets a `data:image/…` `media_url`                                                    | renders it as an image                                                                            | 2026-10-22 |
+| `--retry-sentinels`                                                                              | walks displayed NFTs (`nfts`) with empty `name` and `media_url`, whatever `collection_name` holds | 2026-10-22 |
 
 ## Not yet decided
 
-- When the production re-run happens (operator step, after the deploy).
+- When the production re-run happens (operator step, after the deploy):
+  `nft-metadata --retry-sentinels` against production, ~3,275 candidates.
 
 ## Out of scope
 
@@ -83,13 +96,14 @@ Measured 2026-10-21/22 on mainnet (details: 0520
 
 ## Acceptance Criteria
 
-- [ ] Every row above has a test written before the code
-- [ ] Stroopies and a live SushiSwap position resolve to their names locally
+- [x] Every row above has a test written before the code
+- [x] Stroopies and a live SushiSwap position resolve to their names locally
       (worker against mainnet RPC, docker ClickHouse)
-- [ ] A real Stroopies `data:image/svg+xml` value renders in a browser `<img>`
+- [x] A real Stroopies `data:image/svg+xml` value renders in a browser `<img>`
+      (Chromium; Firefox and WebKit not checked)
 - [ ] Production re-run done; Stroopies shows names and images (operator)
-- [ ] **Docs updated** — `docs/architecture/indexing-pipeline/enrichment.md`
+- [x] **Docs updated** — `docs/architecture/indexing-pipeline/enrichment.md`
       (accepted `token_uri` forms), `crates/backfill-enrichment-runner/README.md`
       (`--retry-sentinels` predicate)
-- [ ] **API types regenerated** — `Cargo.lock` changes (new crate); diff
-      expected empty
+- [x] **API types regenerated** — `Cargo.lock` changes (`data-url` crate);
+      the regenerated types are unchanged
