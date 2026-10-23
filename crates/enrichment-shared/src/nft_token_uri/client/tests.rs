@@ -645,3 +645,38 @@ async fn live_mainnet_zero_arg_token_uri_success() {
         "URI scheme not recognised: {uri}"
     );
 }
+
+// ---- task 0654: metadata inlined as a data: URI ----
+
+#[tokio::test]
+async fn data_uri_metadata_is_read_without_asking_a_gateway() {
+    let rpc = MockServer::start().await;
+    let xdr = scval_string_b64("data:application/json,{\"name\":\"Stroopies 0\"}");
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": { "latestLedger": 1, "results": [{ "auth": [], "xdr": xdr }] },
+        })))
+        .mount(&rpc)
+        .await;
+    let gateway = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&gateway)
+        .await;
+
+    let client = reqwest::Client::new();
+    let contract = stellar_strkey::Contract([0xCD; 32]).to_string();
+    let got = super::fetch_uncached(
+        &client,
+        &[rpc.uri()],
+        &[format!("{}/ipfs/", gateway.uri())],
+        0,
+        &contract,
+        "0",
+    )
+    .await
+    .expect("inline metadata resolves");
+    assert_eq!(got, json!({ "name": "Stroopies 0" }));
+}

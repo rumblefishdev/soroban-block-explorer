@@ -28,6 +28,8 @@ describe('federatedDomain', () => {
     ['an E.164 phone number', '+14155550100*stellar.org', 'stellar.org'],
     ['an internationalized domain', 'karol*münchen.de', 'münchen.de'],
     ['a punycode domain', 'karol*xn--mnchen-3ya.de', 'xn--mnchen-3ya.de'],
+    ['a punycode TLD', 'karol*example.xn--p1ai', 'example.xn--p1ai'],
+    ['an uppercase punycode TLD', 'karol*Example.XN--P1AI', 'example.xn--p1ai'],
   ])('accepts %s', (_label, input, domain) => {
     expect(federatedDomain(input)).toBe(domain);
   });
@@ -45,6 +47,8 @@ describe('federatedDomain', () => {
     // Stricter than SEP-2 on purpose — see the FEDERATED doc comment.
     ['a single-label domain', 'karol*localhost'],
     ['numeric tld', 'karol*example.12'],
+    ['a bare xn-- tld', 'karol*example.xn--'],
+    ['a punycode tld ending in a hyphen', 'karol*example.xn--p1ai-'],
     ['whitespace inside', 'kar ol*lobstr.co'],
     ['empty name', '*lobstr.co'],
     ['empty', ''],
@@ -199,6 +203,24 @@ describe('resolveFederatedName (reverse, type=id)', () => {
     await expect(
       resolveFederatedName(ACCOUNT, 'lobstr.co')
     ).resolves.toBeNull();
+  });
+
+  // `home_domain` is ASCII on the ledger, so an IDN TLD (`.рф`) can only be
+  // stored in its `xn--` form, and the lookup must still go out.
+  it('resolves a home domain under a punycode TLD', async () => {
+    const fetchMock = stubFetch({
+      'https://anchor.xn--p1ai/.well-known/stellar.toml': fetchReply(
+        'FEDERATION_SERVER="https://anchor.xn--p1ai/federation/"\n'
+      ),
+      'https://anchor.xn--p1ai/federation/': fetchReply(
+        JSON.stringify({ stellar_address: 'karol*anchor.xn--p1ai' })
+      ),
+    });
+
+    await expect(
+      resolveFederatedName(ACCOUNT, 'anchor.xn--p1ai')
+    ).resolves.toBe('karol*anchor.xn--p1ai');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('is silent when the account has no registered name', async () => {

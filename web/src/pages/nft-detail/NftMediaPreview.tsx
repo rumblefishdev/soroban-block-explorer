@@ -36,6 +36,8 @@ function extensionOf(url: string): string | null {
 }
 
 function classify(url: string): MediaKind {
+  // An image inlined in the URL itself; it has no file extension to read.
+  if (url.toLowerCase().startsWith('data:image/')) return 'image';
   const ext = extensionOf(url);
   if (ext && VIDEO_EXT.has(ext)) return 'video';
   if (ext && !IMAGE_EXT.has(ext)) return 'unsupported';

@@ -4,7 +4,7 @@ title: 'FEATURE: metadata enrichment follows the stored verdict, records why a f
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0455', '0311', '0392', '0220', '0231', '0542']
+related_tasks: ['0455', '0311', '0392', '0220', '0231', '0542', '0654']
 tags:
   [
     'enrichment',
@@ -56,6 +56,12 @@ history:
       Issue #684 (no NFT images for a mainnet collection) is defect 3: the
       contract inlines its metadata as a `data:` URI. Linked here; the
       issue-specific findings are in the section below.
+  - date: 2026-10-22
+    status: backlog
+    who: karolkow
+    note: >
+      The data: URI half of defect 3 moved to 0654 (issue #684). The gateway
+      half, the status column and the retry schedule stay here.
 ---
 
 # FEATURE: metadata enrichment consistency and retry
@@ -97,7 +103,7 @@ routing decision, every consumer reads it (the 0542 principle applied to NFTs).
   TLS, timeout and "asset not listed in the toml yet". Never for contract
   reverts or malformed URIs. Issuers without a home domain are re-checked when
   the domain changes, not re-fetched.
-- Accept `data:application/json` URIs; replace the IPFS gateway; add
+- (`data:` URIs: task 0654.) Replace the IPFS gateway; add
   "preflight queue full" to the transient list; raise the SEP-1 timeout.
 - API maps the status: "no metadata" and "could not fetch" render differently
   (never an empty value that looks real).

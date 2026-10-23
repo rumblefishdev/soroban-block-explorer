@@ -1611,6 +1611,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
+name = "data-url"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
+
+[[package]]
 name = "db-clickhouse"
 version = "0.1.0"
 dependencies = [
@@ -1856,6 +1862,7 @@ dependencies = [
  "base64 0.22.1",
  "clickhouse",
  "data-encoding",
+ "data-url",
  "db-clickhouse",
  "moka",
  "psl",

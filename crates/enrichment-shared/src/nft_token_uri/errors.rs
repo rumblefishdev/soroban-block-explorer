@@ -62,8 +62,9 @@ pub enum NftTokenUriError {
 
     /// URI returned by `token_uri()` (or `image` field inside the
     /// fetched JSON) used a scheme the fetcher refuses to follow.
-    /// Allowed: `https://`, `ipfs://`. Refused: `http://` (no TLS),
-    /// `file://`, `data:`, `javascript:`, anything else.
+    /// Allowed: `https://`, `ipfs://` (a `data:` value is read in place,
+    /// never followed). Refused: `http://` (no TLS), `file://`,
+    /// `javascript:`, anything else.
     #[error("unsafe URI scheme: {uri}")]
     UnsafeScheme { uri: String },
 
