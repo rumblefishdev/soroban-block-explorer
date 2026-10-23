@@ -2,7 +2,7 @@
 id: '0654'
 title: 'FEATURE: NFT metadata and images inlined as data: URIs'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0520', '0644', '0311']
 tags: ['enrichment', 'nft', 'frontend', 'effort-small', 'priority-high']
@@ -15,6 +15,14 @@ history:
     note: >
       Split out of 0520 (its defect 3, the data: URI half) after issue #684.
       The owner chose the small fix now; the rest of 0520 stays in backlog.
+  - date: 2026-10-23
+    status: completed
+    who: karolkow
+    note: >
+      Shipped in production-2026.10.23-1 (#687; testnet deployed first).
+      Re-run on testnet: 190 of 190 data: NFTs named. Re-run on mainnet
+      (4-RPC pool, concurrency 3): 3,273 empty displayed NFTs -> 2,648,
+      Stroopies 9 of 9 with name and SVG. Issue #684 answered and closed.
 ---
 
 # FEATURE: NFT metadata and images inlined as data: URIs
@@ -30,10 +38,10 @@ the detail page, and make the existing empty rows re-runnable.
 
 ## Stan teraz
 
-- Done: code and tests for every decision row (PR on
-  `feat/0654-nft-metadata-data-uris`); verified end to end against mainnet
-  RPC into a local ClickHouse.
-- Next: review, merge, deploy; then the operator re-run below.
+- Done: shipped (#687, `production-2026.10.23-1`), re-run on both networks,
+  issue #684 closed.
+- Left out (not this task): IPFS gateway choice and retry schedule (0520);
+  token ids above `u32` (1 NFT, `CD7KETFO…`).
 - In force: no network request for a `data:` value; the 8 KB `media_url` cap
   and the 256 KB metadata cap stay as they are.
 
@@ -101,7 +109,7 @@ revert, return an empty or dead URI, or have no `token_uri`.
       (worker against mainnet RPC, docker ClickHouse)
 - [x] A real Stroopies `data:image/svg+xml` value renders in a browser `<img>`
       (Chromium; Firefox and WebKit not checked)
-- [ ] Production re-run done; Stroopies shows names and images (operator)
+- [x] Production re-run done; Stroopies shows names and images (operator)
 - [x] **Docs updated** — `docs/architecture/indexing-pipeline/enrichment.md`
       (accepted `token_uri` forms), `crates/backfill-enrichment-runner/README.md`
       (`--retry-sentinels` predicate)
