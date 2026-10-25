@@ -122,7 +122,7 @@ fn map_item(r: AccountListRow) -> AccountListItem {
     path = "/accounts/{account_id}",
     tag = "accounts",
     params(
-        ("account_id" = String, Path, description = "Stellar account StrKey (G…, 56 chars)"),
+        ("account_id" = String, Path, description = "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)"),
     ),
     responses(
         (status = 200, description = "Account detail with current balances",
@@ -136,9 +136,10 @@ pub async fn get_account(
     State(state): State<AppState>,
     Path(account_id): Path<String>,
 ) -> Response {
-    if let Err(resp) = path::strkey(&account_id, 'G', "account_id") {
-        return resp;
-    }
+    let account_id = match path::account_id(&account_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
 
     let header = match fetch_account_for_source(&state, &account_id).await {
         Ok(Some(r)) => r,
@@ -263,7 +264,7 @@ pub async fn get_account(
     path = "/accounts/{account_id}/transactions",
     tag = "accounts",
     params(
-        ("account_id" = String, Path, description = "Stellar account StrKey (G…, 56 chars)"),
+        ("account_id" = String, Path, description = "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)"),
         ("limit"  = Option<u32>,    Query, description = "Items per page (1–100, default 20).",
          minimum = 1, maximum = 100),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response."),
@@ -283,9 +284,10 @@ pub async fn list_account_transactions(
     Path(account_id): Path<String>,
     Query(params): Query<AccountTxListParams>,
 ) -> Response {
-    if let Err(resp) = path::strkey(&account_id, 'G', "account_id") {
-        return resp;
-    }
+    let account_id = match path::account_id(&account_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
 
     let sort = match parse_sort_order(params.order.as_deref()) {
         Ok(s) => s,

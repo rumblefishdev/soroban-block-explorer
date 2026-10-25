@@ -607,8 +607,9 @@ External runtime dependencies are limited to read-only canonical Stellar data so
   layer per [ADR 0029](../../../lore/2-adrs/0029_abandon-parsed-artifacts-read-time-xdr-fetch.md)
 
 No other external API is required. Horizon, Soroban RPC, and third-party
-indexers are explicitly not in the trust boundary. Docker Hub is read by the
-Galexie protocol watch (§8.2) only, for an alarm; no data path depends on it.
+indexers are explicitly not in the trust boundary. Docker Hub, Horizon's root
+document and the crates.io listing of `soroban-env-common` are read by the Galexie
+protocol watch (§8.2) only, for an alarm; no data path depends on them.
 
 ## 7. Environments and Scalability
 
@@ -760,9 +761,13 @@ The deployed alarms (production; authoritative definitions in
   captive-core version of the image the Galexie service runs (from its ECR
   image config) and of the newest `stellar/stellar-galexie` image on Docker
   Hub; it throws when Docker Hub's core major is newer than ours, or when it
-  cannot read either. Alarm when both runs of a 6 h period fail (the function's
-  `Errors`), missing data breaching. Pages when the Galexie for the next
-  protocol is out, before the pubnet vote (task 0610); runbook
+  cannot read either. The same run compares the indexer's `STELLAR_XDR_MAJOR`
+  (set from `Cargo.toml` by the Compute stack) with the protocol Horizon says
+  core supports, and throws when a `soroban-env-host` built on that
+  protocol's `stellar-xdr` is on crates.io — the two move together through
+  `contract-executor` (task 0646). Alarm when both runs of a 6 h period fail (the function's
+  `Errors`), missing data breaching. Pages when the Galexie or the crate for
+  the next protocol is out, before the pubnet vote (task 0610); runbook
   [`docs/runbooks/galexie-protocol-watch.md`](../../runbooks/galexie-protocol-watch.md)
 - Ingest backlog age above 120 s for 3 consecutive minutes (set by
   `ingestionBacklogAgeSeconds` in `infra/envs/production.json`) — the consumer-side
@@ -793,10 +798,12 @@ The source design documents specific operational recovery assumptions:
 - failed ledger files remain in S3 and can be replayed by re-triggering the Lambda
 - schema migrations run before new Lambda code deployment in the CI/CD pipeline
 - protocol upgrades are handled by bumping the pinned `stellar-xdr` Rust crate
-  (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md)) **and** the
+  (per [ADR 0004](../../../lore/2-adrs/0004_rust-only-xdr-parsing.md)) together
+  with `soroban-env-host` in `crates/contract-executor`, which pins it exactly,
+  **and** the
   pinned Galexie image, whose captive core is tied to a protocol and stops
   exporting to S3 without erroring if it is left behind — the Galexie
-  protocol watch (§8.2) pages when the new image is out; the frontend consumes
+  protocol watch (§8.2) pages when the new image or crate is out; the frontend consumes
   typed API responses via OpenAPI-generated TS client (task 0096).
 
 These assumptions connect runtime infrastructure directly to safe ingestion operations.

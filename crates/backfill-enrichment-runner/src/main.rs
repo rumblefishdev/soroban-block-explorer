@@ -32,11 +32,11 @@
 //! - **`--force-retry`** = drop the filter and walk every key. `enrich_*`
 //!   is idempotent — a later run upgrades a sentinel to a real value (or
 //!   clears a removed one) via a newer-`version` INSERT.
-//! - **`--retry-sentinels`** = re-attempt ONLY existing all-`''` sentinel rows
-//!   (candidate source flips to the side table itself). Real values — incl.
-//!   partials (one real column + one `''`) — are left untouched, so a retry
-//!   cannot clobber a good value with a regressed source. Mutually exclusive
-//!   with `--force-retry`.
+//! - **`--retry-sentinels`** = re-attempt ONLY rows the fetch found nothing for
+//!   (assets: all-`''`; NFTs: empty `name` + `media_url`, keys in `nfts`), from
+//!   the side table. Rows with a fetched value are left untouched, so a retry
+//!   cannot clobber it with a regressed source. Mutually exclusive with
+//!   `--force-retry`.
 //!
 //! There is no surrogate `id` on ClickHouse (PR #175), so unlike the old
 //! Postgres drain there is no `--id` single-row mode; address a single row
@@ -158,9 +158,9 @@ struct DrainArgs {
     #[arg(long)]
     force_retry: bool,
 
-    /// Re-enrich ONLY existing all-`''` sentinel rows (permanent-fail
-    /// "tried-nothing"); real values are left untouched. Walks the side table,
-    /// not the base table. Mutually exclusive with `--force-retry`.
+    /// Re-enrich ONLY rows the fetch found nothing for (permanent-fail
+    /// "tried-nothing"); fetched values are left untouched. Walks the side
+    /// table, not the base table. Mutually exclusive with `--force-retry`.
     #[arg(long, conflicts_with = "force_retry")]
     retry_sentinels: bool,
 }
@@ -183,8 +183,8 @@ enum DrainMode {
     /// Only keys with no side-table row yet (`(key) NOT IN *_enrichment`).
     /// The default (no flag).
     Untried,
-    /// Only existing all-`''` sentinel rows — re-attempt permanent fails
-    /// without touching real values (no clobber). `--retry-sentinels`.
+    /// Only rows the fetch found nothing for — re-attempt permanent fails
+    /// without touching fetched values (no clobber). `--retry-sentinels`.
     Sentinels,
     /// Every key, real + sentinel alike. `--force-retry`.
     All,
@@ -478,8 +478,8 @@ fn nft_base(mode: DrainMode) -> &'static str {
         }
         DrainMode::All => "FROM nfts FINAL WHERE 1 = 1",
         DrainMode::Sentinels => {
-            "FROM nft_enrichment FINAL \
-             WHERE name = '' AND media_url = '' AND collection_name = ''"
+            "FROM nft_enrichment FINAL WHERE name = '' AND media_url = '' \
+             AND (contract_id, token_id) IN (SELECT contract_id, token_id FROM nfts)"
         }
     }
 }

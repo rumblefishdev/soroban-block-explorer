@@ -329,18 +329,15 @@ pub struct ExtractedContractDeployment {
     /// but always set when the parser produces a deployment).
     pub contract_type: ContractType,
     pub is_sac: bool,
-    /// Task 0160 — SAC underlying asset identity resolved from
-    /// `ContractIdPreimage::FromAsset` (top-level op OR auth-entry
-    /// `CreateContractHostFn`), correlated by the preimage-derived
-    /// contract_id.
+    /// SAC underlying asset identity, read from the SAC's own instance
+    /// entry (task 0571; task 0160 read it from the envelope).
     ///
     /// * `Some(Native)` — XLM-SAC, persisted with NULL code/issuer.
     /// * `Some(Credit { .. })` — classic credit SAC, persisted with real
     ///   code + issuer.
-    /// * `None` — non-SAC deployment, OR a SAC whose creating preimage
-    ///   is not present in the current batch (e.g. replay starting from
-    ///   mid-ledger without the original deploy tx). `detect_assets`
-    ///   skips such SACs with a `tracing::warn`.
+    /// * `None` — non-SAC deployment, OR a SAC instance whose storage
+    ///   names no asset (86 early testnet instances, 2026-10-16).
+    ///   `detect_assets` skips such SACs with a `tracing::warn`.
     pub sac_asset: Option<SacAssetIdentity>,
 }
 

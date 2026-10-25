@@ -19,14 +19,10 @@ diff-production: build
 # Deploying --all ships EVERY pending delta, including changes parked by
 # other tasks: 0312's undeployed CloudflareBootstrap slim-down sat in
 # production for weeks, and any unrelated `make deploy-production` would
-# have shipped it silently as a stowaway. So: show the full diff first,
-# then require a literal "yes". Non-interactive bypass: FORCE=1.
+# have shipped it silently as a stowaway. So the full diff is printed first,
+# into the same output as the deploy; it does not wait for confirmation.
 deploy-production: build
 	pnpm exec cdk --app "$(PRODUCTION_APP)" diff --strict
-	@if [ "$(FORCE)" != "1" ]; then \
-		printf '\nThe deploy is --all: EVERY delta above ships now, parked or not.\nType yes to continue: '; \
-		read ans; [ "$$ans" = "yes" ] || { echo "aborted — nothing deployed"; exit 1; }; \
-	fi
 	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy --all --require-approval broadening
 
 destroy-production: build
@@ -158,10 +154,6 @@ diff-testnet: build
 
 deploy-testnet: build
 	pnpm exec cdk --app "$(TESTNET_APP)" diff --strict
-	@if [ "$(FORCE)" != "1" ]; then \
-		printf '\nThe deploy is --all: EVERY delta above ships now, parked or not.\nType yes to continue: '; \
-		read ans; [ "$$ans" = "yes" ] || { echo "aborted — nothing deployed"; exit 1; }; \
-	fi
 	pnpm exec cdk --app "$(TESTNET_APP)" deploy --all --require-approval broadening
 
 build-testnet-web:

@@ -1,20 +1,24 @@
 import { Box, Card, Stack, Tooltip, Typography } from '@mui/material';
 import {
+  CardSkeleton,
   Chip,
   DetailErrorState,
+  getIdentifierHref,
   IdentifierWithCopy,
   isContractId,
   NotFoundState,
+  QueryErrorState,
   SectionErrorBoundary,
   Tabs,
   truncateMiddle,
+  unmuxed,
   useTabUrlState,
   type TabDefinition,
 } from '@rumblefish/soroban-block-explorer-ui';
-import type { ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { type ReactNode } from 'react';
+import { Navigate, useLocation, useParams } from 'react-router-dom';
 
-import { useContractDetail } from '../api/index.js';
+import { useContractDetail, useContractVerification } from '../api/index.js';
 import { routes } from '../router/routes.js';
 
 import { ContractCode } from './contracts/ContractCode.js';
@@ -25,14 +29,26 @@ import { ContractInterface } from './contracts/ContractInterface.js';
 import { ContractInvocations } from './contracts/ContractInvocations.js';
 import { ContractDetailSkeleton } from './contracts/ContractDetailSkeleton.js';
 import { ContractSummary } from './contracts/ContractSummary.js';
+import {
+  VerifiedCode,
+  isShownVerification,
+  verifiedByNames,
+} from './contracts/VerifiedCode.js';
 import { PageBreadcrumb } from './detail/PageBreadcrumb.js';
 
 const BREADCRUMB_TRUNCATION = { prefix: 4, suffix: 4 } as const;
 
-const TAB_KEYS = ['interface', 'code', 'invocations', 'events'] as const;
+const TAB_KEYS = [
+  'interface',
+  'code',
+  'verified',
+  'invocations',
+  'events',
+] as const;
 
 export default function ContractDetailPage() {
   const { contractId = '' } = useParams<{ contractId: string }>();
+  const location = useLocation();
   const valid = isContractId(contractId);
   const contract = useContractDetail(valid ? contractId : '');
   const { activeKey, setActiveKey } = useTabUrlState({
@@ -40,8 +56,27 @@ export default function ContractDetailPage() {
     validKeys: TAB_KEYS,
   });
   const face = contract.data != null ? contractFace(contract.data) : null;
+  // Task 0639: asked with the page — it decides whether the Verified Code tab
+  // and the header chip exist. Any answer but a verified one shows nothing.
+  const verification = useContractVerification(
+    contractId,
+    valid && contract.data?.wasm_hash != null
+  );
+  const verified = isShownVerification(verification.data)
+    ? verification.data
+    : null;
 
   if (!valid) {
+    // A `W…` (a contract with a sub-account id, CAP-0084) has its contract's
+    // page; the open tab rides along.
+    const base = unmuxed(contractId);
+    if (base != null && isContractId(base))
+      return (
+        <Navigate
+          to={getIdentifierHref('contract', base) + location.search}
+          replace
+        />
+      );
     return <NotFoundState entity="contract" identifier={contractId} />;
   }
 
@@ -63,13 +98,29 @@ export default function ContractDetailPage() {
     summary = <ContractSummary contract={contract.data} />;
   }
 
-  // The Code tab (task 0465) only exists for contracts with a WASM — SAC
+  // The Decompilation tab (task 0465) only exists for contracts with a WASM — SAC
   // and pre-upload contracts have nothing to decompile by design. A stale
   // `?tab=code` URL on such a contract falls back to Interface rather than
   // rendering an empty pane.
   const hasWasm = contract.data?.wasm_hash != null;
+  // A deep link to Verified Code waits for the answer instead of falling
+  // back to Interface and jumping when it lands.
+  const verificationPending =
+    activeKey === 'verified' && hasWasm && verification.isPending;
+  // …and one that fails (other than a 404: no such contract or no WASM)
+  // shows the error with Retry rather than a silent fallback.
+  const verificationFailed =
+    activeKey === 'verified' &&
+    hasWasm &&
+    verification.isError &&
+    (verification.error as { status?: number } | null)?.status !== 404;
+  const showVerified =
+    verified != null || verificationPending || verificationFailed;
   const effectiveKey =
-    activeKey === 'code' && !hasWasm ? 'interface' : activeKey;
+    (activeKey === 'code' && !hasWasm) ||
+    (activeKey === 'verified' && !showVerified)
+      ? 'interface'
+      : activeKey;
 
   // No count badges on the Invocations / Events tabs (task 0348 F1):
   // `recent_invocations` / `recent_events` are a 7-day activity window, but a
@@ -89,7 +140,7 @@ export default function ContractDetailPage() {
                 component="span"
                 sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}
               >
-                Code
+                Decompilation
                 <Box
                   component="span"
                   sx={{
@@ -97,6 +148,32 @@ export default function ContractDetailPage() {
                     height: 6,
                     borderRadius: '50%',
                     bgcolor: 'warning.main',
+                  }}
+                />
+              </Box>
+            ),
+          } satisfies TabDefinition,
+        ]
+      : []),
+    ...(showVerified
+      ? [
+          {
+            key: 'verified',
+            // Emerald dot = verified, the counterpart of the amber
+            // "experimental" dot on Decompilation.
+            label: (
+              <Box
+                component="span"
+                sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}
+              >
+                Verified Code
+                <Box
+                  component="span"
+                  sx={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    bgcolor: 'emerald.400',
                   }}
                 />
               </Box>
@@ -143,6 +220,29 @@ export default function ContractDetailPage() {
             >
               <span>
                 <Chip size="md" color="neutral" label="Externally managed" />
+              </span>
+            </Tooltip>
+          )}
+          {verified != null && (
+            // Task 0639: a third party's claim, read from BlockSmith — the
+            // tooltip names who made it, as on "Externally managed". A plain
+            // label, like its neighbours: the tab below is opened from the tabs.
+            <Tooltip
+              title={
+                <>
+                  Rebuilt from its source by:
+                  {verifiedByNames(verified).map((n, i) => (
+                    <bdi key={i} style={{ display: 'block' }}>
+                      {n}
+                    </bdi>
+                  ))}
+                  Not an audit.
+                </>
+              }
+              describeChild
+            >
+              <span>
+                <Chip size="md" color="emerald" label="Verified source" />
               </span>
             </Tooltip>
           )}
@@ -206,6 +306,25 @@ export default function ContractDetailPage() {
                 wasmHash={contract.data.wasm_hash}
               />
             )}
+            {effectiveKey === 'verified' &&
+              (verified != null ? (
+                <VerifiedCode
+                  key={contractId}
+                  contractId={contractId}
+                  verification={verified}
+                />
+              ) : verificationFailed ? (
+                <Stack spacing={1.5} sx={{ p: 2 }}>
+                  <QueryErrorState
+                    error={verification.error}
+                    onRetry={() => void verification.refetch()}
+                  />
+                </Stack>
+              ) : (
+                <Stack spacing={1.5} sx={{ p: 2 }}>
+                  <CardSkeleton />
+                </Stack>
+              ))}
             {effectiveKey === 'invocations' && (
               <ContractInvocations contractId={contractId} />
             )}

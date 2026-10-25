@@ -1,5 +1,5 @@
 ---
-id: '0643'
+id: '0644'
 title: 'Delete the three dead `infra:*:staging` scripts'
 type: REFACTOR
 status: backlog
@@ -13,7 +13,8 @@ history:
     note: >
       Found while auditing the root CLAUDE.md: it and docs/deployment.md both
       claimed the staging scripts do not exist. They do — only the Makefile
-      targets behind them are gone.
+      targets behind them are gone. Filed as 0643 and renumbered the same day:
+      another session had already used 0643 in its commit messages.
 ---
 
 # Delete the three dead `infra:*:staging` scripts

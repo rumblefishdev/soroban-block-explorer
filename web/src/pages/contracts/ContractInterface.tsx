@@ -194,7 +194,7 @@ function FunctionRow({ fn }: { fn: ContractFunctionSig }) {
  * Interface tab — the contract's declared public functions, rendered as a
  * readable accordion list. SAC and pre-upload contracts have no program, and
  * a few programs carry no interface section (`contractspecv0`): both show an
- * empty state, the latter pointing to the Code tab, which reconstructs the
+ * empty state, the latter pointing to the Decompilation tab, which reconstructs the
  * functions from the program itself.
  */
 export function ContractInterface({ contractId }: { contractId: string }) {
@@ -230,7 +230,7 @@ export function ContractInterface({ contractId }: { contractId: string }) {
       <EmptyState
         icon={<InfoOutlinedIcon fontSize="small" />}
         title="No interface metadata"
-        description="No function list is available for this contract's WASM. The Code tab reconstructs its functions from the WASM itself."
+        description="No function list is available for this contract's WASM. The Decompilation tab reconstructs its functions from the WASM itself."
       />
     );
   }

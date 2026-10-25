@@ -71,3 +71,8 @@ SEP-58 (draft 0.6.0, updated 2026-07-15) defines the build fields
 consumers SHOULD weigh results by verifier reputation and aggregate across
 independent verifiers. It defines no verified / mismatched / disputed
 states and no API — those are the Query API's.
+
+## Summary carried over from the task file (2026-10-16)
+
+- `verified_source_code_uris` is present exactly when `is_public` (49/49 records).
+- Coverage: 33 of 49,455 testnet Wasm programs (0.07%).

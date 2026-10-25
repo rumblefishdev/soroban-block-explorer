@@ -1,3 +1,5 @@
+import { unmuxed } from './strkey.js';
+
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 const STELLAR_ACCOUNT = /^G[A-Z2-7]{55}$/;
 const STELLAR_CONTRACT = /^C[A-Z2-7]{55}$/;
@@ -35,15 +37,18 @@ export type AddressType = 'account' | 'contract' | 'pool';
  * first letter says what it is (SEP-23) — `G` account, `C` contract, `L`
  * liquidity pool. The API sends an address that can be an account or a
  * contract in one field (task 0600), and every link takes its type from here.
+ * A muxed key (`M…` account, `W…` contract, each with a sub-account id) links
+ * to the page of the address it stands for; `getIdentifierHref` resolves it.
  *
- * `null` for an address with no page of its own — a muxed account (`M…`), a
- * claimable balance (`B…`) — or a value that is not a StrKey: show it, do
- * not link it.
+ * `null` for an address with no page of its own — a claimable balance
+ * (`B…`) — or a value that is not a StrKey: show it, do not link it.
  */
 export function addressType(value: string): AddressType | null {
   if (isAccountId(value)) return 'account';
   if (isContractId(value)) return 'contract';
   if (isPoolId(value)) return 'pool';
+  const base = unmuxed(value);
+  if (base != null) return isAccountId(base) ? 'account' : 'contract';
   return null;
 }
 

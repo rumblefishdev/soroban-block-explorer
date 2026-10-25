@@ -3,6 +3,7 @@ import {
   DebouncedField,
   isAccountId,
   isContractId,
+  unmuxed,
 } from '@rumblefish/soroban-block-explorer-ui';
 
 import { OPERATION_TYPE_OPTIONS } from './operationTypes.js';
@@ -29,8 +30,10 @@ export function TransactionFilters({
   onSearchChange,
   onOperationTypeChange,
 }: TransactionFiltersProps) {
+  // A muxed `M…` / `W…` stands for an account / contract and is valid too.
+  const address = unmuxed(search) ?? search;
   const isError =
-    search !== '' && !isAccountId(search) && !isContractId(search);
+    search !== '' && !isAccountId(address) && !isContractId(address);
 
   return (
     <Box

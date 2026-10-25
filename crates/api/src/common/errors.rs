@@ -102,6 +102,18 @@ pub const SPONSORSHIP_FETCH_FAILED: &str = "sponsorship_fetch_failed";
 /// WAT paths failed) or exceeded the in-handler time budget.
 pub const DECOMPILE_FAILED: &str = "decompile_failed";
 
+/// The source verification service could not be read (transport failure,
+/// HTTP error, or a document outside its published schema), or the source
+/// archive could not be downloaded. Transient from
+/// the client's perspective — retrying later is reasonable.
+pub const SOURCE_VERIFICATION_FAILED: &str = "source_verification_failed";
+
+/// The verified source archive failed its checks: a host other than the
+/// verifier's, a sha256 other than the published one, a size over the caps,
+/// corrupt content, or unpacked files too large for one response. Not
+/// shown, never partially.
+pub const SOURCE_ARCHIVE_INVALID: &str = "source_archive_invalid";
+
 /// `q` query parameter on `/v1/search` failed shape validation: missing,
 /// empty after trim, or longer than the per-endpoint byte cap
 /// (`search::handlers::MAX_Q_LEN`, currently 256). Distinct from

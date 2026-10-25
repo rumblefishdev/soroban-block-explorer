@@ -23,7 +23,7 @@ const FETCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
     path = "/accounts/{account_id}/sponsorship",
     tag = "accounts",
     params(
-        ("account_id" = String, Path, description = "Stellar account StrKey (G…, 56 chars)"),
+        ("account_id" = String, Path, description = "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)"),
     ),
     responses(
         (status = 200, description = "The account's sponsored entries and who pays them",
@@ -37,9 +37,10 @@ pub async fn get_account_sponsorship(
     State(state): State<AppState>,
     Path(account_id): Path<String>,
 ) -> Response {
-    if let Err(resp) = path::strkey(&account_id, 'G', "account_id") {
-        return resp;
-    }
+    let account_id = match path::account_id(&account_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let header = match queries::fetch_account(&state.ch(), &account_id).await {
         Ok(Some(h)) => h,
         Ok(None) => return errors::not_found(format!("account '{account_id}' not found")),

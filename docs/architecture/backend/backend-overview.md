@@ -192,10 +192,18 @@ The backend serves data from the block explorer's own database, adding:
     Built-in safeguards: 100 KB body cap (per SEP-1 spec), 1 s connect / 2 s
     request timeouts, RFC 1035 hostname validation rejecting IP literals,
     refusal of a name that resolves to a non-public address
-    (`enrichment_shared::outbound_guard`, task 0644), and a 24 h LRU cache
+    (`enrichment_shared::outbound_guard`, task 0656), and a 24 h LRU cache
     (1024 entries) keyed by lowercase home_domain. Currently
     consumed only by `GET /v1/assets/{id}`; future detail endpoints
     (accounts, etc.) will reuse the same fetcher
+  - **`runtime_enrichment::source_verification`** — reads a verifier
+    aggregator's Query API and the source archives it points to, for the
+    contract page's Verified Code tab (task 0639). Configured per network by
+    `SOURCE_VERIFICATION_API_URL` (testnet only today; the service runs on a
+    staging host); unset, the client does not exist. 2 s connect, 5 s per
+    Query API call (body capped at 1 MB), 10 s per archive, no redirects, archive host pinned to the verifier's,
+    sha256 and size caps checked before unpacking. Failures are errors the
+    handlers report, not empty results.
   - **`runtime_enrichment::nft_token_uri`** — drives the detail-only
     `metadata` field on `GET /v1/nfts/:id` (task 0195 §2d). Per ADR 0043
     detail-only carve-out — the `nfts.metadata` JSONB column was dropped
@@ -334,17 +342,17 @@ filter, and had to be corrected — the exception looked like the rule.
 
 ### 6.3 Endpoint Inventory
 
-| Resource        | Endpoint(s)                                                                                                                                                                                                         |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Network         | `GET /network/stats`                                                                                                                                                                                                |
-| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                                                                      |
-| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                                                            |
-| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                                                              |
-| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                                                                    |
-| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/decompiled`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
-| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                             |
-| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/activity`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                                  |
-| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                          |
+| Resource        | Endpoint(s)                                                                                                                                                                                                                                                                                                    |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Network         | `GET /network/stats`                                                                                                                                                                                                                                                                                           |
+| Transactions    | `GET /transactions`, `GET /transactions/:hash`                                                                                                                                                                                                                                                                 |
+| Ledgers         | `GET /ledgers`, `GET /ledgers/:sequence`                                                                                                                                                                                                                                                                       |
+| Accounts        | `GET /accounts`, `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                                                                                                                                                                                         |
+| Assets          | `GET /assets`, `GET /assets/:id`, `GET /assets/:id/transactions`                                                                                                                                                                                                                                               |
+| Contracts       | `GET /contracts`, `GET /contracts/:contract_id`, `GET /contracts/:contract_id/interface`, `GET /contracts/:contract_id/decompiled`, `GET /contracts/:contract_id/verification`, `GET /contracts/:contract_id/verified-source`, `GET /contracts/:contract_id/invocations`, `GET /contracts/:contract_id/events` |
+| NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                                                                                                                        |
+| Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/activity`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                                                                                                                             |
+| Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                                                                                                                     |
 
 ### 6.4 Resource Details
 
@@ -360,6 +368,13 @@ fast, and cacheable with short TTLs.
 
 **`GET /transactions`** - Paginated list. Query params: `limit`, `cursor`,
 `filter[source_account]`, `filter[contract_id]`, `filter[operation_type]`.
+
+An address with a sub-account id is answered as its base address,
+checksum-checked: a `W…` (CAP-0084) as its `C…` wherever a contract id is
+taken — the `/contracts/:contract_id` paths, the transactions'
+`filter[contract_id]` and search — and
+an `M…` as its `G…` wherever an account id is taken — the `/accounts/:account_id`
+paths, `filter[source_account]` and search.
 
 **`GET /transactions/:hash`** - Full detail for a single transaction (supports both normal
 and advanced representations):
@@ -500,6 +515,35 @@ soroban-ret team's guidance); when Rust emission fails the same response degrade
 WAT directly. 404 for SAC / pre-upload contracts (no WASM by design) and for code neither
 indexed nor live on the ledger. Output is immutable per (`wasm_hash`, decompiler version) —
 responses carry the `LONG` cache header.
+
+**`GET /contracts/:contract_id/verification`** - What independent source verifiers say
+about the contract's current WASM (task 0639). The handler resolves `wasm_hash` as
+`/decompiled` does (CAP-85 references included) and asks a verifier aggregator's Query
+API (`GET {SOURCE_VERIFICATION_API_URL}/wasms/{wasm_hash}`) on request; nothing is stored.
+The aggregate is reduced to one `status` — `verified` (source published),
+`verified_private`, `mismatched` (submitted source rebuilds to other code), `disputed`,
+`unverified` or `none` — plus every verifier's own answer, the shown record's archive
+(`url`, `sha256`, `format`) and its build recipe (SEP-58 `bldimg` / `bldopt`, package,
+manifest path, report link). `source` and `build` are given only for the verified states — submitted source that did not reproduce the on-chain code is never offered. The status comes from the verifiers' own answers (any `verified` with a published archive → `verified`, without one → `verified_private`, `verified` and `mismatched` together → `disputed`); the aggregator's `agreement` is descriptive by its SEP and not read. An answer with a verifier listed as unavailable is a 500 unless the code was verified or disputed: an outage is never reported as `none` or `mismatched`. Every verifier keeps its own copy of the same archive (one `source_sha256`); the first usable copy of any verifier is taken — a known format on that verifier's own host (a domain, not an IP literal). On a network without a verifier service
+(`SOURCE_VERIFICATION_API_URL` unset — mainnet today) it answers 200 with `status:
+"unavailable"` and null `wasm_hash` / `checked_at`, asking neither the database nor the
+service, under the `LONG` cache header (it changes only with a deploy). 404 for an unknown
+contract and for one without WASM; 500 `source_verification_failed` when the service cannot
+be read. `MEDIUM` cache header otherwise: a verification can land at any time.
+
+**`GET /contracts/:contract_id/verified-source`** - The verified record's source archive,
+unpacked (task 0639). Downloaded only from the verifier's own host over https (no
+redirects), checked against the record's `source_sha256`, and unpacked from `.tar.gz` or
+`.zip` within caps (10 MB download, 4 MB unpacked, 2 000 files; the response stays under the 6 MB Lambda limit, counted as the escaped proxy response); a failed
+download is a 500 `source_verification_failed`, any other miss a 500
+`source_archive_invalid`, and nothing is shown. Returns the files the archive unpacks to,
+as `tar` and `unzip` would leave them: every regular file with its UTF-8 text (`null` for a
+non-text file); folders, links and metadata entries are not files, and a path listed twice
+keeps one copy. The recipe and the archive always come from the same verifier; sha256 is returned as
+published and compared without regard to case. Served only for `verified`: source that did not
+reproduce the on-chain code (`mismatched`, `disputed`) is not served and the page shows
+none of it; 404 for those, when no source is published and when the network has no
+verifier service. `LONG` cache header.
 
 **`GET /contracts/:contract_id/invocations`** - Paginated list of contract invocations.
 

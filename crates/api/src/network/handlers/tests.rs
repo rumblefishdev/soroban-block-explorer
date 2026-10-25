@@ -39,6 +39,7 @@ fn app(ch: clickhouse::Client) -> Router {
                 vec!["http://unused".to_owned()],
             )
             .expect("build account_sponsors fetcher"),
+        source_verification: None,
     };
     let state = AppState::for_tests(ch, runtime_enrichment);
 

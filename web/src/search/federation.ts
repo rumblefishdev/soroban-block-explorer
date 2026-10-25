@@ -48,9 +48,17 @@ import { isAccountId } from '@rumblefish/soroban-block-explorer-ui';
  *    minimum is what stops a dial at `lobstr.c` on the way to `.co` or `.com`:
  *    every character this regex accepts early is a request sent to a domain
  *    the user may not have finished typing.
+ *
+ * The TLD is letters, or an IDN TLD in its ASCII (`xn--`) form. An
+ * on-ledger `home_domain` is ASCII-only, so an account whose domain sits
+ * under `.рф` or `.中国` can only store it as `….xn--p1ai` /
+ * `….xn--fiqs8s`: matching the Unicode spelling alone would skip every such
+ * account. `xn--` must be followed by at least one character, so a
+ * half-typed `lobstr.xn--` still sends nothing.
  */
 const DOMAIN_SRC =
-  '(?:[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]*[\\p{L}\\p{N}])?\\.)+\\p{L}{2,}';
+  '(?:[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]*[\\p{L}\\p{N}])?\\.)+' +
+  '(?:\\p{L}{2,}|xn--[a-z0-9-]*[a-z0-9])';
 
 const FEDERATED = new RegExp(`^[^*\\s>]+\\*(${DOMAIN_SRC})$`, 'iu');
 

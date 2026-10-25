@@ -289,23 +289,23 @@ Navigation rules:
 
 ### 6.1 Route Inventory
 
-| Route                    | Page            | Primary API Endpoint(s)                                                     |
-| ------------------------ | --------------- | --------------------------------------------------------------------------- |
-| `/`                      | Home            | `GET /network/stats`, `GET /transactions?limit=10`, `GET /ledgers?limit=10` |
-| `/transactions`          | Transactions    | `GET /transactions`                                                         |
-| `/transactions/:hash`    | Transaction     | `GET /transactions/:hash`                                                   |
-| `/ledgers`               | Ledgers         | `GET /ledgers`                                                              |
-| `/ledgers/:sequence`     | Ledger          | `GET /ledgers/:sequence`                                                    |
-| `/accounts/:accountId`   | Account         | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`       |
-| `/assets`                | Assets          | `GET /assets`                                                               |
-| `/assets/:id`            | Asset           | `GET /assets/:id`, `GET /assets/:id/transactions`                           |
-| `/contracts/:contractId` | Contract        | `GET /contracts/:contract_id` (+ `/interface`, `/invocations`, `/events`)   |
-| `/nfts`                  | NFTs            | `GET /nfts`                                                                 |
-| `/nfts/:id`              | NFT             | `GET /nfts/:id`                                                             |
-| `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                      |
-| `/liquidity-pools/:id`   | Liquidity Pool  | `GET /liquidity-pools/:id`                                                  |
-| `/search?q=`             | Search Results  | `GET /search`                                                               |
-| `/privacy-policy`        | Privacy Policy  | none (static text)                                                          |
+| Route                    | Page            | Primary API Endpoint(s)                                                                                                       |
+| ------------------------ | --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `/`                      | Home            | `GET /network/stats`, `GET /transactions?limit=10`, `GET /ledgers?limit=10`                                                   |
+| `/transactions`          | Transactions    | `GET /transactions`                                                                                                           |
+| `/transactions/:hash`    | Transaction     | `GET /transactions/:hash`                                                                                                     |
+| `/ledgers`               | Ledgers         | `GET /ledgers`                                                                                                                |
+| `/ledgers/:sequence`     | Ledger          | `GET /ledgers/:sequence`                                                                                                      |
+| `/accounts/:accountId`   | Account         | `GET /accounts/:account_id`, `GET /accounts/:account_id/transactions`                                                         |
+| `/assets`                | Assets          | `GET /assets`                                                                                                                 |
+| `/assets/:id`            | Asset           | `GET /assets/:id`, `GET /assets/:id/transactions`                                                                             |
+| `/contracts/:contractId` | Contract        | `GET /contracts/:contract_id` (+ `/interface`, `/decompiled`, `/verification`, `/verified-source`, `/invocations`, `/events`) |
+| `/nfts`                  | NFTs            | `GET /nfts`                                                                                                                   |
+| `/nfts/:id`              | NFT             | `GET /nfts/:id`                                                                                                               |
+| `/liquidity-pools`       | Liquidity Pools | `GET /liquidity-pools`                                                                                                        |
+| `/liquidity-pools/:id`   | Liquidity Pool  | `GET /liquidity-pools/:id`                                                                                                    |
+| `/search?q=`             | Search Results  | `GET /search`                                                                                                                 |
+| `/privacy-policy`        | Privacy Policy  | none (static text)                                                                                                            |
 
 Each route should be implemented as a dedicated page module with:
 
@@ -762,6 +762,17 @@ Contract details and interface.
 - Contract interface - list of public functions with parameter names and types, allowing
   users to understand the contract's API without reading source code. SAC and pre-upload
   contracts carry no WASM interface metadata and show an empty state
+- Decompilation tab (formerly "Code", task 0465) - the WASM reconstructed on demand by
+  soroban-ret, marked experimental with an amber dot; present for every contract with a WASM
+- Verified Code tab and header chip (task 0639) - source code an independent verifier
+  rebuilt to the exact on-chain WASM, read through the BlockSmith Query API
+  (`/verification`, asked with the page; `/verified-source`, fetched when the tab
+  opens). Present only for `verified` (file tree beside the code viewer, the built
+  package's `src/lib.rs` open first, the open file in `?file=`, a collapsed build recipe,
+  a download link) and `verified_private` ("the source code is not published"); every
+  other answer — `mismatched`, `disputed`, `unverified`, `none`, `unavailable` (a
+  network without a verifier service), a 404, an error — shows no tab and no chip. Everything the verifier and the archive publish is shown as published: recipe values verbatim in frames, lists one element per frame, full file paths, and invisible or direction-changing characters written out as `⟨U+…⟩` with a warning above the code (Copy keeps the original). Built from the Decompilation tab's parts;
+  the attribution names the verifiers from the API. Testnet only today
 - Invocations tab - recent invocations table (transaction hash, caller — an account or a
   contract in one `caller` field, each linked (tasks 0487, 0600) — status,
   ledger, timestamp). The appearance index carries no per-call function name — call

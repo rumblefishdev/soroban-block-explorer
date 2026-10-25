@@ -23,6 +23,8 @@ import {
   getPoolChart,
   getSearch,
   getTransaction,
+  getVerification,
+  getVerifiedSource,
   health,
   listAccounts,
   listAccountTransactions,
@@ -81,6 +83,12 @@ import type {
   GetTransactionData,
   GetTransactionError,
   GetTransactionResponse,
+  GetVerificationData,
+  GetVerificationError,
+  GetVerificationResponse,
+  GetVerifiedSourceData,
+  GetVerifiedSourceError,
+  GetVerifiedSourceResponse,
   HealthData,
   ListAccountsData,
   ListAccountsError,
@@ -924,6 +932,69 @@ export const listInvocationsInfiniteOptions = (
       queryKey: listInvocationsInfiniteQueryKey(options),
     }
   );
+
+export const getVerificationQueryKey = (
+  options: Options<GetVerificationData>
+) => createQueryKey('getVerification', options);
+
+/**
+ * What independent verifiers say about the contract's current Wasm.
+ *
+ * Read from the verifier aggregator on request. `unavailable` on a network
+ * without a verifier service; 404 for an unknown contract and for one
+ * without Wasm.
+ */
+export const getVerificationOptions = (options: Options<GetVerificationData>) =>
+  queryOptions<
+    GetVerificationResponse,
+    GetVerificationError,
+    GetVerificationResponse,
+    ReturnType<typeof getVerificationQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await getVerification({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: getVerificationQueryKey(options),
+  });
+
+export const getVerifiedSourceQueryKey = (
+  options: Options<GetVerifiedSourceData>
+) => createQueryKey('getVerifiedSource', options);
+
+/**
+ * The shown record's source archive, downloaded from the verifier's own
+ * host, checked against its published sha256 and unpacked.
+ *
+ * Only for `verified`: source that did not reproduce the on-chain code
+ * (`mismatched`, `disputed`) is not served, and the page shows none of it.
+ * 404 for every other status and when no source is published.
+ */
+export const getVerifiedSourceOptions = (
+  options: Options<GetVerifiedSourceData>
+) =>
+  queryOptions<
+    GetVerifiedSourceResponse,
+    GetVerifiedSourceError,
+    GetVerifiedSourceResponse,
+    ReturnType<typeof getVerifiedSourceQueryKey>
+  >({
+    queryFn: async ({ queryKey, signal }) => {
+      const { data } = await getVerifiedSource({
+        ...options,
+        ...queryKey[0],
+        signal,
+        throwOnError: true,
+      });
+      return data;
+    },
+    queryKey: getVerifiedSourceQueryKey(options),
+  });
 
 export const listLedgersQueryKey = (options?: Options<ListLedgersData>) =>
   createQueryKey('listLedgers', options);

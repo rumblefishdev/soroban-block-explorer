@@ -17,7 +17,7 @@ Otherwise, read `lore/0-session/current-task.md` (follows symlink).
 
 Parse YAML frontmatter to extract `id`, `title`, and `type`.
 
-If no task is found, **STOP** and ask the user to set one with `lore_set-task`.
+If no task is found, **STOP** and ask the user to set one with the `lore-framework` plugin's `set-task` MCP tool.
 
 ### 2. Determine branch type prefix
 

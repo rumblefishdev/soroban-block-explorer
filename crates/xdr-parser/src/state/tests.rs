@@ -2,6 +2,10 @@ use super::*;
 use serde_json::json;
 use std::collections::HashMap;
 
+/// Network id for tests whose contract ids are placeholders: no SAC identity
+/// can derive to them, so the network does not matter.
+const ANY_NETWORK: [u8; 32] = [0; 32];
+
 fn make_change(
     entry_type: &str,
     change_type: &str,
@@ -151,7 +155,7 @@ fn extract_wasm_contract_deployment() {
     )];
 
     let deployments =
-        extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
+        extract_contract_deployments(&changes, "GDEPLOYER", &ANY_NETWORK, &HashMap::new());
     assert_eq!(deployments.len(), 1);
     assert_eq!(deployments[0].contract_id, "CABC123");
     assert_eq!(
@@ -184,11 +188,39 @@ fn extract_sac_deployment() {
     )];
 
     let deployments =
-        extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
+        extract_contract_deployments(&changes, "GDEPLOYER", &ANY_NETWORK, &HashMap::new());
     assert_eq!(deployments.len(), 1);
     assert!(deployments[0].is_sac);
     assert_eq!(deployments[0].contract_type, ContractType::Token);
     assert!(deployments[0].wasm_hash.is_none());
+}
+
+/// Task 0571: a SAC deployed by another contract leaves no asset in its
+/// envelope; the identity comes from the instance entry itself, read through
+/// the production encoder (`entry_as_current_change`).
+#[test]
+fn extract_sac_deployment_takes_identity_from_the_instance_entry() {
+    use crate::sac::tests::{BCB_SAC, BCB_SAC_INSTANCE, entry_data};
+    use stellar_xdr::{LedgerEntry, LedgerEntryExt};
+    let entry = LedgerEntry {
+        last_modified_ledger_seq: 64_951_791,
+        data: entry_data(BCB_SAC_INSTANCE),
+        ext: LedgerEntryExt::V0,
+    };
+    let mut change = crate::ledger_entry_changes::entry_as_current_change(&entry).unwrap();
+    change.change_type = "created".into();
+
+    let net = crate::sac::network_id(crate::sac::MAINNET_PASSPHRASE);
+    let deployments = extract_contract_deployments(&[change], "GDEPLOYER", &net, &HashMap::new());
+    assert_eq!(deployments.len(), 1);
+    assert_eq!(deployments[0].contract_id, BCB_SAC);
+    assert_eq!(
+        deployments[0].sac_asset,
+        Some(SacAssetIdentity::Credit {
+            code: "BCB".into(),
+            issuer: "GD7P2H4MSVW3V6L34YFX7YZBIMWAOSSZVXELJANBPKMDRO34DYV37BCB".into(),
+        })
+    );
 }
 
 #[test]
@@ -210,7 +242,7 @@ fn skip_non_instance_contract_data() {
     )];
 
     let deployments =
-        extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
+        extract_contract_deployments(&changes, "GDEPLOYER", &ANY_NETWORK, &HashMap::new());
     assert!(deployments.is_empty());
 }
 
@@ -512,7 +544,7 @@ fn skip_updated_contract_instance() {
     )];
 
     let deployments =
-        extract_contract_deployments(&changes, "GDEPLOYER", &HashMap::new(), &HashMap::new());
+        extract_contract_deployments(&changes, "GDEPLOYER", &ANY_NETWORK, &HashMap::new());
     assert!(deployments.is_empty());
 }
 

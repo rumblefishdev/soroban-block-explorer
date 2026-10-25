@@ -543,6 +543,37 @@ export type AssetTransactionItem = {
   successful: boolean;
 };
 
+export type BuildRecipe = {
+  /**
+   * Build arguments, in order (`bldarg`; empty means `contract build`).
+   */
+  arguments: Array<string>;
+  /**
+   * Build image, pinned by digest (`bldimg`).
+   */
+  image?: string | null;
+  /**
+   * Cargo manifest inside the archive (`--manifest-path`).
+   */
+  manifest_path?: string | null;
+  /**
+   * Build options as the verifier recorded them (`bldopt`).
+   */
+  options: Array<string>;
+  /**
+   * Cargo package the verifier built (`--package`).
+   */
+  package?: string | null;
+  /**
+   * The verifier's full report, when it publishes one.
+   */
+  report_url?: string | null;
+  /**
+   * When the verifier processed the build (RFC 3339).
+   */
+  verified_at?: string | null;
+};
+
 /**
  * One row from the chart endpoint. All money fields are **USD decimal
  * strings with exactly two decimals**, computed at read from on-chain
@@ -2532,6 +2563,50 @@ export type SignatureDto = {
 };
 
 /**
+ * Response of `GET /v1/contracts/{contract_id}/verification` (task 0639).
+ *
+ * What independent verifiers say about the contract's current Wasm, read
+ * from a verifier aggregator (BlockSmith Query API) on request. `status` is
+ * the one branch the page needs; `source` and `build` describe the record
+ * it shows.
+ */
+export type SourceVerificationResponse = {
+  build?: null | BuildRecipe;
+  /**
+   * When the aggregator last refreshed this answer (RFC 3339); null when
+   * `unavailable`.
+   */
+  checked_at?: string | null;
+  contract_id: string;
+  source?: null | VerifiedSourceArchive;
+  /**
+   * The one branch the page needs; see `VerificationStatus`.
+   */
+  status: VerificationStatus;
+  /**
+   * Every verifier's own answer, in the aggregator's order.
+   */
+  verifiers: Array<SourceVerifier>;
+  /**
+   * Lowercase hex hash the verifiers were asked about; null when
+   * `unavailable` (nothing was asked).
+   */
+  wasm_hash?: string | null;
+};
+
+export type SourceVerifier = {
+  /**
+   * Display name as the verifier publishes it.
+   */
+  name?: string | null;
+  /**
+   * The verifier's own result, e.g. `verified` or `mismatched`.
+   */
+  status: string;
+  url: string;
+};
+
+/**
  * DB-sourced light slice for the transaction detail endpoint.
  *
  * Composed with `E3HeavyFields` via `merge_e3_response` (task 0150). All
@@ -2636,6 +2711,60 @@ export type TransactionListItem = {
    */
   source_account?: string | null;
   successful: boolean;
+};
+
+/**
+ * What the contract page shows; on the wire as its snake_case name, listed
+ * in the OpenAPI spec.
+ */
+export type VerificationStatus =
+  | 'verified'
+  | 'verified_private'
+  | 'mismatched'
+  | 'disputed'
+  | 'unverified'
+  | 'none'
+  | 'unavailable';
+
+export type VerifiedSourceArchive = {
+  /**
+   * `tar.gz` or `zip`.
+   */
+  format: string;
+  /**
+   * Lowercase hex sha256 the archive must hash to.
+   */
+  sha256: string;
+  /**
+   * Content-addressed archive on the verifier's storage.
+   */
+  url: string;
+};
+
+export type VerifiedSourceFile = {
+  /**
+   * UTF-8 text; `null` for a file that is not text.
+   */
+  content?: string | null;
+  /**
+   * Path inside the archive, as the archive states it.
+   */
+  path: string;
+  size: number;
+};
+
+/**
+ * Response of `GET /v1/contracts/{contract_id}/verified-source` (task 0639):
+ * the unpacked archive of a `verified` record, after its sha256 matched.
+ */
+export type VerifiedSourceResponse = {
+  archive_sha256: string;
+  contract_id: string;
+  /**
+   * Every regular file, sorted by path.
+   */
+  files: Array<VerifiedSourceFile>;
+  wasm_hash: string;
 };
 
 /**
@@ -2811,7 +2940,7 @@ export type GetAccountData = {
   body?: never;
   path: {
     /**
-     * Stellar account StrKey (G…, 56 chars)
+     * Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)
      */
     account_id: string;
   };
@@ -2849,7 +2978,7 @@ export type GetAccountSponsorshipData = {
   body?: never;
   path: {
     /**
-     * Stellar account StrKey (G…, 56 chars)
+     * Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)
      */
     account_id: string;
   };
@@ -2889,7 +3018,7 @@ export type ListAccountTransactionsData = {
   body?: never;
   path: {
     /**
-     * Stellar account StrKey (G…, 56 chars)
+     * Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)
      */
     account_id: string;
   };
@@ -3133,7 +3262,7 @@ export type GetContractData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3172,7 +3301,7 @@ export type GetDecompiledData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3219,7 +3348,7 @@ export type ListEventsData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3267,7 +3396,7 @@ export type GetInterfaceData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3306,7 +3435,7 @@ export type ListInvocationsData = {
   body?: never;
   path: {
     /**
-     * Contract StrKey (C…, 56 chars)
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
      */
     contract_id: string;
   };
@@ -3351,6 +3480,86 @@ export type ListInvocationsResponses = {
 
 export type ListInvocationsResponse =
   ListInvocationsResponses[keyof ListInvocationsResponses];
+
+export type GetVerificationData = {
+  body?: never;
+  path: {
+    /**
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
+     */
+    contract_id: string;
+  };
+  query?: never;
+  url: '/v1/contracts/{contract_id}/verification';
+};
+
+export type GetVerificationErrors = {
+  /**
+   * Invalid contract_id
+   */
+  400: ErrorEnvelope;
+  /**
+   * Contract not found, or no WASM
+   */
+  404: ErrorEnvelope;
+  /**
+   * Verification service unreadable or archive unusable
+   */
+  500: ErrorEnvelope;
+};
+
+export type GetVerificationError =
+  GetVerificationErrors[keyof GetVerificationErrors];
+
+export type GetVerificationResponses = {
+  /**
+   * Verification status
+   */
+  200: SourceVerificationResponse;
+};
+
+export type GetVerificationResponse =
+  GetVerificationResponses[keyof GetVerificationResponses];
+
+export type GetVerifiedSourceData = {
+  body?: never;
+  path: {
+    /**
+     * Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)
+     */
+    contract_id: string;
+  };
+  query?: never;
+  url: '/v1/contracts/{contract_id}/verified-source';
+};
+
+export type GetVerifiedSourceErrors = {
+  /**
+   * Invalid contract_id
+   */
+  400: ErrorEnvelope;
+  /**
+   * No verifier service, contract or WASM, or no published source
+   */
+  404: ErrorEnvelope;
+  /**
+   * Verification service unreadable or archive failed its checks
+   */
+  500: ErrorEnvelope;
+};
+
+export type GetVerifiedSourceError =
+  GetVerifiedSourceErrors[keyof GetVerifiedSourceErrors];
+
+export type GetVerifiedSourceResponses = {
+  /**
+   * Unpacked source archive
+   */
+  200: VerifiedSourceResponse;
+};
+
+export type GetVerifiedSourceResponse =
+  GetVerifiedSourceResponses[keyof GetVerifiedSourceResponses];
 
 export type ListLedgersData = {
   body?: never;
@@ -3949,11 +4158,13 @@ export type ListTransactionsData = {
      */
     cursor?: string;
     /**
-     * Filter by source account StrKey (G…).
+     * Filter by source account StrKey (G…, or M… for the same account with a
+     * sub-account id).
      */
     'filter[source_account]'?: string | null;
     /**
-     * Filter by contract StrKey (C…) — matches root op, nested call, or event emission.
+     * Filter by contract StrKey (C…, or W… for the same contract with a
+     * sub-account id) — matches root op, nested call, or event emission.
      */
     'filter[contract_id]'?: string | null;
     /**

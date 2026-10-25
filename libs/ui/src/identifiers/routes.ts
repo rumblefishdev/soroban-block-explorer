@@ -1,3 +1,4 @@
+import { unmuxed } from './strkey.js';
 import type { EntityType } from './types.js';
 
 /**
@@ -25,7 +26,8 @@ export const routeSegments = {
  * The single URL builder: a detail-page href from an entity type + id
  * (`/accounts/:id`, `/assets/:id`, …), assembled from {@link routeSegments}.
  *
- * The one place that turns `(type, id)` into a URL. `IdentifierDisplay` uses
+ * The one place that turns `(type, id)` into a URL; a muxed `M…` / `W…`
+ * id goes to the page of the account / contract it stands for. `IdentifierDisplay` uses
  * it for static links; `web`'s `routes` and search `routeForHit` re-use it
  * (the `web → libs/ui` dependency direction is allowed; the reverse is not,
  * which is why the source lives here).
@@ -44,5 +46,7 @@ export function getIdentifierHref(type: EntityType, id: string): string {
         'from the hit, or pass `href` explicitly to `IdentifierDisplay`.'
     );
   }
-  return `/${routeSegments[type]}/${encodeURIComponent(id)}`;
+  // A muxed key (`M…` / `W…`) has the page of the address it stands for.
+  const page = unmuxed(id) ?? id;
+  return `/${routeSegments[type]}/${encodeURIComponent(page)}`;
 }

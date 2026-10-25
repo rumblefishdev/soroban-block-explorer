@@ -24,7 +24,7 @@ const WASM_HASH =
   'cd8ad034fd37e246ca578b1cfd1dc3d95fb532a6591ecf491ee01d2db03f5244';
 
 describe('Interface tab with no function list', () => {
-  it('says a WASM has no function list and names the Code tab', () => {
+  it('says a WASM has no function list and names the Decompilation tab', () => {
     response = {
       contract_id: CONTRACT,
       wasm_hash: WASM_HASH,
@@ -33,7 +33,9 @@ describe('Interface tab with no function list', () => {
     renderWithProviders(<ContractInterface contractId={CONTRACT} />);
 
     expect(screen.getByText('No interface metadata')).toBeInTheDocument();
-    expect(screen.getByText(/The Code tab reconstructs/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/The Decompilation tab reconstructs/)
+    ).toBeInTheDocument();
   });
 
   it('treats a declared but empty function list the same way', () => {

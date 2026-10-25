@@ -216,6 +216,62 @@ async fn select_nft_chunk_skips_enriched() {
         .expect("cleanup enrichment");
 }
 
+/// `--retry-sentinels` for NFTs (task 0654): a displayed NFT with no name and
+/// no media is retried even when the collection name is filled (`name()` is
+/// stamped separately); a real row and a key that is not in `nfts` are not.
+/// `#[ignore]`.
+#[tokio::test]
+#[ignore = "needs live local ClickHouse"]
+async fn select_nft_chunk_sentinels_ignores_collection_name() {
+    let client = db_clickhouse::client(&db_clickhouse::Config::from_env());
+    client
+        .query("INSERT INTO nfts (contract_id, token_id) VALUES (6101,'0'),(6101,'1'),(6101,'2')")
+        .execute()
+        .await
+        .expect("seed nfts");
+    client
+        .query(
+            "INSERT INTO nft_enrichment \
+             (contract_id, token_id, name, media_url, collection_name, version) VALUES \
+             (6101,'0','','','Stroopies',now64(3)), \
+             (6101,'1','','','',now64(3)), \
+             (6101,'2','Stroopies 2','data:image/svg+xml,<svg/>','Stroopies',now64(3)), \
+             (6102,'0','','','',now64(3))",
+        )
+        .execute()
+        .await
+        .expect("seed nft enrichment");
+
+    let got = select_nft_chunk(&client, None, 100, DrainMode::Sentinels)
+        .await
+        .expect("sentinels query");
+    assert_eq!(
+        got,
+        vec![
+            NftKey {
+                contract_id: 6101,
+                token_id: "0".into(),
+            },
+            NftKey {
+                contract_id: 6101,
+                token_id: "1".into(),
+            },
+        ],
+        "empty name and media of a displayed NFT, whatever the collection name"
+    );
+
+    client
+        .query("ALTER TABLE nfts DELETE WHERE contract_id = 6101")
+        .execute()
+        .await
+        .expect("cleanup nfts");
+    client
+        .query("ALTER TABLE nft_enrichment DELETE WHERE contract_id IN (6101,6102)")
+        .execute()
+        .await
+        .expect("cleanup enrichment");
+}
+
 /// `--retry-sentinels` mode: candidate = existing all-`''` rows only.
 /// A real row and a PARTIAL (real icon + `''` name) must be excluded —
 /// proving partials are never re-fetched/clobbered. `#[ignore]`.

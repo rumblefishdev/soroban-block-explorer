@@ -5,7 +5,7 @@
 | Check | File | If Missing |
 |-------|------|------------|
 | **Who** | `lore/0-session/current-user.md` | Auto-generated from `LORE_SESSION_CURRENT_USER` env |
-| **What** | `lore/0-session/current-task.md` | Pick from `lore/0-session/next-tasks.md`, use MCP tool `lore_set-task` |
+| **What** | `lore/0-session/current-task.md` | Pick from `lore/0-session/next-tasks.md`, use the `lore-framework` plugin's `set-task` MCP tool |
 
 ## File Size & Test Placement
 
@@ -125,6 +125,15 @@ per-layer deep-dives (`infra/README.md`, `infra-hetzner/README.md`,
 
 These encode durable rules. Keep transient state (which task is open, which PR is
 pending) out of them — it rots and makes the guide untrustworthy.
+
+## Verify on real data locally — before review, not after deploy
+
+`cargo run -p api --bin local` serves the whole API against the production
+ClickHouse, read-only through the developer's mTLS cert
+(`infra-hetzner/ca/README.md`); `CLICKHOUSE_DATABASE` picks the network's
+database. An API or UI change is checked there on real rows before review.
+"Verifiable only after deploy" holds just for edge and infra behaviour
+(Lambda wiring, API Gateway, Turnstile).
 
 ## Evidence — conclusions from the whole population, not a sample
 

@@ -4,6 +4,7 @@ import {
   isAccountId,
   isContractId,
   useCursorPagination,
+  unmuxed,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useCallback, useMemo } from 'react';
 
@@ -30,13 +31,15 @@ export default function TransactionsListPage() {
   const hasFilters = q !== '' || op !== '';
 
   // Map the combined search box to the API's separate account / contract
-  // filters by inspecting the StrKey prefix. Unrecognised input applies no
+  // filters by inspecting the StrKey prefix; a muxed `M…` / `W…` filters by
+  // the account / contract it stands for. Unrecognised input applies no
   // filter rather than sending a value the API would reject.
   const queryFilters = useMemo<Filters>(() => {
     const filters: Filters = { limit: PAGE_SIZE };
     if (q) {
-      if (isAccountId(q)) filters['filter[source_account]'] = q;
-      else if (isContractId(q)) filters['filter[contract_id]'] = q;
+      const address = unmuxed(q) ?? q;
+      if (isAccountId(address)) filters['filter[source_account]'] = address;
+      else if (isContractId(address)) filters['filter[contract_id]'] = address;
     }
     if (op) filters['filter[operation_type]'] = op;
     return filters;

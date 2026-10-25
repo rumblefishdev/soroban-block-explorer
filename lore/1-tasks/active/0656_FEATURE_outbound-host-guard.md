@@ -1,5 +1,5 @@
 ---
-id: '0644'
+id: '0656'
 title: 'SECURITY: one outbound-host guard — refuse non-global addresses for every third-party fetch'
 type: FEATURE
 status: active

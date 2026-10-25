@@ -20,6 +20,8 @@ export { useContractsList } from './useContractsList.js';
 export { useContractDetail } from './useContractDetail.js';
 export { useContractDecompiled } from './useContractDecompiled.js';
 export { useContractInterface } from './useContractInterface.js';
+export { useContractVerification } from './useContractVerification.js';
+export { useContractVerifiedSource } from './useContractVerifiedSource.js';
 export { useContractInvocations } from './useContractInvocations.js';
 export { useContractEvents } from './useContractEvents.js';
 export { usePoolsList } from './usePoolsList.js';

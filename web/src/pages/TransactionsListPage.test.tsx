@@ -138,4 +138,35 @@ describe('TransactionsListPage', () => {
       expect(lastFilters?.['filter[contract_id]']).toBeUndefined();
     });
   });
+
+  it('routes a muxed search to the filter of the address it stands for', async () => {
+    mockOk([]);
+    const user = userEvent.setup();
+
+    renderWithProviders(<TransactionsListPage />, {
+      initialEntries: ['/transactions'],
+    });
+
+    const search = screen.getByPlaceholderText(
+      /source account or contract id/i
+    );
+    // An account with sub-account id 3539365402 (`M…`) filters by its `G…`.
+    await user.click(search);
+    await user.paste(
+      'MD5SL5RIC5STHGDDOJGSIIZHZZQPA4HIYFEPIQ3FF7M3H2F5VQ7K2AAAAAANF5TODJEYA'
+    );
+
+    await vi.waitFor(() => {
+      const lastFilters =
+        hookMocks.useTransactionsList.mock.calls[
+          hookMocks.useTransactionsList.mock.calls.length - 1
+        ]?.[1];
+      expect(lastFilters?.['filter[source_account]']).toBe(
+        'GD5SL5RIC5STHGDDOJGSIIZHZZQPA4HIYFEPIQ3FF7M3H2F5VQ7K2FTL'
+      );
+    });
+    expect(
+      screen.queryByText(/requires a full account/i)
+    ).not.toBeInTheDocument();
+  });
 });

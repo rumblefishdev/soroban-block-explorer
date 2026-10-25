@@ -11,17 +11,21 @@
 //!   NFT detail page (task 0195 §2d). Source-named to match the rest of
 //!   the workspace; the wire response field stays `metadata` and is
 //!   mapped at the handler boundary.
+//! - [`source_verification`] — a verifier aggregator's Query API and the
+//!   source archives it points to, for the contract page (task 0639).
 
 pub mod account_sponsors;
 pub mod nft_token_uri;
 pub mod rpc_pool;
 pub mod sep1;
+pub mod source_verification;
 pub mod stellar_archive;
 pub mod wasm_code;
 
 use account_sponsors::AccountSponsorsFetcher;
 use nft_token_uri::NftTokenUriFetcher;
 use sep1::Sep1Fetcher;
+use source_verification::SourceVerificationFetcher;
 use stellar_archive::StellarArchiveFetcher;
 use wasm_code::WasmCodeFetcher;
 
@@ -43,4 +47,6 @@ pub struct RuntimeEnrichment {
     pub nft_token_uri: NftTokenUriFetcher,
     pub wasm_code: WasmCodeFetcher,
     pub account_sponsors: AccountSponsorsFetcher,
+    /// `None` on a network without a verifier service (`SOURCE_VERIFICATION_API_URL` unset).
+    pub source_verification: Option<SourceVerificationFetcher>,
 }

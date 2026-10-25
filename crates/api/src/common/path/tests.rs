@@ -251,3 +251,63 @@ async fn sequence_non_numeric_rejected() {
     let (_, json) = body_json(err).await;
     assert_eq!(json["code"], "invalid_sequence");
 }
+
+// -----------------------------------------------------------------------
+// contract_id — `C…` or `W…` (CAP-0084)
+// -----------------------------------------------------------------------
+
+const REAL_C: &str = "CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA";
+/// `REAL_C` with sub-account id 42.
+fn real_w() -> String {
+    let stellar_strkey::Strkey::Contract(c) = stellar_strkey::Strkey::from_string(REAL_C).unwrap()
+    else {
+        panic!("not a contract strkey");
+    };
+    stellar_strkey::Strkey::MuxedContract(stellar_strkey::MuxedContract {
+        contract_id: c.0,
+        id: 42,
+    })
+    .to_string()
+    .as_str()
+    .to_owned()
+}
+
+#[test]
+fn contract_id_keeps_a_c_strkey() {
+    assert_eq!(contract_id(REAL_C).unwrap(), REAL_C);
+}
+
+#[test]
+fn contract_id_turns_a_w_strkey_into_its_contract() {
+    assert_eq!(contract_id(&real_w()).unwrap(), REAL_C);
+}
+
+#[tokio::test]
+async fn contract_id_rejects_an_account() {
+    let err = contract_id("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAT").unwrap_err();
+    let (status, json) = body_json(err).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["code"], "invalid_contract_id");
+}
+
+// -----------------------------------------------------------------------
+// account_id — `G…` or `M…`
+// -----------------------------------------------------------------------
+
+const REAL_G: &str = "GD5SL5RIC5STHGDDOJGSIIZHZZQPA4HIYFEPIQ3FF7M3H2F5VQ7K2FTL";
+/// `REAL_G` with sub-account id 3539365402.
+const REAL_M: &str = "MD5SL5RIC5STHGDDOJGSIIZHZZQPA4HIYFEPIQ3FF7M3H2F5VQ7K2AAAAAANF5TODJEYA";
+
+#[test]
+fn account_id_keeps_a_g_and_turns_an_m_into_its_account() {
+    assert_eq!(account_id(REAL_G).unwrap(), REAL_G);
+    assert_eq!(account_id(REAL_M).unwrap(), REAL_G);
+}
+
+#[tokio::test]
+async fn account_id_rejects_a_contract() {
+    let err = account_id(REAL_C).unwrap_err();
+    let (status, json) = body_json(err).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["code"], "invalid_account_id");
+}

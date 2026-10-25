@@ -599,10 +599,11 @@ Lambdas were taken **out of the VPC** (removing the NAT Gateway), and Galexie mo
 
 **External services consumed (read-only):**
 
-| External service                             | Purpose                        | Failure impact                                       |
-| -------------------------------------------- | ------------------------------ | ---------------------------------------------------- |
-| Stellar network peers (Galexie Captive Core) | Live ledger data source        | Critical — mitigated by connecting to multiple peers |
-| Stellar public history archives              | Historical backfill (one-time) | Non-critical after backfill completes                |
+| External service                             | Purpose                                          | Failure impact                                                 |
+| -------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------- |
+| Stellar network peers (Galexie Captive Core) | Live ledger data source                          | Critical — mitigated by connecting to multiple peers           |
+| Stellar public history archives              | Historical backfill (one-time)                   | Non-critical after backfill completes                          |
+| Source verification Query API (testnet only) | Verified source on the contract page (task 0639) | Non-critical — the Source code tab is hidden, the error logged |
 
 No external APIs (Horizon, Soroswap, Aquarius, Soroban RPC) are required for core
 functionality. All data flows from the canonical ledger.

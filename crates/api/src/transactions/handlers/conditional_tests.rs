@@ -33,6 +33,7 @@ fn test_state(ch: clickhouse::Client) -> AppState {
                 vec!["http://unused".to_owned()],
             )
             .expect("build account_sponsors fetcher"),
+        source_verification: None,
     };
     AppState::for_tests(ch, runtime_enrichment)
 }

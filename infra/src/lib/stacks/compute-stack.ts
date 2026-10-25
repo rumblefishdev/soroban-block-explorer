@@ -15,6 +15,7 @@ import type { Construct } from 'constructs';
 
 import type { EnvironmentConfig } from '../types.js';
 import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
+import { stellarXdrMajor } from '../stellar-xdr-pin.js';
 import { PublicLakeKeepalive } from './public-lake-keepalive.js';
 
 const DLQ_RETENTION_DAYS = 14;
@@ -315,6 +316,11 @@ export class ComputeStack extends cdk.Stack {
         // failure. Same list the enrichment worker gets (see its block
         // below). Required: the Lambda refuses to start without it.
         SOROBAN_RPC_URLS: config.sorobanRpcUrls.join(','),
+        // Verified-source lookups for the contract page (task 0639), only on
+        // networks that configure a verifier service.
+        ...(config.sourceVerificationApiUrl
+          ? { SOURCE_VERIFICATION_API_URL: config.sourceVerificationApiUrl }
+          : {}),
         // Origin lock (task 0277), phase 2: arm the middleware by injecting the
         // shared secret as EDGE_SECRET. The Lambda's edge_lock middleware then
         // rejects any request (except /health) lacking a matching X-Edge-Secret —
@@ -378,6 +384,8 @@ export class ComputeStack extends cdk.Stack {
         RUST_LOG: 'info',
         ENRICHMENT_QUEUE_URL: enrichmentQueue.queueUrl,
         MTLS_SECRET_NAME: processorSecretName,
+        // Not read by the indexer: the protocol watch reads it (task 0646).
+        STELLAR_XDR_MAJOR: String(stellarXdrMajor(cargoWorkspacePath)),
       },
     });
     this.processorFunction = processorFunction;

@@ -40,6 +40,7 @@ fn app(ch: clickhouse::Client) -> axum::Router {
                 vec!["http://unused".to_owned()],
             )
             .expect("build account_sponsors fetcher"),
+        source_verification: None,
     };
     let (router, _spec) = OpenApiRouter::new()
         .nest("/v1", crate::liquidity_pools::router())

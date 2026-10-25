@@ -4,7 +4,7 @@ title: 'FEATURE: metadata enrichment follows the stored verdict, records why a f
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0455', '0311', '0392', '0220', '0231', '0542']
+related_tasks: ['0455', '0311', '0392', '0220', '0231', '0542', '0654']
 tags:
   [
     'enrichment',
@@ -15,6 +15,7 @@ tags:
     'priority-medium',
   ]
 links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/684'
   - crates/indexer/src/handler/mod.rs
   - crates/indexer/src/handler/enrichment_publish.rs
   - crates/db-clickhouse/src/persist/stage.rs
@@ -48,6 +49,19 @@ history:
       pools use for their own bookkeeping, so it fires on 33 non-token
       contracts and hides the case it exists for. Same subject (metadata we can
       or cannot read), so it rides here rather than in 0473.
+  - date: 2026-10-21
+    status: backlog
+    who: karolkow
+    note: >
+      Issue #684 (no NFT images for a mainnet collection) is defect 3: the
+      contract inlines its metadata as a `data:` URI. Linked here; the
+      issue-specific findings are in the section below.
+  - date: 2026-10-22
+    status: backlog
+    who: karolkow
+    note: >
+      The data: URI half of defect 3 moved to 0654 (issue #684). The gateway
+      half, the status column and the retry schedule stay here.
 ---
 
 # FEATURE: metadata enrichment consistency and retry
@@ -66,42 +80,11 @@ Four defects in the metadata path, one task:
 4. **The "token metadata we cannot read" warning fires 4 504 times a week**, every
    one of them a contract that is not a token.
 
-## Measured 2026-09-15/16 (production, read-only)
+## Measured
 
-**Defect 1 — one decision, two rules.** The parser treats any `mint(address,
-number)` as an NFT candidate: it cannot tell a token id from an amount without
-the contract's class. Staging decides with the class (`stage.rs` `route_for`:
-Token/Fungible → drop, Nft → `nfts`, other → `nfts_pending`, since task 0220).
-The enrichment producer (task 0231, a month later) queues the parser's raw
-candidates (`handler/mod.rs`, `batch_minted_nfts`) instead of what staging
-stored. Result: 53 239 `nft_enrichment` keys from Fungible contracts, none in
-`nfts`; ~5 200 `sentinel written` warnings/week, ~4 400 of them
-`token_uri` calls on contracts without that function (estimate from log lines).
-
-**Defect 2 — what a retry recovers.** Every empty row of a real NFT (2 916 of
-13 980 displayed: 2 055 all-empty, 861 with only a collection name) was
-re-fetched on a stratified sample of 558; every empty asset row (343 271,
-15 361 domains) in full, reproducing the worker's rules.
-
-|        | Empty today | Recovered by a retry now | Never fixable by retry                                                   |
-| ------ | ----------- | ------------------------ | ------------------------------------------------------------------------ |
-| NFTs   | 2 916       | ~22 (0.8%, extrapolated) | 94% — contract reverts (40%), empty `token_uri` (34%), `data:` URI (19%) |
-| Assets | 343 271     | 3 299 (1%)               | 78% no home domain, 13% dead DNS                                         |
-
-The recoverable failures were attempted 12–36 s after the NFT was minted or
-the asset first appeared; siblings minted minutes later were enriched fine —
-metadata published late. Going forward ~70 assets and ~2 NFTs per week
-(estimate). A 2026-07-02 manual `--retry-sentinels` pass recovered 809 of
-276 584 asset rows (0.29%); that flag skips the 861 half-empty NFT rows.
-
-**Defect 3.** All 90 sampled `data:` URIs decode to JSON with a name (~556
-NFTs). Both configured IPFS gateways answered 429 to every request (observed
-from a workstation, not from the Lambda — unverified there); stored
-`media_url` values on the same gateway are at risk.
-
-Also found: RPC "preflight queue full" is not on the transient list (an
-overloaded provider writes permanent empties); the SEP-1 fetch gives up at 2 s
-(339 assets answer only within 15 s).
+Production measurements behind the four defects (2026-09-15/16):
+`notes/R-measured-2026-09.md`. Issue #684, a collection whose metadata and
+image are both inline `data:` URIs: `notes/R-issue-684-inline-data-uri.md`.
 
 ## Implementation
 
@@ -120,7 +103,7 @@ routing decision, every consumer reads it (the 0542 principle applied to NFTs).
   TLS, timeout and "asset not listed in the toml yet". Never for contract
   reverts or malformed URIs. Issuers without a home domain are re-checked when
   the domain changes, not re-fetched.
-- Accept `data:application/json` URIs; replace the IPFS gateway; add
+- (`data:` URIs: task 0654.) Replace the IPFS gateway; add
   "preflight queue full" to the transient list; raise the SEP-1 timeout.
 - API maps the status: "no metadata" and "could not fetch" render differently
   (never an empty value that looks real).
@@ -154,6 +137,8 @@ cannot read.
 - [ ] Every enrichment row carries a status; no all-empty sentinel is written
 - [ ] Retry schedule exercised by a test; contract reverts are never retried
 - [ ] `data:` JSON URIs decode; the IPFS gateway answers from the Lambda
+- [ ] An inline `data:image/…` image renders on the NFT list and detail page
+      (the issue #684 contract is the test case)
 - [ ] After backfill: re-run the re-fetch measurement — recovered counts
       reported against the table above
 - [ ] The metadata warning fires only for contracts that really carry token

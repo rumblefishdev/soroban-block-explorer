@@ -5,6 +5,13 @@ import { useMemo, useState } from 'react';
 
 import 'prismjs/components/prism-rust';
 import 'prismjs/components/prism-wasm';
+// The files of a verified source archive (task 0639): a Cargo project.
+import 'prismjs/components/prism-toml';
+import 'prismjs/components/prism-json';
+import 'prismjs/components/prism-markdown';
+import 'prismjs/components/prism-makefile';
+
+import { displayText } from './hiddenCharacters.js';
 
 import type { Theme } from '@mui/material/styles';
 
@@ -16,6 +23,7 @@ import type { Theme } from '@mui/material/styles';
  * task-0465 mainnet sweep (max ~130 KB). Line numbers render regardless.
  */
 const HIGHLIGHT_LIMIT = 400_000;
+const NBSP_STAND_IN = '\uE000';
 
 /**
  * Above this line count the gutter (and with it the click-to-highlight
@@ -67,29 +75,59 @@ const tokenSx = (theme: Theme) => {
   };
 };
 
+/** Prism grammar names this viewer loads; `none` renders plain text. */
+export type CodeLanguage =
+  | 'rust'
+  | 'wasm'
+  | 'toml'
+  | 'json'
+  | 'markdown'
+  | 'makefile'
+  | 'none';
+
 /**
- * Scrollable source viewer: Prism-highlighted Rust/WAT, a sticky
- * line-number gutter (excluded from text selection so copied code stays
- * clean), and click-a-number line highlighting. Loaded lazily from
- * `ContractCode` so Prism stays out of the main bundle.
+ * Scrollable source viewer: Prism-highlighted code (Rust/WAT for the
+ * Decompilation tab, the files of a Cargo project for Verified Code), a
+ * sticky line-number gutter (excluded from text selection so copied code
+ * stays clean), and click-a-number line highlighting. Loaded lazily so
+ * Prism stays out of the main bundle.
  */
 export default function CodeHighlight({
   source,
   language,
+  height,
 }: {
   source: string;
-  language: 'rust' | 'wasm';
+  language: CodeLanguage;
+  /** Fixed height, so a file tree beside the viewer lines up with it;
+   *  unset, the viewer grows with the source up to 640 px. */
+  height?: number;
 }) {
   const [selectedLine, setSelectedLine] = useState<number | null>(null);
 
+  // Drawn with hidden characters made visible (see `displayText`).
+  const shown = useMemo(() => displayText(source), [source]);
+
   const html = useMemo(() => {
-    if (source.length > HIGHLIGHT_LIMIT) return null;
+    if (shown.length > HIGHLIGHT_LIMIT) return null;
     const grammar = Prism.languages[language];
     if (grammar == null) return null;
-    return Prism.highlight(source, grammar, language);
-  }, [source, language]);
+    // Prism's encoder turns a no-break space into a plain one; carry it
+    // through on a private-use stand-in instead (plain view if the text
+    // already holds one).
+    if (shown.includes(NBSP_STAND_IN)) return null;
+    return Prism.highlight(
+      shown.replaceAll('\u00A0', NBSP_STAND_IN),
+      grammar,
+      language
+    ).replaceAll(NBSP_STAND_IN, '\u00A0');
+  }, [shown, language]);
 
-  const lineCount = useMemo(() => source.split('\n').length, [source]);
+  // A final newline ends the last line; it does not start another.
+  const lineCount = useMemo(() => {
+    const lines = shown.split('\n').length;
+    return shown.endsWith('\n') && lines > 1 ? lines - 1 : lines;
+  }, [shown]);
   const showGutter = lineCount <= GUTTER_LIMIT;
 
   return (
@@ -99,7 +137,8 @@ export default function CodeHighlight({
         border: `1px solid ${theme.palette.stroke.default}`,
         backgroundColor: theme.palette.surface.grayMainAlt,
         overflow: 'auto',
-        maxHeight: 640,
+        maxHeight: height ?? 640,
+        ...(height != null && { height }),
         fontFamily: 'monospace',
         fontSize: 13,
         lineHeight: `${LINE_HEIGHT}px`,
@@ -166,7 +205,7 @@ export default function CodeHighlight({
           )}
           {html == null ? (
             <Box component="pre" sx={{ m: 0, font: 'inherit' }}>
-              {source}
+              {shown}
             </Box>
           ) : (
             // Prism escapes the input during tokenization, so the produced

@@ -16,6 +16,7 @@ import { validateConfig, type EnvironmentConfig } from '../lib/types.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const testnet = require('../../envs/testnet.json') as EnvironmentConfig;
+const production = require('../../envs/production.json') as EnvironmentConfig;
 
 type Resource = { Type: string; Properties: Record<string, unknown> };
 type Templates = Record<string, Record<string, Resource>>;
@@ -30,7 +31,7 @@ function synth(config: EnvironmentConfig): Templates {
   createApp({ config, cargoWorkspacePath: resolve(here, '../../..') });
   const templates: Templates = {};
   for (const file of readdirSync(out)) {
-    const match = /^Explorer-testnet-(\w+)\.template\.json$/.exec(file);
+    const match = /^Explorer-[a-z]+-(\w+)\.template\.json$/.exec(file);
     if (match?.[1]) {
       templates[match[1]] = JSON.parse(readFileSync(join(out, file), 'utf8'))
         .Resources as Record<string, Resource>;
@@ -93,6 +94,43 @@ describe('testnet environment', () => {
     expect(env['testnet-soroban-explorer-api']?.['PUBLIC_ARCHIVE_PREFIX']).toBe(
       testnet.publicArchivePrefix
     );
+  });
+
+  it('gives only the API the verifier service (task 0639)', () => {
+    const env: Record<string, Record<string, string>> = Object.fromEntries(
+      ofType('Compute', 'AWS::Lambda::Function').map((f) => [
+        f.Properties['FunctionName'] as string,
+        (f.Properties['Environment'] as { Variables: Record<string, string> })
+          .Variables,
+      ])
+    );
+    for (const [name, vars] of Object.entries(env)) {
+      expect(vars['SOURCE_VERIFICATION_API_URL']).toBe(
+        name === 'testnet-soroban-explorer-api'
+          ? testnet.sourceVerificationApiUrl
+          : undefined
+      );
+    }
+    expect(testnet.sourceVerificationApiUrl).toMatch(/^https:\/\//);
+  });
+
+  it('gives production no verifier service (task 0639)', () => {
+    const functions = ofType(
+      'Compute',
+      'AWS::Lambda::Function',
+      synth(production)
+    );
+    const api = functions.find(
+      (f) => f.Properties['FunctionName'] === 'production-soroban-explorer-api'
+    );
+    expect(api).toBeDefined();
+    for (const f of functions) {
+      const env = f.Properties['Environment'] as
+        | { Variables: Record<string, string> }
+        | undefined;
+      if (env === undefined) continue;
+      expect(env.Variables['SOURCE_VERIFICATION_API_URL']).toBeUndefined();
+    }
   });
 
   it('paused: no queue consumer, no keepalive', () => {

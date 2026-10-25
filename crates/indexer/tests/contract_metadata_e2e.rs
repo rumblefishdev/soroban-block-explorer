@@ -107,7 +107,6 @@ async fn a_changed_instance_yields_metadata_from_its_functions() {
     let ledger = Ledger {
         sequence: 64_818_615,
         timestamp: 1_791_380_000,
-        protocol_version: 29,
         network_id: [0; 32],
     };
 
@@ -173,7 +172,6 @@ async fn real_ledgers_print_live_writes() {
         let ledger = Ledger {
             sequence: parsed.ledger.sequence,
             timestamp: parsed.ledger.closed_at as u64,
-            protocol_version: parsed.ledger.protocol_version,
             network_id: xdr_parser::sac::network_id(xdr_parser::MAINNET_PASSPHRASE),
         };
         let writes =

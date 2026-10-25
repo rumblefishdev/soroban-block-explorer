@@ -73,6 +73,14 @@ export interface EnvironmentConfig {
    */
   readonly publicArchivePrefix?: string;
   /**
+   * Base URL of the source-verification Query API (task 0639), e.g.
+   * `https://staging.sv.blocksmith.co/api/query/v1`. The API Lambda receives
+   * it as `SOURCE_VERIFICATION_API_URL`. Unset: the network has no verifier
+   * service: `/verification` answers `unavailable`, `/verified-source` 404,
+   * and the page shows no Verified Code tab.
+   */
+  readonly sourceVerificationApiUrl?: string;
+  /**
    * ClickHouse database of this environment, passed to all three Lambdas as
    * `CLICKHOUSE_DATABASE`. Unset: they use `default`.
    */

@@ -99,6 +99,38 @@ fn extract_columns_replaces_unsafe_image_with_sentinel() {
     assert_eq!(collection, "X");
 }
 
+#[test]
+fn extract_columns_keeps_an_inline_image() {
+    // Stroopies (CDC5ZX…JFGB) inlines its art; ~5.2 KB, under the 8 KB cap.
+    let svg = format!(
+        "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>{}</svg>",
+        "<rect width='64' height='64' fill='rgb(47,47,50)'/>".repeat(100)
+    );
+    let png = "data:image/png;base64,iVBORw0KGgo=";
+    for image in [
+        svg.as_str(),
+        png,
+        "data:image/jpeg;base64,/9j/",
+        "data:image/gif;base64,R0lG",
+        "data:image/webp;base64,UklG",
+    ] {
+        let (_, stored, _) = extract_columns(&json!({ "name": "Stroopies 0", "image": image }));
+        assert_eq!(stored, image);
+    }
+}
+
+#[test]
+fn extract_columns_refuses_other_inline_types() {
+    for image in [
+        "data:text/html,<script>alert(1)</script>",
+        "data:image/bmp;base64,Qk0=",
+        "data:application/json,{}",
+    ] {
+        let (_, stored, _) = extract_columns(&json!({ "name": "X", "image": image }));
+        assert_eq!(stored, "", "{image}");
+    }
+}
+
 /// CH-backed end-to-end smoke (task 0231 step 5): the full nft write path
 /// against a live local ClickHouse — `soroban_contracts` StrKey lookup →
 /// live `token_uri()` RPC (+ metadata fetch) → INSERT → read back. Covers

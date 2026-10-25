@@ -10,6 +10,7 @@ import {
   isPoolIdentifier,
   isTransactionHash,
 } from '../validators.js';
+import { getIdentifierHref } from '../routes.js';
 
 const VALID_ACCOUNT =
   'GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOUJ3K4MOMNGEE36';
@@ -142,8 +143,24 @@ describe('addressType', () => {
     expect(addressType(VALID_POOL)).toBe('pool');
   });
 
+  it('names the page of the address a muxed key stands for', () => {
+    // An account with sub-account id 3539365402, a contract with id 42.
+    const m =
+      'MD5SL5RIC5STHGDDOJGSIIZHZZQPA4HIYFEPIQ3FF7M3H2F5VQ7K2AAAAAANF5TODJEYA';
+    const w =
+      'WDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIAAAAAAAAAAAFLR56';
+    expect(addressType(m)).toBe('account');
+    expect(addressType(w)).toBe('contract');
+    expect(getIdentifierHref('account', m)).toBe(
+      '/accounts/GD5SL5RIC5STHGDDOJGSIIZHZZQPA4HIYFEPIQ3FF7M3H2F5VQ7K2FTL'
+    );
+    expect(getIdentifierHref('contract', w)).toBe(
+      '/contracts/CDL74RF5BLYR2YBLCCI7F5FB6TPSCLKEJUBSD2RSVWZ4YHF3VMFAIGWA'
+    );
+  });
+
   it('links nothing without a page of its own', () => {
-    // A muxed account and a claimable balance are StrKeys with no route.
+    // A malformed muxed key and a claimable balance have no route.
     expect(addressType('M' + VALID_ACCOUNT.slice(1))).toBeNull();
     expect(addressType('B' + VALID_ACCOUNT.slice(1))).toBeNull();
     expect(addressType('USDC')).toBeNull();

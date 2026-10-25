@@ -98,6 +98,12 @@ touched. Re-running on partially-populated rows after a producer
 re-publish is the live worker's job, not the backfill's. Use
 `--force-retry` if you want to re-walk everything regardless.
 
+**`nft-metadata --retry-sentinels`** walks NFTs in `nfts` whose enrichment row
+has an empty `name` and `media_url`, whatever `collection_name` holds: the
+collection name is stamped from the contract's `name()` on its own path, so a
+row the `token_uri` fetch found nothing for may still carry it. Keys of
+contracts that are not in `nfts` are not retried.
+
 `--force-retry` drops the standard filter entirely and walks every row
 in the target table (γ-semantics per task 0196):
 

@@ -124,7 +124,7 @@ async fn fetch_contract_list_for_source(
     path = "/contracts/{contract_id}",
     tag = "contracts",
     params(
-        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)"),
+        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)"),
     ),
     responses(
         (status = 200, description = "Contract detail", body = ContractDetailResponse),
@@ -137,9 +137,10 @@ pub async fn get_contract(
     State(state): State<AppState>,
     Path(contract_id): Path<String>,
 ) -> Response {
-    if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
-        return resp;
-    }
+    let contract_id = match path::contract_id(&contract_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
 
     if let Some(cached) = state.contract_cache.get(&contract_id) {
         let mut resp = Json(cached).into_response();
@@ -196,7 +197,7 @@ pub async fn get_contract(
     path = "/contracts/{contract_id}/interface",
     tag = "contracts",
     params(
-        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)"),
+        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)"),
     ),
     responses(
         (status = 200, description = "Public function signatures", body = InterfaceResponse),
@@ -209,9 +210,10 @@ pub async fn get_interface(
     State(state): State<AppState>,
     Path(contract_id): Path<String>,
 ) -> Response {
-    if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
-        return resp;
-    }
+    let contract_id = match path::contract_id(&contract_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
 
     // 200 + interface_metadata=null for SAC / pre-upload / stub-only;
     // 404 only when the contract row itself is missing.
@@ -261,7 +263,7 @@ pub async fn get_interface(
     path = "/contracts/{contract_id}/invocations",
     tag = "contracts",
     params(
-        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)"),
+        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)"),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20). One DB appearance row maps to\none `InvocationItem` (no expansion), so `data.len() <= limit`.",
          minimum = 1, maximum = 100),
@@ -281,9 +283,10 @@ pub async fn list_invocations(
     pagination: Pagination<TxListCursor>,
     Path(contract_id): Path<String>,
 ) -> Response {
-    if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
-        return resp;
-    }
+    let contract_id = match path::contract_id(&contract_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
 
     let contract = match fetch_contract_for_source(&state, &contract_id).await {
         Ok(Some(c)) => c,
@@ -344,7 +347,7 @@ pub async fn list_invocations(
     path = "/contracts/{contract_id}/events",
     tag = "contracts",
     params(
-        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)"),
+        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)"),
         ("limit" = Option<u32>, Query,
          description = "Items per page (1–100, default 20). The page is per event\n(one row → one item), so `data.len() <= limit`.",
          minimum = 1, maximum = 100),
@@ -364,9 +367,10 @@ pub async fn list_events(
     pagination: Pagination<EventCursor>,
     Path(contract_id): Path<String>,
 ) -> Response {
-    if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
-        return resp;
-    }
+    let contract_id = match path::contract_id(&contract_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
 
     let contract = match fetch_contract_for_source(&state, &contract_id).await {
         Ok(Some(c)) => c,
@@ -494,7 +498,7 @@ const DECOMPILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10
     path = "/contracts/{contract_id}/decompiled",
     tag = "contracts",
     params(
-        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars)"),
+        ("contract_id" = String, Path, description = "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)"),
         DecompiledParams,
     ),
     responses(
@@ -509,9 +513,10 @@ pub async fn get_decompiled(
     Path(contract_id): Path<String>,
     Query(params): Query<DecompiledParams>,
 ) -> Response {
-    if let Err(resp) = path::strkey(&contract_id, 'C', "contract_id") {
-        return resp;
-    }
+    let contract_id = match path::contract_id(&contract_id) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let want_wat = match params.format.as_deref() {
         None | Some("rust") => false,
         Some("wat") => true,

@@ -62,7 +62,6 @@ pub async fn contract_metadata_writes(
     let ledger = Ledger {
         sequence: parsed.ledger.sequence,
         timestamp: parsed.ledger.closed_at as u64,
-        protocol_version: parsed.ledger.protocol_version,
         network_id: *crate::handler::process::network_id(),
     };
     ledger_metadata_writes(

@@ -81,6 +81,35 @@ pub(crate) fn pool_id_from_text(raw: &str) -> Option<String> {
     }
 }
 
+/// The contract a `W…` names: a contract with a sub-account id (CAP-0084) is
+/// that contract. `None` for anything that is not a valid `W…` (CRC checked).
+pub(crate) fn contract_of_muxed(value: &str) -> Option<String> {
+    match stellar_strkey::Strkey::from_string(value) {
+        Ok(stellar_strkey::Strkey::MuxedContract(m)) => Some(
+            stellar_strkey::Contract(m.contract_id)
+                .to_string()
+                .as_str()
+                .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
+/// The account an `M…` names: an account with a sub-account id (SEP-23
+/// muxed account) is that account. `None` for anything that is not a valid
+/// `M…` (CRC checked).
+pub(crate) fn account_of_muxed(value: &str) -> Option<String> {
+    match stellar_strkey::Strkey::from_string(value) {
+        Ok(stellar_strkey::Strkey::MuxedAccountEd25519(m)) => Some(
+            stellar_strkey::ed25519::PublicKey(m.ed25519)
+                .to_string()
+                .as_str()
+                .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
 /// A pool row's stored `pool_kind`, decoded ONCE where it leaves the database;
 /// everything downstream holds a [`domain::PoolKind`].
 ///

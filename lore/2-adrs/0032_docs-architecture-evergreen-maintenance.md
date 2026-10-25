@@ -1,7 +1,7 @@
 ---
 id: '0032'
 title: '`docs/architecture/**` becomes evergreen — maintained in sync with ADRs'
-status: proposed
+status: accepted
 deciders: [stkrolikiewicz]
 related_tasks: ['0154', '0155']
 related_adrs:
@@ -50,6 +50,16 @@ history:
       iteration, or we commit to keeping them up to date. This ADR
       captures the latter decision and the process that makes it
       sustainable.
+  - date: '2026-10-15'
+    status: accepted
+    who: karolkow
+    note: >
+      Accepted on the evidence that it is already the working rule: its only
+      follow-up, the one-shot catch-up of task 0155, is completed, and
+      `docs/architecture/**` took 360 commits in the last 90 days. Both the
+      ADR and the task template carry the docs checklist, and the root
+      CLAUDE.md states the rule. The status was the last thing left at
+      `proposed`.
 ---
 
 # ADR 0032: `docs/architecture/**` becomes evergreen — maintained in sync with ADRs

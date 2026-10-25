@@ -51,8 +51,7 @@ use crate::sac::derive_sac_contract_id;
 /// non-SAC preimages (`Address(salt)`) because the hash input only cares
 /// about the preimage XDR, not the variant.
 ///
-/// Mirrors the shape of `crate::sac::extract_sac_identities` and is
-/// expected to be `collect()`-ed into a `HashMap<String, String>` at the
+/// Expected to be `collect()`-ed into a `HashMap<String, String>` at the
 /// indexer call site — see `crates/indexer/src/handler/process.rs`.
 pub fn extract_op_source_per_contract(
     envelope: &InnerTxRef<'_>,
@@ -140,16 +139,15 @@ fn credentials_signer(creds: &SorobanCredentials, effective_op_source: &str) -> 
         ScAddress::MuxedAccount(med) => {
             Some(stellar_xdr::MuxedAccount::Ed25519(med.ed25519.clone()).to_string())
         }
-        ScAddress::Contract(_) | ScAddress::ClaimableBalance(_) | ScAddress::LiquidityPool(_) => {
-            None
-        }
+        ScAddress::Contract(_)
+        | ScAddress::ClaimableBalance(_)
+        | ScAddress::LiquidityPool(_)
+        | ScAddress::MuxedContract(_) => None,
     }
 }
 
 /// Walk an auth invocation tree, pushing `(contract_id, signer)` for every
-/// `CreateContractHostFn` / `CreateContractV2HostFn` node. Mirrors
-/// `crate::sac::walk_auth_node` but emits the auth signer rather than the
-/// SAC asset identity.
+/// `CreateContractHostFn` / `CreateContractV2HostFn` node.
 fn walk_auth_for_creates(
     node: &SorobanAuthorizedInvocation,
     signer: &str,

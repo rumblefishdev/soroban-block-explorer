@@ -26,8 +26,10 @@ The session start hook auto-generates `current-user.md` on startup.
 
 ## Manual Setup
 
-Use MCP tools:
-- `lore_set-user` — Set current user
-- `lore_set-task` — Set current task by ID
-- `lore_list-users` — List available users
-- `lore_show-session` — Show current session state
+Use the `lore-framework` plugin's MCP tools. Each is listed to an agent under
+its full name, `mcp__plugin_lore-framework_lore-framework__lore-framework_<verb>`
+— the short names below are this repo's shorthand, not callable as written:
+- `set-user` — Set current user
+- `set-task` — Set current task by ID
+- `list-users` — List available users
+- `show-session` — Show current session state

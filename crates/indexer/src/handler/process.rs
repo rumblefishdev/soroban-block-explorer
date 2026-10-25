@@ -203,28 +203,33 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         let envelope = envelopes.get(tx_index).and_then(Option::as_ref);
         let tx_meta = tx_metas.get(tx_index).copied();
 
-        if let Some(env) = envelope {
+        let ops = envelope.map(|env| {
             let inner = xdr_parser::envelope::inner_transaction(env);
             let op_results = tx_results
                 .get(tx_index)
                 .and_then(|r| xdr_parser::tx_op_results(r));
-            let ops = xdr_parser::extract_operations(
+            xdr_parser::extract_operations(
                 &inner,
                 tx_meta,
                 op_results,
                 &ext_tx.hash,
                 ledger_sequence,
                 tx_index,
-            );
-            all_operations.push((ext_tx.hash.clone(), ops));
-        }
+            )
+        });
 
         if let Some(tm) = tx_meta {
             // Consensus events only: nothing here reads the debug channel.
             let events = ledger_events.extract(tx_index, &ext_tx.hash).events;
             let nft_events = xdr_parser::detect_nft_events(&events, net_id);
             all_nft_events.extend(nft_events);
-            let edges = xdr_parser::extract_asset_transfers(&events, net_id);
+            let edges = xdr_parser::extract_asset_transfers(
+                &events,
+                ops.as_deref().unwrap_or_default(),
+                &ext_tx.source_account,
+                ext_tx.source_muxed_id,
+                net_id,
+            );
             transfer_rejects.absorb(edges.reject_counts());
             all_asset_transfers.extend(edges.transfers);
             all_events.push((ext_tx.hash.clone(), events));
@@ -264,6 +269,10 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
                 changes,
             ));
         }
+
+        if let Some(ops) = ops {
+            all_operations.push((ext_tx.hash.clone(), ops));
+        }
     }
 
     let mut all_contract_deployments = Vec::new();
@@ -273,23 +282,10 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
     let mut all_assets = Vec::new();
     let mut all_lp_positions = Vec::new();
 
-    let sac_identity_by_contract: HashMap<String, xdr_parser::SacAssetIdentity> =
-        extracted_transactions
-            .iter()
-            .enumerate()
-            .filter(|(_, ext_tx)| !ext_tx.parse_error)
-            .filter_map(|(tx_index, _)| envelopes.get(tx_index).and_then(Option::as_ref))
-            .flat_map(|env| {
-                let inner = xdr_parser::envelope::inner_transaction(env);
-                xdr_parser::extract_sac_identities(&inner, net_id)
-            })
-            .collect();
-
     // Task 0255 Phase 1 — per-contract op-source override for the deployer
-    // attribution path. Mirrors the SAC walker shape: walks every successful
-    // envelope, collects `(contract_id, deployer_strkey)` pairs from
-    // top-level `CreateContract*` ops AND nested `CreateContractHostFn`
-    // auth entries. The map drives `extract_contract_deployments`'s
+    // attribution path. Walks every successful envelope, collects
+    // `(contract_id, deployer_strkey)` pairs from top-level `CreateContract*`
+    // ops AND nested `CreateContractHostFn` auth entries. The map drives `extract_contract_deployments`'s
     // `deployer_account` fallback — present entries override the tx
     // source, absent entries inherit it (the ~88 % of mainnet deploys
     // with no per-op source override).
@@ -316,7 +312,7 @@ pub fn parse_ledger(meta: &LedgerCloseMeta) -> ParseOutput {
         let deployments = xdr_parser::extract_contract_deployments(
             changes,
             tx_source,
-            &sac_identity_by_contract,
+            net_id,
             &deployer_by_contract,
         );
         // detect_assets uses WASM interfaces to classify non-SAC deployments

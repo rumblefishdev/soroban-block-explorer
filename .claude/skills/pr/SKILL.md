@@ -13,7 +13,7 @@ Create a GitHub PR with title and body derived from the active lore task and git
 
 Read `lore/0-session/current-task.md` (follows symlink). Parse YAML frontmatter to extract `id`, `title`, and `type`.
 
-If no active task exists, **STOP** and ask the user to set one with `lore_set-task`.
+If no active task exists, **STOP** and ask the user to set one with the `lore-framework` plugin's `set-task` MCP tool.
 
 ### 2. Determine PR title
 

@@ -59,6 +59,23 @@ fn event(
     }
 }
 
+/// Decode `events` as a Soroban call by `G1`: operation 0 invokes a host
+/// function, so a recipient's id comes from the event itself.
+fn extract(events: &[ExtractedEvent]) -> AssetTransferExtraction {
+    let invoke = ExtractedOperation {
+        transaction_hash: "ab".repeat(32),
+        operation_index: 0,
+        op_type: domain::OperationType::InvokeHostFunction,
+        source_account: None,
+        details: json!({}),
+        asset_appearances: Vec::new(),
+        counterparties: Vec::new(),
+        source_muxed_id: None,
+        destination_muxed_id: None,
+    };
+    extract_asset_transfers(events, &[invoke], G1, None, &net())
+}
+
 fn event_id(op: Option<(u16, u32)>) -> EventId {
     let (transaction_index, (operation_index, event_index)) = match op {
         Some(op) => (1, op),
@@ -134,7 +151,7 @@ fn sep50_mint_cannot_credit_the_token_number_as_an_amount() {
         })),
         Some((0, 0)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.rejects.is_empty());
     assert_eq!(out.transfers.len(), 1);
     assert_eq!(out.transfers[0].to.as_deref(), Some(G2));
@@ -230,7 +247,7 @@ fn native_transfer_from_the_real_xlm_sac_is_a_row() {
         ]),
         Some((0, 0)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.rejects.is_empty(), "{:?}", out.rejects);
     assert_eq!(
         out.transfers,
@@ -244,6 +261,8 @@ fn native_transfer_from_the_real_xlm_sac_is_a_row() {
             asset: EventAsset::Native,
             emitter: xlm_sac,
             amount: Some(10_000),
+            from_muxed_id: None,
+            to_muxed_id: Some(3_539_365_402),
         }]
     );
 }
@@ -261,7 +280,7 @@ fn credit_asset_from_its_own_sac_passes_the_gate() {
         i128v("39298327"),
         Some((0, 0)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.rejects.is_empty(), "{:?}", out.rejects);
     let t = &out.transfers[0];
     assert_eq!(t.kind, TokenEventKind::Mint);
@@ -291,7 +310,7 @@ fn a_foreign_contract_claiming_a_labelled_asset_is_rejected_not_stored() {
         i128v("1"),
         Some((0, 0)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.transfers.is_empty());
     assert_eq!(
         out.rejects,
@@ -314,7 +333,7 @@ fn bespoke_token_is_its_own_asset_and_needs_no_gate() {
         i128v("500"),
         Some((2, 5)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.rejects.is_empty());
     let t = &out.transfers[0];
     assert_eq!(t.asset, EventAsset::Bespoke);
@@ -330,7 +349,7 @@ fn non_fungible_movement_is_a_row_with_no_amount() {
         map(vec![("token_id", json!({ "type": "u32", "value": 942 }))]),
         Some((0, 1)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.rejects.is_empty());
     assert_eq!(out.transfers[0].kind, TokenEventKind::Burn);
     assert_eq!(out.transfers[0].amount, None);
@@ -351,7 +370,7 @@ fn restated_mint_is_rejected_and_counted_never_a_phantom_row() {
         ]),
         Some((0, 13)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.transfers.is_empty());
     assert!(matches!(
         out.rejects.as_slice(),
@@ -368,7 +387,7 @@ fn non_token_events_are_skipped_silently() {
         json!({ "type": "void" }),
         Some((0, 0)),
     );
-    let out = extract_asset_transfers(&[fn_call], &net());
+    let out = extract(&[fn_call]);
     assert!(out.transfers.is_empty());
     assert!(out.rejects.is_empty());
 }
@@ -381,7 +400,7 @@ fn a_token_verb_outside_an_operation_is_a_reject() {
         i128v("500"),
         None,
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.transfers.is_empty());
     assert!(matches!(
         out.rejects.as_slice(),
@@ -410,7 +429,7 @@ fn sep41_mint_with_admin_credits_the_recipient_not_the_admin() {
         i128v("11368693905"),
         Some((0, 3)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.rejects.is_empty());
     let [t] = out.transfers.as_slice() else {
         panic!("expected one transfer, got {:?}", out.transfers);
@@ -434,7 +453,7 @@ fn a_token_verb_in_an_unknown_topic_shape_is_a_reject_not_silence() {
         map(vec![("amount", i128v("5")), ("amount0", i128v("1"))]),
         Some((0, 0)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.transfers.is_empty());
     assert!(matches!(
         out.rejects.as_slice(),
@@ -460,7 +479,7 @@ fn a_token_verb_without_an_emitter_is_a_reject() {
         i128v("500"),
         Some((0, 0)),
     );
-    let out = extract_asset_transfers(&[ev], &net());
+    let out = extract(&[ev]);
     assert!(out.transfers.is_empty());
     assert!(matches!(
         out.rejects.as_slice(),
@@ -471,4 +490,23 @@ fn a_token_verb_without_an_emitter_is_a_reject() {
         }]
     ));
     assert_eq!(out.reject_counts().no_emitter, 1);
+}
+
+/// CAP-67: a classic payment forwards a text memo as a string `to_muxed_id`;
+/// only a `u64` can be a sub-account id.
+#[test]
+fn a_text_to_muxed_id_is_not_an_id() {
+    let xlm_sac = derive_sac_strkey("", "", &net()).expect("native SAC derives");
+    let ev = event(
+        Some(&xlm_sac),
+        vec![sym("transfer"), addr(G1), addr(G2), string("native")],
+        map(vec![
+            ("amount", i128v("10000")),
+            ("to_muxed_id", string("drip faucet")),
+        ]),
+        Some((0, 0)),
+    );
+    let out = extract(&[ev]);
+    assert_eq!(out.transfers[0].to_muxed_id, None);
+    assert_eq!(out.transfers[0].amount, Some(10_000));
 }

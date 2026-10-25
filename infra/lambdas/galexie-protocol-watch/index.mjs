@@ -1,7 +1,11 @@
-// Galexie protocol watch (task 0610): every 3 hours, compare the captive-core
-// version of the Galexie that runs with the newest Galexie on Docker Hub. A
-// newer core there — and any read that fails — throws, and the alarm on this
-// function's Errors goes to Slack. The reason is in the log.
+// Protocol watch, every 3 hours, two checks:
+//   - Galexie (task 0610): the captive-core version of the Galexie that runs
+//     against the newest Galexie on Docker Hub;
+//   - stellar-xdr (task 0646): the major the running indexer was built with
+//     against the protocol Horizon says core supports, and crates.io.
+// Either one finding something to do — or failing to read — makes the run
+// throw, and the alarm on this function's Errors goes to Slack. Both reasons
+// are in the log.
 //
 // The AWS SDK v3 comes with the Lambda Node.js runtime; nothing is bundled.
 import {
@@ -14,8 +18,18 @@ import {
   DescribeServicesCommand,
   DescribeTaskDefinitionCommand,
 } from '@aws-sdk/client-ecs';
+import {
+  LambdaClient,
+  GetFunctionConfigurationCommand,
+} from '@aws-sdk/client-lambda';
 
 import { coreVersion, verdict } from './check.mjs';
+import {
+  networkProtocol,
+  requiredVersion,
+  stableVersions,
+  xdrVerdict,
+} from './xdr.mjs';
 
 const MANIFEST_TYPES = [
   'application/vnd.docker.distribution.manifest.list.v2+json',
@@ -27,6 +41,7 @@ const HUB_REPO = 'stellar/stellar-galexie';
 
 const ecs = new ECSClient({});
 const ecr = new ECRClient({});
+const lambda = new LambdaClient({});
 
 async function getJson(url, headers = {}) {
   // Without the query string: an ECR download URL carries its signature there.
@@ -152,18 +167,90 @@ async function newestOnHub() {
   return { tag, ...(await coreVersion(await hubRegistry(), tag)) };
 }
 
-export async function handler() {
+async function galexieCheck() {
   const image = await runningImage();
   const ours = await coreVersion(
     ecrRegistry(image.repository),
     image.reference
   );
-  const newest = await newestOnHub();
-  const result = verdict({ ours, newest });
+  return verdict({ ours, newest: await newestOnHub() });
+}
 
-  console.log(result.message);
-  if (!result.ok) {
-    throw new Error(result.message);
+/** The stellar-xdr major the deployed indexer was built with. */
+async function indexerXdrMajor() {
+  const config = await lambda.send(
+    new GetFunctionConfigurationCommand({
+      FunctionName: process.env.INDEXER_FUNCTION_NAME,
+    })
+  );
+  const value = config.Environment?.Variables?.STELLAR_XDR_MAJOR;
+  if (!/^\d+$/.test(value ?? '')) {
+    throw new Error(
+      `cannot determine: ${process.env.INDEXER_FUNCTION_NAME} has STELLAR_XDR_MAJOR=${value}`
+    );
   }
-  return result.message;
+  return Number(value);
+}
+
+const CRATES = 'https://crates.io/api/v1/crates';
+// crates.io refuses requests without a User-Agent.
+const CRATES_HEADERS = {
+  'user-agent':
+    'soroban-block-explorer protocol watch (github.com/rumblefishdev/soroban-block-explorer)',
+};
+
+/**
+ * soroban-env-host releases, newest first, with the stellar-xdr major each is
+ * built on, down to the first one not newer than ours. A host reaches
+ * stellar-xdr through soroban-env-common, which ships with it under the same
+ * number and is pinned by it exactly (env-host 30.0.0 → env-common =30.0.0 →
+ * stellar-xdr =30.0.0; so for every stable release 25–30 on 2026-10-19), so
+ * env-common's own listing stands for env-host's. One read per release.
+ */
+async function hostReleases(pinned) {
+  const hosts = [];
+  const listing = await getJson(`${CRATES}/soroban-env-common`, CRATES_HEADERS);
+  for (const num of stableVersions(listing)) {
+    const xdr = requiredVersion(
+      await getJson(
+        `${CRATES}/soroban-env-common/${num}/dependencies`,
+        CRATES_HEADERS
+      ),
+      'stellar-xdr'
+    );
+    hosts.push({ num, xdr: Number(xdr.split('.')[0]) });
+    if (hosts.at(-1).xdr <= pinned) break;
+  }
+  return hosts;
+}
+
+async function xdrCheck() {
+  const pinned = await indexerXdrMajor();
+  const network = networkProtocol(
+    await getJson('https://horizon.stellar.org/')
+  );
+  const lags = pinned < network.current || pinned < network.supported;
+  const hosts = lags ? await hostReleases(pinned) : null;
+  return xdrVerdict({ pinned, network, hosts });
+}
+
+/** A check that throws counts as one that could not check: not ok. */
+async function run(check) {
+  try {
+    return await check();
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+
+export async function handler() {
+  // Both checks run even when one fails, so one log line says it all.
+  const results = [await run(galexieCheck), await run(xdrCheck)];
+  const message = results.map((r) => r.message).join('\n');
+
+  console.log(message);
+  if (results.some((r) => !r.ok)) {
+    throw new Error(message);
+  }
+  return message;
 }

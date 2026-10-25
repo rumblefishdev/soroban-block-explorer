@@ -2,7 +2,7 @@
 //!
 //! A token's `decimals`, `name` and `symbol` are whatever its own functions
 //! return, wherever the author chose to keep them. This crate runs such a
-//! function with the network's own host library (`soroban-env-host`, the code
+//! function with the official host library (`soroban-env-host`, the code
 //! validators run) over ledger entries the caller supplies: the program's
 //! bytes, the contract's instance, and anything else the run turns out to
 //! need. Nothing here talks to the network.
@@ -33,7 +33,6 @@ pub struct Ledger {
     pub sequence: u32,
     /// Close time, Unix seconds.
     pub timestamp: u64,
-    pub protocol_version: u32,
     /// `sha256` of the network passphrase.
     pub network_id: [u8; 32],
 }
@@ -85,8 +84,14 @@ pub fn call_view(
     let source = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])));
     // Reserve and TTL settings are read only by calls that create or extend
     // entries; a read-only call leaves them at their defaults.
+    //
+    // The host runs only a ledger of its own protocol and refuses any other,
+    // so that a contract is never replayed with another protocol's execution
+    // costs. A read-only call is not charged for those costs, so every ledger
+    // runs at the host's protocol: one host answers before a protocol vote
+    // and after it.
     let ledger_info = LedgerInfo {
-        protocol_version: ledger.protocol_version,
+        protocol_version: soroban_env_host::meta::INTERFACE_VERSION.protocol,
         sequence_number: ledger.sequence,
         timestamp: ledger.timestamp,
         network_id: ledger.network_id,

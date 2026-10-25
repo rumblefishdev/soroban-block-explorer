@@ -179,7 +179,7 @@
           {
             "name": "account_id",
             "in": "path",
-            "description": "Stellar account StrKey (G…, 56 chars)",
+            "description": "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)",
             "required": true,
             "schema": {
               "type": "string"
@@ -238,7 +238,7 @@
           {
             "name": "account_id",
             "in": "path",
-            "description": "Stellar account StrKey (G…, 56 chars)",
+            "description": "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)",
             "required": true,
             "schema": {
               "type": "string"
@@ -298,7 +298,7 @@
           {
             "name": "account_id",
             "in": "path",
-            "description": "Stellar account StrKey (G…, 56 chars)",
+            "description": "Stellar account StrKey (G…, 56 chars), or the same account with a sub-account id (M…, 69 chars)",
             "required": true,
             "schema": {
               "type": "string"
@@ -694,7 +694,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -755,7 +755,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -823,7 +823,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -903,7 +903,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -962,7 +962,7 @@
           {
             "name": "contract_id",
             "in": "path",
-            "description": "Contract StrKey (C…, 56 chars)",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
             "required": true,
             "schema": {
               "type": "string"
@@ -1023,6 +1023,128 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contracts/{contract_id}/verification": {
+      "get": {
+        "tags": ["contracts"],
+        "summary": "What independent verifiers say about the contract's current Wasm.",
+        "description": "Read from the verifier aggregator on request. `unavailable` on a network\nwithout a verifier service; 404 for an unknown contract and for one\nwithout Wasm.",
+        "operationId": "get_verification",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceVerificationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Contract not found, or no WASM",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Verification service unreadable or archive unusable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/contracts/{contract_id}/verified-source": {
+      "get": {
+        "tags": ["contracts"],
+        "summary": "The shown record's source archive, downloaded from the verifier's own\nhost, checked against its published sha256 and unpacked.",
+        "description": "Only for `verified`: source that did not reproduce the on-chain code\n(`mismatched`, `disputed`) is not served, and the page shows none of it.\n404 for every other status and when no source is published.",
+        "operationId": "get_verified_source",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "description": "Contract StrKey (C…, 56 chars), or the same contract with a sub-account id (W…, 69 chars, CAP-0084)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unpacked source archive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifiedSourceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid contract_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No verifier service, contract or WASM, or no published source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Verification service unreadable or archive failed its checks",
             "content": {
               "application/json": {
                 "schema": {
@@ -1975,7 +2097,7 @@
           {
             "name": "filter[source_account]",
             "in": "query",
-            "description": "Filter by source account StrKey (G…).",
+            "description": "Filter by source account StrKey (G…, or M… for the same account with a\nsub-account id).",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -1984,7 +2106,7 @@
           {
             "name": "filter[contract_id]",
             "in": "query",
-            "description": "Filter by contract StrKey (C…) — matches root op, nested call, or event emission.",
+            "description": "Filter by contract StrKey (C…, or W… for the same contract with a\nsub-account id) — matches root op, nested call, or event emission.",
             "required": false,
             "schema": {
               "type": ["string", "null"]
@@ -2681,6 +2803,46 @@
           },
           "successful": {
             "type": "boolean"
+          }
+        }
+      },
+      "BuildRecipe": {
+        "type": "object",
+        "required": ["options", "arguments"],
+        "properties": {
+          "arguments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Build arguments, in order (`bldarg`; empty means `contract build`)."
+          },
+          "image": {
+            "type": ["string", "null"],
+            "description": "Build image, pinned by digest (`bldimg`)."
+          },
+          "manifest_path": {
+            "type": ["string", "null"],
+            "description": "Cargo manifest inside the archive (`--manifest-path`)."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Build options as the verifier recorded them (`bldopt`)."
+          },
+          "package": {
+            "type": ["string", "null"],
+            "description": "Cargo package the verifier built (`--package`)."
+          },
+          "report_url": {
+            "type": ["string", "null"],
+            "description": "The verifier's full report, when it publishes one."
+          },
+          "verified_at": {
+            "type": ["string", "null"],
+            "description": "When the verifier processed the build (RFC 3339)."
           }
         }
       },
@@ -5002,6 +5164,74 @@
           }
         }
       },
+      "SourceVerificationResponse": {
+        "type": "object",
+        "description": "Response of `GET /v1/contracts/{contract_id}/verification` (task 0639).\n\nWhat independent verifiers say about the contract's current Wasm, read\nfrom a verifier aggregator (BlockSmith Query API) on request. `status` is\nthe one branch the page needs; `source` and `build` describe the record\nit shows.",
+        "required": ["contract_id", "status", "verifiers"],
+        "properties": {
+          "build": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BuildRecipe",
+                "description": "How the shown record was built (SEP-58 fields), when there is one."
+              }
+            ]
+          },
+          "checked_at": {
+            "type": ["string", "null"],
+            "description": "When the aggregator last refreshed this answer (RFC 3339); null when\n`unavailable`."
+          },
+          "contract_id": {
+            "type": "string"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VerifiedSourceArchive",
+                "description": "The published source archive of the shown record, when there is one."
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/VerificationStatus",
+            "description": "The one branch the page needs; see `VerificationStatus`."
+          },
+          "verifiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceVerifier"
+            },
+            "description": "Every verifier's own answer, in the aggregator's order."
+          },
+          "wasm_hash": {
+            "type": ["string", "null"],
+            "description": "Lowercase hex hash the verifiers were asked about; null when\n`unavailable` (nothing was asked)."
+          }
+        }
+      },
+      "SourceVerifier": {
+        "type": "object",
+        "required": ["url", "status"],
+        "properties": {
+          "name": {
+            "type": ["string", "null"],
+            "description": "Display name as the verifier publishes it."
+          },
+          "status": {
+            "type": "string",
+            "description": "The verifier's own result, e.g. `verified` or `mismatched`."
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "TransactionDetailLight": {
         "type": "object",
         "description": "DB-sourced light slice for the transaction detail endpoint.\n\nComposed with `E3HeavyFields` via `merge_e3_response` (task 0150). All\nXDR-sourced fields (memo, result_code, signatures, events, operation\ndetails, envelope_xdr/result_xdr, operation_tree) live in `heavy`.",
@@ -5160,6 +5390,79 @@
           },
           "successful": {
             "type": "boolean"
+          }
+        }
+      },
+      "VerificationStatus": {
+        "type": "string",
+        "description": "What the contract page shows; on the wire as its snake_case name, listed\nin the OpenAPI spec.",
+        "enum": [
+          "verified",
+          "verified_private",
+          "mismatched",
+          "disputed",
+          "unverified",
+          "none",
+          "unavailable"
+        ]
+      },
+      "VerifiedSourceArchive": {
+        "type": "object",
+        "required": ["url", "sha256", "format"],
+        "properties": {
+          "format": {
+            "type": "string",
+            "description": "`tar.gz` or `zip`."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Lowercase hex sha256 the archive must hash to."
+          },
+          "url": {
+            "type": "string",
+            "description": "Content-addressed archive on the verifier's storage."
+          }
+        }
+      },
+      "VerifiedSourceFile": {
+        "type": "object",
+        "required": ["path", "size"],
+        "properties": {
+          "content": {
+            "type": ["string", "null"],
+            "description": "UTF-8 text; `null` for a file that is not text."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path inside the archive, as the archive states it."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "VerifiedSourceResponse": {
+        "type": "object",
+        "description": "Response of `GET /v1/contracts/{contract_id}/verified-source` (task 0639):\nthe unpacked archive of a `verified` record, after its sha256 matched.",
+        "required": ["contract_id", "wasm_hash", "archive_sha256", "files"],
+        "properties": {
+          "archive_sha256": {
+            "type": "string"
+          },
+          "contract_id": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerifiedSourceFile"
+            },
+            "description": "Every regular file, sorted by path."
+          },
+          "wasm_hash": {
+            "type": "string"
           }
         }
       },

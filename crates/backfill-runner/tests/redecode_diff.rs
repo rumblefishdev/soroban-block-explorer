@@ -14,6 +14,11 @@
 //! memos included. It exercises the write path (staging, targeted writer,
 //! RMT collapse), which gate 7a's counts cannot see.
 //!
+//! Expected difference (task 0649): rows written before the Soroban recipient
+//! id was read from the event hold `to_muxed_id = NULL` where the decoder now
+//! gives the id — a Soroban transfer to an `M…` (or `W…`). Such a row differs
+//! until its range is re-ingested.
+//!
 //! What it does not prove: that the decoder is right. Same code on both sides.
 //! That is gate 7c (T11), against ledger state read from the network.
 //!

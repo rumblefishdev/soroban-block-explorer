@@ -28,7 +28,8 @@ Context persistence for stateless Claude sessions.
 
 **Before coding:** Ensure `0-session/current-user.md` and `0-session/current-task.md` exist.
 
-**Setup:** Use MCP tools `lore_set-user` and `lore_set-task`
+**Setup:** the `lore-framework` plugin's `set-user` and `set-task` MCP tools
+(full names in [`0-session/CLAUDE.md`](0-session/CLAUDE.md))
 
 ## Structure
 

@@ -1,4 +1,5 @@
-//! Contracts API module: detail, interface, invocations, events.
+//! Contracts API module: detail, interface, decompiled and verified source,
+//! invocations, events.
 //!
 //! The SQL behind each endpoint is in `queries` (invocations in
 //! `queries/list_invocations.rs`). Pagination, error envelopes, cursor codec,
@@ -9,6 +10,7 @@ pub mod cache;
 pub mod dto;
 mod handlers;
 mod queries;
+mod verified_source;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -22,6 +24,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::get_contract))
         .routes(routes!(handlers::get_interface))
         .routes(routes!(handlers::get_decompiled))
+        .routes(routes!(verified_source::get_verification))
+        .routes(routes!(verified_source::get_verified_source))
         .routes(routes!(handlers::list_invocations))
         .routes(routes!(handlers::list_events))
 }

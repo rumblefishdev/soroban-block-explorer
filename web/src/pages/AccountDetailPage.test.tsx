@@ -140,6 +140,25 @@ describe('AccountDetailPage', () => {
     expect(hookMocks.useAccountDetail).toHaveBeenCalledWith('');
   });
 
+  it('sends an M-address URL to the page of the account it stands for', () => {
+    const g = 'GD5SL5RIC5STHGDDOJGSIIZHZZQPA4HIYFEPIQ3FF7M3H2F5VQ7K2FTL';
+    const m =
+      'MD5SL5RIC5STHGDDOJGSIIZHZZQPA4HIYFEPIQ3FF7M3H2F5VQ7K2AAAAAANF5TODJEYA';
+    mockDetail({
+      data: { ...SAMPLE, account_id: g },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${m}`],
+      routePath: '/accounts/:accountId',
+    });
+    expect(hookMocks.useAccountDetail).toHaveBeenLastCalledWith(g);
+    expect(hookMocks.useAccountDetail).not.toHaveBeenCalledWith(m);
+  });
+
   it('renders the summary + balances for a valid account', () => {
     mockDetail({
       data: SAMPLE,

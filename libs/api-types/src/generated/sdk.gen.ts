@@ -46,6 +46,12 @@ import type {
   GetTransactionData,
   GetTransactionErrors,
   GetTransactionResponses,
+  GetVerificationData,
+  GetVerificationErrors,
+  GetVerificationResponses,
+  GetVerifiedSourceData,
+  GetVerifiedSourceErrors,
+  GetVerifiedSourceResponses,
   HealthData,
   HealthResponses,
   ListAccountsData,
@@ -379,6 +385,53 @@ export const listInvocations = <ThrowOnError extends boolean = false>(
       { scheme: 'bearer', type: 'http' },
     ],
     url: '/v1/contracts/{contract_id}/invocations',
+    ...options,
+  });
+
+/**
+ * What independent verifiers say about the contract's current Wasm.
+ *
+ * Read from the verifier aggregator on request. `unavailable` on a network
+ * without a verifier service; 404 for an unknown contract and for one
+ * without Wasm.
+ */
+export const getVerification = <ThrowOnError extends boolean = false>(
+  options: Options<GetVerificationData, ThrowOnError>
+) =>
+  (options.client ?? client).get<
+    GetVerificationResponses,
+    GetVerificationErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/verification',
+    ...options,
+  });
+
+/**
+ * The shown record's source archive, downloaded from the verifier's own
+ * host, checked against its published sha256 and unpacked.
+ *
+ * Only for `verified`: source that did not reproduce the on-chain code
+ * (`mismatched`, `disputed`) is not served, and the page shows none of it.
+ * 404 for every other status and when no source is published.
+ */
+export const getVerifiedSource = <ThrowOnError extends boolean = false>(
+  options: Options<GetVerifiedSourceData, ThrowOnError>
+) =>
+  (options.client ?? client).get<
+    GetVerifiedSourceResponses,
+    GetVerifiedSourceErrors,
+    ThrowOnError
+  >({
+    security: [
+      { name: 'x-api-key', type: 'apiKey' },
+      { scheme: 'bearer', type: 'http' },
+    ],
+    url: '/v1/contracts/{contract_id}/verified-source',
     ...options,
   });
 

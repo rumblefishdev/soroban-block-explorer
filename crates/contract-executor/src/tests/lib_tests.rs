@@ -17,10 +17,11 @@ const PROGRAM: [u8; 32] = [
     0x19, 0xd9, 0x8b, 0xc9, 0x17, 0xdd, 0x0a, 0x51, 0xe0, 0x3a, 0x34, 0xf5, 0xab, 0x96, 0x97, 0x81,
 ];
 
+// A protocol-29 mainnet ledger: the host is a protocol-30 host and still
+// answers like the network did.
 const LEDGER: Ledger = Ledger {
     sequence: 64_818_615,
     timestamp: 1_791_380_000,
-    protocol_version: 29,
     network_id: [0; 32],
 };
 

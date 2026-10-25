@@ -46,7 +46,7 @@ tracing-subscriber = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 stellar-xdr = { workspace = true }
-stellar-strkey = "0.0.16"
+stellar-strkey = "1.0"
 thiserror = { workspace = true }
 futures = "0.3"
 hex = { workspace = true }
@@ -54,7 +54,14 @@ hex = { workspace = true }
 serde_bytes = "0.11"
 bytes = "1"
 moka = { version = "0.12", features = ["sync", "future"] }
+# Verified source archives (task 0639): `.tar.gz` and `.zip` of a Cargo
+# project, checked against their published sha256 before unpacking.
+flate2 = "1"
+tar = "0.4"
+zip = { version = "3", default-features = false, features = ["deflate-flate2"] }
+sha2 = { workspace = true }
 
 [dev-dependencies]
+wiremock = "0.6"
 aws-smithy-runtime-api = "=1.11.6"
 tower = "0.5"

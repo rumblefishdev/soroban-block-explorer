@@ -72,7 +72,6 @@ struct ProgramRow {
 struct LatestLedger {
     sequence: i64,
     closed_at: u32,
-    protocol_version: i32,
 }
 
 #[derive(Row, Deserialize, PartialEq)]
@@ -91,7 +90,7 @@ pub async fn execute(
 
     let latest = client
         .query(
-            "SELECT sequence, toUInt32(toUnixTimestamp(closed_at)) AS closed_at, protocol_version \
+            "SELECT sequence, toUInt32(toUnixTimestamp(closed_at)) AS closed_at \
              FROM ledgers ORDER BY sequence DESC LIMIT 1",
         )
         .fetch_one::<LatestLedger>()
@@ -104,7 +103,6 @@ pub async fn execute(
     let ledger = Ledger {
         sequence: latest.sequence as u32,
         timestamp: u64::from(latest.closed_at),
-        protocol_version: latest.protocol_version as u32,
         network_id,
     };
 

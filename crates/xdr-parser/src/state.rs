@@ -26,15 +26,11 @@ use domain::{AssetFamily, ContractType, NftEventType};
 /// Identifies new contract instances by looking for `contract_data` entries
 /// with the contract instance key. Detects SACs from the executable type.
 ///
-/// `sac_identities` maps `contract_id` (the deterministic preimage hash
-/// per stellar-core, see `crate::sac::derive_sac_contract_id`) to the
-/// underlying classic asset for every SAC found in the current batch's
-/// transaction envelopes (top-level `CreateContract` ops AND
-/// `CreateContractHostFn` auth entries — task 0160). For SAC
-/// deployments without a matching identity (e.g. replay from
-/// mid-ledger without the original deploy tx) the deployment still
-/// lands here with `sac_asset: None`; `detect_assets` then skips the
-/// asset row with a `tracing::warn` rather than fabricate one.
+/// A SAC's identity (the asset it wraps) is read from the instance entry
+/// itself — see [`crate::sac::sac_identity_from_instance`]; `network_id` is
+/// what proves the name derives to the contract. An instance whose storage
+/// names no asset lands with `sac_asset: None`; `detect_assets` then skips
+/// the asset row with a `tracing::warn` rather than fabricate one.
 ///
 /// `deployer_by_contract` maps `contract_id` to the per-op effective
 /// source for every `CreateContract*` reachable from the batch's
@@ -50,7 +46,7 @@ use domain::{AssetFamily, ContractType, NftEventType};
 pub fn extract_contract_deployments(
     changes: &[ExtractedLedgerEntryChange],
     tx_source_account: &str,
-    sac_identities: &HashMap<String, SacAssetIdentity>,
+    network_id: &[u8; 32],
     deployer_by_contract: &HashMap<String, String>,
 ) -> Vec<ExtractedContractDeployment> {
     let mut deployments = Vec::new();
@@ -88,12 +84,10 @@ pub fn extract_contract_deployments(
             ContractType::Other
         };
 
-        // Task 0160: SAC identity is keyed by the deterministic preimage
-        // hash (== contract_id). Lookup is O(1) and correlation-free —
-        // works across multi-SAC tx, factory deploys (auth entries), and
-        // batch boundaries.
         let sac_asset = if is_sac {
-            sac_identities.get(&contract_id).cloned()
+            data.get("val").and_then(|val| {
+                crate::sac::sac_identity_from_instance(&contract_id, val, network_id)
+            })
         } else {
             None
         };
@@ -594,13 +588,11 @@ pub fn extract_lp_positions(changes: &[ExtractedLedgerEntryChange]) -> Vec<Extra
 ///    (ADR 0051): a `classic_credit` (type 1) or `native` (type 0) row with the
 ///    SAC handle in `sac_contract_id` (the deploy's derived `C…`) + `sac_deployed
 ///    = true`; the key `contract_id` stays unset (reserved for soroban identity).
-///    Identity comes from `deployment.sac_asset` (resolved from
-///    `ContractIdPreimage::FromAsset` via `crate::sac::extract_sac_identities`
-///    in the indexer). Two shapes:
+///    Identity comes from `deployment.sac_asset` (read from the SAC's own
+///    instance entry, `crate::sac::sac_identity_from_instance`). Two shapes:
 ///    - `Credit { code, issuer }` → the classic_credit row for that pair.
 ///    - `Native` → the native (type 0) row (NULL code/issuer).
-///    - `None` (SAC deployment whose creating preimage is not in this
-///      batch) is logged as a warn and skipped — better to lose one row
+///    - `None` (SAC instance whose storage names no asset) is logged as a warn and skipped — better to lose one row
 ///      than fabricate identity.
 /// 2. **WASM-based deployments classifying as
 ///    [`ContractClassification::Fungible`]** — [`AssetFamily::Soroban`]
