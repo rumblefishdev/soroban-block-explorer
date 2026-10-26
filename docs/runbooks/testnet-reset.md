@@ -124,11 +124,12 @@ from a laptop with the testnet enrichment Lambda's certificate (secret
 `soroban/testnet/mtls/lambda-enrichment-testnet`, user `testnet_writer`,
 which can write nothing outside `testnet.*`), after step 6a; the
 indexer may already be running. `SOROBAN_RPC_URLS` must
-name the testnet RPC — the NFT calls go to whatever pool it holds.
+name the testnet pool (`sorobanRpcUrls` in `infra/envs/testnet.json`) — the
+NFT calls go to whatever pool it holds.
 
 ```bash
 CLICKHOUSE_DATABASE=testnet \
-SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org \
+SOROBAN_RPC_URLS=https://soroban-testnet.stellar.org,https://soroban-rpc.testnet.stellar.gateway.fm,https://rpc.ankr.com/stellar_testnet_soroban \
 enrich --clickhouse-url https://<ch-host> \
   --ch-cert <cert.pem> --ch-key <key.pem> --ch-ca infra-hetzner/ca/ca.crt \
   sep1-assets
