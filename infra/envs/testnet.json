@@ -21,7 +21,11 @@
   "ledgerSource": "public-lake",
   "publicArchivePrefix": "v1.1/stellar/ledgers/testnet/2025-12-18",
   "clickhouseDatabase": "testnet",
-  "sorobanRpcUrls": ["https://soroban-testnet.stellar.org"],
+  "sorobanRpcUrls": [
+    "https://soroban-testnet.stellar.org",
+    "https://soroban-rpc.testnet.stellar.gateway.fm",
+    "https://rpc.ankr.com/stellar_testnet_soroban"
+  ],
   "sourceVerificationApiUrl": "https://staging.sv.blocksmith.co/api/query/v1",
   "ecsLogRetentionDays": 90,
   "galexieStopTimeout": 120,
