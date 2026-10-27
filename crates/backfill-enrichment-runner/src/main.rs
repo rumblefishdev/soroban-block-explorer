@@ -614,9 +614,10 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
     /// `(all_real, partial, all_sentinel)` per-ROW classification — the
     /// per-column split can't tell "2 partial rows" from "1 all-real + 1
     /// all-sentinel" (same column tallies), so count rows directly. `all_real`
-    /// = every column non-empty; `all_sent` = every column `''`/NULL; partial =
-    /// the rest. (NFT `collection_name` is often legitimately empty, so a
-    /// name+media-only NFT lands in `partial`, not `all_real`.)
+    /// = every column non-empty; `all_sent` = the caller's "tried, nothing"
+    /// test; partial = the rest. (NFT `collection_name` is often legitimately
+    /// empty, so a name+media-only NFT lands in `partial`, not `all_real`; a
+    /// collection-name-only NFT is `all_sent`.)
     async fn row_class(
         c: &Client,
         table: &str,
@@ -667,7 +668,9 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
         client,
         "nft_enrichment",
         "coalesce(name, '') != '' AND coalesce(media_url, '') != '' AND coalesce(collection_name, '') != ''",
-        "coalesce(name, '') = '' AND coalesce(media_url, '') = '' AND coalesce(collection_name, '') = ''",
+        // Same rule as the drain's Sentinel outcome and `--retry-sentinels`: the
+        // collection name comes from the contract, not from this token.
+        "coalesce(name, '') = '' AND coalesce(media_url, '') = ''",
     )
     .await?;
 
