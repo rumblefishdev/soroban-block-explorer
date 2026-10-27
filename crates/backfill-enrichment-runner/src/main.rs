@@ -635,11 +635,23 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
     )
     .await?;
     let a_rows = cnt(client, "SELECT count() FROM asset_enrichment FINAL").await?;
+    // The same predicate the drain walks: `rows` also counts keys that are not
+    // candidates, so `candidates - rows` would hide untried ones.
+    let a_untried = cnt(
+        client,
+        &format!("SELECT count() {}", sep1_base(DrainMode::Untried)),
+    )
+    .await?;
     let (a_icon_r, a_icon_s) = col(client, "asset_enrichment", "icon_url").await?;
     let (a_name_r, a_name_s) = col(client, "asset_enrichment", "name").await?;
 
     let n_cand = cnt(client, "SELECT count() FROM nfts FINAL").await?;
     let n_rows = cnt(client, "SELECT count() FROM nft_enrichment FINAL").await?;
+    let n_untried = cnt(
+        client,
+        &format!("SELECT count() {}", nft_base(DrainMode::Untried)),
+    )
+    .await?;
     let (n_name_r, n_name_s) = col(client, "nft_enrichment", "name").await?;
     let (n_media_r, n_media_s) = col(client, "nft_enrichment", "media_url").await?;
     let (n_coll_r, n_coll_s) = col(client, "nft_enrichment", "collection_name").await?;
@@ -662,10 +674,7 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
     println!("# enrich — status\n");
 
     println!("## `asset_enrichment` (classic/SAC assets)\n");
-    println!(
-        "candidates: {a_cand} | rows (tried): {a_rows} | untried: {}\n",
-        a_cand.saturating_sub(a_rows)
-    );
+    println!("candidates: {a_cand} | rows (tried): {a_rows} | untried: {a_untried}\n");
     println!("| column     | real | `''` sentinel |");
     println!("| ---------- | ---: | ------------: |");
     println!("| `icon_url` | {a_icon_r:>4} | {a_icon_s:>13} |");
@@ -673,10 +682,7 @@ async fn print_status(client: &Client) -> Result<(), Box<dyn std::error::Error +
     println!("\nrows: {a_row_real} all-real · {a_row_part} partial · {a_row_sent} all-sentinel");
 
     println!("\n## `nft_enrichment`\n");
-    println!(
-        "candidates: {n_cand} | rows (tried): {n_rows} | untried: {}\n",
-        n_cand.saturating_sub(n_rows)
-    );
+    println!("candidates: {n_cand} | rows (tried): {n_rows} | untried: {n_untried}\n");
     println!("| column            | real | `''` sentinel |");
     println!("| ----------------- | ---: | ------------: |");
     println!("| `name`            | {n_name_r:>4} | {n_name_s:>13} |");

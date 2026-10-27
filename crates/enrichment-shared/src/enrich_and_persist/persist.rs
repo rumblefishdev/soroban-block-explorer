@@ -17,6 +17,9 @@ use db_clickhouse::persist::rows::{AssetEnrichmentRow, NftEnrichmentRow};
 
 use super::{AssetKey, EnrichError, EnrichOutcome, NftKey, now_ms};
 
+#[cfg(test)]
+mod tests;
+
 /// Build + INSERT one `asset_enrichment` row, returning whether a real value or
 /// only the `''` sentinel landed. `''` is stored as-is (read-neutralised with
 /// `NULLIF`). Parallel to [`insert_nft`]: `(client, &key, …resolved values…)`.
@@ -45,6 +48,18 @@ pub(crate) async fn insert_asset(
     Ok(outcome)
 }
 
+/// Real iff the token's own metadata landed: a name or a media URL. The
+/// collection name does not count — it comes from the contract's `name()` and is
+/// stamped whatever this token returned, so a row with only a collection name
+/// is still the "tried, nothing" case that `--retry-sentinels` walks.
+fn nft_outcome(name: &str, media_url: &str) -> EnrichOutcome {
+    if !name.is_empty() || !media_url.is_empty() {
+        EnrichOutcome::Real
+    } else {
+        EnrichOutcome::Sentinel
+    }
+}
+
 /// Build + INSERT one `nft_enrichment` row, returning whether a real value or
 /// only the `''` sentinel landed. `''` is stored as-is (read-neutralised with
 /// `NULLIF`). Parallel to [`insert_asset`]: `(client, &key, …resolved values…)`.
@@ -57,12 +72,7 @@ pub(crate) async fn insert_nft(
     media_url: String,
     collection_name: String,
 ) -> Result<EnrichOutcome, EnrichError> {
-    // Real iff any of the three columns landed a non-sentinel value.
-    let outcome = if !name.is_empty() || !media_url.is_empty() || !collection_name.is_empty() {
-        EnrichOutcome::Real
-    } else {
-        EnrichOutcome::Sentinel
-    };
+    let outcome = nft_outcome(&name, &media_url);
     let row = NftEnrichmentRow {
         contract_id: key.contract_id,
         token_id: key.token_id.clone(),
