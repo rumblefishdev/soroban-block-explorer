@@ -72,7 +72,11 @@ const MAX_COLLECTION_NAME_CHARS: usize = 4096;
 /// [`super::errors::is_transient`].
 #[derive(Clone)]
 pub struct NftTokenUriFetcher {
+    /// Soroban RPC calls — hosts from configuration.
     client: reqwest::Client,
+    /// Metadata fetches — the host comes from the contract's `token_uri`, so
+    /// this client refuses non-public addresses (`crate::outbound_guard`).
+    metadata_client: reqwest::Client,
     /// RPC endpoint pool — round-robin + failover (task 0311). A single
     /// element = the historical single-RPC behaviour.
     rpc_urls: Arc<Vec<String>>,
@@ -101,6 +105,26 @@ fn env_list(key: &str) -> Option<Vec<String>> {
         .map(str::to_owned)
         .collect();
     (!list.is_empty()).then_some(list)
+}
+
+/// HTTP settings both of the fetcher's clients share.
+fn http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        // Same-registrable-domain redirect policy, shared with SEP-1
+        // (lore-0455; measured 2026-08-18). `Policy::limited(0)` was the
+        // original SSRF guard, but it also refused a directory CID's
+        // harmless `301` to the same host with a trailing slash, losing
+        // the content. This policy follows https-only, same-eTLD+1,
+        // bounded-hop redirects — recovering that case — and still stops
+        // the off-host and per-CID-subdomain shapes the guard exists to
+        // block (PSL-listed gateway domains resolve per-CID subdomains to
+        // different registrable domains). A stopped redirect surfaces as
+        // the 3xx response, which `fetch_one_metadata` already maps to a
+        // failover-worthy `HttpStatus`.
+        .redirect(crate::sep1::same_etld1_redirect_policy())
+        .user_agent(USER_AGENT)
 }
 
 impl NftTokenUriFetcher {
@@ -138,22 +162,9 @@ impl NftTokenUriFetcher {
     }
 
     fn build(rpc_urls: Vec<String>, ipfs_gateways: Vec<String>) -> Result<Self, reqwest::Error> {
-        let client = reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            // Same-registrable-domain redirect policy, shared with SEP-1
-            // (lore-0455; measured 2026-08-18). `Policy::limited(0)` was the
-            // original SSRF guard, but it also refused a directory CID's
-            // harmless `301` to the same host with a trailing slash, losing
-            // the content. This policy follows https-only, same-eTLD+1,
-            // bounded-hop redirects — recovering that case — and still stops
-            // the off-host and per-CID-subdomain shapes the guard exists to
-            // block (PSL-listed gateway domains resolve per-CID subdomains to
-            // different registrable domains). A stopped redirect surfaces as
-            // the 3xx response, which `fetch_one_metadata` already maps to a
-            // failover-worthy `HttpStatus`.
-            .redirect(crate::sep1::same_etld1_redirect_policy())
-            .user_agent(USER_AGENT)
+        let client = http_client_builder().build()?;
+        let metadata_client = http_client_builder()
+            .dns_resolver(crate::outbound_guard::resolver())
             .build()?;
         let cache = FutureCache::builder()
             .time_to_live(CACHE_TTL)
@@ -165,6 +176,7 @@ impl NftTokenUriFetcher {
             .build();
         Ok(Self {
             client,
+            metadata_client,
             rpc_urls: Arc::new(rpc_urls),
             ipfs_gateways: Arc::new(ipfs_gateways),
             cursor: Arc::new(AtomicUsize::new(0)),
@@ -197,6 +209,7 @@ impl NftTokenUriFetcher {
     ) -> Result<Option<Value>, Arc<NftTokenUriError>> {
         let key = format!("{contract_id}:{token_id}");
         let client = self.client.clone();
+        let metadata_client = self.metadata_client.clone();
         let rpc_urls = Arc::clone(&self.rpc_urls);
         let ipfs_gateways = Arc::clone(&self.ipfs_gateways);
         // One round-robin tick per request → spreads each request's first pick.
@@ -209,6 +222,7 @@ impl NftTokenUriFetcher {
             .try_get_with(key, async move {
                 let json = fetch_uncached(
                     &client,
+                    &metadata_client,
                     &rpc_urls,
                     &ipfs_gateways,
                     start,
@@ -308,6 +322,7 @@ async fn simulate_name_with_failover(
 /// Pulled out of the cache closure so tests can drive it directly.
 async fn fetch_uncached(
     client: &reqwest::Client,
+    metadata_client: &reqwest::Client,
     rpc_urls: &[String],
     ipfs_gateways: &[String],
     start: usize,
@@ -331,7 +346,7 @@ async fn fetch_uncached(
     }
     validate_uri(&uri)?;
     debug!(uri = %uri, "nft token_uri resolved; fetching metadata");
-    fetch_metadata_with_failover(client, &uri, ipfs_gateways, start).await
+    fetch_metadata_with_failover(metadata_client, &uri, ipfs_gateways, start).await
 }
 
 /// Try each RPC in the pool (round-robin from `start`) until one answers.
