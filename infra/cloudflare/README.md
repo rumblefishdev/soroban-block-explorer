@@ -3,12 +3,12 @@
 Terraform for the **sorobanscan-specific** Cloudflare resources only
 (task 0277 / ADR 0048). Part of a deliberate **repo split** (D9):
 
-| Lives here (`soroban-explorer`)                         | Lives in `dns-cloudformation` (private)                     |
-| ------------------------------------------------------- | ----------------------------------------------------------- |
-| `api-sorobanscan.rumblefishdev.com` DNS record (orange) | the `cloudflare_zone` `rumblefishdev.com`                   |
-| API origin lock — per-host **AOP** (mTLS)               | company DNS records + zone settings                         |
-| AWS side of the lock (CDK: API GW mTLS)                 | zone-level **edge rulesets** (WAF / rate-limit / challenge) |
-| own TF-state bucket (`*-cf-tfstate`)                    | its own, separate TF-state bucket                           |
+| Lives here (`soroban-explorer`)                                    | Lives in `dns-cloudformation` (private)                     |
+| ------------------------------------------------------------------ | ----------------------------------------------------------- |
+| `api-sorobanscan.rumblefishdev.com` DNS record (orange)            | the `cloudflare_zone` `rumblefishdev.com`                   |
+| API origin lock — per-host **AOP** (mTLS)                          | company DNS records + zone settings                         |
+| AWS side of the lock (CDK: API GW mTLS)                            | zone-level **edge rulesets** (WAF / rate-limit / challenge) |
+| its state, a key in soroban-infrastructure's `*-cf-tfstate` bucket | its own, separate TF-state bucket                           |
 
 This module **does not own the zone** — it references it by id
 (`var.cloudflare_zone_id`, from dns-cloudformation's `zone_id` output).
@@ -30,8 +30,9 @@ clean.
 
 1. `dns-cloudformation` applied first → the zone `rumblefishdev.com` exists; copy its
    `zone_id` output into `terraform.tfvars`.
-2. CDK `CloudflareBootstrapStack` deployed → the state bucket exists
-   (`make -C infra deploy-production-cloudflare-bootstrap`).
+2. The state bucket `production-soroban-explorer-cf-tfstate` exists. It is
+   soroban-infrastructure's `cloudflare/state-bucket.yaml` (stack
+   `Explorer-production-CloudflareBootstrap`, moved there in task 0658).
 3. Zone-scoped, least-privilege `CLOUDFLARE_API_TOKEN` exported (DNS:Edit +
    SSL and Certificates:Edit on rumblefishdev.com; see `providers.tf`).
 

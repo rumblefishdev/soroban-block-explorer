@@ -1,9 +1,9 @@
 # Copy to backend.hcl (gitignored) and fill in. Then:
 #   terraform init -backend-config=backend.hcl
 #
-# Bucket = the CDK-provisioned state bucket (CloudflareBootstrapStack output
-# CloudflareTfStateBucketName), e.g. production-soroban-explorer-cf-tfstate.
-# This is THIS repo's own bucket (D11) — separate from dns-cloudformation's bucket.
+# Bucket = the shared Soroban Cloudflare state bucket, soroban-infrastructure's
+# cloudflare/state-bucket.yaml (task 0658): production-soroban-explorer-cf-tfstate.
+# This repo's state is one key in it; it is separate from dns-cloudformation's bucket (D11).
 
 bucket       = "production-soroban-explorer-cf-tfstate"
 key          = "sorobanscan-api.tfstate"

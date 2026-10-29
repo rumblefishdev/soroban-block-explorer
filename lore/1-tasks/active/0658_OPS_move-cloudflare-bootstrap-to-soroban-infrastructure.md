@@ -55,10 +55,10 @@ deploy-scope self-check. Accounts of past deploys stay as written.
 
 ## Acceptance Criteria
 
-- [ ] `cdk synth` of production lists no `CloudflareBootstrap` stack, and the
+- [x] `cdk synth` of production lists no `CloudflareBootstrap` stack, and the
       live stack is unchanged by it
-- [ ] Nothing in `infra/` or the docs tells a reader to deploy the bucket from
+- [x] Nothing in `infra/` or the docs tells a reader to deploy the bucket from
       this repo
-- [ ] **Docs updated** — N/A: no file under `docs/architecture/**` names the
+- [x] **Docs updated** — N/A: no file under `docs/architecture/**` names the
       stack.
-- [ ] **API types regenerated** — N/A: nothing under `crates/api/**`.
+- [x] **API types regenerated** — N/A: nothing under `crates/api/**`.
