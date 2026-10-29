@@ -203,7 +203,7 @@ second release on the same day.
 
 A selector other than `all` / `web` is appended to `Explorer-production-`
 **verbatim**, so it carries the stack's own case (`CloudWatch`, `ApiGateway`,
-`LedgerBucket`, `CloudflareBootstrap`, `HetznerDns`, …). The mapping lives in
+`LedgerBucket`, `HetznerDns`, …). The mapping lives in
 [`infra/scripts/deploy-scope.sh`](../infra/scripts/deploy-scope.sh) — run it to
 see what a tag will do, and note that it now **rejects** a malformed tag
 outright, where the old `production-*` trigger would deploy the release set for
@@ -304,18 +304,17 @@ The production app (`node dist/bin/production.js`, config
 `infra/envs/production.json`) deploys these stacks. All commands run from
 the repo root as `make -C infra <target>` (or `cd infra && make <target>`).
 
-| Stack (`Explorer-production-…`) | Contains                                                             | Make target                              |
-| ------------------------------- | -------------------------------------------------------------------- | ---------------------------------------- |
-| `Network`                       | Minimal VPC, public subnet (post-0239, no NAT/RDS)                   | `deploy-production-network`              |
-| `LedgerBucket`                  | S3 `stellar-ledger-data` (Galexie → indexer)                         | `deploy-production-ledger-bucket`        |
-| `Compute`                       | **API + Indexer + Enrichment Lambdas** + SQS queues/DLQ              | `deploy-production-compute`              |
-| `Ingestion`                     | Galexie ECS Fargate task + ECR repo                                  | `deploy-production-ingestion`            |
-| `Delivery`                      | CloudFront distribution + SPA S3 bucket                              | `deploy-production-delivery`             |
-| `ApiGateway`                    | REST API Gateway, caching, throttle, mTLS/edge lock                  | `deploy-production-apigateway`           |
-| `Observability`                 | X-Ray / logging config                                               | `deploy-production-observability`        |
-| `CloudWatch`                    | Alarms + dashboards                                                  | `deploy-production-cloudwatch`           |
-| `HetznerDns`                    | Route 53 A record → CH box IP (from SSM `/soroban/production/ch-ip`) | `deploy-production-hetzner-dns`          |
-| `CloudflareBootstrap`           | TF-state bucket for `infra/cloudflare/`                              | `deploy-production-cloudflare-bootstrap` |
+| Stack (`Explorer-production-…`) | Contains                                                             | Make target                       |
+| ------------------------------- | -------------------------------------------------------------------- | --------------------------------- |
+| `Network`                       | Minimal VPC, public subnet (post-0239, no NAT/RDS)                   | `deploy-production-network`       |
+| `LedgerBucket`                  | S3 `stellar-ledger-data` (Galexie → indexer)                         | `deploy-production-ledger-bucket` |
+| `Compute`                       | **API + Indexer + Enrichment Lambdas** + SQS queues/DLQ              | `deploy-production-compute`       |
+| `Ingestion`                     | Galexie ECS Fargate task + ECR repo                                  | `deploy-production-ingestion`     |
+| `Delivery`                      | CloudFront distribution + SPA S3 bucket                              | `deploy-production-delivery`      |
+| `ApiGateway`                    | REST API Gateway, caching, throttle, mTLS/edge lock                  | `deploy-production-apigateway`    |
+| `Observability`                 | X-Ray / logging config                                               | `deploy-production-observability` |
+| `CloudWatch`                    | Alarms + dashboards                                                  | `deploy-production-cloudwatch`    |
+| `HetznerDns`                    | Route 53 A record → CH box IP (from SSM `/soroban/production/ch-ip`) | `deploy-production-hetzner-dns`   |
 
 Frontend **content** is separate: `deploy-production-web`
 (build → S3 sync → CloudFront invalidation).

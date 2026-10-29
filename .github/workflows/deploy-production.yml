@@ -20,8 +20,8 @@ name: Deploy Production
 #     Any selector other than `all` / `web` is appended to
 #     `Explorer-production-` verbatim, so it must carry the stack's own case:
 #     `Network`, `LedgerBucket`, `Compute`, `Ingestion`, `Delivery`,
-#     `Observability`, `ApiGateway`, `CloudWatch`, `CloudflareBootstrap`,
-#     `HetznerDns` (the list `infra/src/lib/app.ts` builds). A typo is not
+#     `Observability`, `ApiGateway`, `CloudWatch`, `HetznerDns` (the list
+#     `infra/src/lib/app.ts` builds). A typo is not
 #     silent — `cdk` fails on an unknown stack id before anything deploys.
 #
 #   • `-all` is not "deploy everything unconditionally": CDK skips stacks with
