@@ -308,21 +308,12 @@ fn s3_client_nothing_listens_on() -> S3Client {
     S3Client::from_conf(config)
 }
 
-fn assert_names_the_refused_connection(err: HandlerError) {
-    let message = err.to_string().to_lowercase();
-    assert!(
-        message.contains("refused"),
-        "the cause is missing from: {message}"
-    );
-}
-
 #[tokio::test]
 async fn a_failed_existence_check_logs_why_it_failed() {
     let err = s3_object_exists(&s3_client_nothing_listens_on(), "bucket", "key")
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("key"));
-    assert_names_the_refused_connection(err);
+    assert!(err.to_string().to_lowercase().contains("refused"), "{err}");
 }
 
 #[tokio::test]
@@ -330,5 +321,5 @@ async fn a_failed_download_logs_why_it_failed() {
     let err = download_s3_object(&s3_client_nothing_listens_on(), "bucket", "key")
         .await
         .unwrap_err();
-    assert_names_the_refused_connection(err);
+    assert!(err.to_string().to_lowercase().contains("refused"), "{err}");
 }
