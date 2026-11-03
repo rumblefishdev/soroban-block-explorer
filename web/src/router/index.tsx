@@ -160,6 +160,12 @@ export const router = createBrowserRouter([
         element: page(() => import('../pages/PrivacyPolicyPage.js')),
       },
       {
+        // The portal hub (task 0660). CloudFront sends `/api` and `/api/`
+        // here; everything under `/api/` is a portal or a redirect to one.
+        path: 'api',
+        element: page(() => import('../pages/ApiHubPage.js')),
+      },
+      {
         path: '*',
         element: page(() => import('../pages/NotFoundPage.js')),
       },

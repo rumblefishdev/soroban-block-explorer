@@ -277,13 +277,15 @@ Navigation rules:
 - exact search hits should resolve directly to the detail page when confidence is high
 - broad or ambiguous matches should remain on a grouped search results page
 - list routes should preserve filters and cursor state in the URL when practical
-- `/prices-api` and `/prices-api/*` are not explorer routes: CloudFront serves the
-  Stellar Prices API portal there, a separate SPA. The navbar and the footer link it
-  with a plain anchor (`PRICES_API_URL`), never through the router, and no explorer
-  route may live under `/prices-api`
-- `/api`, `/api/*`, `/pricing-api` and `/pricing-api/*` are not explorer routes
-  either: the portal's old homes, which CloudFront answers with a `301` to the same
-  path under `/prices-api` (task 0608)
+- `/api` is the explorer's portal hub (task 0660), the one explorer route under
+  `/api`. Everything below `/api/` belongs to a portal: CloudFront serves the
+  Stellar Prices API portal, a separate SPA, at `/api/prices-api/*`. The navbar, the
+  footer and the hub link it with a plain anchor (`PRICES_API_URL`), never through
+  the router
+- `/prices-api`, `/prices-api/*`, `/pricing-api`, `/pricing-api/*` and every other
+  `/api/*` path are not explorer routes either: the portal's old homes, which
+  CloudFront answers with a `301` to the same path under `/api/prices-api` (tasks
+  0608, 0660)
 
 ## 6. Routes and Pages
 
@@ -306,6 +308,7 @@ Navigation rules:
 | `/liquidity-pools/:id`   | Liquidity Pool  | `GET /liquidity-pools/:id`                                                                                                    |
 | `/search?q=`             | Search Results  | `GET /search`                                                                                                                 |
 | `/privacy-policy`        | Privacy Policy  | none (static text)                                                                                                            |
+| `/api`                   | APIs (hub)      | none (static links to the product portals)                                                                                    |
 
 Each route should be implemented as a dedicated page module with:
 

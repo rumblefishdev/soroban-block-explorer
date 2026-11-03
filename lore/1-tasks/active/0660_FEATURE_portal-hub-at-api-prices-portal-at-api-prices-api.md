@@ -35,9 +35,10 @@ and the pre-0608 `/api/<route>`) answers `301` to the same path under
 
 ## Stan teraz
 
-- Done: nothing yet.
-- Next: the Prices build with the new base path (0631 before it if it can be).
-- In force: one hop for every old URL, never a chain.
+- Done: explorer side on `feat/0660-portal-hub` (CloudFront behaviors, both
+  functions, the hub route, `PRICES_API_URL`, docs). Not deployed.
+- Next: the Prices side (Step 2) in stellar-prices-api.
+- In force: one hop for every old URL, never a chain. Deploy order below.
 
 ## Context
 
@@ -78,8 +79,18 @@ return path, links) and move it.
 
 ### Step 4: Hub and links
 
-Decide where the hub lives: a route of the explorer SPA, or a static page in
-the portal bucket. `PRICES_API_URL` → `/api/prices-api/`.
+The hub is a route of the explorer SPA (`ApiHubPage`): header, theme, consent
+and GTM come with it. `PRICES_API_URL` → `/api/prices-api/`.
+
+## Deploy order
+
+1. Prices: sync the new bundle to `api/prices-api/`. Nothing serves it yet.
+2. Explorer: Delivery (CDK) deploy, then the SPA. The SPA links the new path,
+   so it never goes first; `/prices-api/` keeps working through the 301.
+3. Prices Compute: `PORTAL_HOME` → `/api/prices-api/`. Never before 2: today
+   `/api/prices-api/?signin=…` would land on `/prices-api/prices-api/`.
+
+The old `prices-api/` prefix is then dead, like the 0631 ones.
 
 ## Acceptance Criteria
 
