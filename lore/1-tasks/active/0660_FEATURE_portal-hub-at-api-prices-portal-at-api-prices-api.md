@@ -2,7 +2,7 @@
 id: '0660'
 title: 'Portal hub at /api/: serve the Prices portal at /api/prices-api/'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0659', '0608', '0631', '0519']
 tags: [infra, cloudfront, prices-portal, priority-medium, effort-medium]
@@ -15,6 +15,12 @@ history:
       Created under 0659. Team decision after conference feedback: the
       product portals gather under /api/ (prices-api now, x402-facilitator and
       sorobanscan later).
+  - date: '2026-11-03'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started. 0631 not done yet and no longer a blocker. The hub is a route
+      of the explorer SPA.
 ---
 
 # Portal hub at /api/: serve the Prices portal at /api/prices-api/
