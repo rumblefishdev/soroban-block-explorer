@@ -30,7 +30,7 @@ and the pre-0608 `/api/<route>`) answers `301` to the same path under
 ## Stan teraz
 
 - Done: nothing yet.
-- Next: 0631, then the Prices build with the new base path.
+- Next: the Prices build with the new base path (0631 before it if it can be).
 - In force: one hop for every old URL, never a chain.
 
 ## Context
@@ -49,9 +49,12 @@ Today (`infra/src/lib/stacks/delivery-stack.ts`, 0608):
 
 ## Implementation Plan
 
-### Step 1: 0631 first
+### Step 1: 0631, if it can go first
 
-Drop the old prefixes so `api/` holds only the new portal.
+Recommended, not required: nothing reads the old prefixes (the `/api*` and
+`/pricing-api*` behaviors answer 301 before S3). Dropped now, `api/` holds only
+dead files and one delete clears it. Dropped after this task, the delete must
+exclude `api/prices-api/`, or it takes the live portal with it.
 
 ### Step 2: Prices side (stellar-prices-api)
 

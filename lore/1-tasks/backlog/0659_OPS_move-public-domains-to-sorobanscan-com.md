@@ -54,7 +54,7 @@ covers `sorobanscan.com` and `*.sorobanscan.com` only. Hence
 ## Order
 
 1. **0660**: portal hub `/api/` and the Prices portal at `/api/prices-api/`, on
-   the current domain. Needs 0631.
+   the current domain. 0631 first if it can be; it is not a blocker.
 2. **0661**: ACM wildcards, the API's edge rules and Turnstile hostnames for
    the new zone.
 3. **0662**: explorer API on `api.sorobanscan.com`, beside the old host.
