@@ -189,3 +189,39 @@ describe('testnet environment', () => {
     ).toThrow(/publicArchivePrefix is read only with ledgerSource/);
   });
 });
+
+// One failed reconcile on testnet (2026-11-03) also paged production: a metric
+// filter's metric carries no dimension, so a shared name is one shared series.
+describe('terminal indexer failure metric', () => {
+  const failureFilter = (from: Templates): Resource => {
+    const filter = Object.values(from['CloudWatch'] ?? {}).find(
+      (r) =>
+        r.Type === 'AWS::Logs::MetricFilter' &&
+        JSON.stringify(r.Properties).includes('ch_write_failure')
+    );
+    if (!filter) throw new Error('no ch_write_failure metric filter');
+    return filter;
+  };
+  const namespaceOf = (from: Templates): string =>
+    (
+      failureFilter(from).Properties['MetricTransformations'] as {
+        MetricNamespace: string;
+      }[]
+    )[0]?.MetricNamespace ?? '';
+
+  it('is a separate series on each network', () => {
+    expect(namespaceOf(templates)).not.toBe(namespaceOf(synth(production)));
+  });
+
+  it('is the series the alarm and the dashboard read', () => {
+    const namespace = namespaceOf(templates);
+    const alarm = ofType('CloudWatch', 'AWS::CloudWatch::Alarm').find(
+      (a) => a.Properties['AlarmName'] === 'testnet-indexer-ch-write-failures'
+    );
+    expect(alarm?.Properties['Namespace']).toBe(namespace);
+    const [dashboard] = ofType('CloudWatch', 'AWS::CloudWatch::Dashboard');
+    expect(JSON.stringify(dashboard?.Properties['DashboardBody'])).toContain(
+      `${namespace}\\",\\"ChWriteFailures`
+    );
+  });
+});

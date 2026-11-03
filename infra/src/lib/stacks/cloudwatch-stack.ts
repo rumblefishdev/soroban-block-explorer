@@ -369,7 +369,11 @@ export class CloudWatchStack extends cdk.Stack {
           '=',
           'ch_write_failure'
         ),
-        metricNamespace: 'SorobanBlockExplorer/Indexer',
+        // The log line names no network, so this filter cannot add the
+        // Environment dimension the indexer's other metrics carry. The namespace
+        // keeps each network's failures apart: one shared series let a single
+        // testnet failure page production.
+        metricNamespace: `SorobanBlockExplorer/Indexer/${config.envName}`,
         metricName: 'ChWriteFailures',
         metricValue: '1',
         defaultValue: 0,
@@ -783,7 +787,7 @@ export class CloudWatchStack extends cdk.Stack {
                 label: 'Lambda errors',
               }),
               new cloudwatch.Metric({
-                namespace: 'SorobanBlockExplorer/Indexer',
+                namespace: `SorobanBlockExplorer/Indexer/${config.envName}`,
                 metricName: 'ChWriteFailures',
                 period: cdk.Duration.minutes(5),
                 statistic: cloudwatch.Stats.SUM,
