@@ -27,6 +27,7 @@ pub mod process;
 
 use aws_sdk_cloudwatch::Client as CloudWatchClient;
 use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::error::DisplayErrorContext;
 use db_clickhouse::persist::persist_ledger_clickhouse;
 use domain::ClassificationCache;
 use lambda_runtime::{Error, LambdaEvent};
@@ -273,7 +274,7 @@ async fn reconcile(state: &HandlerState) -> Result<Reconciled, HandlerError> {
         }
 
         let key = ledger_s3_key(&state.key_prefix, next);
-        if !s3_object_exists(state, &key).await? {
+        if !s3_object_exists(&state.s3_client, &state.bucket, &key).await? {
             // `next` is not on S3 yet — stop. A future doorbell (when the file
             // lands) resumes here. This gate is what guarantees no gaps.
             if persisted == 0 && max_seq <= 0 {
@@ -340,22 +341,20 @@ fn ledger_s3_key(prefix: &str, ledger: i64) -> String {
 /// HEAD the object: `true` if it exists, `false` on `NotFound`. Any other
 /// error (network, permissions, throttling) propagates so the doorbell is
 /// retried — mistaking a transient failure for a gap would stall the tail.
-async fn s3_object_exists(state: &HandlerState, key: &str) -> Result<bool, HandlerError> {
-    match state
-        .s3_client
-        .head_object()
-        .bucket(&state.bucket)
-        .key(key)
-        .send()
-        .await
-    {
+async fn s3_object_exists(
+    client: &S3Client,
+    bucket: &str,
+    key: &str,
+) -> Result<bool, HandlerError> {
+    match client.head_object().bucket(bucket).key(key).send().await {
         Ok(_) => Ok(true),
         Err(err) => {
             if err.as_service_error().is_some_and(|e| e.is_not_found()) {
                 Ok(false)
             } else {
                 Err(HandlerError::S3Download(format!(
-                    "head_object failed for {key}"
+                    "head_object failed for {key}: {}",
+                    DisplayErrorContext(&err)
                 )))
             }
         }
@@ -755,7 +754,7 @@ async fn download_s3_object(
         .key(key)
         .send()
         .await
-        .map_err(|e| HandlerError::S3Download(e.to_string()))?;
+        .map_err(|e| HandlerError::S3Download(DisplayErrorContext(&e).to_string()))?;
 
     let bytes = resp
         .body
