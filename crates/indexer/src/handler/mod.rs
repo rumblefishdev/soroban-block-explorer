@@ -187,7 +187,9 @@ pub async fn handler(
             // lore-0455): the old sanitizer reduced the 0454 outage to the
             // undiagnosable label "ClickHouse error". Everything ClickHouse
             // could echo back is public on-chain data, so detail in logs
-            // costs nothing and buys the post-incident "why".
+            // costs nothing and buys the post-incident "why". An S3 error adds
+            // request ids and can name this function's AWS role: fine in the
+            // account's own logs, to be checked before any log export.
             // `alarm` is a machine contract, not log copy: the
             // `indexer-ch-write-failures` CloudWatch metric filter keys on
             // `$.fields.alarm = "ch_write_failure"`. Reword the human

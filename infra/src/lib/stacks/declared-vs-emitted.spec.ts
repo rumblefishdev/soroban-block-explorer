@@ -175,11 +175,11 @@ describe('custom metric names read from code-published namespaces exist in crate
   // template (`Template.fromStack`), where MetricFilter transformations and
   // dashboard bodies are concrete resources rather than source text. Worth
   // doing if this list ever grows past a couple of entries.
-  const FILTER_MINTED_METRICS = new Set([
-    // Minted by `IndexerChWriteFailureFilter` in cloudwatch-stack.ts from
-    // log lines carrying `$.fields.alarm = "ch_write_failure"`.
-    'ChWriteFailures',
-  ]);
+  //
+  // Empty today: `ChWriteFailures` lives in a per-network namespace this scan
+  // does not read, and testnet-environment.test.ts ties its alarm and dashboard
+  // to the filter that mints it.
+  const FILTER_MINTED_METRICS = new Set<string>();
 
   const names = new Set(
     stackSources.flatMap(({ text }) =>
