@@ -31,8 +31,11 @@ the API answers `403` behind its new host.
 
 ## Stan teraz
 
-- Done: nothing yet.
-- Next: issue the certificates.
+- Done: Step 1. Both certificates `ISSUED` 2026-11-04, validated through
+  soroban-infrastructure#5's record: us-east-1 `0bcafe74-2ec1-4624-8277-5a51112da65a`,
+  eu-central-1 `c937aeef-20b3-4e94-ba90-ade97c7d00ec`.
+- Next: Step 2 (soroban-infrastructure#4 plus the token's permissions) and
+  Step 3 (Turnstile, with dns-cloudformation's owner).
 - In force: the zone and its rulesets belong to soroban-infrastructure.
 - Decided (2026-11-04): the old SPA alias stays until 0664. us-east-1:
   `sorobanscan.com`, `*.sorobanscan.com`, `sorobanscan.rumblefish.dev`,

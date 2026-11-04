@@ -31,10 +31,11 @@ zone. The old `api-*sorobanscan.rumblefishdev.com` hosts keep serving until
 
 ## Stan teraz
 
-- Done: Step 1 in code (`sorobanscanApiDomainName` +
-  `sorobanscanApiCertificateArn`, both unset in the env files, so a deploy
-  changes nothing). Not deployed.
-- Next: 0661's eu-central-1 certificate, then set both fields per env.
+- Done: Step 1 in code (#700); both fields set per env with 0661's
+  `*.sorobanscan.com` certificate (`api.sorobanscan.com`,
+  `api-testnet.sorobanscan.com`). Not deployed.
+- Next: deploy ApiGateway (testnet from a laptop, production by a
+  `-ApiGateway` tag), then Step 2 with soroban-infrastructure#4.
 - In force: no gap. The old host serves until the new one is verified.
 
 ## Context
