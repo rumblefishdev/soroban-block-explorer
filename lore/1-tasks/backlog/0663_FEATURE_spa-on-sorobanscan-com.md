@@ -43,8 +43,9 @@ Route 53 records for the SPA: a JSON-only change fails at synth.
   bound to a domain, so the history stays. `_ga` and the consent cookie are per
   domain: returning visitors count as new once, and the consent banner shows
   again.
-- The old alias leaves the distribution at this deploy. Either keep it (SAN
-  certificate from 0661) until 0664 redirects it, or accept a gap. Decide with 0664.
+- The old alias stays on the distribution beside the new one (decided
+  2026-11-04, SAN certificate from 0661) until 0664 redirects it. The API's
+  CORS allows both origins for that window.
 
 ## Implementation Plan
 
