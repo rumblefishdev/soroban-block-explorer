@@ -31,8 +31,9 @@ This task holds the names and the order; each step is its own task.
 
 ## Stan teraz
 
-- Done: names and order agreed (2026-11-03).
-- Next: 0660 (portal hub), which does not depend on the new domain.
+- Done: names and order agreed (2026-11-03); 0631 and 0660 shipped
+  (2026-11-04; Prices Compute for 0660 rides with stellar-prices-api 0242).
+- Next: 0661 (certificates, edge rules, Turnstile).
 - In force: one step at a time; each ships and is verified before the next.
 
 ## Names

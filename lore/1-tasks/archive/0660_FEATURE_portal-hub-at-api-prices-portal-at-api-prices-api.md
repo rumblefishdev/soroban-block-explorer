@@ -2,11 +2,14 @@
 id: '0660'
 title: 'Portal hub at /api/: serve the Prices portal at /api/prices-api/'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0659', '0608', '0631', '0519']
 tags: [infra, cloudfront, prices-portal, priority-medium, effort-medium]
-links: []
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/pull/699'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/pull/701'
+  - 'https://github.com/rumblefishdev/stellar-prices-api/pull/410'
 history:
   - date: '2026-11-03'
     status: backlog
@@ -21,6 +24,15 @@ history:
     note: >
       Started. 0631 not done yet and no longer a blocker. The hub is a route
       of the explorer SPA.
+  - date: '2026-11-04'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Shipped in production-2026.11.04-1-Delivery and -2-web (#701), after
+      the Prices bundle sync and a testnet rehearsal. Hub, portal, one-hop
+      301s and a Discord sign-in verified on production. Prices Compute
+      (PORTAL_HOME) rides with 0242's deploy, tracked in stellar-prices-api
+      0339.
 ---
 
 # Portal hub at /api/: serve the Prices portal at /api/prices-api/
@@ -35,22 +47,22 @@ and the pre-0608 `/api/<route>`) answers `301` to the same path under
 
 ## Stan teraz
 
-- Done: explorer side on `feat/0660-portal-hub` (CloudFront behaviors, both
-  functions, the hub route, `PRICES_API_URL`, docs). Not deployed.
-- Next: the Prices side (Step 2) in stellar-prices-api.
-- In force: one hop for every old URL, never a chain. Deploy order below.
+- Done: live on production since 2026-11-04 (Delivery and SPA), testnet too.
+- Left, in stellar-prices-api 0339: Prices Compute with the new `PORTAL_HOME`
+  (until then the OAuth return reaches the portal through the 301), then
+  dropping the dead `prices-api/` bucket prefix.
+- In force: one hop for every old URL, never a chain.
 
 ## Context
 
-Today (`infra/src/lib/stacks/delivery-stack.ts`, 0608):
+Before this task (`infra/src/lib/stacks/delivery-stack.ts`, 0608):
 
 - `/prices-api` and `/prices-api/*` → `apiSpaBehavior(apiSpaFunction)`, bundle
   under the `prices-api/` prefix of `${envName}-soroban-explorer-api-spa`.
 - `/api`, `/api/*`, `/pricing-api`, `/pricing-api/*` →
   `apiPathRedirectFunction`, a `301` to the same path under `/prices-api`.
-- The old `api/` and `pricing-api/` bucket prefixes are still there (0631,
-  backlog). The new `api/prices-api/` prefix would sit inside the old `api/`
-  one.
+- The old `api/` and `pricing-api/` bucket prefixes were still there (0631,
+  dropped 2026-11-04 before this deploy).
 - The SPA links the portal through `PRICES_API_URL` in
   `libs/ui/src/layout/links.ts`.
 
@@ -94,11 +106,35 @@ The old `prices-api/` prefix is then dead, like the 0631 ones.
 
 ## Acceptance Criteria
 
-- [ ] `/api/prices-api/` serves the portal; Discord sign-in completes.
-- [ ] `/prices-api/dashboard?x=1`, `/pricing-api/dashboard?x=1` and
+- [x] `/api/prices-api/` serves the portal; Discord sign-in completes (on
+      production, 2026-11-04, through the `/prices-api/?signin=…` 301).
+- [x] `/prices-api/dashboard?x=1`, `/pricing-api/dashboard?x=1` and
       `/api/dashboard?x=1` answer one `301` to `/api/prices-api/dashboard?x=1`.
-- [ ] `/api/` shows the hub.
-- [ ] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
+- [x] `/api/` shows the hub.
+- [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`
       (portal behaviors and redirects) and
       `docs/architecture/frontend/frontend-overview.md` (`/prices-api` routes).
-- [ ] **API types regenerated** — N/A: nothing under `crates/api/**`.
+- [x] **API types regenerated** — N/A: nothing under `crates/api/**`.
+
+## Design Decisions
+
+### From Plan
+
+1. **The hub is an SPA route**, not a static page in the portal bucket: header,
+   theme, consent and GTM come with it. The `/api/` behavior points at the SPA
+   origin; a bare `/api` matches no behavior and falls to the default one, so
+   it renders the hub too.
+
+### Emerged
+
+2. **Testnet rehearsal first.** `Explorer-testnet-Delivery --exclusively` and
+   `deploy-testnet-web` from `develop`, the same diff as production, checked
+   before the tags.
+3. **Prices Compute held.** Prices deploys Compute from `develop`, which also
+   carries stellar-prices-api#390 (0242); its decision D9 deploys Compute only
+   after 0286 phase-3 stage D. The 301 keeps sign-in working meanwhile.
+
+## Issues Encountered
+
+- `make deploy-testnet-web` hung after a finished `nx build` (the Nx process
+  never exited). `NX_TUI=false NX_DAEMON=false` got it through.

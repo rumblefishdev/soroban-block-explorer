@@ -275,6 +275,30 @@ export class ApiGatewayStack extends cdk.Stack {
       });
     }
 
+    // The API's host on the sorobanscan.com zone (task 0662) — one more custom
+    // domain on the same API, so the old host serves until its redirect (task
+    // 0664). Cloudflare-fronted like the one above: no Route 53 record, the
+    // regional target is output for soroban-infrastructure's `cloudflare/`.
+    if (
+      config.sorobanscanApiDomainName &&
+      config.sorobanscanApiCertificateArn
+    ) {
+      const sorobanscanApiDomain = api.addDomainName('SorobanscanApiDomain', {
+        domainName: config.sorobanscanApiDomainName,
+        certificate: acm.Certificate.fromCertificateArn(
+          this,
+          'SorobanscanApiCertificate',
+          config.sorobanscanApiCertificateArn
+        ),
+        endpointType: apigateway.EndpointType.REGIONAL,
+        ...mtlsConfig,
+      });
+
+      new cdk.CfnOutput(this, 'SorobanscanApiRegionalTarget', {
+        value: sorobanscanApiDomain.domainNameAliasDomainName,
+      });
+    }
+
     // ---------------------
     // Tags
     // ---------------------

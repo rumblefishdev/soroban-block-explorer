@@ -54,6 +54,8 @@
   "enableCloudflareApiDomain": true,
   "cloudflareApiDomainName": "api-testnet-sorobanscan.rumblefishdev.com",
   "cloudflareApiCertificateArn": "arn:aws:acm:eu-central-1:750702271865:certificate/c96addf8-e778-4ef3-810c-bde092eeb822",
+  "sorobanscanApiDomainName": "api-testnet.sorobanscan.com",
+  "sorobanscanApiCertificateArn": "arn:aws:acm:eu-central-1:750702271865:certificate/c937aeef-20b3-4e94-ba90-ade97c7d00ec",
   "turnstileSiteKey": "0x4AAAAAADh96AKvSoW5C7CO",
   "provisionEdgeSecret": true,
   "enableEdgeSecretLock": true,

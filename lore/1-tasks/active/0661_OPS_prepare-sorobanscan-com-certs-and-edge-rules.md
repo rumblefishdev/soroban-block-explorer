@@ -2,7 +2,7 @@
 id: '0661'
 title: 'Prepare sorobanscan.com: ACM certificates, API edge rules, Turnstile'
 type: OPS
-status: backlog
+status: active
 related_adr: ['0048']
 related_tasks: ['0659', '0662', '0663', '0277', '0658']
 tags: [infra, cloudflare, acm, priority-medium, effort-medium]
@@ -12,6 +12,13 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Created under 0659.'
+  - date: '2026-11-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started after 0660 shipped. Decided: the old SPA alias stays on the
+      distribution until 0664, so the us-east-1 certificate carries the old
+      names as SANs.
 ---
 
 # Prepare sorobanscan.com: ACM certificates, API edge rules, Turnstile
@@ -24,9 +31,17 @@ the API answers `403` behind its new host.
 
 ## Stan teraz
 
-- Done: nothing yet.
-- Next: issue the certificates.
+- Done: Step 1. Both certificates `ISSUED` 2026-11-04, validated through
+  soroban-infrastructure#5's record: us-east-1 `0bcafe74-2ec1-4624-8277-5a51112da65a`,
+  eu-central-1 `c937aeef-20b3-4e94-ba90-ade97c7d00ec`.
+- Next: Step 2 (soroban-infrastructure#4 plus the token's permissions) and
+  Step 3 (Turnstile, with dns-cloudformation's owner).
 - In force: the zone and its rulesets belong to soroban-infrastructure.
+- Decided (2026-11-04): the old SPA alias stays until 0664. us-east-1:
+  `sorobanscan.com`, `*.sorobanscan.com`, `sorobanscan.rumblefish.dev`,
+  `*.sorobanscan.rumblefish.dev` (the old names validate through the Route 53
+  record the current certificate uses). eu-central-1: `sorobanscan.com`,
+  `*.sorobanscan.com`.
 
 ## Context
 
