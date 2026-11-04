@@ -31,11 +31,11 @@ zone. The old `api-*sorobanscan.rumblefishdev.com` hosts keep serving until
 
 ## Stan teraz
 
-- Done: Step 1 in code (#700); both fields set per env with 0661's
-  `*.sorobanscan.com` certificate (`api.sorobanscan.com`,
-  `api-testnet.sorobanscan.com`). Not deployed.
-- Next: deploy ApiGateway (testnet from a laptop, production by a
-  `-ApiGateway` tag), then Step 2 with soroban-infrastructure#4.
+- Done (2026-11-04): Steps 1 and 2 on both networks. `api.sorobanscan.com`
+  (`production-2026.11.04-3-ApiGateway`) and `api-testnet.sorobanscan.com`
+  (laptop) answer like the old hosts: `/health` 200, `/v1/ledgers` 401, a
+  direct origin hit 403. Step 3 is in code with 0663's PR.
+- Next: Step 3 ships with 0663 (SPA build, OpenAPI `base_url`, load tests).
 - In force: no gap. The old host serves until the new one is verified.
 
 ## Context
