@@ -250,6 +250,23 @@ export interface EnvironmentConfig {
   readonly cloudflareApiCertificateArn: string;
 
   /**
+   * The API's host on the sorobanscan.com zone (task 0662), e.g.
+   * "api.sorobanscan.com": a further REGIONAL custom domain beside
+   * `cloudflareApiDomainName`, which keeps serving until its redirect (task
+   * 0664). No Route 53 record — Cloudflare (soroban-infrastructure's
+   * `cloudflare/`) is authoritative and points a proxied CNAME at the
+   * `SorobanscanApiRegionalTarget` output. Unset (with its certificate) = no
+   * domain. Same mTLS as the Cloudflare domain.
+   */
+  readonly sorobanscanApiDomainName?: string;
+
+  /**
+   * ACM cert ARN covering `sorobanscanApiDomainName`, in `awsRegion` (the
+   * eu-central-1 `*.sorobanscan.com` wildcard of task 0661).
+   */
+  readonly sorobanscanApiCertificateArn?: string;
+
+  /**
    * Phase 1 of the secret-header origin lock (task 0277 / ADR 0048): provision
    * the CDK-generated `EdgeSecret` in Secrets Manager (and only that). Split from
    * `enableEdgeSecretLock` so the value can be copied into the Cloudflare
@@ -652,6 +669,17 @@ export function validateConfig(config: EnvironmentConfig): void {
     errors.push(
       `enableCloudflareApiDomain=true requires cloudflareApiDomainName and a real ` +
         `cloudflareApiCertificateArn (got a placeholder).`
+    );
+  }
+
+  // The sorobanscan.com API domain is all or nothing: a name without a
+  // certificate (or the reverse) is a half-edited env file.
+  if (
+    !config.sorobanscanApiDomainName !== !config.sorobanscanApiCertificateArn
+  ) {
+    errors.push(
+      `sorobanscanApiDomainName and sorobanscanApiCertificateArn are set ` +
+        `together or not at all.`
     );
   }
 

@@ -2,7 +2,7 @@
 id: '0662'
 title: 'Serve the explorer API at api.sorobanscan.com beside the old host'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0048']
 related_tasks: ['0659', '0661', '0663', '0664']
 tags: [infra, cdk, api-gateway, cloudflare, priority-medium, effort-small]
@@ -12,6 +12,12 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Created under 0659. Needs 0661.'
+  - date: '2026-11-03'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started: the CDK side (Step 1), off until both new config fields are set.
+      0661's certificate does not exist yet.
 ---
 
 # Serve the explorer API at api.sorobanscan.com beside the old host
@@ -25,8 +31,10 @@ zone. The old `api-*sorobanscan.rumblefishdev.com` hosts keep serving until
 
 ## Stan teraz
 
-- Done: nothing yet.
-- Next: a second Cloudflare custom domain in the API Gateway stack.
+- Done: Step 1 in code (`sorobanscanApiDomainName` +
+  `sorobanscanApiCertificateArn`, both unset in the env files, so a deploy
+  changes nothing). Not deployed.
+- Next: 0661's eu-central-1 certificate, then set both fields per env.
 - In force: no gap. The old host serves until the new one is verified.
 
 ## Context
