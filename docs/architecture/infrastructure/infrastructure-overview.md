@@ -347,11 +347,12 @@ asymmetry is deliberate:
   managed rules, unmetered DDoS, Managed Challenge, rate limiting. The AWS origin
   accepts Cloudflare only, via a secret request header verified in the application
   (`crates/api/src/common/edge_lock.rs`).
-  The API is moving to `api.sorobanscan.com` (task 0659): `sorobanscanApiDomainName`
-  adds it as one more custom domain on the same API (task 0662), fronted the same
-  way from the `sorobanscan.com` zone, whose records and rules live in
-  soroban-infrastructure's `cloudflare/`. Both hosts serve until the old one
-  redirects (task 0664).
+  The API is moving to `api.sorobanscan.com` (`api-testnet.sorobanscan.com` on
+  testnet; task 0659): `sorobanscanApiDomainName` adds it as one more custom
+  domain on the same API (task 0662), with the `*.sorobanscan.com` certificate in
+  `sorobanscanApiCertificateArn` (task 0661). It is fronted the same way from the
+  `sorobanscan.com` zone, whose records and rules live in soroban-infrastructure's
+  `cloudflare/`. Both hosts serve until the old one redirects (task 0664).
 - **Frontend** (`sorobanscan.rumblefish.dev`) — **no edge filtering at all.** The
   zone stays on Route 53; the nameserver flip in task 0277 covered
   `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end

@@ -13,9 +13,11 @@ import { validateConfig, type EnvironmentConfig } from '../lib/types.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const production = require('../../envs/production.json') as EnvironmentConfig;
-
-const CERT =
-  'arn:aws:acm:eu-central-1:750702271865:certificate/00000000-0000-0000-0000-000000000000';
+const bare: EnvironmentConfig = {
+  ...production,
+  sorobanscanApiDomainName: undefined,
+  sorobanscanApiCertificateArn: undefined,
+};
 
 function apiDomainNames(config: EnvironmentConfig): string[] {
   const out = mkdtempSync(join(tmpdir(), 'sorobanscan-api-'));
@@ -40,26 +42,21 @@ function apiDomainNames(config: EnvironmentConfig): string[] {
 }
 
 describe('sorobanscan.com API domain', () => {
-  it('adds the domain beside the current one when both fields are set', () => {
-    expect(
-      apiDomainNames({
-        ...production,
-        sorobanscanApiDomainName: 'api.sorobanscan.com',
-        sorobanscanApiCertificateArn: CERT,
-      })
-    ).toEqual([production.cloudflareApiDomainName, 'api.sorobanscan.com']);
-  });
-
-  it('adds nothing while the env file leaves both unset', () => {
+  it('serves production on both hosts, as the env file sets it', () => {
     expect(apiDomainNames(production)).toEqual([
       production.cloudflareApiDomainName,
+      'api.sorobanscan.com',
     ]);
+  });
+
+  it('adds nothing while both fields are unset', () => {
+    expect(apiDomainNames(bare)).toEqual([production.cloudflareApiDomainName]);
   });
 
   it('rejects a name without a certificate', () => {
     expect(() =>
       validateConfig({
-        ...production,
+        ...bare,
         sorobanscanApiDomainName: 'api.sorobanscan.com',
       })
     ).toThrow(/set together or not at all/);
