@@ -185,24 +185,6 @@ export interface EnvironmentConfig {
   // that must be live BEFORE the Cloudflare cutover (task 0277 Step 2).
 
   /**
-   * Provision the AWS-side bootstrap for THIS repo's Cloudflare module via CDK
-   * (so nothing is created by hand): the Terraform remote-state S3 bucket
-   * (versioned, encrypted, private) that backs `infra/cloudflare/`. Deploy this
-   * FIRST — the backend bucket must exist before the first `terraform apply`.
-   *
-   * DEPLOY-ONCE / LEAVE TRUE: the bucket is `RETAIN` and becomes the live
-   * Terraform backend. Flipping back to false removes the stack from the app and
-   * orphans the bucket from CDK (data survives via RETAIN, but it is then
-   * unmanaged) — so set it true once and keep it.
-   *
-   * Scope note (task 0277 D9/D11): this is the bucket for the **sorobanscan**
-   * slice only (api DNS record + AOP origin lock). The Cloudflare zone, company
-   * DNS, zone-level rulesets and a SEPARATE state bucket live in the private
-   * `dns-cloudformation` repo. Default false.
-   */
-  readonly provisionCloudflareBootstrap: boolean;
-
-  /**
    * Phase 1 of the API mTLS rollout: provision the **versioned** S3
    * truststore bucket (and only that) so the operator can upload the CA
    * bundle PEM (`truststore.pem`) BEFORE mTLS is attached.

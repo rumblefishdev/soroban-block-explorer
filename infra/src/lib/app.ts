@@ -10,7 +10,6 @@ import { IngestionStack } from './stacks/ingestion-stack.js';
 import { ObservabilityStack } from './stacks/observability-stack.js';
 import { CloudWatchStack } from './stacks/cloudwatch-stack.js';
 import { HetznerDnsStack } from './stacks/hetzner-dns-stack.js';
-import { CloudflareBootstrapStack } from './stacks/cloudflare-bootstrap-stack.js';
 
 export interface CreateAppOptions {
   readonly config: EnvironmentConfig;
@@ -105,15 +104,9 @@ export function createApp({
   });
   cloudWatch.addDependency(apiGateway);
 
-  // AWS-side bootstrap for THIS repo's Cloudflare module (task 0277 / ADR 0048):
-  // the Terraform remote-state bucket for infra/cloudflare/. Standalone — no
-  // dependency on the other stacks.
-  if (config.provisionCloudflareBootstrap) {
-    new CloudflareBootstrapStack(app, `${prefix}-CloudflareBootstrap`, {
-      env,
-      config,
-    });
-  }
+  // The Terraform state bucket of infra/cloudflare/ is no longer here: its
+  // stack, Explorer-production-CloudflareBootstrap, is soroban-infrastructure's
+  // cloudflare/state-bucket.yaml since task 0658.
 
   // HetznerDnsStack only when the env has a real `chDomainName` and owns
   // its record.
