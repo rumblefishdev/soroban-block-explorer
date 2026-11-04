@@ -373,14 +373,15 @@ redeploying `ApiGateway` as soon as the run ends.
   CloudFront in the initial topology
 - since task 0519, also serves a second, independently-built SPA (the
   Stellar Prices portal) from its own S3 bucket
-  (`${envName}-soroban-explorer-api-spa`, key prefix `prices-api/`) under
-  `/prices-api` + `/prices-api/*` on the same distribution (two behaviors:
-  `/prices-api/*` requires the literal trailing slash and doesn't match bare
-  `/prices-api`, so that gets its own exact-match behavior). Both point at
-  one CloudFront Function (`api-spa-routing.ts`) that always rewrites
-  extensionless paths to `/prices-api/index.html` (SPA routing fallback,
-  including the bucket root) and redirects bare `/prices-api` to
-  `/prices-api/` — the main behaviors' `errorResponses`
+  (`${envName}-soroban-explorer-api-spa`, key prefix `api/prices-api/`) under
+  `/api/prices-api` + `/api/prices-api/*` on the same distribution (task
+  0660; two behaviors: `/api/prices-api/*` requires the literal trailing
+  slash and doesn't match bare `/api/prices-api`, so that gets its own
+  exact-match behavior, and both sit above `/api/*`, since behaviors match in
+  order). Both point at one CloudFront Function (`api-spa-routing.ts`) that
+  always rewrites extensionless paths to `/api/prices-api/index.html` (SPA
+  routing fallback, including the bucket root) and redirects bare
+  `/api/prices-api` to `/api/prices-api/` — the main behaviors' `errorResponses`
   can't cover this because custom error pages resolve through the
   _default_ behavior's origin, not the originating one. The same function
   also does the basic-auth check when `enableApiSpaBasicAuth` is on,
@@ -390,12 +391,16 @@ redeploying `ApiGateway` as soon as the run ends.
   flags off, so turning a gate off keeps its credentials for re-arming.
   Production runs with `enableApiSpaBasicAuth=false` (the portal is
   public; its backend lives on a separate host).
-- `/api` + `/api/*`, the portal's home until task 0608, and `/pricing-api` +
-  `/pricing-api/*`, its name for a few hours on 2026-10-02, keep behaviors on
-  the same origin, but their function (`api-path-redirect.ts`) answers every
-  request with a `301` to the same path under `/prices-api`, query string
-  kept (bare `/api` → `/prices-api/`), so links shared before the move
-  still land on the portal.
+- `/api` and `/api/` are the portal hub, a route of the main SPA (task 0660):
+  bare `/api` falls to the default behavior, and `/api/` has an exact-match
+  behavior with the main behaviors' settings, since `/api/*` would take it.
+- The portal's old homes keep behaviors on the portal origin, but their
+  function (`api-path-redirect.ts`) answers every request with a `301` to the
+  same path under `/api/prices-api`, query string kept, so links shared
+  before a move still land on the portal in one hop: `/prices-api` +
+  `/prices-api/*` (task 0608 until task 0660), `/pricing-api` +
+  `/pricing-api/*` (a few hours on 2026-10-02), and every other `/api/*`
+  path (the portal's home until task 0608).
 - since task 0576, writes standard (access) logs for every request, explorer
   and portal alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
   referrer, user agent and viewer IP, never cookies. Objects expire after 30

@@ -15,9 +15,9 @@
 # clean.
 #
 # State lives in S3 with the NATIVE S3 lockfile (use_lockfile, Terraform
-# >= 1.10 — no DynamoDB). Backend bucket is the CDK-provisioned
-# `<env>-soroban-explorer-cf-tfstate` (CloudflareBootstrapStack) — SEPARATE
-# from dns-cloudformation's bucket (D11). State may carry the mTLS client key as a
+# >= 1.10 — no DynamoDB). Backend bucket is `<env>-soroban-explorer-cf-tfstate`,
+# from soroban-infrastructure's cloudflare/state-bucket.yaml (task 0658) —
+# SEPARATE from dns-cloudformation's bucket (D11). State may carry the mTLS client key as a
 # resource attribute, so the bucket stays private + encrypted, never committed.
 
 terraform {

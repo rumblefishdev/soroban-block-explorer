@@ -165,12 +165,13 @@ export interface EnvironmentConfig {
   readonly enableBasicAuth: boolean;
 
   /**
-   * Enable CloudFront Function basic auth on the `/prices-api/*` behavior
-   * only (task 0519; `/api/*` until task 0608) — the separate Prices portal
+   * Enable CloudFront Function basic auth on the `/api/prices-api/*` behavior
+   * only (task 0519; `/api/*` until task 0608, `/prices-api/*` until task
+   * 0660) — the separate Prices portal
    * SPA served from its own S3 bucket (`apiSpaBucket`) on the same
    * distribution. Independent of `enableBasicAuth`: flipping this on does NOT
    * gate the main site's behaviors, and flipping `enableBasicAuth` on does
-   * NOT gate `/prices-api/*`.
+   * NOT gate `/api/prices-api/*`.
    *
    * Shares the same CloudFront Function code and KeyValueStore as
    * `enableBasicAuth` when both are true (one construct, one set of
@@ -183,24 +184,6 @@ export interface EnvironmentConfig {
   // All default false until the Cloudflare zone + certs/secrets exist;
   // enabling them does NOT move DNS, it provisions the AWS-side locks
   // that must be live BEFORE the Cloudflare cutover (task 0277 Step 2).
-
-  /**
-   * Provision the AWS-side bootstrap for THIS repo's Cloudflare module via CDK
-   * (so nothing is created by hand): the Terraform remote-state S3 bucket
-   * (versioned, encrypted, private) that backs `infra/cloudflare/`. Deploy this
-   * FIRST — the backend bucket must exist before the first `terraform apply`.
-   *
-   * DEPLOY-ONCE / LEAVE TRUE: the bucket is `RETAIN` and becomes the live
-   * Terraform backend. Flipping back to false removes the stack from the app and
-   * orphans the bucket from CDK (data survives via RETAIN, but it is then
-   * unmanaged) — so set it true once and keep it.
-   *
-   * Scope note (task 0277 D9/D11): this is the bucket for the **sorobanscan**
-   * slice only (api DNS record + AOP origin lock). The Cloudflare zone, company
-   * DNS, zone-level rulesets and a SEPARATE state bucket live in the private
-   * `dns-cloudformation` repo. Default false.
-   */
-  readonly provisionCloudflareBootstrap: boolean;
 
   /**
    * Phase 1 of the API mTLS rollout: provision the **versioned** S3
