@@ -116,7 +116,7 @@ Base URL — pick one:
   this for backend capacity). Take the `ApiEndpoint` from the ApiGateway stack
   output (the `…execute-api.eu-central-1.amazonaws.com/production` URL) and append
   `/v1`. Requires `--edge-secret` (Cloudflare won't inject it off its own path).
-- **Through Cloudflare** — `https://api-sorobanscan.rumblefishdev.com/v1` (the real
+- **Through Cloudflare** — `https://api.sorobanscan.com/v1` (the real
   path, but subject to Cloudflare's own rate limit → HTTP 429 `error code: 1015`,
   which `loadTesting` does NOT control).
 

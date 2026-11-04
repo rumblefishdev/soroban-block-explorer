@@ -12,7 +12,7 @@ describe('NetworkMenu', () => {
     expect(screen.queryByRole('link', { name: 'Testnet' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Mainnet' })).toHaveAttribute(
       'href',
-      'https://sorobanscan.rumblefish.dev'
+      'https://sorobanscan.com'
     );
   });
 
@@ -23,7 +23,7 @@ describe('NetworkMenu', () => {
 
     expect(screen.getByRole('link', { name: 'Testnet' })).toHaveAttribute(
       'href',
-      'https://testnet.sorobanscan.rumblefish.dev/ledgers'
+      'https://testnet.sorobanscan.com/ledgers'
     );
   });
 });

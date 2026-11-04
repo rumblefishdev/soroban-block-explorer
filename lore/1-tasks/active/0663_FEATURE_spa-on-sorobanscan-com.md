@@ -2,7 +2,7 @@
 id: '0663'
 title: 'Serve the explorer SPA at sorobanscan.com and testnet.sorobanscan.com'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0659', '0661', '0662', '0664', '0660']
 tags: [infra, cdk, cloudfront, web, priority-medium, effort-medium]
@@ -12,6 +12,12 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Created under 0659. Needs 0661 and 0662.'
+  - date: '2026-11-04'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started: Steps 1-2 and 0662's Step 3 in code, with the old SPA host kept
+      as a second alias (legacyDomainName) and the API's CORS open to both.
 ---
 
 # Serve the explorer SPA at sorobanscan.com and testnet.sorobanscan.com
@@ -24,9 +30,16 @@ Route 53 records for the SPA: a JSON-only change fails at synth.
 
 ## Stan teraz
 
-- Done: nothing yet.
-- Next: the CDK flag that skips the SPA's Route 53 records.
-- In force: the Prices `portalWebOrigin` moves in the same window.
+- Done: Steps 1-2 in code. `legacyDomainName` keeps the old host as a second
+  alias with its Route 53 records; `domainName` (`sorobanscan.com`) gets none.
+  `CORS_ALLOW_ORIGIN` takes a comma list. Not deployed.
+- Next, in order: Turnstile on the new hosts (0661 Step 3); Compute and
+  ApiGateway (CORS for both origins); Delivery; Step 3's DNS records; the SPA.
+- In force: the smoke URL stays on the old host until 0664 (it still serves).
+- Found: the Prices backend allows one CORS origin (`portalWebOrigin`), and the
+  OAuth popup posts back to its opener's origin. Moving it to
+  `sorobanscan.com` while the old host still serves the portal breaks the
+  portal there, so it moves with 0664's redirect, or the backend takes both.
 
 ## Context
 

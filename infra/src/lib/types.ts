@@ -135,8 +135,14 @@ export interface EnvironmentConfig {
 
   // Delivery (consumed by DeliveryStack + ApiGatewayStack)
 
-  /** Frontend SPA domain, e.g. "sorobanscan.rumblefish.dev". */
+  /** Frontend SPA domain, e.g. "sorobanscan.com". */
   readonly domainName: string;
+  /**
+   * The SPA's previous host, kept as a second alias on the distribution until
+   * task 0664 redirects it (task 0663). It keeps its Route 53 records; a
+   * `domainName` outside the hosted zone gets its DNS from soroban-infrastructure.
+   */
+  readonly legacyDomainName?: string;
   /** API custom domain, e.g. "api.sorobanscan.rumblefish.dev". */
   readonly apiDomainName: string;
   /** Existing Route 53 hosted zone ID for sorobanscan.rumblefish.dev (global). */
@@ -452,6 +458,17 @@ export interface EnvironmentConfig {
  * label. For an apex record (`fqdn === zoneName`) it returns the zone
  * name itself, which CDK accepts as the apex.
  */
+export function inZone(fqdn: string, zoneName: string): boolean {
+  return fqdn === zoneName || fqdn.endsWith(`.${zoneName}`);
+}
+
+/** Every origin the SPA is served from, for the API's CORS (task 0663). */
+export function spaOrigins(config: EnvironmentConfig): string[] {
+  return [config.domainName, config.legacyDomainName]
+    .filter((host): host is string => !!host)
+    .map((host) => `https://${host}`);
+}
+
 export function relativeRecordName(fqdn: string, zoneName: string): string {
   if (fqdn === zoneName) {
     return zoneName;
@@ -522,6 +539,16 @@ export function validateConfig(config: EnvironmentConfig): void {
   }
   if (!config.domainName || config.domainName.includes('CHANGE')) {
     errors.push(`domainName missing or placeholder: "${config.domainName}"`);
+  }
+  // Route 53 records go to exactly one SPA name: the one inside the zone.
+  const routed = [config.domainName, config.legacyDomainName].filter(
+    (host) => host && inZone(host, config.hostedZoneName)
+  );
+  if (routed.length !== 1) {
+    errors.push(
+      `exactly one of domainName / legacyDomainName must be within ` +
+        `hostedZoneName "${config.hostedZoneName}", got: ${routed.length}`
+    );
   }
   if (!config.apiDomainName || config.apiDomainName.includes('CHANGE')) {
     errors.push(
