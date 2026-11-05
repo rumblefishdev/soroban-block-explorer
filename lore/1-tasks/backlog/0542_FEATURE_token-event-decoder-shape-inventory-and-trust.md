@@ -621,8 +621,8 @@ tie query has something to resolve on. Repo-wide; needs a deploy window
 
 ### Step 4: Reject alarm with a threshold
 
-`alarm` field on the per-ledger `error!` + CloudWatch metric filter +
-`FILTER_MINTED_METRICS` entry, threshold from the measured baseline.
+`alarm` field on the per-ledger `error!` + CloudWatch metric filter read through
+`filter.metric()`, threshold from the measured baseline.
 
 ### Step 6: `i128` token ids — semantic resolution for live and replay
 
