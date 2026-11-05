@@ -189,3 +189,24 @@ describe('testnet environment', () => {
     ).toThrow(/publicArchivePrefix is read only with ledgerSource/);
   });
 });
+
+// One failed reconcile on testnet (2026-11-03) also paged production: a metric
+// filter's metric carries no dimension, so a shared name is one shared series.
+describe('terminal indexer failure metric', () => {
+  const namespaceOf = (from: Templates): string => {
+    const filter = Object.values(from['CloudWatch'] ?? {}).find(
+      (r) =>
+        r.Type === 'AWS::Logs::MetricFilter' &&
+        JSON.stringify(r.Properties).includes('ch_write_failure')
+    );
+    if (!filter) throw new Error('no ch_write_failure metric filter');
+    const [transformation] = filter.Properties['MetricTransformations'] as {
+      MetricNamespace: string;
+    }[];
+    return transformation?.MetricNamespace ?? '';
+  };
+
+  it('is a separate series on each network', () => {
+    expect(namespaceOf(templates)).not.toBe(namespaceOf(synth(production)));
+  });
+});

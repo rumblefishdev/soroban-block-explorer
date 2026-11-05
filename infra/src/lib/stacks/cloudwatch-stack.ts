@@ -355,9 +355,8 @@ export class CloudWatchStack extends cdk.Stack {
         // machine-contract field, NOT the human `message` prose. The
         // indexer Lambda uses `tracing_subscriber::fmt().json()`, so
         // each log line is `{"fields":{"alarm":"...","message":...}}`.
-        // History: this filter originally matched the prose `failed to
-        // process S3 record`; the doorbell rewrite (`bee784df`)
-        // reworded the emit site and left the filter matching nothing —
+        // History: the doorbell rewrite (`bee784df`) reworded the prose this
+        // filter once matched and left it matching nothing —
         // the metric stayed flat 0 through the 0454 outage. Prose is
         // for operators and may be reworded freely; the `alarm` field
         // is emitted by both hard-failure sites (`handler/mod.rs`
@@ -369,7 +368,9 @@ export class CloudWatchStack extends cdk.Stack {
           '=',
           'ch_write_failure'
         ),
-        metricNamespace: 'SorobanBlockExplorer/Indexer',
+        // The log line names no network, so no Environment dimension here: the
+        // namespace keeps one network's failure from paging the other.
+        metricNamespace: `SorobanBlockExplorer/Indexer/${config.envName}`,
         metricName: 'ChWriteFailures',
         metricValue: '1',
         defaultValue: 0,
@@ -379,7 +380,7 @@ export class CloudWatchStack extends cdk.Stack {
       new cloudwatch.Alarm(this, 'IndexerChWriteFailureAlarm', {
         alarmName: `${config.envName}-indexer-ch-write-failures`,
         alarmDescription:
-          'Indexer reconcile hit a terminal failure - the log line carries cause=s3|parse|clickhouse|mtls_init; read it before assuming the database. (Metric name kept for history; every terminal reconcile failure lands here, not only CH writes.)',
+          'Indexer reconcile hit a terminal failure - the log line carries cause=s3|parse|clickhouse|mtls_init; read it before assuming the database. (Despite the metric name, every terminal reconcile failure lands here, not only CH writes.)',
         metric: chWriteFailureFilter.metric({
           period: cdk.Duration.minutes(5),
           statistic: cloudwatch.Stats.SUM,
@@ -782,9 +783,7 @@ export class CloudWatchStack extends cdk.Stack {
                 statistic: cloudwatch.Stats.SUM,
                 label: 'Lambda errors',
               }),
-              new cloudwatch.Metric({
-                namespace: 'SorobanBlockExplorer/Indexer',
-                metricName: 'ChWriteFailures',
+              chWriteFailureFilter.metric({
                 period: cdk.Duration.minutes(5),
                 statistic: cloudwatch.Stats.SUM,
                 label: 'CH write failures',
