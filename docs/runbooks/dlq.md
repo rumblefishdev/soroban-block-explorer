@@ -14,6 +14,11 @@ What can legitimately land in each queue:
 | `ledger-processor-dlq` | reconcile failed `maxReceiveCount` times — a ClickHouse/S3 incident                                                                                   | none: doorbells carry no data (the indexer reconciles from its durable cursor) |
 | `enrichment-dlq`       | a DB-write failure during a CH incident, a poison-pill message that crashes/times out the worker, or a fetch that timed out past connect on every try | redrive material / reproduction evidence                                       |
 
+A fetch answered with 429 or 5xx also lands in `enrichment-dlq` after three
+tries: on an IPFS gateway, or on one issuer's `stellar.toml`. Check first
+whether the gateway still serves backends (`DEFAULT_IPFS_GATEWAYS`); a redrive
+while it refuses them sends the messages back here.
+
 Dead issuer domains do NOT land here (since 2026-08-11): connect-level fetch
 failures classify **permanent** and write the `''` sentinel immediately —
 measured 30 days of "transient" retries were 100% dead domains and 0%

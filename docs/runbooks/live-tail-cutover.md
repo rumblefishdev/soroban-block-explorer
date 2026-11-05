@@ -858,8 +858,8 @@ Operator on-call until T+24h. Watch:
 - `<env>-galexie-ingestion-lag` — must stay OK (alarm `alarmName` set
   by `cloudwatch-stack.ts::GalexieLagAlarm`, NOT the construct ID).
   For production: `production-galexie-ingestion-lag`.
-- `<env>-indexer-ch-write-failures` alarm (CDK
-  `IndexerChWriteFailureAlarm` in `cloudwatch-stack.ts`) — a log
+- `<env>-indexer-failures` alarm (CDK
+  `IndexerFailureAlarm` in `cloudwatch-stack.ts`) — a log
   MetricFilter on the indexer log group matching the exact JSON
   `$.fields.message` values `"failed to process S3 record"` (the
   terminal per-batch failure) and `"failed to build mTLS CH client"`
@@ -979,7 +979,7 @@ rotation gone wrong, malformed JSON on update.
 `MtlsError::Fetch` or `MtlsError::BundleDecode`. Existing warm Lambda
 containers keep working with the cached bundle until they reach end
 of life (~15 min idle); new containers fail immediately. The
-`<env>-indexer-ch-write-failures` alarm fires within 5 min of the
+`<env>-indexer-failures` alarm fires within 5 min of the
 first cold start.
 
 **Recovery**:

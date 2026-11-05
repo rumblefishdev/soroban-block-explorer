@@ -4,7 +4,7 @@ use super::*;
 fn resolve_ipfs_swaps_scheme() {
     assert_eq!(
         resolve_ipfs_to_https("ipfs://QmFoo/1.json"),
-        "https://ipfs.io/ipfs/QmFoo/1.json"
+        "https://ipfs.filebase.io/ipfs/QmFoo/1.json"
     );
     assert_eq!(
         resolve_ipfs_to_https("https://example.com/1.json"),
@@ -555,29 +555,22 @@ fn trailing_slash_redirect_is_followed_and_offhost_is_not() {
 }
 
 #[test]
-fn ipfs_candidates_rotate_and_passthrough() {
+fn ipfs_candidates_keep_pool_order_and_passthrough() {
     let gws = vec![
         "https://gw-a/ipfs/".to_owned(),
         "https://gw-b/ipfs/".to_owned(),
     ];
-    // ipfs:// → one URL per gateway, order rotated by `start`.
+    // ipfs:// → one URL per gateway, always the first gateway first.
     assert_eq!(
-        super::ipfs_candidate_urls("ipfs://QmX/1.json", &gws, 0),
+        super::ipfs_candidate_urls("ipfs://QmX/1.json", &gws),
         vec![
             "https://gw-a/ipfs/QmX/1.json",
             "https://gw-b/ipfs/QmX/1.json"
         ]
     );
+    // https:// → single passthrough.
     assert_eq!(
-        super::ipfs_candidate_urls("ipfs://QmX/1.json", &gws, 1),
-        vec![
-            "https://gw-b/ipfs/QmX/1.json",
-            "https://gw-a/ipfs/QmX/1.json"
-        ]
-    );
-    // https:// → single passthrough, no rotation.
-    assert_eq!(
-        super::ipfs_candidate_urls("https://host.example/1.json", &gws, 0),
+        super::ipfs_candidate_urls("https://host.example/1.json", &gws),
         vec!["https://host.example/1.json"]
     );
 }

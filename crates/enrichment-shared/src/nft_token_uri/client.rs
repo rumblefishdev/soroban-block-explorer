@@ -32,17 +32,17 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const CACHE_CAPACITY: u64 = 1024;
 const USER_AGENT: &str = concat!("soroban-block-explorer/", env!("CARGO_PKG_VERSION"));
-/// Default IPFS gateways, tried in order with failover. Unlike the Soroban RPC
-/// pool, which belongs to one network and so has no default
-/// ([`crate::soroban_rpc`]), a gateway serves any network's content. Both
-/// serve path-style `/ipfs/<CID>` with HTTP 200 in one hop (no redirect needed; since
-/// lore-0455 the client follows same-registrable-domain https redirects
-/// with a bounded budget, so a trailing-slash `301` no longer loses
-/// content) and are reachable from the prod box
-/// (task 0311 sieve, 2026-06-22). The prior single default
-/// `cloudflare-ipfs.com` was sunset by Cloudflare → dead.
+/// Default IPFS gateways, tried in this order on every request. Unlike the
+/// Soroban RPC pool, which belongs to one network and so has no default
+/// ([`crate::soroban_rpc`]), a gateway serves any network's content. The first
+/// one also becomes the stored address of every `ipfs://` image, which browsers
+/// load directly. `ipfs.io` stopped serving backends in 2026 and
+/// `cloudflare-ipfs.com` was sunset before it. Filebase is first because Pinata
+/// answers slower than the API's 3 s budget for a detail page. Filebase states
+/// its public gateway is for testing and light usage, at 200 requests a minute
+/// (lore-0520).
 pub(super) const DEFAULT_IPFS_GATEWAYS: &[&str] = &[
-    "https://ipfs.io/ipfs/",
+    "https://ipfs.filebase.io/ipfs/",
     "https://gateway.pinata.cloud/ipfs/",
 ];
 
@@ -76,7 +76,7 @@ pub struct NftTokenUriFetcher {
     /// RPC endpoint pool — round-robin + failover (task 0311). A single
     /// element = the historical single-RPC behaviour.
     rpc_urls: Arc<Vec<String>>,
-    /// IPFS gateway pool — round-robin + failover for `ipfs://` token_uris.
+    /// IPFS gateway pool — in order, with failover, for `ipfs://` token_uris.
     ipfs_gateways: Arc<Vec<String>>,
     /// Round-robin start cursor — spreads each request's first pick across the
     /// pools so no single endpoint is hammered first (proactive 429 avoidance).
@@ -331,7 +331,7 @@ async fn fetch_uncached(
     }
     validate_uri(&uri)?;
     debug!(uri = %uri, "nft token_uri resolved; fetching metadata");
-    fetch_metadata_with_failover(client, &uri, ipfs_gateways, start).await
+    fetch_metadata_with_failover(client, &uri, ipfs_gateways).await
 }
 
 /// Try each RPC in the pool (round-robin from `start`) until one answers.
@@ -361,7 +361,7 @@ async fn simulate_with_failover(
     Err(last.expect("rpc pool is non-empty, so the loop body ran"))
 }
 
-/// Resolve the `token_uri` value to metadata JSON, rotating IPFS gateways with
+/// Resolve the `token_uri` value to metadata JSON, walking IPFS gateways with
 /// failover. An `ipfs://` URI has one candidate per gateway (content-addressed
 /// → identical bytes); an `https://` URI has a single candidate. Advances only
 /// on endpoint faults; a deterministic content error (unsupported type,
@@ -370,9 +370,8 @@ async fn fetch_metadata_with_failover(
     client: &reqwest::Client,
     uri: &str,
     ipfs_gateways: &[String],
-    start: usize,
 ) -> Result<Value, NftTokenUriError> {
-    let candidates = ipfs_candidate_urls(uri, ipfs_gateways, start);
+    let candidates = ipfs_candidate_urls(uri, ipfs_gateways);
     let mut last: Option<NftTokenUriError> = None;
     for url in &candidates {
         match fetch_one_metadata(client, url).await {
@@ -390,16 +389,14 @@ async fn fetch_metadata_with_failover(
 }
 
 /// Ordered candidate URLs for a validated `token_uri` value. `ipfs://<rest>` →
-/// one URL per gateway (round-robin from `start`); `https://…` → the single
-/// direct URL (a specific host — no rotation).
-fn ipfs_candidate_urls(uri: &str, gateways: &[String], start: usize) -> Vec<String> {
+/// one URL per gateway, in pool order; `https://…` → the single direct URL (a
+/// specific host).
+fn ipfs_candidate_urls(uri: &str, gateways: &[String]) -> Vec<String> {
     match uri.strip_prefix("ipfs://") {
-        Some(rest) if !gateways.is_empty() => {
-            let n = gateways.len();
-            (0..n)
-                .map(|k| format!("{}{rest}", gateways[(start + k) % n]))
-                .collect()
-        }
+        Some(rest) if !gateways.is_empty() => gateways
+            .iter()
+            .map(|gateway| format!("{gateway}{rest}"))
+            .collect(),
         _ => vec![uri.to_owned()],
     }
 }
@@ -675,7 +672,7 @@ fn decode_string_result(xdr_b64: &str, function_name: &str) -> Result<String, Nf
 /// `ipfs://...` → `https://<primary-gateway>/ipfs/...`; HTTPS passes through.
 /// Single-gateway resolution (the primary of [`DEFAULT_IPFS_GATEWAYS`]) for the
 /// `image`-field path in `enrich_and_persist::nft_token_uri`; the `token_uri`
-/// metadata fetch itself rotates the full pool via `fetch_metadata_with_failover`.
+/// metadata fetch itself walks the full pool via `fetch_metadata_with_failover`.
 pub(crate) fn resolve_ipfs_to_https(uri: &str) -> String {
     uri.strip_prefix("ipfs://")
         .map(|rest| format!("{}{rest}", DEFAULT_IPFS_GATEWAYS[0]))

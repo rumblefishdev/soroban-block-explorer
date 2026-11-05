@@ -135,6 +135,7 @@ detail: `notes/R-measured-2026-09.md`.
 - [ ] Every enrichment row carries a status; no all-empty sentinel is written
 - [ ] Retry schedule exercised by a test; contract reverts are never retried
 - [ ] `data:` JSON URIs decode; the IPFS gateway answers from the Lambda
+- [ ] Rows already stored on the retired gateway are rewritten, testnet first
 - [ ] An inline `data:image/…` image renders on the NFT list and detail page
       (the issue #684 contract is the test case)
 - [ ] After backfill: re-run the re-fetch measurement — recovered counts

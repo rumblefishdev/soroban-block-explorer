@@ -343,22 +343,28 @@ and the `enableWaf` setting were deleted from the CDK app. There is no AWS WAF i
 this system and no switch to re-enable one. What replaced it is asymmetric, and the
 asymmetry is deliberate:
 
-- **API** (`api-sorobanscan.rumblefishdev.com`) — fronted by **Cloudflare**: WAF
+- **API** (`api.sorobanscan.com`, `api-testnet.sorobanscan.com`) — fronted by **Cloudflare**: WAF
   managed rules, unmetered DDoS, Managed Challenge, rate limiting. The AWS origin
   accepts Cloudflare only, via a secret request header verified in the application
   (`crates/api/src/common/edge_lock.rs`).
-  The API is moving to `api.sorobanscan.com` (`api-testnet.sorobanscan.com` on
-  testnet; task 0659): `sorobanscanApiDomainName` adds it as one more custom
-  domain on the same API (task 0662), with the `*.sorobanscan.com` certificate in
-  `sorobanscanApiCertificateArn` (task 0661). It is fronted the same way from the
-  `sorobanscan.com` zone, whose records and rules live in soroban-infrastructure's
-  `cloudflare/`. Both hosts serve until the old one redirects (task 0664).
+  `sorobanscanApiDomainName` is one more custom domain on the same API (task
+  0662), with the `*.sorobanscan.com` certificate in `sorobanscanApiCertificateArn`
+  (task 0661). Its records and edge rules live in soroban-infrastructure's
+  `cloudflare/`, in the `sorobanscan.com` zone. The old host
+  (`api-sorobanscan.rumblefishdev.com`, rules in dns-cloudformation) serves the same
+  API until task 0664 redirects it.
 - **Frontend** (`sorobanscan.com`, `testnet.sorobanscan.com`; task 0663) — **no
   edge filtering at all.** Their records are DNS-only in soroban-infrastructure's
   `sorobanscan.com` zone. The old hosts (`legacyDomainName`:
   `sorobanscan.rumblefish.dev` and its testnet twin) stay second aliases on the
-  same distribution, with their Route 53 records, until task 0664 redirects
-  them; the API's CORS allows both origins for that window. The
+  same distribution, with their Route 53 records, and only redirect: every
+  viewer-request function answers `301` to the same path and query on the new
+  host (task 0664, `cloudfront-functions/legacy-host-redirect.ts`), and the
+  portal's old paths reach `/api/prices-api/` in the same hop. The Prices portal
+  is the exception while `pricesPortalOnLegacyHost` is set: it stays on the old
+  host and the new host answers `302` back to it, because the Prices API is
+  still on `prices-api.sorobanscan.rumblefish.dev` (CORS for one origin, a
+  `SameSite=Lax` session cookie). The
   `rumblefish.dev` zone stays on Route 53; the nameserver flip in task 0277
   covered `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end
   state, not a pending migration: the distribution serves a static, edge-cached
