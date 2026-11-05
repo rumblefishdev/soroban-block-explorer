@@ -138,11 +138,21 @@ export interface EnvironmentConfig {
   /** Frontend SPA domain, e.g. "sorobanscan.com". */
   readonly domainName: string;
   /**
-   * The SPA's previous host, kept as a second alias on the distribution until
-   * task 0664 redirects it (task 0663). It keeps its Route 53 records; a
-   * `domainName` outside the hosted zone gets its DNS from soroban-infrastructure.
+   * The SPA's previous host, kept as a second alias on the distribution (task
+   * 0663) whose every request answers `301` to the same path on `domainName`
+   * (task 0664). It keeps its Route 53 records; a `domainName` outside the
+   * hosted zone gets its DNS from soroban-infrastructure.
    */
   readonly legacyDomainName?: string;
+  /**
+   * The Prices portal (`/api/prices-api/*` and its old paths) stays on
+   * `legacyDomainName`: the new host answers `302` back to it, and the old host
+   * serves it (task 0664). Needed until the Prices API is on a
+   * `sorobanscan.com` host: its session cookie is `SameSite=Lax` (same-site
+   * only with `*.rumblefish.dev`) and its CORS allows one origin,
+   * `portalWebOrigin`.
+   */
+  readonly pricesPortalOnLegacyHost?: boolean;
   /** API custom domain, e.g. "api.sorobanscan.rumblefish.dev". */
   readonly apiDomainName: string;
   /** Existing Route 53 hosted zone ID for sorobanscan.rumblefish.dev (global). */
@@ -645,6 +655,21 @@ export function validateConfig(config: EnvironmentConfig): void {
         `Pick one (origin-secret lock is the Cloudflare-cutover lock per ADR 0048; ` +
         `basic auth is the temporary pre-launch gate from task 0273), or land a ` +
         `combined guard function first.`
+    );
+  }
+  if (config.pricesPortalOnLegacyHost && !config.legacyDomainName) {
+    errors.push(`pricesPortalOnLegacyHost needs legacyDomainName.`);
+  }
+  // The old host's redirect (task 0664) is the main behaviors' viewer-request
+  // function too.
+  if (
+    config.legacyDomainName &&
+    (config.enableBasicAuth || config.enableOriginSecretLock)
+  ) {
+    errors.push(
+      `legacyDomainName cannot be combined with enableBasicAuth or ` +
+        `enableOriginSecretLock: its 301 needs the main behaviors' only ` +
+        `viewer-request function.`
     );
   }
 

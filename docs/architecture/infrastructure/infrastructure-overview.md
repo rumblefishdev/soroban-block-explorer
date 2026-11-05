@@ -357,8 +357,14 @@ asymmetry is deliberate:
   edge filtering at all.** Their records are DNS-only in soroban-infrastructure's
   `sorobanscan.com` zone. The old hosts (`legacyDomainName`:
   `sorobanscan.rumblefish.dev` and its testnet twin) stay second aliases on the
-  same distribution, with their Route 53 records, until task 0664 redirects
-  them; the API's CORS allows both origins for that window. The
+  same distribution, with their Route 53 records, and only redirect: every
+  viewer-request function answers `301` to the same path and query on the new
+  host (task 0664, `cloudfront-functions/legacy-host-redirect.ts`), and the
+  portal's old paths reach `/api/prices-api/` in the same hop. The Prices portal
+  is the exception while `pricesPortalOnLegacyHost` is set: it stays on the old
+  host and the new host answers `302` back to it, because the Prices API is
+  still on `prices-api.sorobanscan.rumblefish.dev` (CORS for one origin, a
+  `SameSite=Lax` session cookie). The
   `rumblefish.dev` zone stays on Route 53; the nameserver flip in task 0277
   covered `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end
   state, not a pending migration: the distribution serves a static, edge-cached
