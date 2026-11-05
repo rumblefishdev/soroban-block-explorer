@@ -32,9 +32,15 @@ custom domains go, and Search Console gets the change of address.
 
 ## Stan teraz
 
-- Done: Step 1 in code, on testnet 2026-11-05 (laptop). Every viewer-request
-  function on the distribution answers `301` on `legacyDomainName`; the main
-  behaviors, which had none, get `legacy-host-redirect.ts`.
+- Done: Step 1 on both networks, 2026-11-05: testnet from a laptop,
+  production by `production-2026.11.05-5-Delivery` (#711, release #712). Every
+  viewer-request function on the distribution answers `301` on
+  `legacyDomainName`; the main behaviors, which had none, get
+  `legacy-host-redirect.ts`. Checked with `curl` on both production hosts.
+- Found (2026-11-05): that tag's CI run failed at "Smoke test — Frontend",
+  which still fetched the old host and now got its `301`. The deploy itself
+  went through. The smoke now fetches `https://sorobanscan.com/` (carried from
+  0663).
 - Found (2026-11-05): the Prices portal cannot work on `sorobanscan.com` while
   the Prices API is on `prices-api.sorobanscan.rumblefish.dev`. Its CORS allows
   one origin, and its session cookie is `SameSite=Lax`, same-site only with
@@ -46,12 +52,19 @@ custom domains go, and Search Console gets the change of address.
   the new host answers `302` back to it, the old host serves it, and
   `portalWebOrigin` stays. Then the flag goes and the portal follows with a
   `301`.
-- Carried from 0663 (its Step 4): the GA4 stream URL and the smoke URL in
-  `.github/workflows/deploy-production.yml`. Prices `portalWebOrigin` waits for
+- Carried from 0663 (its Step 4): the GA4 stream URL. Prices `portalWebOrigin` waits for
   the Prices API's move (see Found). GA4 checked 2026-11-05: the GTM container
   fires its one tag on every page, with no host condition.
-- Next: Step 1 on production; then Step 2 (dns-cloudformation, which we can
-  now apply).
+- Done: Step 2, 2026-11-05. dns-cloudformation#6: both old API hosts answer
+  `308` from the zone's redirect ruleset. dns-cloudformation#7: their records
+  moved there (imported, pointed at the new hosts), and their `X-Edge-Secret`
+  rule, managed WAF and rate limit went, since the redirect phase runs before
+  them; that state holds no edge secret any more. Here: `infra/cloudflare/`
+  removed (its state held only those records) and
+  `enableCloudflareApiDomain: false`, which drops the old custom domains.
+- Next: the old custom domains' release (`-ApiGateway`), then their ACM
+  certificates (`10aeba0f…`, `c96addf8…`), their validation records in
+  dns-cloudformation and this repo's old Cloudflare state objects; Step 3.
 - Decided (2026-11-05): `api.sorobanscan.rumblefish.dev` stays dark. It has
   had no DNS answer since `enableLegacyApiDomain: false`, so nothing depends on
   it.
@@ -91,16 +104,21 @@ The tool needs the 301s live.
 
 ## Acceptance Criteria
 
-- [ ] `curl -sI` on every old host answers its code with `Location` on the new
-      host, path and query kept.
+- [x] `curl -sI` on every old host answers its code with `Location` on the new
+      host, path and query kept (2026-11-05, both networks), the portal's
+      paths excepted while `pricesPortalOnLegacyHost` is set.
 - [ ] `https://sorobanscan.rumblefish.dev/prices-api/dashboard?x=1` → one hop
-      to `https://sorobanscan.com/api/prices-api/dashboard?x=1`.
+      to `https://sorobanscan.com/api/prices-api/dashboard?x=1`: after the
+      Prices API moves. Until then it is one hop to
+      `/api/prices-api/dashboard?x=1` on the old host, and the new host's
+      `/prices-api/…` is one `302` there.
 - [ ] The old API custom domains are removed.
 - [ ] Search Console change of address submitted.
 - [ ] Portal sign-in works from `sorobanscan.com/api/prices-api/` (from 0663):
       after the Prices API moves; until then the new host sends the portal to
       the old one.
 - [ ] GA4 real-time shows hits from `sorobanscan.com` (from 0663).
-- [ ] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`,
-      `docs/deployment.md`, `infra/cloudflare/README.md` (or its removal).
+- [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`,
+      `docs/deployment.md`, `infra/cloudflare/README.md` (removed with its
+      directory), `docs/architecture/backend/api-gateway-cache-spec.md`.
 - [ ] **API types regenerated** — N/A: nothing under `crates/api/**`.

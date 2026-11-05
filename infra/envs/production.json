@@ -51,7 +51,7 @@
   "provisionApiMtlsTruststore": false,
   "enableApiMtls": false,
   "enableLegacyApiDomain": false,
-  "enableCloudflareApiDomain": true,
+  "enableCloudflareApiDomain": false,
   "cloudflareApiDomainName": "api-sorobanscan.rumblefishdev.com",
   "cloudflareApiCertificateArn": "arn:aws:acm:eu-central-1:750702271865:certificate/10aeba0f-4a9e-44b8-ae04-fabd74255976",
   "sorobanscanApiDomainName": "api.sorobanscan.com",

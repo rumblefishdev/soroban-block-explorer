@@ -90,12 +90,12 @@ destroy-production-hetzner-dns: build
 
 # --- Frontend SPA (build + S3 sync + CloudFront invalidation) ---
 # Requires Explorer-production-Delivery already deployed (make deploy-production-delivery).
-# VITE_API_BASE_URL is baked from cloudflareApiDomainName — the SPA calls the API
-# through the Cloudflare-fronted host (task 0277), NOT the legacy apiDomainName.
+# VITE_API_BASE_URL is baked from sorobanscanApiDomainName — the SPA calls the API
+# through its Cloudflare-fronted host (tasks 0277, 0662), NOT the legacy apiDomainName.
 
 build-production-web:
 	cd .. && VITE_STELLAR_NETWORK=mainnet \
-		VITE_API_BASE_URL=https://$$(jq -r '.sorobanscanApiDomainName // .cloudflareApiDomainName' infra/envs/production.json) \
+		VITE_API_BASE_URL=https://$$(jq -r '.sorobanscanApiDomainName' infra/envs/production.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json) \
 		pnpm nx build @rumblefish/soroban-block-explorer-web
 	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json); \
@@ -135,7 +135,7 @@ deploy-production-web: build-production-web
 # --- Testnet (task 0553) ---
 # Same recipes as production against envs/testnet.json. The SPA calls the
 # API through its Cloudflare host, so build-testnet-web needs
-# enableCloudflareApiDomain=true there first.
+# sorobanscanApiDomainName there first.
 
 synth-testnet: build
 	pnpm exec cdk --app "$(TESTNET_APP)" synth
@@ -149,7 +149,7 @@ deploy-testnet: build
 
 build-testnet-web:
 	cd .. && VITE_STELLAR_NETWORK=testnet \
-		VITE_API_BASE_URL=https://$$(jq -r '.sorobanscanApiDomainName // .cloudflareApiDomainName' infra/envs/testnet.json) \
+		VITE_API_BASE_URL=https://$$(jq -r '.sorobanscanApiDomainName' infra/envs/testnet.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json) \
 		pnpm nx build @rumblefish/soroban-block-explorer-web
 	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json); \

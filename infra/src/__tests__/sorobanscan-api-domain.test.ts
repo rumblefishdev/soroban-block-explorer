@@ -9,12 +9,14 @@ import { createApp } from '../lib/app.js';
 import { validateConfig, type EnvironmentConfig } from '../lib/types.js';
 
 // The API's host on the sorobanscan.com zone (task 0662): one more custom
-// domain beside the current one, only when both fields are set.
+// domain beside the Cloudflare one, only when both fields are set. Since task
+// 0664 the env files turn the old one off: its host only answers 308.
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const production = require('../../envs/production.json') as EnvironmentConfig;
 const bare: EnvironmentConfig = {
   ...production,
+  enableCloudflareApiDomain: true,
   sorobanscanApiDomainName: undefined,
   sorobanscanApiCertificateArn: undefined,
 };
@@ -42,11 +44,8 @@ function apiDomainNames(config: EnvironmentConfig): string[] {
 }
 
 describe('sorobanscan.com API domain', () => {
-  it('serves production on both hosts, as the env file sets it', () => {
-    expect(apiDomainNames(production)).toEqual([
-      production.cloudflareApiDomainName,
-      'api.sorobanscan.com',
-    ]);
+  it('serves production on api.sorobanscan.com alone, as the env file sets it', () => {
+    expect(apiDomainNames(production)).toEqual(['api.sorobanscan.com']);
   });
 
   it('adds nothing while both fields are unset', () => {
