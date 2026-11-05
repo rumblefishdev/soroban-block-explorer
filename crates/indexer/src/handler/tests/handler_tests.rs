@@ -288,3 +288,38 @@ fn is_retryable_bad_response_defaults_unknown_to_retry() {
     assert!(is_retryable_bad_response(""));
     assert!(is_retryable_bad_response("Code: 241 MEMORY_LIMIT_EXCEEDED"));
 }
+
+// -------------------------------------------------------------------
+// S3 failure detail — the log line is the only record of why a reconcile
+// failed, and the SDK's plain Display says just "dispatch failure"
+// -------------------------------------------------------------------
+
+fn s3_client_nothing_listens_on() -> S3Client {
+    let config = aws_sdk_s3::Config::builder()
+        .behavior_version_latest()
+        .region(aws_sdk_s3::config::Region::new("eu-central-1"))
+        .credentials_provider(aws_sdk_s3::config::Credentials::new(
+            "test", "test", None, None, "test",
+        ))
+        .endpoint_url("http://127.0.0.1:1")
+        .force_path_style(true)
+        .retry_config(aws_sdk_s3::config::retry::RetryConfig::disabled())
+        .build();
+    S3Client::from_conf(config)
+}
+
+#[tokio::test]
+async fn a_failed_existence_check_logs_why_it_failed() {
+    let err = s3_object_exists(&s3_client_nothing_listens_on(), "bucket", "key")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("refused"), "{err}");
+}
+
+#[tokio::test]
+async fn a_failed_download_logs_why_it_failed() {
+    let err = download_s3_object(&s3_client_nothing_listens_on(), "bucket", "key")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().to_lowercase().contains("refused"), "{err}");
+}
