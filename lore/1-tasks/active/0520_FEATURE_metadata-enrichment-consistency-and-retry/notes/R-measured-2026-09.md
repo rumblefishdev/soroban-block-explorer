@@ -78,3 +78,10 @@ after the worker deploys these need a rewrite, testnet first: `INSERT ... SELECT
 with `replaceOne` on the prefix and `version = now64(3)`. A `token_uri` that names
 `https://ipfs.io/...` literally has one candidate and still fails (one known
 contract, `CDA5FGE4...`, one empty row).
+
+A gateway's refusal can still store an empty row for good. Traced in code, not
+seen live: a 403 or a connect error from a gateway is permanent, no other gateway
+is tried, the `''` sentinel is written and no alarm fires. 0 such sentinels for
+Pinata in 30 days of mainnet worker logs; the same search for `ipfs` did not run.
+Fix with A2: for `ipfs://`, treat any non-2xx or transport error as a gateway
+fault, and transient when every gateway fails that way.
