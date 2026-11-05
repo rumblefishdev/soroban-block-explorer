@@ -880,13 +880,13 @@ the API hosts' edge rules and the SPA's Turnstile widget are in
 
 ## Verify after deploy
 
-| Surface      | Check                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------- |
-| Frontend     | https://sorobanscan.com and, until 0664, https://sorobanscan.rumblefish.dev load (HTTP 200, `text/html`)        |
-| API (via CF) | `curl -f https://api.sorobanscan.com/health` (and `api-sorobanscan.rumblefishdev.com` until 0664)               |
-| API docs     | https://api.sorobanscan.com/api-docs/ (Swagger UI)                                                              |
-| CH box       | see [`infra-hetzner/README.md` § Post-deploy verification](../infra-hetzner/README.md#post-deploy-verification) |
-| Alarms       | CloudWatch → `Explorer-production-CloudWatch` dashboards; no alarms in ALARM                                    |
+| Surface      | Check                                                                                                                                          |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend     | https://sorobanscan.com loads (HTTP 200, `text/html`); https://sorobanscan.rumblefish.dev/x?y=1 answers `301` to https://sorobanscan.com/x?y=1 |
+| API (via CF) | `curl -f https://api.sorobanscan.com/health` (and `api-sorobanscan.rumblefishdev.com` until 0664)                                              |
+| API docs     | https://api.sorobanscan.com/api-docs/ (Swagger UI)                                                                                             |
+| CH box       | see [`infra-hetzner/README.md` § Post-deploy verification](../infra-hetzner/README.md#post-deploy-verification)                                |
+| Alarms       | CloudWatch → `Explorer-production-CloudWatch` dashboards; no alarms in ALARM                                                                   |
 
 ---
 

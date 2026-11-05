@@ -73,6 +73,22 @@ describe('SPA on sorobanscan.com', () => {
     );
   });
 
+  it("keeps the old host apart from the main behaviors' gates", () => {
+    expect(() =>
+      validateConfig({ ...production, enableBasicAuth: true })
+    ).toThrow(/legacyDomainName cannot be combined/);
+  });
+
+  it('keeps the portal on the old host only when there is one', () => {
+    expect(() =>
+      validateConfig({
+        ...production,
+        legacyDomainName: undefined,
+        pricesPortalOnLegacyHost: true,
+      })
+    ).toThrow(/pricesPortalOnLegacyHost needs legacyDomainName/);
+  });
+
   it('rejects two SPA names inside the hosted zone', () => {
     expect(() =>
       validateConfig({

@@ -40,6 +40,7 @@
   "loadTesting": false,
   "domainName": "sorobanscan.com",
   "legacyDomainName": "sorobanscan.rumblefish.dev",
+  "pricesPortalOnLegacyHost": true,
   "apiDomainName": "api.sorobanscan.rumblefish.dev",
   "hostedZoneId": "Z10396861CRMUIWWA8TL9",
   "hostedZoneName": "sorobanscan.rumblefish.dev",

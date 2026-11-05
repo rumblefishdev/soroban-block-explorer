@@ -7,9 +7,13 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
-import { API_PATH_REDIRECT_FUNCTION_CODE } from '../cloudfront-functions/api-path-redirect.js';
+import { apiPathRedirectFunctionCode } from '../cloudfront-functions/api-path-redirect.js';
 import { apiSpaRoutingFunctionCode } from '../cloudfront-functions/api-spa-routing.js';
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
+import {
+  type HostMove,
+  legacyHostRedirectFunctionCode,
+} from '../cloudfront-functions/legacy-host-redirect.js';
 import { originSecretFunctionCode } from '../cloudfront-functions/origin-secret.js';
 import {
   inZone,
@@ -40,6 +44,9 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *   `/pricing-api`+`/pricing-api/*`: the portal's old homes, now only a `301`
  *   to the same path under `/api/prices-api` (tasks 0608, 0660)
  * - CloudFront distribution with SPA routing fallback
+ * - `legacyDomainName`, the SPA's old host: every request answers `301` to the
+ *   same path on `domainName` (task 0664), from whichever function the
+ *   behavior runs
  * - S3 bucket for the distribution's standard logs, kept 30 days (task 0576)
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
@@ -50,7 +57,7 @@ export interface DeliveryStackProps extends cdk.StackProps {
  * that is deliberate (ADR 0048, task 0302). The only viewer-side gate this stack
  * can still attach is the CloudFront Function below, and only when
  * `enableOriginSecretLock` or `enableBasicAuth` is set — both are `false` in
- * production. It used to carry a CLOUDFRONT-scoped AWS WAF WebACL from a
+ * production, where the main behaviors' slot holds the old host's redirect. It used to carry a CLOUDFRONT-scoped AWS WAF WebACL from a
  * companion us-east-1 stack, wired in via crossRegionReferences; both were
  * removed. Cloudflare fronts the API hostname, not this one, and the
  * distribution serves static edge-cached files from a private S3 origin, so the
@@ -159,7 +166,33 @@ export class DeliveryStack extends cdk.Stack {
     // `apiSpaFunction` below for SPA routing (independent of auth), and it also
     // does the basic-auth check — reusing this same KVS, not a second,
     // separately-credentialed one — when `config.enableApiSpaBasicAuth` is on.
+    //
+    // The old host's redirect (task 0664) takes the main behaviors' slot too;
+    // `validateConfig` keeps it apart from both gates.
     let viewerRequestFunction: cloudfront.Function | undefined;
+    const legacyMove: HostMove | undefined = config.legacyDomainName
+      ? { from: config.legacyDomainName, to: config.domainName }
+      : undefined;
+    // The Prices portal's behaviors move the other way while it stays on the
+    // old host (`pricesPortalOnLegacyHost`).
+    const portalMove: HostMove | undefined =
+      legacyMove && config.pricesPortalOnLegacyHost
+        ? { from: legacyMove.to, to: legacyMove.from, temporary: true }
+        : legacyMove;
+
+    if (legacyMove) {
+      viewerRequestFunction = new cloudfront.Function(
+        this,
+        'LegacyHostRedirectFunction',
+        {
+          functionName: `${config.envName}-soroban-explorer-legacy-host-redirect`,
+          runtime: cloudfront.FunctionRuntime.JS_2_0,
+          code: cloudfront.FunctionCode.fromInline(
+            legacyHostRedirectFunctionCode(legacyMove)
+          ),
+        }
+      );
+    }
 
     if (config.enableOriginSecretLock) {
       // Cloudflare origin-secret lock — KVS holds the expected secret,
@@ -233,7 +266,7 @@ export class DeliveryStack extends cdk.Stack {
         runtime: cloudfront.FunctionRuntime.JS_2_0,
         ...(apiSpaKvs && { keyValueStore: apiSpaKvs }),
         code: cloudfront.FunctionCode.fromInline(
-          apiSpaRoutingFunctionCode(apiSpaKvs?.keyValueStoreId)
+          apiSpaRoutingFunctionCode(apiSpaKvs?.keyValueStoreId, portalMove)
         ),
       }
     );
@@ -247,7 +280,7 @@ export class DeliveryStack extends cdk.Stack {
         functionName: `${config.envName}-soroban-explorer-api-path-redirect`,
         runtime: cloudfront.FunctionRuntime.JS_2_0,
         code: cloudfront.FunctionCode.fromInline(
-          API_PATH_REDIRECT_FUNCTION_CODE
+          apiPathRedirectFunctionCode(portalMove)
         ),
       }
     );
@@ -370,7 +403,8 @@ export class DeliveryStack extends cdk.Stack {
 
     // ---------------------
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
-      // The old host stays an alias until task 0664 redirects it (task 0663).
+      // The old host stays an alias (task 0663); its functions answer `301` to
+      // the new one (task 0664).
       domainNames: [config.domainName, config.legacyDomainName].filter(
         (host): host is string => !!host
       ),
