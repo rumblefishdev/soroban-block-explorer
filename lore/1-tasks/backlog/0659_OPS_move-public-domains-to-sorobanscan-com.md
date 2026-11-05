@@ -33,7 +33,12 @@ This task holds the names and the order; each step is its own task.
 
 - Done: names and order agreed (2026-11-03); 0631 and 0660 shipped
   (2026-11-04; Prices Compute for 0660 rides with stellar-prices-api 0242).
-- Next: 0661 (certificates, edge rules, Turnstile).
+- Done (2026-11-05): 0661, 0662 and 0663. The explorer SPA and API serve on
+  `sorobanscan.com`, `testnet.sorobanscan.com`, `api.sorobanscan.com` and
+  `api-testnet.sorobanscan.com`, beside the old hosts. The Turnstile widget
+  moved to soroban-infrastructure.
+- Next: 0664 (redirects, plus 0663's Prices `portalWebOrigin`, GA4 and smoke
+  URL).
 - In force: one step at a time; each ships and is verified before the next.
 
 ## Names
