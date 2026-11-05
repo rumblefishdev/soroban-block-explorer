@@ -343,16 +343,16 @@ and the `enableWaf` setting were deleted from the CDK app. There is no AWS WAF i
 this system and no switch to re-enable one. What replaced it is asymmetric, and the
 asymmetry is deliberate:
 
-- **API** (`api-sorobanscan.rumblefishdev.com`) — fronted by **Cloudflare**: WAF
+- **API** (`api.sorobanscan.com`, `api-testnet.sorobanscan.com`) — fronted by **Cloudflare**: WAF
   managed rules, unmetered DDoS, Managed Challenge, rate limiting. The AWS origin
   accepts Cloudflare only, via a secret request header verified in the application
   (`crates/api/src/common/edge_lock.rs`).
-  The API is moving to `api.sorobanscan.com` (`api-testnet.sorobanscan.com` on
-  testnet; task 0659): `sorobanscanApiDomainName` adds it as one more custom
-  domain on the same API (task 0662), with the `*.sorobanscan.com` certificate in
-  `sorobanscanApiCertificateArn` (task 0661). It is fronted the same way from the
-  `sorobanscan.com` zone, whose records and rules live in soroban-infrastructure's
-  `cloudflare/`. Both hosts serve until the old one redirects (task 0664).
+  `sorobanscanApiDomainName` is one more custom domain on the same API (task
+  0662), with the `*.sorobanscan.com` certificate in `sorobanscanApiCertificateArn`
+  (task 0661). Its records and edge rules live in soroban-infrastructure's
+  `cloudflare/`, in the `sorobanscan.com` zone. The old host
+  (`api-sorobanscan.rumblefishdev.com`, rules in dns-cloudformation) serves the same
+  API until task 0664 redirects it.
 - **Frontend** (`sorobanscan.com`, `testnet.sorobanscan.com`; task 0663) — **no
   edge filtering at all.** Their records are DNS-only in soroban-infrastructure's
   `sorobanscan.com` zone. The old hosts (`legacyDomainName`:

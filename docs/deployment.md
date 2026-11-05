@@ -143,8 +143,9 @@ true`.
 4. In `dns-cloudformation` (`cloudflare/`, Terraform, applied by the zone's
    owner): `enable_testnet_edge_secret = true` with the **testnet** edge secret
    in `testnet_edge_secret` (each environment has its own), which adds the
-   testnet rule stamping `X-Edge-Secret` on the testnet API host; the testnet
-   SPA hostname in `turnstile_domains`.
+   testnet rule stamping `X-Edge-Secret` on the testnet API host. The
+   Turnstile widget's hostnames now live in soroban-infrastructure's
+   `cloudflare/turnstile.tf` (task 0661), not here.
 5. The widget's Turnstile secret key into
    `soroban/testnet/auth/turnstile-secret` (same widget as production, so the
    same value).
@@ -869,6 +870,12 @@ Terraform, run from a laptop, gated behind `terraform plan` flags:
 
 ➡️ **[`infra/cloudflare/README.md`](../infra/cloudflare/README.md)**
 
+The `sorobanscan.com` zone is not here: its records (`sorobanscan.com`,
+`testnet.sorobanscan.com`, `api.sorobanscan.com`, `api-testnet.sorobanscan.com`),
+the API hosts' edge rules and the SPA's Turnstile widget are in
+[soroban-infrastructure](https://github.com/rumblefishdev/soroban-infrastructure)'s
+`cloudflare/` (tasks 0661–0663).
+
 ---
 
 ## Verify after deploy
@@ -876,9 +883,8 @@ Terraform, run from a laptop, gated behind `terraform plan` flags:
 | Surface      | Check                                                                                                           |
 | ------------ | --------------------------------------------------------------------------------------------------------------- |
 | Frontend     | https://sorobanscan.com and, until 0664, https://sorobanscan.rumblefish.dev load (HTTP 200, `text/html`)        |
-| API (legacy) | `curl -f https://api.sorobanscan.rumblefish.dev/health`                                                         |
 | API (via CF) | `curl -f https://api.sorobanscan.com/health` (and `api-sorobanscan.rumblefishdev.com` until 0664)               |
-| API docs     | https://api.sorobanscan.rumblefish.dev/api-docs (Swagger UI)                                                    |
+| API docs     | https://api.sorobanscan.com/api-docs/ (Swagger UI)                                                              |
 | CH box       | see [`infra-hetzner/README.md` § Post-deploy verification](../infra-hetzner/README.md#post-deploy-verification) |
 | Alarms       | CloudWatch → `Explorer-production-CloudWatch` dashboards; no alarms in ALARM                                    |
 
