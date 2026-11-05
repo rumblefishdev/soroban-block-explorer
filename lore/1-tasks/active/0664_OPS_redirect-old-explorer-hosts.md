@@ -32,9 +32,15 @@ custom domains go, and Search Console gets the change of address.
 
 ## Stan teraz
 
-- Done: Step 1 in code, on testnet 2026-11-05 (laptop). Every viewer-request
-  function on the distribution answers `301` on `legacyDomainName`; the main
-  behaviors, which had none, get `legacy-host-redirect.ts`.
+- Done: Step 1 on both networks, 2026-11-05: testnet from a laptop,
+  production by `production-2026.11.05-5-Delivery` (#711, release #712). Every
+  viewer-request function on the distribution answers `301` on
+  `legacyDomainName`; the main behaviors, which had none, get
+  `legacy-host-redirect.ts`. Checked with `curl` on both production hosts.
+- Found (2026-11-05): that tag's CI run failed at "Smoke test — Frontend",
+  which still fetched the old host and now got its `301`. The deploy itself
+  went through. The smoke now fetches `https://sorobanscan.com/` (carried from
+  0663).
 - Found (2026-11-05): the Prices portal cannot work on `sorobanscan.com` while
   the Prices API is on `prices-api.sorobanscan.rumblefish.dev`. Its CORS allows
   one origin, and its session cookie is `SameSite=Lax`, same-site only with
@@ -46,12 +52,10 @@ custom domains go, and Search Console gets the change of address.
   the new host answers `302` back to it, the old host serves it, and
   `portalWebOrigin` stays. Then the flag goes and the portal follows with a
   `301`.
-- Carried from 0663 (its Step 4): the GA4 stream URL and the smoke URL in
-  `.github/workflows/deploy-production.yml`. Prices `portalWebOrigin` waits for
+- Carried from 0663 (its Step 4): the GA4 stream URL. Prices `portalWebOrigin` waits for
   the Prices API's move (see Found). GA4 checked 2026-11-05: the GTM container
   fires its one tag on every page, with no host condition.
-- Next: Step 1 on production; then Step 2 (dns-cloudformation, which we can
-  now apply).
+- Next: Step 2 (dns-cloudformation, which we can now apply), then Step 3.
 - Decided (2026-11-05): `api.sorobanscan.rumblefish.dev` stays dark. It has
   had no DNS answer since `enableLegacyApiDomain: false`, so nothing depends on
   it.
