@@ -875,9 +875,9 @@ Terraform, run from a laptop, gated behind `terraform plan` flags:
 
 | Surface      | Check                                                                                                           |
 | ------------ | --------------------------------------------------------------------------------------------------------------- |
-| Frontend     | https://sorobanscan.rumblefish.dev loads (HTTP 200, `text/html`)                                                |
+| Frontend     | https://sorobanscan.com and, until 0664, https://sorobanscan.rumblefish.dev load (HTTP 200, `text/html`)        |
 | API (legacy) | `curl -f https://api.sorobanscan.rumblefish.dev/health`                                                         |
-| API (via CF) | `curl -f https://api-sorobanscan.rumblefishdev.com/health`                                                      |
+| API (via CF) | `curl -f https://api.sorobanscan.com/health` (and `api-sorobanscan.rumblefishdev.com` until 0664)               |
 | API docs     | https://api.sorobanscan.rumblefish.dev/api-docs (Swagger UI)                                                    |
 | CH box       | see [`infra-hetzner/README.md` § Post-deploy verification](../infra-hetzner/README.md#post-deploy-verification) |
 | Alarms       | CloudWatch → `Explorer-production-CloudWatch` dashboards; no alarms in ALARM                                    |

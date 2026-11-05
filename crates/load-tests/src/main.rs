@@ -44,7 +44,7 @@ struct Args {
     #[arg(
         long,
         env = "BASE_URL",
-        default_value = "https://api-sorobanscan.rumblefishdev.com/v1"
+        default_value = "https://api.sorobanscan.com/v1"
     )]
     base_url: String,
     /// Paid-tier `x-api-key` — REQUIRED in prod (bypasses Turnstile/JWT). Must be in the server `API_KEYS`.

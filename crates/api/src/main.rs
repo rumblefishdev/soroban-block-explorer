@@ -132,24 +132,30 @@ fn app(config: &AppConfig, state: AppState) -> Router {
     // here and must carry `Access-Control-Allow-Origin` themselves or the browser
     // blocks the read. Outermost so even 401/403 responses get the header.
     // `None` (CORS_ALLOW_ORIGIN unset) = no CORS layer (same-origin/non-browser).
-    match config
+    // A comma-separated list serves the SPA on its old and new hosts at once
+    // (task 0663): the response echoes the request's origin when it is listed.
+    let origins: Vec<axum::http::HeaderValue> = config
         .cors_allow_origin
         .as_deref()
-        .and_then(|o| axum::http::HeaderValue::from_str(o).ok())
-    {
-        Some(origin) => router.layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(origin)
-                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
-                .allow_headers([
-                    axum::http::header::AUTHORIZATION,
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::header::ACCEPT,
-                    axum::http::HeaderName::from_static("x-api-key"),
-                ]),
-        ),
-        None => router,
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|o| axum::http::HeaderValue::from_str(o.trim()).ok())
+        .filter(|o| !o.is_empty())
+        .collect();
+    if origins.is_empty() {
+        return router;
     }
+    router.layer(
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(tower_http::cors::AllowOrigin::list(origins))
+            .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::ACCEPT,
+                axum::http::HeaderName::from_static("x-api-key"),
+            ]),
+    )
 }
 
 #[cfg(feature = "swagger-ui")]
