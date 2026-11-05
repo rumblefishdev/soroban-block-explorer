@@ -350,9 +350,10 @@ asymmetry is deliberate:
   `sorobanscanApiDomainName` is one more custom domain on the same API (task
   0662), with the `*.sorobanscan.com` certificate in `sorobanscanApiCertificateArn`
   (task 0661). Its records and edge rules live in soroban-infrastructure's
-  `cloudflare/`, in the `sorobanscan.com` zone. The old host
-  (`api-sorobanscan.rumblefishdev.com`, rules in dns-cloudformation) serves the same
-  API until task 0664 redirects it.
+  `cloudflare/`, in the `sorobanscan.com` zone. The old hosts
+  (`api-sorobanscan.rumblefishdev.com` and its testnet twin) only answer `308` to the
+  new ones, path and query kept, from dns-cloudformation (task 0664); their custom
+  domains are gone (`enableCloudflareApiDomain: false`).
 - **Frontend** (`sorobanscan.com`, `testnet.sorobanscan.com`; task 0663) — **no
   edge filtering at all.** Their records are DNS-only in soroban-infrastructure's
   `sorobanscan.com` zone. The old hosts (`legacyDomainName`:
