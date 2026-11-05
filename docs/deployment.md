@@ -60,8 +60,10 @@ laptop-only; plane 1 additionally has a tag-driven CI path (§ Releases).
 2. **Hetzner ClickHouse box (Ansible)** — the production data plane (CH +
    Caddy mTLS + backups). Driven by `ansible-playbook`. Deep-dive:
    [`infra-hetzner/README.md`](../infra-hetzner/README.md).
-3. **Cloudflare edge (Terraform)** — DNS record + WAF + API origin mTLS
-   lock for the API host. Deep-dive: [`infra/cloudflare/README.md`](../infra/cloudflare/README.md).
+3. **Cloudflare edge (Terraform)** — the `sorobanscan.com` records, the API
+   hosts' edge rules and the SPA's Turnstile widget, in
+   [soroban-infrastructure](https://github.com/rumblefishdev/soroban-infrastructure)'s
+   `cloudflare/`; not in this repo.
 
 They are decoupled: a backend fix touches only plane 1; a CH schema/config
 change touches only plane 2; they are shipped separately.
@@ -128,28 +130,22 @@ The API goes public behind Cloudflare like production's, in two deploys —
 the edge secret exists only after the first, and Cloudflare must send it
 before the API demands it:
 
-1. An ACM certificate for `cloudflareApiDomainName` in `eu-central-1`, DNS
-   validation (the validation CNAME goes into the `rumblefishdev.com` zone
-   and **stays there**: ACM renews the certificate yearly through the same
-   record, as it does production's).
-   Its ARN into `cloudflareApiCertificateArn`, `enableCloudflareApiDomain:
-true`.
+1. An ACM certificate for `sorobanscanApiDomainName` in `eu-central-1`, DNS
+   validation in the `sorobanscan.com` zone (soroban-infrastructure's
+   `cloudflare/acm-validation.tf`), where it **stays**: ACM renews the
+   certificate through the same record. Its ARN into
+   `sorobanscanApiCertificateArn` (task 0661).
 2. **Deploy 1** creates the API custom domain and the testnet secrets
    (`soroban/testnet/cloudflare/edge-secret`, `soroban/testnet/auth/*`).
-3. The proxied API record: this repo's Terraform, workspace `testnet`
-   ([`infra/cloudflare/README.md`](../infra/cloudflare/README.md#testnet)),
-   origin target from the `CloudflareApiRegionalTarget` output of
-   `Explorer-testnet-ApiGateway`.
-4. In `dns-cloudformation` (`cloudflare/`, Terraform, applied by the zone's
-   owner): `enable_testnet_edge_secret = true` with the **testnet** edge secret
-   in `testnet_edge_secret` (each environment has its own), which adds the
-   testnet rule stamping `X-Edge-Secret` on the testnet API host. The
-   Turnstile widget's hostnames now live in soroban-infrastructure's
-   `cloudflare/turnstile.tf` (task 0661), not here.
-5. The widget's Turnstile secret key into
+3. In soroban-infrastructure's `cloudflare/explorer.tf`: the `X-Edge-Secret`
+   rule, then the proxied API record, its target the
+   `SorobanscanApiRegionalTarget` output of `Explorer-testnet-ApiGateway`
+   (that README's arming order). The SPA's hostname joins the Turnstile
+   widget in its `turnstile.tf`.
+4. The widget's Turnstile secret key into
    `soroban/testnet/auth/turnstile-secret` (same widget as production, so the
    same value).
-6. `enableEdgeSecretLock` and `enableAuthLayer` to `true`, **deploy 2**, then
+5. `enableEdgeSecretLock` and `enableAuthLayer` to `true`, **deploy 2**, then
    `deploy-testnet-web`. Run deploy 2 the same day as deploy 1: until then the
    testnet API answers on its `execute-api` address without the edge lock or
    Turnstile.
@@ -294,8 +290,8 @@ optional. The role itself is defined in
 password-manager entries and your mTLS cert — full list in
 [`infra-hetzner/README.md` § Prerequisites](../infra-hetzner/README.md#prerequisites).
 
-**Cloudflare plane:** Terraform + a zone-scoped `CLOUDFLARE_API_TOKEN` —
-see [`infra/cloudflare/README.md`](../infra/cloudflare/README.md).
+**Cloudflare plane:** Terraform and soroban-infrastructure's
+`cloudflare/` README (its token is read from Secrets Manager).
 
 ---
 
@@ -801,7 +797,7 @@ Bump procedure — **pull → tag → push → sha**:
 
 `Delivery` provisions the CloudFront distribution and the SPA bucket. The
 **content** is a separate step that builds the SPA (baking `VITE_API_BASE_URL`
-from `cloudflareApiDomainName` and `VITE_TURNSTILE_SITE_KEY` from
+from `sorobanscanApiDomainName` and `VITE_TURNSTILE_SITE_KEY` from
 `turnstileSiteKey`, both read out of `production.json` — no shell env needed —
 and `VITE_STELLAR_NETWORK=mainnet`; the testnet recipe sets `testnet`, which
 turns the network pill beside the logo yellow and marks the browser tab),
@@ -865,12 +861,10 @@ via the team password manager (see that README).
 
 ## Cloudflare edge
 
-DNS record + WAF + API-origin mTLS lock for `api-sorobanscan.rumblefishdev.com`.
-Terraform, run from a laptop, gated behind `terraform plan` flags:
-
-➡️ **[`infra/cloudflare/README.md`](../infra/cloudflare/README.md)**
-
-The `sorobanscan.com` zone is not here: its records (`sorobanscan.com`,
+Not in this repo. The old API hosts (`api-sorobanscan.rumblefishdev.com`,
+`api-testnet-sorobanscan.rumblefishdev.com`) only answer `308` to the new ones,
+from dns-cloudformation's `cloudflare/redirect.tf` (task 0664). The
+`sorobanscan.com` zone: its records (`sorobanscan.com`,
 `testnet.sorobanscan.com`, `api.sorobanscan.com`, `api-testnet.sorobanscan.com`),
 the API hosts' edge rules and the SPA's Turnstile widget are in
 [soroban-infrastructure](https://github.com/rumblefishdev/soroban-infrastructure)'s

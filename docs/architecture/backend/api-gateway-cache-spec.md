@@ -9,7 +9,7 @@
 > per-endpoint `Cache-Control` tiers below in every user's **browser**, and
 > the **in-process moka caches** for contract detail (45 s) and network
 > stats (60 s) — Cloudflare proxies but does not cache
-> (`cf-cache-status: DYNAMIC`, no cache rules in `infra/cloudflare/`).
+> (`cf-cache-status: DYNAMIC`, no cache rules in the zone).
 > A dedicated Memcached cluster is a standing cost serving a need nothing
 > has measured.
 >
