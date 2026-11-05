@@ -197,9 +197,9 @@ describe('terminal indexer failure metric', () => {
     const filter = Object.values(from['CloudWatch'] ?? {}).find(
       (r) =>
         r.Type === 'AWS::Logs::MetricFilter' &&
-        JSON.stringify(r.Properties).includes('ch_write_failure')
+        JSON.stringify(r.Properties).includes('indexer_failure')
     );
-    if (!filter) throw new Error('no ch_write_failure metric filter');
+    if (!filter) throw new Error('no indexer_failure metric filter');
     const [transformation] = filter.Properties['MetricTransformations'] as {
       MetricNamespace: string;
     }[];

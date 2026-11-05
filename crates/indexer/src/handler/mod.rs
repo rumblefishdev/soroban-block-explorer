@@ -191,22 +191,20 @@ pub async fn handler(
             // request ids and can name this function's AWS role: fine in the
             // account's own logs.
             // `alarm` is a machine contract, not log copy: the
-            // `indexer-ch-write-failures` CloudWatch metric filter keys on
-            // `$.fields.alarm = "ch_write_failure"`. Reword the human
+            // `indexer-failures` CloudWatch metric filter keys on
+            // `$.fields.alarm = "indexer_failure"`. Reword the human
             // message freely; rename this field only together with
             // `infra/src/lib/stacks/cloudwatch-stack.ts` (the
             // declared-vs-emitted infra test enforces the pair).
             // `cause` exists because all three reconcile failure modes emit
-            // this one alarm field, so an S3 outage or a parse bug pages as
-            // "CH write failure" (lore-0455 review). The cause field makes the
-            // first minute of an incident honest despite that name.
+            // this one alarm field: it says which one paged (lore-0455 review).
             let cause = match &e {
                 HandlerError::S3Download(_) => "s3",
                 HandlerError::Parse(_) => "parse",
                 HandlerError::ClickHouse(_) => "clickhouse",
             };
             error!(
-                alarm = "ch_write_failure",
+                alarm = "indexer_failure",
                 cause,
                 message_id = %msg.message_id,
                 error = %e,
