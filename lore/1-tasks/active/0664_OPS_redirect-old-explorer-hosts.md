@@ -62,9 +62,19 @@ custom domains go, and Search Console gets the change of address.
   them; that state holds no edge secret any more. Here: `infra/cloudflare/`
   removed (its state held only those records) and
   `enableCloudflareApiDomain: false`, which drops the old custom domains.
-- Next: the old custom domains' release (`-ApiGateway`), then their ACM
-  certificates (`10aeba0f…`, `c96addf8…`), their validation records in
-  dns-cloudformation and this repo's old Cloudflare state objects; Step 3.
+- Done: the cleanup, 2026-11-05. The old custom domains went on testnet
+  (laptop) and production (`production-2026.11.05-6-ApiGateway`, release
+  #715, smoke green). Their ACM certificates (`10aeba0f…`, `c96addf8…`, not in
+  use) were deleted and their validation records went in
+  dns-cloudformation#8. This repo's old Cloudflare state objects were deleted
+  from `production-soroban-explorer-cf-tfstate` (versioned; a copy is in
+  `~/Backups/explorer-cf-tfstate-2026-11-05/` on stkrolikiewicz's laptop).
+- Found (2026-11-05): one more unused certificate in eu-central-1,
+  `api.sorobanscan.rumblefishdev.com` (`67947579…`), from before the
+  one-label host of task 0277. Not deleted; nothing uses it.
+- Next: Step 3 (Search Console) and the GA4 stream URL, both by a person.
+  Then the flag `pricesPortalOnLegacyHost` goes once the Prices API is on
+  `prices-api.sorobanscan.com` (0659 step 6).
 - Decided (2026-11-05): `api.sorobanscan.rumblefish.dev` stays dark. It has
   had no DNS answer since `enableLegacyApiDomain: false`, so nothing depends on
   it.
@@ -112,7 +122,7 @@ The tool needs the 301s live.
       Prices API moves. Until then it is one hop to
       `/api/prices-api/dashboard?x=1` on the old host, and the new host's
       `/prices-api/…` is one `302` there.
-- [ ] The old API custom domains are removed.
+- [x] The old API custom domains are removed (2026-11-05, both networks).
 - [ ] Search Console change of address submitted.
 - [ ] Portal sign-in works from `sorobanscan.com/api/prices-api/` (from 0663):
       after the Prices API moves; until then the new host sends the portal to
