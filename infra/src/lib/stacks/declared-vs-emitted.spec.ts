@@ -54,7 +54,8 @@
  *     of the declared literal also fails, because the pair regex requires the
  *     closing quote. Both verified by breaking the Rust source and running it.
  *   - The metric-name half is the inexact one (±400-character proximity), and
- *     it fails closed: a name no Rust source emits fails the test.
+ *     it reads only single-quoted namespaces: there, a name no Rust source emits
+ *     fails the test. A namespace written as a template literal is not scanned.
  *   - Nx tracks the Rust sources this test reads: breaking an emit site
  *     invalidates the cache and the test re-runs. Verified, because a cached
  *     pass here would be a silent skip of the guard against silent skips.

@@ -755,13 +755,23 @@ async fn download_s3_object(
         .key(key)
         .send()
         .await
-        .map_err(|e| HandlerError::S3Download(DisplayErrorContext(&e).to_string()))?;
+        .map_err(|e| {
+            HandlerError::S3Download(format!(
+                "get_object failed for {key}: {}",
+                DisplayErrorContext(&e)
+            ))
+        })?;
 
     let bytes = resp
         .body
         .collect()
         .await
-        .map_err(|e| HandlerError::S3Download(DisplayErrorContext(&e).to_string()))?
+        .map_err(|e| {
+            HandlerError::S3Download(format!(
+                "reading the body of {key} failed: {}",
+                DisplayErrorContext(&e)
+            ))
+        })?
         .into_bytes()
         .to_vec();
 
