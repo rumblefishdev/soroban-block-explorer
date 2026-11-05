@@ -69,5 +69,12 @@ networks. Mainnet 30 of 30 are IPFS fetches; testnet 46 of 103 (the other 57 are
   Pinata too. 44 of 44 distinct stored images (p50 1.3 s, max 3.7 s, all
   `image/png`). Not measured from a Lambda.
 
-Stored `media_url` on `ipfs.io`: 194 rows on mainnet (166 in one collection), 165
-on testnet. The image address is baked into the row, so these need a rewrite.
+Filebase's page: "intended for testing and light usage", 200 requests a minute,
+"For production traffic, use a dedicated gateway".
+
+Stored `media_url` on `ipfs.io`: 217 rows on mainnet on 2026-11-05 and growing until
+the worker deploys, 165 on testnet. The image address is baked into the row, so
+after the worker deploys these need a rewrite, testnet first: `INSERT ... SELECT`
+with `replaceOne` on the prefix and `version = now64(3)`. A `token_uri` that names
+`https://ipfs.io/...` literally has one candidate and still fails (one known
+contract, `CDA5FGE4...`, one empty row).
