@@ -11,7 +11,11 @@ import { API_PATH_REDIRECT_FUNCTION_CODE } from '../cloudfront-functions/api-pat
 import { apiSpaRoutingFunctionCode } from '../cloudfront-functions/api-spa-routing.js';
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
 import { originSecretFunctionCode } from '../cloudfront-functions/origin-secret.js';
-import { relativeRecordName, type EnvironmentConfig } from '../types.js';
+import {
+  inZone,
+  relativeRecordName,
+  type EnvironmentConfig,
+} from '../types.js';
 
 export interface DeliveryStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
@@ -366,7 +370,10 @@ export class DeliveryStack extends cdk.Stack {
 
     // ---------------------
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
-      domainNames: [config.domainName],
+      // The old host stays an alias until task 0664 redirects it (task 0663).
+      domainNames: [config.domainName, config.legacyDomainName].filter(
+        (host): host is string => !!host
+      ),
       certificate,
       defaultRootObject: 'index.html',
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
@@ -448,8 +455,14 @@ export class DeliveryStack extends cdk.Stack {
     // recordName must be RELATIVE to the hosted zone — CDK concatenates
     // it with zoneName unless it ends in a trailing dot. See
     // relativeRecordName() in types.ts.
+    // Only the SPA name inside the zone has records here (validateConfig keeps
+    // it to one); sorobanscan.com's DNS lives in soroban-infrastructure.
+    const routedName = [config.domainName, config.legacyDomainName].find(
+      (host): host is string => !!host && inZone(host, config.hostedZoneName)
+    );
+    if (!routedName) throw new Error('no SPA name within hostedZoneName');
     const frontendRecordName = relativeRecordName(
-      config.domainName,
+      routedName,
       config.hostedZoneName
     );
 

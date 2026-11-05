@@ -353,9 +353,14 @@ asymmetry is deliberate:
   `sorobanscanApiCertificateArn` (task 0661). It is fronted the same way from the
   `sorobanscan.com` zone, whose records and rules live in soroban-infrastructure's
   `cloudflare/`. Both hosts serve until the old one redirects (task 0664).
-- **Frontend** (`sorobanscan.rumblefish.dev`) — **no edge filtering at all.** The
-  zone stays on Route 53; the nameserver flip in task 0277 covered
-  `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end
+- **Frontend** (`sorobanscan.com`, `testnet.sorobanscan.com`; task 0663) — **no
+  edge filtering at all.** Their records are DNS-only in soroban-infrastructure's
+  `sorobanscan.com` zone. The old hosts (`legacyDomainName`:
+  `sorobanscan.rumblefish.dev` and its testnet twin) stay second aliases on the
+  same distribution, with their Route 53 records, until task 0664 redirects
+  them; the API's CORS allows both origins for that window. The
+  `rumblefish.dev` zone stays on Route 53; the nameserver flip in task 0277
+  covered `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end
   state, not a pending migration: the distribution serves a static, edge-cached
   bundle from a private S3 origin via Origin Access Control, so injection-oriented
   managed rules have no application to protect, and putting Cloudflare ahead of

@@ -95,6 +95,37 @@ async fn armed_app_serves_the_advertised_session_path() {
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
+/// Both SPA hosts while the old one still serves (task 0663): each listed
+/// origin is echoed back, an unlisted one gets no CORS header.
+#[tokio::test]
+async fn cors_allows_every_listed_origin() {
+    let config = AppConfig {
+        cors_allow_origin: Some("https://sorobanscan.com, https://old.example".to_string()),
+        ..test_config()
+    };
+    for (origin, allowed) in [
+        ("https://sorobanscan.com", true),
+        ("https://old.example", true),
+        ("https://evil.example", false),
+    ] {
+        let response = test_app_with(&config)
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("origin", origin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let echoed = response.headers().get("access-control-allow-origin");
+        assert_eq!(
+            echoed.map(|v| v.to_str().unwrap()),
+            allowed.then_some(origin)
+        );
+    }
+}
+
 #[tokio::test]
 async fn health_returns_ok() {
     let app = test_app();

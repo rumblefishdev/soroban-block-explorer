@@ -63,7 +63,7 @@ describe('pricesApiUrlFor', () => {
 
   it("sends testnet to mainnet's portal, since testnet has none", () => {
     expect(pricesApiUrlFor('testnet')).toBe(
-      'https://sorobanscan.rumblefish.dev/api/prices-api/'
+      'https://sorobanscan.com/api/prices-api/'
     );
   });
 });
