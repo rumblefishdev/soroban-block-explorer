@@ -34,15 +34,16 @@ const CACHE_CAPACITY: u64 = 1024;
 const USER_AGENT: &str = concat!("soroban-block-explorer/", env!("CARGO_PKG_VERSION"));
 /// Default IPFS gateways, tried in order with failover. Unlike the Soroban RPC
 /// pool, which belongs to one network and so has no default
-/// ([`crate::soroban_rpc`]), a gateway serves any network's content. Both
-/// serve path-style `/ipfs/<CID>` with HTTP 200 in one hop (no redirect needed; since
-/// lore-0455 the client follows same-registrable-domain https redirects
-/// with a bounded budget, so a trailing-slash `301` no longer loses
-/// content) and are reachable from the prod box
-/// (task 0311 sieve, 2026-06-22). The prior single default
-/// `cloudflare-ipfs.com` was sunset by Cloudflare → dead.
+/// ([`crate::soroban_rpc`]), a gateway serves any network's content. The first
+/// one also becomes the stored address of every `ipfs://` image, which browsers
+/// load directly. Both serve path-style `/ipfs/<CID>` with HTTP 200 in one hop
+/// (since lore-0455 the client follows same-registrable-domain https redirects
+/// with a bounded budget, so a trailing-slash `301` no longer loses content).
+/// `ipfs.io` refuses backends since its 2026 retirement, `cloudflare-ipfs.com`
+/// was sunset earlier. Filebase states its public gateway is for testing, at
+/// 100 requests a minute; NFT metadata needs far fewer (lore-0520).
 pub(super) const DEFAULT_IPFS_GATEWAYS: &[&str] = &[
-    "https://ipfs.io/ipfs/",
+    "https://ipfs.filebase.io/ipfs/",
     "https://gateway.pinata.cloud/ipfs/",
 ];
 
