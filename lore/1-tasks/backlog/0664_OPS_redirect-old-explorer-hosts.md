@@ -25,7 +25,12 @@ custom domains go, and Search Console gets the change of address.
 
 ## Stan teraz
 
-- Done: nothing yet.
+- Done: nothing yet. 0663 shipped 2026-11-05: both SPA and API hosts serve
+  on `sorobanscan.com` and on the old names.
+- Carried from 0663 (its Step 4), for this window: Prices `portalWebOrigin` →
+  `https://sorobanscan.com` (its backend allows one origin, so portal sign-in
+  from the new host waits for it), the GA4 stream URL with a real-time check,
+  and the smoke URL in `.github/workflows/deploy-production.yml`.
 - Next: decide how the Route 53 names redirect (see Step 1).
 - In force: one hop. Old portal paths go straight to `/api/prices-api/…`.
 
@@ -69,6 +74,8 @@ The tool needs the 301s live.
       to `https://sorobanscan.com/api/prices-api/dashboard?x=1`.
 - [ ] The old API custom domains are removed.
 - [ ] Search Console change of address submitted.
+- [ ] Portal sign-in works from `sorobanscan.com/api/prices-api/` (from 0663).
+- [ ] GA4 real-time shows hits from `sorobanscan.com` (from 0663).
 - [ ] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`,
       `docs/deployment.md`, `infra/cloudflare/README.md` (or its removal).
 - [ ] **API types regenerated** — N/A: nothing under `crates/api/**`.
