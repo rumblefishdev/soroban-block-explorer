@@ -51,3 +51,23 @@ the NFT-enum key as metadata only when its map carries `name` or `symbol`;
 leave `Symbol("METADATA")` untouched, and skip decoding the pre-image. The
 warning then means what it was written for: a real token whose metadata we
 cannot read.
+
+## Gateway replacement, measured 2026-11-04/05
+
+The gateway half of defect 3 reached the enrichment DLQ. Logs, 2026-10-21 to
+2026-11-04: messages with three failed tries equal the queue depth on both
+networks. Mainnet 30 of 30 are IPFS fetches; testnet 46 of 103 (the other 57 are
+5xx from two issuer domains, `stellar.toml`).
+
+- `ipfs.io`: 162 of 162 logged errors in 30 days are 429. Source:
+  gatewaychanges.ipfs.io (retired 2026-09-21), blog.ipfs.tech/2026-08-beyond-sponsored-gateways.
+- `gateway.pinata.cloud`, from a workstation: 4-7 s per answer against a 5 s
+  budget, then 429 on 5 of 5. 88 worker tries end in `error sending request`;
+  the log drops the underlying cause.
+- `ipfs.filebase.io`, from a workstation, one request a second: 16 of 17 metadata
+  files from the failing keys (p50 0.23 s); the 17th, `QmU1sB…/0`, times out on
+  Pinata too. 44 of 44 distinct stored images (p50 1.3 s, max 3.7 s, all
+  `image/png`). Not measured from a Lambda.
+
+Stored `media_url` on `ipfs.io`: 194 rows on mainnet (166 in one collection), 165
+on testnet. The image address is baked into the row, so these need a rewrite.
