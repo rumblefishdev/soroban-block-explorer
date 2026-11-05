@@ -17,7 +17,7 @@ What can legitimately land in each queue:
 A fetch answered with 429 or 5xx also lands in `enrichment-dlq` after three
 tries: on an IPFS gateway, or on one issuer's `stellar.toml`. Check first
 whether the gateway still serves backends (`DEFAULT_IPFS_GATEWAYS`); a redrive
-before that fix sends the messages back here.
+while it refuses them sends the messages back here.
 
 Dead issuer domains do NOT land here (since 2026-08-11): connect-level fetch
 failures classify **permanent** and write the `''` sentinel immediately —
