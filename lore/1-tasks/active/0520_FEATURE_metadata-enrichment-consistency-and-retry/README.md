@@ -2,7 +2,7 @@
 id: '0520'
 title: 'FEATURE: metadata enrichment follows the stored verdict, records why a fetch failed, and retries what can recover'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0455', '0311', '0392', '0220', '0231', '0542', '0654']
 tags:
@@ -62,6 +62,14 @@ history:
     note: >
       The data: URI half of defect 3 moved to 0654 (issue #684). The gateway
       half, the status column and the retry schedule stay here.
+  - date: 2026-11-05
+    status: active
+    who: karolkow
+    note: >
+      Activated for the gateway half of A2: ipfs.io stopped serving backends
+      and every NFT fetched through it either fails into the enrichment DLQ or
+      stores an image the gateway refuses. The status column, retry schedule
+      and A1, A3, A4 stay open.
 ---
 
 # FEATURE: metadata enrichment consistency and retry
@@ -115,20 +123,10 @@ reason — so A2's retry gate (never contract reverts or malformed URIs) applies
 to history too; no manual `--retry-sentinels`. Marking history `failed` without
 a reason would retry rows A2 excludes.
 
-**A4 — stop warning about a key that is not token metadata.** `is_metadata_key`
-(`token_metadata.rs`) accepts `Symbol("METADATA")` and the OZ NFT
-`Vec([Symbol("Metadata")])`; when neither yields a name, symbol or decimals,
-`ledger_entry_changes.rs` warns "non-standard shape, skipped". Measured over 7
-days of production logs: 4 504 such lines, all 33 contracts concentrated-liquidity
-pools whose `Metadata` slot holds oracle bookkeeping (`checkpoint_count`,
-`last_checkpoint_index`, `last_observation_ledger`) — read from chain, none has
-`Symbol("METADATA")`, none is a token, none has a `soroban_contract_metadata`
-row, so no name is lost. They log on every instance write, twice (the discarded
-"before" image is decoded too), and one pool produces 78% of the lines. Accept
-the NFT-enum key as metadata only when its map carries `name` or `symbol`;
-leave `Symbol("METADATA")` untouched, and skip decoding the pre-image. The
-warning then means what it was written for: a real token whose metadata we
-cannot read.
+**A4 — stop warning about a key that is not token metadata.** Accept the NFT-enum
+key as metadata only when its map carries `name` or `symbol`; leave
+`Symbol("METADATA")` untouched, and skip decoding the pre-image. Measurement and
+detail: `notes/R-measured-2026-09.md`.
 
 ## Acceptance Criteria
 

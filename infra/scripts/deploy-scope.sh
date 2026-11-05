@@ -69,8 +69,8 @@ self_check() {
   check 'production-2026.08.18-1-web' 'stacks= exclusively= web=true'
   check 'production-2026.08.18-1-CloudWatch' \
     'stacks=Explorer-production-CloudWatch exclusively=--exclusively web=false'
-  check 'production-2026.08.18-1-CloudflareBootstrap' \
-    'stacks=Explorer-production-CloudflareBootstrap exclusively=--exclusively web=false'
+  check 'production-2026.08.18-1-LedgerBucket' \
+    'stacks=Explorer-production-LedgerBucket exclusively=--exclusively web=false'
 
   # Rejected shapes — each one deployed the release set before the anchor.
   check 'production-experiment' 'REJECT'

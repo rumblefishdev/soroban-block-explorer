@@ -11,7 +11,11 @@ import { API_PATH_REDIRECT_FUNCTION_CODE } from '../cloudfront-functions/api-pat
 import { apiSpaRoutingFunctionCode } from '../cloudfront-functions/api-spa-routing.js';
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
 import { originSecretFunctionCode } from '../cloudfront-functions/origin-secret.js';
-import { relativeRecordName, type EnvironmentConfig } from '../types.js';
+import {
+  inZone,
+  relativeRecordName,
+  type EnvironmentConfig,
+} from '../types.js';
 
 export interface DeliveryStackProps extends cdk.StackProps {
   readonly config: EnvironmentConfig;
@@ -23,21 +27,24 @@ export interface DeliveryStackProps extends cdk.StackProps {
  * Creates:
  * - S3 bucket for React SPA static hosting (private, CloudFront OAC)
  * - S3 bucket for a second, independently-built SPA (the Stellar Prices
- *   portal) served at `/prices-api`+`/prices-api/*` on the same
- *   distribution (task 0519; moved from `/api` by task 0608), with its own
- *   CloudFront Function handling SPA routing fallback (bare `/prices-api`
- *   redirect, extensionless paths rewritten to `/prices-api/index.html`) —
- *   the main behaviors' `errorResponses` below can't do this for
- *   `/prices-api/*` since custom error pages are resolved through the
- *   _default_ behavior's origin, not the originating one
- * - `/api`+`/api/*` and `/pricing-api`+`/pricing-api/*`: the portal's old
- *   homes, now only a `301` to the same path under `/prices-api` (task 0608)
+ *   portal) served at `/api/prices-api`+`/api/prices-api/*` on the same
+ *   distribution (task 0519; moved from `/api` by task 0608 and from
+ *   `/prices-api` by task 0660), with its own CloudFront Function handling
+ *   SPA routing fallback (bare `/api/prices-api` redirect, extensionless
+ *   paths rewritten to `/api/prices-api/index.html`) — the main behaviors'
+ *   `errorResponses` below can't do this for `/api/prices-api/*` since
+ *   custom error pages are resolved through the _default_ behavior's origin,
+ *   not the originating one
+ * - `/api` + `/api/`: the portal hub, a route of the main SPA (task 0660)
+ * - every other `/api/*`, `/prices-api`+`/prices-api/*` and
+ *   `/pricing-api`+`/pricing-api/*`: the portal's old homes, now only a `301`
+ *   to the same path under `/api/prices-api` (tasks 0608, 0660)
  * - CloudFront distribution with SPA routing fallback
  * - S3 bucket for the distribution's standard logs, kept 30 days (task 0576)
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
- *   (main behaviors) and `config.enableApiSpaBasicAuth` (`/prices-api/*`
- *   only)
+ *   (main behaviors) and `config.enableApiSpaBasicAuth`
+ *   (`/api/prices-api/*` only)
  *
  * This distribution has **no AWS WAF and no CDN-level request filtering**, and
  * that is deliberate (ADR 0048, task 0302). The only viewer-side gate this stack
@@ -75,8 +82,8 @@ export class DeliveryStack extends cdk.Stack {
     // ---------------------
     // S3 Bucket (API SPA — task 0519)
     // ---------------------
-    // Separate, independently-built SPA served from `/prices-api/*` on the
-    // same distribution, under the `prices-api/` key prefix (CloudFront
+    // Separate, independently-built SPA served from `/api/prices-api/*` on the
+    // same distribution, under the `api/prices-api/` key prefix (CloudFront
     // hands S3 the viewer path unchanged). Same shape as `spaBucket` above.
     const apiSpaBucket = new s3.Bucket(this, 'ApiSpaBucket', {
       bucketName: `${config.envName}-soroban-explorer-api-spa`,
@@ -96,7 +103,7 @@ export class DeliveryStack extends cdk.Stack {
     // OBJECT_WRITER ownership; the S3 default (BUCKET_OWNER_ENFORCED)
     // disables ACLs and delivery fails. Objects expire after 30 days: every
     // line carries a viewer IP, and the Prices portal's privacy policy
-    // (served from this distribution under `/prices-api/*`) keeps technical logs
+    // (served from this distribution under `/api/prices-api/*`) keeps technical logs
     // for up to 30 days.
     const logBucket = new s3.Bucket(this, 'LogBucket', {
       bucketName: `${config.envName}-soroban-explorer-cf-logs`,
@@ -147,7 +154,7 @@ export class DeliveryStack extends cdk.Stack {
     // gate humans at the Cloudflare edge instead (or land a combined guard
     // function).
     //
-    // The `/prices-api` + `/prices-api/*` behaviors (task 0519, 0608) are
+    // The `/api/prices-api` + `/api/prices-api/*` behaviors (tasks 0519, 0660) are
     // separate behaviors with their own function slot. They always get
     // `apiSpaFunction` below for SPA routing (independent of auth), and it also
     // does the basic-auth check — reusing this same KVS, not a second,
@@ -187,7 +194,7 @@ export class DeliveryStack extends cdk.Stack {
     // Always provisioned, even with both basic-auth flags off: its credentials
     // are written out-of-band (never in CDK), so letting a flag flip delete the
     // store would make re-arming either gate a manual re-seed. Shared by the
-    // main site (`enableBasicAuth`) and the `/prices-api/*` SPA
+    // main site (`enableBasicAuth`) and the `/api/prices-api/*` SPA
     // (`enableApiSpaBasicAuth`), which are gated independently.
     const basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
       keyValueStoreName: `${config.envName}-soroban-explorer-basic-auth`,
@@ -212,9 +219,9 @@ export class DeliveryStack extends cdk.Stack {
       );
     }
 
-    // `/prices-api` + `/prices-api/*` routing function — always created.
-    // SPA routing (bare-`/prices-api` redirect, extensionless-path fallback
-    // to `/prices-api/index.html`) must work whether or not auth is on; the auth
+    // `/api/prices-api` + `/api/prices-api/*` routing function — always
+    // created. SPA routing (bare-`/api/prices-api` redirect, extensionless-path
+    // fallback to `/api/prices-api/index.html`) must work whether or not auth is on; the auth
     // check is folded in only when `enableApiSpaBasicAuth` is set, since
     // CloudFront allows only one viewer-request function per behavior.
     const apiSpaKvs = config.enableApiSpaBasicAuth ? basicAuthKvs : undefined;
@@ -231,9 +238,8 @@ export class DeliveryStack extends cdk.Stack {
       }
     );
 
-    // `/api` + `/api/*` and `/pricing-api` + `/pricing-api/*` — the portal's
-    // old homes (task 0608): every request answers `301` to the same path
-    // under `/prices-api`.
+    // The portal's old homes (tasks 0608, 0660): every request answers `301`
+    // to the same path under `/api/prices-api`.
     const apiPathRedirectFunction = new cloudfront.Function(
       this,
       'ApiPathRedirectFunction',
@@ -364,7 +370,10 @@ export class DeliveryStack extends cdk.Stack {
 
     // ---------------------
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
-      domainNames: [config.domainName],
+      // The old host stays an alias until task 0664 redirects it (task 0663).
+      domainNames: [config.domainName, config.legacyDomainName].filter(
+        (host): host is string => !!host
+      ),
       certificate,
       defaultRootObject: 'index.html',
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
@@ -395,15 +404,21 @@ export class DeliveryStack extends cdk.Stack {
         // for now; split out a long-TTL asset sub-path once this SPA's
         // build output layout is known.
         //
-        // `/prices-api/*` requires the literal trailing slash, so it does
-        // NOT match bare `/prices-api` — that needs its own exact-match
-        // behavior, redirected to `/prices-api/` by the same function.
-        '/prices-api': apiSpaBehavior(apiSpaFunction),
-        '/prices-api/*': apiSpaBehavior(apiSpaFunction),
-        // The old homes (task 0608): the function answers `301` before the
-        // origin is reached; the origin is there because a behavior needs one.
-        '/api': apiSpaBehavior(apiPathRedirectFunction),
+        // `/api/prices-api/*` requires the literal trailing slash, so it does
+        // NOT match bare `/api/prices-api` — that needs its own exact-match
+        // behavior, redirected to `/api/prices-api/` by the same function.
+        // Behaviors match in this order: both stay above `/api/*`.
+        '/api/prices-api': apiSpaBehavior(apiSpaFunction),
+        '/api/prices-api/*': apiSpaBehavior(apiSpaFunction),
+        // The portal hub (task 0660), a route of the main SPA. Bare `/api`
+        // already falls to the default behavior; `/api/` would match `/api/*`.
+        '/api/': { ...sharedBehaviorProps, cachePolicy: shortTtlCachePolicy },
+        // The old homes (tasks 0608, 0660): the function answers `301` before
+        // the origin is reached; the origin is there because a behavior needs
+        // one.
         '/api/*': apiSpaBehavior(apiPathRedirectFunction),
+        '/prices-api': apiSpaBehavior(apiPathRedirectFunction),
+        '/prices-api/*': apiSpaBehavior(apiPathRedirectFunction),
         '/pricing-api': apiSpaBehavior(apiPathRedirectFunction),
         '/pricing-api/*': apiSpaBehavior(apiPathRedirectFunction),
       },
@@ -440,8 +455,14 @@ export class DeliveryStack extends cdk.Stack {
     // recordName must be RELATIVE to the hosted zone — CDK concatenates
     // it with zoneName unless it ends in a trailing dot. See
     // relativeRecordName() in types.ts.
+    // Only the SPA name inside the zone has records here (validateConfig keeps
+    // it to one); sorobanscan.com's DNS lives in soroban-infrastructure.
+    const routedName = [config.domainName, config.legacyDomainName].find(
+      (host): host is string => !!host && inZone(host, config.hostedZoneName)
+    );
+    if (!routedName) throw new Error('no SPA name within hostedZoneName');
     const frontendRecordName = relativeRecordName(
-      config.domainName,
+      routedName,
       config.hostedZoneName
     );
 

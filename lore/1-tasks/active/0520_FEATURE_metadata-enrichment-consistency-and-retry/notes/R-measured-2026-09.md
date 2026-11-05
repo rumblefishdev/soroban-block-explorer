@@ -34,3 +34,40 @@ from a workstation, not from the Lambda — unverified there); stored
 Also found: RPC "preflight queue full" is not on the transient list (an
 overloaded provider writes permanent empties); the SEP-1 fetch gives up at 2 s
 (339 assets answer only within 15 s).
+
+## A4 in full (moved from the task file)
+
+**A4 — stop warning about a key that is not token metadata.** `is_metadata_key`
+(`token_metadata.rs`) accepts `Symbol("METADATA")` and the OZ NFT
+`Vec([Symbol("Metadata")])`; when neither yields a name, symbol or decimals,
+`ledger_entry_changes.rs` warns "non-standard shape, skipped". Measured over 7
+days of production logs: 4 504 such lines, all 33 contracts concentrated-liquidity
+pools whose `Metadata` slot holds oracle bookkeeping (`checkpoint_count`,
+`last_checkpoint_index`, `last_observation_ledger`) — read from chain, none has
+`Symbol("METADATA")`, none is a token, none has a `soroban_contract_metadata`
+row, so no name is lost. They log on every instance write, twice (the discarded
+"before" image is decoded too), and one pool produces 78% of the lines. Accept
+the NFT-enum key as metadata only when its map carries `name` or `symbol`;
+leave `Symbol("METADATA")` untouched, and skip decoding the pre-image. The
+warning then means what it was written for: a real token whose metadata we
+cannot read.
+
+## Gateway replacement, measured 2026-11-04/05
+
+The gateway half of defect 3 reached the enrichment DLQ. Logs, 2026-10-21 to
+2026-11-04: messages with three failed tries equal the queue depth on both
+networks. Mainnet 30 of 30 are IPFS fetches; testnet 46 of 103 (the other 57 are
+5xx from two issuer domains, `stellar.toml`).
+
+- `ipfs.io`: 162 of 162 logged errors in 30 days are 429. Source:
+  gatewaychanges.ipfs.io (retired 2026-09-21), blog.ipfs.tech/2026-08-beyond-sponsored-gateways.
+- `gateway.pinata.cloud`, from a workstation: 4-7 s per answer against a 5 s
+  budget, then 429 on 5 of 5. 88 worker tries end in `error sending request`;
+  the log drops the underlying cause.
+- `ipfs.filebase.io`, from a workstation, one request a second: 16 of 17 metadata
+  files from the failing keys (p50 0.23 s); the 17th, `QmU1sB…/0`, times out on
+  Pinata too. 44 of 44 distinct stored images (p50 1.3 s, max 3.7 s, all
+  `image/png`). Not measured from a Lambda.
+
+Stored `media_url` on `ipfs.io`: 194 rows on mainnet (166 in one collection), 165
+on testnet. The image address is baked into the row, so these need a rewrite.

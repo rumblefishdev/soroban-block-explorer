@@ -88,15 +88,6 @@ deploy-production-hetzner-dns: build
 destroy-production-hetzner-dns: build
 	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
 
-# --- Cloudflare bootstrap (TF-state bucket for infra/cloudflare/) ---
-# Requires "provisionCloudflareBootstrap": true in envs/production.json.
-
-deploy-production-cloudflare-bootstrap: build
-	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-CloudflareBootstrap --require-approval broadening
-
-destroy-production-cloudflare-bootstrap: build
-	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudflareBootstrap --force
-
 # --- Frontend SPA (build + S3 sync + CloudFront invalidation) ---
 # Requires Explorer-production-Delivery already deployed (make deploy-production-delivery).
 # VITE_API_BASE_URL is baked from cloudflareApiDomainName — the SPA calls the API
@@ -104,7 +95,7 @@ destroy-production-cloudflare-bootstrap: build
 
 build-production-web:
 	cd .. && VITE_STELLAR_NETWORK=mainnet \
-		VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/production.json) \
+		VITE_API_BASE_URL=https://$$(jq -r '.sorobanscanApiDomainName // .cloudflareApiDomainName' infra/envs/production.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json) \
 		pnpm nx build @rumblefish/soroban-block-explorer-web
 	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/production.json); \
@@ -158,7 +149,7 @@ deploy-testnet: build
 
 build-testnet-web:
 	cd .. && VITE_STELLAR_NETWORK=testnet \
-		VITE_API_BASE_URL=https://$$(jq -r '.cloudflareApiDomainName' infra/envs/testnet.json) \
+		VITE_API_BASE_URL=https://$$(jq -r '.sorobanscanApiDomainName // .cloudflareApiDomainName' infra/envs/testnet.json) \
 		VITE_TURNSTILE_SITE_KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json) \
 		pnpm nx build @rumblefish/soroban-block-explorer-web
 	@cd .. && KEY=$$(jq -r '.turnstileSiteKey // ""' infra/envs/testnet.json); \

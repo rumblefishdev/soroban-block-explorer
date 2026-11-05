@@ -4,7 +4,7 @@ use super::*;
 fn resolve_ipfs_swaps_scheme() {
     assert_eq!(
         resolve_ipfs_to_https("ipfs://QmFoo/1.json"),
-        "https://ipfs.io/ipfs/QmFoo/1.json"
+        "https://ipfs.filebase.io/ipfs/QmFoo/1.json"
     );
     assert_eq!(
         resolve_ipfs_to_https("https://example.com/1.json"),
