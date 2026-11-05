@@ -85,3 +85,26 @@ is tried, the `''` sentinel is written and no alarm fires. 0 such sentinels for
 Pinata in 30 days of mainnet worker logs; the same search for `ipfs` did not run.
 Fix with A2: for `ipfs://`, treat any non-2xx or transport error as a gateway
 fault, and transient when every gateway fails that way.
+
+## After the release that carries #705 and #709
+
+These PRs are merged and wait for the next release. Testnet first, then mainnet:
+
+1. Deploy all stacks. #710 renames the failure log field, so Compute and CloudWatch
+   must both go: `deploy-testnet`, later `deploy-production`.
+2. Check `list-metrics` on `SorobanBlockExplorer/Indexer/<env>` shows `IndexerFailures`.
+3. Redrive `<env>-enrichment-dlq` and read the worker log: fetches must succeed
+   through `ipfs.filebase.io` from the Lambda. This settles the gateway criterion.
+4. Rewrite stored image addresses once the worker runs the new code:
+
+   ```sql
+   INSERT INTO nft_enrichment (contract_id, token_id, name, media_url, collection_name, version)
+   SELECT contract_id, token_id, name,
+          replaceOne(media_url, 'https://ipfs.io/ipfs/', 'https://ipfs.filebase.io/ipfs/'),
+          collection_name, now64(3)
+   FROM nft_enrichment FINAL
+   WHERE media_url LIKE 'https://ipfs.io/ipfs/%'
+   ```
+
+5. Drain keys still with no row: `backfill-enrichment-runner nft-metadata`, at low
+   concurrency, because Filebase allows 200 requests a minute.
