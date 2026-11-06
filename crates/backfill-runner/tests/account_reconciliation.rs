@@ -49,7 +49,7 @@
 //!     cargo test -p backfill-runner --test account_reconciliation -- --nocapture
 //! ```
 //!
-//! Optional: `T11_CH_DOMAIN` (default `ch.sorobanscan.rumblefish.dev`),
+//! Optional: `T11_CH_DOMAIN` (default `ch.sorobanscan.com`),
 //! `T11_RPC_URL` (default a public mainnet Soroban RPC), `T11_ACCOUNTS`
 //! (comma-separated G-StrKeys replacing the list below).
 
@@ -162,7 +162,7 @@ async fn every_account_sums_to_its_ledger_balance() {
         eprintln!("T11_CH_CERT / T11_CH_KEY not set — skipping the account reconciliation");
         return;
     };
-    let domain = env_or("T11_CH_DOMAIN", "ch.sorobanscan.rumblefish.dev");
+    let domain = env_or("T11_CH_DOMAIN", "ch.sorobanscan.com");
     let rpc_url = env_or(
         "T11_RPC_URL",
         "https://soroban-rpc.mainnet.stellar.gateway.fm/",

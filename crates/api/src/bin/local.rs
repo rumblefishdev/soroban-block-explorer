@@ -33,7 +33,7 @@
 //! Env, optional:
 //! - `LOCAL_MTLS_DIR` — dir with `<user>.crt`, `<user>.key`, `ca.crt`
 //!   (default `infra-hetzner/ca/out/$USER`)
-//! - `LOCAL_CH_DOMAIN` — Caddy mTLS host (default `ch.sorobanscan.rumblefish.dev`)
+//! - `LOCAL_CH_DOMAIN` — Caddy mTLS host (default `ch.sorobanscan.com`)
 //! - `LOCAL_PORT` — listen port (default 9100)
 
 use api::runtime_enrichment::RuntimeEnrichment;
@@ -52,8 +52,7 @@ async fn main() {
     let user = std::env::var("USER").unwrap_or_else(|_| "dev".into());
     let mtls_dir =
         std::env::var("LOCAL_MTLS_DIR").unwrap_or_else(|_| format!("infra-hetzner/ca/out/{user}"));
-    let domain =
-        std::env::var("LOCAL_CH_DOMAIN").unwrap_or_else(|_| "ch.sorobanscan.rumblefish.dev".into());
+    let domain = std::env::var("LOCAL_CH_DOMAIN").unwrap_or_else(|_| "ch.sorobanscan.com".into());
     let port: u16 = std::env::var("LOCAL_PORT")
         .ok()
         .and_then(|p| p.parse().ok())

@@ -26,7 +26,7 @@
 //! cargo test -p backfill-runner --test event_id_reconciliation -- --nocapture
 //! ```
 //!
-//! Optional: `EVENT_CH_DOMAIN` (default `ch.sorobanscan.rumblefish.dev`),
+//! Optional: `EVENT_CH_DOMAIN` (default `ch.sorobanscan.com`),
 //! `EVENT_RPC_URL` (default a public mainnet Soroban RPC),
 //! `EVENT_ARCHIVE_URL` (default the public `aws-public-blockchain` bucket).
 
@@ -205,7 +205,7 @@ fn prod_client() -> Option<clickhouse::Client> {
         eprintln!("no client certificate at {cert} — skipping the event id reconciliation");
         return None;
     }
-    let domain = env_or("EVENT_CH_DOMAIN", "ch.sorobanscan.rumblefish.dev");
+    let domain = env_or("EVENT_CH_DOMAIN", "ch.sorobanscan.com");
     let bundle = db_clickhouse::mtls::MtlsBundle {
         cert_pem: std::fs::read_to_string(&cert).expect("read EVENT_CH_CERT"),
         key_pem: std::fs::read_to_string(&key).expect("read EVENT_CH_KEY"),

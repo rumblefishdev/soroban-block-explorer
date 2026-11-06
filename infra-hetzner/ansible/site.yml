@@ -68,7 +68,7 @@
                                      CLICKHOUSE_CN_USER_MAP via Caddy)
             BORG_PASSPHRASE         (random 40-byte base64)
             CH_DOMAIN               (Caddy site address — e.g.
-                                     ch.sorobanscan.rumblefish.dev)
+                                     ch.sorobanscan.com)
             ACME_EMAIL              (Let's Encrypt account email)
             OPERATOR_SSH_PUBKEYS    (one OpenSSH public key per line —
                                      who can SSH into the deploy user)

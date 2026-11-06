@@ -57,8 +57,11 @@ ingestion.
     - Cause: the ECS security group lacks egress on 80, so every fetch from
       the SDF archives (`http://history.stellar.org`) timed out (`exit 28`,
       19 times). Follow-up 0667.
-- Next: operators, defaults and docs (`local.rs`, backfill-runner tests,
-  stellar-prices-api `reingest_0286.py`, runbooks), then Step 4.
+  - Defaults and docs name the new host: `local.rs`, the backfill-runner
+    tests, the runbooks and READMEs here, and stellar-prices-api's
+    `reingest_0286.py`, `sdex-backfill` and runbooks. Dated SCF evidence
+    stays as submitted.
+- Next: Step 4, once operators confirm they use the new host.
 - In force:
   - Both names stay valid until the last client has moved.
   - Every Ansible run keeps `CH_DOMAIN=ch.sorobanscan.com` and
