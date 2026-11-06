@@ -66,10 +66,16 @@ access and credentials see
 `HetznerDnsStack` provisions a Route 53 A record targeting the
 Hetzner-hosted ClickHouse server's public IPv4. The FQDN comes
 verbatim from the `chDomainName` field in the env config
-(`envs/${env}.json`) — for example, production today resolves to
-`ch.sorobanscan.rumblefish.dev`. Caddy on the box uses this name
+(`envs/${env}.json`). Caddy on the box uses this name
 for the Let's Encrypt HTTP-01 challenge; AWS-side workloads use
 it as the mTLS endpoint.
+
+Production no longer uses it (task 0665). Its name is
+`ch.sorobanscan.com`, a Cloudflare record in soroban-infrastructure
+(`cloudflare/clickhouse.tf`), and `provisionChDns: false` keeps the
+app from synthesizing this stack. The deployed stack still holds the
+old record, `ch.sorobanscan.rumblefish.dev`, until 0665's Step 4
+removes it.
 
 ### One-time setup (per environment, before first deploy)
 

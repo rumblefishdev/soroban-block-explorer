@@ -78,7 +78,7 @@ async fn movements_match_attributed_transfers() {
         ca_pem: String::new(),
     };
     let ch = db_clickhouse::mtls::client_with_mtls(
-        "ch.sorobanscan.rumblefish.dev",
+        "ch.sorobanscan.com",
         &bundle,
         db_clickhouse::PROD_DATABASE,
     )
