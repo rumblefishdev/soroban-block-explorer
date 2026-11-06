@@ -1,36 +1,22 @@
 ---
-id: '0664'
-title: 'Redirect the old explorer hosts to sorobanscan.com'
-type: OPS
-status: active
-related_adr: ['0048']
-related_tasks: ['0659', '0662', '0663', '0660']
-tags: [infra, cloudfront, cloudflare, seo, priority-medium, effort-medium]
+title: 'How the redirects shipped, 2026-11-05/06'
+type: research
+status: mature
+spawns: []
+tags: [redirects, cloudfront, cloudflare, prices-portal]
 links: []
 history:
-  - date: '2026-11-03'
-    status: backlog
+  - date: '2026-11-06'
+    status: mature
     who: stkrolikiewicz
-    note: 'Created under 0659. Needs 0662 and 0663.'
-  - date: '2026-11-05'
-    status: active
-    who: stkrolikiewicz
-    note: >
-      Started after 0663 shipped. Decided: the old SPA hosts redirect from the
-      same distribution (a host check in its viewer-request functions), not a
-      second one; api.sorobanscan.rumblefish.dev stays dark.
+    note: "The task file's state log and plan, moved here when 0664 completed (README limit)."
 ---
 
-# Redirect the old explorer hosts to sorobanscan.com
+# How the redirects shipped, 2026-11-05/06
 
-## Summary
+The state log as it grew while the task ran, and the plan it followed.
 
-The old explorer hosts keep answering, as redirects to the new ones, path and
-query kept: `301` for the SPA hosts, `308` for the API hosts (a `301` lets a
-client turn a POST into a GET, and `/auth/session` is a POST). Then the old API
-custom domains go, and Search Console gets the change of address.
-
-## Stan teraz
+## State log
 
 - Done: Step 1 on both networks, 2026-11-05: testnet from a laptop,
   production by `production-2026.11.05-5-Delivery` (#711, release #712). Every
@@ -83,25 +69,19 @@ custom domains go, and Search Console gets the change of address.
   `sorobanscan.rumblefish.dev` is on the unwanted-referrals list while the
   portal stays there, and real-time shows the explorer's views, which only the
   new host serves now.
-- Next: the flag `pricesPortalOnLegacyHost` goes once the Prices API is on
-  `prices-api.sorobanscan.com` (stellar-prices-api task 0340, 0659 step 6),
-  and with it the unwanted-referral rule.
+- Done: the portal follows, 2026-11-06 (about 09:00 UTC). With
+  stellar-prices-api 0340's switch (its #412: `portalWebOrigin`, `redirect_uri`,
+  the bundle on `prices-api.sorobanscan.com`), `pricesPortalOnLegacyHost: false`
+  went out: #718, release #719, Delivery from a laptop to keep the window
+  short. The old host answers `301` for the portal too. A Discord sign-in
+  passed on `https://sorobanscan.com/api/prices-api/`.
+- Left outside this task: the GA4 unwanted-referral rule for
+  `sorobanscan.rumblefish.dev` can go (Aga). The unused certificate
+  `67947579…` stays until someone deletes it (0659).
 - Decided (2026-11-05): `api.sorobanscan.rumblefish.dev` stays dark. It has
   had no DNS answer since `enableLegacyApiDomain: false`, so nothing depends on
   it.
 - In force: one hop. Old portal paths go straight to `/api/prices-api/…`.
-
-## Hosts
-
-| Old                                         | New                           | Code |
-| ------------------------------------------- | ----------------------------- | ---- |
-| `sorobanscan.rumblefish.dev`                | `sorobanscan.com`             | 301  |
-| `testnet.sorobanscan.rumblefish.dev`        | `testnet.sorobanscan.com`     | 301  |
-| `api-sorobanscan.rumblefishdev.com`         | `api.sorobanscan.com`         | 308  |
-| `api-testnet-sorobanscan.rumblefishdev.com` | `api-testnet.sorobanscan.com` | 308  |
-
-`api.sorobanscan.rumblefish.dev` has been dark since
-`enableLegacyApiDomain: false`. Decide: leave it dark or add a 308.
 
 ## Implementation Plan
 
@@ -123,24 +103,40 @@ its owner applies it. After that the old API Gateway custom domain and
 Add `sorobanscan.com`; Change of Address from `sorobanscan.rumblefish.dev`.
 The tool needs the 301s live.
 
-## Acceptance Criteria
+## Design Decisions
 
-- [x] `curl -sI` on every old host answers its code with `Location` on the new
-      host, path and query kept (2026-11-05, both networks), the portal's
-      paths excepted while `pricesPortalOnLegacyHost` is set.
-- [ ] `https://sorobanscan.rumblefish.dev/prices-api/dashboard?x=1` → one hop
-      to `https://sorobanscan.com/api/prices-api/dashboard?x=1`: after the
-      Prices API moves. Until then it is one hop to
-      `/api/prices-api/dashboard?x=1` on the old host, and the new host's
-      `/prices-api/…` is one `302` there.
-- [x] The old API custom domains are removed (2026-11-05, both networks).
-- [x] Search Console change of address submitted (2026-11-05, from
-      `https://sorobanscan.rumblefish.dev/`).
-- [ ] Portal sign-in works from `sorobanscan.com/api/prices-api/` (from 0663):
-      after the Prices API moves; until then the new host sends the portal to
-      the old one.
-- [x] GA4 real-time shows hits from `sorobanscan.com` (from 0663; 2026-11-05).
-- [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md`,
-      `docs/deployment.md`, `infra/cloudflare/README.md` (removed with its
-      directory), `docs/architecture/backend/api-gateway-cache-spec.md`.
-- [ ] **API types regenerated** — N/A: nothing under `crates/api/**`.
+### From Plan
+
+1. **The old SPA hosts redirect from the same distribution**: a host check in
+   every viewer-request function, plus `legacy-host-redirect.ts` for the
+   behaviors that had none. No second distribution, so no alias moved.
+2. **`308` for the API hosts**, from a Single Redirect in the
+   `rumblefishdev.com` zone, so a POST stays a POST.
+
+### Emerged
+
+3. **`pricesPortalOnLegacyHost`, a temporary move the other way (`302`).** The
+   portal's session cookie (`SameSite=Lax`) and CORS need page and API
+   same-site. Until the Prices API had a `sorobanscan.com` host, the portal had
+   to stay on the old one. That also fixed a live regression: since 0663 the
+   "Prices API" link on the new host had led to a portal that could not sign
+   in.
+4. **The old API hosts' records moved to dns-cloudformation**, imported and
+   pointed at the new hosts. Their edge rules went, since the redirect phase
+   runs before the transform, WAF and rate-limit phases. That state holds no
+   edge secret any more, and `infra/cloudflare/` went from this repo.
+5. **Search Console's change of address from a URL-prefix property**
+   `https://sorobanscan.rumblefish.dev/`, never from the `rumblefish.dev`
+   domain property, which would have moved the company site.
+6. **Delivery for the flag from a laptop** (release #719), not a tag, so the
+   Prices switch window stayed a few minutes instead of a CI run.
+
+## Issues Encountered
+
+- `production-2026.11.05-5-Delivery`'s CI run failed at the frontend smoke,
+  which fetched the old host and got its new `301`. The deploy itself went
+  through. Fixed in #713.
+- CloudFormation kept the production Delivery update in progress for 14
+  minutes (842 s on 2026-11-06) while the CloudFront functions were already
+  `LIVE` and serving the new behavior. Check the function stage and the hosts,
+  not the stack.
