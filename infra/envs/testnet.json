@@ -72,7 +72,7 @@
   "galexieEphemeralUtilizationThreshold": 60,
   "ingestionBacklogAgeSeconds": 120,
   "costAnomalyAlertThresholdUsd": 3,
-  "chDomainName": "ch.sorobanscan.rumblefish.dev",
+  "chDomainName": "ch.sorobanscan.com",
   "mtlsSecretNamePrefix": "soroban/testnet/mtls",
   "provisionChDns": false,
   "provisionCostAnomalyMonitor": false
