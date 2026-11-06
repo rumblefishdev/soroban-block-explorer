@@ -31,15 +31,33 @@ ingestion.
 
 ## Stan teraz
 
-- Done: nothing live yet.
-- In progress (2026-11-06):
+- Done (2026-11-06):
   - Step 1: soroban-infrastructure#10, `ch.sorobanscan.com` A `168.119.73.161`,
     DNS-only.
-  - Step 2: Caddy's site address takes optional extra names from
-    `CH_DOMAIN_ALIASES` (Ansible `ch_domain_aliases`), empty by default.
-- Next: apply #10, then `--tags app` with `CH_DOMAIN=ch.sorobanscan.com` and
-  `CH_DOMAIN_ALIASES=ch.sorobanscan.rumblefish.dev`; check both names.
-- In force: both names stay valid until the last client has moved.
+  - Step 2: #721, then `--tags app` (stkrolikiewicz, 12:38 UTC) with
+    `CH_DOMAIN=ch.sorobanscan.com` and
+    `CH_DOMAIN_ALIASES=ch.sorobanscan.rumblefish.dev`. Both names answer `/ping`
+    with a client certificate (`dev_shared`) and refuse the handshake without
+    one.
+  - The run recreated the whole stack (a changed `.env` does that): 4 + 1
+    indexer write failures at 12:43 UTC, redelivered. Four alarms
+    (`*-indexer-*failures`, `*-ingestion-backlog-age`) were OK again by 12:58.
+- In progress: Step 3, testnet first (`testnet.json`).
+- Next: production `chDomainName` with `provisionChDns: false` (Compute and
+  Ingestion), then a Prices Compute + EventBridge deploy.
+- In force:
+  - Both names stay valid until the last client has moved.
+  - Every Ansible run keeps `CH_DOMAIN=ch.sorobanscan.com` and
+    `CH_DOMAIN_ALIASES=ch.sorobanscan.rumblefish.dev` until Step 4. An old
+    `CH_DOMAIN` alone drops the new name from Caddy.
+- Found:
+  - Prices reads `/platform/production/ch-domain`, which
+    Explorer-production-Compute writes from `chDomainName`. So Prices follows
+    the explorer's production deploy, not the other way round.
+  - Production builds `HetznerDnsStack` from `chDomainName` in the Route 53
+    zone `sorobanscan.rumblefish.dev`. The new name is outside it, so
+    production switches with `provisionChDns: false`. The stack stays deployed
+    and keeps the old record until Step 4.
 
 ## Context
 
@@ -81,8 +99,8 @@ Drop the old name from Caddy, point reverse DNS at the new one, remove
 
 ## Acceptance Criteria
 
-- [ ] `https://ch.sorobanscan.com/ping` answers with a client certificate and
-      refuses the handshake without one.
+- [x] `https://ch.sorobanscan.com/ping` answers with a client certificate and
+      refuses the handshake without one (2026-11-06).
 - [ ] Every client is on the new name; ingestion lag stays normal.
 - [ ] The old name is gone from Caddy; `HetznerDnsStack` removed.
 - [ ] **Docs updated** — `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md`,
