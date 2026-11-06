@@ -4,7 +4,7 @@ title: 'Move the ClickHouse endpoint to ch.sorobanscan.com'
 type: OPS
 status: active
 related_adr: []
-related_tasks: ['0659', '0664', '0234', '0239']
+related_tasks: ['0659', '0664', '0234', '0239', '0667']
 tags: [infra, infra-hetzner, clickhouse, mtls, priority-low, effort-medium]
 links: []
 history:
@@ -42,9 +42,23 @@ ingestion.
   - The run recreated the whole stack (a changed `.env` does that): 4 + 1
     indexer write failures at 12:43 UTC, redelivered. Four alarms
     (`*-indexer-*failures`, `*-ingestion-backlog-age`) were OK again by 12:58.
-- In progress: Step 3, testnet first (`testnet.json`).
-- Next: production `chDomainName` with `provisionChDns: false` (Compute and
-  Ingestion), then a Prices Compute + EventBridge deploy.
+  - Step 3, AWS clients:
+    - Testnet: #722, `make deploy-testnet` at 13:13 UTC.
+    - Production: #723 and release #724. Compute and Ingestion were deployed
+      from a laptop at 13:25–13:32 UTC, from `a1fae52a`.
+    - stellar-prices-api: Compute, then EventBridge with `--force` (its
+      template doesn't change: the stacks read the name through an SSM-typed
+      parameter). Deployed 14:14–14:17 UTC from `bc315639`. All 12 Prices
+      Lambdas are on the new name, with 0 errors.
+  - The Galexie restart (task definition rev 11) paused ingestion 13:28–14:51
+    UTC. Ledgers stayed contiguous in S3 from `65337130`.
+    - 13:29–13:56: captive core rebuilt state from 38 buckets.
+    - 14:02–14:51: catch-up ran one checkpoint per round, at 5–10 min a round.
+    - Cause: the ECS security group lacks egress on 80, so every fetch from
+      the SDF archives (`http://history.stellar.org`) timed out (`exit 28`,
+      19 times). Follow-up 0667.
+- Next: operators, defaults and docs (`local.rs`, backfill-runner tests,
+  stellar-prices-api `reingest_0286.py`, runbooks), then Step 4.
 - In force:
   - Both names stay valid until the last client has moved.
   - Every Ansible run keeps `CH_DOMAIN=ch.sorobanscan.com` and
