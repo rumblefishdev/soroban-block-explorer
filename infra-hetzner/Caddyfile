@@ -84,7 +84,11 @@
 	}
 }
 
-{$CH_DOMAIN} {
+# `{$CH_DOMAIN_ALIASES}` is optional extra names for the same site, space-separated, empty
+# by default. Caddy substitutes `{$VAR}` before parsing, so an empty value leaves one address
+# and a list adds more, each with its own Let's Encrypt certificate. Used while a rename is
+# in flight (lore task 0665): both names answer until the last client has moved.
+{$CH_DOMAIN} {$CH_DOMAIN_ALIASES} {
 	tls {
 		# Both directions of mutual authentication. `require_and_verify`
 		# rejects any handshake that does not present a certificate

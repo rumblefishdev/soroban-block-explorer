@@ -2,7 +2,7 @@
 id: '0665'
 title: 'Move the ClickHouse endpoint to ch.sorobanscan.com'
 type: OPS
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0659', '0664', '0234', '0239']
 tags: [infra, infra-hetzner, clickhouse, mtls, priority-low, effort-medium]
@@ -12,6 +12,12 @@ history:
     status: backlog
     who: stkrolikiewicz
     note: 'Created under 0659. Last step of the move.'
+  - date: '2026-11-06'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Started: the DNS record (soroban-infrastructure#10) and Caddy serving
+      both names (CH_DOMAIN_ALIASES).
 ---
 
 # Move the ClickHouse endpoint to ch.sorobanscan.com
@@ -25,8 +31,14 @@ ingestion.
 
 ## Stan teraz
 
-- Done: nothing yet.
-- Next: the DNS-only record and the second name in Caddy.
+- Done: nothing live yet.
+- In progress (2026-11-06):
+  - Step 1: soroban-infrastructure#10, `ch.sorobanscan.com` A `168.119.73.161`,
+    DNS-only.
+  - Step 2: Caddy's site address takes optional extra names from
+    `CH_DOMAIN_ALIASES` (Ansible `ch_domain_aliases`), empty by default.
+- Next: apply #10, then `--tags app` with `CH_DOMAIN=ch.sorobanscan.com` and
+  `CH_DOMAIN_ALIASES=ch.sorobanscan.rumblefish.dev`; check both names.
 - In force: both names stay valid until the last client has moved.
 
 ## Context
