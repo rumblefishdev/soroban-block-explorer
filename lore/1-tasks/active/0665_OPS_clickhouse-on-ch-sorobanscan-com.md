@@ -61,7 +61,14 @@ ingestion.
     tests, the runbooks and READMEs here, and stellar-prices-api's
     `reingest_0286.py`, `sdex-backfill` and runbooks. Dated SCF evidence
     stays as submitted.
-- Next: Step 4, once operators confirm they use the new host.
+- In progress: Step 4.
+  - Code: `HetznerDnsStack`, `provisionChDns` and the `*-hetzner-dns` Make
+    targets removed; the docs point at `cloudflare/clickhouse.tf`.
+  - Then, in order: no old-name requests in Caddy's log; delete the
+    `Explorer-production-HetznerDns` stack (its Route 53 record); `--tags
+app,hetzner` with `CH_DOMAIN_ALIASES=` empty (Caddy drops the old name,
+    reverse DNS follows `ch_domain`). The Ansible run recreates the stack,
+    as in Step 2.
 - In force:
   - Both names stay valid until the last client has moved.
   - Every Ansible run keeps `CH_DOMAIN=ch.sorobanscan.com` and

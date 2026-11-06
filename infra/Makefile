@@ -76,18 +76,6 @@ deploy-production-cloudwatch: build
 destroy-production-cloudwatch: build
 	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-CloudWatch --force
 
-synth-production-hetzner-dns: build
-	pnpm exec cdk --app "$(PRODUCTION_APP)" synth Explorer-production-HetznerDns
-
-diff-production-hetzner-dns: build
-	pnpm exec cdk --app "$(PRODUCTION_APP)" diff Explorer-production-HetznerDns
-
-deploy-production-hetzner-dns: build
-	pnpm exec cdk --app "$(PRODUCTION_APP)" deploy Explorer-production-HetznerDns --require-approval broadening
-
-destroy-production-hetzner-dns: build
-	pnpm exec cdk --app "$(PRODUCTION_APP)" destroy Explorer-production-HetznerDns --force
-
 # --- Frontend SPA (build + S3 sync + CloudFront invalidation) ---
 # Requires Explorer-production-Delivery already deployed (make deploy-production-delivery).
 # VITE_API_BASE_URL is baked from sorobanscanApiDomainName — the SPA calls the API

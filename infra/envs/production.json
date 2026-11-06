@@ -71,6 +71,5 @@
   "ingestionBacklogAgeSeconds": 120,
   "costAnomalyAlertThresholdUsd": 3,
   "chDomainName": "ch.sorobanscan.com",
-  "provisionChDns": false,
   "mtlsSecretNamePrefix": "soroban/production/mtls"
 }
