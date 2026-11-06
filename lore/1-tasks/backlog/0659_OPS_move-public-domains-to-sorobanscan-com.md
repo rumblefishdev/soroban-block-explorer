@@ -37,8 +37,16 @@ This task holds the names and the order; each step is its own task.
   `sorobanscan.com`, `testnet.sorobanscan.com`, `api.sorobanscan.com` and
   `api-testnet.sorobanscan.com`, beside the old hosts. The Turnstile widget
   moved to soroban-infrastructure.
-- Next: 0664 (redirects, plus 0663's Prices `portalWebOrigin`, GA4 and smoke
-  URL).
+- Done (2026-11-05/06): 0664. Every old explorer host redirects (`301` SPA,
+  `308` API), and the old API domains, certificates and edge rules are gone.
+  Search Console change of address and GA4 are done.
+- Done (2026-11-06): step 6 up to the switch, stellar-prices-api task 0340.
+  The Prices API answers on `prices-api.sorobanscan.com` (proxied), and the
+  portal runs on `sorobanscan.com/api/prices-api/` with Discord sign-in. The
+  old Prices API host still serves API-key clients.
+- Next: 0340 step 5 (Prices docs, skill and examples, then the old API host).
+  Then 0665. Optional: delete the unused certificate
+  `api.sorobanscan.rumblefishdev.com` (`67947579…`, 0664).
 - In force: one step at a time; each ships and is verified before the next.
 
 ## Names
@@ -68,7 +76,8 @@ covers `sorobanscan.com` and `*.sorobanscan.com` only. Hence
    the same window.
 5. **0664**: old explorer hosts answer 301 (SPA) / 308 (API); Search Console
    change of address.
-6. **Prices API on `prices-api.sorobanscan.com`**: stellar-prices-api side.
+6. **Prices API on `prices-api.sorobanscan.com`**: stellar-prices-api side,
+   its task 0340.
    Follow its `docs/runbooks/portal-oauth-deploy-prep.md` §6 (Discord redirect
    URI order). Its old host redirects only after the stored `redirect_uri`
    points at the new one.
