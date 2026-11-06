@@ -135,8 +135,24 @@ export interface EnvironmentConfig {
 
   // Delivery (consumed by DeliveryStack + ApiGatewayStack)
 
-  /** Frontend SPA domain, e.g. "sorobanscan.rumblefish.dev". */
+  /** Frontend SPA domain, e.g. "sorobanscan.com". */
   readonly domainName: string;
+  /**
+   * The SPA's previous host, kept as a second alias on the distribution (task
+   * 0663) whose every request answers `301` to the same path on `domainName`
+   * (task 0664). It keeps its Route 53 records; a `domainName` outside the
+   * hosted zone gets its DNS from soroban-infrastructure.
+   */
+  readonly legacyDomainName?: string;
+  /**
+   * The Prices portal (`/api/prices-api/*` and its old paths) stays on
+   * `legacyDomainName`: the new host answers `302` back to it, and the old host
+   * serves it (task 0664). Needed until the Prices API is on a
+   * `sorobanscan.com` host: its session cookie is `SameSite=Lax` (same-site
+   * only with `*.rumblefish.dev`) and its CORS allows one origin,
+   * `portalWebOrigin`.
+   */
+  readonly pricesPortalOnLegacyHost?: boolean;
   /** API custom domain, e.g. "api.sorobanscan.rumblefish.dev". */
   readonly apiDomainName: string;
   /** Existing Route 53 hosted zone ID for sorobanscan.rumblefish.dev (global). */
@@ -165,12 +181,13 @@ export interface EnvironmentConfig {
   readonly enableBasicAuth: boolean;
 
   /**
-   * Enable CloudFront Function basic auth on the `/prices-api/*` behavior
-   * only (task 0519; `/api/*` until task 0608) — the separate Prices portal
+   * Enable CloudFront Function basic auth on the `/api/prices-api/*` behavior
+   * only (task 0519; `/api/*` until task 0608, `/prices-api/*` until task
+   * 0660) — the separate Prices portal
    * SPA served from its own S3 bucket (`apiSpaBucket`) on the same
    * distribution. Independent of `enableBasicAuth`: flipping this on does NOT
    * gate the main site's behaviors, and flipping `enableBasicAuth` on does
-   * NOT gate `/prices-api/*`.
+   * NOT gate `/api/prices-api/*`.
    *
    * Shares the same CloudFront Function code and KeyValueStore as
    * `enableBasicAuth` when both are true (one construct, one set of
@@ -183,24 +200,6 @@ export interface EnvironmentConfig {
   // All default false until the Cloudflare zone + certs/secrets exist;
   // enabling them does NOT move DNS, it provisions the AWS-side locks
   // that must be live BEFORE the Cloudflare cutover (task 0277 Step 2).
-
-  /**
-   * Provision the AWS-side bootstrap for THIS repo's Cloudflare module via CDK
-   * (so nothing is created by hand): the Terraform remote-state S3 bucket
-   * (versioned, encrypted, private) that backs `infra/cloudflare/`. Deploy this
-   * FIRST — the backend bucket must exist before the first `terraform apply`.
-   *
-   * DEPLOY-ONCE / LEAVE TRUE: the bucket is `RETAIN` and becomes the live
-   * Terraform backend. Flipping back to false removes the stack from the app and
-   * orphans the bucket from CDK (data survives via RETAIN, but it is then
-   * unmanaged) — so set it true once and keep it.
-   *
-   * Scope note (task 0277 D9/D11): this is the bucket for the **sorobanscan**
-   * slice only (api DNS record + AOP origin lock). The Cloudflare zone, company
-   * DNS, zone-level rulesets and a SEPARATE state bucket live in the private
-   * `dns-cloudformation` repo. Default false.
-   */
-  readonly provisionCloudflareBootstrap: boolean;
 
   /**
    * Phase 1 of the API mTLS rollout: provision the **versioned** S3
@@ -265,6 +264,23 @@ export interface EnvironmentConfig {
    * (REGIONAL custom domain). DNS-validated via the rumblefishdev.com zone.
    */
   readonly cloudflareApiCertificateArn: string;
+
+  /**
+   * The API's host on the sorobanscan.com zone (task 0662), e.g.
+   * "api.sorobanscan.com": a further REGIONAL custom domain beside
+   * `cloudflareApiDomainName`, which keeps serving until its redirect (task
+   * 0664). No Route 53 record — Cloudflare (soroban-infrastructure's
+   * `cloudflare/`) is authoritative and points a proxied CNAME at the
+   * `SorobanscanApiRegionalTarget` output. Unset (with its certificate) = no
+   * domain. Same mTLS as the Cloudflare domain.
+   */
+  readonly sorobanscanApiDomainName?: string;
+
+  /**
+   * ACM cert ARN covering `sorobanscanApiDomainName`, in `awsRegion` (the
+   * eu-central-1 `*.sorobanscan.com` wildcard of task 0661).
+   */
+  readonly sorobanscanApiCertificateArn?: string;
 
   /**
    * Phase 1 of the secret-header origin lock (task 0277 / ADR 0048): provision
@@ -452,6 +468,17 @@ export interface EnvironmentConfig {
  * label. For an apex record (`fqdn === zoneName`) it returns the zone
  * name itself, which CDK accepts as the apex.
  */
+export function inZone(fqdn: string, zoneName: string): boolean {
+  return fqdn === zoneName || fqdn.endsWith(`.${zoneName}`);
+}
+
+/** Every origin the SPA is served from, for the API's CORS (task 0663). */
+export function spaOrigins(config: EnvironmentConfig): string[] {
+  return [config.domainName, config.legacyDomainName]
+    .filter((host): host is string => !!host)
+    .map((host) => `https://${host}`);
+}
+
 export function relativeRecordName(fqdn: string, zoneName: string): string {
   if (fqdn === zoneName) {
     return zoneName;
@@ -522,6 +549,16 @@ export function validateConfig(config: EnvironmentConfig): void {
   }
   if (!config.domainName || config.domainName.includes('CHANGE')) {
     errors.push(`domainName missing or placeholder: "${config.domainName}"`);
+  }
+  // Route 53 records go to exactly one SPA name: the one inside the zone.
+  const routed = [config.domainName, config.legacyDomainName].filter(
+    (host) => host && inZone(host, config.hostedZoneName)
+  );
+  if (routed.length !== 1) {
+    errors.push(
+      `exactly one of domainName / legacyDomainName must be within ` +
+        `hostedZoneName "${config.hostedZoneName}", got: ${routed.length}`
+    );
   }
   if (!config.apiDomainName || config.apiDomainName.includes('CHANGE')) {
     errors.push(
@@ -620,6 +657,21 @@ export function validateConfig(config: EnvironmentConfig): void {
         `combined guard function first.`
     );
   }
+  if (config.pricesPortalOnLegacyHost && !config.legacyDomainName) {
+    errors.push(`pricesPortalOnLegacyHost needs legacyDomainName.`);
+  }
+  // The old host's redirect (task 0664) is the main behaviors' viewer-request
+  // function too.
+  if (
+    config.legacyDomainName &&
+    (config.enableBasicAuth || config.enableOriginSecretLock)
+  ) {
+    errors.push(
+      `legacyDomainName cannot be combined with enableBasicAuth or ` +
+        `enableOriginSecretLock: its 301 needs the main behaviors' only ` +
+        `viewer-request function.`
+    );
+  }
 
   // API mTLS is a two-phase rollout: the truststore bucket must be
   // provisioned (and the CA PEM uploaded) BEFORE mTLS can be attached —
@@ -669,6 +721,17 @@ export function validateConfig(config: EnvironmentConfig): void {
     errors.push(
       `enableCloudflareApiDomain=true requires cloudflareApiDomainName and a real ` +
         `cloudflareApiCertificateArn (got a placeholder).`
+    );
+  }
+
+  // The sorobanscan.com API domain is all or nothing: a name without a
+  // certificate (or the reverse) is a half-edited env file.
+  if (
+    !config.sorobanscanApiDomainName !== !config.sorobanscanApiCertificateArn
+  ) {
+    errors.push(
+      `sorobanscanApiDomainName and sorobanscanApiCertificateArn are set ` +
+        `together or not at all.`
     );
   }
 

@@ -7,7 +7,11 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
-import { relativeRecordName, type EnvironmentConfig } from '../types.js';
+import {
+  relativeRecordName,
+  spaOrigins,
+  type EnvironmentConfig,
+} from '../types.js';
 
 // API Gateway account-level default throttle (rps / burst). Used as the
 // "lifted" ceiling when `config.loadTesting` is set, so the per-stage 50/100
@@ -117,7 +121,7 @@ export class ApiGatewayStack extends cdk.Stack {
         }),
       },
       defaultCorsPreflightOptions: {
-        allowOrigins: [`https://${config.domainName}`],
+        allowOrigins: spaOrigins(config),
         // POST is needed for the cross-origin `/auth/session` mint (task 0277
         // paid-API). The SPA on `domainName` calls the API on a different host,
         // so every non-simple request triggers a browser preflight.
@@ -272,6 +276,30 @@ export class ApiGatewayStack extends cdk.Stack {
       });
       new cdk.CfnOutput(this, 'CloudflareApiCustomDomain', {
         value: `https://${config.cloudflareApiDomainName}`,
+      });
+    }
+
+    // The API's host on the sorobanscan.com zone (task 0662) — one more custom
+    // domain on the same API, so the old host serves until its redirect (task
+    // 0664). Cloudflare-fronted like the one above: no Route 53 record, the
+    // regional target is output for soroban-infrastructure's `cloudflare/`.
+    if (
+      config.sorobanscanApiDomainName &&
+      config.sorobanscanApiCertificateArn
+    ) {
+      const sorobanscanApiDomain = api.addDomainName('SorobanscanApiDomain', {
+        domainName: config.sorobanscanApiDomainName,
+        certificate: acm.Certificate.fromCertificateArn(
+          this,
+          'SorobanscanApiCertificate',
+          config.sorobanscanApiCertificateArn
+        ),
+        endpointType: apigateway.EndpointType.REGIONAL,
+        ...mtlsConfig,
+      });
+
+      new cdk.CfnOutput(this, 'SorobanscanApiRegionalTarget', {
+        value: sorobanscanApiDomain.domainNameAliasDomainName,
       });
     }
 

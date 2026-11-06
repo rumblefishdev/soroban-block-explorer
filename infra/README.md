@@ -24,7 +24,6 @@ ApiGatewayStack          REST API Gateway (cache, throttle, mTLS lock)
 ObservabilityStack       X-Ray / logging
 CloudWatchStack          alarms + dashboards
 HetznerDnsStack          Route 53 A record → CH box IP
-CloudflareBootstrapStack TF-state bucket for infra/cloudflare/
 ```
 
 ## Prerequisites

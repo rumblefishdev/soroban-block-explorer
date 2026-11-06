@@ -16,7 +16,7 @@ describe('NetworkSwitcher', () => {
       screen.getByRole('link', {
         name: 'Network: Mainnet. Switch to Testnet',
       })
-    ).toHaveAttribute('href', 'https://testnet.sorobanscan.rumblefish.dev');
+    ).toHaveAttribute('href', 'https://testnet.sorobanscan.com');
     expect(screen.getByText('Mainnet')).toHaveStyle({ color: '#155dfc' });
   });
 
@@ -26,7 +26,7 @@ describe('NetworkSwitcher', () => {
       screen.getByRole('link', {
         name: 'Network: Testnet. Switch to Mainnet',
       })
-    ).toHaveAttribute('href', 'https://sorobanscan.rumblefish.dev');
+    ).toHaveAttribute('href', 'https://sorobanscan.com');
     expect(screen.getByText('Testnet')).toHaveStyle({ color: '#bb4d00' });
   });
 
@@ -36,7 +36,7 @@ describe('NetworkSwitcher', () => {
     });
     expect(screen.getByRole('link')).toHaveAttribute(
       'href',
-      'https://testnet.sorobanscan.rumblefish.dev/transactions'
+      'https://testnet.sorobanscan.com/transactions'
     );
   });
 
@@ -53,9 +53,7 @@ describe('NetworkSwitcher', () => {
     act(() => {
       vi.runAllTimers();
     });
-    expect(assign).toHaveBeenCalledWith(
-      'https://testnet.sorobanscan.rumblefish.dev'
-    );
+    expect(assign).toHaveBeenCalledWith('https://testnet.sorobanscan.com');
   });
 
   it('leaves a modified click to the browser', () => {

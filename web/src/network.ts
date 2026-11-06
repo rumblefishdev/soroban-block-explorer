@@ -12,7 +12,7 @@ export interface NetworkSite {
   url: string;
 }
 
-const MAINNET_SITE_URL = 'https://sorobanscan.rumblefish.dev';
+const MAINNET_SITE_URL = 'https://sorobanscan.com';
 
 // Both deployments, in the order the network menu lists them. The hosts are
 // the `domainName` of infra/envs/production.json and testnet.json.
@@ -25,7 +25,7 @@ export const NETWORK_SITES: NetworkSite[] = [
   {
     key: 'testnet',
     name: 'Testnet',
-    url: 'https://testnet.sorobanscan.rumblefish.dev',
+    url: 'https://testnet.sorobanscan.com',
   },
 ];
 

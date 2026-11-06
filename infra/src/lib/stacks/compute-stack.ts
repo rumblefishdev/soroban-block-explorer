@@ -13,7 +13,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { RustFunction } from 'cargo-lambda-cdk';
 import type { Construct } from 'constructs';
 
-import type { EnvironmentConfig } from '../types.js';
+import { spaOrigins, type EnvironmentConfig } from '../types.js';
 import { mtlsSecretArn, secretsManagerLayerArn } from '../mtls.js';
 import { stellarXdrMajor } from '../stellar-xdr-pin.js';
 import { PublicLakeKeepalive } from './public-lake-keepalive.js';
@@ -304,12 +304,15 @@ export class ComputeStack extends cdk.Stack {
         // edge-locked legacy domain (task 0277). Falls back to the legacy domain
         // for envs without the Cloudflare domain.
         API_BASE_URL: `https://${
-          config.cloudflareApiDomainName ?? config.apiDomainName
+          config.sorobanscanApiDomainName ??
+          config.cloudflareApiDomainName ??
+          config.apiDomainName
         }`,
         // CORS allow-origin for the cross-origin SPA. API Gateway answers only
         // the OPTIONS preflight; the actual responses come from the Lambda and
-        // need Access-Control-Allow-Origin (task 0277). `domainName` is the SPA host.
-        CORS_ALLOW_ORIGIN: `https://${config.domainName}`,
+        // need Access-Control-Allow-Origin (task 0277). Every SPA host, comma
+        // separated, while the old one still serves (task 0663).
+        CORS_ALLOW_ORIGIN: spaOrigins(config).join(','),
         MTLS_SECRET_NAME: apiSecretName,
         // Soroban RPC pool of this network for the NFT detail page and the
         // on-demand decompiled-code endpoint (task 0465), tried in turn on

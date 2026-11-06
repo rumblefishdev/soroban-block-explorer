@@ -343,13 +343,31 @@ and the `enableWaf` setting were deleted from the CDK app. There is no AWS WAF i
 this system and no switch to re-enable one. What replaced it is asymmetric, and the
 asymmetry is deliberate:
 
-- **API** (`api-sorobanscan.rumblefishdev.com`) — fronted by **Cloudflare**: WAF
+- **API** (`api.sorobanscan.com`, `api-testnet.sorobanscan.com`) — fronted by **Cloudflare**: WAF
   managed rules, unmetered DDoS, Managed Challenge, rate limiting. The AWS origin
   accepts Cloudflare only, via a secret request header verified in the application
   (`crates/api/src/common/edge_lock.rs`).
-- **Frontend** (`sorobanscan.rumblefish.dev`) — **no edge filtering at all.** The
-  zone stays on Route 53; the nameserver flip in task 0277 covered
-  `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end
+  `sorobanscanApiDomainName` is one more custom domain on the same API (task
+  0662), with the `*.sorobanscan.com` certificate in `sorobanscanApiCertificateArn`
+  (task 0661). Its records and edge rules live in soroban-infrastructure's
+  `cloudflare/`, in the `sorobanscan.com` zone. The old hosts
+  (`api-sorobanscan.rumblefishdev.com` and its testnet twin) only answer `308` to the
+  new ones, path and query kept, from dns-cloudformation (task 0664); their custom
+  domains are gone (`enableCloudflareApiDomain: false`).
+- **Frontend** (`sorobanscan.com`, `testnet.sorobanscan.com`; task 0663) — **no
+  edge filtering at all.** Their records are DNS-only in soroban-infrastructure's
+  `sorobanscan.com` zone. The old hosts (`legacyDomainName`:
+  `sorobanscan.rumblefish.dev` and its testnet twin) stay second aliases on the
+  same distribution, with their Route 53 records, and only redirect: every
+  viewer-request function answers `301` to the same path and query on the new
+  host (task 0664, `cloudfront-functions/legacy-host-redirect.ts`), and the
+  portal's old paths reach `/api/prices-api/` in the same hop. The Prices portal
+  is the exception while `pricesPortalOnLegacyHost` is set: it stays on the old
+  host and the new host answers `302` back to it, because the Prices API is
+  still on `prices-api.sorobanscan.rumblefish.dev` (CORS for one origin, a
+  `SameSite=Lax` session cookie). The
+  `rumblefish.dev` zone stays on Route 53; the nameserver flip in task 0277
+  covered `rumblefishdev.com`, not the parent `rumblefish.dev`. This is an accepted end
   state, not a pending migration: the distribution serves a static, edge-cached
   bundle from a private S3 origin via Origin Access Control, so injection-oriented
   managed rules have no application to protect, and putting Cloudflare ahead of
@@ -373,14 +391,15 @@ redeploying `ApiGateway` as soon as the run ends.
   CloudFront in the initial topology
 - since task 0519, also serves a second, independently-built SPA (the
   Stellar Prices portal) from its own S3 bucket
-  (`${envName}-soroban-explorer-api-spa`, key prefix `prices-api/`) under
-  `/prices-api` + `/prices-api/*` on the same distribution (two behaviors:
-  `/prices-api/*` requires the literal trailing slash and doesn't match bare
-  `/prices-api`, so that gets its own exact-match behavior). Both point at
-  one CloudFront Function (`api-spa-routing.ts`) that always rewrites
-  extensionless paths to `/prices-api/index.html` (SPA routing fallback,
-  including the bucket root) and redirects bare `/prices-api` to
-  `/prices-api/` — the main behaviors' `errorResponses`
+  (`${envName}-soroban-explorer-api-spa`, key prefix `api/prices-api/`) under
+  `/api/prices-api` + `/api/prices-api/*` on the same distribution (task
+  0660; two behaviors: `/api/prices-api/*` requires the literal trailing
+  slash and doesn't match bare `/api/prices-api`, so that gets its own
+  exact-match behavior, and both sit above `/api/*`, since behaviors match in
+  order). Both point at one CloudFront Function (`api-spa-routing.ts`) that
+  always rewrites extensionless paths to `/api/prices-api/index.html` (SPA
+  routing fallback, including the bucket root) and redirects bare
+  `/api/prices-api` to `/api/prices-api/` — the main behaviors' `errorResponses`
   can't cover this because custom error pages resolve through the
   _default_ behavior's origin, not the originating one. The same function
   also does the basic-auth check when `enableApiSpaBasicAuth` is on,
@@ -390,12 +409,16 @@ redeploying `ApiGateway` as soon as the run ends.
   flags off, so turning a gate off keeps its credentials for re-arming.
   Production runs with `enableApiSpaBasicAuth=false` (the portal is
   public; its backend lives on a separate host).
-- `/api` + `/api/*`, the portal's home until task 0608, and `/pricing-api` +
-  `/pricing-api/*`, its name for a few hours on 2026-10-02, keep behaviors on
-  the same origin, but their function (`api-path-redirect.ts`) answers every
-  request with a `301` to the same path under `/prices-api`, query string
-  kept (bare `/api` → `/prices-api/`), so links shared before the move
-  still land on the portal.
+- `/api` and `/api/` are the portal hub, a route of the main SPA (task 0660):
+  bare `/api` falls to the default behavior, and `/api/` has an exact-match
+  behavior with the main behaviors' settings, since `/api/*` would take it.
+- The portal's old homes keep behaviors on the portal origin, but their
+  function (`api-path-redirect.ts`) answers every request with a `301` to the
+  same path under `/api/prices-api`, query string kept, so links shared
+  before a move still land on the portal in one hop: `/prices-api` +
+  `/prices-api/*` (task 0608 until task 0660), `/pricing-api` +
+  `/pricing-api/*` (a few hours on 2026-10-02), and every other `/api/*`
+  path (the portal's home until task 0608).
 - since task 0576, writes standard (access) logs for every request, explorer
   and portal alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
   referrer, user agent and viewer IP, never cookies. Objects expire after 30

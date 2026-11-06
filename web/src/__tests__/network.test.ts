@@ -58,12 +58,12 @@ describe('markTestnetTab', () => {
 
 describe('pricesApiUrlFor', () => {
   it("links the portal on mainnet's own host", () => {
-    expect(pricesApiUrlFor('mainnet')).toBe('/prices-api/');
+    expect(pricesApiUrlFor('mainnet')).toBe('/api/prices-api/');
   });
 
   it("sends testnet to mainnet's portal, since testnet has none", () => {
     expect(pricesApiUrlFor('testnet')).toBe(
-      'https://sorobanscan.rumblefish.dev/prices-api/'
+      'https://sorobanscan.com/api/prices-api/'
     );
   });
 });

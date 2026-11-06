@@ -56,7 +56,7 @@ function reportIssueUrl(opts: {
     `- Requested: ${opts.requested}`,
     `- Rendered: ${opts.shown ?? 'nothing (request failed)'}`,
     ...(opts.apiError ? [`- Failure: ${opts.apiError}`] : []),
-    `- Seen on: https://sorobanscan.rumblefish.dev/contracts/${opts.contractId}?tab=code`,
+    `- Seen on: https://sorobanscan.com/contracts/${opts.contractId}?tab=code`,
     '',
     'What looks wrong:',
     '',

@@ -679,7 +679,7 @@ to drop per-object request cost — task 0278); and TLS on public ingress.
 | Galexie ingestion lag           | 0 new S3 ledger files (ingest-queue doorbells) in 5 min | SNS → Slack |
 | Galexie ephemeral storage       | >60% of task ephemeral disk, sustained 3×5 min          | SNS → Slack |
 | Ledger Processor error rate     | >1% of Lambda invocations in error                      | SNS → Slack |
-| Indexer CH write failures       | >10 post-retry hard-failure log lines in 5 min          | SNS → Slack |
+| Indexer failures                | >10 post-retry hard-failure log lines in 5 min          | SNS → Slack |
 | Ledger Processor DLQ depth      | >0 messages                                             | SNS → Slack |
 | Enrichment DLQ depth            | >0 messages                                             | SNS → Slack |
 | Enrichment worker error rate    | >1% of Lambda invocations in error                      | SNS → Slack |
