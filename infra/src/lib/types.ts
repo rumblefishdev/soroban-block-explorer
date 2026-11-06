@@ -420,23 +420,17 @@ export interface EnvironmentConfig {
   // deployment-specific identifiers kept out of the (public) repo and sourced
   // at deploy time from SSM Parameter Store (see CloudWatchStack).
 
-  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack, HetznerDnsStack)
+  // Hetzner ClickHouse — mTLS (consumed by ComputeStack, IngestionStack)
 
   /**
-   * FQDN that Route 53 maps to the Hetzner ClickHouse box. Used as both
+   * FQDN of the Hetzner ClickHouse box. Used as both
    * the mTLS endpoint hostname by AWS-side workloads (Lambda, Galexie)
    * and the LE HTTP-01 challenge target by Caddy on the box.
    *
-   * The IPv4 target is read from SSM Parameter Store at
-   * `/soroban/${envName}/ch-ip` by `HetznerDnsStack`.
+   * Its record is a DNS-only Cloudflare A record in soroban-infrastructure
+   * (`cloudflare/clickhouse.tf`, task 0665), not part of this app.
    */
   readonly chDomainName: string;
-  /**
-   * Create the Route 53 record for `chDomainName` (HetznerDnsStack). False
-   * for an environment that shares another one's ClickHouse host and so
-   * must not own its record. Unset: true.
-   */
-  readonly provisionChDns?: boolean;
   /**
    * Secret-name prefix in AWS Secrets Manager for mTLS client cert
    * bundles. Each AWS service (Lambda, Galexie) gets its own secret at
@@ -624,7 +618,7 @@ export function validateConfig(config: EnvironmentConfig): void {
     );
   }
 
-  // Hetzner DNS — per-env (consumed by HetznerDnsStack).
+  // Hetzner ClickHouse endpoint — per-env.
   if (!config.chDomainName) {
     errors.push(`chDomainName missing`);
   } else if (

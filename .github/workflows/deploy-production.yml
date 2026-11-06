@@ -20,7 +20,7 @@ name: Deploy Production
 #     Any selector other than `all` / `web` is appended to
 #     `Explorer-production-` verbatim, so it must carry the stack's own case:
 #     `Network`, `LedgerBucket`, `Compute`, `Ingestion`, `Delivery`,
-#     `Observability`, `ApiGateway`, `CloudWatch`, `HetznerDns` (the list
+#     `Observability`, `ApiGateway`, `CloudWatch` (the list
 #     `infra/src/lib/app.ts` builds). A typo is not
 #     silent — `cdk` fails on an unknown stack id before anything deploys.
 #

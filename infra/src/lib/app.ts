@@ -9,7 +9,6 @@ import { ApiGatewayStack } from './stacks/api-gateway-stack.js';
 import { IngestionStack } from './stacks/ingestion-stack.js';
 import { ObservabilityStack } from './stacks/observability-stack.js';
 import { CloudWatchStack } from './stacks/cloudwatch-stack.js';
-import { HetznerDnsStack } from './stacks/hetzner-dns-stack.js';
 
 export interface CreateAppOptions {
   readonly config: EnvironmentConfig;
@@ -107,16 +106,6 @@ export function createApp({
   // The Terraform state bucket of infra/cloudflare/ is no longer here: its
   // stack, Explorer-production-CloudflareBootstrap, is soroban-infrastructure's
   // cloudflare/state-bucket.yaml since task 0658.
-
-  // HetznerDnsStack only when the env has a real `chDomainName` and owns
-  // its record.
-  if (
-    config.provisionChDns !== false &&
-    !config.chDomainName.includes('PLACEHOLDER') &&
-    !config.chDomainName.includes('CHANGE')
-  ) {
-    new HetznerDnsStack(app, `${prefix}-HetznerDns`, { env, config });
-  }
 
   app.synth();
 }

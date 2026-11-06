@@ -208,7 +208,7 @@ aws ecr describe-images \
 `HetznerDnsStack` reads this at deploy time and creates the Route 53
 A record for `ch.sorobanscan.rumblefish.dev`, production's first name. Since
 task 0665 the name is `ch.sorobanscan.com`, a Cloudflare record in
-soroban-infrastructure, and production sets `provisionChDns: false`.
+soroban-infrastructure, and `HetznerDnsStack` is gone. This step is history.
 
 ```bash
 aws ssm put-parameter \
@@ -333,8 +333,8 @@ make deploy-production
 ```
 
 CDK applies stacks in dependency order: Network → LedgerBucket → Compute
-→ Ingestion → Delivery → Observability → ApiGateway → CloudWatch →
-HetznerDns.
+→ Ingestion → Delivery → Observability → ApiGateway → CloudWatch
+(`HetznerDns` came last until task 0665 removed it).
 
 **No stack connects to ClickHouse at deploy time.** The schema is applied
 box-side by the `db-clickhouse-init` sidecar (idempotent `init.sql`) and CH
@@ -964,9 +964,9 @@ S3 bucket continues to accumulate Galexie's exports.
    - **B**: provision a new box per `infra-hetzner/README.md`, restore
      CH state from the BX21 Borg backup (per task 0228 follow-up;
      ledger range up to last Borg snapshot ≈ 1 h RPO).
-3. Once box is back, update SSM `/soroban/production/ch-ip` (D-3) if
-   IPv4 changed; re-deploy Route 53 record via `make deploy-production`
-   (HetznerDnsStack picks up the new IP).
+3. Once box is back, if the IPv4 changed, update `ch.sorobanscan.com` in
+   soroban-infrastructure `cloudflare/clickhouse.tf` and apply it (task 0665;
+   the Route 53 record and `HetznerDnsStack` of D-3 are gone).
 4. Re-enable Lambda concurrency. S3 backlog drains per B-3.3.
 
 **Open items**: no automated failover. Hot standby on a second box

@@ -203,8 +203,8 @@ them via `lookup('env', '...')`. Set them in
 the template in the "Prerequisites" section above):
 
 - `CH_DOMAIN` → real DNS name pointed at the server IP (matches
-  `chDomainName` in the CDK env config — provisioned by
-  `HetznerDnsStack`)
+  `chDomainName` in the CDK env config; the record is in
+  soroban-infrastructure `cloudflare/clickhouse.tf`)
 - `ACME_EMAIL` → real operator email (LE expiry warnings)
 - `STORAGEBOX_ID` → numeric Cloud ID of the BX21 Storage Box
   (Console → Storage Boxes). `HCLOUD_TOKEN` →
@@ -566,10 +566,8 @@ See `infra-hetzner/ca/README.md` §Compromise response.
   automatically when within 30 days of expiry.
 - DNS for `$CH_DOMAIN` must point at the server IP **before** the
   first deploy or the http-01 challenge fails. Caddy retries
-  automatically once DNS is corrected. The record itself lives in
-  Route 53 and is managed by the CDK `HetznerDnsStack` — see
-  `infra/src/lib/stacks/hetzner-dns-stack.ts` and `make
-deploy-production-hetzner-dns`.
+  automatically once DNS is corrected. The record itself is a DNS-only
+  Cloudflare A record in soroban-infrastructure (`cloudflare/clickhouse.tf`).
 
 ### ClickHouse RBAC + auth model
 

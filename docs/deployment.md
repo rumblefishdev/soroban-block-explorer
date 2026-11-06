@@ -32,7 +32,6 @@ for _which_ command ships _what_.
 | API Gateway (cache / throttle / mTLS lock)                                  | `make -C infra deploy-production-apigateway`                           | AWS CDK    |
 | CloudWatch alarms / dashboards                                              | `make -C infra deploy-production-cloudwatch`                           | AWS CDK    |
 | CloudFront / SPA delivery **infra** (not content)                           | `make -C infra deploy-production-delivery`                             | AWS CDK    |
-| Route 53 record for the CH box (IP change)                                  | `make -C infra deploy-production-hetzner-dns`                          | AWS CDK    |
 | Anything else in `infra/src` (multiple stacks)                              | `make -C infra deploy-production` (all) — but see gotchas              | AWS CDK    |
 | ClickHouse box config / `docker-compose.prod.yml` / Caddy / users / backups | Ansible — see [§ The machine](#the-machine-hetzner-clickhouse)         | Hetzner    |
 | Cloudflare edge (DNS / WAF / mTLS)                                          | Terraform — see [§ Cloudflare edge](#cloudflare-edge)                  | Cloudflare |
@@ -114,8 +113,9 @@ and region. What differs from production:
   [`docs/runbooks/testnet-reset.md`](runbooks/testnet-reset.md); and
   `testnet-indexer-runaway-wakeups`, over 400 wake-up messages sent to the
   indexer queue in 15 minutes twice in a row, standing in for the loop guard.
-- **No ClickHouse DNS record and no cost monitor** — both belong to
-  production (`provisionChDns`, `provisionCostAnomalyMonitor`).
+- **No cost monitor** — it belongs to production
+  (`provisionCostAnomalyMonitor`). Neither network owns a ClickHouse DNS
+  record: `ch.sorobanscan.com` is in soroban-infrastructure.
 
 Targets in `infra/Makefile`: `synth-testnet`, `diff-testnet`,
 `deploy-testnet` (all stacks, same diff-then-`yes` guard as production),
@@ -200,7 +200,7 @@ second release on the same day.
 
 A selector other than `all` / `web` is appended to `Explorer-production-`
 **verbatim**, so it carries the stack's own case (`CloudWatch`, `ApiGateway`,
-`LedgerBucket`, `HetznerDns`, …). The mapping lives in
+`LedgerBucket`, …). The mapping lives in
 [`infra/scripts/deploy-scope.sh`](../infra/scripts/deploy-scope.sh) — run it to
 see what a tag will do, and note that it now **rejects** a malformed tag
 outright, where the old `production-*` trigger would deploy the release set for
@@ -301,17 +301,16 @@ The production app (`node dist/bin/production.js`, config
 `infra/envs/production.json`) deploys these stacks. All commands run from
 the repo root as `make -C infra <target>` (or `cd infra && make <target>`).
 
-| Stack (`Explorer-production-…`) | Contains                                                             | Make target                       |
-| ------------------------------- | -------------------------------------------------------------------- | --------------------------------- |
-| `Network`                       | Minimal VPC, public subnet (post-0239, no NAT/RDS)                   | `deploy-production-network`       |
-| `LedgerBucket`                  | S3 `stellar-ledger-data` (Galexie → indexer)                         | `deploy-production-ledger-bucket` |
-| `Compute`                       | **API + Indexer + Enrichment Lambdas** + SQS queues/DLQ              | `deploy-production-compute`       |
-| `Ingestion`                     | Galexie ECS Fargate task + ECR repo                                  | `deploy-production-ingestion`     |
-| `Delivery`                      | CloudFront distribution + SPA S3 bucket                              | `deploy-production-delivery`      |
-| `ApiGateway`                    | REST API Gateway, caching, throttle, mTLS/edge lock                  | `deploy-production-apigateway`    |
-| `Observability`                 | X-Ray / logging config                                               | `deploy-production-observability` |
-| `CloudWatch`                    | Alarms + dashboards                                                  | `deploy-production-cloudwatch`    |
-| `HetznerDns`                    | Route 53 A record → CH box IP (from SSM `/soroban/production/ch-ip`) | `deploy-production-hetzner-dns`   |
+| Stack (`Explorer-production-…`) | Contains                                                | Make target                       |
+| ------------------------------- | ------------------------------------------------------- | --------------------------------- |
+| `Network`                       | Minimal VPC, public subnet (post-0239, no NAT/RDS)      | `deploy-production-network`       |
+| `LedgerBucket`                  | S3 `stellar-ledger-data` (Galexie → indexer)            | `deploy-production-ledger-bucket` |
+| `Compute`                       | **API + Indexer + Enrichment Lambdas** + SQS queues/DLQ | `deploy-production-compute`       |
+| `Ingestion`                     | Galexie ECS Fargate task + ECR repo                     | `deploy-production-ingestion`     |
+| `Delivery`                      | CloudFront distribution + SPA S3 bucket                 | `deploy-production-delivery`      |
+| `ApiGateway`                    | REST API Gateway, caching, throttle, mTLS/edge lock     | `deploy-production-apigateway`    |
+| `Observability`                 | X-Ray / logging config                                  | `deploy-production-observability` |
+| `CloudWatch`                    | Alarms + dashboards                                     | `deploy-production-cloudwatch`    |
 
 Frontend **content** is separate: `deploy-production-web`
 (build → S3 sync → CloudFront invalidation).
@@ -824,9 +823,9 @@ make -C infra deploy-production-web
 - API Gateway cache / throttle / edge-lock toggles live in
   `production.json` (`apiGatewayCache*`, `apiGatewayThrottle*`,
   `enableApiMtls`, `enable*Lock`): `make -C infra deploy-production-apigateway`.
-- CH box IP changed (box replacement): update the SSM parameter, then
-  `make -C infra deploy-production-hetzner-dns` (see
-  [`infra/README.md` § HetznerDnsStack](../infra/README.md#hetznerdnsstack--route-53-record-for-the-production-clickhouse-box)).
+- CH box IP changed (box replacement): update `ch.sorobanscan.com` in
+  soroban-infrastructure `cloudflare/clickhouse.tf` and apply it (see
+  [`infra/README.md` § ClickHouse endpoint DNS](../infra/README.md#clickhouse-endpoint-dns)).
 
 ---
 
