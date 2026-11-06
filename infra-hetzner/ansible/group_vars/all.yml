@@ -63,6 +63,11 @@ storagebox_subaccount_password: "{{ lookup('env', 'STORAGEBOX_SUBACCOUNT_PASSWOR
 # shell env so the playbook stays env-agnostic.
 ch_domain: "{{ lookup('env', 'CH_DOMAIN') }}"
 
+# Optional extra names Caddy also serves, space-separated; empty by default.
+# Set only while a rename is in flight (lore task 0665), with the old name
+# here and the new one in CH_DOMAIN. Reverse DNS follows `ch_domain` only.
+ch_domain_aliases: "{{ lookup('env', 'CH_DOMAIN_ALIASES') }}"
+
 # Let's Encrypt account email — receives expiry-warning mail.
 acme_email: "{{ lookup('env', 'ACME_EMAIL') }}"
 

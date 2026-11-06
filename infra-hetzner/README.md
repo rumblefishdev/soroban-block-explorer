@@ -88,6 +88,7 @@ export STORAGEBOX_SUBACCOUNT_PASSWORD="..."  # Random 32-byte base64 — passwor
 export CLICKHOUSE_PASSWORD="..."        # CH `default` user password
 export BORG_PASSPHRASE="..."            # Borg repokey-blake2 passphrase
 export CH_DOMAIN="..."                  # Caddy site address (e.g. ch.sorobanscan.rumblefish.dev — matches `chDomainName` in the CDK env config)
+export CH_DOMAIN_ALIASES=""            # Optional: extra names Caddy also serves, space-separated — only while a rename is in flight (task 0665)
 export ACME_EMAIL="..."                 # Let's Encrypt account email
 export CLICKHOUSE_CN_USER_MAP="..."     # Comma-separated `<cn>:<ch_user>` pairs — Caddy uses both as the mTLS allowlist AND as the identity it forwards to CH (e.g. `<firstname>-laptop:dev_shared,galexie-production:galexie,...`). See docs/architecture/security/clickhouse-rbac.md.
 
