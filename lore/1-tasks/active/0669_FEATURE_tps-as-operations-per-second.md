@@ -2,7 +2,7 @@
 id: '0669'
 title: 'Report TPS as operations per second over the last hour'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0045']
 tags: [priority-medium, effort-small, layer-api, layer-frontend-pages]
@@ -14,6 +14,11 @@ history:
     note: >
       SDF asked why our TPS is about half of Chainspect's. Chainspect counts
       operations, not transactions; the team decided our TPS should too.
+  - date: '2026-11-10'
+    status: active
+    who: stkrolikiewicz
+    note: >
+      Activated to start implementation (Step 1 query first).
 ---
 
 # Report TPS as operations per second over the last hour
