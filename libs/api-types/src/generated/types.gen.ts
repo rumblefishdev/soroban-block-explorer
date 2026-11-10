@@ -1185,12 +1185,14 @@ export type NetworkStats = {
    */
   total_contracts: number;
   /**
-   * Transactions per second over a 60s rolling window. Computed as
-   * `SUM(ledgers.transaction_count)` divided by the actual span
-   * between MIN/MAX `closed_at` in the window. Stable on partial /
-   * single-ledger windows (NULLIF guards zero-span).
+   * Operations per second over the 720 ledgers (~1 h) ending at head,
+   * including the operations of failed transactions — the figure
+   * Chainspect reports for Stellar. Computed as the window's
+   * `SUM(transactions.operation_count)` divided by the span between its
+   * MIN/MAX `closed_at`; `0` when the span is zero (a single-ledger
+   * cluster).
    */
-  tps_60s: number;
+  tps: number;
 };
 
 /**

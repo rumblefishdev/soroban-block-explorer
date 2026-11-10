@@ -88,7 +88,7 @@ async fn stats_endpoint_returns_documented_shape_against_real_db() {
 
     // Shape asserted regardless of row counts — empty DB is fine.
     for key in [
-        "tps_60s",
+        "tps",
         "total_accounts",
         "total_contracts",
         "latest_ledger_sequence",
@@ -96,7 +96,7 @@ async fn stats_endpoint_returns_documented_shape_against_real_db() {
     ] {
         assert!(json.get(key).is_some(), "envelope missing `{key}`: {json}");
     }
-    assert!(json["tps_60s"].is_number(), "tps_60s not number: {json}");
+    assert!(json["tps"].is_number(), "tps not number: {json}");
     assert!(
         json["total_accounts"].is_number(),
         "total_accounts not number: {json}"

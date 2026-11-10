@@ -15,7 +15,7 @@ import { SearchInput } from './SearchInput.js';
  * typing accepts the wider shape).
  */
 export interface NetworkStats {
-  tps_60s: number;
+  tps: number;
   latest_ledger_sequence: number;
   total_accounts: number;
   total_contracts: number;
@@ -156,9 +156,7 @@ export function TopNav({
           >
             <Stat
               label="TPS"
-              value={
-                <AnimatedNumber value={stats?.tps_60s} format={TPS_FORMAT} />
-              }
+              value={<AnimatedNumber value={stats?.tps} format={TPS_FORMAT} />}
               valueColor="text.success"
             />
             <StatDivider />

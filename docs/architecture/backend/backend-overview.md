@@ -357,7 +357,9 @@ filter, and had to be corrected — the exception looked like the rule.
 #### Network
 
 **`GET /network/stats`** - Chain overview: current ledger sequence, TPS, total accounts,
-total contracts.
+total contracts. `tps` is operations per second over the 720 ledgers (~1 h) ending at
+head, including the operations of failed transactions — the same count Chainspect
+reports for Stellar (task 0669).
 
 This endpoint exists to support top-level explorer summary views and should remain small,
 fast, and cacheable with short TTLs.

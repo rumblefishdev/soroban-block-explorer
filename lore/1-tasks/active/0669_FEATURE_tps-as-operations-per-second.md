@@ -33,9 +33,10 @@ transactions, averaged over the last 720 ledgers (~1 h).
 
 ## Stan teraz
 
-- Done: root cause found and checked against Chainspect's own ledger range
-  (see Context).
-- Next: Step 1.
+- Done: Steps 1–4 on `feat/0669_tps-operations-per-second`. Both Chainspect
+  ranges match exactly: `..65385031` 470,156 / 130.7805, `..65407351`
+  480,894 / 133.7675.
+- Next: PR, then deploy (Compute + web).
 - In force: label stays "TPS"; value = operations/s incl. failed
   transactions; window = the 720 ledgers ending at head.
 
@@ -116,14 +117,25 @@ toFloat64(ifNull(
 
 ## Acceptance Criteria
 
-- [ ] For a range Chainspect publishes, the Step 1 query returns its `txns`
+- [x] For a range Chainspect publishes, the Step 1 query returns its `txns`
       exactly and its `tps.value` to two decimals.
-- [ ] Home KPI and top nav show the new value and caption, checked on prod
+- [x] Home KPI and top nav show the new value and caption, checked on prod
       data through `cargo run -p api --bin local`.
-- [ ] **Docs updated** — `GET /network/stats` in
+- [x] **Docs updated** — `GET /network/stats` in
       `docs/architecture/backend/backend-overview.md` and
       `docs/architecture/technical-design-general-overview.md`.
-- [ ] **API types regenerated** — the `NetworkStats` field changes.
+- [x] **API types regenerated** — the `NetworkStats` field changes.
+
+## Design Decisions
+
+### Emerged
+
+1. **`transactions FINAL`, not `LIMIT 1 BY`**: same TPS at 10 heads; the whole
+   statement took p50 25 ms vs 95 ms on prod (2026-11-10). On a key range
+   `FINAL` merges only overlapping parts, and head parts do not overlap.
+   Reasoning in the `fetch_stats` comment.
+2. **Cache tests moved** to `network/cache/tests.rs` in their own commit: the
+   fixture changes, and CLAUDE.md forbids inline tests.
 
 ## Notes
 
