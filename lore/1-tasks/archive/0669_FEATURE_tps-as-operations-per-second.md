@@ -2,9 +2,9 @@
 id: '0669'
 title: 'Report TPS as operations per second'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
-related_tasks: ['0045']
+related_tasks: ['0045', '0553']
 tags: [priority-medium, effort-small, layer-api, layer-frontend-pages]
 links: []
 history:
@@ -19,6 +19,15 @@ history:
     who: stkrolikiewicz
     note: >
       Activated to start implementation (Step 1 query first).
+  - date: '2026-11-12'
+    status: completed
+    who: stkrolikiewicz
+    note: >
+      Shipped in production-2026.11.12-1 (Compute + SPA) and on testnet by
+      hand. PRs #728, #729, release #730. TPS equals Horizon at the first
+      head served on each (prod 107.8833, testnet 3.5667). The release diff
+      showed 0553's CloudWatch change undeployed (indexer failure alarm blind
+      since 2026-11-06); shipped as production-2026.11.12-2-CloudWatch.
 ---
 
 # Report TPS as operations per second
@@ -33,9 +42,7 @@ transactions. The window stays 60 s (team, 2026-11-12); Chainspect's is ~1 h.
 
 ## Stan teraz
 
-- Done: Steps 1–4, PRs #728 (test move) and #729. Both Chainspect ranges
-  match: `..65385031` 470,156 / 130.7805, `..65407351` 480,894 / 133.7675.
-- Next: review, merge, deploy Compute and web together.
+- Done: live on production and testnet since 2026-11-12. Nothing open.
 - In force: label "TPS"; value = operations/s incl. failed transactions;
   window = ledgers closed in the 60 s before head, first one not summed.
 
@@ -62,68 +69,58 @@ transactions. The window stays 60 s (team, 2026-11-12); Chainspect's is ~1 h.
   inter-ledger intervals. Over 720 ledgers the same effect is 0.14%, and
   Chainspect divides the same way (470,156 / 3,595 s).
 
-## Implementation Plan
+## Implementation
 
-### Step 1: Query
+The plan's 720-ledger window shipped in #729 first and was replaced by the
+60 s window before merge (Emerged 3).
 
-In `fetch_stats`, replace the `tps_60s` subquery:
+- `fetch_stats`: the window is the ledgers closed in the 60 s before the head
+  ledger closed, bounded to the 200 ledgers below head. TPS is
+  `sum(transactions.operation_count)` over the window's ledgers after its
+  first, divided by the first-to-head `closed_at` span. Pinned to head; no
+  `now64()`.
+- `NetworkStats.tps_60s` → `tps`; API types regenerated.
+- `ChainOverview.tsx` and `TopNav.tsx` read `tps`; caption "Last 60s";
+  tooltip "Operations per second, including failed transactions".
+- PRs: #728 (cache tests moved), #729, release #730.
 
-```sql
-toFloat64(ifNull(
-    (SELECT sum(operation_count) FROM (
-        SELECT ledger_sequence, application_order, operation_count
-        FROM transactions
-        WHERE ledger_sequence > {head} - 720 AND ledger_sequence <= {head}
-        LIMIT 1 BY ledger_sequence, application_order))
-    / nullIf((SELECT dateDiff('second', min(closed_at), max(closed_at))
-              FROM ledgers
-              WHERE sequence > {head} - 720 AND sequence <= {head}), 0),
-    0
-)) AS tps
-```
+## Verification
 
-- Both reads are primary-key ranges; no `closed_at` filter and no `now64()`.
-- `LIMIT 1 BY` drops ReplacingMergeTree copies, the same rule as lore-0420.
-  `min` / `max` of `closed_at` are not affected by copies.
-- Rewrite the comment block above the query; it documents the 60 s window
-  and the `closed_at` prune.
-- Cost: measured 0.078 s and 225.5k rows on prod, once per new ledger (the
-  cache is keyed on head). If it shows in ClickHouse load, store a
-  ledger-level operation count in `ledgers` at ingestion instead (schema
-  change).
-
-### Step 2: DTO and API types
-
-- Rename `NetworkStats.tps_60s` and `StatsRow.tps_60s` to `tps`. Doc
-  comment: operations per second over the 720 ledgers ending at head,
-  including the operations of failed transactions.
-- `pnpm nx run @rumblefish/api-types:generate`.
-
-### Step 3: UI
-
-- Read the new field in `libs/ui/src/layout/TopNav.tsx` and
-  `web/src/pages/home/ChainOverview.tsx`.
-- Caption "Last 60s" → "Last hour" in `ChainOverview.tsx` and
-  `HomeSkeleton.tsx`. Tooltip: operations per second, including failed
-  transactions.
-
-### Step 4: Verify on real data
-
-- Run the Step 1 query with `head` = Chainspect's current `tps.finish`. The
-  sum must equal its `txns`.
-- `cargo run -p api --bin local` against prod ClickHouse; check the home KPI
-  and the top nav.
+- Prod ClickHouse vs Horizon `tx_set_operation_count`, same window and span:
+  65438237 → 113.3667, 65437700 → 101.0333, 65000000 → 188.6667,
+  60100720 → 159.5714 before merge; 65440965 → 107.8833, the first head the
+  deployed API served. All equal. Testnet 5693724 → 3.5667 on both sides.
+- Cost on prod: p50 27 / p95 29 ms over 40 heads, against 25 / 29 ms for the
+  old statement; 30.5 ms on the first live runs.
+- Deployed code: the API Lambda binaries (prod 13:37:52 UTC, testnet
+  14:03:20 UTC) carry `AS tps_window` and no `tps_60s`; both SPA bundles
+  carry the tooltip and no `tps_60s`.
+- Not checked: the page in a browser. Turnstile never resolves in the in-app
+  pane, and the Chrome extension was not connected.
 
 ## Acceptance Criteria
 
 - [x] For a range Chainspect publishes, the Step 1 query returns its `txns`
-      exactly and its `tps.value` to two decimals.
+      exactly and its `tps.value` to two decimals (the 720-ledger version;
+      the shipped 60 s window was checked against Horizon).
 - [x] Home KPI and top nav show the new value and caption, checked on prod
       data through `cargo run -p api --bin local`.
 - [x] **Docs updated** — `GET /network/stats` in
       `docs/architecture/backend/backend-overview.md` and
       `docs/architecture/technical-design-general-overview.md`.
 - [x] **API types regenerated** — the `NetworkStats` field changes.
+- [x] Live on production and testnet; the served value equals Horizon.
+
+## Issues Encountered
+
+- **Indexer failure alarm blind on production.** The release's `cdk diff`
+  listed 0553's CloudWatch change as undeployed: the indexer has logged
+  `alarm = "indexer_failure"` since the Compute deploy of 2026-11-06
+  13:26 UTC, while the live filter matched `ch_write_failure`. It missed 5
+  failure lines on 2026-11-06 15:54–15:55 UTC. Shipped as
+  `production-2026.11.12-2-CloudWatch`; the new filter matches that line.
+- **Stale `libs/ui/dist`** failed the pre-commit `web:typecheck` (TS6305).
+  `trash libs/ui/dist` + `pnpm nx reset` fixed it; not a code problem.
 
 ## Design Decisions
 
@@ -144,6 +141,3 @@ toFloat64(ifNull(
 - Other Stellar tools, checked 2026-11-09: StellarChain.io shows
   transactions per second (incl. failed, last 50 ledgers); StellarExpert
   shows no TPS, only per-ledger transactions and operations.
-- If the hourly value feels too static, the same operation count over 60 s
-  is a one-predicate change; it keeps the ~8% over-count unless the first
-  ledger is dropped from the sum.
