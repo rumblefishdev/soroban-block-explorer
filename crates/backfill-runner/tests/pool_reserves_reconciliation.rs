@@ -37,7 +37,7 @@
 //! cargo test -p backfill-runner --test pool_reserves_reconciliation -- --nocapture
 //! ```
 //!
-//! Optional: `POOL_CH_DOMAIN` (default `ch.sorobanscan.rumblefish.dev`),
+//! Optional: `POOL_CH_DOMAIN` (default `ch.sorobanscan.com`),
 //! `POOL_RPC_URL` (default a public mainnet Soroban RPC).
 
 use std::collections::HashMap;
@@ -78,7 +78,7 @@ async fn every_pool_matches_its_own_storage() {
         eprintln!("no client certificate at {cert} — skipping the pool reserves reconciliation");
         return;
     }
-    let domain = env_or("POOL_CH_DOMAIN", "ch.sorobanscan.rumblefish.dev");
+    let domain = env_or("POOL_CH_DOMAIN", "ch.sorobanscan.com");
     let rpc_url = env_or(
         "POOL_RPC_URL",
         "https://soroban-rpc.mainnet.stellar.gateway.fm/",

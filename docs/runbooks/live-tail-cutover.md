@@ -1,7 +1,7 @@
 # Runbook: live-tail cutover (PG → CH)
 
 **Task:** [0241 — Indexer Lambda hard swap PG→CH + live-tail cutover runbook + empirical validation](../../lore/1-tasks/active/0241_FEATURE_indexer-hard-swap-pg-to-ch-and-cutover-runbook.md)
-**Target:** Production `indexer` Lambda in eu-central-1, writing to Hetzner ClickHouse via Caddy mTLS reverse proxy (`ch.sorobanscan.rumblefish.dev`)
+**Target:** Production `indexer` Lambda in eu-central-1, writing to Hetzner ClickHouse via Caddy mTLS reverse proxy (`ch.sorobanscan.com`)
 **Idempotent:** yes — `ReplacingMergeTree` collapses replays in the 17 RMT tables; `ledgers` is plain MergeTree by design (see Part B-2 `count(DISTINCT sequence)` note); per-ledger commit isolation means already-committed earlier ledgers in the batch stay committed. The in-band `[50, 200, 800] ms` envelope retries the failing ledger on **transient** errors only; on a hard failure the Lambda returns Err, S3 redelivers the whole batch, and `ReplacingMergeTree` dedupes the replayed rows
 **Frequency:** one-shot (cutover) — Part D (first-time region setup) is true one-time; Parts B+C repeat only on a rollback + re-cut
 
@@ -206,7 +206,9 @@ aws ecr describe-images \
 ### D-3 — SSM parameter for the Hetzner box IPv4
 
 `HetznerDnsStack` reads this at deploy time and creates the Route 53
-A record for `ch.sorobanscan.rumblefish.dev`.
+A record for `ch.sorobanscan.rumblefish.dev`, production's first name. Since
+task 0665 the name is `ch.sorobanscan.com`, a Cloudflare record in
+soroban-infrastructure, and `HetznerDnsStack` is gone. This step is history.
 
 ```bash
 aws ssm put-parameter \
@@ -331,8 +333,8 @@ make deploy-production
 ```
 
 CDK applies stacks in dependency order: Network → LedgerBucket → Compute
-→ Ingestion → Delivery → Observability → ApiGateway → CloudWatch →
-HetznerDns.
+→ Ingestion → Delivery → Observability → ApiGateway → CloudWatch
+(`HetznerDns` came last until task 0665 removed it).
 
 **No stack connects to ClickHouse at deploy time.** The schema is applied
 box-side by the `db-clickhouse-init` sidecar (idempotent `init.sql`) and CH
@@ -387,7 +389,7 @@ cd infra-hetzner/ca
 curl --cert out/test-rogue-cert/test-rogue-cert.crt \
      --key  out/test-rogue-cert/test-rogue-cert.key \
      --cacert ca.crt \
-     https://ch.sorobanscan.rumblefish.dev/ping
+     https://ch.sorobanscan.com/ping
 # Expected: HTTP 403, NOT 200.
 
 # Clean up.
@@ -458,7 +460,7 @@ ssh deploy@$HETZNER_IP 'docker exec clickhouse clickhouse-client \
 curl --cert out/lambda-api-production/lambda-api-production.crt \
      --key  out/lambda-api-production/lambda-api-production.key \
      --cacert infra-hetzner/ca/ca.crt \
-     https://ch.sorobanscan.rumblefish.dev/ping
+     https://ch.sorobanscan.com/ping
 # Expected: HTTP 200, body "Ok.\n"
 
 # 3. Indexer Lambda is deployed at the 0241 code version.
@@ -962,9 +964,9 @@ S3 bucket continues to accumulate Galexie's exports.
    - **B**: provision a new box per `infra-hetzner/README.md`, restore
      CH state from the BX21 Borg backup (per task 0228 follow-up;
      ledger range up to last Borg snapshot ≈ 1 h RPO).
-3. Once box is back, update SSM `/soroban/production/ch-ip` (D-3) if
-   IPv4 changed; re-deploy Route 53 record via `make deploy-production`
-   (HetznerDnsStack picks up the new IP).
+3. Once box is back, if the IPv4 changed, update `ch.sorobanscan.com` in
+   soroban-infrastructure `cloudflare/clickhouse.tf` and apply it (task 0665;
+   the Route 53 record and `HetznerDnsStack` of D-3 are gone).
 4. Re-enable Lambda concurrency. S3 backlog drains per B-3.3.
 
 **Open items**: no automated failover. Hot standby on a second box

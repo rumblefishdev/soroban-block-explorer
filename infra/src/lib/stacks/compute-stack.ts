@@ -121,7 +121,7 @@ export class ComputeStack extends cdk.Stack {
       // this passphrase is missing. Same value used by Galexie partition
       // mapping in ingestion-stack — single source of truth.
       STELLAR_NETWORK_PASSPHRASE: config.stellarNetworkPassphrase,
-      // mTLS endpoint on the Hetzner box (provisioned by HetznerDnsStack).
+      // mTLS endpoint on the Hetzner box (Caddy, `ch.sorobanscan.com`).
       CH_DOMAIN: config.chDomainName,
       // Standard config for the Secrets Manager Lambda Extension —
       // turn on in-memory caching so repeat reads in the same execution

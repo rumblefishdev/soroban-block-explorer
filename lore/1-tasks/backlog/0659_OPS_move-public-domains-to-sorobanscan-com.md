@@ -44,9 +44,13 @@ This task holds the names and the order; each step is its own task.
   The Prices API answers on `prices-api.sorobanscan.com` (proxied), and the
   portal runs on `sorobanscan.com/api/prices-api/` with Discord sign-in. The
   old Prices API host still serves API-key clients.
-- Next: 0340 step 5 (Prices docs, skill and examples, then the old API host).
-  Then 0665. Optional: delete the unused certificate
-  `api.sorobanscan.rumblefishdev.com` (`67947579…`, 0664).
+- Done (2026-11-06): 0340 step 5's docs part (stellar-prices-api #413, #414).
+- Done (2026-11-06): 0665. Every ClickHouse client uses `ch.sorobanscan.com`;
+  the old name is gone from Caddy and Route 53. Spawned 0667 (Galexie egress
+  on 80) and 0668 (Robot firewall rules).
+- Next: the old Prices API host (0340). Optional: delete the unused
+  certificate `api.sorobanscan.rumblefishdev.com` (`67947579…`,
+  0664).
 - In force: one step at a time; each ships and is verified before the next.
 
 ## Names

@@ -74,6 +74,5 @@
   "costAnomalyAlertThresholdUsd": 3,
   "chDomainName": "ch.sorobanscan.com",
   "mtlsSecretNamePrefix": "soroban/testnet/mtls",
-  "provisionChDns": false,
   "provisionCostAnomalyMonitor": false
 }

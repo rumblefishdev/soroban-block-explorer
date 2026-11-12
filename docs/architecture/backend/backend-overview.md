@@ -357,7 +357,10 @@ filter, and had to be corrected — the exception looked like the rule.
 #### Network
 
 **`GET /network/stats`** - Chain overview: current ledger sequence, TPS, total accounts,
-total contracts.
+total contracts. `tps` is operations per second over the ledgers closed in the 60 s
+before the head ledger closed, including the operations of failed transactions (task
+0669). The window's first ledger is left out of the sum, because its operations predate
+the measured span.
 
 This endpoint exists to support top-level explorer summary views and should remain small,
 fast, and cacheable with short TTLs.

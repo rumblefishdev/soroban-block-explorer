@@ -23,7 +23,6 @@ DeliveryStack            CloudFront + SPA S3 bucket
 ApiGatewayStack          REST API Gateway (cache, throttle, mTLS lock)
 ObservabilityStack       X-Ray / logging
 CloudWatchStack          alarms + dashboards
-HetznerDnsStack          Route 53 A record → CH box IP
 ```
 
 ## Prerequisites
@@ -61,38 +60,15 @@ access and credentials see
 [`infra-hetzner/README.md`](../infra-hetzner/README.md) and
 [`docs/architecture/security/clickhouse-rbac.md`](../docs/architecture/security/clickhouse-rbac.md).
 
-## HetznerDnsStack — Route 53 record for the production ClickHouse box
+## ClickHouse endpoint DNS
 
-`HetznerDnsStack` provisions a Route 53 A record targeting the
-Hetzner-hosted ClickHouse server's public IPv4. The FQDN comes
-verbatim from the `chDomainName` field in the env config
-(`envs/${env}.json`) — for example, production today resolves to
-`ch.sorobanscan.rumblefish.dev`. Caddy on the box uses this name
-for the Let's Encrypt HTTP-01 challenge; AWS-side workloads use
-it as the mTLS endpoint.
-
-### One-time setup (per environment, before first deploy)
-
-The box IPv4 is intentionally NOT in `envs/${env}.json` — that matches the existing `inventory.ini`-is-gitignored convention. It lives in SSM Parameter Store:
-
-```bash
-aws ssm put-parameter \
-    --name /soroban/production/ch-ip \
-    --value <dedicated-server-ipv4> \
-    --type String \
-    --region eu-central-1        # MUST match awsRegion — the stack resolves
-                                 # the param in its own region (hetzner-dns-stack.ts)
-```
-
-Subsequent IP rotations (after a box replacement) use `--overwrite` on the same command — no CDK code change, no PR.
-
-### Deploy
-
-```bash
-make deploy-production-hetzner-dns
-```
-
-`cdk synth` does NOT require AWS auth for the IP — the SSM value is rendered as a CFN dynamic reference (`{{resolve:ssm:/soroban/production/ch-ip}}`) and resolved by CloudFormation at deploy time. If the parameter is missing, the deploy fails with a CFN error pointing at the parameter name.
+`chDomainName` (`ch.sorobanscan.com` in both env files) is a DNS-only
+Cloudflare A record to the Hetzner box, kept in soroban-infrastructure
+(`cloudflare/clickhouse.tf`). Caddy on the box uses the name for the Let's
+Encrypt HTTP-01 challenge; AWS-side workloads use it as the mTLS endpoint.
+After a box replacement, change the address there. Until task 0665 this app
+had a `HetznerDnsStack` with a Route 53 record for
+`ch.sorobanscan.rumblefish.dev`.
 
 ## Environments
 

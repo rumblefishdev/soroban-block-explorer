@@ -51,7 +51,7 @@ that source, not an independent redesign.
 
 The indexing pipeline sits between canonical Stellar data sources and the explorer's owned
 ClickHouse schema (hosted on the Hetzner AX52 box; Lambdas reach it via the Caddy mTLS
-reverse proxy at `ch.sorobanscan.rumblefish.dev`).
+reverse proxy at `ch.sorobanscan.com`).
 
 Its role is to:
 

@@ -12,6 +12,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Task created from the 0455 mute investigation'
+  - date: 2026-11-12
+    status: backlog
+    who: karolkow
+    note: 'Second failure class measured: the Rust decompile runs the API Lambda out of memory (2026-11-11 alarm)'
 ---
 
 # BUG: the decompiled-contract route times out and answers a bare 500
@@ -54,6 +58,45 @@ Two things are wrong and they are separable:
    being broken, and it should not read as such.
 
 The decompiled tab shipped under task 0465 (archived).
+
+## Premise
+
+Independent review, 2026-11-12, of the task's goal against the code:
+**the premise holds with changes.** The timeout half is mostly stale; the
+out-of-memory half below is the real task.
+
+1. The timeout no longer answers a bare 500: it sends `decompile_failed`
+   with a WAT hint (`crates/api/src/contracts/handlers.rs:581-585`), and the
+   Code tab falls back to WAT on that code (`web/src/pages/contracts/ContractCode.tsx`,
+   since 2026-08-10). Acceptance criteria 1 and 3 are therefore done or stale.
+2. Step 4 is decided: stage metrics were tried and reverted on 2026-08-27,
+   because the `{proxy+}` API collapses every route into one series
+   (`infra/src/lib/stacks/api-gateway-stack.ts:102-114`). A per-route count
+   has to come from the Lambda's own logs.
+3. `tokio::time::timeout` ends the wait, not the work
+   (`crates/api/src/runtime_enrichment/wasm_code.rs`, `DECOMPILE_SLOTS`). In
+   Lambda the overrunning thread is frozen with the environment after the
+   response and resumes during the next request that environment serves,
+   which then pays its CPU and memory. Read from the code, not reproduced.
+   Any fix that keeps the lifting inside the API process keeps this.
+4. Fixing the response status cannot fix an OOM: the process is gone. Fix
+   classes that remove the problem: decompile once per new `wasm_hash`
+   outside the API and store the result; or run it in a separately invoked
+   function whose failure becomes an error. A deny-list of known hashes
+   misses new uploads. A larger timeout budget is a dead end (see below).
+5. Missing criteria: no API Lambda OOM on any of the 13 known hashes;
+   an overrun does not keep running in a reused environment; a path for
+   hashes uploaded after the sweep; a 502 still ends in WAT, not an error.
+
+## Out of memory — measured 2026-11-12
+
+The Rust decompile runs the API Lambda (256 MB) out of memory: seven
+`Runtime.OutOfMemory` kills on 2026-11-11, all one contract's
+`/decompiled`, answered 502 with no body, so the Code tab shows its error
+state instead of WAT. Of the 13 hashes 0465's sweep saw above 10 s, 7 pass
+256 MB; `spec_only` finishes the 8 timeouts at 5–7 MB, so the growth is in
+function-body lifting. `soroban-ret` 0.0.4 has no budget option. Full
+measurements: [notes/R-decompile-oom-2026-11-12.md](notes/R-decompile-oom-2026-11-12.md).
 
 ## Implementation Plan
 

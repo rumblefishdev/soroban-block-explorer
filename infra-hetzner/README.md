@@ -87,7 +87,7 @@ export STORAGEBOX_ID="..."              # Numeric Cloud ID of the BX21 Storage B
 export STORAGEBOX_SUBACCOUNT_PASSWORD="..."  # Random 32-byte base64 — password set on the Borg subaccount (used for the SFTP key-install login, not by the cron)
 export CLICKHOUSE_PASSWORD="..."        # CH `default` user password
 export BORG_PASSPHRASE="..."            # Borg repokey-blake2 passphrase
-export CH_DOMAIN="..."                  # Caddy site address (e.g. ch.sorobanscan.rumblefish.dev — matches `chDomainName` in the CDK env config)
+export CH_DOMAIN="..."                  # Caddy site address (e.g. ch.sorobanscan.com — matches `chDomainName` in the CDK env config)
 export CH_DOMAIN_ALIASES=""            # Optional: extra names Caddy also serves, space-separated — only while a rename is in flight (task 0665)
 export ACME_EMAIL="..."                 # Let's Encrypt account email
 export CLICKHOUSE_CN_USER_MAP="..."     # Comma-separated `<cn>:<ch_user>` pairs — Caddy uses both as the mTLS allowlist AND as the identity it forwards to CH (e.g. `<firstname>-laptop:dev_shared,galexie-production:galexie,...`). See docs/architecture/security/clickhouse-rbac.md.
@@ -203,8 +203,8 @@ them via `lookup('env', '...')`. Set them in
 the template in the "Prerequisites" section above):
 
 - `CH_DOMAIN` → real DNS name pointed at the server IP (matches
-  `chDomainName` in the CDK env config — provisioned by
-  `HetznerDnsStack`)
+  `chDomainName` in the CDK env config; the record is in
+  soroban-infrastructure `cloudflare/clickhouse.tf`)
 - `ACME_EMAIL` → real operator email (LE expiry warnings)
 - `STORAGEBOX_ID` → numeric Cloud ID of the BX21 Storage Box
   (Console → Storage Boxes). `HCLOUD_TOKEN` →
@@ -566,10 +566,8 @@ See `infra-hetzner/ca/README.md` §Compromise response.
   automatically when within 30 days of expiry.
 - DNS for `$CH_DOMAIN` must point at the server IP **before** the
   first deploy or the http-01 challenge fails. Caddy retries
-  automatically once DNS is corrected. The record itself lives in
-  Route 53 and is managed by the CDK `HetznerDnsStack` — see
-  `infra/src/lib/stacks/hetzner-dns-stack.ts` and `make
-deploy-production-hetzner-dns`.
+  automatically once DNS is corrected. The record itself is a DNS-only
+  Cloudflare A record in soroban-infrastructure (`cloudflare/clickhouse.tf`).
 
 ### ClickHouse RBAC + auth model
 

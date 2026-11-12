@@ -53,7 +53,7 @@ async fn decoded_pool_events_match_their_events_and_reserves() {
         key_pem: std::fs::read_to_string(&key).expect("read POOL_CH_KEY"),
         ca_pem: String::new(),
     };
-    let domain = env_or("POOL_CH_DOMAIN", "ch.sorobanscan.rumblefish.dev");
+    let domain = env_or("POOL_CH_DOMAIN", "ch.sorobanscan.com");
     let ch = db_clickhouse::mtls::client_with_mtls(&domain, &bundle, db_clickhouse::PROD_DATABASE)
         .expect("mTLS ClickHouse client");
 

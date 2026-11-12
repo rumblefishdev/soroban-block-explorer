@@ -1,4 +1,4 @@
-import { Box, Divider, Stack } from '@mui/material';
+import { Box, Divider, Stack, Tooltip } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import {
   AnimatedNumber,
@@ -52,11 +52,18 @@ export function ChainOverview() {
         align="center"
         valueVariant="heading4SemiBold"
         labelVariant="bodyMedium"
-        label="TPS"
+        label={
+          <Tooltip
+            title="Operations per second, including failed transactions"
+            describeChild
+          >
+            <span>TPS</span>
+          </Tooltip>
+        }
         value={
           data ? (
             <AnimatedNumber
-              value={data.tps_60s}
+              value={data.tps}
               format={{ minimumFractionDigits: 1, maximumFractionDigits: 1 }}
             />
           ) : undefined
