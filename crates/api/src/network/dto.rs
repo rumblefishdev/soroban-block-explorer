@@ -25,11 +25,13 @@ use utoipa::ToSchema;
 /// * data staleness ("info from N seconds ago") = `Date.now() - generated_at`
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NetworkStats {
-    /// Transactions per second over a 60s rolling window. Computed as
-    /// `SUM(ledgers.transaction_count)` divided by the actual span
-    /// between MIN/MAX `closed_at` in the window. Stable on partial /
-    /// single-ledger windows (NULLIF guards zero-span).
-    pub tps_60s: f64,
+    /// Operations per second over the ledgers closed in the 60 s before the
+    /// head ledger closed, including the operations of failed transactions.
+    /// Computed as `SUM(transactions.operation_count)` over the window's
+    /// ledgers after its first, divided by the span between the window's
+    /// MIN/MAX `closed_at`; `0` when the span is zero (a single-ledger
+    /// window).
+    pub tps: f64,
     /// Indexed account count: `count()` over `accounts_recent`, the deduped
     /// MV the `/accounts` list also pages from — so this KPI and that list
     /// agree. Exact to ±1 vs `accounts FINAL`, modulo the ~2-minute MV

@@ -6,7 +6,7 @@ fn sample(seq: i64) -> NetworkStats {
     use chrono::TimeZone;
     let ts = chrono::Utc.timestamp_opt(1_700_000_000, 0).unwrap();
     NetworkStats {
-        tps_60s: 1.5,
+        tps: 1.5,
         total_accounts: 100,
         total_contracts: 5,
         latest_ledger_sequence: seq,
