@@ -1721,7 +1721,7 @@
       "get": {
         "tags": ["network"],
         "summary": "Get top-level chain overview stats.",
-        "description": "Reads the single-statement network-stats query (latest ledger row +\noperations per second over the last 720 ledgers for TPS + deduped\ncounts of accounts / contracts) and caches the assembled response\n**keyed on the chain head** (`latest_ledger_sequence`) in process\nmemory — see `network/cache.rs`.\nSee the task 0045 spec and `network::queries::fetch_stats` for the full\ndata-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
+        "description": "Reads the single-statement network-stats query (latest ledger row +\noperations per second over the last 60 s of ledgers for TPS + deduped\ncounts of accounts / contracts) and caches the assembled response\n**keyed on the chain head** (`latest_ledger_sequence`) in process\nmemory — see `network/cache.rs`.\nSee the task 0045 spec and `network::queries::fetch_stats` for the full\ndata-source mapping.\n\nPer request we first read the head cheaply (`crate::common::head` —\n`SELECT max(sequence)`, a primary-key probe) and look up the cache\nunder it: an unchanged head is a HIT (the new ledger has not landed),\nan advanced head is a MISS that recomputes once. So a new ledger is\nvisible on the **first** request after it is written — there is no\nup-to-TTL window serving the previous head (task 0291).\n\nConcurrent cold-cache requests deduplicate via\n`moka::future::Cache::try_get_with` — the first task runs the\nasync DB query and the rest wait on its result instead of fanning\nout N round-trips.",
         "operationId": "get_network_stats",
         "responses": {
           "200": {
@@ -3670,7 +3670,7 @@
           "tps": {
             "type": "number",
             "format": "double",
-            "description": "Operations per second over the 720 ledgers (~1 h) ending at head,\nincluding the operations of failed transactions — the figure\nChainspect reports for Stellar. Computed as the window's\n`SUM(transactions.operation_count)` divided by the span between its\nMIN/MAX `closed_at`; `0` when the span is zero (a single-ledger\ncluster)."
+            "description": "Operations per second over the ledgers closed in the 60 s before the\nhead ledger closed, including the operations of failed transactions.\nComputed as `SUM(transactions.operation_count)` over the window's\nledgers after its first, divided by the span between the window's\nMIN/MAX `closed_at`; `0` when the span is zero (a single-ledger\nwindow)."
           }
         }
       },

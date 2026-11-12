@@ -25,12 +25,12 @@ use utoipa::ToSchema;
 /// * data staleness ("info from N seconds ago") = `Date.now() - generated_at`
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NetworkStats {
-    /// Operations per second over the 720 ledgers (~1 h) ending at head,
-    /// including the operations of failed transactions — the figure
-    /// Chainspect reports for Stellar. Computed as the window's
-    /// `SUM(transactions.operation_count)` divided by the span between its
+    /// Operations per second over the ledgers closed in the 60 s before the
+    /// head ledger closed, including the operations of failed transactions.
+    /// Computed as `SUM(transactions.operation_count)` over the window's
+    /// ledgers after its first, divided by the span between the window's
     /// MIN/MAX `closed_at`; `0` when the span is zero (a single-ledger
-    /// cluster).
+    /// window).
     pub tps: f64,
     /// Indexed account count: `count()` over `accounts_recent`, the deduped
     /// MV the `/accounts` list also pages from — so this KPI and that list

@@ -1,6 +1,6 @@
 ---
 id: '0669'
-title: 'Report TPS as operations per second over the last hour'
+title: 'Report TPS as operations per second'
 type: FEATURE
 status: active
 related_adr: []
@@ -21,7 +21,7 @@ history:
       Activated to start implementation (Step 1 query first).
 ---
 
-# Report TPS as operations per second over the last hour
+# Report TPS as operations per second
 
 ## Summary
 
@@ -29,16 +29,15 @@ The home KPI and the top nav show "TPS" as transactions per second over the
 last 60 s, about 60–67 on mainnet. Chainspect, the number people compare us
 with, shows about 130 for Stellar because it counts operations. Our TPS will
 mean the same: operations per second, including the operations of failed
-transactions, averaged over the last 720 ledgers (~1 h).
+transactions. The window stays 60 s (team, 2026-11-12); Chainspect's is ~1 h.
 
 ## Stan teraz
 
-- Done: Steps 1–4 on `feat/0669_tps-operations-per-second`. Both Chainspect
-  ranges match exactly: `..65385031` 470,156 / 130.7805, `..65407351`
-  480,894 / 133.7675.
-- Next: PR, then deploy (Compute + web).
-- In force: label stays "TPS"; value = operations/s incl. failed
-  transactions; window = the 720 ledgers ending at head.
+- Done: Steps 1–4, PRs #728 (test move) and #729. Both Chainspect ranges
+  match: `..65385031` 470,156 / 130.7805, `..65407351` 480,894 / 133.7675.
+- Next: review, merge, deploy Compute and web together.
+- In force: label "TPS"; value = operations/s incl. failed transactions;
+  window = ledgers closed in the 60 s before head, first one not summed.
 
 ## Context
 
@@ -136,6 +135,9 @@ toFloat64(ifNull(
    Reasoning in the `fetch_stats` comment.
 2. **Cache tests moved** to `network/cache/tests.rs` in their own commit: the
    fixture changes, and CLAUDE.md forbids inline tests.
+3. **Window 60 s, not 720 ledgers** (team decision, daily 2026-11-12). The
+   first ledger is left out of the sum: N ledgers span N-1 intervals, which
+   over-stated TPS by +7.2% on a 13-ledger window (prod, 2026-11-12).
 
 ## Notes
 

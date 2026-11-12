@@ -121,7 +121,7 @@ quick access to exploration.
   badge, timestamp
 - Latest ledgers table — sequence, closed_at, transaction count
 - Chain overview — current ledger sequence, TPS (operations per second over the last
-  hour, failed transactions included), total accounts, total contracts
+  60 s, failed transactions included), total accounts, total contracts
 
 #### Transactions (`/transactions`)
 
@@ -345,8 +345,8 @@ ledger archive for read-time XDR expansion on E3 / E14.
 #### Network
 
 **`GET /network/stats`** — Chain overview: current ledger sequence, TPS, total accounts,
-total contracts. `tps` is operations per second over the 720 ledgers ending at head,
-including the operations of failed transactions.
+total contracts. `tps` is operations per second over the ledgers closed in the 60 s
+before the head ledger closed, including the operations of failed transactions.
 
 #### Transactions
 

@@ -24,9 +24,9 @@ struct StatsRow {
     total_contracts: u64,
 }
 
-/// Ledgers in the TPS window, ending at head (~1 h at ~5 s per ledger).
-/// The same window Chainspect publishes for Stellar (task 0669).
-const TPS_WINDOW_LEDGERS: i64 = 720;
+/// TPS window: the ledgers closed within this many seconds before the head
+/// ledger closed (task 0669; 60 s as before, decided 2026-11-12).
+const TPS_WINDOW_SECONDS: i64 = 60;
 
 pub async fn fetch_stats(
     client: &clickhouse::Client,
@@ -35,26 +35,34 @@ pub async fn fetch_stats(
     // `ledgers` is ORDER BY `sequence`, NOT `closed_at`. Ordering or filtering
     // by `closed_at` forces a full 12M-row table scan (measured) — and this
     // endpoint is polled, so that scan recurs and eats the `read_rows` quota.
-    // Every read is a primary-key range pinned to the caller's `head` (the
-    // chain head the cache version-keys on — `crate::common::head`), with no
-    // `closed_at` filter and no `now64()`:
+    // Every read is pinned to the caller's `head` (the chain head the cache
+    // version-keys on — `crate::common::head`) and pruned by a primary-key
+    // range first; nothing reads `now64()`, so one head always yields one
+    // value:
     //   * the latest ledger via `WHERE sequence = head` (primary-key point
     //     read, one granule) — so `latest_ledger_sequence` always equals the
     //     cache key (no TOCTOU, no re-derivation of "latest" here). It takes
     //     `LIMIT 1` because a duplicated head row would return two rows and
     //     break `fetch_optional` with a 500 on the whole stats endpoint;
-    //   * TPS (task 0669) = operations per second over the
-    //     `TPS_WINDOW_LEDGERS` ledgers ending at head: `sum(operation_count)`
-    //     over `transactions` divided by the `closed_at` span of the same
-    //     ledgers. `operation_count` is the envelope's count (the inner tx's
-    //     for a fee bump) and is set for failed transactions too, so the sum
-    //     is Horizon's `tx_set_operation_count` and Chainspect's `txns`
-    //     (checked equal for two of its published ranges). Dividing by the
-    //     span counts N ledgers over N-1 intervals, as Chainspect does; over
-    //     720 ledgers that is +0.14%. `ledgers` is the indexer's commit
-    //     marker, written after `transactions`, so the head ledger's
-    //     operations are already in the sum. `min` / `max` of `closed_at` are
-    //     not affected by duplicate ledger rows.
+    //   * TPS (task 0669) = operations per second over the ledgers closed in
+    //     the `TPS_WINDOW_SECONDS` before the head ledger closed. The window
+    //     (`tps_window`) is read from `ledgers` under a `sequence > head - 200`
+    //     prune (~17 min of ledgers, ample for 60 s) before the `closed_at`
+    //     predicate refines it; it yields the window's first sequence and its
+    //     `closed_at` span. The numerator is `sum(operation_count)` over the
+    //     window's `transactions` **after its first ledger**: a span covers
+    //     N-1 inter-ledger intervals, and the operations of the first ledger
+    //     were applied before it began, so counting them would over-state TPS
+    //     by N/(N-1) — ~8% over 60 s (measured +7.2% on 13 ledgers). Ledgers
+    //     close ~5 s apart, so the window is ~12 ledgers.
+    //     `operation_count` is the envelope's count (the inner tx's for a fee
+    //     bump) and is set for failed transactions too, so the sum over
+    //     ledgers is Horizon's `tx_set_operation_count` and Chainspect's
+    //     `txns` (checked equal for two of its published 720-ledger ranges).
+    //     `ledgers` is the indexer's commit marker, written after
+    //     `transactions`, so the head ledger's operations are already in the
+    //     sum. `min` / `max` of `sequence` and `closed_at` are not affected
+    //     by duplicate ledger rows.
     //
     // Duplicates (lore-0420): both tables are `ReplacingMergeTree` with **no
     // version column**, so a row re-ingested before its parts merge is there
@@ -69,11 +77,11 @@ pub async fn fetch_stats(
     //     sort key `(ledger_sequence, application_order)`. On this primary-key
     //     range it merges only parts whose ranges overlap, and at the head
     //     they do not (each indexer insert covers new ledgers). Measured on
-    //     prod over 10 heads (2026-11-10): the whole statement took p50 25 ms
-    //     with `FINAL` and 95 ms with `LIMIT 1 BY ledger_sequence,
-    //     application_order`, with the same TPS every time. Overlapping parts
-    //     (a backfill re-writing recent ledgers) raise the `FINAL` cost
-    //     towards that of `LIMIT 1 BY`; it stays bounded by the 720 ledgers.
+    //     prod over 10 heads with a 720-ledger window (2026-11-10): the whole
+    //     statement took p50 25 ms with `FINAL` and 95 ms with `LIMIT 1 BY
+    //     ledger_sequence, application_order`, with the same TPS every time.
+    //     Overlapping parts (a backfill re-writing recent ledgers) raise the
+    //     `FINAL` cost; over a ~12-ledger window it stays small.
     // `head` is a trusted i64 from our own head probe, so it is inlined (no
     // injection surface) — matching the i64-inlining convention in
     // `crates/api/src/common/ch.rs`. This also drops the previous inner
@@ -96,19 +104,26 @@ pub async fn fetch_stats(
     //   * soroban_contracts → `FINAL`, affordable here because the table is
     //     ~146k rows (not 14M like accounts).
     let sql = format!(
-        "SELECT \
+        "WITH \
+            (SELECT closed_at FROM ledgers WHERE sequence = {head} LIMIT 1) \
+                AS head_closed_at, \
+            (SELECT tuple(min(sequence), \
+                          dateDiff('second', min(closed_at), max(closed_at))) \
+             FROM ledgers \
+             WHERE sequence > {head} - 200 \
+               AND sequence <= {head} \
+               AND closed_at >= head_closed_at - INTERVAL {window} SECOND) \
+                AS tps_window \
+         SELECT \
             latest.sequence AS latest_ledger_sequence, \
             latest.closed_at AS latest_ledger_closed_at, \
             now64() AS generated_at, \
             toFloat64(ifNull( \
                 (SELECT sum(operation_count) \
                  FROM transactions FINAL \
-                 WHERE ledger_sequence > {head} - {window} \
+                 WHERE ledger_sequence > tps_window.1 \
                    AND ledger_sequence <= {head}) \
-                / nullIf((SELECT dateDiff('second', min(closed_at), max(closed_at)) \
-                          FROM ledgers \
-                          WHERE sequence > {head} - {window} \
-                            AND sequence <= {head}), 0), \
+                / nullIf(tps_window.2, 0), \
                 0 \
             )) AS tps, \
             ifNull((SELECT count() FROM accounts_recent), 0) \
@@ -121,7 +136,7 @@ pub async fn fetch_stats(
              WHERE sequence = {head} \
              LIMIT 1 \
          ) AS latest",
-        window = TPS_WINDOW_LEDGERS,
+        window = TPS_WINDOW_SECONDS,
     );
     let row_opt = client.query(&sql).fetch_optional::<StatsRow>().await?;
 

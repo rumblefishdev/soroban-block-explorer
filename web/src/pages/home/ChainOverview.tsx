@@ -68,7 +68,7 @@ export function ChainOverview() {
             />
           ) : undefined
         }
-        caption="Last hour"
+        caption="Last 60s"
         valueColor={(theme) => theme.palette.text.success}
         loading={isLoading}
       />,

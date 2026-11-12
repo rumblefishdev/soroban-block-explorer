@@ -32,7 +32,7 @@ const KPI = [
   // ChainOverview's own loading state (which also renders the live pip), so the
   // skeleton ledger cell looks the same as the mounted page.
   { label: <LiveIndicator />, caption: 'Current ledger' },
-  { label: 'TPS', caption: 'Last hour' },
+  { label: 'TPS', caption: 'Last 60s' },
   { label: 'Accounts', caption: 'Total' },
   { label: 'Contracts', caption: 'Soroban' },
 ];

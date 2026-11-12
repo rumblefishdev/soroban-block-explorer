@@ -1185,12 +1185,12 @@ export type NetworkStats = {
    */
   total_contracts: number;
   /**
-   * Operations per second over the 720 ledgers (~1 h) ending at head,
-   * including the operations of failed transactions — the figure
-   * Chainspect reports for Stellar. Computed as the window's
-   * `SUM(transactions.operation_count)` divided by the span between its
+   * Operations per second over the ledgers closed in the 60 s before the
+   * head ledger closed, including the operations of failed transactions.
+   * Computed as `SUM(transactions.operation_count)` over the window's
+   * ledgers after its first, divided by the span between the window's
    * MIN/MAX `closed_at`; `0` when the span is zero (a single-ledger
-   * cluster).
+   * window).
    */
   tps: number;
 };

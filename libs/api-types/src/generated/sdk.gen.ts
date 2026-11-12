@@ -585,7 +585,7 @@ export const listParticipants = <ThrowOnError extends boolean = false>(
  * Get top-level chain overview stats.
  *
  * Reads the single-statement network-stats query (latest ledger row +
- * operations per second over the last 720 ledgers for TPS + deduped
+ * operations per second over the last 60 s of ledgers for TPS + deduped
  * counts of accounts / contracts) and caches the assembled response
  * **keyed on the chain head** (`latest_ledger_sequence`) in process
  * memory — see `network/cache.rs`.
