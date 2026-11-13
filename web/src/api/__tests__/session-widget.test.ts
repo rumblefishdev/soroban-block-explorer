@@ -79,9 +79,11 @@ describe('Turnstile solver and retry panel', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     renders[0]['before-interactive-callback']();
-    expect(document.body.textContent).toContain(
-      "Confirm you're human to keep loading data"
-    );
+    // Cloudflare enters interactive mode again after a refresh in the widget.
+    renders[0]['before-interactive-callback']();
+    expect(
+      document.body.textContent?.split("Confirm you're human").length
+    ).toBe(2);
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(api.remove).not.toHaveBeenCalled();

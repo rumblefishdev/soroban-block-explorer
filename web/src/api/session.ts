@@ -15,6 +15,7 @@
 // in `./client.ts`.
 
 import type { SessionResponse } from '@rumblefish/api-types';
+import { colorsDark } from '@rumblefish/soroban-block-explorer-ui';
 
 // Refresh a touch early so an in-flight request never rides an edge-expired JWT.
 const EXPIRY_SKEW_MS = 30_000;
@@ -258,13 +259,15 @@ async function solveTurnstile(
     );
 
     // Cloudflare wants a click: stop the watchdog, turn the overlay into a
-    // card and say why the page waits.
+    // card and say why the page waits. One heading: Cloudflare can enter
+    // interactive mode again after a refresh inside the widget, and
+    // `prepend` of the same node only moves it.
+    const heading = document.createElement('p');
+    heading.textContent = "Confirm you're human to keep loading data";
+    heading.style.cssText = PANEL_TEXT_CSS;
     const askForInteraction = () => {
       clearTimeout(timer);
       container.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
-      const heading = document.createElement('p');
-      heading.textContent = "Confirm you're human to keep loading data";
-      heading.style.cssText = PANEL_TEXT_CSS;
       container.prepend(heading);
     };
 
@@ -293,8 +296,9 @@ async function solveTurnstile(
 
 const PANEL_POSITION_CSS =
   'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2147483647;';
-const PANEL_CARD_CSS =
-  'max-width:360px;padding:20px 24px;border-radius:12px;background:#1e1e1e;color:#f5f5f5;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;';
+// The dark palette of the design system: the page around the card may be
+// either theme, and one fixed card keeps the panel readable on both.
+const PANEL_CARD_CSS = `max-width:360px;padding:20px 24px;border-radius:12px;border:1px solid ${colorsDark.stroke.default};background:${colorsDark.surface.grayMain};color:${colorsDark.text.primary};text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;`;
 const PANEL_TEXT_CSS = 'margin:0 0 12px;font-size:14px;line-height:1.5;';
 
 /**
@@ -316,8 +320,7 @@ function showRetryPanel(reason: string): Promise<void> {
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = 'Try again';
-  button.style.cssText =
-    'padding:8px 20px;border:0;border-radius:8px;background:#fcd535;color:#111;font:inherit;font-weight:600;cursor:pointer;';
+  button.style.cssText = `padding:8px 20px;border:0;border-radius:8px;background:${colorsDark.surface.primaryMain};color:${colorsDark.text.inverted};font:inherit;font-weight:600;cursor:pointer;`;
 
   panel.append(title, detail, button);
   document.body.appendChild(panel);
