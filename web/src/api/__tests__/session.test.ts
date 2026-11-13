@@ -101,6 +101,20 @@ describe('createSession', () => {
     expect(await session.ensureToken()).toBe('jwt-2');
   });
 
+  it('resolves null when the API has no mint route (backend gate off)', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }));
+    const session = createSession({
+      siteKey: 'key',
+      apiBaseUrl: 'https://api',
+      solve,
+    });
+
+    // The API mounts `/auth/session` only with its gate on; without the gate
+    // a request needs no session, so it goes out without one.
+    expect(await session.ensureToken()).toBeNull();
+    expect(document.body.textContent).not.toContain('Try again');
+  });
+
   it('keeps state per instance', async () => {
     fetchMock
       .mockResolvedValueOnce(okResponse('jwt-a'))

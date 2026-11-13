@@ -29,7 +29,8 @@ export interface SessionOptions {
 
 export interface Session {
   /**
-   * Resolve a usable session JWT, or `null` when the layer is dark. Reuses a
+   * Resolve a usable session JWT, or `null` when the layer is dark (no site
+   * key, or the API answers the mint with 404). Reuses a
    * fresh token; otherwise solves Turnstile once and exchanges it. Never
    * throws, and never resolves `null` while armed: a failed solve or a refused
    * exchange shows the retry panel and waits for the visitor, so no request
@@ -96,6 +97,10 @@ export function createSession({
               expiresAtMs = Date.now() + body.expires_in * 1000;
               return token;
             }
+            // The API mounts `/auth/session` only with its gate on
+            // (`crates/api/src/main.rs`); with the gate off a request needs no
+            // session, so it goes out without one, as before task 0289.
+            if (res.status === 404) return null;
             reason = `The server did not accept the check (HTTP ${res.status}).`;
           } catch (e) {
             reason = e instanceof Error ? e.message : String(e);
