@@ -126,7 +126,7 @@ Cloudflare's siteverify endpoint before minting a free-tier session JWT
 (`crates/api/src/auth/`). The token and the JWT are different things — the widget never
 issues the session. Until a session exists every API request waits for it; none goes out
 without one, unless the API answers the mint with 404 (its gate is off). When Cloudflare asks for a click, the widget stays in a centre card until the
-visitor solves it; when the check fails, a "Try again" panel names the reason, and nothing
+visitor solves it; when the check fails twice in a row (one silent retry), a "Try again" panel names the reason, and nothing
 is solved again until it is clicked (`web/src/api/session.ts`, task 0289). This is also
 not Cloudflare fronting the frontend's own domain, which sits on Route 53 with no edge
 filter.

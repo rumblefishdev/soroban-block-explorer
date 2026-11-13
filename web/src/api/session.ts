@@ -82,7 +82,11 @@ export function createSession({
     inFlight = (async () => {
       try {
         // Until a session is minted: solve, exchange, and on failure wait for
-        // the visitor's "Try again" before solving again.
+        // the visitor's "Try again" before solving again. The first failure
+        // is retried once without asking: a cold Lambda, a 5xx or a network
+        // that is just back (a laptop waking) used to heal on the next poll,
+        // and one more solve is no loop.
+        let silentRetryLeft = true;
         for (;;) {
           let reason: string;
           try {
@@ -116,6 +120,10 @@ export function createSession({
             reason = e instanceof Error ? e.message : String(e);
           }
           console.warn(`Turnstile session failed: ${reason}`);
+          if (silentRetryLeft) {
+            silentRetryLeft = false;
+            continue;
+          }
           await showRetryPanel(reason);
         }
       } finally {
@@ -318,12 +326,18 @@ const PANEL_TEXT_CSS = 'margin:0 0 12px;font-size:14px;line-height:1.5;';
 function showRetryPanel(reason: string): Promise<void> {
   const panel = document.createElement('div');
   panel.setAttribute('role', 'alertdialog');
+  panel.setAttribute('aria-labelledby', 'turnstile-retry-title');
+  panel.setAttribute('aria-describedby', 'turnstile-retry-detail');
   panel.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
 
+  // Named and described for screen readers, with focus on the button, so a
+  // keyboard user is not left on a page whose sections only say "loading".
   const title = document.createElement('p');
+  title.id = 'turnstile-retry-title';
   title.textContent = "We couldn't verify your browser";
   title.style.cssText = PANEL_TEXT_CSS + 'font-weight:600;font-size:16px;';
   const detail = document.createElement('p');
+  detail.id = 'turnstile-retry-detail';
   detail.textContent = `This explorer checks that visitors are human before it loads data. ${reason}`;
   detail.style.cssText = PANEL_TEXT_CSS;
   const button = document.createElement('button');
@@ -333,6 +347,7 @@ function showRetryPanel(reason: string): Promise<void> {
 
   panel.append(title, detail, button);
   document.body.appendChild(panel);
+  button.focus();
 
   return new Promise<void>((resolve) => {
     button.addEventListener('click', () => {
