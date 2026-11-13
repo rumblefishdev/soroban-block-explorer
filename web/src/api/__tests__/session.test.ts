@@ -18,10 +18,12 @@ describe('createSession', () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     fetchMock.mockReset();
     solve.mockClear();
   });
@@ -101,25 +103,23 @@ describe('createSession', () => {
     expect(await session.ensureToken()).toBe('jwt-2');
   });
 
-  it('resolves null, not a throw, when the exchange fails', async () => {
-    fetchMock.mockResolvedValueOnce(new Response('nope', { status: 403 }));
-    solve.mockRejectedValueOnce(new Error('widget failed'));
+  it('resolves null when the API has no mint route (backend gate off)', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }));
     const session = createSession({
       siteKey: 'key',
       apiBaseUrl: 'https://api',
       solve,
     });
 
-    expect(await session.ensureToken()).toBeNull(); // solve throws
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(await session.ensureToken()).toBeNull(); // server 403
-    expect(solve).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The API mounts `/auth/session` only with its gate on; without the gate
+    // a request needs no session, so it goes out without one.
+    expect(await session.ensureToken()).toBeNull();
+    expect(document.body.textContent).not.toContain('Try again');
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('404'));
 
-    // A failure is not cached: the next call tries again and succeeds.
-    fetchMock.mockResolvedValueOnce(okResponse('jwt-after-failure'));
-    expect(await session.ensureToken()).toBe('jwt-after-failure');
-    expect(solve).toHaveBeenCalledTimes(3);
+    // Remembered for the session: later requests do not solve again.
+    expect(await session.ensureToken()).toBeNull();
+    expect(solve).toHaveBeenCalledTimes(1);
   });
 
   it('keeps state per instance', async () => {

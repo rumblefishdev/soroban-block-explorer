@@ -70,3 +70,70 @@ Seen again 2026-09-24 on `/search?q=<hash>` in the in-app browser: the same
 Turnstile] Nothing to reset found for provided container` in the console —
 a `reset()` called on a widget that was never rendered (or already removed),
 so the failure path itself throws. Guard the reset on a live widget id.
+
+## 2026-11-13 — verify panel instead of a 401 (this PR)
+
+Third report: a testnet user left the home page open overnight. A 15-min
+re-mint needed a click, the 20 s watchdog removed the widget, every read went
+out without a Bearer and got 401, and each poll started a new challenge
+(Turnstile analytics: ~85 unsolved in two hours). Owner chose to keep the gate
+and fix what the visitor sees; opening reads or a challenge-after-limit
+(Blockscout's model) stay out of scope.
+
+## Premise
+
+Fresh review of the goal alone (2026-11-13):
+
+- **holds** — the client causes the failure: a failed solve resolved `null`,
+  the bare request got 401, `QueryProvider` does not retry 4xx, and the
+  4-8 s home poll started a new solve each tick.
+- **holds** — the cheapest root fix is the one built here: stop the 20 s
+  watchdog once Cloudflare asks for a click, and stop solving after a failure.
+- **wrong as evidence of harm** — "124 of 158 unsolved" does not mean most
+  visitors fail; one stuck tab re-rendering every ~25 s explains it (derived,
+  not measured; both networks share one site key).
+- **doubtful** — the 15-min TTL makes an idle tab re-check ~4 times an hour;
+  kept by the owner's scope, listed under Not yet decided.
+- **doubtful** — a WARP block at the edge is unproven: the 2026-10-05 launch
+  note says Managed Challenge stays off, while checklist row 2 says it is on.
+
+## Decisions so far
+
+| #   | Decision                                                                                                              | From                    | Test                                    |
+| --- | --------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------- |
+| 1   | Armed, `ensureToken` never resolves `null`: requests wait for a session, none go out bare                             | owner (W25 C)           | solver: stall → panel → retry → JWT     |
+| 2   | A failed solve or a refused mint shows a panel with the reason and "Try again"; nothing re-solves until it is clicked | owner (W25 C)           | solver: retry panel, HTTP status        |
+| 3   | Cloudflare asks for a click → the widget stays, with a heading; the watchdog stops counting                           | owner (W25 C)           | solver: interactive heading, no timeout |
+| 4   | No callback within 20 s and no interaction → failure → panel (2), widget removed                                      | plan review (blocker 1) | solver: stall shows the retry panel     |
+| 5   | `refresh-timeout: 'manual'`, `retry: 'never'`: Cloudflare must not restart challenges by itself                       | plan review (2)         | solver: render options                  |
+| 6   | The Turnstile error code reaches the panel and `console.warn`                                                         | plan review (6)         | solver: error code in the panel         |
+| 7   | A script that loads without `window.turnstile` can be retried                                                         | plan review (3)         | solver: retry after missing global      |
+| 8   | The API logs every refused or failed siteverify, with Cloudflare's `error-codes` or HTTP status, never the token      | owner (W25 C)           | none (log line)                         |
+| 9   | A 404 from the mint means the API gate is off: resolve `null`, the request goes out bare as before                    | code review (standards) | session: 404 → null                     |
+| 10  | Panel colours come from `colorsDark`; the interactive heading is added once                                           | code review             | solver: one heading                     |
+
+| 11 | The first failure of a mint cycle is retried once without the panel; the panel follows the second | devil's advocate (1) | solver: silent retry, two stalls |
+| 12 | The retry panel is labelled (`aria-labelledby`/`-describedby`) and its button takes focus | devil's advocate (3) | solver: labels and focus |
+
+The 2026-09-24 `reset()` error has no source in our code (`git log -S "reset("`
+on `session.ts` is empty): Turnstile's own retry or refresh called it after
+`remove()`. `retry: 'never'` and `refresh-timeout: 'manual'` should stop it;
+not reproduced, so not proven.
+
+## Not yet decided
+
+- A 401 on a JWT the client still thinks is fresh shows the section error and
+  re-mints on the next poll. No retry rule added: no measured case (review 7).
+- Session TTL (15 min): a longer one would cut re-checks with the gate kept;
+  out of this PR's scope.
+- Turnstile analytics split by hostname and interactive vs non-interactive,
+  and whether Bot Fight Mode is on for the zone: owner's dashboard, not yet read.
+- After the click, a check that stalls keeps the card with no "Try again": the
+  watchdog stops at interaction and is not re-armed. No measured case.
+- `session.ts` now holds the session, the widget and the panel: split in a
+  `[structure only]` PR; `session-widget.test.ts` then follows its source file.
+- One passed check shared by all tabs and reloads (an HttpOnly cookie set by
+  the API, per OWASP): proposed to the owner; the reporter may be opening new
+  tabs, which this PR does not change.
+- Before mainnet: leave one testnet tab open overnight; nothing tested an
+  unattended interactive challenge for hours.

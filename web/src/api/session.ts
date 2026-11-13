@@ -15,6 +15,7 @@
 // in `./client.ts`.
 
 import type { SessionResponse } from '@rumblefish/api-types';
+import { colorsDark } from '@rumblefish/soroban-block-explorer-ui';
 
 // Refresh a touch early so an in-flight request never rides an edge-expired JWT.
 const EXPIRY_SKEW_MS = 30_000;
@@ -29,10 +30,13 @@ export interface SessionOptions {
 
 export interface Session {
   /**
-   * Resolve a usable session JWT, or `null` when the layer is dark. Reuses a
+   * Resolve a usable session JWT, or `null` when the layer is dark (no site
+   * key, or the API answers the mint with 404). Reuses a
    * fresh token; otherwise solves Turnstile once and exchanges it. Never
-   * throws — on failure the token stays `null` and the request proceeds
-   * without a Bearer (the backend decides the outcome).
+   * throws, and never resolves `null` while armed: a failed solve or a refused
+   * exchange shows the retry panel and waits for the visitor, so no request
+   * goes out without a session (task 0289 — a bare request gets a 401 that
+   * the page can only show as a broken section).
    */
   ensureToken(): Promise<string | null>;
   /** Drop the cached JWT so the next request re-solves Turnstile. Called on 401. */
@@ -59,6 +63,9 @@ export function createSession({
   // Single-flight: concurrent callers (e.g. a burst of queries on first paint)
   // share one Turnstile solve + one `/auth/session` round-trip.
   let inFlight: Promise<string | null> | null = null;
+  // Set when the API answers the mint with 404 (its gate is off): later
+  // requests go out without a session instead of solving again.
+  let apiGateOff = false;
 
   const invalidate = () => {
     token = null;
@@ -66,7 +73,7 @@ export function createSession({
   };
 
   const ensureToken = async (): Promise<string | null> => {
-    if (!siteKey) return null;
+    if (!siteKey || apiGateOff) return null;
     if (token !== null && Date.now() < expiresAtMs - EXPIRY_SKEW_MS) {
       return token;
     }
@@ -74,26 +81,51 @@ export function createSession({
 
     inFlight = (async () => {
       try {
-        const turnstileToken = await solve(siteKey);
-        // Plain `fetch`, not the generated SDK: the SDK client's request
-        // interceptor awaits `ensureToken`, so calling it here would wait on
-        // its own in-flight promise forever.
-        const res = await fetch(`${apiBaseUrl}/auth/session`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: turnstileToken }),
-        });
-        if (!res.ok) {
-          invalidate();
-          return null;
+        // Until a session is minted: solve, exchange, and on failure wait for
+        // the visitor's "Try again" before solving again. The first failure
+        // is retried once without asking: a cold Lambda, a 5xx or a network
+        // that is just back (a laptop waking) used to heal on the next poll,
+        // and one more solve is no loop.
+        let silentRetryLeft = true;
+        for (;;) {
+          let reason: string;
+          try {
+            const turnstileToken = await solve(siteKey);
+            // Plain `fetch`, not the generated SDK: the SDK client's request
+            // interceptor awaits `ensureToken`, so calling it here would wait
+            // on its own in-flight promise forever.
+            const res = await fetch(`${apiBaseUrl}/auth/session`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: turnstileToken }),
+            });
+            if (res.ok) {
+              const body = (await res.json()) as SessionResponse;
+              token = body.token;
+              expiresAtMs = Date.now() + body.expires_in * 1000;
+              return token;
+            }
+            // The API mounts `/auth/session` only with its gate on
+            // (`crates/api/src/main.rs`); with the gate off a request needs no
+            // session, so it goes out without one, as before task 0289.
+            if (res.status === 404) {
+              console.warn(
+                'Turnstile session: the API has no /auth/session (HTTP 404), so its gate is off; sending requests without a session.'
+              );
+              apiGateOff = true;
+              return null;
+            }
+            reason = `The server did not accept the check (HTTP ${res.status}).`;
+          } catch (e) {
+            reason = e instanceof Error ? e.message : String(e);
+          }
+          console.warn(`Turnstile session failed: ${reason}`);
+          if (silentRetryLeft) {
+            silentRetryLeft = false;
+            continue;
+          }
+          await showRetryPanel(reason);
         }
-        const body = (await res.json()) as SessionResponse;
-        token = body.token;
-        expiresAtMs = Date.now() + body.expires_in * 1000;
-        return token;
-      } catch {
-        invalidate();
-        return null;
       } finally {
         inFlight = null;
       }
@@ -116,7 +148,9 @@ const TURNSTILE_SRC =
 
 // Watchdog: if Turnstile never fires a callback (script loads but the widget
 // stalls), solveTurnstile would hang forever and block every API call awaiting
-// `ensureToken`. Reject + clean up after this long.
+// `ensureToken`. Reject + clean up after this long — but only while the check
+// runs on its own: once Cloudflare asks the visitor to click, the widget waits
+// for them as long as it takes.
 const TURNSTILE_TIMEOUT_MS = 20_000;
 
 interface TurnstileApi {
@@ -125,8 +159,15 @@ interface TurnstileApi {
     opts: {
       sitekey: string;
       callback: (token: string) => void;
-      'error-callback'?: () => void;
+      'error-callback'?: (errorCode: string) => void;
       'expired-callback'?: () => void;
+      'before-interactive-callback'?: () => void;
+      // 'manual' / 'never': Cloudflare must not restart a challenge on its own
+      // (by default it re-arms a timed-out interactive check and retries a
+      // failed one every 8 s) — an unattended tab then piles up unsolved
+      // challenges. The visitor restarts it from the panel instead.
+      'refresh-timeout'?: 'auto' | 'manual' | 'never';
+      retry?: 'auto' | 'never';
       // 'interaction-only' pairs with the widget's "managed" mode (turnstile.tf):
       // the widget stays hidden and auto-resolves for legitimate traffic, and
       // only paints an interactive challenge when Cloudflare demands one.
@@ -159,11 +200,14 @@ function createTurnstileSolver(): (sitekey: string) => Promise<string> {
       script.async = true;
       script.defer = true;
       script.onload = () => {
-        if (window.turnstile) resolve(window.turnstile);
-        else
+        if (window.turnstile) {
+          resolve(window.turnstile);
+        } else {
+          scriptPromise = null; // allow a later retry
           reject(
             new Error('Turnstile script loaded but window.turnstile is absent')
           );
+        }
       };
       script.onerror = () => {
         scriptPromise = null; // allow a later retry
@@ -183,7 +227,8 @@ function createTurnstileSolver(): (sitekey: string) => Promise<string> {
  * traffic this never paints — Cloudflare resolves it silently and fires
  * `callback`. The container is a centered, top-layer overlay so that, on the
  * rare occasion Cloudflare escalates to an interactive challenge, the checkbox
- * is visible and clickable rather than hidden off-screen.
+ * is visible and clickable rather than hidden off-screen; it then becomes a
+ * card that says why the page is waiting.
  */
 async function solveTurnstile(
   sitekey: string,
@@ -191,8 +236,7 @@ async function solveTurnstile(
 ): Promise<string> {
   const turnstile = await loadScript();
   const container = document.createElement('div');
-  container.style.cssText =
-    'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2147483647;';
+  container.style.cssText = PANEL_POSITION_CSS;
   document.body.appendChild(container);
 
   return new Promise<string>((resolve, reject) => {
@@ -226,18 +270,89 @@ async function solveTurnstile(
       reject(new Error(message));
     };
 
-    timer = setTimeout(() => fail('Turnstile timed out'), TURNSTILE_TIMEOUT_MS);
+    timer = setTimeout(
+      () => fail('The check did not finish within 20 seconds.'),
+      TURNSTILE_TIMEOUT_MS
+    );
+
+    // Cloudflare wants a click: stop the watchdog, turn the overlay into a
+    // card and say why the page waits. One heading: Cloudflare can enter
+    // interactive mode again after a refresh inside the widget, and
+    // `prepend` of the same node only moves it.
+    const heading = document.createElement('p');
+    heading.textContent = "Confirm you're human to keep loading data";
+    heading.style.cssText = PANEL_TEXT_CSS;
+    const askForInteraction = () => {
+      clearTimeout(timer);
+      container.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
+      container.prepend(heading);
+    };
 
     try {
       widgetId = turnstile.render(container, {
         sitekey,
         appearance: 'interaction-only',
+        'refresh-timeout': 'manual',
+        retry: 'never',
         callback: succeed,
-        'error-callback': () => fail('Turnstile challenge failed'),
-        'expired-callback': () => fail('Turnstile token expired before use'),
+        'error-callback': (errorCode) =>
+          fail(`The check failed (Cloudflare Turnstile error ${errorCode}).`),
+        'expired-callback': () => fail('The check expired before it was used.'),
+        'before-interactive-callback': askForInteraction,
       });
     } catch (e) {
       fail(e instanceof Error ? e.message : 'Turnstile render failed');
     }
+  });
+}
+
+// ── Panel ───────────────────────────────────────────────────────────────────
+// One card at the centre of the screen, built with plain DOM like the widget
+// container above: the session lives outside React, and the panel must show
+// on any page while every data request waits for it.
+
+const PANEL_POSITION_CSS =
+  'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2147483647;';
+// The dark palette of the design system: the page around the card may be
+// either theme, and one fixed card keeps the panel readable on both.
+const PANEL_CARD_CSS = `max-width:360px;padding:20px 24px;border-radius:12px;border:1px solid ${colorsDark.stroke.default};background:${colorsDark.surface.grayMain};color:${colorsDark.text.primary};text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;`;
+const PANEL_TEXT_CSS = 'margin:0 0 12px;font-size:14px;line-height:1.5;';
+
+/**
+ * The default `waitForRetry`: a card that says the check failed and why, with
+ * a "Try again" button. Resolves (and removes the card) on the click; nothing
+ * is solved again before it, so an unattended tab starts no new challenges.
+ */
+function showRetryPanel(reason: string): Promise<void> {
+  const panel = document.createElement('div');
+  panel.setAttribute('role', 'alertdialog');
+  panel.setAttribute('aria-labelledby', 'turnstile-retry-title');
+  panel.setAttribute('aria-describedby', 'turnstile-retry-detail');
+  panel.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
+
+  // Named and described for screen readers, with focus on the button, so a
+  // keyboard user is not left on a page whose sections only say "loading".
+  const title = document.createElement('p');
+  title.id = 'turnstile-retry-title';
+  title.textContent = "We couldn't verify your browser";
+  title.style.cssText = PANEL_TEXT_CSS + 'font-weight:600;font-size:16px;';
+  const detail = document.createElement('p');
+  detail.id = 'turnstile-retry-detail';
+  detail.textContent = `This explorer checks that visitors are human before it loads data. ${reason}`;
+  detail.style.cssText = PANEL_TEXT_CSS;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Try again';
+  button.style.cssText = `padding:8px 20px;border:0;border-radius:8px;background:${colorsDark.surface.primaryMain};color:${colorsDark.text.inverted};font:inherit;font-weight:600;cursor:pointer;`;
+
+  panel.append(title, detail, button);
+  document.body.appendChild(panel);
+  button.focus();
+
+  return new Promise<void>((resolve) => {
+    button.addEventListener('click', () => {
+      panel.remove();
+      resolve();
+    });
   });
 }
