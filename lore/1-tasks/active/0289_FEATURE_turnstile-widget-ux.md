@@ -2,7 +2,7 @@
 id: '0289'
 title: 'FEATURE: Turnstile widget UX (clean gate, do not block all reads)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0048']
 related_tasks: ['0277']
 tags: [phase-future, effort-medium, priority-low, frontend, ux, turnstile]
@@ -20,6 +20,15 @@ history:
       acceptance criterion - a failed verification shows a retry state, not a
       crash - is this task's 2026-09-24 section. Its first (WARP passes the
       edge) has no reproduction yet; the issue waits for the reporter's setup.
+  - date: '2026-11-13'
+    status: active
+    who: karolkow
+    note: >
+      Activated after a third report (a testnet user, night of 2026-11-13: a
+      run of unsolved Turnstile re-checks, then every read 401). Scope chosen:
+      keep the gate; a failed or interactive check shows a persistent verify
+      panel instead of the render-error state, retries stop until it is
+      solved, and the API logs each failed verification.
 ---
 
 # Turnstile widget UX
