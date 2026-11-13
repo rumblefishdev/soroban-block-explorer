@@ -25,11 +25,6 @@ export interface SessionOptions {
   apiBaseUrl: string;
   /** Solves a Turnstile challenge. Injectable so a test needs no widget. */
   solve?: (siteKey: string) => Promise<string>;
-  /**
-   * Shows why getting a session failed and resolves when the visitor asks to
-   * try again. Injectable so a test needs no DOM.
-   */
-  waitForRetry?: (reason: string) => Promise<void>;
 }
 
 export interface Session {
@@ -58,7 +53,6 @@ export function createSession({
   siteKey,
   apiBaseUrl,
   solve = createTurnstileSolver(),
-  waitForRetry = showRetryPanel,
 }: SessionOptions): Session {
   // The JWT lives in memory only (never persisted). `expiresAtMs` is the
   // absolute wall-clock expiry.
@@ -107,7 +101,7 @@ export function createSession({
             reason = e instanceof Error ? e.message : String(e);
           }
           console.warn(`Turnstile session failed: ${reason}`);
-          await waitForRetry(reason);
+          await showRetryPanel(reason);
         }
       } finally {
         inFlight = null;

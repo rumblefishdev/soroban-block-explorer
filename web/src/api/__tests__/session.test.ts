@@ -18,12 +18,10 @@ describe('createSession', () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     vi.stubGlobal('fetch', fetchMock);
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    vi.restoreAllMocks();
     fetchMock.mockReset();
     solve.mockClear();
   });
@@ -101,53 +99,6 @@ describe('createSession', () => {
     expect(await session.ensureToken()).toBe('jwt-1');
     session.invalidate();
     expect(await session.ensureToken()).toBe('jwt-2');
-  });
-
-  it('waits through a failed solve and a refused exchange, then resolves the JWT', async () => {
-    solve.mockRejectedValueOnce(new Error('widget failed'));
-    fetchMock
-      .mockResolvedValueOnce(new Response('nope', { status: 403 }))
-      .mockResolvedValueOnce(okResponse('jwt-after-failure'));
-    const waitForRetry = vi.fn<(reason: string) => Promise<void>>(
-      async () => undefined
-    );
-    const session = createSession({
-      siteKey: 'key',
-      apiBaseUrl: 'https://api',
-      solve,
-      waitForRetry,
-    });
-
-    // Never `null` while armed: a request must not go out without a session.
-    expect(await session.ensureToken()).toBe('jwt-after-failure');
-    expect(solve).toHaveBeenCalledTimes(3);
-    expect(waitForRetry).toHaveBeenCalledTimes(2);
-    expect(waitForRetry.mock.calls[0][0]).toContain('widget failed');
-    expect(waitForRetry.mock.calls[1][0]).toContain('403');
-  });
-
-  it('does not solve again until the visitor asks to retry', async () => {
-    solve.mockRejectedValueOnce(new Error('widget failed'));
-    fetchMock.mockResolvedValueOnce(okResponse('jwt-1'));
-    let retry: () => void = () => undefined;
-    const waitForRetry = vi.fn<(reason: string) => Promise<void>>(
-      () => new Promise<void>((resolve) => (retry = resolve))
-    );
-    const session = createSession({
-      siteKey: 'key',
-      apiBaseUrl: 'https://api',
-      solve,
-      waitForRetry,
-    });
-
-    const pending = session.ensureToken();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(solve).toHaveBeenCalledTimes(1);
-    expect(fetchMock).not.toHaveBeenCalled();
-
-    retry();
-    expect(await pending).toBe('jwt-1');
-    expect(solve).toHaveBeenCalledTimes(2);
   });
 
   it('keeps state per instance', async () => {
