@@ -125,7 +125,7 @@ challenge token, the SPA posts it to `/auth/session`, and the backend verifies i
 Cloudflare's siteverify endpoint before minting a free-tier session JWT
 (`crates/api/src/auth/`). The token and the JWT are different things — the widget never
 issues the session. Until a session exists every API request waits for it; none goes out
-without one. When Cloudflare asks for a click, the widget stays in a centre card until the
+without one, unless the API answers the mint with 404 (its gate is off). When Cloudflare asks for a click, the widget stays in a centre card until the
 visitor solves it; when the check fails, a "Try again" panel names the reason, and nothing
 is solved again until it is clicked (`web/src/api/session.ts`, task 0289). This is also
 not Cloudflare fronting the frontend's own domain, which sits on Route 53 with no edge

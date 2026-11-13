@@ -63,6 +63,9 @@ export function createSession({
   // Single-flight: concurrent callers (e.g. a burst of queries on first paint)
   // share one Turnstile solve + one `/auth/session` round-trip.
   let inFlight: Promise<string | null> | null = null;
+  // Set when the API answers the mint with 404 (its gate is off): later
+  // requests go out without a session instead of solving again.
+  let apiGateOff = false;
 
   const invalidate = () => {
     token = null;
@@ -70,7 +73,7 @@ export function createSession({
   };
 
   const ensureToken = async (): Promise<string | null> => {
-    if (!siteKey) return null;
+    if (!siteKey || apiGateOff) return null;
     if (token !== null && Date.now() < expiresAtMs - EXPIRY_SKEW_MS) {
       return token;
     }
@@ -101,7 +104,13 @@ export function createSession({
             // The API mounts `/auth/session` only with its gate on
             // (`crates/api/src/main.rs`); with the gate off a request needs no
             // session, so it goes out without one, as before task 0289.
-            if (res.status === 404) return null;
+            if (res.status === 404) {
+              console.warn(
+                'Turnstile session: the API has no /auth/session (HTTP 404), so its gate is off; sending requests without a session.'
+              );
+              apiGateOff = true;
+              return null;
+            }
             reason = `The server did not accept the check (HTTP ${res.status}).`;
           } catch (e) {
             reason = e instanceof Error ? e.message : String(e);

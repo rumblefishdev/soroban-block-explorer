@@ -18,10 +18,12 @@ describe('createSession', () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     fetchMock.mockReset();
     solve.mockClear();
   });
@@ -113,6 +115,11 @@ describe('createSession', () => {
     // a request needs no session, so it goes out without one.
     expect(await session.ensureToken()).toBeNull();
     expect(document.body.textContent).not.toContain('Try again');
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('404'));
+
+    // Remembered for the session: later requests do not solve again.
+    expect(await session.ensureToken()).toBeNull();
+    expect(solve).toHaveBeenCalledTimes(1);
   });
 
   it('keeps state per instance', async () => {
