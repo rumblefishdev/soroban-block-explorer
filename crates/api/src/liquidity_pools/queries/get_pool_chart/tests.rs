@@ -25,10 +25,9 @@ fn add_state(
     price_bucket: DateTime<Utc>,
     samples: u64,
 ) {
-    inputs.states.insert(ms(bucket), reserves);
     inputs
-        .state_price_buckets
-        .insert(ms(bucket), secs(price_bucket));
+        .states
+        .insert(ms(bucket), vec![(secs(price_bucket), reserves)]);
     inputs.samples.insert(ms(bucket), samples);
 }
 
@@ -79,6 +78,55 @@ fn a_week_prices_at_the_day_of_its_last_change() {
 
     assert_eq!(points[0].bucket, monday);
     assert_eq!(tvls(&points), vec![Some("5.00".into())]);
+}
+
+#[test]
+fn a_week_whose_last_day_does_not_price_falls_back_to_an_earlier_day() {
+    // The week of Monday 2026-08-17 changed on Monday and on Thursday. The
+    // only close is Monday's: 72 h before Thursday, past the cap. The week
+    // shows Monday's state, the newest one that prices.
+    let monday = at(2026, 8, 17, 0);
+    let thursday = at(2026, 8, 20, 0);
+    let mut inputs = ChartInputs {
+        prices: vec![vec![(secs(monday), 3.0)]],
+        ..ChartInputs::default()
+    };
+    inputs.states.insert(
+        ms(monday),
+        vec![
+            (secs(thursday), vec![Some(9.0)]),
+            (secs(monday), vec![Some(5.0)]),
+        ],
+    );
+    inputs.samples.insert(ms(monday), 6);
+
+    let points = assemble_chart(&inputs, 30);
+
+    assert_eq!(tvls(&points), vec![Some("15.00".into())]);
+    assert_eq!(points[0].samples_in_bucket, 6);
+}
+
+#[test]
+fn the_newest_day_that_prices_wins_in_any_order() {
+    // Both days price; the database lists Monday before Tuesday. The week
+    // shows Tuesday's state at Tuesday's close.
+    let monday = at(2026, 8, 17, 0);
+    let tuesday = at(2026, 8, 18, 0);
+    let mut inputs = ChartInputs {
+        prices: vec![vec![(secs(monday), 3.0), (secs(tuesday), 4.0)]],
+        ..ChartInputs::default()
+    };
+    inputs.states.insert(
+        ms(monday),
+        vec![
+            (secs(monday), vec![Some(5.0)]),
+            (secs(tuesday), vec![Some(9.0)]),
+        ],
+    );
+
+    let points = assemble_chart(&inputs, 30);
+
+    assert_eq!(tvls(&points), vec![Some("36.00".into())]);
 }
 
 #[test]
