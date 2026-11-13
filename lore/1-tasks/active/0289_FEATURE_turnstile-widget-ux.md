@@ -112,6 +112,9 @@ Fresh review of the goal alone (2026-11-13):
 | 9   | A 404 from the mint means the API gate is off: resolve `null`, the request goes out bare as before                    | code review (standards) | session: 404 → null                     |
 | 10  | Panel colours come from `colorsDark`; the interactive heading is added once                                           | code review             | solver: one heading                     |
 
+| 11 | The first failure of a mint cycle is retried once without the panel; the panel follows the second | devil's advocate (1) | solver: silent retry, two stalls |
+| 12 | The retry panel is labelled (`aria-labelledby`/`-describedby`) and its button takes focus | devil's advocate (3) | solver: labels and focus |
+
 The 2026-09-24 `reset()` error has no source in our code (`git log -S "reset("`
 on `session.ts` is empty): Turnstile's own retry or refresh called it after
 `remove()`. `retry: 'never'` and `refresh-timeout: 'manual'` should stop it;
@@ -129,3 +132,8 @@ not reproduced, so not proven.
   watchdog stops at interaction and is not re-armed. No measured case.
 - `session.ts` now holds the session, the widget and the panel: split in a
   `[structure only]` PR; `session-widget.test.ts` then follows its source file.
+- One passed check shared by all tabs and reloads (an HttpOnly cookie set by
+  the API, per OWASP): proposed to the owner; the reporter may be opening new
+  tabs, which this PR does not change.
+- Before mainnet: leave one testnet tab open overnight; nothing tested an
+  unattended interactive challenge for hours.
