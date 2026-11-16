@@ -73,7 +73,9 @@ only the routing. The portal's backend is on a host of its own
 4. Check: `401` without the password; with it `200` and the uploaded page's
    body (a missing file also answers `200`, with the explorer's page);
    `/api/dashboard` → `301` `/api/prices-api/dashboard`; `/api/anything` →
-   `302` `/api/`; the Prices portal as before.
+   `302` `/api/`; the Prices portal as before. `curl --path-as-is` on
+   `/api/prices-api/../x402-facilitator/index.html` (and with `%2e%2e`) must
+   not return the x402 page without the password: compare the body.
 
 ## Acceptance Criteria
 
@@ -143,7 +145,6 @@ only the routing. The portal's backend is on a host of its own
 - Follow-up, after this task's deploy: drop `api` from the pattern in
   `api-path-redirect.ts` (decision 10).
 - A browser that opened `/api/x402-facilitator` before the deploy keeps the
-  old `301` to the Prices portal; no change here undoes it. Test in a fresh
-  profile.
+  old `301` to the Prices portal: test in a fresh profile.
 - Turning the gate off at launch: `enableX402PortalBasicAuth: false` and a
   Delivery deploy.
