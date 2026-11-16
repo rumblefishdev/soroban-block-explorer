@@ -31,8 +31,9 @@ describe('api-path-redirect', () => {
     ['/pricing-api', '/api/prices-api/'],
     ['/pricing-api/', '/api/prices-api/'],
     ['/pricing-api/docs', '/api/prices-api/docs'],
-    // The portal's home until task 0608. `/api` and `/api/` are the hub and
-    // never reach this function.
+    // The portal's home until task 0608. Since task 0670 `/api/*` has its own
+    // function; this one still answers it rightly for the minutes of a deploy
+    // in which the distribution has not moved the behavior yet.
     ['/api/dashboard', '/api/prices-api/dashboard'],
     ['/api/assets/index-abc.js', '/api/prices-api/assets/index-abc.js'],
   ])('%s → 301 %s', (uri, location) => {

@@ -9,8 +9,8 @@ import { createApp } from '../lib/app.js';
 import type { EnvironmentConfig } from '../lib/types.js';
 
 // The behaviors under `/api/` on the SPA distribution (task 0670): the Prices
-// portal, the x402 portal behind its own Basic Auth key, and the hub, all
-// above `/api/*`.
+// portal, the x402 portal behind its own Basic Auth key, the hub, and the
+// redirect for every other path.
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const envs = {
@@ -108,6 +108,22 @@ describe('the /api/ behaviors in production', () => {
     expect(portal.stores).toHaveLength(0);
     expect(portal.code).not.toContain('kvs');
     expect(portal.code).toContain('/api/prices-api/index.html');
+  });
+
+  it('sends the rest of /api/* through the hub redirect', () => {
+    expect(functionOf('/api/*').name).toBe(
+      'production-soroban-explorer-api-hub-redirect'
+    );
+    for (const pattern of [
+      '/prices-api',
+      '/prices-api/*',
+      '/pricing-api',
+      '/pricing-api/*',
+    ]) {
+      expect(functionOf(pattern).name, pattern).toBe(
+        'production-soroban-explorer-api-path-redirect'
+      );
+    }
   });
 
   it('carries no credentials in the template', () => {

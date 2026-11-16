@@ -26,7 +26,8 @@ history:
 stellar-x402 from the API SPA bucket, beside the Prices portal, behind HTTP
 Basic Auth with a password of its own while it is built. The other `/api/*`
 paths stop reading as Prices ones: only the routes the Prices portal had at
-`/api/` still answer `301` to `/api/prices-api/…`, the rest go to the hub.
+`/api/` still answer `301` to `/api/prices-api/…`, the rest go to the hub
+with a `302`.
 
 ## Stan teraz
 
@@ -58,7 +59,7 @@ only the routing. The portal's backend is on a host of its own
    `auth-token-x402` of the existing KeyValueStore; behaviors
    `/api/x402-facilitator` and `/api/x402-facilitator/*` above `/api/*`.
 3. `/api/*`: the Prices portal's old routes → `301` to the same path under
-   `/api/prices-api`, query kept; anything else → `301` to `/api/`.
+   `/api/prices-api`, query kept; anything else → `302` to `/api/`.
 4. `enableX402PortalBasicAuth`: `true` in production, `false` on testnet.
 
 ### Deploy order (production, manual)
@@ -69,9 +70,10 @@ only the routing. The portal's backend is on a host of its own
 2. `make deploy-production-delivery`.
 3. Upload `index.html` to
    `s3://production-soroban-explorer-api-spa/api/x402-facilitator/index.html`.
-4. Check: `401` without the password, `200` with it, `/api/dashboard` →
-   `/api/prices-api/dashboard`, `/api/anything` → `/api/`, the Prices portal as
-   before.
+4. Check: `401` without the password; with it `200` and the uploaded page's
+   body (a missing file also answers `200`, with the explorer's page);
+   `/api/dashboard` → `301` `/api/prices-api/dashboard`; `/api/anything` →
+   `302` `/api/`; the Prices portal as before.
 
 ## Acceptance Criteria
 
@@ -82,7 +84,7 @@ only the routing. The portal's backend is on a host of its own
       (unit test; the key name is its own, not `auth-token`)
 - [x] `/api/docs`, `/api/dashboard`, `/api/login`, `/api/quick-start`,
       `/api/privacy-policy`, `/api/openapi.json` → `301` to the same path
-      under `/api/prices-api`, query kept; any other `/api/*` → `301` `/api/`
+      under `/api/prices-api`, query kept; any other `/api/*` → `302` `/api/`
       (unit tests; on production after the deploy)
 - [x] The Prices portal's function source is unchanged: byte-identical to
       `develop`'s for every combination of gate and host move
@@ -108,7 +110,7 @@ only the routing. The portal's backend is on a host of its own
 3. **`/api/*` got a function of its own, `api-hub-redirect.ts`.** It needs two
    host moves, the Prices portal's for the old routes and the main SPA's for
    the hub, which differ while `pricesPortalOnLegacyHost` is on.
-   `api-path-redirect.ts` keeps `/prices-api…` and `/pricing-api…` only.
+   `api-path-redirect.ts` serves `/prices-api…` and `/pricing-api…` only.
 4. **The old-route list is the six the portal's router had before 0608**,
    checked against `web/portal/src/app/app.tsx` and `public/` of
    stellar-prices-api at the commit before its move (`16dcff9b~1`) and at its
@@ -123,9 +125,25 @@ only the routing. The portal's backend is on a host of its own
 8. **`/api/assets/*` now goes to the hub.** Before, it went to
    `/api/prices-api/assets/*`; those hashed files are from before 0608 and
    are gone.
+9. **Unknown paths answer `302`, not `301`** (review of PR #734). A browser
+   keeps a `301` for good, and a path that is unknown today can be the next
+   portal's: `/api/x402-facilitator` answered `301` to the Prices portal until
+   this task, and the browsers that opened it then still go there. The six
+   old routes keep `301`: they will never mean anything else.
+10. **`api-path-redirect.ts` still strips `/api`** (review of PR #734),
+    though no behavior under `/api/` points at it after the deploy. The
+    function is updated in place, minutes before the distribution moves
+    `/api/*` to `api-hub-redirect.ts`; without `api` in its pattern,
+    `/api/docs` would answer `301` to `/api/prices-api/api/docs` in that
+    window. Dropping it is a deploy of its own.
 
 ## Notes
 
 - Hub tile for the x402 portal: a separate PR, when the portal opens.
+- Follow-up, after this task's deploy: drop `api` from the pattern in
+  `api-path-redirect.ts` (decision 10).
+- A browser that opened `/api/x402-facilitator` before the deploy keeps the
+  old `301` to the Prices portal; no change here undoes it. Test in a fresh
+  profile.
 - Turning the gate off at launch: `enableX402PortalBasicAuth: false` and a
   Delivery deploy.

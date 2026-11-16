@@ -7,6 +7,7 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
+import { apiHubRedirectFunctionCode } from '../cloudfront-functions/api-hub-redirect.js';
 import { apiPathRedirectFunctionCode } from '../cloudfront-functions/api-path-redirect.js';
 import { apiSpaRoutingFunctionCode } from '../cloudfront-functions/api-spa-routing.js';
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
@@ -43,9 +44,12 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *   key portal of stellar-x402, from the same bucket and the same function
  *   source (task 0670). stellar-x402 uploads its files; this stack only routes
  * - `/api` + `/api/`: the portal hub, a route of the main SPA (task 0660)
- * - every other `/api/*`, `/prices-api`+`/prices-api/*` and
- *   `/pricing-api`+`/pricing-api/*`: the Prices portal's old homes, now only a
- *   `301` to the same path under `/api/prices-api` (tasks 0608, 0660)
+ * - `/prices-api`+`/prices-api/*` and `/pricing-api`+`/pricing-api/*`: the
+ *   Prices portal's old homes, now only a `301` to the same path under
+ *   `/api/prices-api` (tasks 0608, 0660)
+ * - every other `/api/*`: a `301` to the same path under `/api/prices-api` for
+ *   the routes the Prices portal had at `/api/` (until task 0608), and a `302`
+ *   to the hub at `/api/` for the rest (task 0670)
  * - CloudFront distribution with SPA routing fallback
  * - `legacyDomainName`, the SPA's old host: every request answers `301` to the
  *   same path on `domainName` (task 0664), from whichever function the
@@ -335,8 +339,8 @@ export class DeliveryStack extends cdk.Stack {
       }
     );
 
-    // The Prices portal's old homes (tasks 0608, 0660): every request answers
-    // `301` to the same path under `/api/prices-api`.
+    // The Prices portal's old homes outside `/api/` (tasks 0608, 0660): every
+    // request answers `301` to the same path under `/api/prices-api`.
     const apiPathRedirectFunction = new cloudfront.Function(
       this,
       'ApiPathRedirectFunction',
@@ -345,6 +349,22 @@ export class DeliveryStack extends cdk.Stack {
         runtime: cloudfront.FunctionRuntime.JS_2_0,
         code: cloudfront.FunctionCode.fromInline(
           apiPathRedirectFunctionCode(portalMove)
+        ),
+      }
+    );
+
+    // Every `/api/*` path no portal and not the hub takes (task 0670): the
+    // Prices portal's routes from when it lived at `/api/` answer `301` to the
+    // same path under `/api/prices-api`, the rest `302` to the hub: a path that
+    // is unknown today can be the next portal's, and a browser keeps a `301`.
+    const apiHubRedirectFunction = new cloudfront.Function(
+      this,
+      'ApiHubRedirectFunction',
+      {
+        functionName: `${config.envName}-soroban-explorer-api-hub-redirect`,
+        runtime: cloudfront.FunctionRuntime.JS_2_0,
+        code: cloudfront.FunctionCode.fromInline(
+          apiHubRedirectFunctionCode(portalMove, legacyMove)
         ),
       }
     );
@@ -516,10 +536,10 @@ export class DeliveryStack extends cdk.Stack {
         // The portal hub (task 0660), a route of the main SPA. Bare `/api`
         // already falls to the default behavior; `/api/` would match `/api/*`.
         '/api/': { ...sharedBehaviorProps, cachePolicy: shortTtlCachePolicy },
-        // The old homes (tasks 0608, 0660): the function answers `301` before
-        // the origin is reached; the origin is there because a behavior needs
-        // one.
-        '/api/*': apiSpaBehavior(apiPathRedirectFunction),
+        // The redirects (tasks 0608, 0660, 0670): the function answers `301`
+        // or `302` before the origin is reached; the origin is there because a
+        // behavior needs one.
+        '/api/*': apiSpaBehavior(apiHubRedirectFunction),
         '/prices-api': apiSpaBehavior(apiPathRedirectFunction),
         '/prices-api/*': apiSpaBehavior(apiPathRedirectFunction),
         '/pricing-api': apiSpaBehavior(apiPathRedirectFunction),

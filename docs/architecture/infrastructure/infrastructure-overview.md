@@ -427,9 +427,16 @@ redeploying `ApiGateway` as soon as the run ends.
   function (`api-path-redirect.ts`) answers every request with a `301` to the
   same path under `/api/prices-api`, query string kept, so links shared
   before a move still land on the portal in one hop: `/prices-api` +
-  `/prices-api/*` (task 0608 until task 0660), `/pricing-api` +
-  `/pricing-api/*` (a few hours on 2026-10-02), and every other `/api/*`
-  path (the portal's home until task 0608).
+  `/prices-api/*` (task 0608 until task 0660) and `/pricing-api` +
+  `/pricing-api/*` (a few hours on 2026-10-02).
+- Every other `/api/*` path has its own function (`api-hub-redirect.ts`, task
+  0670). The routes the Prices portal had while it lived at `/api/` (until
+  task 0608: `docs`, `dashboard`, `login`, `quick-start`, `privacy-policy`,
+  `openapi.json`) answer `301` to the same path under `/api/prices-api`, query
+  string kept; anything else answers `302` to the hub at `/api/` (not a
+  `301`, which a browser keeps: an unknown path can be the next portal's).
+  `api-path-redirect.ts` still strips `/api` too, for the minutes of a deploy
+  in which the distribution has not moved `/api/*` to the new function.
 - since task 0576, writes standard (access) logs for every request, explorer
   and portal alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
   referrer, user agent and viewer IP, never cookies. Objects expire after 30

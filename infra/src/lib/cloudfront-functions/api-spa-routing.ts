@@ -28,7 +28,7 @@ export interface ApiSpaRouting {
  * the API SPA bucket under `/api/`: `<prefix>` and `<prefix>/*`. One source,
  * one function per portal: the Stellar Prices portal at `/api/prices-api`
  * (task 0519; at `/api` until task 0608 and at `/prices-api` until task 0660,
- * both now only redirect — `api-path-redirect.ts`) and
+ * both now only redirect — `api-path-redirect.ts`, `api-hub-redirect.ts`) and
  * the x402 facilitator's portal at `/api/x402-facilitator` (task 0670).
  * Combines the concerns that must live in one viewer-request function, since
  * CloudFront allows only one per behavior:

@@ -283,10 +283,11 @@ Navigation rules:
   footer and the hub link it with a plain anchor (`PRICES_API_URL`), never through
   the router. The x402 facilitator's API key portal, another separate SPA, is at
   `/api/x402-facilitator/*` (task 0670); the hub does not list it yet
-- `/prices-api`, `/prices-api/*`, `/pricing-api`, `/pricing-api/*` and every other
-  `/api/*` path are not explorer routes either: the Prices portal's old homes, which
-  CloudFront answers with a `301` to the same path under `/api/prices-api` (tasks
-  0608, 0660)
+- `/prices-api`, `/prices-api/*`, `/pricing-api` and `/pricing-api/*` are not
+  explorer routes either: the Prices portal's old homes, which CloudFront answers
+  with a `301` to the same path under `/api/prices-api` (tasks 0608, 0660). So do
+  the portal's routes from when it lived at `/api/` (`/api/dashboard` and the
+  like); every other `/api/*` path answers `302` to the hub at `/api/` (task 0670)
 
 ## 6. Routes and Pages
 
