@@ -196,6 +196,20 @@ export interface EnvironmentConfig {
    */
   readonly enableApiSpaBasicAuth: boolean;
 
+  /**
+   * Enable CloudFront Function basic auth on `/api/x402-facilitator` +
+   * `/api/x402-facilitator/*` only (task 0670): the API key portal of
+   * stellar-x402, a third SPA, served from `apiSpaBucket` under the
+   * `api/x402-facilitator/` prefix. On while the portal is built and tested;
+   * off when it opens.
+   *
+   * Independent of `enableBasicAuth` and `enableApiSpaBasicAuth`: same
+   * KeyValueStore, but a key of its own, `auth-token-x402`, so this password
+   * is not the main site's or the Prices portal's. Closed by default: until
+   * the key is written (see `delivery-stack.ts`), the page answers `503`.
+   */
+  readonly enableX402PortalBasicAuth: boolean;
+
   // Cloudflare edge migration (task 0277 / ADR 0048) — origin lockdown.
   // All default false until the Cloudflare zone + certs/secrets exist;
   // enabling them does NOT move DNS, it provisions the AWS-side locks

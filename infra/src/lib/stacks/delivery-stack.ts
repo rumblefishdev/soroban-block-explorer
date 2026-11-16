@@ -39,10 +39,13 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *   `errorResponses` below can't do this for `/api/prices-api/*` since
  *   custom error pages are resolved through the _default_ behavior's origin,
  *   not the originating one
+ * - `/api/x402-facilitator`+`/api/x402-facilitator/*`: a third SPA, the API
+ *   key portal of stellar-x402, from the same bucket and the same function
+ *   source (task 0670). stellar-x402 uploads its files; this stack only routes
  * - `/api` + `/api/`: the portal hub, a route of the main SPA (task 0660)
  * - every other `/api/*`, `/prices-api`+`/prices-api/*` and
- *   `/pricing-api`+`/pricing-api/*`: the portal's old homes, now only a `301`
- *   to the same path under `/api/prices-api` (tasks 0608, 0660)
+ *   `/pricing-api`+`/pricing-api/*`: the Prices portal's old homes, now only a
+ *   `301` to the same path under `/api/prices-api` (tasks 0608, 0660)
  * - CloudFront distribution with SPA routing fallback
  * - `legacyDomainName`, the SPA's old host: every request answers `301` to the
  *   same path on `domainName` (task 0664), from whichever function the
@@ -50,14 +53,17 @@ export interface DeliveryStackProps extends cdk.StackProps {
  * - S3 bucket for the distribution's standard logs, kept 30 days (task 0576)
  * - Route 53 DNS records for frontend
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
- *   (main behaviors) and `config.enableApiSpaBasicAuth`
- *   (`/api/prices-api/*` only)
+ *   (main behaviors), `config.enableApiSpaBasicAuth`
+ *   (`/api/prices-api/*` only) and `config.enableX402PortalBasicAuth`
+ *   (`/api/x402-facilitator/*` only, with credentials of its own)
  *
  * This distribution has **no AWS WAF and no CDN-level request filtering**, and
  * that is deliberate (ADR 0048, task 0302). The only viewer-side gate this stack
  * can still attach is the CloudFront Function below, and only when
  * `enableOriginSecretLock` or `enableBasicAuth` is set — both are `false` in
- * production, where the main behaviors' slot holds the old host's redirect. It used to carry a CLOUDFRONT-scoped AWS WAF WebACL from a
+ * production, where the main behaviors' slot holds the old host's redirect. (The
+ * x402 portal's Basic Auth, `enableX402PortalBasicAuth`, is on in production,
+ * but it gates `/api/x402-facilitator/*` only.) It used to carry a CLOUDFRONT-scoped AWS WAF WebACL from a
  * companion us-east-1 stack, wired in via crossRegionReferences; both were
  * removed. Cloudflare fronts the API hostname, not this one, and the
  * distribution serves static edge-cached files from a private S3 origin, so the
@@ -226,9 +232,11 @@ export class DeliveryStack extends cdk.Stack {
 
     // Always provisioned, even with both basic-auth flags off: its credentials
     // are written out-of-band (never in CDK), so letting a flag flip delete the
-    // store would make re-arming either gate a manual re-seed. Shared by the
-    // main site (`enableBasicAuth`) and the `/api/prices-api/*` SPA
-    // (`enableApiSpaBasicAuth`), which are gated independently.
+    // store would make re-arming a gate a manual re-seed. Shared by the main
+    // site (`enableBasicAuth`), the `/api/prices-api/*` SPA
+    // (`enableApiSpaBasicAuth`) and the `/api/x402-facilitator/*` SPA
+    // (`enableX402PortalBasicAuth`), which are gated independently. The first
+    // two read the key `auth-token`, the third `auth-token-x402`.
     const basicAuthKvs = new cloudfront.KeyValueStore(this, 'BasicAuthKvs', {
       keyValueStoreName: `${config.envName}-soroban-explorer-basic-auth`,
     });
@@ -266,13 +274,69 @@ export class DeliveryStack extends cdk.Stack {
         runtime: cloudfront.FunctionRuntime.JS_2_0,
         ...(apiSpaKvs && { keyValueStore: apiSpaKvs }),
         code: cloudfront.FunctionCode.fromInline(
-          apiSpaRoutingFunctionCode(apiSpaKvs?.keyValueStoreId, portalMove)
+          apiSpaRoutingFunctionCode({
+            prefix: '/api/prices-api',
+            ...(apiSpaKvs && {
+              auth: {
+                kvsId: apiSpaKvs.keyValueStoreId,
+                key: 'auth-token',
+                realm: 'API',
+              },
+            }),
+            move: portalMove,
+          })
         ),
       }
     );
 
-    // The portal's old homes (tasks 0608, 0660): every request answers `301`
-    // to the same path under `/api/prices-api`.
+    // `/api/x402-facilitator` + `/api/x402-facilitator/*` (task 0670): the
+    // same routing for the API key portal of stellar-x402. Its page is on
+    // `domainName` only, so the old host answers `301` (`legacyMove`), whatever
+    // the Prices portal does.
+    //
+    // The gate reads a key of its own, so its password is not the main site's
+    // or the Prices portal's. Write it BEFORE the deploy that creates these
+    // behaviors, and the page is never served without it (until the key
+    // exists, the answer is `503`):
+    //
+    //   KVS_ARN=$(aws cloudfront list-key-value-stores --query "KeyValueStoreList.Items[?Name=='production-soroban-explorer-basic-auth'].ARN" --output text)
+    //   ETAG=$(aws cloudfront-keyvaluestore describe-key-value-store --kvs-arn "$KVS_ARN" --query "ETag" --output text)
+    //   read -rs PW
+    //   TOKEN=$(printf '%s' "<user>:$PW" | base64 | tr -d '\n')
+    //   aws cloudfront-keyvaluestore put-key --kvs-arn "$KVS_ARN" \
+    //     --key auth-token-x402 --value "$TOKEN" --if-match "$ETAG"
+    //
+    // `read -rs` keeps the password out of the shell's history, `printf '%s'`
+    // takes a `%` in it as it is, and `tr` joins the lines GNU `base64` breaks
+    // a long value into.
+    const x402PortalKvs = config.enableX402PortalBasicAuth
+      ? basicAuthKvs
+      : undefined;
+    const x402PortalFunction = new cloudfront.Function(
+      this,
+      'X402PortalRoutingFunction',
+      {
+        functionName: `${config.envName}-soroban-explorer-x402-portal-routing`,
+        runtime: cloudfront.FunctionRuntime.JS_2_0,
+        ...(x402PortalKvs && { keyValueStore: x402PortalKvs }),
+        code: cloudfront.FunctionCode.fromInline(
+          apiSpaRoutingFunctionCode({
+            prefix: '/api/x402-facilitator',
+            ...(x402PortalKvs && {
+              auth: {
+                kvsId: x402PortalKvs.keyValueStoreId,
+                key: 'auth-token-x402',
+                realm: 'x402 facilitator',
+              },
+            }),
+            move: legacyMove,
+          })
+        ),
+      }
+    );
+
+    // The Prices portal's old homes (tasks 0608, 0660): every request answers
+    // `301` to the same path under `/api/prices-api`.
     const apiPathRedirectFunction = new cloudfront.Function(
       this,
       'ApiPathRedirectFunction',
@@ -444,6 +508,11 @@ export class DeliveryStack extends cdk.Stack {
         // Behaviors match in this order: both stay above `/api/*`.
         '/api/prices-api': apiSpaBehavior(apiSpaFunction),
         '/api/prices-api/*': apiSpaBehavior(apiSpaFunction),
+        // The x402 portal (task 0670): the same bucket, under the
+        // `api/x402-facilitator/` prefix, and the same pair of behaviors, above
+        // `/api/*` too.
+        '/api/x402-facilitator': apiSpaBehavior(x402PortalFunction),
+        '/api/x402-facilitator/*': apiSpaBehavior(x402PortalFunction),
         // The portal hub (task 0660), a route of the main SPA. Bare `/api`
         // already falls to the default behavior; `/api/` would match `/api/*`.
         '/api/': { ...sharedBehaviorProps, cachePolicy: shortTtlCachePolicy },

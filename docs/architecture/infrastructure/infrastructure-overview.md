@@ -404,15 +404,26 @@ redeploying `ApiGateway` as soon as the run ends.
   _default_ behavior's origin, not the originating one. The same function
   also does the basic-auth check when `enableApiSpaBasicAuth` is on,
   independent of the main site's `enableBasicAuth`/`enableOriginSecretLock`
-  — sharing the KeyValueStore (not the Function itself) so there's one
-  credential to manage, not two. The KVS is provisioned even with both
+  — sharing the KeyValueStore (not the Function itself) and its key
+  `auth-token`, so those two gates have one credential, not two (the x402
+  portal's gate, below, has its own). The KVS is provisioned even with both
   flags off, so turning a gate off keeps its credentials for re-arming.
   Production runs with `enableApiSpaBasicAuth=false` (the portal is
   public; its backend lives on a separate host).
+- since task 0670, a third SPA, the API key portal of stellar-x402, under
+  `/api/x402-facilitator` + `/api/x402-facilitator/*`: the same bucket (key
+  prefix `api/x402-facilitator/`), the same pair of behaviors above `/api/*`
+  and a second function from the same source (`api-spa-routing.ts` takes the
+  prefix). stellar-x402 uploads the files with `aws s3 sync`; this stack only
+  routes. `enableX402PortalBasicAuth` puts it behind Basic Auth with a key of
+  its own in the shared KeyValueStore, `auth-token-x402`, so its password is
+  not the main site's or the Prices portal's; until the key is written the
+  answer is `503`. Production runs with it `true` while the portal is built
+  and tested, testnet with `false`.
 - `/api` and `/api/` are the portal hub, a route of the main SPA (task 0660):
   bare `/api` falls to the default behavior, and `/api/` has an exact-match
   behavior with the main behaviors' settings, since `/api/*` would take it.
-- The portal's old homes keep behaviors on the portal origin, but their
+- The Prices portal's old homes keep behaviors on the portal origin, but their
   function (`api-path-redirect.ts`) answers every request with a `301` to the
   same path under `/api/prices-api`, query string kept, so links shared
   before a move still land on the portal in one hop: `/prices-api` +

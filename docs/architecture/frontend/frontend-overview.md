@@ -281,9 +281,10 @@ Navigation rules:
   `/api`. Everything below `/api/` belongs to a portal: CloudFront serves the
   Stellar Prices API portal, a separate SPA, at `/api/prices-api/*`. The navbar, the
   footer and the hub link it with a plain anchor (`PRICES_API_URL`), never through
-  the router
+  the router. The x402 facilitator's API key portal, another separate SPA, is at
+  `/api/x402-facilitator/*` (task 0670); the hub does not list it yet
 - `/prices-api`, `/prices-api/*`, `/pricing-api`, `/pricing-api/*` and every other
-  `/api/*` path are not explorer routes either: the portal's old homes, which
+  `/api/*` path are not explorer routes either: the Prices portal's old homes, which
   CloudFront answers with a `301` to the same path under `/api/prices-api` (tasks
   0608, 0660)
 
