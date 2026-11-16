@@ -1,7 +1,9 @@
 /**
  * CloudFront Function source for HTTP Basic Auth gating, backed by a
- * CloudFront KeyValueStore. The KVS holds a single key `auth-token`
- * containing the pre-encoded `base64(user:password)` value. Credentials
+ * CloudFront KeyValueStore. The KVS holds one key per gate, each a
+ * pre-encoded `base64(user:password)` value: `auth-token` for the main site
+ * and the Prices portal, `auth-token-x402` for the x402 portal (task 0670), so
+ * each password changes without the other. Credentials
  * are populated out-of-band (`aws cloudfront-keyvaluestore put-key`)
  * and never live in this code or in the CDK template.
  *
@@ -18,13 +20,17 @@
  * embed the same auth check without duplicating the KVS error handling.
  * Assumes the enclosing function already has `const kvs = cf.kvs(...)` in
  * scope and is `async`. Returns a statement block, not a full function body.
+ * `key` is the KVS key that holds this gate's credentials.
  */
-export function basicAuthCheckSnippet(realm: string): string {
+export function basicAuthCheckSnippet(
+  realm: string,
+  key = 'auth-token'
+): string {
   return `
   var headers = request.headers;
   var expected;
   try {
-    var token = await kvs.get('auth-token');
+    var token = await kvs.get('${key}');
     expected = 'Basic ' + token;
   } catch (e) {
     return {
