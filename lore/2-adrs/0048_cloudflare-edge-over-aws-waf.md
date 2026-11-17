@@ -263,6 +263,13 @@ impractical.
   ACME) — accepted risk, mitigated by host firewall + Caddy rate limiting.
 - Re-creating a torn-down WebACL is a **fresh CDK deploy** (logs are
   `RemovalPolicy.DESTROY`), not a toggle.
+- **The API Gateway stage throttle is one bucket for all users** (50 rps /
+  100 burst), and Cloudflare's rate-limit rule counts per IP (Free plan:
+  IP only; per-header or per-session counting is Enterprise). A few IPs each
+  under the per-IP limit can together fill the bucket through Cloudflare,
+  and real users get 429 while it lasts. Accepted risk (2026-11-17): the
+  5-day peak was ~4.7 rps, 9% of the bucket, with no known case of it
+  filling.
 
 ---
 
