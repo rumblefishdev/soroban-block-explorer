@@ -22,41 +22,36 @@ each.
 
 ## Decisions so far
 
-| #   | Decision                                                                                                    | From         | vs this task           | Who does the same                                     | Code | Test |
-| --- | ----------------------------------------------------------------------------------------------------------- | ------------ | ---------------------- | ----------------------------------------------------- | ---- | ---- |
-| 1   | Readers are developers and regular users: every value keeps its type, nothing is a JSON wall                | design round | matches B              | stellar.expert                                        | —    | —    |
-| 2   | One table row per event, with columns; one view, no per-row expand, no two-line cards                       | design round | matches                | stellar.expert, Soroscan                              | —    | —    |
-| 3   | The Type column stays with its coloured chip                                                                | design round | matches F              | stellar.expert                                        | —    | —    |
-| 4   | Column order Type, Where, Contract, Topics, Data, ID; the ID in full, wrapping only after the dash          | design round | changes (ID was first) | Soroscan (ID last)                                    | —    | —    |
-| 5   | A scalar renders as its value plus a muted type tag (`81147 i128`); an unknown type renders as its raw JSON | design round | matches B              | stellar.expert (`0i128`)                              | —    | —    |
-| 6   | `vec` and `map`: one entry per line, indented                                                               | design round | matches                | Stellar Lab                                           | —    | —    |
-| 7   | Lists and maps always in full (measured: map median 2 fields, max 15; vec median 3, max 13)                 | design round | beyond                 | stellar.expert                                        | —    | —    |
-| 8   | Bytes in full, wrapped, as lowercase hex — the form the contract page uses for the wasm hash                | design round | beyond                 | Soroscan, Stellar Lab, `stellar xdr decode`           | —    | —    |
-| 9   | Addresses truncated 4…4, linked, with copy                                                                  | design round | matches                | stellar.expert, Soroscan                              | —    | —    |
-| 10  | A number never breaks across lines                                                                          | design round | beyond                 | all compared explorers                                | —    | —    |
-| 11  | Amounts stay in smallest units in this PR; token units come later in this task                              | design round | changes order          | stellar.expert, Soroscan, Stellar Lab (raw in events) | —    | —    |
-| 12  | The Events table first; operation args, the execution trace and the contract Events tab follow, one PR each | design round | matches                | —                                                     | —    | —    |
+| #   | Decision                                                                                                                                                                                                                                                                                                                                  | From         | vs this task                  | Who does the same                                       | Code | Test |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ----------------------------- | ------------------------------------------------------- | ---- | ---- |
+| 1   | Readers are developers and regular users: every value keeps its type, nothing is a JSON wall                                                                                                                                                                                                                                              | design round | matches B                     | stellar.expert                                          | —    | —    |
+| 2   | One table row per event, with columns; one view, no per-row expand, no two-line cards                                                                                                                                                                                                                                                     | design round | matches                       | stellar.expert, Soroscan                                | —    | —    |
+| 3   | The Type column stays with its coloured chip                                                                                                                                                                                                                                                                                              | design round | matches F                     | stellar.expert                                          | —    | —    |
+| 4   | Column order Type, Where, Contract, Topics, Data, ID; the ID in full, wrapping only after the dash                                                                                                                                                                                                                                        | design round | changes (ID was first)        | Soroscan (ID last)                                      | —    | —    |
+| 5   | A scalar renders as its value plus a muted type tag (`81147 i128`); an unknown type renders as its raw JSON                                                                                                                                                                                                                               | design round | matches B                     | stellar.expert (`0i128`)                                | —    | —    |
+| 6   | `vec` and `map`: one entry per line, indented                                                                                                                                                                                                                                                                                             | design round | matches                       | Stellar Lab                                             | —    | —    |
+| 7   | Lists and maps always in full (measured: map median 2 fields, max 15; vec median 3, max 13)                                                                                                                                                                                                                                               | design round | beyond                        | stellar.expert                                          | —    | —    |
+| 8   | Bytes in full, wrapped, as lowercase hex — the form the contract page uses for the wasm hash                                                                                                                                                                                                                                              | design round | beyond                        | Soroscan, Stellar Lab, `stellar xdr decode`             | —    | —    |
+| 9   | Addresses truncated 4…4, linked, with copy                                                                                                                                                                                                                                                                                                | design round | matches                       | stellar.expert, Soroscan                                | —    | —    |
+| 10  | A number never breaks across lines                                                                                                                                                                                                                                                                                                        | design round | beyond                        | all compared explorers                                  | —    | —    |
+| 11  | Amounts stay in smallest units in this PR; token units come later in this task                                                                                                                                                                                                                                                            | design round | changes order                 | stellar.expert, Soroscan, Stellar Lab (raw in events)   | —    | —    |
+| 12  | The Events table first; operation args, the execution trace and the contract Events tab follow, one PR each                                                                                                                                                                                                                               | design round | matches                       | —                                                       | —    | —    |
+| 13  | Values take the official `stellar-xdr` format: 64-bit integers as decimal text, `u256`/`i256` decimal, bytes hex, strings escaped, errors with their code. Same for the account sequence number and 64-bit fields in operation details. Stored `soroban_events` rows are rewritten with the contract Events tab PR (an operator backfill) | design round | changes (absorbs 0456 item 3) | Stellar CLI, stellar-rpc `xdrFormat: json`, Stellar Lab | —    | —    |
 
 ## Not yet decided
 
-- **How values are encoded between parser and page.** `crates/xdr-parser/src/scval.rs`
-  writes its own JSON dialect, which the official `stellar-xdr` JSON
-  (`stellar xdr decode --output json`) differs from in five value types:
+- **Storage form of event payloads** (raw XDR or JSON in `soroban_events`), and
+  more widely what the database should hold versus what is decoded from the
+  ledger archive at read time — under study; storage measurements so far:
+  raw XDR would take 12–28% less than today's 181.5 GiB of event JSON
+  (_estimate_, two samples). Task 0572 owns the storage question.
 
-  | Type                                  | Ours                         | Official                   |
-  | ------------------------------------- | ---------------------------- | -------------------------- |
-  | `u64`, `i64`, `timepoint`, `duration` | JSON number                  | decimal string             |
-  | `u256`, `i256`                        | 64 hex digits                | decimal string             |
-  | `bytes`                               | base64                       | hex                        |
-  | `string`, `sym` with invalid UTF-8    | `<invalid-utf8>` placeholder | escaped bytes (`ab\xffcd`) |
-  | `error`                               | name only                    | type and code (0352)       |
-
-  The first row loses data: a browser's `JSON.parse` rounds integers above
-  2^53. Example: the USDC `transfer` in transaction `e376edec…a19a` (ledger 64081288) carries `to_muxed_id` 6952519163801588163; the page reads 6952519163801588000. Measured on three 200,000-ledger slices (from 52M,
-  58M, 64M): 6,378 / 6,871 / 6,966 events carry such a value. The same
-  dialect is stored in `soroban_events.topics_xdr` / `data_xdr`, so a change
-  meets stored rows. Related: 0431 (adopt the `stellar-xdr` API), 0456
-  (`u256` decode), 0352 (error code).
+Why decision 13 (measured 2026-11-17): the parser's own dialect differs from the
+official JSON in five types, and a browser's `JSON.parse` rounds integers above
+2^53 — e.g. the USDC `transfer` in transaction `e376edec…a19a` (ledger 64081288) carries `to_muxed_id` 6952519163801588163, read as
+6952519163801588000; 6,378 / 6,871 / 6,966 events per 200,000-ledger slice
+(from 52M, 58M, 64M) carry such a value. Audit of other hand-rolled decoding:
+[`R-audit-hand-rolled-decoding-2026-11.md`](R-audit-hand-rolled-decoding-2026-11.md).
 
 ## Out of scope
 
