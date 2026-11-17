@@ -2345,8 +2345,8 @@
             "format": "int64"
           },
           "sequence_number": {
-            "type": "integer",
-            "format": "int64"
+            "type": "string",
+            "description": "Decimal text, not a JSON number: most sequence numbers exceed 2^53,\nwhere a browser's JSON parser drops the last digits."
           },
           "signing": {
             "oneOf": [
