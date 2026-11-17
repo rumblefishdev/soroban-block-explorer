@@ -65,6 +65,28 @@ but doesn't remove it. The canary (0284) probes execute-api, so coordinate.
 
 - [ ] Raw execute-api no longer resolves/answers; CF path unaffected
 
+## Premise
+
+Fresh opus devil's-advocate review, 2026-11-17 (premise first): the flag is
+right and safe to deploy, but "only Cloudflare reaches the API" is false while
+the REGIONAL custom domain answers directly (below). Deeper: Cloudflare limits
+per IP and the stage throttle is one global 50 rps bucket, so a few IPs under
+the per-IP limit can drain it through Cloudflare too; if draining the throttle
+is the threat, origin locking alone does not remove it. Put to the owner.
+
+## Still Open
+
+- **The REGIONAL custom domain is a second Cloudflare bypass.** API Gateway
+  routes by SNI, so `curl --resolve api.sorobanscan.com:443:<IP of any
+regional API Gateway endpoint in eu-central-1>` reaches the production
+  stage: `/health` 200, `/v1/ledgers` 403 (edge lock), measured 2026-11-17
+  through the IP of another API's regional domain. It needs no secret
+  hostname. API mTLS (ADR 0048 Path B) closes it; task 0285 does not.
+- **Unmeasured: whether a 403 from the closed address spends the stage
+  throttle.** AWS documents only the 403. Measure on testnet after deploy
+  (requests to the closed URL vs the stage `Count` metric); the stage has no
+  access logs.
+
 ## Design Decisions
 
 ### From Plan

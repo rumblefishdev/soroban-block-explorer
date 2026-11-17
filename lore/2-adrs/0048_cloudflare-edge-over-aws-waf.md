@@ -63,6 +63,9 @@ history:
       `/health`), yet every request to it still spent the API Gateway stage
       throttle shared with real users, outside Cloudflare's rate limit. It now
       answers 403 to everything; API mTLS on the custom domains stays open.
+      The REGIONAL custom domain remains a bypass: any regional API Gateway IP
+      with SNI `api.sorobanscan.com` reaches the API without Cloudflare (200
+      for `/health`, 403 for data, measured 2026-11-17).
 ---
 
 # ADR 0048: Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare

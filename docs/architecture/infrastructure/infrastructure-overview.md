@@ -347,8 +347,10 @@ asymmetry is deliberate:
   managed rules, unmetered DDoS, Managed Challenge, rate limiting. The AWS origin
   accepts Cloudflare only, via a secret request header verified in the application
   (`crates/api/src/common/edge_lock.rs`). The raw `execute-api` address is closed
-  (`disableExecuteApiEndpoint`, task 0285): it answers `403` to every request, so
-  junk sent there cannot spend the stage throttle real users share.
+  (`disableExecuteApiEndpoint`, task 0285): it answers `403` to every request.
+  The REGIONAL custom domain is still reachable without Cloudflare — any
+  regional API Gateway IP with SNI `api.sorobanscan.com` — and only the
+  edge-secret lock guards it (`/health` exempt) until API mTLS is on.
   `sorobanscanApiDomainName` is one more custom domain on the same API (task
   0662), with the `*.sorobanscan.com` certificate in `sorobanscanApiCertificateArn`
   (task 0661). Its records and edge rules live in soroban-infrastructure's
