@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { ExplorerThemeProvider } from '@rumblefish/soroban-block-explorer-ui';
 import { describe, expect, it } from 'vitest';
 
-import { HighlightedJson } from './HighlightedJson.js';
+import { HighlightedJson } from '../HighlightedJson.js';
 
 const CONTRACT = 'CDDTJ7OZU2WZAEZNTUZWIRAE4EMP5CF63M3INFQWTLX4ENMYUFK6RCTX';
 const ACCOUNT = 'GC4QMEH5CY5HAEZVC2XNTRV2XBPQWUX2WCV3ANU32HBFNCYIKWHGK7XQ';
