@@ -4,7 +4,7 @@ title: 'OPS: indexer metrics as EMF, drop LastProcessedLedgerSequence, replace C
 type: OPS
 status: backlog
 related_adr: ['0054']
-related_tasks: ['0399', '0553', '0653', '0670']
+related_tasks: ['0399', '0553', '0653', '0674']
 tags:
   ['effort-medium', 'priority-low', 'monitoring', 'cost', 'indexer', 'galexie']
 links:
@@ -38,7 +38,7 @@ and the cost drops by about $14 a month.
 ## Stan teraz
 
 - Done: findings verified in code and in read-only CloudWatch, 2026-11-13.
-- Next: after 0670 (a stall alarm then watches the switch everywhere), agree
+- Next: after 0674 (a stall alarm then watches the switch everywhere), agree
   the change with the Prices and x402 teams.
 - In force: same namespace, metric names and dimension. ADR 0054 rule 5 on
   every alarm-stack deploy.
@@ -121,7 +121,7 @@ published only after a persist; it climbs only during catch-up.
   denominator.
 - Turn Container Insights off.
 
-The memory alarm (0670) reads the free AWS/ECS series and is not affected.
+The memory alarm (0674) reads the free AWS/ECS series and is not affected.
 
 ## Acceptance Criteria
 

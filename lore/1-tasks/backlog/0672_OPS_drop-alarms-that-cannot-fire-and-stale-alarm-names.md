@@ -4,7 +4,7 @@ title: 'OPS: delete the indexer error-rate alarms, make the worker alarm Errors 
 type: OPS
 status: backlog
 related_adr: ['0054']
-related_tasks: ['0454', '0455', '0553', '0670', '0671']
+related_tasks: ['0454', '0455', '0553', '0674', '0671']
 tags: ['effort-small', 'priority-medium', 'monitoring', 'observability']
 links:
   - infra/src/lib/stacks/cloudwatch-stack.ts
@@ -59,7 +59,7 @@ gets today.
   ADR 0054 records Errors = 0 through seven lag events (:116-117).
 - Which alarm covers each kind of failure without it:
   - a handled failure: `indexer-failures`;
-  - a persistent crash or a bad config: the stall alarm (0670), or
+  - a persistent crash or a bad config: the stall alarm (0674), or
     backlog-age until then, and after 10 receives the ledger DLQ;
   - a single crash that succeeds on redelivery: not paged. There were 0 in 91
     days, and the cursor reconciles it.
@@ -118,7 +118,7 @@ Once nothing reads `processorErrorRateThreshold`, delete it from `types.ts`
   owner says whether the criterion is already met.
 - SCF milestone docs record what was true when they were submitted. Add a
   dated note under each table, "replaced by `production-indexer-failures` on
-  2026-11-12", and do not rewrite the table. When 0670 lands, do the same for
+  2026-11-12", and do not rewrite the table. When 0674 lands, do the same for
   `production-galexie-ingestion-lag` (`milestone-1-evidence.md:2637`,
   `milestone-1.md:51`).
 

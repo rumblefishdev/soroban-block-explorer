@@ -1,5 +1,5 @@
 ---
-id: '0670'
+id: '0674'
 title: 'OPS: production gets the ingestion-stall alarm; Galexie memory gets an alarm'
 type: OPS
 status: backlog
