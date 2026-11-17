@@ -40,11 +40,10 @@ each.
 
 ## Not yet decided
 
-- **Storage form of event payloads** (raw XDR or JSON in `soroban_events`), and
-  more widely what the database should hold versus what is decoded from the
-  ledger archive at read time — under study; storage measurements so far:
-  raw XDR would take 12–28% less than today's 181.5 GiB of event JSON
-  (_estimate_, two samples). Task 0572 owns the storage question.
+- **Storage form of event payloads** — decided 2026-11-17: stays JSON, in the
+  decision-13 format. The alternatives (raw XDR for all payloads; standard
+  events kept only in typed tables) moved to 0572 with their measurements, see
+  [`0572 notes`](../../../backlog/0572_RESEARCH_event-payload-binary-xdr/notes/R-storage-measurements-2026-11.md).
 
 Why decision 13 (measured 2026-11-17): the parser's own dialect differs from the
 official JSON in five types, and a browser's `JSON.parse` rounds integers above
