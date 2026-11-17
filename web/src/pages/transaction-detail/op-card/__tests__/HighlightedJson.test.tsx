@@ -7,10 +7,10 @@ import { HighlightedJson } from '../HighlightedJson.js';
 const CONTRACT = 'CDDTJ7OZU2WZAEZNTUZWIRAE4EMP5CF63M3INFQWTLX4ENMYUFK6RCTX';
 const ACCOUNT = 'GC4QMEH5CY5HAEZVC2XNTRV2XBPQWUX2WCV3ANU32HBFNCYIKWHGK7XQ';
 
-function renderJson(value: unknown) {
+function renderJson(value: unknown, narrow = false) {
   return render(
     <ExplorerThemeProvider>
-      <HighlightedJson value={value} />
+      <HighlightedJson value={value} narrow={narrow} />
     </ExplorerThemeProvider>
   );
 }
@@ -36,6 +36,22 @@ describe('HighlightedJson strkey awareness (0460 #14)', () => {
     expect(screen.getByRole('link', { name: asset }).getAttribute('href')).toBe(
       `/assets/USDC-${ACCOUNT}`
     );
+  });
+
+  it('shortens an address in a narrow column, keeping its link and copy whole', () => {
+    renderJson([{ type: 'address', value: ACCOUNT }], true);
+    const link = screen.getByRole('link', { name: ACCOUNT });
+    expect(link.textContent).toBe('GC4Q…K7XQ');
+    expect(link.getAttribute('href')).toBe(`/accounts/${ACCOUNT}`);
+    expect(screen.getByRole('button', { name: /copy/i })).toBeTruthy();
+  });
+
+  it('shortens only the issuer of an asset in a narrow column', () => {
+    const asset = `yUSDC:${ACCOUNT}`;
+    renderJson({ asset }, true);
+    const link = screen.getByRole('link', { name: asset });
+    expect(link.textContent).toBe('yUSDC:GC4Q…K7XQ');
+    expect(link.getAttribute('href')).toBe(`/assets/yUSDC-${ACCOUNT}`);
   });
 
   it('leaves ordinary strings and near-miss values untouched', () => {
