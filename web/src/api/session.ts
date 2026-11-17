@@ -67,9 +67,12 @@ export function createSession({
   // requests go out without a session instead of solving again.
   let apiGateOff = false;
 
+  // Called on every 401. A 401 means the gate is on, so a 404 seen earlier
+  // (e.g. during a deploy) no longer holds and the next request solves again.
   const invalidate = () => {
     token = null;
     expiresAtMs = 0;
+    apiGateOff = false;
   };
 
   const ensureToken = async (): Promise<string | null> => {

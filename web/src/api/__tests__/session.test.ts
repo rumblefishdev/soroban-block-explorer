@@ -122,6 +122,23 @@ describe('createSession', () => {
     expect(solve).toHaveBeenCalledTimes(1);
   });
 
+  it('solves again after a 401 that follows a 404 (the gate came back on)', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response('', { status: 404 }))
+      .mockResolvedValueOnce(okResponse('jwt-1'));
+    const session = createSession({
+      siteKey: 'key',
+      apiBaseUrl: 'https://api',
+      solve,
+    });
+
+    expect(await session.ensureToken()).toBeNull();
+    // A 401 on a request sent without a session proves the gate is on.
+    session.invalidate();
+    expect(await session.ensureToken()).toBe('jwt-1');
+    expect(solve).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps state per instance', async () => {
     fetchMock
       .mockResolvedValueOnce(okResponse('jwt-a'))
