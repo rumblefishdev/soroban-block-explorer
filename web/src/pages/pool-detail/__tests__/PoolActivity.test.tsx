@@ -127,6 +127,11 @@ describe('tradeRate', () => {
     expect(tradeRate(parts)).toBe('0.0003245 XLM/USDC');
   });
 
+  it('keeps a rate below 0.0000001 instead of rounding it to 0', () => {
+    const parts = poolAmountLegs({ amounts: ['-1', '30000000'] }, pool);
+    expect(tradeRate(parts)).toBe('0.00000003333 XLM/USDC');
+  });
+
   it('has no rate for a deposit and no rate against a zero leg', () => {
     expect(
       tradeRate(poolAmountLegs({ amounts: ['1200000000', '5000000'] }, pool))

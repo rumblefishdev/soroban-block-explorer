@@ -326,6 +326,20 @@ describe('humanizeOp', () => {
     );
   });
 
+  it('keeps a price below 0.0000001 instead of rounding it to 0', () => {
+    const op = light({ type_name: 'MANAGE_SELL_OFFER' });
+    const h = heavy({
+      selling: 'ETH:GISSUER',
+      buying: 'USDC:GISSUER',
+      amount: 50_000_000,
+      price: { n: 1, d: 30_000_000 },
+      offerId: 0,
+    });
+    expect(humanizeOp(op, h)).toBe(
+      'Offered to sell 5 ETH for USDC @ 0.00000003333333 USDC/ETH'
+    );
+  });
+
   it('reads amount 0 on an existing offer as cancellation', () => {
     const op = light({ type_name: 'MANAGE_SELL_OFFER' });
     const h = heavy({
