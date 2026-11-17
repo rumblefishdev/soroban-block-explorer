@@ -1,5 +1,13 @@
 import type * as ApiTypes from '@rumblefish/api-types';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 // The session is wired into the shared API client by `client.ts` at import
 // time. These tests import it fresh per case, with the config mocked, and
@@ -59,6 +67,14 @@ async function freshClient() {
 }
 
 describe('client.ts session wiring', () => {
+  // The first import of `client.ts` transforms the generated SDK and the UI
+  // library (`session.ts` takes its panel colours from it): ~2 s alone, past
+  // 5 s when the whole suite runs at once. Paid here, under the hook's own
+  // timeout, so no case's 5 s goes to it; each later import takes ~50 ms.
+  beforeAll(async () => {
+    await freshClient();
+  });
+
   beforeEach(() => {
     window.turnstile = {
       render: (_el, opts) => {
