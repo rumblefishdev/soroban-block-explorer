@@ -2,7 +2,7 @@
 id: '0285'
 title: 'FEATURE: Kill raw execute-api endpoint (disableExecuteApiEndpoint)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: ['0048']
 related_tasks: ['0277']
 tags: [phase-future, effort-small, priority-low, security, defense-in-depth]
@@ -33,6 +33,14 @@ history:
       switch with blast radius well beyond this task. Not to be bundled in
       casually — see the arming preconditions in `infra/src/lib/types.ts:248-258`,
       which require the Turnstile / API-key secrets to be real before arming.
+  - date: '2026-11-17'
+    status: active
+    who: karolkow
+    note: >
+      Activated after the 2026-11-17 security audit: the production
+      execute-api address is public in the repo's load-test results and
+      bypasses Cloudflare's per-IP rate limit while sharing the stage
+      throttle with real users. Decoupled from mTLS on the owner's word.
 ---
 
 # Kill raw execute-api endpoint
