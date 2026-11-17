@@ -3,7 +3,7 @@ id: '0048'
 title: 'Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare'
 status: accepted # proposed | accepted | deprecated | superseded
 deciders: [fmazur, team]
-related_tasks: ['0277', '0273', '0302']
+related_tasks: ['0277', '0273', '0302', '0285']
 related_adrs: ['0001', '0047']
 tags: [infra, security, waf, cloudflare, ddos, dns, edge]
 links:
@@ -52,6 +52,17 @@ history:
       component: the `$0.60/M` request fee is ~0.08 USD/mo at real volume
       (~130k req/mo); the saving is the fixed WebACL + rule fee, measured
       18.07 USD in June 2026. Teardown outcome recorded in task 0302.
+  - date: '2026-11-17'
+    status: accepted
+    who: karolkow
+    note: >
+      Decision 3's `disableExecuteApiEndpoint: true` is taken out of Path B and
+      set unconditionally (task 0285). The code had chained it to
+      `enableApiMtls`, which never shipped, so the raw `execute-api` address
+      kept answering. It sat behind the edge-secret lock (403 for data, 200 for
+      `/health`), yet every request to it still spent the API Gateway stage
+      throttle shared with real users, outside Cloudflare's rate limit. It now
+      answers 403 to everything; API mTLS on the custom domains stays open.
 ---
 
 # ADR 0048: Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare

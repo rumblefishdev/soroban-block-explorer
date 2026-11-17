@@ -229,24 +229,16 @@ export interface EnvironmentConfig {
 
   /**
    * Phase 2 — lock the API Gateway custom domain to Cloudflare via mTLS
-   * (Path B in [ADR 0048]). When true the `ApiGatewayStack`:
-   *  - attaches the S3 **truststore** (the CA bundle that signed
-   *    Cloudflare's uploaded Authenticated-Origin-Pulls client cert) to
-   *    the REGIONAL custom domain, and
-   *  - sets `disableExecuteApiEndpoint=true` so the raw
-   *    `execute-api` URL — which bypasses custom-domain mTLS — stops
-   *    answering.
+   * (Path B in [ADR 0048]). When true the `ApiGatewayStack` attaches the S3
+   * **truststore** (the CA bundle that signed Cloudflare's uploaded
+   * Authenticated-Origin-Pulls client cert) to the REGIONAL custom domain.
+   * The raw `execute-api` URL is closed regardless of this flag
+   * (`disableExecuteApiEndpoint`, task 0285).
    *
    * REQUIRES `provisionApiMtlsTruststore=true` AND the PEM already uploaded
    * (enforced in `validateConfig`). The CA bundle is a **non-secret** PEM
    * uploaded out-of-band; no value is committed. No `crates/api` change
    * (handshake-level reject).
-   *
-   * ORDERING GOTCHA (task 0277 Step 2): the custom-domain base-path mapping
-   * MUST already be live before `disableExecuteApiEndpoint` flips, otherwise
-   * the edge 403s itself. The custom domain already exists today, so flipping
-   * this on the existing domain is safe — but never enable it before the
-   * custom domain serves.
    */
   readonly enableApiMtls: boolean;
 

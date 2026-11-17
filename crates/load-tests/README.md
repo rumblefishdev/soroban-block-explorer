@@ -101,7 +101,8 @@ cargo build --release -p load-tests
 **Run from: repo root**
 
 `API_KEY` must be in the server `API_KEYS` allowlist; `EDGE_SECRET` is the
-Cloudflare edge secret from Secrets Manager:
+Cloudflare edge secret from Secrets Manager (a fallback: on its own path
+Cloudflare stamps the header itself):
 
 ```bash
 export API_KEY="<paid-tier key present in the server API_KEYS>"
@@ -110,15 +111,11 @@ export EDGE_SECRET=$(AWS_PROFILE=sorobanscan aws secretsmanager get-secret-value
   --secret-id soroban/production/cloudflare/edge-secret --query SecretString --output text)
 ```
 
-Base URL — pick one:
-
-- **Direct to the API Gateway origin** (bypasses Cloudflare's own rate limit; use
-  this for backend capacity). Take the `ApiEndpoint` from the ApiGateway stack
-  output (the `…execute-api.eu-central-1.amazonaws.com/production` URL) and append
-  `/v1`. Requires `--edge-secret` (Cloudflare won't inject it off its own path).
-- **Through Cloudflare** — `https://api.sorobanscan.com/v1` (the real
-  path, but subject to Cloudflare's own rate limit → HTTP 429 `error code: 1015`,
-  which `loadTesting` does NOT control).
+Base URL — `https://api.sorobanscan.com/v1`, through Cloudflare. It is the only
+way in: the raw `execute-api` address answers `403` to every request since task
+0285 closed it (`disableExecuteApiEndpoint`). Runs are therefore subject to
+Cloudflare's own rate limit → HTTP 429 `error code: 1015`, which `loadTesting`
+does NOT control; that rule lives in soroban-infrastructure's `cloudflare/`.
 
 `API_KEY`/`EDGE_SECRET` are read from the exported env (above) — pass them as
 env, NOT as `--api-key`/`--edge-secret` flags, so the secrets never land in the
@@ -127,21 +124,21 @@ process arg list (`ps aux`) during the run.
 ```bash
 # smoke first — expect mostly 200
 ./target/release/load-tests \
-  --base-url <API_GW_ORIGIN>/v1 \
+  --base-url https://api.sorobanscan.com/v1 \
   --rps 5 --duration 1m
 
 # AC4 tiers (see the table above) — one run each, own out/ dir per run
-./target/release/load-tests --base-url <API_GW_ORIGIN>/v1 \
+./target/release/load-tests --base-url https://api.sorobanscan.com/v1 \
   --rps 0.386 --duration 6m  --harvest 500   # A — 1M/mo, contention control
-./target/release/load-tests --base-url <API_GW_ORIGIN>/v1 \
+./target/release/load-tests --base-url https://api.sorobanscan.com/v1 \
   --rps 3.858 --duration 10m --harvest 500   # B — 10M/mo
-./target/release/load-tests --base-url <API_GW_ORIGIN>/v1 \
+./target/release/load-tests --base-url https://api.sorobanscan.com/v1 \
   --rps 19.29 --duration 12m --harvest 500   # C — 50M/mo, needs loadTesting
 
 # saturation / knee-finding (NOT an AC4 number — see the model table above)
 ulimit -n 65535
 ./target/release/load-tests \
-  --base-url <API_GW_ORIGIN>/v1 \
+  --base-url https://api.sorobanscan.com/v1 \
   --vus 1000 --duration 1h --harvest 500
 ```
 
@@ -189,7 +186,7 @@ Diagnostics if the smoke isn't 200: `401` = `x-api-key` not in `API_KEYS`;
 `403` = missing `x-edge-secret` (or a no-User-Agent block — the harness sets a
 UA; this was AWS WAF `NoUserAgent_HEADER` before task 0302, Cloudflare's managed
 equivalent after);
-`429`/`1015` = Cloudflare rate limit (use the direct origin); `500 db_error` =
+`429`/`1015` = Cloudflare rate limit (lower `--rps`, or raise that rule for the run); `500 db_error` =
 CH rejected `log_comment` — the `profiles.xml` `changeable_in_readonly`
 constraint (+ `config.d/access-control.xml`) isn't deployed to the box.
 
