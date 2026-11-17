@@ -50,7 +50,7 @@ and the request interceptor blocks every call until a session exists (`web/src/a
 
 ## Acceptance Criteria
 
-- [ ] Clean widget placement; data loads with at most one solve per session; no overlay over content
+- [ ] Clean widget placement; data loads with at most one solve per session
 
 ## 2026-09-24 — a failed solve reads as a crash (decision 93 A)
 
@@ -99,21 +99,22 @@ Fresh review of the goal alone (2026-11-13):
 
 ## Decisions so far
 
-| #   | Decision                                                                                                              | From                    | Test                                    |
-| --- | --------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------- |
-| 1   | Armed, `ensureToken` never resolves `null`: requests wait for a session, none go out bare                             | owner (W25 C)           | solver: stall → panel → retry → JWT     |
-| 2   | A failed solve or a refused mint shows a panel with the reason and "Try again"; nothing re-solves until it is clicked | owner (W25 C)           | solver: retry panel, HTTP status        |
-| 3   | Cloudflare asks for a click → the widget stays, with a heading; the watchdog stops counting                           | owner (W25 C)           | solver: interactive heading, no timeout |
-| 4   | No callback within 20 s and no interaction → failure → panel (2), widget removed                                      | plan review (blocker 1) | solver: stall shows the retry panel     |
-| 5   | `refresh-timeout: 'manual'`, `retry: 'never'`: Cloudflare must not restart challenges by itself                       | plan review (2)         | solver: render options                  |
-| 6   | The Turnstile error code reaches the panel and `console.warn`                                                         | plan review (6)         | solver: error code in the panel         |
-| 7   | A script that loads without `window.turnstile` can be retried                                                         | plan review (3)         | solver: retry after missing global      |
-| 8   | The API logs every refused or failed siteverify, with Cloudflare's `error-codes` or HTTP status, never the token      | owner (W25 C)           | none (log line)                         |
-| 9   | A 404 from the mint means the API gate is off: resolve `null`, the request goes out bare as before                    | code review (standards) | session: 404 → null                     |
-| 10  | Panel colours come from `colorsDark`; the interactive heading is added once                                           | code review             | solver: one heading                     |
+| #   | Decision                                                                                                         | From                    | Test                                    |
+| --- | ---------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------- |
+| 1   | Armed, `ensureToken` never resolves `null`: requests wait for a session, none go out bare                        | owner (W25 C)           | solver: stall → panel → retry → JWT     |
+| 2   | A failed solve or a refused mint shows a panel with "Try again"; nothing re-solves until it is clicked           | owner (W25 C)           | solver: retry panel, HTTP status        |
+| 3   | Cloudflare asks for a click → the widget stays, with a heading; the watchdog stops counting                      | owner (W25 C)           | solver: interactive heading, no timeout |
+| 4   | No callback within 20 s and no interaction → failure → panel (2), widget removed                                 | plan review (blocker 1) | solver: stall shows the retry panel     |
+| 5   | `refresh-timeout: 'manual'`, `retry: 'never'`: Cloudflare must not restart challenges by itself                  | plan review (2)         | solver: render options                  |
+| 6   | The Turnstile error code or HTTP status goes to `console.warn` only; the panel shows fixed plain text            | owner (2026-11-17)      | solver: error code out of the panel     |
+| 7   | A script that loads without `window.turnstile` can be retried                                                    | plan review (3)         | solver: retry after missing global      |
+| 8   | The API logs every refused or failed siteverify, with Cloudflare's `error-codes` or HTTP status, never the token | owner (W25 C)           | none (log line)                         |
+| 9   | A 404 from the mint means the API gate is off: resolve `null`, the request goes out bare as before               | code review (standards) | session: 404 → null                     |
+| 10  | Panel colours come from `colorsDark`; the interactive heading is added once                                      | code review             | solver: one heading                     |
 
 | 11 | The first failure of a mint cycle is retried once without the panel; the panel follows the second | devil's advocate (1) | solver: silent retry, two stalls |
 | 12 | The retry panel is labelled (`aria-labelledby`/`-describedby`) and its button takes focus | devil's advocate (3) | solver: labels and focus |
+| 13 | The card covers the centre of the page by design and fills a phone screen less 16 px a side, up to 360 px | owner (2026-11-17) | solver: phone width |
 
 The 2026-09-24 `reset()` error has no source in our code (`git log -S "reset("`
 on `session.ts` is empty): Turnstile's own retry or refresh called it after

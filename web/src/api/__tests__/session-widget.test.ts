@@ -153,7 +153,18 @@ describe('Turnstile solver and retry panel', () => {
     expect(document.activeElement).toBe(retryButton());
   });
 
-  it("shows Cloudflare's error code in the panel and the console", async () => {
+  it('fills a phone screen less a margin, up to 360 px', async () => {
+    const { api } = fakeTurnstile();
+    window.turnstile = api as unknown as Window['turnstile'];
+    void armedSession().ensureToken();
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    const panel = document.querySelector<HTMLElement>('[role="alertdialog"]');
+    expect(panel?.style.width).toBe('calc(100vw - 32px)');
+    expect(panel?.style.maxWidth).toBe('360px');
+  });
+
+  it("keeps Cloudflare's error code out of the panel, in the console", async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     void armedSession().ensureToken();
@@ -164,13 +175,14 @@ describe('Turnstile solver and retry panel', () => {
     renders[1]['error-callback']('600010');
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(document.body.textContent).toContain('600010');
+    expect(retryButton()).toBeDefined();
+    expect(document.body.textContent).not.toContain('600010');
     expect(console.warn).toHaveBeenCalledWith(
       expect.stringContaining('600010')
     );
   });
 
-  it('shows the HTTP status when the API refuses the token', async () => {
+  it('keeps the HTTP status out of the panel, in the console, when the API refuses the token', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     fetchMock.mockResolvedValue(new Response('nope', { status: 403 }));
@@ -182,8 +194,9 @@ describe('Turnstile solver and retry panel', () => {
     renders[1].callback('turnstile-token-2');
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(document.body.textContent).toContain('403');
     expect(retryButton()).toBeDefined();
+    expect(document.body.textContent).not.toContain('403');
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('403'));
   });
 
   it('loads the script again on retry when it came up without window.turnstile', async () => {

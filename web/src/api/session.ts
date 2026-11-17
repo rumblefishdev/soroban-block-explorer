@@ -127,7 +127,7 @@ export function createSession({
             silentRetryLeft = false;
             continue;
           }
-          await showRetryPanel(reason);
+          await showRetryPanel();
         }
       } finally {
         inFlight = null;
@@ -318,15 +318,18 @@ const PANEL_POSITION_CSS =
   'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2147483647;';
 // The dark palette of the design system: the page around the card may be
 // either theme, and one fixed card keeps the panel readable on both.
-const PANEL_CARD_CSS = `max-width:360px;padding:20px 24px;border-radius:12px;border:1px solid ${colorsDark.stroke.default};background:${colorsDark.surface.grayMain};color:${colorsDark.text.primary};text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;`;
+// `background-color`, not the `background` shorthand: the test DOM (cssstyle
+// 5.3.7) drops the whole style when `color` follows that shorthand.
+const PANEL_CARD_CSS = `box-sizing:border-box;width:calc(100vw - 32px);max-width:360px;padding:20px 24px;border-radius:12px;border:1px solid ${colorsDark.stroke.default};background-color:${colorsDark.surface.grayMain};color:${colorsDark.text.primary};text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;`;
 const PANEL_TEXT_CSS = 'margin:0 0 12px;font-size:14px;line-height:1.5;';
 
 /**
- * The default `waitForRetry`: a card that says the check failed and why, with
- * a "Try again" button. Resolves (and removes the card) on the click; nothing
- * is solved again before it, so an unattended tab starts no new challenges.
+ * A card that says the check failed, with a "Try again" button; the technical
+ * reason goes only to the console. Resolves (and removes the card) on the
+ * click; nothing is solved again before it, so an unattended tab starts no
+ * new challenges.
  */
-function showRetryPanel(reason: string): Promise<void> {
+function showRetryPanel(): Promise<void> {
   const panel = document.createElement('div');
   panel.setAttribute('role', 'alertdialog');
   panel.setAttribute('aria-labelledby', 'turnstile-retry-title');
@@ -341,7 +344,8 @@ function showRetryPanel(reason: string): Promise<void> {
   title.style.cssText = PANEL_TEXT_CSS + 'font-weight:600;font-size:16px;';
   const detail = document.createElement('p');
   detail.id = 'turnstile-retry-detail';
-  detail.textContent = `This explorer checks that visitors are human before it loads data. ${reason}`;
+  detail.textContent =
+    'This explorer checks that visitors are human before it loads data.';
   detail.style.cssText = PANEL_TEXT_CSS;
   const button = document.createElement('button');
   button.type = 'button';
