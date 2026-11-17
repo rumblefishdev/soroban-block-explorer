@@ -6,23 +6,23 @@ import { screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderWithProviders } from '../test-utils.js';
+import { renderWithProviders } from '../../test-utils.js';
 
-import AccountDetailPage from './AccountDetailPage.js';
+import AccountDetailPage from '../AccountDetailPage.js';
 
 const hookMocks = vi.hoisted(() => ({
   useAccountDetail: vi.fn(),
   useAccountTransactions: vi.fn(),
 }));
 
-vi.mock('../api/index.js', async () => ({
+vi.mock('../../api/index.js', async () => ({
   useAccountDetail: hookMocks.useAccountDetail,
   useAccountTransactions: hookMocks.useAccountTransactions,
   // Pure pagination helper — keep the real implementation so the
   // transactions section renders instead of hitting its error boundary.
   usePagedRows: (
-    await vi.importActual<typeof import('../api/usePagedRows.js')>(
-      '../api/usePagedRows.js'
+    await vi.importActual<typeof import('../../api/usePagedRows.js')>(
+      '../../api/usePagedRows.js'
     )
   ).usePagedRows,
 }));
