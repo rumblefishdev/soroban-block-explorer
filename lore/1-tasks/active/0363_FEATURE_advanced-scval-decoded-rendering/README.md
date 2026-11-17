@@ -2,12 +2,14 @@
 id: '0363'
 title: 'FEATURE: tx-detail — decode ScVals to typed chips (kill the raw-JSON wall)'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
-related_tasks: ['0352', '0071', '0453', '0462']
+related_tasks: ['0352', '0071', '0453', '0462', '0431', '0456']
 tags:
   [frontend, transaction-detail, soroban, ux, priority-medium, effort-medium]
-links: ['https://github.com/rumblefishdev/soroban-block-explorer/issues/378']
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/378'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/735'
 history:
   - date: 2026-07-07
     status: backlog
@@ -70,6 +72,16 @@ history:
       it; 0462 ships a local ~40-line stopgap until then. Stale references
       corrected in the body (the advanced/ path, the "advanced mode" framing —
       that split no longer exists).
+  - date: '2026-11-17'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Issue #735 (the Data column squeezed on the transaction
+      page) enters as the first PR: value rendering in the Events table.
+      Its design decisions are recorded under "2026-11-17 — first PR". One
+      question stays open: how values are encoded between parser and page —
+      the parser's own JSON dialect differs from the official stellar-xdr
+      JSON in five value types, and one of them loses digits in the browser.
 ---
 
 # FEATURE: decoded ScVal rendering in tx detail
@@ -338,51 +350,8 @@ original wording is kept struck through so the change is visible, not silent.
 
 ## UX Expert Analysis (`/ux-expert`)
 
-Audit of the current state + per-option verdict, grounded in the actual
-components (`EventsSection`, `OperationJsonDetail`, `HighlightedJson`, `XdrRow`)
-and the decoder (`crates/xdr-parser/src/scval.rs`). Premise confirmed:
-`scval_to_typed_json` emits a clean, recursive tagged union `{type, value}` — a
-`switch(type)` renderer is real, not speculative. `scval.rs:19` (`e.name()`)
-does drop the error code, so the `Type/Code` chip needs the Rust fix.
-
-### Current-state findings (2 Critical, 5 Major)
-
-| #   | Finding                                                                                                                                        | Dimension                                     | Sev         |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------- |
-| F1  | Meaning buried under `{type,value}` scaffolding — type tags dominate, values buried (signal-to-noise inverted)                                 | Cognitive Load / Data Presentation            | 🔴 Critical |
-| F2  | No overview / progressive disclosure — all events fully expanded = ~13k px wall; `XdrRow` collapse exists but only on base64 blobs             | Information Architecture / Screen Real Estate | 🔴 Critical |
-| F3  | Amounts unreadable — `i128` as raw digit string, no grouping / decimal-adjust / asset context; `formatCompactAmount` unused here               | Data Presentation                             | 🟠 Major    |
-| F4  | Addresses raw + unclickable inside topics/data/args — same datum rendered two ways (Contract column uses `IdentifierDisplay`, inline does not) | Interaction Cost / Data Presentation          | 🟠 Major    |
-| F5  | Table container fights tree content — 2 free-width JSON columns, `overflowX:auto`, `break-all` snaps strkeys mid-char                          | Screen Real Estate / Responsiveness           | 🟠 Major    |
-| F6  | No semantic/human layer — even decoded, reader must assemble "Transfer X: A→B" themselves                                                      | Information Architecture                      | 🟠 Major    |
-| F7  | Error code dropped at `scval.rs:19` (`e.name()` only) — `Type/Code` chip impossible without Rust fix (shared w/ 0352)                          | Data Presentation / Correctness               | 🟠 Major    |
-
-F1+F2 together = user cannot do the primary task (understand the tx) without
-hand-parsing JSON. **Quick wins (parts already exist):** collapse via `XdrRow`
-kills the wall before any decoder work; route addresses → `IdentifierDisplay`,
-amounts → `formatCompactAmount`. `XdrRow` already has `role=button` /
-`aria-expanded` — carry that a11y into `ScValView` collapse.
-
-### Per-option verdict
-
-- **E (raw JSON, current):** ✅ keep ONLY as per-node "raw" fallback; ❌ never default. Escape hatch, not a view.
-- **A (collapse):** ✅ highest ROI, uses existing `XdrRow`. **But collapse without a decoded summary line is a blind toggle** — A has a hard dependency on ≥ B-lite (decode `topics[0]` sym + contract) for the row label.
-- **B (`ScValView`):** ✅ the load-bearing fix (F1/F3/F4/F5). Input already a clean union → one component, table-driven `switch`. Ponytail: no plugin architecture; first cut = common types (sym/address/int/bool/bytes/vec/map), tail (void/duration/timepoint/contract_instance) handled but not gold-plated. Must default-collapse nested structures or it becomes a new wall.
-- **C / C-lite (semantic):** ✅ biggest comprehension gain (F6), biggest domain risk. Known-shape match is a heuristic → unknown shapes MUST degrade to plain B, never guess; "assets moved" amount needs decimals metadata. C-lite (known events + `fn(args)→result` signature/call-tree) is the right ceiling. Named-params-from-ABI = genuine bonus, defer.
-- **D (JSON-viewer lib):** ❌ reject. Renders the same `{type,value}` scaffolding prettier — no decode, no linked addresses, no formatted amounts. Solves F2 weakly, nothing else, adds a dependency + foreign visual language. Wrong rung when B (one component + existing primitives) solves 100%.
-
-### Sequencing (affirms the Implementation Plan, two nuances)
-
-1. **B-core** first — A and C both depend on a decoded summary. Wire into events topics/data + op args.
-2. **A** (collapse via `XdrRow`) — each collapsed row now has a real summary line. Kills the wall.
-3. **C-lite** — known-event line + invocation signature/call-tree, with graceful fallback to B.
-4. Fix **`scval.rs:19`** error code (with 0352) — unblocks the `Type/Code` chip.
-5. Bonus: named params from ABI — defer.
-
-**Two corrections to make explicit in the plan:** (1) A has a hard dependency on
-B-lite — collapse needs a summary to show; (2) reject D outright. AC mapping is
-clean: "13k→scannable" ← A, "typed chips" ← B, "semantic summary" ← C-lite.
-Task is well-diagnosed and well-scoped.
+The 2026-07 analysis (2 critical, 5 major findings, per-option verdict,
+sequencing): [`notes/R-ux-expert-analysis-2026-07.md`](notes/R-ux-expert-analysis-2026-07.md).
 
 ## Status (2026-08-05)
 
@@ -478,6 +447,12 @@ raised, told apart only by a glyph.
    no filtering — one read site (`whereLabel`). It cannot order anything:
    per-operation events carry no stage, so there is no total order to build
    from it. Its job is to remove an information gap, not to compute.
+
+## 2026-11-17 — first PR: the Events table (Refs #735)
+
+Value rendering in the Events table ships first; the other renderers follow,
+one PR each. Decisions and the one open question (how values are encoded
+between parser and page): [`notes/S-events-table-value-rendering.md`](notes/S-events-table-value-rendering.md).
 
 ## Future Work
 
