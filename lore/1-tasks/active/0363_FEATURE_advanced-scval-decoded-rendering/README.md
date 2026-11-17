@@ -118,27 +118,34 @@ Options considered (A ⊂ B ⊂ C; D=lib, E=raw):
 **Now (2026-08-19):** A is done (0453), the call tree is done (0462), C exists only
 inside the trace. **The open target is B + C-lite's semantic line.**
 
+## Premise
+
+Reviewed 2026-11-17 by a fresh reviewer given only the goal and constraints:
+
+- The problem is real but is two problems. The squeezed Events table (#735) is
+  caused by full addresses in Topics; truncating them is frontend-only. The
+  64-bit precision loss is real and rare (10,581 of 172,988,828 events in
+  ledgers 64.0M–64.2M), in five encoder arms (`scval.rs:21-27,116`), not one.
+- The digits are lost in one place: the generated client's `JSON.parse`
+  (`libs/api-types/src/generated/client/client.gen.ts:177`); serde keeps them.
+- Changing the parser's value format, as the first decision draft said,
+  silently breaks Rust readers (`asset_transfers.rs:100` reads `to_muxed_id`
+  with `as_u64()`; `executable_ref.rs`, `pool_config_factory.rs`, `nft.rs`),
+  the stored rows (mixed until a backfill) and the price service's weekly
+  `JSONExtractString(topics_xdr, …)` query. "Official values inside our
+  `{type, value}` envelope" is a third format no peer emits.
+- Bytes in full: 5.2% of bytes values exceed 1,000 hex characters (p99 1,056),
+  so "no per-row expand" brings the wall back for them.
+- Upstream renderers start from raw XDR: stellar.expert's MIT `sc-val.js`
+  (value + type tag), Stellar Lab's `@stellar/stellar-xdr-json`.
+
+Where to fix the precision loss and how long bytes render went back to the
+owner as decisions ([`notes/S-events-table-value-rendering.md`](notes/S-events-table-value-rendering.md)).
+
 ## Reference — how mature explorers do it (researched)
 
-- **stellar.expert (same chain, open-source — north star):** ScVals rendered as
-  **typed chips with a small dimmed type subscript** (`0i128`, `164266u32`,
-  `"mint"sym`, `…bytes`); maps/vecs as `{key: val}` / `[…]`. Invocation shown as
-  a **function signature `fn(arg,arg) → result`** with a **nested sub-call tree**
-  (each sub-call's return after `→`); an ⓘ tooltip fetches the WASM interface to
-  show **named parameters**. Events decoded **twice**: a semantic line
-  (`0.55 KALE minted`) + the decoded `["mint"sym, …] with data …i128` (topics vs
-  data separated). Zero raw XDR embedded — links out to Stellar Lab/Horizon for
-  raw. Addresses truncated + identicon + clickable + known-name label (`[Kale]`).
-- **Etherscan / Solscan / Blockscout:** decoded is the **default**, raw/hex is a
-  toggle or a tab labeled "debugging"; a plain-language **"assets moved" summary
-  line** at the top (Tokens Transferred / Balance Change), decimal-adjusted +
-  logo + truncated links; typed **named param tables** (`#/Name/Type/Value`) with
-  the resolved signature as header; **prominent decoded failure reason** in the
-  status row (red "Fail with error 'X'"); verbose logs collapsed by default.
-- **Architectural note:** StellarChain's invocation trace uses **ephemeral
-  Soroban RPC → disappears for old txs.** stellar.expert (and us, via `heavy`
-  archive-XDR fetch, ADR 0029) reconstruct from **persisted** meta → always
-  available. Our foundation is on the robust side; keep it.
+stellar.expert, Etherscan, Solscan, Blockscout and StellarChain, as read on
+2026-07-07: [`notes/R-explorer-reference-2026-07.md`](notes/R-explorer-reference-2026-07.md).
 
 ## Target design (A + B + C-lite)
 
@@ -276,20 +283,8 @@ Events section further down, which nothing has touched.
 
 ## Wireframe (Events)
 
-Now:
-
-```
-Type      Topics                        Data
-Contract  [ {"type":"sym",              { "type":"i128",
-             "value":"fee"}, … ]          "value":"947930" }
-```
-
-Target (collapsed):
-
-```
-● transfer   CCW67T…MI75   GX…4P → GY…8K        326,131,711   [raw ⌄]
-● fee        CAS3J7…OWMA   GB6KVOP2…KNFCP            947,930   [raw ⌄]
-```
+The 2026-07 wireframe, replaced by the 2026-11-17 design round:
+[`notes/G-wireframe-events-2026-07.md`](notes/G-wireframe-events-2026-07.md).
 
 ## Component inventory (reuse, don't rebuild)
 
