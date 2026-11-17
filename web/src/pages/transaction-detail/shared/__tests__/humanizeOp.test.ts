@@ -1,7 +1,7 @@
 import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
 import { describe, expect, it } from 'vitest';
 
-import { humanizeOp } from './humanizeOp.js';
+import { humanizeOp } from '../humanizeOp.js';
 
 /** Minimal `OperationItem` with the fields `humanizeOp` reads; the rest are
  *  filled with inert defaults so the generated type is satisfied. */
