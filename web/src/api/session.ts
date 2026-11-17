@@ -320,7 +320,7 @@ const PANEL_POSITION_CSS =
 // either theme, and one fixed card keeps the panel readable on both.
 // `background-color`, not the `background` shorthand: the test DOM (cssstyle
 // 5.3.7) drops the whole style when `color` follows that shorthand.
-const PANEL_CARD_CSS = `box-sizing:border-box;width:calc(100vw - 32px);max-width:360px;padding:20px 24px;border-radius:12px;border:1px solid ${colorsDark.stroke.default};background-color:${colorsDark.surface.grayMain};color:${colorsDark.text.primary};text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;`;
+const PANEL_CARD_CSS = `max-width:360px;padding:20px 24px;border-radius:12px;border:1px solid ${colorsDark.stroke.default};background-color:${colorsDark.surface.grayMain};color:${colorsDark.text.primary};text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;`;
 const PANEL_TEXT_CSS = 'margin:0 0 12px;font-size:14px;line-height:1.5;';
 
 /**
@@ -334,7 +334,12 @@ function showRetryPanel(): Promise<void> {
   panel.setAttribute('role', 'alertdialog');
   panel.setAttribute('aria-labelledby', 'turnstile-retry-title');
   panel.setAttribute('aria-describedby', 'turnstile-retry-detail');
-  panel.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
+  // Text only, so the card takes a phone's width less 16 px a side; the click
+  // card keeps the width of Cloudflare's 300 px widget.
+  panel.style.cssText =
+    PANEL_POSITION_CSS +
+    PANEL_CARD_CSS +
+    'box-sizing:border-box;width:calc(100vw - 32px);';
 
   // Named and described for screen readers, with focus on the button, so a
   // keyboard user is not left on a page whose sections only say "loading".
