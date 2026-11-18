@@ -210,13 +210,10 @@ jobs:
       - name: Deploy SPA content (build → S3 sync → CloudFront invalidation)
         if: steps.plan.outputs.web == 'true'
         run: make -C infra deploy-production-web
+      # Through the public host: the raw execute-api address answers 403 to
+      # everything since task 0285 closed it.
       - name: Smoke test — API /health (edge-lock-exempt, no secret needed)
-        run: |
-          API=$(aws cloudformation describe-stacks --region eu-central-1 \
-            --stack-name Explorer-production-ApiGateway \
-            --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
-            --output text)
-          curl -f --retry 3 --retry-delay 5 "${API%/}/health"
+        run: curl -f --retry 3 --retry-delay 5 https://api.sorobanscan.com/health
       - name: Smoke test — Frontend (public, no basic-auth on prod)
         run: |
           CODE=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 5 \
