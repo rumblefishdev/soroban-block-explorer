@@ -327,22 +327,26 @@ struct HeldChRow {
 #[derive(Debug, Row, Deserialize)]
 struct LedgerCollectionNameRow {
     contract_id: String,
-    name: Option<String>,
+    name: String,
 }
 
 /// `GET /v1/nfts?filter[owner]=G…` — the NFTs one account holds now, one page:
 /// the rows, order and cursor [`fetch_list`] gives, read without a JOIN.
 ///
-/// On production every JOIN in the list query costs tens of MiB of hash
-/// tables whatever the row count, so the list read for one owner took
-/// 155–385 MiB; this read takes 4–10 MiB (task 0675). Each source is read for
-/// the owner's tokens only, the three are folded into one row per token by
+/// An account holds a few NFTs, but every JOIN builds a hash table per server
+/// thread whatever the row count, so the joined list read costs far more memory
+/// than the data (measured in task 0675). Here each source is read for the
+/// owner's tokens only, the three are folded into one row per token by
 /// `GROUP BY`, and the page's few contracts are named afterwards.
 ///
 /// The holding is the `FINAL` row of `nfts`: a token sold in a later ingest
 /// batch can sit unmerged beside its old row, and must not count. The
 /// `owned` scope reads without `FINAL` — it only narrows what is read, and may
 /// include a token the owner no longer holds.
+///
+/// One difference from the list: an NFT whose contract has no
+/// `soroban_contracts` row fails the page here, where the list's INNER JOIN
+/// drops the row unseen.
 pub async fn fetch_held_by(
     client: &clickhouse::Client,
     owner: &str,
@@ -402,32 +406,30 @@ pub async fn fetch_held_by(
             .bind(&c.token_id);
     }
     let rows = query.bind(limit).fetch_all::<HeldChRow>().await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
 
     // Name the page's contracts: the C… address, and the collection name the
     // contract itself publishes, which wins over the enrichment one (the same
     // precedence as the list).
-    let mut ids: Vec<i64> = rows.iter().map(|r| r.contract_surrogate).collect();
-    ids.sort_unstable();
-    ids.dedup();
-    let in_list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
-    let ledger_names_sql = format!(
-        "SELECT contract_id, name FROM soroban_contract_metadata FINAL \
-         WHERE contract_id IN (SELECT contract_id FROM soroban_contracts WHERE id IN ({in_list})) \
-           AND name != ''"
-    );
-    let (contracts, ledger_names) = if ids.is_empty() {
-        (HashMap::new(), Vec::new())
-    } else {
-        tokio::try_join!(
-            resolve_contracts(client, ids),
-            client
-                .query(&ledger_names_sql)
-                .fetch_all::<LedgerCollectionNameRow>(),
-        )?
-    };
+    let ids: Vec<i64> = rows.iter().map(|r| r.contract_surrogate).collect();
+    let contract_ids_sql = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    let (contracts, ledger_names) = tokio::try_join!(
+        resolve_contracts(client, ids),
+        client
+            .query(&format!(
+                "SELECT contract_id, assumeNotNull(name) AS name \
+                 FROM soroban_contract_metadata FINAL \
+                 WHERE contract_id IN \
+                       (SELECT contract_id FROM soroban_contracts WHERE id IN ({contract_ids_sql})) \
+                   AND name != ''"
+            ))
+            .fetch_all::<LedgerCollectionNameRow>(),
+    )?;
     let ledger_names: HashMap<String, String> = ledger_names
         .into_iter()
-        .filter_map(|r| Some((r.contract_id, r.name?)))
+        .map(|r| (r.contract_id, r.name))
         .collect();
 
     rows.into_iter()

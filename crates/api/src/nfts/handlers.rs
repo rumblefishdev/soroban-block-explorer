@@ -119,7 +119,7 @@ pub async fn list_nfts(
         return errors::bad_request_with_details(
             errors::INVALID_FILTER,
             "filter[owner] cannot be combined with other filters",
-            serde_json::json!({ "param": "filter[owner]" }),
+            serde_json::json!({ "filter": "owner", "received": params.filter_owner }),
         );
     }
 

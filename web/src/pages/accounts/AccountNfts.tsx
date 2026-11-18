@@ -8,9 +8,9 @@ import { NftsTable } from '../nfts/NftsTable.js';
 
 /**
  * NFTs section of the account detail page — the NFTs the account holds now,
- * each linked to its NFT page. Few accounts hold any (856 of ~20M on
- * mainnet, task 0675), so the section shows only once its first page comes
- * back with rows; a failed fetch still shows, so the error is not hidden.
+ * each linked to its NFT page. Few accounts hold any, so the section shows
+ * only once its first page comes back with rows; a failed fetch still shows,
+ * so the error is not hidden.
  */
 export function AccountNfts({ accountId }: { accountId: string }) {
   // Own URL key: the transactions section below pages with `?cursor=`.

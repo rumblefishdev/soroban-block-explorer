@@ -674,6 +674,28 @@ describe('AccountDetailPage', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('shows the NFTs section with its error when the NFT fetch fails', () => {
+    mockDetail({ data: SAMPLE, isLoading: false, isError: false });
+    hookMocks.useNftsList.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: Object.assign(new Error('boom'), { status: 500 }),
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    const card = screen.getByText('NFTs').closest('.MuiCard-root');
+    if (!card) throw new Error('NFTs card not found');
+    expect(
+      within(card as HTMLElement).getByRole('button', { name: /try again/i })
+    ).toBeInTheDocument();
+  });
+
   it('shows no NFTs section for an account that holds none', () => {
     mockDetail({ data: SAMPLE, isLoading: false, isError: false });
 

@@ -562,8 +562,9 @@ place where indexed contract metadata and decoded usage history are exposed.
 sold in a later batch never lists under its previous owner). `filter[owner]` takes no
 other filter (400 `invalid_filter`) and is served by its own read, `fetch_held_by`: it
 reads each source for the owner's tokens and folds them with `GROUP BY` instead of
-joining them, because on production each JOIN cost tens of MiB of per-thread hash
-tables (155–385 MiB per call; 4–10 MiB this way).
+joining them, because every JOIN builds a hash table per server thread whatever the
+row count (measured in task 0675). An NFT whose contract has no `soroban_contracts`
+row fails that read; the unfiltered list drops such a row.
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL. The owner (`owner`) is a `G…` account or a `C…` contract, resolved through

@@ -257,6 +257,28 @@ async fn nfts_held_by_an_owner_match_the_list_for_that_owner() {
     }
     assert_eq!(walked, ["kept", "plain", "unminted"]);
 
+    // And back from the last row: each Prev page starts at the row just before.
+    let mut walked_back = Vec::new();
+    let last = alice.last().expect("Alice holds NFTs");
+    let mut cursor = NftListCursor {
+        minted_at_ledger: last.minted_at_ledger.unwrap_or(0),
+        contract_surrogate: last.contract_surrogate,
+        token_id: last.token_id.clone(),
+    };
+    loop {
+        let page = fetch_held_by(&ch, "GALICE", 2, Some(&cursor), Direction::Prev)
+            .await
+            .expect("page must run");
+        let Some(row) = page.first() else { break };
+        walked_back.push(row.token_id.clone());
+        cursor = NftListCursor {
+            minted_at_ledger: row.minted_at_ledger.unwrap_or(0),
+            contract_surrogate: row.contract_surrogate,
+            token_id: row.token_id.clone(),
+        };
+    }
+    assert_eq!(walked_back, ["plain", "kept"]);
+
     base.query(&format!("DROP DATABASE {DB}"))
         .execute()
         .await

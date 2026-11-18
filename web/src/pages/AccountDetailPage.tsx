@@ -17,8 +17,8 @@ import { Navigate, useParams } from 'react-router-dom';
 import { useAccountDetail } from '../api/index.js';
 
 import { AccountBalances } from './accounts/AccountBalances.js';
-import { AccountNfts } from './accounts/AccountNfts.js';
 import { AccountDetailSkeleton } from './accounts/AccountDetailSkeleton.js';
+import { AccountNfts } from './accounts/AccountNfts.js';
 import { AccountSigners } from './accounts/AccountSigners.js';
 import { AccountSponsorship } from './accounts/AccountSponsorship.js';
 import { AccountSummary } from './accounts/AccountSummary.js';
