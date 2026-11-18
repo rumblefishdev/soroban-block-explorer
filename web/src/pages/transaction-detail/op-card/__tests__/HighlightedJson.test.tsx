@@ -1,11 +1,23 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { ExplorerThemeProvider } from '@rumblefish/soroban-block-explorer-ui';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { HighlightedJson } from '../HighlightedJson.js';
 
 const CONTRACT = 'CDDTJ7OZU2WZAEZNTUZWIRAE4EMP5CF63M3INFQWTLX4ENMYUFK6RCTX';
 const ACCOUNT = 'GC4QMEH5CY5HAEZVC2XNTRV2XBPQWUX2WCV3ANU32HBFNCYIKWHGK7XQ';
+
+/** What the copy button puts on the clipboard: the full value, never the
+ *  shortened text on screen. */
+function copiedByButton(): string {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText },
+    configurable: true,
+  });
+  fireEvent.click(screen.getByRole('button', { name: /copy/i }));
+  return writeText.mock.calls[0][0];
+}
 
 function renderJson(value: unknown, narrow = false) {
   return render(
@@ -43,7 +55,7 @@ describe('HighlightedJson strkey awareness (0460 #14)', () => {
     const link = screen.getByRole('link', { name: ACCOUNT });
     expect(link.textContent).toBe('GC4Q…K7XQ');
     expect(link.getAttribute('href')).toBe(`/accounts/${ACCOUNT}`);
-    expect(screen.getByRole('button', { name: /copy/i })).toBeTruthy();
+    expect(copiedByButton()).toBe(ACCOUNT);
   });
 
   it('shortens only the issuer of an asset in a narrow column', () => {
@@ -52,6 +64,7 @@ describe('HighlightedJson strkey awareness (0460 #14)', () => {
     const link = screen.getByRole('link', { name: asset });
     expect(link.textContent).toBe('yUSDC:GC4Q…K7XQ');
     expect(link.getAttribute('href')).toBe(`/assets/yUSDC-${ACCOUNT}`);
+    expect(copiedByButton()).toBe(asset);
   });
 
   it('leaves ordinary strings and near-miss values untouched', () => {
