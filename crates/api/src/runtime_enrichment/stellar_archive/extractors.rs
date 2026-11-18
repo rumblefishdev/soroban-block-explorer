@@ -74,10 +74,8 @@ pub fn extract_e3_heavy(
         }
         _ => None,
     };
-    let operation_tree = operation_tree.map(|mut tree| {
-        scval_integers_as_text(&mut tree);
-        tree
-    });
+    let mut operation_tree = operation_tree;
+    operation_tree.iter_mut().for_each(scval_integers_as_text);
 
     // Operations: raw details per op. Op results feed the path-payment
     // pool claims (poolIds / claimedAtoms in details — task 0261), so that

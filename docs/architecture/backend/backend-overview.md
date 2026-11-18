@@ -343,8 +343,8 @@ filter, and had to be corrected — the exception looked like the rule.
 **Every integer inside a typed contract value (`{"type", "value"}`) leaves the
 API as decimal text**, whatever its size: `{"type":"u32","value":"5"}`,
 `{"type":"u64","value":"6952519163801588163"}`. A browser's `JSON.parse` keeps an
-integer exact only up to 2^53 − 1, and 31% of muxed ids in token transfers are
-above it. One rule for every integer type, so a client never checks which form
+integer exact only up to 2^53 − 1, and 131,893 of 422,424 muxed ids in token
+transfers (31%) are above it (`asset_transfers.to_muxed_id`, measured 2026-11-18). One rule for every integer type, so a client never checks which form
 a value came in. `u256` and `i256` leave as their signed decimal, the form the
 official stellar-xdr JSON (SEP-51) writes; the parser stores them as 64 hex
 characters, and the API converts them.
@@ -353,8 +353,8 @@ It covers event topics and data (contract and diagnostic), the invocation tree,
 the contract values inside operation details (call args, return value) and the
 contract events list. `common::scval_integers_as_text` does it, last, on the
 value about to be sent; the parser and stored rows keep JSON numbers, which
-Rust reads exactly. Plain numbers in classic operation details are not yet
-covered (lore 0363, decision 13, step 2).
+Rust reads exactly. Plain numbers in classic operation details (e.g. `amount`)
+are not typed contract values and stay JSON numbers.
 
 ### 6.3 Endpoint Inventory
 

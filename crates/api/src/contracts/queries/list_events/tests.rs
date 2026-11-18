@@ -90,6 +90,20 @@ fn event_transactions_resolve_by_position() {
 }
 
 #[test]
+fn map_event_row_sends_contract_integers_as_text() {
+    // Stored rows keep JSON numbers; the response carries every digit as
+    // text (lore 0363, decision 13).
+    let ev = map_event_row(event_row(
+        1,
+        r#"[{"type":"sym","value":"transfer"},{"type":"u32","value":5}]"#,
+        r#"{"type":"u64","value":17933488432273231284}"#,
+    ))
+    .expect("a valid row decodes");
+    assert_eq!(ev.item.topics[1]["value"], "5");
+    assert_eq!(ev.item.data["value"], "17933488432273231284");
+}
+
+#[test]
 fn map_event_row_scalar_topics_wraps_singleton() {
     let ev =
         map_event_row(event_row(0 /* system */, r#""solo""#, "null")).expect("a valid row decodes");

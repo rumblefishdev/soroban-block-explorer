@@ -114,3 +114,42 @@ fn operations_are_numbered_from_zero_like_their_events() {
         );
     }
 }
+
+#[test]
+fn transaction_page_contract_values_carry_integers_as_text() {
+    // Every typed integer the transaction page receives is text, in events
+    // and in operation details (lore 0363, decision 13).
+    let meta = ledger();
+    let net_id = xdr_parser::network_id(xdr_parser::MAINNET_PASSPHRASE);
+    let ledger_info = xdr_parser::extract_ledger(&meta);
+    let txs = xdr_parser::extract_transactions(
+        &meta,
+        ledger_info.sequence,
+        ledger_info.closed_at,
+        &net_id,
+    );
+    let integer_tags = ["u32", "i32", "u64", "i64", "timepoint", "duration"];
+    let mut seen = 0;
+    for tx in &txs {
+        let heavy = extract_e3_heavy(&meta, &tx.hash, &net_id).expect("heavy fields");
+        let json = serde_json::to_value(&heavy).expect("serialises");
+        let mut stack = vec![&json];
+        while let Some(v) = stack.pop() {
+            match v {
+                serde_json::Value::Object(o) => {
+                    if let (Some(t), Some(inner)) =
+                        (o.get("type").and_then(|t| t.as_str()), o.get("value"))
+                        && integer_tags.contains(&t)
+                    {
+                        assert!(inner.is_string(), "{t} sent as {inner}");
+                        seen += 1;
+                    }
+                    stack.extend(o.values());
+                }
+                serde_json::Value::Array(a) => stack.extend(a),
+                _ => {}
+            }
+        }
+    }
+    assert!(seen > 0, "the fixture ledger carries typed integers");
+}
