@@ -1,8 +1,5 @@
 import type { XdrEventDto } from '@rumblefish/api-types';
-import {
-  formatAmount,
-  formatInteger,
-} from '@rumblefish/soroban-block-explorer-ui';
+import { formatAmount } from '@rumblefish/soroban-block-explorer-ui';
 
 import { symTopic } from './ExecutionTrace.js';
 
@@ -39,8 +36,8 @@ import { symTopic } from './ExecutionTrace.js';
  *  failure this codebase refuses. Nothing is skipped: an unexpected shape
  *  passes through verbatim and is displayed as it arrived.
  *
- *  The API sends a u64 counter as decimal text (lore 0363, decision 13); an
- *  older response sends a JSON number. Either is kept as it arrived, never
+ *  A u64 counter arrives as decimal text (lore 0363, decision 13) or, from an
+ *  API without that change, as a JSON number. Either is kept as it arrived, never
  *  coerced into a number that could lose digits. */
 export function readResourceCounters(
   events: readonly XdrEventDto[]
@@ -87,7 +84,6 @@ export function allResourceFacts(
  *  as a number or as text. Anything else shows as it arrived — formatting an
  *  unparsed value would dress it up as something we read. */
 function counterText(value: number | string): string {
-  if (typeof value === 'number') return formatInteger(value);
-  if (/^\d+$/.test(value)) return formatAmount(value);
-  return value;
+  const text = String(value);
+  return /^\d+$/.test(text) ? formatAmount(text) : text;
 }
