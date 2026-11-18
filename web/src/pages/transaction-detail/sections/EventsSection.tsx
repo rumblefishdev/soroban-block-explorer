@@ -57,6 +57,22 @@ function eventChip(event: XdrEventDto) {
   return <Chip size="sm" color="neutral" label="Diagnostic" />;
 }
 
+/** The event ID in full, free to wrap only after the dash. The ID is two
+ *  fixed-width numbers (where the event sits in the chain, its index there);
+ *  kept on one line it took the width the event's Topics and Data need
+ *  (issue #735). A digit run has no break point of its own, so the `<wbr>`
+ *  is the only place the ID can wrap, and it is not copied with the text. */
+function EventId({ id }: { id: string | null | undefined }) {
+  if (id == null) return <>—</>;
+  const [position, index] = id.split('-');
+  return (
+    <>
+      {position}-<wbr />
+      {index}
+    </>
+  );
+}
+
 function EventTable({
   events,
   showWhere,
@@ -69,27 +85,17 @@ function EventTable({
       <Table size="small">
         <TableHead>
           <TableRow>
-            <TableCell>ID</TableCell>
             <TableCell sx={{ width: 130 }}>Type</TableCell>
             {showWhere && <TableCell sx={{ width: 120 }}>Where</TableCell>}
             <TableCell sx={{ width: 200 }}>Contract</TableCell>
             <TableCell>Topics</TableCell>
             <TableCell>Data</TableCell>
+            <TableCell>ID</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
           {events.map((event, index) => (
             <TableRow key={event.id ?? `diag-${index}`}>
-              <TableCell
-                sx={(theme) => ({
-                  verticalAlign: 'top',
-                  color: theme.palette.text.tertiary,
-                  fontFamily: 'monospace',
-                  whiteSpace: 'nowrap',
-                })}
-              >
-                {event.id ?? '—'}
-              </TableCell>
               <TableCell sx={{ verticalAlign: 'top' }}>
                 {eventChip(event)}
               </TableCell>
@@ -119,10 +125,19 @@ function EventTable({
                 )}
               </TableCell>
               <TableCell sx={{ verticalAlign: 'top' }}>
-                <HighlightedJson value={event.topics} />
+                <HighlightedJson value={event.topics} narrow />
               </TableCell>
               <TableCell sx={{ verticalAlign: 'top' }}>
-                <HighlightedJson value={event.data} />
+                <HighlightedJson value={event.data} narrow />
+              </TableCell>
+              <TableCell
+                sx={(theme) => ({
+                  verticalAlign: 'top',
+                  color: theme.palette.text.tertiary,
+                  fontFamily: 'monospace',
+                })}
+              >
+                <EventId id={event.id} />
               </TableCell>
             </TableRow>
           ))}
