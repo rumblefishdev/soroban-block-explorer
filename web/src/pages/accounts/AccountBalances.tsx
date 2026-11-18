@@ -338,30 +338,34 @@ export function AccountBalances({
     validKeys: HOLDINGS_TABS,
   });
   const showNfts = nftCount > 0 && activeKey === 'nfts';
-  const action =
+  // The pills take the counter's place under the title: they carry both counts.
+  const title =
     nftCount > 0 ? (
-      <HoldingsSwitch
-        active={showNfts ? 'nfts' : 'tokens'}
-        tokens={balances.length}
-        nfts={nftCount}
-        onChange={setActiveKey}
-      />
-    ) : undefined;
+      <Stack spacing={0.75} alignItems="flex-start">
+        <Typography variant="heading5SemiBold" component="h2">
+          Assets
+        </Typography>
+        <HoldingsSwitch
+          active={showNfts ? 'nfts' : 'tokens'}
+          tokens={balances.length}
+          nfts={nftCount}
+          onChange={setActiveKey}
+        />
+      </Stack>
+    ) : (
+      'Assets'
+    );
 
   if (showNfts) {
     return (
-      <SectionCard
-        title="Assets"
-        meta={`${nftCount} ${nftCount === 1 ? 'NFT' : 'NFTs'}`}
-        action={action}
-      >
+      <SectionCard title={title}>
         <AccountNfts accountId={accountId} />
       </SectionCard>
     );
   }
 
   return (
-    <SectionCard title="Assets" meta={meta} action={action}>
+    <SectionCard title={title} meta={nftCount > 0 ? undefined : meta}>
       {balances.length === 0 ? (
         <EmptyState
           icon={<AccountBalanceWalletIcon />}
@@ -399,9 +403,9 @@ export function AccountBalances({
 }
 
 /**
- * Tokens / NFTs pills in the Assets card header, each with its count. Same
- * pill look as the chart range picker on the pool page (`IntervalPills` in
- * `PoolCharts.tsx`), so the header keeps its height.
+ * Tokens / NFTs pills under the Assets title, each with its count. Same pill
+ * look as the chart range picker on the pool page (`IntervalPills` in
+ * `PoolCharts.tsx`).
  */
 function HoldingsSwitch({
   active,

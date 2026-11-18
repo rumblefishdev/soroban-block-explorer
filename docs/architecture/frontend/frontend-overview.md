@@ -522,8 +522,9 @@ Account detail view for a Stellar account.
 
 - Account summary - account ID (full, copyable), sequence number, first seen ledger, last seen ledger
 - **Assets** - native XLM plus every trustline, INCLUDING the ones standing at zero.
-  When the account holds an NFT the card header gets a `Tokens N` / `NFTs N` pill
-  switch (`?holdings=nfts`); the NFTs view lists the NFTs held now, each linked to its NFT
+  When the account holds an NFT a `Tokens N` / `NFTs N` pill switch takes the
+  counter's place under the title (`?holdings=nfts`); the NFTs view lists the NFTs held
+  now, each linked to its NFT
   page, fed by `GET /nfts?filter[owner]=` and paged by cursor under `?cursor_n=`.
   The count comes with the account (`nft_count`), so the card is laid out once and
   an account without NFTs sends no NFT request (task 0675).
