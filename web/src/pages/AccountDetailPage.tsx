@@ -18,7 +18,6 @@ import { useAccountDetail } from '../api/index.js';
 
 import { AccountBalances } from './accounts/AccountBalances.js';
 import { AccountDetailSkeleton } from './accounts/AccountDetailSkeleton.js';
-import { AccountNfts } from './accounts/AccountNfts.js';
 import { AccountSigners } from './accounts/AccountSigners.js';
 import { AccountSponsorship } from './accounts/AccountSponsorship.js';
 import { AccountSummary } from './accounts/AccountSummary.js';
@@ -64,8 +63,10 @@ export default function AccountDetailPage() {
     summary = <AccountSummary account={account.data} />;
     balances = (
       <AccountBalances
+        accountId={accountId}
         balances={account.data.balances}
         deleted={account.data.deleted}
+        nftCount={account.data.nft_count}
       />
     );
     signers = (
@@ -117,11 +118,6 @@ export default function AccountDetailPage() {
       {balances != null && (
         <SectionErrorBoundary sectionName="account-balances">
           {balances}
-        </SectionErrorBoundary>
-      )}
-      {account.data != null && (
-        <SectionErrorBoundary sectionName="account-nfts">
-          <AccountNfts accountId={accountId} />
         </SectionErrorBoundary>
       )}
       {signers != null && (

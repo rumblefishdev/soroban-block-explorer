@@ -9,6 +9,8 @@ import {
   IdentifierDisplay,
   PaginationControls,
   scaleByDecimals,
+  Tabs,
+  useTabUrlState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useSearchParams } from 'react-router-dom';
 
@@ -17,6 +19,7 @@ import { PAGE_SIZE } from '../../api/polling.js';
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { AssetIcon } from '../assets/AssetIcon.js';
+import { AccountNfts } from './AccountNfts.js';
 import { NATIVE_ASSET_CODE, SAC_TAG } from '../assets/assetType.js';
 
 interface BalanceShape {
@@ -57,6 +60,8 @@ interface BalanceShape {
  * Position would have worked only per page: with pagination the index restarts
  * at 0 on every page, so page 2's first row would claim page 1's key.
  */
+const HOLDINGS_TABS = ['tokens', 'nfts'];
+
 function assetKey(balance: AccountBalance): string {
   return [
     balance.type,
@@ -269,12 +274,17 @@ function BalanceRow({
  * has to fall in the same place the server put it.
  */
 export function AccountBalances({
+  accountId,
   balances,
   deleted,
+  nftCount,
 }: {
+  accountId: string;
   balances: readonly AccountBalance[];
   /** The account was closed — "yet" would promise something that cannot come. */
   deleted: boolean;
+  /** NFTs the account holds now; at 0 the card has no NFTs tab. */
+  nftCount: number;
 }) {
   const funded = balances.filter((b) => b.balance !== '0').length;
   const noun = balances.length === 1 ? 'asset' : 'assets';
@@ -320,8 +330,43 @@ export function AccountBalances({
   const start = page * PAGE_SIZE;
   const shown = paged ? balances.slice(start, start + PAGE_SIZE) : balances;
 
+  // NFTs are a second tab of this card, not assets of their own: SEP-50 NFTs
+  // carry no balance, so they get their own list. The tab exists only for an
+  // account that holds one, and `?holdings=nfts` keeps it across a reload.
+  const { activeKey, setActiveKey } = useTabUrlState({
+    param: 'holdings',
+    defaultKey: 'tokens',
+    validKeys: HOLDINGS_TABS,
+  });
+  const showNfts = nftCount > 0 && activeKey === 'nfts';
+  const title =
+    nftCount > 0 ? (
+      <Tabs
+        tabs={[
+          { key: 'tokens', label: 'Tokens', count: balances.length },
+          { key: 'nfts', label: 'NFTs', count: nftCount },
+        ]}
+        activeKey={showNfts ? 'nfts' : 'tokens'}
+        onChange={setActiveKey}
+        aria-label="Assets"
+      />
+    ) : (
+      'Assets'
+    );
+
+  if (showNfts) {
+    return (
+      <SectionCard
+        title={title}
+        meta={`${nftCount} ${nftCount === 1 ? 'NFT' : 'NFTs'}`}
+      >
+        <AccountNfts accountId={accountId} />
+      </SectionCard>
+    );
+  }
+
   return (
-    <SectionCard title="Assets" meta={meta}>
+    <SectionCard title={title} meta={meta}>
       {balances.length === 0 ? (
         <EmptyState
           icon={<AccountBalanceWalletIcon />}

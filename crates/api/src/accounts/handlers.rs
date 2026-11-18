@@ -20,6 +20,7 @@ use super::dto::{
     AccountSigning, AccountSponsorship, AccountTransactionItem, AccountTxListParams,
     AccountsListCursor, AccountsListParams,
 };
+use super::nft_count;
 use super::queries::{
     self, AccountBalanceRow, AccountEntryStateRow, AccountHeaderRow, AccountListRow, AccountTxRow,
     ResolvedListParams,
@@ -153,10 +154,12 @@ pub async fn get_account(
     // Balances and deleted-status both key off `header.id` alone — neither
     // consumes the other, so they go out together (task 0446). Kept as two
     // `match` arms so each keeps its own error log line.
-    let (balances_res, deleted_res, signing_res) = tokio::join!(
+    let ch = state.ch();
+    let (balances_res, deleted_res, signing_res, nft_count_res) = tokio::join!(
         fetch_account_balances(&state, header.id),
         fetch_deleted_for_source(&state, header.id),
         fetch_entry_state_for_source(&state, header.id),
+        nft_count::fetch_nft_count(&ch, header.id),
     );
 
     let balances = match balances_res {
@@ -178,6 +181,14 @@ pub async fn get_account(
             .collect(),
         Err(e) => {
             tracing::error!(account_id = %account_id, error = %e, "DB error fetching account balances");
+            return errors::internal_error(errors::DB_ERROR, "database error");
+        }
+    };
+
+    let nft_count = match nft_count_res {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::error!(account_id = %account_id, error = %e, "DB error counting account NFTs");
             return errors::internal_error(errors::DB_ERROR, "database error");
         }
     };
@@ -245,6 +256,7 @@ pub async fn get_account(
         deleted,
         signing,
         sponsorship,
+        nft_count,
     };
 
     let mut resp = Json(body).into_response();

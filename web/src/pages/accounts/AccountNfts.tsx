@@ -3,14 +3,11 @@ import { useCursorPagination } from '@rumblefish/soroban-block-explorer-ui';
 import { PAGE_SIZE, useNftsList, usePagedRows } from '../../api/index.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { DataList } from '../detail/DataList.js';
-import { SectionCard } from '../detail/SectionCard.js';
 import { NftsTable } from '../nfts/NftsTable.js';
 
 /**
- * NFTs section of the account detail page — the NFTs the account holds now,
- * each linked to its NFT page. Few accounts hold any, so the section shows
- * only once its first page comes back with rows; a failed fetch still shows,
- * so the error is not hidden.
+ * The NFTs tab of the account's Assets card — the NFTs the account holds now,
+ * each linked to its NFT page, newest mint first.
  */
 export function AccountNfts({ accountId }: { accountId: string }) {
   // Own URL key: the transactions section below pages with `?cursor=`.
@@ -24,26 +21,21 @@ export function AccountNfts({ accountId }: { accountId: string }) {
   });
   const pager = usePagedRows(query.data, goNext, goPrev);
 
-  if (query.isLoading) return null;
-  if (!query.isError && cursor == null && pager.rows.length === 0) return null;
-
   return (
-    <SectionCard title="NFTs">
-      <DataList
-        query={query}
-        pager={pager}
-        errorPy={6}
-        renderTable={(rows, { loading }) => (
-          <NftsTable
-            rows={rows}
-            loading={loading}
-            skeletonRows={PAGE_SIZE}
-            hideOwner
-          />
-        )}
-        emptyKind="nft"
-        emptyPy={6}
-      />
-    </SectionCard>
+    <DataList
+      query={query}
+      pager={pager}
+      errorPy={6}
+      renderTable={(rows, { loading }) => (
+        <NftsTable
+          rows={rows}
+          loading={loading}
+          skeletonRows={PAGE_SIZE}
+          hideOwner
+        />
+      )}
+      emptyKind="nft"
+      emptyPy={6}
+    />
   );
 }

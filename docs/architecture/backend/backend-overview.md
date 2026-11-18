@@ -428,7 +428,8 @@ Deliberately omits address search (exact lookup is the global-search redirect) a
 balance ranking / `xlm_supply_percent` (no index / no XLM-supply source — see task 0274).
 
 **`GET /accounts/:account_id`** - Account detail: current balances, sequence number,
-and first/last seen ledger.
+first/last seen ledger, and `nft_count` — the NFTs the account holds now (the merged
+`nfts` row, the same rule as `GET /nfts?filter[owner]=`).
 
 **`GET /accounts/:account_id/transactions`** - Paginated transactions involving this
 account.

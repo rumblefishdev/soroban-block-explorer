@@ -65,6 +65,7 @@ const SAMPLE: AccountDetailResponse = {
   last_seen_ledger: 200,
   sequence_number: '99123456',
   deleted: false,
+  nft_count: 0,
 };
 
 const DELETED_SAMPLE: AccountDetailResponse = {
@@ -648,8 +649,26 @@ describe('AccountDetailPage', () => {
     expect(screen.queryByText(/recent transactions/i)).not.toBeInTheDocument();
   });
 
-  it('lists the NFTs the account holds, linked, without an owner column', () => {
+  it('shows no NFTs tab and asks for no NFTs when the account holds none', () => {
     mockDetail({ data: SAMPLE, isLoading: false, isError: false });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('Assets')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /NFTs/ })).not.toBeInTheDocument();
+    expect(hookMocks.useNftsList).not.toHaveBeenCalled();
+  });
+
+  it('switches the Assets card to the NFTs the account holds, linked, without an owner column', async () => {
+    const user = userEvent.setup();
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 1 },
+      isLoading: false,
+      isError: false,
+    });
     mockNfts([HELD_NFT]);
 
     renderWithProviders(<AccountDetailPage />, {
@@ -657,12 +676,23 @@ describe('AccountDetailPage', () => {
       routePath: '/accounts/:accountId',
     });
 
+    // Tokens first, each tab carrying its count; no NFT request until asked.
+    expect(screen.getByRole('tab', { name: /Tokens\s*2/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    expect(hookMocks.useNftsList).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: /NFTs\s*1/ }));
+
     expect(hookMocks.useNftsList).toHaveBeenLastCalledWith(null, {
       limit: 20,
       'filter[owner]': VALID_ACCOUNT,
     });
-    const card = screen.getByText('NFTs').closest('.MuiCard-root');
-    if (!card) throw new Error('NFTs card not found');
+    const card = screen
+      .getByRole('tab', { name: /NFTs/ })
+      .closest('.MuiCard-root');
+    if (!card) throw new Error('Assets card not found');
     const links = within(card as HTMLElement).getAllByRole('link');
     expect(
       links.some(
@@ -674,8 +704,12 @@ describe('AccountDetailPage', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('shows the NFTs section with its error when the NFT fetch fails', () => {
-    mockDetail({ data: SAMPLE, isLoading: false, isError: false });
+  it('opens the NFTs tab from the URL and shows its error when the NFT fetch fails', () => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 1 },
+      isLoading: false,
+      isError: false,
+    });
     hookMocks.useNftsList.mockReturnValue({
       data: undefined,
       isLoading: false,
@@ -685,25 +719,16 @@ describe('AccountDetailPage', () => {
     });
 
     renderWithProviders(<AccountDetailPage />, {
-      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
       routePath: '/accounts/:accountId',
     });
 
-    const card = screen.getByText('NFTs').closest('.MuiCard-root');
-    if (!card) throw new Error('NFTs card not found');
+    expect(screen.getByRole('tab', { name: /NFTs/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
     expect(
-      within(card as HTMLElement).getByRole('button', { name: /try again/i })
+      screen.getByRole('button', { name: /try again/i })
     ).toBeInTheDocument();
-  });
-
-  it('shows no NFTs section for an account that holds none', () => {
-    mockDetail({ data: SAMPLE, isLoading: false, isError: false });
-
-    renderWithProviders(<AccountDetailPage />, {
-      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
-      routePath: '/accounts/:accountId',
-    });
-
-    expect(screen.queryByText('NFTs')).not.toBeInTheDocument();
   });
 });

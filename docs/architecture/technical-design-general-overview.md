@@ -387,7 +387,8 @@ transactions.
 #### Accounts
 
 **`GET /accounts/:account_id`** — Account detail: current balances, sequence number,
-and first/last seen ledger.
+first/last seen ledger, and `nft_count` — the NFTs the account holds now (the merged
+`nfts` row, the same rule as `GET /nfts?filter[owner]=`).
 
 **`GET /accounts/:account_id/transactions`** — Paginated transactions involving this
 account.

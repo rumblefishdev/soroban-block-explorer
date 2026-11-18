@@ -151,6 +151,12 @@ export type AccountDetailResponse = {
   home_domain?: string | null;
   last_seen_ledger: number;
   /**
+   * How many NFTs the account holds now. Counts only what the indexer
+   * classified as an NFT; `0` also for an account whose NFTs are not
+   * indexed.
+   */
+  nft_count: number;
+  /**
    * Decimal text, not a JSON number: most sequence numbers exceed 2^53,
    * where a browser's JSON parser drops the last digits.
    */

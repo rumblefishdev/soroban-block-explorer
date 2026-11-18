@@ -126,6 +126,10 @@ pub struct AccountDetailResponse {
     /// `account_entry_state` row) — so it holds no reserves to count. Render
     /// nothing for `null`.
     pub sponsorship: Option<AccountSponsorship>,
+    /// How many NFTs the account holds now. Counts only what the indexer
+    /// classified as an NFT; `0` also for an account whose NFTs are not
+    /// indexed.
+    pub nft_count: u64,
 }
 
 /// The CAP-33 counters the network keeps on the account itself, copied as
