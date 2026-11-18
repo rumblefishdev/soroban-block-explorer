@@ -1,7 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Browser regression for the account page (issue #377).
+ * Browser regression for the account page (issue #377) and for the session
+ * check against the real Cloudflare Turnstile widget (task 0289).
  *
  * The API is intercepted per test rather than reached: CI has no mTLS
  * certificate for production ClickHouse, and a test whose result depends on
@@ -9,8 +10,9 @@ import { defineConfig, devices } from '@playwright/test';
  * is exactly what jsdom cannot check — real history, real layout, real
  * scrolling.
  *
- * `webServer` boots the app's own dev server. `reuseExistingServer` keeps a
- * local run instant when one is already up; CI always starts its own.
+ * `webServer` boots the app's own dev servers. The account server is reused
+ * locally when one is already up, to keep a local run instant; CI always
+ * starts its own. The Turnstile servers are never reused (see below).
  */
 export default defineConfig({
   testDir: './e2e',
@@ -38,7 +40,13 @@ export default defineConfig({
       // The value is never fetched: every request is intercepted by `page.route`.
       // It only has to parse as a URL, and pointing it at the test server keeps a
       // stray un-mocked call local instead of aimed at a real host.
-      env: { VITE_API_BASE_URL: 'http://localhost:4280/api' },
+      // No site key: the account tests run with the session gate off. Empty,
+      // not absent, so a key in the shell or in `.env.development.local`
+      // cannot arm it.
+      env: {
+        VITE_API_BASE_URL: 'http://localhost:4280/api',
+        VITE_TURNSTILE_SITE_KEY: '',
+      },
     },
 
     // Four more servers, one per Cloudflare dummy site key, for

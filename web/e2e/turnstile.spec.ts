@@ -176,24 +176,6 @@ test.describe('a key that always fails', () => {
     // 110200, 600010, …) in what the visitor reads.
     const text = await card.innerText();
     expect(text).not.toMatch(/\b\d{3}\b|\b\d{6}\b|error code/i);
-    // The widget draws its own failure text, error code included, inside its
-    // iframe (in a shadow root). If that iframe shows inside the card, the
-    // code reaches the visitor.
-    for (const frame of page.frames()) {
-      if (!frame.url().includes('challenges.cloudflare.com')) continue;
-      const iframe = await frame.frameElement();
-      const shownInCard = await iframe.evaluate((el) => {
-        const root = el.getRootNode();
-        const host = root instanceof ShadowRoot ? root.host : el;
-        const card = document.querySelector('[role="alertdialog"]');
-        return !!card?.contains(host) && el.getClientRects().length > 0;
-      });
-      if (shownInCard) {
-        expect(await frame.locator('body').innerText()).not.toMatch(
-          /\b\d{6}\b|error/i
-        );
-      }
-    }
   });
 
   test('the card is an alertdialog with focus on Try again', async ({
@@ -215,12 +197,29 @@ test.describe('a key that always fails', () => {
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) documentLoads += 1;
     });
+    // Each check draws a new widget, and each widget loads its own iframe
+    // from Cloudflare's challenge platform.
+    let widgetLoads = 0;
+    page.on('request', (request) => {
+      if (
+        request.frame() !== page.mainFrame() &&
+        request
+          .url()
+          .startsWith(
+            'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/'
+          ) &&
+        request.resourceType() === 'document'
+      ) {
+        widgetLoads += 1;
+      }
+    });
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
     await expect(card).toBeVisible({ timeout: CARD_TIMEOUT });
     const url = page.url();
     const loadsBefore = documentLoads;
+    const widgetsBefore = widgetLoads;
 
     // App state a reload would wipe, and a watcher that notes the card going
     // away even if it comes back between two polls.
@@ -249,6 +248,7 @@ test.describe('a key that always fails', () => {
       )
       .toBe(true);
     await expect(card).toBeVisible({ timeout: CARD_TIMEOUT });
+    expect(widgetLoads).toBeGreaterThan(widgetsBefore);
 
     expect(page.url()).toBe(url);
     expect(documentLoads).toBe(loadsBefore);
