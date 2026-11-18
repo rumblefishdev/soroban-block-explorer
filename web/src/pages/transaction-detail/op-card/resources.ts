@@ -1,5 +1,8 @@
 import type { XdrEventDto } from '@rumblefish/api-types';
-import { formatInteger } from '@rumblefish/soroban-block-explorer-ui';
+import {
+  formatAmount,
+  formatInteger,
+} from '@rumblefish/soroban-block-explorer-ui';
 
 import { symTopic } from './ExecutionTrace.js';
 
@@ -36,10 +39,9 @@ import { symTopic } from './ExecutionTrace.js';
  *  failure this codebase refuses. Nothing is skipped: an unexpected shape
  *  passes through verbatim and is displayed as it arrived.
  *
- *  The decoder emits u64 as a JSON number, and every counter observed on
- *  mainnet is far below 2^53, so the common path loses no precision. A value
- *  arriving as a decimal string (a big int) is kept as that string rather than
- *  coerced into a wrong number. */
+ *  The API sends a u64 counter as decimal text (lore 0363, decision 13); an
+ *  older response sends a JSON number. Either is kept as it arrived, never
+ *  coerced into a number that could lose digits. */
 export function readResourceCounters(
   events: readonly XdrEventDto[]
 ): Map<string, number | string> {
@@ -77,8 +79,15 @@ export function allResourceFacts(
 ): ResourceFact[] {
   return [...counters].map(([label, value]) => ({
     label,
-    // Grouping is for numbers we decoded. Anything else shows as it arrived —
-    // formatting an unparsed value would dress it up as something we read.
-    value: typeof value === 'number' ? formatInteger(value) : value,
+    value: counterText(value),
   }));
+}
+
+/** A counter as decimal digits gets thousands separators, whether it arrived
+ *  as a number or as text. Anything else shows as it arrived — formatting an
+ *  unparsed value would dress it up as something we read. */
+function counterText(value: number | string): string {
+  if (typeof value === 'number') return formatInteger(value);
+  if (/^\d+$/.test(value)) return formatAmount(value);
+  return value;
 }
