@@ -9,7 +9,6 @@ import {
   IdentifierDisplay,
   PaginationControls,
   scaleByDecimals,
-  Tabs,
   useTabUrlState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useSearchParams } from 'react-router-dom';
@@ -339,26 +338,22 @@ export function AccountBalances({
     validKeys: HOLDINGS_TABS,
   });
   const showNfts = nftCount > 0 && activeKey === 'nfts';
-  const title =
+  const action =
     nftCount > 0 ? (
-      <Tabs
-        tabs={[
-          { key: 'tokens', label: 'Tokens', count: balances.length },
-          { key: 'nfts', label: 'NFTs', count: nftCount },
-        ]}
-        activeKey={showNfts ? 'nfts' : 'tokens'}
+      <HoldingsSwitch
+        active={showNfts ? 'nfts' : 'tokens'}
+        tokens={balances.length}
+        nfts={nftCount}
         onChange={setActiveKey}
-        aria-label="Assets"
       />
-    ) : (
-      'Assets'
-    );
+    ) : undefined;
 
   if (showNfts) {
     return (
       <SectionCard
-        title={title}
+        title="Assets"
         meta={`${nftCount} ${nftCount === 1 ? 'NFT' : 'NFTs'}`}
+        action={action}
       >
         <AccountNfts accountId={accountId} />
       </SectionCard>
@@ -366,7 +361,7 @@ export function AccountBalances({
   }
 
   return (
-    <SectionCard title={title} meta={meta}>
+    <SectionCard title="Assets" meta={meta} action={action}>
       {balances.length === 0 ? (
         <EmptyState
           icon={<AccountBalanceWalletIcon />}
@@ -400,5 +395,68 @@ export function AccountBalances({
         />
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * Tokens / NFTs pills in the Assets card header, each with its count. Same
+ * pill look as the chart range picker on the pool page (`IntervalPills` in
+ * `PoolCharts.tsx`), so the header keeps its height.
+ */
+function HoldingsSwitch({
+  active,
+  tokens,
+  nfts,
+  onChange,
+}: {
+  active: 'tokens' | 'nfts';
+  tokens: number;
+  nfts: number;
+  onChange: (next: string) => void;
+}) {
+  const options = [
+    { key: 'tokens', label: 'Tokens', count: tokens },
+    { key: 'nfts', label: 'NFTs', count: nfts },
+  ] as const;
+  return (
+    <Stack direction="row" spacing={0.5} role="group" aria-label="Show">
+      {options.map(({ key, label, count }) => {
+        const isActive = key === active;
+        return (
+          <Box
+            key={key}
+            component="button"
+            type="button"
+            aria-pressed={isActive}
+            onClick={() => onChange(key)}
+            sx={(theme) => ({
+              ...theme.typography.bodyXsMedium,
+              border: 'none',
+              borderRadius: `${theme.shape.radius.s}px`,
+              px: 1.25,
+              py: 0.5,
+              cursor: 'pointer',
+              backgroundColor: isActive
+                ? theme.palette.surface.primaryMain
+                : theme.palette.surface.grayLight,
+              color: isActive
+                ? theme.palette.grey[900]
+                : theme.palette.text.secondary,
+              '&:hover': {
+                backgroundColor: isActive
+                  ? theme.palette.surface.primaryHover
+                  : theme.palette.surface.grayHover,
+              },
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.stroke.action}`,
+                outlineOffset: 2,
+              },
+            })}
+          >
+            {label} {count}
+          </Box>
+        );
+      })}
+    </Stack>
   );
 }

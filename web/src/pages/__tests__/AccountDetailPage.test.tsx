@@ -649,7 +649,7 @@ describe('AccountDetailPage', () => {
     expect(screen.queryByText(/recent transactions/i)).not.toBeInTheDocument();
   });
 
-  it('shows no NFTs tab and asks for no NFTs when the account holds none', () => {
+  it('shows no NFTs switch and asks for no NFTs when the account holds none', () => {
     mockDetail({ data: SAMPLE, isLoading: false, isError: false });
 
     renderWithProviders(<AccountDetailPage />, {
@@ -658,7 +658,9 @@ describe('AccountDetailPage', () => {
     });
 
     expect(screen.getByText('Assets')).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: /NFTs/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /NFTs/ })
+    ).not.toBeInTheDocument();
     expect(hookMocks.useNftsList).not.toHaveBeenCalled();
   });
 
@@ -677,20 +679,20 @@ describe('AccountDetailPage', () => {
     });
 
     // Tokens first, each tab carrying its count; no NFT request until asked.
-    expect(screen.getByRole('tab', { name: /Tokens\s*2/ })).toHaveAttribute(
-      'aria-selected',
+    expect(screen.getByRole('button', { name: 'Tokens 2' })).toHaveAttribute(
+      'aria-pressed',
       'true'
     );
     expect(hookMocks.useNftsList).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('tab', { name: /NFTs\s*1/ }));
+    await user.click(screen.getByRole('button', { name: 'NFTs 1' }));
 
     expect(hookMocks.useNftsList).toHaveBeenLastCalledWith(null, {
       limit: 20,
       'filter[owner]': VALID_ACCOUNT,
     });
     const card = screen
-      .getByRole('tab', { name: /NFTs/ })
+      .getByRole('button', { name: 'NFTs 1' })
       .closest('.MuiCard-root');
     if (!card) throw new Error('Assets card not found');
     const links = within(card as HTMLElement).getAllByRole('link');
@@ -704,7 +706,7 @@ describe('AccountDetailPage', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('opens the NFTs tab from the URL and shows its error when the NFT fetch fails', () => {
+  it('opens the NFTs view from the URL and shows its error when the NFT fetch fails', () => {
     mockDetail({
       data: { ...SAMPLE, nft_count: 1 },
       isLoading: false,
@@ -723,8 +725,8 @@ describe('AccountDetailPage', () => {
       routePath: '/accounts/:accountId',
     });
 
-    expect(screen.getByRole('tab', { name: /NFTs/ })).toHaveAttribute(
-      'aria-selected',
+    expect(screen.getByRole('button', { name: 'NFTs 1' })).toHaveAttribute(
+      'aria-pressed',
       'true'
     );
     expect(
