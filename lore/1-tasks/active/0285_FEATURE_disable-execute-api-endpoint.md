@@ -64,3 +64,48 @@ but doesn't remove it. The canary (0284) probes execute-api, so coordinate.
 ## Acceptance Criteria
 
 - [ ] Raw execute-api no longer resolves/answers; CF path unaffected
+
+## Premise
+
+Fresh opus devil's-advocate review, 2026-11-17 (premise first): the flag is
+right and safe to deploy, but "only Cloudflare reaches the API" is false while
+the REGIONAL custom domain answers directly (below). Deeper: Cloudflare limits
+per IP and the stage throttle is one global 50 rps bucket, so a few IPs under
+the per-IP limit can drain it through Cloudflare too; if draining the throttle
+is the threat, origin locking alone does not remove it. Put to the owner.
+
+## Still Open
+
+- **The REGIONAL custom domain is a second Cloudflare bypass.** API Gateway
+  routes by SNI, so `curl --resolve api.sorobanscan.com:443:<IP of any
+regional API Gateway endpoint in eu-central-1>` reaches the production
+  stage: `/health` 200, `/v1/ledgers` 403 (edge lock), measured 2026-11-17
+  through the IP of another API's regional domain. It needs no secret
+  hostname. API mTLS (ADR 0048 Path B) closes it; task 0285 does not.
+- **Unmeasured: whether a 403 from the closed address spends the stage
+  throttle.** AWS documents only the 403. Measure on testnet after deploy
+  (requests to the closed URL vs the stage `Count` metric); the stage has no
+  access logs.
+
+## Design Decisions
+
+### From Plan
+
+1. **Decoupled from mTLS, set unconditionally.** `disableExecuteApiEndpoint: true`
+   in every environment, no config flag: both environments serve through a
+   custom domain (base-path mappings `api.sorobanscan.com` and
+   `api-testnet.sorobanscan.com`, checked 2026-11-17), so no case needs the
+   address open.
+
+### Emerged
+
+2. **The flag takes effect on deploy without a manual redeploy.** AWS applies
+   it only on a stage update; CDK hashes the whole `CfnRestApi` into the
+   deployment's logical ID, so the synth already carries a new deployment.
+3. **Canary gating left as it is.** The origin-lock canary still probes the
+   execute-api URL only when an API lock is on. With the address always closed
+   the gate (and the matching `validateConfig` check) could go, but the canary
+   is off in both environments; only its comments were corrected.
+4. **Load tests go through Cloudflare only.** The guide's "direct to origin"
+   path is gone, so a run above Cloudflare's per-IP rate limit needs that rule
+   raised in soroban-infrastructure for the run.

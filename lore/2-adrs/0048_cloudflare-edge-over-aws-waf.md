@@ -3,7 +3,7 @@ id: '0048'
 title: 'Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare'
 status: accepted # proposed | accepted | deprecated | superseded
 deciders: [fmazur, team]
-related_tasks: ['0277', '0273', '0302']
+related_tasks: ['0277', '0273', '0302', '0285']
 related_adrs: ['0001', '0047']
 tags: [infra, security, waf, cloudflare, ddos, dns, edge]
 links:
@@ -52,6 +52,20 @@ history:
       component: the `$0.60/M` request fee is ~0.08 USD/mo at real volume
       (~130k req/mo); the saving is the fixed WebACL + rule fee, measured
       18.07 USD in June 2026. Teardown outcome recorded in task 0302.
+  - date: '2026-11-17'
+    status: accepted
+    who: karolkow
+    note: >
+      Decision 3's `disableExecuteApiEndpoint: true` is taken out of Path B and
+      set unconditionally (task 0285). The code had chained it to
+      `enableApiMtls`, which never shipped, so the raw `execute-api` address
+      kept answering. It sat behind the edge-secret lock (403 for data, 200 for
+      `/health`), yet every request to it still spent the API Gateway stage
+      throttle shared with real users, outside Cloudflare's rate limit. It now
+      answers 403 to everything; API mTLS on the custom domains stays open.
+      The REGIONAL custom domain remains a bypass: any regional API Gateway IP
+      with SNI `api.sorobanscan.com` reaches the API without Cloudflare (200
+      for `/health`, 403 for data, measured 2026-11-17).
 ---
 
 # ADR 0048: Cloudflare edge (WAF/DDoS) over AWS WAF, origins locked to Cloudflare
@@ -249,6 +263,13 @@ impractical.
   ACME) — accepted risk, mitigated by host firewall + Caddy rate limiting.
 - Re-creating a torn-down WebACL is a **fresh CDK deploy** (logs are
   `RemovalPolicy.DESTROY`), not a toggle.
+- **The API Gateway stage throttle is one bucket for all users** (50 rps /
+  100 burst), and Cloudflare's rate-limit rule counts per IP (Free plan:
+  IP only; per-header or per-session counting is Enterprise). A few IPs each
+  under the per-IP limit can together fill the bucket through Cloudflare,
+  and real users get 429 while it lasts. Accepted risk (2026-11-17): the
+  5-day peak was ~4.7 rps, 9% of the bucket, with no known case of it
+  filling.
 
 ---
 

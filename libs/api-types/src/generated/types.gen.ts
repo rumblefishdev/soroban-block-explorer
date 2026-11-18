@@ -150,7 +150,11 @@ export type AccountDetailResponse = {
   first_seen_ledger: number;
   home_domain?: string | null;
   last_seen_ledger: number;
-  sequence_number: number;
+  /**
+   * Decimal text, not a JSON number: most sequence numbers exceed 2^53,
+   * where a browser's JSON parser drops the last digits.
+   */
+  sequence_number: string;
   signing?: null | AccountSigning;
   sponsorship?: null | AccountSponsorship;
 };

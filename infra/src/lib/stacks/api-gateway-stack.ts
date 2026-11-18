@@ -93,9 +93,14 @@ export class ApiGatewayStack extends cdk.Stack {
       restApiName: `${config.envName}-soroban-explorer-api`,
       handler: apiFunction,
       proxy: true,
-      // Phase 2: kill the raw execute-api endpoint, which bypasses
-      // custom-domain mTLS. Only flips with enableApiMtls.
-      ...(config.enableApiMtls && { disableExecuteApiEndpoint: true }),
+      // Clients reach the API through its custom domains, which Cloudflare
+      // fronts. The raw execute-api address skips Cloudflare's rate limit,
+      // so it answers 403 to everything (task 0285). The REGIONAL custom
+      // domain is still reachable without Cloudflare (any regional API
+      // Gateway IP plus SNI `api.sorobanscan.com`); only the edge-secret
+      // lock guards it until API mTLS is on. An environment needs a custom
+      // domain mapped to this stage, or nothing can reach the API.
+      disableExecuteApiEndpoint: true,
       deployOptions: {
         stageName: config.envName,
         tracingEnabled: true,

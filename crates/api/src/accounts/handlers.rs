@@ -237,7 +237,7 @@ pub async fn get_account(
 
     let body = AccountDetailResponse {
         account_id: header.account_id,
-        sequence_number: header.sequence_number,
+        sequence_number: header.sequence_number.to_string(),
         balances,
         home_domain: header.home_domain,
         first_seen_ledger: header.first_seen_ledger,

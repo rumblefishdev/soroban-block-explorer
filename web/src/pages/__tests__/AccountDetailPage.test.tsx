@@ -6,23 +6,23 @@ import { screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderWithProviders } from '../test-utils.js';
+import { renderWithProviders } from '../../test-utils.js';
 
-import AccountDetailPage from './AccountDetailPage.js';
+import AccountDetailPage from '../AccountDetailPage.js';
 
 const hookMocks = vi.hoisted(() => ({
   useAccountDetail: vi.fn(),
   useAccountTransactions: vi.fn(),
 }));
 
-vi.mock('../api/index.js', async () => ({
+vi.mock('../../api/index.js', async () => ({
   useAccountDetail: hookMocks.useAccountDetail,
   useAccountTransactions: hookMocks.useAccountTransactions,
   // Pure pagination helper — keep the real implementation so the
   // transactions section renders instead of hitting its error boundary.
   usePagedRows: (
-    await vi.importActual<typeof import('../api/usePagedRows.js')>(
-      '../api/usePagedRows.js'
+    await vi.importActual<typeof import('../../api/usePagedRows.js')>(
+      '../../api/usePagedRows.js'
     )
   ).usePagedRows,
 }));
@@ -59,7 +59,7 @@ const SAMPLE: AccountDetailResponse = {
   balances: [NATIVE_BALANCE, USDC_BALANCE],
   first_seen_ledger: 50,
   last_seen_ledger: 200,
-  sequence_number: 99_123_456,
+  sequence_number: '99123456',
   deleted: false,
 };
 
@@ -187,6 +187,26 @@ describe('AccountDetailPage', () => {
     expect(screen.getByText('1,250.50')).toBeInTheDocument();
     // Classic credit balance shows the code as the row name.
     expect(screen.getAllByText('USDC').length).toBeGreaterThan(0);
+  });
+
+  it('shows a sequence number above 2^53 digit for digit', () => {
+    // Most live accounts carry a sequence above 2^53 (86.6% on mainnet,
+    // 2026-11-17): (ledger << 32) + count. A JSON number would lose the last
+    // digits in the browser, so the API sends it as decimal text.
+    mockDetail({
+      data: { ...SAMPLE, sequence_number: '214748364800000017' },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('214,748,364,800,000,017')).toBeInTheDocument();
   });
 
   it('shows a Soroban balance with no known scale as a dash, not a number', () => {
