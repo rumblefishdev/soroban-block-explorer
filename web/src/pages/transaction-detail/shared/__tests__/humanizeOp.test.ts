@@ -340,6 +340,29 @@ describe('humanizeOp', () => {
     );
   });
 
+  it('counts seven significant digits below 1, as seven decimals from 0.1 up', () => {
+    const op = light({ type_name: 'MANAGE_SELL_OFFER' });
+    const offer = (n: number, d: number) =>
+      humanizeOp(
+        op,
+        heavy({
+          selling: 'ETH:GISSUER',
+          buying: 'USDC:GISSUER',
+          amount: 50_000_000,
+          price: { n, d },
+          offerId: 0,
+        })
+      );
+    // From 0.1 to 1 seven significant digits are seven decimals: unchanged.
+    expect(offer(1, 3)).toBe(
+      'Offered to sell 5 ETH for USDC @ 0.3333333 USDC/ETH'
+    );
+    // Below 0.1 the digits after the leading zeros are kept.
+    expect(offer(12_345_679, 1_000_000_000)).toBe(
+      'Offered to sell 5 ETH for USDC @ 0.01234568 USDC/ETH'
+    );
+  });
+
   it('reads amount 0 on an existing offer as cancellation', () => {
     const op = light({ type_name: 'MANAGE_SELL_OFFER' });
     const h = heavy({
