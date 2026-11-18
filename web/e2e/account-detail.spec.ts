@@ -66,11 +66,9 @@ async function serveAccount(
 function account(balances: unknown[], signing: unknown) {
   return {
     account_id: ACCOUNT,
-    // Deliberately inside Number.MAX_SAFE_INTEGER. A real Stellar sequence
-    // number is an int64 and can exceed it, which is a genuine wire concern —
-    // but it is not what these tests measure, and a literal that loses
-    // precision at parse time would fail lint for a reason unrelated to them.
-    sequence_number: 251_123_774_269_685,
+    // Decimal text on the wire: a sequence number is an int64 and most
+    // exceed Number.MAX_SAFE_INTEGER.
+    sequence_number: '251123774269685',
     balances,
     home_domain: null,
     first_seen_ledger: 58_469_310,
