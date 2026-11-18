@@ -28,19 +28,21 @@ the NFTs the account holds now, each linked to its NFT page.
 
 ## Stan teraz
 
-- Done: `filter[owner]` on `GET /v1/nfts` with a CH-gated test (red without
-  the filter, red again with the filter matched on unmerged rows); NFTs card
-  on the account page; docs; API types.
-- Next: look at the card on real data (local API on production CH), then
-  the PR — held while the open logic-PR queue is at 6 or more.
-- In force: option A (2026-11-18) — a separate NFTs card under Assets,
-  shown only when the account holds at least one indexed NFT; reuses
-  `NftsTable` without the owner column; no account sub-resource.
-- Cost measured 2026-11-18 on production (`system.query_log`): the filtered
-  page takes ~190 ms and ~385 MiB for an account with no NFTs, ~410–510 ms
-  for the 2,350-NFT holder; today's unfiltered list page takes ~250 ms and
-  ~80 MiB. The extra memory comes from the `nft_enrichment` / mint joins
-  once a non-key filter is applied, not from the owner lookup (~2 MiB).
+- Done: `filter[owner]` on `GET /v1/nfts`, served by its own join-free read
+  `fetch_held_by`; NFTs card on the account page; docs; API types. CH-gated
+  test compares it row for row with the list for each owner and fails when
+  `FINAL` is dropped.
+- Next: the PR; look at the card on real data (local API on production CH)
+  once the certificate links exist.
+- In force: option A (2026-11-18) — a separate NFTs card under Assets, shown
+  only when the account holds at least one indexed NFT; `NftsTable` without
+  the owner column. Read shape B (2026-11-18) — no JOIN for the owner read;
+  `filter[owner]` refuses other filters.
+- Cost on production (`system.query_log`, 3 owners × 3 runs): the shared list
+  shape took 155–385 MiB / 190–400 ms; `fetch_held_by` takes 4–10 MiB /
+  24–35 ms plus two name lookups of ~2.6 MiB / 4–6 ms. Cause: each JOIN builds
+  one hash table per thread (`parallel_hash`, 24 threads); measured locally,
+  `join_algorithm='hash'` takes a one-row join from 65.7 to 0.8 MiB.
 
 ## Context
 

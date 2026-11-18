@@ -559,7 +559,11 @@ place where indexed contract metadata and decoded usage history are exposed.
 `filter[collection]` (exact match), `filter[contract_id]` (C-StrKey), `filter[name]`
 (substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`), `filter[owner]`
 (G-StrKey; the NFTs that account holds now, matched on the merged `nfts` row so a token
-sold in a later batch never lists under its previous owner).
+sold in a later batch never lists under its previous owner). `filter[owner]` takes no
+other filter (400 `invalid_filter`) and is served by its own read, `fetch_held_by`: it
+reads each source for the owner's tokens and folds them with `GROUP BY` instead of
+joining them, because on production each JOIN cost tens of MiB of per-thread hash
+tables (155–385 MiB per call; 4–10 MiB this way).
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL. The owner (`owner`) is a `G…` account or a `C…` contract, resolved through

@@ -47,7 +47,6 @@ async fn nft_ch_rows_decode() {
         filter_collection: None,
         filter_contract_id: None,
         filter_name: None,
-        filter_owner: None,
     };
     let list = fetch_list(&ch, &params, Direction::Next)
         .await
@@ -176,7 +175,6 @@ async fn keyset_pagination_is_total_over_derived_mint_ledger() {
             filter_collection: None,
             filter_contract_id: None,
             filter_name: None,
-            filter_owner: None,
         };
         let mut rows = fetch_list(&ch, &params, Direction::Next)
             .await
