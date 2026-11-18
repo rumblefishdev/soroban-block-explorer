@@ -130,6 +130,10 @@ not reproduced, so not proven.
   and whether Bot Fight Mode is on for the zone: owner's dashboard, not yet read.
 - After the click, a check that stalls keeps the card with no "Try again": the
   watchdog stops at interaction and is not re-armed. No measured case.
+- A connection that hangs while the Turnstile script loads or the session is
+  minted (no answer, no error) keeps the page loading with no card: the 20 s
+  watchdog covers only the widget. Owner, 2026-11-18: the visitor's network,
+  not handled here.
 - `session.ts` now holds the session, the widget and the panel: split in a
   `[structure only]` PR; `session-widget.test.ts` then follows its source file.
 - One passed check shared by all tabs and reloads (an HttpOnly cookie set by
