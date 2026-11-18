@@ -17,6 +17,7 @@ import { Navigate, useParams } from 'react-router-dom';
 import { useAccountDetail } from '../api/index.js';
 
 import { AccountBalances } from './accounts/AccountBalances.js';
+import { AccountNfts } from './accounts/AccountNfts.js';
 import { AccountDetailSkeleton } from './accounts/AccountDetailSkeleton.js';
 import { AccountSigners } from './accounts/AccountSigners.js';
 import { AccountSponsorship } from './accounts/AccountSponsorship.js';
@@ -116,6 +117,11 @@ export default function AccountDetailPage() {
       {balances != null && (
         <SectionErrorBoundary sectionName="account-balances">
           {balances}
+        </SectionErrorBoundary>
+      )}
+      {account.data != null && (
+        <SectionErrorBoundary sectionName="account-nfts">
+          <AccountNfts accountId={accountId} />
         </SectionErrorBoundary>
       )}
       {signers != null && (

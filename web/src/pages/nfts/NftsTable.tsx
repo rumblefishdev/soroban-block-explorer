@@ -15,6 +15,8 @@ interface NftsTableProps {
   rows: readonly NftItem[];
   loading?: boolean;
   skeletonRows?: number;
+  /** On an account's own page every row's owner is that account. */
+  hideOwner?: boolean;
 }
 
 /**
@@ -79,10 +81,15 @@ const columns: ExplorerTableColumn<NftItem>[] = [
  * The NFTs list table — preview + name (linked to detail), collection,
  * contract id and current owner, per the Figma design.
  */
-export function NftsTable({ rows, loading, skeletonRows }: NftsTableProps) {
+export function NftsTable({
+  rows,
+  loading,
+  skeletonRows,
+  hideOwner,
+}: NftsTableProps) {
   return (
     <ExplorerTable
-      columns={columns}
+      columns={hideOwner ? columns.filter((c) => c.id !== 'owner') : columns}
       rows={rows}
       rowKey={(row) => `${row.contract_id}:${row.token_id}`}
       rowHeight={EXPLORER_TABLE_ROW_HEIGHT_TALL}

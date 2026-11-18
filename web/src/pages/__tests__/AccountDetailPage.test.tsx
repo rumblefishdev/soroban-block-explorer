@@ -1,6 +1,7 @@
 import type {
   AccountBalance,
   AccountDetailResponse,
+  NftItem,
 } from '@rumblefish/api-types';
 import { screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
@@ -13,11 +14,14 @@ import AccountDetailPage from '../AccountDetailPage.js';
 const hookMocks = vi.hoisted(() => ({
   useAccountDetail: vi.fn(),
   useAccountTransactions: vi.fn(),
+  useNftsList: vi.fn(),
 }));
 
 vi.mock('../../api/index.js', async () => ({
   useAccountDetail: hookMocks.useAccountDetail,
   useAccountTransactions: hookMocks.useAccountTransactions,
+  useNftsList: hookMocks.useNftsList,
+  PAGE_SIZE: 20,
   // Pure pagination helper — keep the real implementation so the
   // transactions section renders instead of hitting its error boundary.
   usePagedRows: (
@@ -105,7 +109,30 @@ beforeEach(() => {
     error: null,
     refetch: vi.fn(),
   });
+  mockNfts([]);
 });
+
+function mockNfts(rows: NftItem[]): void {
+  hookMocks.useNftsList.mockReturnValue({
+    data: { data: rows, page: { limit: 20 } },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+}
+
+/** Token 3 of a collection, held by the account (issue 741's shape). */
+const HELD_NFT: NftItem = {
+  contract_id: 'CDC5ZX53PWDPVS5AGZPHJ6WHFPB66AZFFEHK4NCFH2AR7ZZQUKOGJFGB',
+  token_id: '3',
+  collection_name: null,
+  name: null,
+  media_url: null,
+  minted_at_ledger: 65048584,
+  owner: VALID_ACCOUNT,
+  last_seen_ledger: 65048584,
+};
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -619,5 +646,42 @@ describe('AccountDetailPage', () => {
     ).toBeInTheDocument();
     // Transactions section is intentionally hidden on detail error.
     expect(screen.queryByText(/recent transactions/i)).not.toBeInTheDocument();
+  });
+
+  it('lists the NFTs the account holds, linked, without an owner column', () => {
+    mockDetail({ data: SAMPLE, isLoading: false, isError: false });
+    mockNfts([HELD_NFT]);
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(hookMocks.useNftsList).toHaveBeenLastCalledWith(null, {
+      limit: 20,
+      'filter[owner]': VALID_ACCOUNT,
+    });
+    const card = screen.getByText('NFTs').closest('.MuiCard-root');
+    if (!card) throw new Error('NFTs card not found');
+    const links = within(card as HTMLElement).getAllByRole('link');
+    expect(
+      links.some(
+        (a) => a.getAttribute('href') === `/nfts/${HELD_NFT.contract_id}/3`
+      )
+    ).toBe(true);
+    expect(
+      within(card as HTMLElement).queryByText('Owner')
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows no NFTs section for an account that holds none', () => {
+    mockDetail({ data: SAMPLE, isLoading: false, isError: false });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.queryByText('NFTs')).not.toBeInTheDocument();
   });
 });

@@ -16,4 +16,6 @@ export const CURSOR_PARAMS = {
   CONTRACT_EVENTS: 'cursor_e',
   /** Contract detail — invocations tab. */
   CONTRACT_INVOCATIONS: 'cursor_i',
+  /** Account detail — NFTs section. */
+  ACCOUNT_NFTS: 'cursor_n',
 } as const;

@@ -522,6 +522,9 @@ Account detail view for a Stellar account.
 
 - Account summary - account ID (full, copyable), sequence number, first seen ledger, last seen ledger
 - **Assets** - native XLM plus every trustline, INCLUDING the ones standing at zero
+- **NFTs** - the NFTs the account holds now, each linked to its NFT page; shown only
+  when the account holds at least one (856 of ~20M accounts on mainnet, task 0675).
+  Fed by `GET /nfts?filter[owner]=`, paged by cursor under its own `?cursor_n=`.
 - **Signers** - the signer set and the three thresholds
 - Recent transactions - paginated table of transactions involving this account,
   carrying the **`Balance change`** column
