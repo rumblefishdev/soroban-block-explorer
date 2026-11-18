@@ -2,7 +2,7 @@
 id: '0363'
 title: 'FEATURE: tx-detail — decode ScVals to typed chips (kill the raw-JSON wall)'
 type: FEATURE
-status: active
+status: backlog
 related_adr: []
 related_tasks: ['0352', '0071', '0453', '0462', '0431', '0456']
 tags:
@@ -82,6 +82,13 @@ history:
       question stays open: how values are encoded between parser and page —
       the parser's own JSON dialect differs from the official stellar-xdr
       JSON in five value types, and one of them loses digits in the browser.
+  - date: '2026-11-18'
+    status: backlog
+    who: karolkow
+    note: >
+      Back to backlog. #735 done (#736, #738, #739, #740 merged). The value
+      format work moved out: stage 1 to 0572, stage 2 to 0456, the indexer to
+      0431 (rows 13-24 of the S note). Left here: B and C-lite.
 ---
 
 # FEATURE: decoded ScVal rendering in tx detail
@@ -451,14 +458,7 @@ between parser and page): [`notes/S-events-table-value-rendering.md`](notes/S-ev
 
 ## Future Work
 
-- **The execution trace renders the diagnostic COPY, not the consensus
-  event.** On the reported transaction the trace's `•` row is `#6` (debug
-  channel), not `#2` (consensus). Same payload, but the copy carries no
-  `op_index` — the consensus row is the richer record. Nothing differs on
-  screen today, so this is latent: if a copy ever diverged, the trace would
-  show debug data wearing a consensus event's clothes and nothing would flag
-  it. Fix shape: use the diagnostic stream for POSITION only and render the
-  matching consensus event. Zero visible change, so not done now.
+Moved to [`notes/S-events-table-value-rendering.md`](notes/S-events-table-value-rendering.md) ("Future work").
 
 ## Notes
 

@@ -68,7 +68,7 @@ each.
 - **Storage form of event payloads** — decided 2026-11-17: stays JSON, in the
   decision-13 format. REVERSED 2026-11-18 by rows 23–24: raw XDR. The alternatives (raw XDR for all payloads; standard
   events kept only in typed tables) moved to 0572 with their measurements, see
-  [`0572 notes`](../../../backlog/0572_RESEARCH_event-payload-binary-xdr/notes/R-storage-measurements-2026-11.md).
+  [`0572 notes`](../../0572_RESEARCH_event-payload-binary-xdr/notes/R-storage-measurements-2026-11.md).
 
 Why decision 13 (measured 2026-11-17): the parser's own dialect differs from the
 official JSON in five types, and a browser's `JSON.parse` rounds integers above
@@ -81,3 +81,24 @@ official JSON in five types, and a browser's `JSON.parse` rounds integers above
 
 - Interpreting contract-specific fixed-point values (e.g. a pool's square-root
   price in `pool_state`): no SEP or CAP defines them.
+
+## Future work (moved from the README, 2026-11-18)
+
+- **The execution trace renders the diagnostic COPY, not the consensus
+  event.** On the reported transaction the trace's `•` row is `#6` (debug
+  channel), not `#2` (consensus). Same payload, but the copy carries no
+  `op_index` — the consensus row is the richer record. Nothing differs on
+  screen today, so this is latent: if a copy ever diverged, the trace would
+  show debug data wearing a consensus event's clothes and nothing would flag
+  it. Fix shape: use the diagnostic stream for POSITION only and render the
+  matching consensus event. Zero visible change, so not done now.
+
+## Where the rest went (2026-11-18)
+
+- Rows 22–24, stage 1 (events stored as raw XDR, official SEP-51 JSON in the
+  API, the web on that format, PR #742 closed as superseded): task 0572.
+- Stage 2 (64-bit fields of classic operation details): task 0456.
+- Indexer modules off our JSON onto stellar-xdr types, and the adopt findings
+  of both audits: task 0431.
+- Left in 0363: B (readable view, parked by the owner), C-lite, and the
+  parked Events-view questions (phone width among them).

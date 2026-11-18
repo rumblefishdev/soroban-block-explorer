@@ -15,7 +15,7 @@ history:
 # Latent decoding traps found by the 2026-11-17 audit
 
 Findings 12–17 of the audit in
-[0363 notes](../../../active/0363_FEATURE_advanced-scval-decoded-rendering/notes/R-audit-hand-rolled-decoding-2026-11.md):
+[0363 notes](../../../backlog/0363_FEATURE_advanced-scval-decoded-rendering/notes/R-audit-hand-rolled-decoding-2026-11.md):
 three invalid-UTF-8 policies in one pipeline; `format_stroops` dropping the
 sign below one unit; `decimal7_string_to_i128` reading `"5"` and `"5.0"` ten
 million apart; `asset_code_str`'s `0x…` form colliding with real codes;
