@@ -182,8 +182,11 @@ export function tradeRate(
   if (!Number.isFinite(inValue) || !Number.isFinite(outValue) || inValue <= 0) {
     return null;
   }
-  const rate = Number((outValue / inValue).toPrecision(4));
-  const text = rate.toLocaleString('en-US', { maximumFractionDigits: 7 });
+  // Four significant figures at any size: a fraction-digit cap would round a
+  // rate below 0.0000001 to "0".
+  const text = (outValue / inValue).toLocaleString('en-US', {
+    maximumSignificantDigits: 4,
+  });
   return `${text} ${assetLegLabel(outLeg.leg)}/${assetLegLabel(inLeg.leg)}`;
 }
 

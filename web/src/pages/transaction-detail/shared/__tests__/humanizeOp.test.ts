@@ -1,7 +1,7 @@
 import type { OperationItem, XdrOperationDto } from '@rumblefish/api-types';
 import { describe, expect, it } from 'vitest';
 
-import { humanizeOp } from './humanizeOp.js';
+import { humanizeOp } from '../humanizeOp.js';
 
 /** Minimal `OperationItem` with the fields `humanizeOp` reads; the rest are
  *  filled with inert defaults so the generated type is satisfied. */
@@ -323,6 +323,43 @@ describe('humanizeOp', () => {
     });
     expect(humanizeOp(op, h)).toBe(
       'Offered to sell 5 ETH for USDC @ 3,001.2 USDC/ETH'
+    );
+  });
+
+  it('keeps a price below 0.0000001 instead of rounding it to 0', () => {
+    const op = light({ type_name: 'MANAGE_SELL_OFFER' });
+    const h = heavy({
+      selling: 'ETH:GISSUER',
+      buying: 'USDC:GISSUER',
+      amount: 50_000_000,
+      price: { n: 1, d: 30_000_000 },
+      offerId: 0,
+    });
+    expect(humanizeOp(op, h)).toBe(
+      'Offered to sell 5 ETH for USDC @ 0.00000003333333 USDC/ETH'
+    );
+  });
+
+  it('counts seven significant digits below 1, as seven decimals from 0.1 up', () => {
+    const op = light({ type_name: 'MANAGE_SELL_OFFER' });
+    const offer = (n: number, d: number) =>
+      humanizeOp(
+        op,
+        heavy({
+          selling: 'ETH:GISSUER',
+          buying: 'USDC:GISSUER',
+          amount: 50_000_000,
+          price: { n, d },
+          offerId: 0,
+        })
+      );
+    // From 0.1 to 1 seven significant digits are seven decimals: unchanged.
+    expect(offer(1, 3)).toBe(
+      'Offered to sell 5 ETH for USDC @ 0.3333333 USDC/ETH'
+    );
+    // Below 0.1 the digits after the leading zeros are kept.
+    expect(offer(12_345_679, 1_000_000_000)).toBe(
+      'Offered to sell 5 ETH for USDC @ 0.01234568 USDC/ETH'
     );
   });
 
