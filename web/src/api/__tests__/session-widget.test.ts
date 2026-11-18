@@ -163,7 +163,7 @@ describe('Turnstile solver and retry panel', () => {
     expect(panel?.style.maxWidth).toBe('360px');
   });
 
-  it("sizes the click card to Cloudflare's widget, not to the phone", async () => {
+  it('gives the click card the same phone width as the retry panel', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     void armedSession().ensureToken();
@@ -171,8 +171,9 @@ describe('Turnstile solver and retry panel', () => {
 
     renders[0]['before-interactive-callback']();
     const card = api.render.mock.calls[0][0];
+    expect(card.style.width).toBe('calc(100vw - 32px)');
+    expect(card.style.boxSizing).toBe('border-box');
     expect(card.style.maxWidth).toBe('360px');
-    expect(card.style.width).toBe('');
   });
 
   it("keeps Cloudflare's error code out of the panel, in the console", async () => {

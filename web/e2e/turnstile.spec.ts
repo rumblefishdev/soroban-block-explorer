@@ -363,4 +363,36 @@ test.describe('a key that forces an interactive challenge', () => {
     );
     expect(seen.data).toHaveLength(0);
   });
+
+  test.describe('on a phone', () => {
+    test.use({ viewport: { width: 375, height: 812 } });
+
+    test("shows Cloudflare's widget at its full width, on screen", async ({
+      page,
+    }) => {
+      await serveApi(page);
+      await page.goto(`/accounts/${ACCOUNT}`);
+      await expect(
+        page.getByText("Confirm you're human to keep loading data")
+      ).toBeVisible({ timeout: CARD_TIMEOUT });
+
+      // A card half the screen wide squeezed the widget to ~140 px and cut
+      // its label; the widget asks for 300 px.
+      async function widgetBox() {
+        const frame = page
+          .frames()
+          .find((f) => f.url().includes('challenges.cloudflare.com'));
+        if (!frame) return null;
+        return (await frame.frameElement()).boundingBox();
+      }
+      await expect
+        .poll(async () => (await widgetBox())?.width ?? 0, { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(290);
+      const box = await widgetBox();
+      expect(box).not.toBeNull();
+      if (!box) return;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(375);
+    });
+  });
 });
