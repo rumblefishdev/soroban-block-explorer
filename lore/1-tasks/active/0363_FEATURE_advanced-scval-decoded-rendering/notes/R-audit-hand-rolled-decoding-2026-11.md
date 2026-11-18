@@ -47,3 +47,47 @@ integers above 2^53.
 Not covered: pool factory/router/state readers, the invocation auth tree,
 `net_settled.rs`, `op_participants.rs`, backfill snapshot readers, the archive
 merge path in the API, USD float math.
+
+## Second pass (2026-11-18): official stellar-xdr JSON vs ours, and areas not covered above
+
+Read-only, `develop` @ 7729b5edd; library sides read in stellar-xdr 30.0.0.
+Only the `std` and `alloc` features are on; the official JSON (SEP-51) needs
+the `serde` feature.
+
+Our contract-value JSON (`crates/xdr-parser/src/scval.rs`) against the
+official one:
+
+| Value                         | Ours                               | Official (SEP-51)                      |
+| ----------------------------- | ---------------------------------- | -------------------------------------- |
+| envelope                      | `{"type":"u32","value":5}`         | `{"u32":5}`                            |
+| u64 / i64 / timepoint / nonce | JSON number                        | decimal string                         |
+| u256 / i256                   | 64 hex characters, no sign         | signed decimal                         |
+| bytes                         | base64                             | hex                                    |
+| string / symbol               | text, `<invalid-utf8>` placeholder | escaped bytes (lossless); tag `symbol` |
+| error                         | variant name only                  | type and code (`{"contract":7}`)       |
+| map entry                     | `{key, value}`                     | `{key, val}`                           |
+
+New findings (verdict and owner):
+
+| #   | Where                                                                                            | What                                                                                                                             | Loses data?     | Verdict, owner  |
+| --- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------- |
+| 18  | `scval.rs:19`                                                                                    | a contract error keeps its name only; the code (`#7`) is lost                                                                    | yes             | adopt, 0363     |
+| 19  | `invocation.rs:431-527`                                                                          | the auth tree keeps only the invocation; credentials (address, nonce, expiry) and the create-contract preimage are lost          | yes             | adopt, 0456     |
+| 20  | `ledger_entry_changes.rs:226,273,339-364`                                                        | config-setting entries stored as `{}`; account and trustline entries drop `inflation_dest`, liabilities, `seq_ledger`/`seq_time` | yes             | no open task    |
+| 21  | `rpc_snapshot.rs:410,417`, `network_state.rs:449`                                                | asset code through `from_utf8_lossy`, not the canonical reader                                                                   | latent          | adopt, 0431     |
+| 22  | `persist/stage.rs:2068` (8 calls)                                                                | an account strkey checked by length and first letter; the library parses it                                                      | accepts junk    | adopt, 0431     |
+| 23  | `contract.rs:56-153,261`                                                                         | own WASM section parser and XDR stream loop; the library has `read_xdr_iter`                                                     | no (duplicate)  | adopt, 0431     |
+| 24  | `transaction.rs:196-213`                                                                         | `encode_xdr` returns `""` on error                                                                                               | hides a failure | adopt, 0431     |
+| 25  | i128 from parts, muxed split, strkey → ScAddress (5 sites), contract executable rendered 3 times | duplicates of library functions                                                                                                  | no              | adopt, 0431     |
+| 26  | `libs/ui/src/identifiers/strkey.ts`                                                              | own strkey encoder in the web; no `@stellar/*` package is installed                                                              | no              | decision needed |
+| 27  | `usd_analytics.rs:397`, `get_pool_chart.rs:392`                                                  | `raw as f64 / 10^d`; an exact scaler exists (`soroban_reserves.rs:120`)                                                          | above 2^53 raw  | no open task    |
+
+Kept with a reason: pool, factory, asset-transfer and executable readers
+pattern-match our JSON because they read the persisted dialect (a DB
+contract); shape-only strkey checks in the API (ADR 0037); the
+`CODE:ISSUER` asset string (no library `Display` for `Asset`); TOID math (no
+library equivalent).
+
+Not covered: web call tree and raw-JSON internals, API search SQL, the
+contract-executor crate, SEP-1 and NFT URI enrichment, snapshot claimable /
+pools / entry-state readers, `classification.rs`.
