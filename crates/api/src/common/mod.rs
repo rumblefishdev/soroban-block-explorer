@@ -21,4 +21,5 @@ pub mod pagination;
 pub mod path;
 pub mod pool_asset_codes;
 pub mod request_id;
+pub mod scval_integers_as_text;
 pub mod strkey;

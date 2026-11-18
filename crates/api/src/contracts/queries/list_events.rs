@@ -9,6 +9,7 @@ use domain::ContractEventType;
 
 use crate::common::ch::millis_to_utc;
 use crate::common::cursor::{Direction, keyset_sql_desc};
+use crate::common::scval_integers_as_text::scval_integers_as_text;
 
 use super::super::dto::{EventCursor, EventItem};
 
@@ -86,13 +87,15 @@ fn map_event_row(r: EventChRow) -> Result<ChEvent, clickhouse::error::Error> {
     let id = id.to_rpc_string();
     // `topics` is a JSON array of ScVals; mirror the PG `expand_events` shaping
     // (array → its elements, scalar → singleton).
-    let topics = match serde_json::from_str::<serde_json::Value>(&r.topics_xdr) {
+    let mut topics = match serde_json::from_str::<serde_json::Value>(&r.topics_xdr) {
         Ok(serde_json::Value::Array(a)) => a,
         Ok(other) => vec![other],
         Err(e) => return Err(broken_event(&id, &format!("topics are not JSON: {e}"))),
     };
-    let data = serde_json::from_str::<serde_json::Value>(&r.data_xdr)
+    let mut data = serde_json::from_str::<serde_json::Value>(&r.data_xdr)
         .map_err(|e| broken_event(&id, &format!("data is not JSON: {e}")))?;
+    topics.iter_mut().for_each(scval_integers_as_text);
+    scval_integers_as_text(&mut data);
     let event_type = match ContractEventType::try_from(r.event_type) {
         Ok(t) => t.to_string(),
         Err(_) => {

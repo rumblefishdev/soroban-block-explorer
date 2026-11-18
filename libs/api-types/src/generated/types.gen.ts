@@ -877,7 +877,7 @@ export type E3HeavyFields = {
   memo_type?: string | null;
   /**
    * Nested Soroban invocation tree, derived from `result_meta_xdr` at
-   * extraction time.
+   * extraction time. Integers inside its contract values are decimal text.
    */
   operation_tree?: unknown;
   /**
@@ -1019,6 +1019,9 @@ export type EventAppearanceItem = {
  */
 export type EventItem = {
   created_at: string;
+  /**
+   * A typed contract value, integers as decimal text (see `topics`).
+   */
   data: unknown;
   event_type: string;
   /**
@@ -1028,6 +1031,10 @@ export type EventItem = {
   id: string;
   ledger_sequence: number;
   successful: boolean;
+  /**
+   * Typed contract values (`{"type", "value"}`); every integer value is
+   * decimal text, `u256`/`i256` signed decimal.
+   */
   topics: Array<unknown>;
   transaction_hash: string;
 };
@@ -1698,6 +1705,9 @@ export type PaginatedContractListItem = {
 export type PaginatedEventItem = {
   data: Array<{
     created_at: string;
+    /**
+     * A typed contract value, integers as decimal text (see `topics`).
+     */
     data: unknown;
     event_type: string;
     /**
@@ -1707,6 +1717,10 @@ export type PaginatedEventItem = {
     id: string;
     ledger_sequence: number;
     successful: boolean;
+    /**
+     * Typed contract values (`{"type", "value"}`); every integer value is
+     * decimal text, `u256`/`i256` signed decimal.
+     */
     topics: Array<unknown>;
     transaction_hash: string;
   }>;
@@ -2782,7 +2796,8 @@ export type XdrEventDto = {
    */
   contract_id?: string | null;
   /**
-   * Decoded event data payload.
+   * Decoded event data payload: a typed contract value, integers as
+   * decimal text (see `topics`).
    */
   data: unknown;
   /**
@@ -2816,7 +2831,9 @@ export type XdrEventDto = {
    */
   stage?: string | null;
   /**
-   * Decoded topic array.
+   * Decoded topic array of typed contract values (`{"type", "value"}`).
+   * Every integer value is decimal text, whatever its type
+   * (`{"type":"u32","value":"5"}`); `u256`/`i256` are signed decimal.
    */
   topics: Array<unknown>;
 };
@@ -2826,7 +2843,9 @@ export type XdrEventDto = {
  */
 export type XdrOperationDto = {
   /**
-   * Full operation details (type-specific JSON).
+   * Full operation details (type-specific JSON). Integers inside its
+   * contract values (call args, return value) are decimal text; classic
+   * fields such as `amount` are still JSON numbers.
    */
   details: unknown;
   /**

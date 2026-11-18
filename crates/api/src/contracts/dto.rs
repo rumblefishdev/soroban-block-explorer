@@ -173,7 +173,10 @@ pub struct EventItem {
     pub successful: bool,
     pub created_at: DateTime<Utc>,
     pub event_type: String,
+    /// Typed contract values (`{"type", "value"}`); every integer value is
+    /// decimal text, `u256`/`i256` signed decimal.
     pub topics: Vec<serde_json::Value>,
+    /// A typed contract value, integers as decimal text (see `topics`).
     pub data: serde_json::Value,
 }
 

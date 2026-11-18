@@ -53,7 +53,7 @@ pub struct E3HeavyFields {
     /// `None` only when the transaction had a parse error.
     pub result_code: Option<String>,
     /// Nested Soroban invocation tree, derived from `result_meta_xdr` at
-    /// extraction time.
+    /// extraction time. Integers inside its contract values are decimal text.
     pub operation_tree: Option<serde_json::Value>,
 }
 
@@ -73,9 +73,12 @@ pub struct XdrEventDto {
     pub event_type: String,
     /// Contract address (StrKey) that emitted the event, if any.
     pub contract_id: Option<String>,
-    /// Decoded topic array.
+    /// Decoded topic array of typed contract values (`{"type", "value"}`).
+    /// Every integer value is decimal text, whatever its type
+    /// (`{"type":"u32","value":"5"}`); `u256`/`i256` are signed decimal.
     pub topics: Vec<serde_json::Value>,
-    /// Decoded event data payload.
+    /// Decoded event data payload: a typed contract value, integers as
+    /// decimal text (see `topics`).
     pub data: serde_json::Value,
     /// The stellar-rpc event id, exactly as `getEvents` returns it (ADR 0059).
     /// Consensus events arrive sorted by it, which is execution order: fee
@@ -105,7 +108,9 @@ pub struct XdrOperationDto {
     /// The operation's position in its transaction's envelope, 0-based
     /// (ADR 0059, stellar-rpc `operationIndex`).
     pub operation_index: i16,
-    /// Full operation details (type-specific JSON).
+    /// Full operation details (type-specific JSON). Integers inside its
+    /// contract values (call args, return value) are decimal text; classic
+    /// fields such as `amount` are still JSON numbers.
     pub details: serde_json::Value,
     /// Per-operation result code from the transaction result XDR, using the
     /// XDR library's variant names: `"Success"`, `"LowReserve"`, `"Trapped"`,

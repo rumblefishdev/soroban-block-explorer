@@ -12,6 +12,7 @@ use stellar_xdr::{LedgerCloseMeta, TransactionEnvelope, TransactionMeta};
 use tracing::instrument;
 
 use super::dto::{E3HeavyFields, SignatureDto, XdrEventDto, XdrOperationDto};
+use crate::common::scval_integers_as_text::scval_integers_as_text;
 
 /// Extract the heavy-field subset of the E3 (`/transactions/:hash`) response
 /// for a given transaction hash within the supplied ledger.
@@ -73,6 +74,10 @@ pub fn extract_e3_heavy(
         }
         _ => None,
     };
+    let operation_tree = operation_tree.map(|mut tree| {
+        scval_integers_as_text(&mut tree);
+        tree
+    });
 
     // Operations: raw details per op. Op results feed the path-payment
     // pool claims (poolIds / claimedAtoms in details — task 0261), so that
@@ -241,11 +246,15 @@ fn event_dtos(tx: xdr_parser::TxEvents) -> (Vec<XdrEventDto>, Vec<XdrEventDto>) 
 /// What an event says, without a location: a diagnostic event as it is
 /// shown, and the base a consensus event adds its id and origin to.
 fn body_dto(body: xdr_parser::EventBody) -> XdrEventDto {
+    let mut topics = topics_to_vec(body.topics);
+    topics.iter_mut().for_each(scval_integers_as_text);
+    let mut data = body.data;
+    scval_integers_as_text(&mut data);
     XdrEventDto {
         event_type: body.event_type.to_string(),
         contract_id: body.contract_id,
-        topics: topics_to_vec(body.topics),
-        data: body.data,
+        topics,
+        data,
         id: None,
         operation_index: None,
         event_index: None,
@@ -266,10 +275,14 @@ fn to_operation_dto(
 ) -> Option<XdrOperationDto> {
     // Parser, tables and wire all count from 0 (ADR 0059).
     let operation_index = to_i16_index(op.operation_index, "operation_index")?;
+    // Contract values inside the details (call args, return value); classic
+    // fields are plain numbers and stay as they are for now.
+    let mut details = op.details;
+    scval_integers_as_text(&mut details);
     Some(XdrOperationDto {
         op_type: op.op_type.to_string(),
         operation_index,
-        details: op.details,
+        details,
         result_code,
     })
 }

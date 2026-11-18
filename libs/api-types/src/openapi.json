@@ -3220,7 +3220,7 @@
             "description": "Memo type as ASCII tag (`\"text\"`, `\"id\"`, `\"hash\"`, `\"return\"`, `\"none\"`)."
           },
           "operation_tree": {
-            "description": "Nested Soroban invocation tree, derived from `result_meta_xdr` at\nextraction time."
+            "description": "Nested Soroban invocation tree, derived from `result_meta_xdr` at\nextraction time. Integers inside its contract values are decimal text."
           },
           "operations": {
             "type": "array",
@@ -3428,7 +3428,9 @@
             "type": "string",
             "format": "date-time"
           },
-          "data": {},
+          "data": {
+            "description": "A typed contract value, integers as decimal text (see `topics`)."
+          },
           "event_type": {
             "type": "string"
           },
@@ -3445,7 +3447,8 @@
           },
           "topics": {
             "type": "array",
-            "items": {}
+            "items": {},
+            "description": "Typed contract values (`{\"type\", \"value\"}`); every integer value is\ndecimal text, `u256`/`i256` signed decimal."
           },
           "transaction_hash": {
             "type": "string"
@@ -4286,7 +4289,9 @@
                   "type": "string",
                   "format": "date-time"
                 },
-                "data": {},
+                "data": {
+                  "description": "A typed contract value, integers as decimal text (see `topics`)."
+                },
                 "event_type": {
                   "type": "string"
                 },
@@ -4303,7 +4308,8 @@
                 },
                 "topics": {
                   "type": "array",
-                  "items": {}
+                  "items": {},
+                  "description": "Typed contract values (`{\"type\", \"value\"}`); every integer value is\ndecimal text, `u256`/`i256` signed decimal."
                 },
                 "transaction_hash": {
                   "type": "string"
@@ -5476,7 +5482,7 @@
             "description": "Contract address (StrKey) that emitted the event, if any."
           },
           "data": {
-            "description": "Decoded event data payload."
+            "description": "Decoded event data payload: a typed contract value, integers as\ndecimal text (see `topics`)."
           },
           "event_index": {
             "type": ["integer", "null"],
@@ -5504,7 +5510,7 @@
           "topics": {
             "type": "array",
             "items": {},
-            "description": "Decoded topic array."
+            "description": "Decoded topic array of typed contract values (`{\"type\", \"value\"}`).\nEvery integer value is decimal text, whatever its type\n(`{\"type\":\"u32\",\"value\":\"5\"}`); `u256`/`i256` are signed decimal."
           }
         }
       },
@@ -5514,7 +5520,7 @@
         "required": ["op_type", "operation_index", "details"],
         "properties": {
           "details": {
-            "description": "Full operation details (type-specific JSON)."
+            "description": "Full operation details (type-specific JSON). Integers inside its\ncontract values (call args, return value) are decimal text; classic\nfields such as `amount` are still JSON numbers."
           },
           "op_type": {
             "type": "string",
