@@ -2,7 +2,7 @@
 id: '0675'
 title: 'FEATURE: account page lists the NFTs the account holds'
 type: FEATURE
-status: backlog
+status: active
 related_adr: []
 related_tasks: ['0376', '0493']
 tags: [priority-medium, effort-medium, layer-api, layer-frontend, nft]
@@ -12,6 +12,10 @@ history:
     status: backlog
     who: karolkow
     note: 'Created from issue 741: a user could not find an NFT on the account page.'
+  - date: 2026-11-18
+    status: active
+    who: karolkow
+    note: 'Activated: option A chosen — an NFTs card under Balances, shown only when the account holds one, fed by filter[owner] on GET /v1/nfts.'
 ---
 
 # FEATURE: account page lists the NFTs the account holds
@@ -24,10 +28,12 @@ the NFTs the account holds now, each linked to its NFT page.
 
 ## Stan teraz
 
-- Done: nothing built; gap measured on production (below).
-- Next: decide the API shape (owner filter on `GET /v1/nfts` vs an account
-  sub-resource) and where the section sits on the page.
-- In force: nothing decided yet.
+- Done: gap measured on production; premise reviewed; peers compared.
+- Next: one PR — `filter[owner]` on `GET /v1/nfts` + an NFTs card on the
+  account page.
+- In force: option A (2026-11-18) — a separate NFTs card under Balances,
+  shown only when the account holds at least one indexed NFT; reuses
+  `NftsTable` without the owner column; no account sub-resource.
 
 ## Context
 
