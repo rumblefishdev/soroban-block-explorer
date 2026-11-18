@@ -3988,6 +3988,10 @@ export type ListNftsData = {
      * `%` / `_` literals.
      */
     'filter[name]'?: string | null;
+    /**
+     * Account G-StrKey; only the NFTs that account holds now.
+     */
+    'filter[owner]'?: string | null;
   };
   url: '/v1/nfts';
 };

@@ -416,7 +416,7 @@ types, return types).
 #### NFTs
 
 **`GET /nfts`** — Paginated list of NFTs. Query params: `limit`, `cursor`,
-`filter[collection]`, `filter[contract_id]`.
+`filter[collection]`, `filter[contract_id]`, `filter[name]`, `filter[owner]`.
 
 **`GET /nfts/:contract_id/:token_id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL. The owner (`owner`) is a `G…` account or a `C…` contract; null once the NFT is

@@ -557,7 +557,9 @@ place where indexed contract metadata and decoded usage history are exposed.
 
 **`GET /nfts`** - Paginated list of NFTs. Query params: `limit`, `cursor`,
 `filter[collection]` (exact match), `filter[contract_id]` (C-StrKey), `filter[name]`
-(substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`).
+(substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`), `filter[owner]`
+(G-StrKey; the NFTs that account holds now, matched on the merged `nfts` row so a token
+sold in a later batch never lists under its previous owner).
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL. The owner (`owner`) is a `G…` account or a `C…` contract, resolved through

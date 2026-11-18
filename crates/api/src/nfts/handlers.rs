@@ -106,6 +106,10 @@ pub async fn list_nfts(
         return resp;
     }
 
+    if let Err(resp) = filters::strkey_opt(params.filter_owner.as_deref(), 'G', "owner") {
+        return resp;
+    }
+
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
     let resolved = ResolvedListParams {
@@ -114,6 +118,7 @@ pub async fn list_nfts(
         filter_collection: params.filter_collection,
         filter_contract_id: params.filter_contract_id,
         filter_name: params.filter_name,
+        filter_owner: params.filter_owner,
     };
 
     let fetched = queries::fetch_list(&state.ch(), &resolved, direction).await;

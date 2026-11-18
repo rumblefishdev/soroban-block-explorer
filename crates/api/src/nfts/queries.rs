@@ -92,6 +92,8 @@ pub struct ResolvedListParams {
     pub filter_contract_id: Option<String>,
     /// Raw substring (no `%` / `_` from caller). SQL composes `%...%`.
     pub filter_name: Option<String>,
+    /// Account G-StrKey; only NFTs it holds now.
+    pub filter_owner: Option<String>,
 }
 
 /// NFT list row: the wire [`NftItem`] fields plus the internal
@@ -205,6 +207,13 @@ pub async fn fetch_list(
     } else {
         ""
     };
+    // Matched on the `FINAL` row, so only the current owner counts: a token
+    // sold in a later batch can sit beside its old row unmerged.
+    let owner_pred = if params.filter_owner.is_some() {
+        " AND n.current_owner_id = (SELECT id FROM accounts WHERE account_id = ? LIMIT 1)"
+    } else {
+        ""
+    };
     let keyset = if params.cursor.is_some() {
         format!(" AND (ifNull(mi.minted_at_ledger, 0), n.contract_id, n.token_id) {op} (?, ?, ?)")
     } else {
@@ -239,7 +248,7 @@ pub async fn fetch_list(
              FROM nfts n FINAL \
              LEFT JOIN enr  e  ON e.contract_id  = n.contract_id AND e.token_id  = n.token_id \
              LEFT JOIN mint mi ON mi.contract_id = n.contract_id AND mi.token_id = n.token_id \
-             WHERE 1 = 1{contract_clause}{collection_pred}{name_pred}{keyset} \
+             WHERE 1 = 1{contract_clause}{collection_pred}{name_pred}{owner_pred}{keyset} \
              ORDER BY ifNull(mi.minted_at_ledger, 0) {order}, n.contract_id {order}, n.token_id {order} \
              LIMIT ? \
          ), \
@@ -294,6 +303,9 @@ pub async fn fetch_list(
     }
     if let Some(n) = &params.filter_name {
         query = query.bind(n);
+    }
+    if let Some(o) = &params.filter_owner {
+        query = query.bind(o);
     }
     if let Some(c) = &params.cursor {
         query = query

@@ -76,6 +76,7 @@ async fn nft_held_by_a_contract_is_served_with_its_address() {
         filter_collection: None,
         filter_contract_id: Some(COLLECTION.to_string()),
         filter_name: None,
+        filter_owner: None,
     };
     let list = fetch_list(&ch, &params, Direction::Next)
         .await
@@ -113,6 +114,92 @@ async fn nft_held_by_a_contract_is_served_with_its_address() {
         .map(|t| (t.from.as_deref(), t.to.as_deref()))
         .collect();
     assert_eq!(moves, [(Some(ALICE), Some(VAULT)), (None, Some(ALICE))]);
+
+    base.query(&format!("DROP DATABASE {DB}"))
+        .execute()
+        .await
+        .expect("drop throwaway db");
+}
+
+/// `filter[owner]` lists only what an account holds NOW (task 0675).
+///
+/// `nfts` keeps one row per token, replaced on every ownership change, and on
+/// production a replaced row can sit unmerged next to its successor. The
+/// filter must read the merged row: matched against the stale row, a token
+/// Alice sold to Bob would still be listed under Alice. Merges are stopped
+/// here so both rows stay on disk, as they do on production.
+#[tokio::test]
+async fn nfts_filtered_by_owner_are_only_the_ones_held_now() {
+    const DB: &str = "api_test_0675_owner_filter";
+    let Some(base) = crate::common::ch::test_client_from_env() else {
+        eprintln!("CH_URL unset — skipping NFT owner-filter check");
+        return;
+    };
+    base.query(&format!("DROP DATABASE IF EXISTS {DB}"))
+        .execute()
+        .await
+        .expect("drop leftover throwaway db");
+    base.query(&format!("CREATE DATABASE {DB}"))
+        .execute()
+        .await
+        .expect("create throwaway db");
+    let ch = base.clone().with_database(DB);
+    db_clickhouse::apply_init_sql(&ch)
+        .await
+        .expect("apply init.sql");
+
+    for sql in [
+        "SYSTEM STOP MERGES nfts",
+        "INSERT INTO soroban_contracts \
+         (id, contract_id, wasm_hash, wasm_uploaded_at_ledger, deployer_id, deployed_at_ledger, \
+          contract_type, is_sac, executable_owner_id, executable_tag) VALUES \
+         (1, 'CCOLLECTION', NULL, 90, NULL, 90, 1, false, NULL, NULL)",
+        "INSERT INTO accounts (id, account_id, first_seen_ledger, last_seen_ledger, sequence_number) \
+         VALUES (10, 'GALICE', 90, 101, 1), (11, 'GBOB', 90, 101, 1), (12, 'GCAROL', 90, 101, 1)",
+        // Alice mints two; she sells one to Bob in a later batch — a second
+        // row for the same token, left unmerged.
+        "INSERT INTO nfts (contract_id, token_id, current_owner_id, current_owner_ledger) VALUES \
+         (1, 'kept', 10, 100), (1, 'sold', 10, 100)",
+        "INSERT INTO nfts (contract_id, token_id, current_owner_id, current_owner_ledger) VALUES \
+         (1, 'sold', 11, 101)",
+        "INSERT INTO nft_ownership_changes \
+         (contract_id, token_id, ledger_sequence, application_order, operation_index, event_index, \
+          owner_id, event_type) VALUES \
+         (1, 'kept', 100, 1, 0, 0, 10, 0), \
+         (1, 'sold', 100, 2, 0, 0, 10, 0), \
+         (1, 'sold', 101, 1, 0, 0, 11, 1)",
+    ] {
+        ch.query(sql).execute().await.expect("seed row");
+    }
+
+    let held_by = |owner: &str| {
+        let ch = ch.clone();
+        let params = ResolvedListParams {
+            limit: 10,
+            cursor: None,
+            filter_collection: None,
+            filter_contract_id: None,
+            filter_name: None,
+            filter_owner: Some(owner.to_string()),
+        };
+        async move {
+            fetch_list(&ch, &params, Direction::Next)
+                .await
+                .expect("list must run")
+                .into_iter()
+                .map(|r| (r.token_id, r.owner))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        held_by("GALICE").await,
+        [("kept".to_string(), Some("GALICE".to_string()))]
+    );
+    assert_eq!(
+        held_by("GBOB").await,
+        [("sold".to_string(), Some("GBOB".to_string()))]
+    );
+    assert_eq!(held_by("GCAROL").await, []);
 
     base.query(&format!("DROP DATABASE {DB}"))
         .execute()
