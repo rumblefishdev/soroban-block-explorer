@@ -222,8 +222,8 @@ function createTurnstileSolver(): (sitekey: string) => Promise<string> {
  * traffic this never paints — Cloudflare resolves it silently and fires
  * `callback`. The container is a centered, top-layer overlay so that, on the
  * rare occasion Cloudflare escalates to an interactive challenge, the checkbox
- * is visible and clickable rather than hidden off-screen; it then becomes a
- * card that says why the page is waiting.
+ * is visible and clickable rather than hidden off-screen. Cloudflare's own
+ * "Verify you are human" says what it wants, so nothing is added around it.
  */
 async function solveTurnstile(
   sitekey: string,
@@ -231,7 +231,10 @@ async function solveTurnstile(
 ): Promise<string> {
   const turnstile = await loadScript();
   const container = document.createElement('div');
-  container.style.cssText = PANEL_POSITION_CSS;
+  // Without a width, a box placed at `left:50%` shrinks to half a phone screen
+  // and squeezes the 300 px widget.
+  container.style.cssText =
+    PANEL_POSITION_CSS + 'width:calc(100vw - 32px);max-width:300px;';
   document.body.appendChild(container);
 
   return new Promise<string>((resolve, reject) => {
@@ -270,17 +273,9 @@ async function solveTurnstile(
       TURNSTILE_TIMEOUT_MS
     );
 
-    // Cloudflare wants a click: stop the watchdog, turn the overlay into a
-    // card and say why the page waits. One heading: Cloudflare can enter
-    // interactive mode again after a refresh inside the widget, and
-    // `prepend` of the same node only moves it.
-    const heading = document.createElement('p');
-    heading.textContent = "Confirm you're human to keep loading data";
-    heading.style.cssText = PANEL_TEXT_CSS;
+    // Cloudflare wants a click: stop the watchdog, so the widget waits for it.
     const askForInteraction = () => {
       clearTimeout(timer);
-      container.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
-      container.prepend(heading);
     };
 
     try {
@@ -313,8 +308,7 @@ const PANEL_POSITION_CSS =
 // `background-color`, not the `background` shorthand: the test DOM (cssstyle
 // 5.3.7) drops the whole style when `color` follows that shorthand.
 // A phone's width less 16 px a side, up to 360 px: without a width, a card
-// placed at `left:50%` shrinks to half the screen and squeezes Cloudflare's
-// 300 px widget.
+// placed at `left:50%` shrinks to half the screen.
 const PANEL_CARD_CSS = `box-sizing:border-box;width:calc(100vw - 32px);max-width:360px;padding:20px 24px;border-radius:12px;border:1px solid ${colorsDark.stroke.default};background-color:${colorsDark.surface.grayMain};color:${colorsDark.text.primary};text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;`;
 const PANEL_TEXT_CSS = 'margin:0 0 12px;font-size:14px;line-height:1.5;';
 

@@ -318,15 +318,11 @@ test.describe('a key that forces an interactive challenge', () => {
   test.use({ baseURL: CHALLENGES });
   test.setTimeout(90_000);
 
-  test('asks the visitor to confirm, keeps the widget up, and waits', async ({
+  test("shows Cloudflare's widget alone, keeps it up, and waits", async ({
     page,
   }) => {
     const seen = await serveApi(page);
     await page.goto(`/accounts/${ACCOUNT}`);
-
-    await expect(
-      page.getByText("Confirm you're human to keep loading data")
-    ).toBeVisible({ timeout: CARD_TIMEOUT });
 
     // The widget's iframe sits in Turnstile's shadow root, so find it through
     // the page's frames rather than a selector.
@@ -350,14 +346,12 @@ test.describe('a key that forces an interactive challenge', () => {
       );
     }
 
-    await expect.poll(widgetOnScreen, { timeout: 15_000 }).toBe(true);
+    await expect.poll(widgetOnScreen, { timeout: CARD_TIMEOUT }).toBe(true);
 
     await page.waitForTimeout(25_000);
 
     expect(await widgetOnScreen()).toBe(true);
-    await expect(
-      page.getByText("Confirm you're human to keep loading data")
-    ).toBeVisible();
+    await expect(page.getByText("Confirm you're human")).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(
       0
     );
@@ -372,11 +366,8 @@ test.describe('a key that forces an interactive challenge', () => {
     }) => {
       await serveApi(page);
       await page.goto(`/accounts/${ACCOUNT}`);
-      await expect(
-        page.getByText("Confirm you're human to keep loading data")
-      ).toBeVisible({ timeout: CARD_TIMEOUT });
 
-      // A card half the screen wide squeezed the widget to ~140 px and cut
+      // A container half the screen wide squeezed the widget to ~140 px and cut
       // its label; the widget asks for 300 px.
       async function widgetBox() {
         const frame = page
@@ -386,7 +377,9 @@ test.describe('a key that forces an interactive challenge', () => {
         return (await frame.frameElement()).boundingBox();
       }
       await expect
-        .poll(async () => (await widgetBox())?.width ?? 0, { timeout: 15_000 })
+        .poll(async () => (await widgetBox())?.width ?? 0, {
+          timeout: CARD_TIMEOUT,
+        })
         .toBeGreaterThanOrEqual(290);
       const box = await widgetBox();
       expect(box).not.toBeNull();

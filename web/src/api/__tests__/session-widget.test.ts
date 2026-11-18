@@ -81,9 +81,8 @@ describe('Turnstile solver and retry panel', () => {
     renders[0]['before-interactive-callback']();
     // Cloudflare enters interactive mode again after a refresh in the widget.
     renders[0]['before-interactive-callback']();
-    expect(
-      document.body.textContent?.split("Confirm you're human").length
-    ).toBe(2);
+    // Only Cloudflare's widget: no text of our own around it.
+    expect(document.body.textContent).toBe('');
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(api.remove).not.toHaveBeenCalled();
@@ -92,7 +91,6 @@ describe('Turnstile solver and retry panel', () => {
     renders[0].callback('turnstile-token');
     expect(await pending).toBe('jwt-1');
     expect(api.remove).toHaveBeenCalledWith('widget-1');
-    expect(document.body.textContent).not.toContain('Confirm');
   });
 
   it('shows the retry panel at once after a server error, and retries on click', async () => {
@@ -163,17 +161,18 @@ describe('Turnstile solver and retry panel', () => {
     expect(panel?.style.maxWidth).toBe('360px');
   });
 
-  it('gives the click card the same phone width as the retry panel', async () => {
+  it("shows Cloudflare's widget alone, as wide as a phone allows up to 300 px", async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     void armedSession().ensureToken();
     await vi.advanceTimersByTimeAsync(0);
 
     renders[0]['before-interactive-callback']();
-    const card = api.render.mock.calls[0][0];
-    expect(card.style.width).toBe('calc(100vw - 32px)');
-    expect(card.style.boxSizing).toBe('border-box');
-    expect(card.style.maxWidth).toBe('360px');
+    const container = api.render.mock.calls[0][0];
+    expect(container.style.width).toBe('calc(100vw - 32px)');
+    expect(container.style.maxWidth).toBe('300px');
+    expect(container.style.backgroundColor).toBe('');
+    expect(container.style.padding).toBe('');
   });
 
   it("keeps Cloudflare's error code out of the panel, in the console", async () => {
