@@ -31,8 +31,7 @@ export interface SessionOptions {
 export interface Session {
   /**
    * Resolve a usable session JWT, or `null` when the layer is dark (no site
-   * key, or the API answers the mint with 404). Reuses a
-   * fresh token; otherwise solves Turnstile once and exchanges it. Never
+   * key). Reuses a fresh token; otherwise solves Turnstile once and exchanges it. Never
    * throws, and never resolves `null` while armed: a failed solve or a refused
    * exchange shows the retry panel and waits for the visitor, so no request
    * goes out without a session (task 0289 — a bare request gets a 401 that
@@ -63,20 +62,14 @@ export function createSession({
   // Single-flight: concurrent callers (e.g. a burst of queries on first paint)
   // share one Turnstile solve + one `/auth/session` round-trip.
   let inFlight: Promise<string | null> | null = null;
-  // Set when the API answers the mint with 404 (its gate is off): later
-  // requests go out without a session instead of solving again.
-  let apiGateOff = false;
 
-  // Called on every 401. A 401 means the gate is on, so a 404 seen earlier
-  // (e.g. during a deploy) no longer holds and the next request solves again.
   const invalidate = () => {
     token = null;
     expiresAtMs = 0;
-    apiGateOff = false;
   };
 
   const ensureToken = async (): Promise<string | null> => {
-    if (!siteKey || apiGateOff) return null;
+    if (!siteKey) return null;
     if (token !== null && Date.now() < expiresAtMs - EXPIRY_SKEW_MS) {
       return token;
     }
@@ -103,16 +96,6 @@ export function createSession({
               token = body.token;
               expiresAtMs = Date.now() + body.expires_in * 1000;
               return token;
-            }
-            // The API mounts `/auth/session` only with its gate on
-            // (`crates/api/src/main.rs`); with the gate off a request needs no
-            // session, so it goes out without one, as before task 0289.
-            if (res.status === 404) {
-              console.warn(
-                'Turnstile session: the API has no /auth/session (HTTP 404), so its gate is off; sending requests without a session.'
-              );
-              apiGateOff = true;
-              return null;
             }
             reason = `The server did not accept the check (HTTP ${res.status}).`;
           } catch (e) {

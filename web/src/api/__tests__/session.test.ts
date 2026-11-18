@@ -103,7 +103,7 @@ describe('createSession', () => {
     expect(await session.ensureToken()).toBe('jwt-2');
   });
 
-  it('resolves null when the API has no mint route (backend gate off)', async () => {
+  it('treats a 404 from the mint like any refusal: the panel, no bare request', async () => {
     fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }));
     const session = createSession({
       siteKey: 'key',
@@ -111,32 +111,16 @@ describe('createSession', () => {
       solve,
     });
 
-    // The API mounts `/auth/session` only with its gate on; without the gate
-    // a request needs no session, so it goes out without one.
-    expect(await session.ensureToken()).toBeNull();
-    expect(document.body.textContent).not.toContain('Try again');
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('404'));
-
-    // Remembered for the session: later requests do not solve again.
-    expect(await session.ensureToken()).toBeNull();
-    expect(solve).toHaveBeenCalledTimes(1);
-  });
-
-  it('solves again after a 401 that follows a 404 (the gate came back on)', async () => {
-    fetchMock
-      .mockResolvedValueOnce(new Response('', { status: 404 }))
-      .mockResolvedValueOnce(okResponse('jwt-1'));
-    const session = createSession({
-      siteKey: 'key',
-      apiBaseUrl: 'https://api',
-      solve,
+    let settled = false;
+    void session.ensureToken().then(() => {
+      settled = true;
     });
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(await session.ensureToken()).toBeNull();
-    // A 401 on a request sent without a session proves the gate is on.
-    session.invalidate();
-    expect(await session.ensureToken()).toBe('jwt-1');
-    expect(solve).toHaveBeenCalledTimes(2);
+    expect(settled).toBe(false);
+    expect(document.body.textContent).toContain('Try again');
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('404'));
+    document.body.innerHTML = '';
   });
 
   it('keeps state per instance', async () => {
