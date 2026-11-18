@@ -9,7 +9,7 @@ import { createSession } from '../session.js';
 type RenderOptions = Record<string, unknown> & {
   callback: (token: string) => void;
   'error-callback': (code: string) => void;
-  'before-interactive-callback': () => void;
+  'unsupported-callback': () => void;
 };
 
 function fakeTurnstile() {
@@ -71,16 +71,13 @@ describe('Turnstile solver and retry panel', () => {
     });
   });
 
-  it('keeps an interactive challenge on screen, past the watchdog, until it is solved', async () => {
+  it('keeps an interactive challenge on screen until it is solved', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     fetchMock.mockResolvedValueOnce(okResponse('jwt-1'));
     const pending = armedSession().ensureToken();
     await vi.advanceTimersByTimeAsync(0);
 
-    renders[0]['before-interactive-callback']();
-    // Cloudflare enters interactive mode again after a refresh in the widget.
-    renders[0]['before-interactive-callback']();
     // Only Cloudflare's widget: no text of our own around it.
     expect(document.body.textContent).toBe('');
 
@@ -113,13 +110,25 @@ describe('Turnstile solver and retry panel', () => {
     expect(await pending).toBe('jwt-1');
   });
 
-  it('turns a 20 s stall into the retry panel, and retries on click', async () => {
+  it('waits for Cloudflare with no time limit of its own', async () => {
+    const { api } = fakeTurnstile();
+    window.turnstile = api as unknown as Window['turnstile'];
+    void armedSession().ensureToken();
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(api.remove).not.toHaveBeenCalled();
+    expect(retryButton()).toBeUndefined();
+  });
+
+  it('shows the retry panel at once for a browser Cloudflare does not support, and retries on click', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     fetchMock.mockResolvedValueOnce(okResponse('jwt-1'));
     const pending = armedSession().ensureToken();
+    await vi.advanceTimersByTimeAsync(0);
 
-    await vi.advanceTimersByTimeAsync(20_000);
+    renders[0]['unsupported-callback']();
+    await vi.advanceTimersByTimeAsync(0);
     expect(api.remove).toHaveBeenCalledWith('widget-1');
     expect(document.body.textContent).toContain(
       "We couldn't verify your browser"
@@ -136,10 +145,12 @@ describe('Turnstile solver and retry panel', () => {
   });
 
   it('labels the panel for assistive technology and focuses its button', async () => {
-    const { api } = fakeTurnstile();
+    const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     void armedSession().ensureToken();
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(0);
+    renders[0]['error-callback']('600010');
+    await vi.advanceTimersByTimeAsync(0);
 
     const panel = document.querySelector('[role="alertdialog"]');
     const titleId = panel?.getAttribute('aria-labelledby') ?? '';
@@ -150,10 +161,12 @@ describe('Turnstile solver and retry panel', () => {
   });
 
   it('fills a phone screen less a margin, up to 360 px', async () => {
-    const { api } = fakeTurnstile();
+    const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     void armedSession().ensureToken();
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(0);
+    renders[0]['error-callback']('600010');
+    await vi.advanceTimersByTimeAsync(0);
 
     const panel = document.querySelector<HTMLElement>('[role="alertdialog"]');
     expect(panel?.style.width).toBe('calc(100vw - 32px)');
@@ -162,12 +175,11 @@ describe('Turnstile solver and retry panel', () => {
   });
 
   it("shows Cloudflare's widget alone, as wide as a phone allows up to 300 px", async () => {
-    const { api, renders } = fakeTurnstile();
+    const { api } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     void armedSession().ensureToken();
     await vi.advanceTimersByTimeAsync(0);
 
-    renders[0]['before-interactive-callback']();
     const container = api.render.mock.calls[0][0];
     expect(container.style.width).toBe('calc(100vw - 32px)');
     expect(container.style.maxWidth).toBe('300px');

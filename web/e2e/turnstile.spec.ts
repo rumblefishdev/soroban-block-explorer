@@ -18,7 +18,7 @@ const FAILS_INVISIBLE = 'http://localhost:4284';
 
 const JWT = 'e2e-session-jwt';
 
-/** A refusal shows the card in seconds; a stall shows it after the 20 s watchdog. */
+/** A refusal shows the card within seconds. */
 const CARD_TIMEOUT = 25_000;
 
 const ACCOUNT = 'GDXWIA4VF3GW2R5OSVIROD47W6AQHE33DSEG6TF7YZD3DYOVU54MYBEN';

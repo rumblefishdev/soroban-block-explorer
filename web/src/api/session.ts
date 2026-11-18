@@ -124,13 +124,6 @@ export function createSession({
 const TURNSTILE_SRC =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 
-// Watchdog: if Turnstile never fires a callback (script loads but the widget
-// stalls), solveTurnstile would hang forever and block every API call awaiting
-// `ensureToken`. Reject + clean up after this long — but only while the check
-// runs on its own: once Cloudflare asks the visitor to click, the widget waits
-// for them as long as it takes.
-const TURNSTILE_TIMEOUT_MS = 20_000;
-
 interface TurnstileApi {
   render(
     container: HTMLElement,
@@ -139,7 +132,7 @@ interface TurnstileApi {
       callback: (token: string) => void;
       'error-callback'?: (errorCode: string) => void;
       'expired-callback'?: () => void;
-      'before-interactive-callback'?: () => void;
+      'unsupported-callback'?: () => void;
       // 'manual' / 'never': Cloudflare must not restart a challenge on its own
       // (by default it re-arms a timed-out interactive check and retries a
       // failed one every 8 s) — an unattended tab then piles up unsolved
@@ -221,18 +214,15 @@ async function solveTurnstile(
   document.body.appendChild(container);
 
   return new Promise<string>((resolve, reject) => {
-    // `let`, not `const`: `cleanup` (below) reads widgetId/timer before they are
+    // `let`, not `const`: `cleanup` (below) reads widgetId before it is
     // assigned — a forward reference prefer-const can't see.
     // eslint-disable-next-line prefer-const
     let widgetId: string | undefined;
     let settled = false;
-    // eslint-disable-next-line prefer-const
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // Idempotent teardown: clear the watchdog, remove the widget + container.
+    // Idempotent teardown: remove the widget + container.
     const cleanup = () => {
       if (settled) return;
       settled = true;
-      if (timer !== undefined) clearTimeout(timer);
       if (widgetId !== undefined) {
         try {
           turnstile.remove(widgetId);
@@ -251,16 +241,8 @@ async function solveTurnstile(
       reject(new Error(message));
     };
 
-    timer = setTimeout(
-      () => fail('The check did not finish within 20 seconds.'),
-      TURNSTILE_TIMEOUT_MS
-    );
-
-    // Cloudflare wants a click: stop the watchdog, so the widget waits for it.
-    const askForInteraction = () => {
-      clearTimeout(timer);
-    };
-
+    // Cloudflare ends every check with one of these callbacks; a click it
+    // asks for waits for the visitor as long as it takes.
     try {
       widgetId = turnstile.render(container, {
         sitekey,
@@ -271,7 +253,8 @@ async function solveTurnstile(
         'error-callback': (errorCode) =>
           fail(`The check failed (Cloudflare Turnstile error ${errorCode}).`),
         'expired-callback': () => fail('The check expired before it was used.'),
-        'before-interactive-callback': askForInteraction,
+        'unsupported-callback': () =>
+          fail('Cloudflare Turnstile does not support this browser.'),
       });
     } catch (e) {
       fail(e instanceof Error ? e.message : 'Turnstile render failed');
