@@ -95,7 +95,7 @@ describe('Turnstile solver and retry panel', () => {
     expect(document.body.textContent).not.toContain('Confirm');
   });
 
-  it('retries once on its own after a server error, with no panel', async () => {
+  it('shows the retry panel at once after a server error, and retries on click', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     fetchMock
@@ -106,14 +106,16 @@ describe('Turnstile solver and retry panel', () => {
 
     renders[0].callback('turnstile-token');
     await vi.advanceTimersByTimeAsync(0);
-    expect(retryButton()).toBeUndefined();
-    expect(api.render).toHaveBeenCalledTimes(2);
+    expect(retryButton()).toBeDefined();
+    expect(api.render).toHaveBeenCalledTimes(1);
 
+    retryButton()?.click();
+    await vi.advanceTimersByTimeAsync(0);
     renders[1].callback('turnstile-token-2');
     expect(await pending).toBe('jwt-1');
   });
 
-  it('turns two silent stalls into the retry panel, and retries on click', async () => {
+  it('turns a 20 s stall into the retry panel, and retries on click', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     fetchMock.mockResolvedValueOnce(okResponse('jwt-1'));
@@ -121,21 +123,17 @@ describe('Turnstile solver and retry panel', () => {
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(api.remove).toHaveBeenCalledWith('widget-1');
-    expect(api.render).toHaveBeenCalledTimes(2);
-    expect(retryButton()).toBeUndefined();
-
-    await vi.advanceTimersByTimeAsync(20_000);
     expect(document.body.textContent).toContain(
       "We couldn't verify your browser"
     );
-    expect(api.render).toHaveBeenCalledTimes(2);
+    expect(api.render).toHaveBeenCalledTimes(1);
 
     retryButton()?.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(api.render).toHaveBeenCalledTimes(3);
+    expect(api.render).toHaveBeenCalledTimes(2);
     expect(retryButton()).toBeUndefined();
 
-    renders[2].callback('turnstile-token');
+    renders[1].callback('turnstile-token');
     expect(await pending).toBe('jwt-1');
   });
 
@@ -143,7 +141,7 @@ describe('Turnstile solver and retry panel', () => {
     const { api } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     void armedSession().ensureToken();
-    await vi.advanceTimersByTimeAsync(40_000);
+    await vi.advanceTimersByTimeAsync(20_000);
 
     const panel = document.querySelector('[role="alertdialog"]');
     const titleId = panel?.getAttribute('aria-labelledby') ?? '';
@@ -157,7 +155,7 @@ describe('Turnstile solver and retry panel', () => {
     const { api } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     void armedSession().ensureToken();
-    await vi.advanceTimersByTimeAsync(40_000);
+    await vi.advanceTimersByTimeAsync(20_000);
 
     const panel = document.querySelector<HTMLElement>('[role="alertdialog"]');
     expect(panel?.style.width).toBe('calc(100vw - 32px)');
@@ -185,8 +183,6 @@ describe('Turnstile solver and retry panel', () => {
 
     renders[0]['error-callback']('600010');
     await vi.advanceTimersByTimeAsync(0);
-    renders[1]['error-callback']('600010');
-    await vi.advanceTimersByTimeAsync(0);
 
     expect(retryButton()).toBeDefined();
     expect(document.body.textContent).not.toContain('600010');
@@ -204,8 +200,6 @@ describe('Turnstile solver and retry panel', () => {
 
     renders[0].callback('turnstile-token');
     await vi.advanceTimersByTimeAsync(0);
-    renders[1].callback('turnstile-token-2');
-    await vi.advanceTimersByTimeAsync(0);
 
     expect(retryButton()).toBeDefined();
     expect(document.body.textContent).not.toContain('403');
@@ -220,13 +214,10 @@ describe('Turnstile solver and retry panel', () => {
 
     scripts()[0].dispatchEvent(new Event('load'));
     await vi.advanceTimersByTimeAsync(0);
-    expect(scripts()).toHaveLength(2); // the one silent retry
-    scripts()[1].dispatchEvent(new Event('load'));
-    await vi.advanceTimersByTimeAsync(0);
     expect(retryButton()).toBeDefined();
 
     retryButton()?.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(scripts()).toHaveLength(3);
+    expect(scripts()).toHaveLength(2);
   });
 });

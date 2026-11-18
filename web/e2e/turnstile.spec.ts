@@ -18,8 +18,8 @@ const FAILS_INVISIBLE = 'http://localhost:4284';
 
 const JWT = 'e2e-session-jwt';
 
-/** The first failure is retried once silently, so the card can take a while. */
-const CARD_TIMEOUT = 45_000;
+/** A refusal shows the card in seconds; a stall shows it after the 20 s watchdog. */
+const CARD_TIMEOUT = 25_000;
 
 const ACCOUNT = 'GDXWIA4VF3GW2R5OSVIROD47W6AQHE33DSEG6TF7YZD3DYOVU54MYBEN';
 const ISSUER = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';

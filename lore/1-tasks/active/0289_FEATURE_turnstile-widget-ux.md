@@ -111,7 +111,7 @@ Fresh review of the goal alone (2026-11-13):
 | 8   | The API logs every refused or failed siteverify, with Cloudflare's `error-codes` or HTTP status, never the token                                               | owner (W25 C)                   | none (log line)                         |
 | 9   | A 404 from the mint means the API gate is off: resolve `null`, the request goes out bare as before                                                             | code review (standards)         | session: 404 → null                     |
 | 10  | Panel colours come from `colorsDark`; the interactive heading is added once                                                                                    | code review                     | solver: one heading                     |
-| 11  | The first failure of a mint cycle is retried once without the panel; the panel follows the second                                                              | devil's advocate (1)            | solver: silent retry, two stalls        |
+| 11  | No silent retry: every failure shows the panel at once (dropped after 7 server errors in 31,452 API requests over 30 days)                                     | owner (2026-11-18)              | solver: panel at once, 20 s stall       |
 | 12  | The retry panel is labelled (`aria-labelledby`/`-describedby`) and its button takes focus                                                                      | devil's advocate (3)            | solver: labels and focus                |
 | 13  | The cards cover the centre of the page by design; the retry card fills a phone screen less 16 px a side, up to 360 px; the click card keeps the widget's width | owner (2026-11-17), code review | solver: phone width, click card width   |
 

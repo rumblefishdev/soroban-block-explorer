@@ -85,11 +85,7 @@ export function createSession({
     inFlight = (async () => {
       try {
         // Until a session is minted: solve, exchange, and on failure wait for
-        // the visitor's "Try again" before solving again. The first failure
-        // is retried once without asking: a cold Lambda, a 5xx or a network
-        // that is just back (a laptop waking) used to heal on the next poll,
-        // and one more solve is no loop.
-        let silentRetryLeft = true;
+        // the visitor's "Try again" before solving again.
         for (;;) {
           let reason: string;
           try {
@@ -123,10 +119,6 @@ export function createSession({
             reason = e instanceof Error ? e.message : String(e);
           }
           console.warn(`Turnstile session failed: ${reason}`);
-          if (silentRetryLeft) {
-            silentRetryLeft = false;
-            continue;
-          }
           await showRetryPanel();
         }
       } finally {
