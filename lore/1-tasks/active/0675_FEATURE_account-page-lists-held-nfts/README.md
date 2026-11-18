@@ -28,21 +28,20 @@ the NFTs the account holds now, each linked to its NFT page.
 
 ## Stan teraz
 
-- Done: `filter[owner]` on `GET /v1/nfts`, served by its own join-free read
-  `fetch_held_by`; NFTs card on the account page; docs; API types. CH-gated
-  test compares it row for row with the list for each owner and fails when
-  `FINAL` is dropped.
-- Next: the PR; look at the card on real data (local API on production CH)
-  once the certificate links exist.
-- In force: option A (2026-11-18) — a separate NFTs card under Assets, shown
-  only when the account holds at least one indexed NFT; `NftsTable` without
-  the owner column. Read shape B (2026-11-18) — no JOIN for the owner read;
-  `filter[owner]` refuses other filters.
+- Done (PR #743): `filter[owner]` on `GET /v1/nfts` served by the join-free
+  `fetch_held_by`; `nft_count` in `GET /v1/accounts/:id`; NFTs as a second tab
+  of the Assets card; docs; API types. Reviews: /code-review (both axes),
+  /ponytail-review, /devils-advocate, /ux-expert — findings applied.
+- Next: look at the card on real data (local API on production CH) once the
+  certificate links exist; then merge.
+- In force: NFTs are a tab of the Assets card — `Tokens N | NFTs N`, only when
+  `nft_count` > 0, `?holdings=nfts` (2026-11-18, replaces the separate card).
+  Read shape B — no JOIN for the owner read; `filter[owner]` refuses other
+  filters. Server join settings stay as they are (measured: a thread cap would
+  slow the transactions list, ~10 cores per query).
 - Cost on production (`system.query_log`, 3 owners × 3 runs): the shared list
   shape took 155–385 MiB / 190–400 ms; `fetch_held_by` takes 4–10 MiB /
-  24–35 ms plus two name lookups of ~2.6 MiB / 4–6 ms. Cause: each JOIN builds
-  one hash table per thread (`parallel_hash`, 24 threads); measured locally,
-  `join_algorithm='hash'` takes a one-row join from 65.7 to 0.8 MiB.
+  24–35 ms plus two name lookups of ~2.6 MiB; the count takes 8 ms / 7 MiB.
 
 ## Context
 
@@ -92,8 +91,8 @@ when the account holds none.
       `CDC5ZX53…GJFGB`, linked to its NFT page.
 - [ ] An account with more NFTs than one page (e.g. the 2,350-NFT holder)
       paginates.
-- [x] An account with no NFTs shows no NFTs card (option A: the card appears
-      only when the first page has rows; a failed fetch still shows its error).
+- [x] An account with no NFTs shows the Assets card without an NFTs tab and
+      sends no NFT request.
 - [x] A CH-gated test: an NFT with unmerged rows for two owners lists only
       under its latest owner.
 - [x] **Docs updated** — `docs/architecture/**` for the new endpoint or filter
