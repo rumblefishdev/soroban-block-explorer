@@ -12,7 +12,8 @@ type TokenKind = 'string' | 'number' | 'bool' | 'null' | 'key';
 
 // Canonical credit-asset form the parser emits: CODE:ISSUER. The asset
 // route spells the same identity CODE-ISSUER, so the href maps the colon
-// to a dash while the visible text stays exactly as in the JSON. The bare
+// to a dash while the visible text stays as in the JSON (shortened only in a
+// narrow column, see `HighlightedJsonProps.narrow`). The bare
 // string "native" is NOT linked — without type context the word could be
 // any value, and a wrong link is worse than none.
 const ASSET_RE = /^([A-Za-z0-9]{1,12}):(G[A-Z2-7]{55})$/;
@@ -186,8 +187,8 @@ interface HighlightedJsonProps {
   /** For a narrow table column (issue #735), where a long word takes the width
    *  the cells beside it need. Addresses show as `GBNM…BOSY` and assets as
    *  `USDC:GA5Z…KZVN` (the link and the copy button keep the full value), and
-   *  a line breaks between words first,
-   *  inside a word only when the word alone does not fit. */
+   *  a line breaks between words first, inside a word only when the word
+   *  alone does not fit. */
   narrow?: boolean;
 }
 
