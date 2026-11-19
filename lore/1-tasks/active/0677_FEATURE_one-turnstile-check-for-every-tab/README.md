@@ -41,9 +41,8 @@ browser until it expires.
 
 - Done: first research (cookie attributes, CORS, CSRF, caching, x402, AOP);
   measurement F12; row 4.
-- Next: grilling round 2 (Not yet decided), after the deeper research and
-  code recon the owner asked for (notes/R-peers-standards-recon.md).
-- In force: rows 1–4 of Decisions so far.
+- Next: three points left (Not yet decided), then code on a feature branch.
+- In force: rows 1–8 of Decisions so far.
 
 ## Context
 
@@ -86,26 +85,31 @@ peer comparison: [notes/R-facts-and-peers.md](notes/R-facts-and-peers.md).
 
 ## Decisions so far
 
-| #   | What is done                                                                                                                                                             | From                                           | vs the task | Who does the same                                               | Code | Test             |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- | ----------- | --------------------------------------------------------------- | ---- | ---------------- |
-| 1   | The gate stays on every read and the session stays 15 min: the x402 grant (Tranche #3) gates the explorer API, so a free read path would undercut it                     | owner, team daily 2026-11-17                   | matches     | —                                                               | none | none (no change) |
-| 2   | One passed check serves every tab and reload: the session lives in an HttpOnly cookie set by the API, per the OWASP Session Management Cheat Sheet                       | owner, team daily 2026-11-17                   | matches     | Cloudflare pre-clearance, Blockscout, Prices portal (see Peers) | —    | to write         |
-| 3   | The site stays on CloudFront, not behind Cloudflare: it holds no data, the API that does is already behind Cloudflare, and 30 days showed 43,006 requests with no attack | owner, team daily 2026-11-17 (keeps task 0302) | matches     | —                                                               | none | none (no change) |
-| 4   | Build the HttpOnly cookie now, not a JWT in `localStorage` and not a measurement first (premise review: frequency doubtful)                                              | owner, grilling W3 A, 2026-11-19               | matches     | Prices portal, Blockscout, Cloudflare pre-clearance             | —    | to write         |
+| #   | What is done                                                                                                                                                                              | From                                           | vs the task | Who does the same                                               | Code | Test             |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ----------- | --------------------------------------------------------------- | ---- | ---------------- |
+| 1   | The gate stays on every read and the session stays 15 min: the x402 grant (Tranche #3) gates the explorer API, so a free read path would undercut it                                      | owner, team daily 2026-11-17                   | matches     | —                                                               | none | none (no change) |
+| 2   | One passed check serves every tab and reload: the session lives in an HttpOnly cookie set by the API, per the OWASP Session Management Cheat Sheet                                        | owner, team daily 2026-11-17                   | matches     | Cloudflare pre-clearance, Blockscout, Prices portal (see Peers) | —    | to write         |
+| 3   | The site stays on CloudFront, not behind Cloudflare: it holds no data, the API that does is already behind Cloudflare, and 30 days showed 43,006 requests with no attack                  | owner, team daily 2026-11-17 (keeps task 0302) | matches     | —                                                               | none | none (no change) |
+| 4   | Build the HttpOnly cookie now, not a JWT in `localStorage` and not a measurement first (premise review: frequency doubtful)                                                               | owner, grilling W3 A, 2026-11-19               | matches     | Prices portal, Blockscout, Cloudflare pre-clearance             | —    | to write         |
+| 5   | A read goes out at once; on a 401 the SPA runs the Turnstile check, mints, and repeats that read once, so no page shows the 401 (replaces 0289 decision 1: the SPA cannot see the cookie) | owner, grilling W4 A, 2026-11-19               | beyond it   | ky, axios-auth-refresh, Cloudflare pre-clearance wrapper        | —    | to write         |
+| 6   | One cut-over: the API sets only the cookie and stops returning the JWT and accepting `Bearer` in the same change; a tab still on the old bundle reloads or shows a brief error            | owner, grilling W10 B, 2026-11-19              | beyond it   | Vite `vite:preloadError` (reload)                               | —    | to write         |
+| 7   | Each tab handles its own 401; no lock shared between tabs                                                                                                                                 | owner, grilling W5 A, 2026-11-19               | beyond it   | supabase-js (dropped Web Locks in v2.107)                       | —    | none (no code)   |
+| 8   | First real proof of the cookie is testnet: deploy, the owner checks, then mainnet (no local path crosses origins)                                                                         | owner, grilling W13 A, 2026-11-19              | beyond it   | —                                                               | —    | testnet run      |
 
 ## Not yet decided
 
-Round 2 of the grilling (research: notes/R-peers-standards-recon.md):
-
-- How a tab learns its session is missing: 401 and one repeated request,
-  a check-session probe, or an expiry hint. Touches 0289 decision 1.
-- Old tabs after the deploy: one release where the API accepts both the
-  cookie and `Bearer`, or the cookie only at once.
-- `SameSite=Strict` or `Lax`.
-- A static custom header on every read (IETF BFF §6.1.3.3), or none.
-- Several visible tabs at one expiry: Web Locks, or each tab on its own.
-- PR split and where the cookie is first proven (no local cross-origin path).
+- `SameSite=Strict` (standard, IETF BFF §6.1.3.2) or `Lax`: no visitor sees
+  a difference; proposed Strict.
+- No static custom header on reads (IETF BFF §6.1.3.3): proposed none.
 - Authenticated Origin Pulls: in this task, a separate task, or not now.
+
+## PR split
+
+One PR, one deploy (decision 6 leaves no step between API and SPA):
+cookie on mint, gate reads the cookie, `Bearer` and the body JWT removed,
+`allowCredentials` on both CORS layers, SPA `credentials: 'include'` and the
+repeat after 401, tests, docs, API types regenerated. Testnet first, then
+mainnet (decision 8).
 
 ## Out of scope
 
