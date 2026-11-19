@@ -35,7 +35,6 @@ export interface ApiGatewayStackProps extends cdk.StackProps {
  * - Environment-specific throttling (rate + burst limits)
  * - Optional response caching (disabled on staging to save cost)
  * - CORS for SPA browser access
- * - API key usage plan for non-browser consumers
  *
  * NOTE on edge protection: this stack used to create its own REGIONAL WAF
  * WebACL (task 0035). It was removed together with the CLOUDFRONT-scoped one
@@ -52,7 +51,7 @@ export class ApiGatewayStack extends cdk.Stack {
 
     const { config, apiFunction } = props;
 
-    // Load-test window (task 0338): lift the per-stage + usage-plan throttle to
+    // Load-test window (task 0338): lift the per-stage throttle to
     // the account ceiling so a load test measures backend capacity rather than
     // edge throttling. It used to drop the REGIONAL WAF per-IP rate rule too;
     // that WebACL is gone (task 0302), so the throttle is all this switch moves.
@@ -148,44 +147,6 @@ export class ApiGatewayStack extends cdk.Stack {
       endpointTypes: [apigateway.EndpointType.REGIONAL],
     });
     this.api = api;
-
-    // ---------------------
-    // Usage Plan + API Key
-    // ---------------------
-    // Optional API key access for non-browser consumers (automation,
-    // partner integrations). Browser traffic does not require an API
-    // key — the SPA calls the API anonymously.
-    //
-    // NOTE: In proxy mode, LambdaRestApi creates a greedy {proxy+}
-    // resource with apiKeyRequired=false. The usage plan tracks and
-    // throttles requests that voluntarily include an x-api-key header,
-    // but does not gate access. To enforce API key requirement on
-    // specific routes, add non-proxy resources with apiKeyRequired=true.
-    const usagePlan = api.addUsagePlan('UsagePlan', {
-      name: `${config.envName}-partner-plan`,
-      throttle: {
-        rateLimit: throttleRate,
-        burstLimit: throttleBurst,
-      },
-      // Daily quota is dropped during a load-test window: with the throttle
-      // lifted, a key'd run would otherwise burn the per-day limit in ~1s and
-      // 429 for the rest of the day, masking backend capacity. Restored (and
-      // the only volumetric cap on key'd traffic) when loadTesting is off.
-      ...(config.loadTesting
-        ? {}
-        : {
-            quota: {
-              limit: config.apiGatewayPartnerDailyQuota,
-              period: apigateway.Period.DAY,
-            },
-          }),
-    });
-    usagePlan.addApiStage({ stage: api.deploymentStage });
-
-    const apiKey = api.addApiKey('PartnerApiKey', {
-      apiKeyName: `${config.envName}-partner-key`,
-    });
-    usagePlan.addApiKey(apiKey);
 
     // ---------------------
     // Custom Domains (Cloudflare migration — task 0277 / ADR 0048)

@@ -378,9 +378,10 @@ asymmetry is deliberate:
   CloudFront would stack two CDNs. AWS Shield Standard still covers volumetric
   L3/L4; nothing caps HTTP requests per IP.
 
-API Gateway throttling and the usage-plan limits are independent of all of the
-above and are now the only volumetric control on the origin. Production defaults
-are `50` rps / `100` burst. They are **not** unconditional: setting
+API Gateway stage throttling is independent of all of the above and is the only
+volumetric control on the AWS side (the partner usage plan was removed in task
+0679: on a `{proxy+}` method that requires no API key it limited nothing).
+Production defaults are `50` rps / `100` burst. They are **not** unconditional: setting
 `loadTesting: true` raises both to the account ceiling for a coordinated
 load-test window (`LOAD_TEST_THROTTLE_RATE` / `_BURST` in
 `stacks/api-gateway-stack.ts`), which leaves the public API with no rate

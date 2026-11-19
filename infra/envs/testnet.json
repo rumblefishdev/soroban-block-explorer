@@ -38,7 +38,6 @@
   "apiGatewayCacheSize": "0.5",
   "apiGatewayCacheTtlImmutable": 3600,
   "apiGatewayCacheTtlMutable": 10,
-  "apiGatewayPartnerDailyQuota": 10000,
   "loadTesting": false,
   "domainName": "testnet.sorobanscan.com",
   "legacyDomainName": "testnet.sorobanscan.rumblefish.dev",

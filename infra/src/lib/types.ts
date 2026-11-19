@@ -114,13 +114,11 @@ export interface EnvironmentConfig {
   readonly apiGatewayCacheTtlImmutable: number;
   /** Cache TTL (seconds) for mutable endpoints (e.g. /transactions?limit=20). Used as the stage-level default. */
   readonly apiGatewayCacheTtlMutable: number;
-  /** Daily request quota for partner API key usage plans. */
-  readonly apiGatewayPartnerDailyQuota: number;
 
   /**
    * Load-test window switch (task 0338). When `true`, the API Gateway stack
    * lifts the volumetric DDoS protections so a load test measures backend
-   * capacity instead of edge throttling: the per-stage + usage-plan throttle
+   * capacity instead of edge throttling: the per-stage throttle
    * is raised to the account ceiling. It used to drop the REGIONAL WAF's per-IP
    * rate-based rule as well; that WebACL no longer exists (ADR 0048, task 0302),
    * so the throttle is now the only thing this switch touches. Everything else
