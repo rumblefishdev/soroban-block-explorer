@@ -53,6 +53,26 @@ is a second place a reader must keep in mind.
 - Stale comment: `api-gateway-stack.ts:19` calls the stage throttle the only
   volumetric protection; Cloudflare's rate limit exists too.
 
+## Premise
+
+Fresh opus review of the goal alone (2026-11-19):
+
+- **holds** — the partner usage plan, key and quota do nothing: both APIs
+  have `ANY`/`OPTIONS` on `/` and `/{proxy+}` with `apiKeyRequired=false`;
+  `get-usage` is empty on both plans (prod since 2026-08-21, testnet since
+  2026-10-05); no script, load test, alarm or doc reads the key; the paid
+  tier is the Lambda allowlist; the stage throttle (50/100) comes from
+  `deployOptions`, not the plan.
+- **holds** — `apiGatewayCacheTtlImmutable` is never read.
+- **gap** — three docs claim the usage plan is a control (technical design
+  overview, infrastructure overview, SCF milestone-3 security checklist
+  row 3); they change with the plan's removal; the SCF checklist wording is
+  the owner's call.
+- **doubtful** — "only the immutable TTL is dead": the whole stage-cache
+  config (`apiGatewayCacheEnabled`, size, mutable TTL, the cache branch) is
+  parked and never runs (`api-gateway-cache-spec.md`: NOT ADOPTED). Scope
+  question for the owner.
+
 ## Acceptance Criteria
 
 - [ ] Partner usage plan, key and quota removed; `cdk diff` shows only their
