@@ -208,7 +208,7 @@ describe('client.ts session wiring', () => {
       expect(document.body.textContent).toContain('Try again')
     );
     expect(document.body.textContent).not.toContain('needs cookies');
-    document.querySelector('button')!.click();
+    document.querySelector('button')?.click();
 
     expect((await pending).response?.status).toBe(200);
     expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(2);

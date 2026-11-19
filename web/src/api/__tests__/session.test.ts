@@ -147,7 +147,7 @@ describe('createSession', () => {
     expect(document.body.textContent).toContain('Try again');
     expect(document.body.textContent).not.toContain('needs cookies');
 
-    document.querySelector('button')!.click();
+    document.querySelector('button')?.click();
     expect(await lost).toBe(true);
     expect(await session.renew(session.mints())).toBe(true);
     expect(session.mints()).toBe(1);
