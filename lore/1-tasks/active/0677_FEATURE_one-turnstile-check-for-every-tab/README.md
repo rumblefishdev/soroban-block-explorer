@@ -41,7 +41,7 @@ browser until it expires.
 
 - Done: research, measurement (F12), two plan reviews, foundations review;
   decisions 1–15; frontier empty.
-- Next: the one PR (PR split), test first; then testnet, then mainnet.
+- Next: review of PR #746 (stacked on #745 `[structure only]`); then deploy per stack on testnet, the owner's checklist, mainnet.
 - In force: rows 1–15 of Decisions so far.
 
 ## Context
