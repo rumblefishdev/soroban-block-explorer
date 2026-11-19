@@ -174,10 +174,16 @@ describe('client.ts session wiring', () => {
     expect(document.body.textContent).not.toContain('This site needs cookies');
   });
 
-  // Decision 14: a repeat that still gets a 401 means the browser does not
-  // keep the cookie: one panel, and no more checks for later reads.
-  it('shows the cookies panel and stops checking when the repeat gets a 401', async () => {
+  // Decision 14 (W46 B): a repeat that still gets a 401 in a browser that
+  // refuses a test cookie means it blocks cookies: one panel, no more checks.
+  it('shows the cookies panel and stops checking when the browser refuses cookies', async () => {
     siteKey = 'key';
+    // A browser that blocks cookies drops every write to `document.cookie`.
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => '',
+      set: () => undefined,
+    });
     const calls = stubFetch([401, 401, 401]);
     const { getNetworkStats } = await freshClient();
 
@@ -186,6 +192,26 @@ describe('client.ts session wiring', () => {
 
     expect(document.body.textContent).toContain('This site needs cookies');
     expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(1);
+    delete (document as { cookie?: string }).cookie;
+    document.body.innerHTML = '';
+  });
+
+  // A browser that keeps cookies, while our side lost the session: Try again,
+  // and the click brings a fresh check and the data.
+  it('shows Try again when the session is lost on our side, then checks again', async () => {
+    siteKey = 'key';
+    const calls = stubFetch([401, 401, 200]);
+    const { getNetworkStats } = await freshClient();
+
+    const pending = getNetworkStats();
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain('Try again')
+    );
+    expect(document.body.textContent).not.toContain('needs cookies');
+    document.querySelector('button')!.click();
+
+    expect((await pending).response?.status).toBe(200);
+    expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(2);
     document.body.innerHTML = '';
   });
 });

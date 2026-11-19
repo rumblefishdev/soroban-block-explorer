@@ -155,19 +155,21 @@ test.describe('a key that always passes', () => {
     }
   });
 
-  // Decision 14: a browser that does not keep the cookie gets one panel.
-  test('a browser that drops the cookie gets one cookies panel and one mint', async ({
+  // Decision 14 (W46 B): the browser keeps cookies but the session cookie
+  // never comes back (here the mint sets none, as a proxy stripping it would):
+  // the visitor is not blamed, the retry card shows, nothing is checked again
+  // before the click.
+  test('a session lost on our side shows Try again, not the cookies panel', async ({
     page,
   }) => {
     const seen = await serveApi(page.context(), { cookieSticks: false });
     await page.goto(`/accounts/${ACCOUNT}`);
 
-    await expect(page.getByRole('alert')).toHaveText(
-      'This site needs cookies',
-      {
-        timeout: CARD_TIMEOUT,
-      }
+    await expect(failureCard(page)).toContainText(
+      "We couldn't verify your browser",
+      { timeout: CARD_TIMEOUT }
     );
+    await expect(page.getByText('This site needs cookies')).toHaveCount(0);
     expect(seen.mints).toHaveLength(1);
   });
 

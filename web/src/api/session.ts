@@ -19,6 +19,8 @@ export interface SessionOptions {
   apiBaseUrl: string;
   /** Solves a Turnstile challenge. Injectable so a test needs no widget. */
   solve?: (siteKey: string) => Promise<string>;
+  /** Whether the browser keeps a cookie at all. Injectable for tests. */
+  keepsCookies?: () => boolean;
 }
 
 export interface Session {
@@ -34,21 +36,26 @@ export interface Session {
    */
   renew(seenMints: number): Promise<boolean>;
   /**
-   * A read repeated right after a fresh mint still got a 401: the browser
-   * does not keep the cookie. Shows one panel; `renew` stops checking.
+   * A read repeated right after a fresh mint still got a 401. If the browser
+   * refuses a test cookie it blocks cookies: one panel, `renew` stops
+   * checking, resolves `false`. Otherwise the cookie was lost on our side
+   * (proxy, deploy): the retry panel, and `true` once the visitor clicks
+   * "Try again". Concurrent callers share one panel.
    */
-  cookiesBlocked(): void;
+  sessionLost(): Promise<boolean>;
 }
 
 export function createSession({
   siteKey,
   apiBaseUrl,
   solve = createTurnstileSolver(),
+  keepsCookies = keepsTestCookie,
 }: SessionOptions): Session {
   let mints = 0;
   let blocked = false;
   // Single-flight: the burst of 401s on first paint shares one check.
   let inFlight: Promise<boolean> | null = null;
+  let lostInFlight: Promise<boolean> | null = null;
 
   const renew = (seenMints: number): Promise<boolean> => {
     if (blocked) return Promise.resolve(false);
@@ -91,17 +98,42 @@ export function createSession({
     return inFlight;
   };
 
-  const cookiesBlocked = () => {
-    if (blocked) return;
-    blocked = true;
+  const sessionLost = (): Promise<boolean> => {
+    if (blocked) return Promise.resolve(false);
+    if (lostInFlight) return lostInFlight;
+    if (!keepsCookies()) {
+      blocked = true;
+      console.warn(
+        'The session cookie was not kept: the browser blocks cookies.'
+      );
+      // No check can help, so one card that stays, with nothing to click.
+      showCard('alert', 'This site needs cookies');
+      return Promise.resolve(false);
+    }
     console.warn(
-      'The session cookie was not kept: the browser blocks cookies.'
+      'The session cookie was lost although the browser keeps cookies.'
     );
-    // No check can help, so one card that stays, with nothing to click.
-    showCard('alert', 'This site needs cookies');
+    lostInFlight = showRetryPanel()
+      .then(() => true)
+      .finally(() => {
+        lostInFlight = null;
+      });
+    return lostInFlight;
   };
 
-  return { mints: () => mints, renew, cookiesBlocked };
+  return { mints: () => mints, renew, sessionLost };
+}
+
+/**
+ * Whether the browser keeps a cookie at all: write a test cookie on the page's
+ * host, read it back, remove it. Reliable where `navigator.cookieEnabled` is
+ * not (it stayed `true` in Chromium with every cookie blocked).
+ */
+function keepsTestCookie(): boolean {
+  document.cookie = 'cookie-probe=1; Path=/; SameSite=Strict';
+  const kept = document.cookie.includes('cookie-probe=1');
+  document.cookie = 'cookie-probe=; Path=/; Max-Age=0';
+  return kept;
 }
 
 // ── Turnstile widget ────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ client.setConfig({ baseUrl: apiBaseUrl, credentials: 'include' });
 
 // Free-tier access layer (task 0277), wired only when the site key is set.
 // A read goes out at once; a 401 means no valid session cookie, so the tab
-// renews it and repeats the read once — the page never sees that 401.
+// renews it and repeats the read — the page never sees that 401.
 if (turnstileSiteKey) {
   const session = createSession({ siteKey: turnstileSiteKey, apiBaseUrl });
   // How many mints had finished when each read went out (see `renew`).
@@ -23,13 +23,18 @@ if (turnstileSiteKey) {
   client.interceptors.response.use(async (response, request) => {
     if (response.status !== 401) return response;
     // A read the map does not know counts as sent now, so it gets a fresh
-    // check rather than a bare repeat that would read as blocked cookies.
-    const seenMints = mintsWhenSent.get(request) ?? session.mints();
-    if (!(await session.renew(seenMints))) return response;
-    // Reads are GETs without a body, so the same Request can go out again.
-    const repeated = await fetch(request);
-    if (repeated.status === 401) session.cookiesBlocked();
-    return repeated;
+    // check rather than a bare repeat that would read as a lost session.
+    let seenMints = mintsWhenSent.get(request) ?? session.mints();
+    for (;;) {
+      if (!(await session.renew(seenMints))) return response;
+      // Reads are GETs without a body, so the same Request can go out again.
+      const repeated = await fetch(request);
+      if (repeated.status !== 401) return repeated;
+      // Still 401 right after a mint: blocked cookies end here; a session
+      // lost on our side waits for "Try again", then gets a fresh check.
+      if (!(await session.sessionLost())) return repeated;
+      seenMints = session.mints();
+    }
   });
 }
 

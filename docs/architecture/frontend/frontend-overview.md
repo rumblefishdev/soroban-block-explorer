@@ -128,9 +128,10 @@ different things — the widget never issues the session. The SPA sends every re
 `credentials: 'include'` and never sees the cookie, so one check serves every tab and
 reload until it expires (15 min). A read goes out at once; its 401 makes the tab run the
 check, mint, and repeat that read once, so no page shows the 401. A read sent before the
-last mint finished is only repeated. If the repeated read still gets a 401, the browser
-does not keep cookies: one "This site needs cookies" panel shows and no further check
-runs. When Cloudflare asks for a click, its widget stays alone at the centre until the
+last mint finished is only repeated. If the repeated read still gets a 401, the tab
+writes a test cookie: a browser that refuses it blocks cookies, so one "This site needs
+cookies" panel shows and no further check runs; a browser that keeps it lost the session
+on our side, so the "Try again" panel shows and the click brings a fresh check. When Cloudflare asks for a click, its widget stays alone at the centre until the
 visitor solves it; when the check fails, a "Try again" panel says the check failed (the reason goes to the console), and nothing
 is solved again until it is clicked (`web/src/api/session.ts`, task 0289). This is also
 not Cloudflare fronting the frontend's own domain, which sits on Route 53 with no edge

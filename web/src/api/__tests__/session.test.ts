@@ -111,23 +111,46 @@ describe('createSession', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('404'));
   });
 
-  // Decision 14: a browser that does not keep the cookie gets one panel and
-  // no further checks.
-  it('shows the cookies panel once and stops checking when cookies are blocked', async () => {
+  // Decision 14 (W46 B): only a browser that refuses a test cookie is told it
+  // blocks cookies; it gets one panel and no further checks.
+  it('shows the cookies panel once and stops checking when a test cookie is refused', async () => {
     const session = createSession({
       siteKey: 'key',
       apiBaseUrl: 'https://api',
       solve,
+      keepsCookies: () => false,
     });
 
-    session.cookiesBlocked();
-    session.cookiesBlocked();
+    expect(
+      await Promise.all([session.sessionLost(), session.sessionLost()])
+    ).toEqual([false, false]);
 
     expect(document.body.textContent).toBe('This site needs cookies');
     expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1);
     expect(await session.renew(session.mints())).toBe(false);
     expect(solve).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // A browser that keeps cookies lost the session on our side: the visitor
+  // is not blamed, and "Try again" allows a fresh check.
+  it('shows Try again, not the cookies panel, when the browser keeps a test cookie', async () => {
+    fetchMock.mockResolvedValueOnce(minted());
+    const session = createSession({
+      siteKey: 'key',
+      apiBaseUrl: 'https://api',
+      solve,
+      keepsCookies: () => true,
+    });
+
+    const lost = session.sessionLost();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.body.textContent).toContain('Try again');
+    expect(document.body.textContent).not.toContain('needs cookies');
+
+    document.querySelector('button')!.click();
+    expect(await lost).toBe(true);
+    expect(await session.renew(session.mints())).toBe(true);
+    expect(session.mints()).toBe(1);
   });
 
   it('keeps state per instance', async () => {
