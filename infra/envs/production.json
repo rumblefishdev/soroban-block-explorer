@@ -34,7 +34,6 @@
   "apiGatewayThrottleBurst": 100,
   "apiGatewayCacheEnabled": false,
   "apiGatewayCacheSize": "0.5",
-  "apiGatewayCacheTtlImmutable": 3600,
   "apiGatewayCacheTtlMutable": 10,
   "apiGatewayPartnerDailyQuota": 10000,
   "loadTesting": false,
