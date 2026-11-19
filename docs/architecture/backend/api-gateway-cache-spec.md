@@ -1,9 +1,9 @@
 # API Gateway stage cache — specification
 
 > **Status: NOT ADOPTED — decision 2026-08-14 (task 0455).** The stage cache
-> has never been enabled: `apiGatewayCacheEnabled` is `false` in
-> `infra/envs/production.json` and the live stage reports
-> `cacheClusterEnabled: false` (verified read-only the same day). The 0097
+> has never been enabled: the live stage reports `cacheClusterEnabled: false`
+> (verified read-only the same day), and the parked CDK switches
+> (`apiGatewayCacheEnabled`, size, TTL) were removed in task 0679. The 0097
 > intent "enable before launch" predates Cloudflare fronting the API
 > (task 0277) and was overtaken by it. What actually caches today: the
 > per-endpoint `Cache-Control` tiers below in every user's **browser**, and
@@ -69,7 +69,7 @@ The full per-endpoint mapping is documented in
    gateway cache by default.
 6. **TTL ceiling:** clamp to 300s. Backend long tier is exactly 300s, so
    the gateway should not extend.
-7. **TTL floor (`apiGatewayCacheTtlMutable`):** keep at 10s. The
+7. **TTL floor:** keep at 10s. The
    backend's short tier is pinned to this value. Lowering below 10s is
    wasted (we'd round-trip more than once per Stellar ledger close);
    raising above 10s is wasted on the short tier specifically.

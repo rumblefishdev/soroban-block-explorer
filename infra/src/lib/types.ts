@@ -106,12 +106,6 @@ export interface EnvironmentConfig {
   readonly apiGatewayThrottleRate: number;
   /** Maximum concurrent requests allowed in a short burst above the rate limit. */
   readonly apiGatewayThrottleBurst: number;
-  /** Whether to provision a dedicated cache cluster (Memcached) on the stage. false = no cluster, no cost. */
-  readonly apiGatewayCacheEnabled: boolean;
-  /** Cache cluster size in GB. String because AWS API accepts '0.5', '1.6', '6.1', etc. */
-  readonly apiGatewayCacheSize: string;
-  /** Cache TTL (seconds) for mutable endpoints (e.g. /transactions?limit=20). Used as the stage-level default. */
-  readonly apiGatewayCacheTtlMutable: number;
   /** Daily request quota for partner API key usage plans. */
   readonly apiGatewayPartnerDailyQuota: number;
 
