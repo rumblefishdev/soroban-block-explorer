@@ -4,7 +4,7 @@ title: 'FEATURE: one Turnstile check for every tab (HttpOnly session cookie)'
 type: FEATURE
 status: active
 related_adr: ['0048']
-related_tasks: ['0289', '0277', '0346']
+related_tasks: ['0289', '0277', '0346', '0678']
 tags:
   [
     effort-medium,
@@ -41,8 +41,8 @@ browser until it expires.
 
 - Done: first research (cookie attributes, CORS, CSRF, caching, x402, AOP);
   measurement F12; row 4.
-- Next: three points left (Not yet decided), then code on a feature branch.
-- In force: rows 1–8 of Decisions so far.
+- Next: one point left (Not yet decided), then code on a feature branch.
+- In force: rows 1–10 of Decisions so far.
 
 ## Context
 
@@ -95,13 +95,12 @@ peer comparison: [notes/R-facts-and-peers.md](notes/R-facts-and-peers.md).
 | 6   | One cut-over: the API sets only the cookie and stops returning the JWT and accepting `Bearer` in the same change; a tab still on the old bundle reloads or shows a brief error            | owner, grilling W10 B, 2026-11-19              | beyond it   | Vite `vite:preloadError` (reload)                               | —    | to write         |
 | 7   | Each tab handles its own 401; no lock shared between tabs                                                                                                                                 | owner, grilling W5 A, 2026-11-19               | beyond it   | supabase-js (dropped Web Locks in v2.107)                       | —    | none (no code)   |
 | 8   | First real proof of the cookie is testnet: deploy, the owner checks, then mainnet (no local path crosses origins)                                                                         | owner, grilling W13 A, 2026-11-19              | beyond it   | —                                                               | —    | testnet run      |
+| 9   | The cookie has `SameSite=Strict` (with `__Host-`, `HttpOnly`, `Secure`, `Path=/`, `Max-Age=900`, no `Domain`)                                                                             | owner, grilling W11 A, 2026-11-19              | beyond it   | IETF BFF §6.1.3.2, Vercel BotID                                 | —    | to write         |
+| 10  | Authenticated Origin Pulls is not part of this task: a separate backlog task 0678 for later                                                                                               | owner, grilling W6 B, 2026-11-19               | beyond it   | —                                                               | none | none             |
 
 ## Not yet decided
 
-- `SameSite=Strict` (standard, IETF BFF §6.1.3.2) or `Lax`: no visitor sees
-  a difference; proposed Strict.
 - No static custom header on reads (IETF BFF §6.1.3.3): proposed none.
-- Authenticated Origin Pulls: in this task, a separate task, or not now.
 
 ## PR split
 
