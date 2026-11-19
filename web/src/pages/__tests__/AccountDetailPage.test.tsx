@@ -664,7 +664,7 @@ describe('AccountDetailPage', () => {
     expect(hookMocks.useNftsList).not.toHaveBeenCalled();
   });
 
-  it('switches the Assets card to the NFTs the account holds, linked, without an owner column', async () => {
+  it('switches the Assets card to the NFTs the account holds, linked, as a list without a header row', async () => {
     const user = userEvent.setup();
     mockDetail({
       data: { ...SAMPLE, nft_count: 1 },
@@ -701,9 +701,12 @@ describe('AccountDetailPage', () => {
         (a) => a.getAttribute('href') === `/nfts/${HELD_NFT.contract_id}/3`
       )
     ).toBe(true);
+    // Like the Tokens list beside it: no header row, and no Owner column —
+    // on the account's own page every owner is that account.
     expect(
-      within(card as HTMLElement).queryByText('Owner')
-    ).not.toBeInTheDocument();
+      within(card as HTMLElement).queryAllByRole('columnheader')
+    ).toHaveLength(0);
+    expect(within(card as HTMLElement).getAllByRole('cell')).toHaveLength(2);
   });
 
   it('opens the NFTs view from the URL and shows its error when the NFT fetch fails', () => {
