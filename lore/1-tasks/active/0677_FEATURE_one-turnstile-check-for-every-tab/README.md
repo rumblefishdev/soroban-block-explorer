@@ -98,12 +98,15 @@ peer comparison: [notes/R-facts-and-peers.md](notes/R-facts-and-peers.md).
 | 9   | The cookie has `SameSite=Strict` (with `__Host-`, `HttpOnly`, `Secure`, `Path=/`, `Max-Age=900`, no `Domain`)                                                                             | owner, grilling W11 A, 2026-11-19              | beyond it   | IETF BFF §6.1.3.2, Vercel BotID                                 | —    | to write         |
 | 10  | Authenticated Origin Pulls is not part of this task: a separate backlog task 0678 for later                                                                                               | owner, grilling W6 B, 2026-11-19               | beyond it   | —                                                               | none | none             |
 | 11  | No extra custom header on reads: one request per read; a page on a taken-over subdomain still cannot read the answer (CORS list)                                                          | owner, grilling W12 A, 2026-11-19              | beyond it   | Vercel BotID, Blockscout                                        | —    | none (no code)   |
+| 12  | A 401 for a read sent before the last mint finished repeats the read without a new check                                                                                                  | owner, W21 A, 2026-11-19                       | beyond it   | axios-auth-refresh                                              | —    | to write         |
+| 13  | The API logs one line per mint and per 401, saying whether a cookie came                                                                                                                  | owner, W23 A, 2026-11-19                       | beyond it   | —                                                               | —    | to write         |
 
 ## Not yet decided
 
-Plan review (notes/S-plan-review.md) reopened four points: browsers that
-block cookies (R5), a 401 after a finished mint (R6), own cookie parsing
-vs `axum-extra` (R7), a log line per mint and 401 (R8).
+- Foundations review (notes/S-foundations-review.md) questions decision 1:
+  is the gate on every read needed for x402 at all.
+- Browsers that block all cookies (B8): cookie only, or a Bearer fallback.
+- Own cookie parsing vs `axum-extra` (R7): benefit being measured.
 
 ## PR split
 
