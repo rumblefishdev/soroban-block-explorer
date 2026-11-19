@@ -133,7 +133,7 @@ export class ApiGatewayStack extends cdk.Stack {
         allowMethods: ['GET', 'POST', 'OPTIONS'],
         // `x-api-key` (paid tier) is a non-safelisted request header — without
         // it the preflight is rejected and a browser cannot send a partner key.
-        allowHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-api-key'],
+        allowHeaders: ['Content-Type', 'Accept', 'x-api-key'],
         // The free-tier session is an HttpOnly cookie (task 0677). The SPA's
         // mint is a JSON POST, so it is preflighted, and the browser refuses a
         // credentialed request whose preflight lacks this — no session is set.

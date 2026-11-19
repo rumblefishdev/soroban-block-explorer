@@ -155,7 +155,6 @@ fn app(config: &AppConfig, state: AppState) -> Router {
             .allow_credentials(true)
             .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
             .allow_headers([
-                axum::http::header::AUTHORIZATION,
                 axum::http::header::CONTENT_TYPE,
                 axum::http::header::ACCEPT,
                 axum::http::HeaderName::from_static("x-api-key"),
