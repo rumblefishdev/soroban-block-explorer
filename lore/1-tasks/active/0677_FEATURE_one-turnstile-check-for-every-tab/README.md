@@ -101,15 +101,19 @@ peer comparison: [notes/R-facts-and-peers.md](notes/R-facts-and-peers.md).
 
 ## Not yet decided
 
-None — the frontier is empty (2026-11-19).
+Plan review (notes/S-plan-review.md) reopened four points: browsers that
+block cookies (R5), a 401 after a finished mint (R6), own cookie parsing
+vs `axum-extra` (R7), a log line per mint and 401 (R8).
 
 ## PR split
 
-One PR, one deploy (decision 6 leaves no step between API and SPA):
-cookie on mint, gate reads the cookie, `Bearer` and the body JWT removed,
-`allowCredentials` on both CORS layers, SPA `credentials: 'include'` and the
-repeat after 401, tests, docs, API types regenerated. Testnet first, then
-mainnet (decision 8).
+One PR (decision 6 leaves no step between API and SPA): cookie on a `204`
+mint, gate reads the cookie, `Bearer`, the body JWT and the `bearer_jwt`
+OpenAPI scheme removed, `allowCredentials` on both CORS layers, SPA
+`credentials: 'include'` (client and mint) and the repeat after 401, tests,
+docs, API types regenerated. Deploy per stack: `ApiGateway` → `Compute` →
+`web`, testnet first with the same order, then mainnet (decision 8).
+Plan review and testnet checklist: notes/S-plan-review.md.
 
 ## Out of scope
 
@@ -117,7 +121,8 @@ mainnet (decision 8).
   same gap exists with `Bearer`. Whoever adds a Cloudflare cache rule must
   make gated responses `private` or key the cache on the session.
 - x402 payment on the explorer API (F7): its order slot is after the session
-  check, before the 401; nothing is built here.
+  check, before the 401; nothing is built here. The x402 task must decide how
+  the SPA treats a 402 from an expired session (R10).
 - Server-side logout or revocation: a stateless 15-min JWT has none (OWASP
   "Logout Button"); a free read gate has no logout.
 
