@@ -97,7 +97,8 @@ export function createSession({
     console.warn(
       'The session cookie was not kept: the browser blocks cookies.'
     );
-    showCookiesPanel();
+    // No check can help, so one card that stays, with nothing to click.
+    showCard('alert', 'This site needs cookies');
   };
 
   return { mints: () => mints, renew, cookiesBlocked };
@@ -280,14 +281,6 @@ function showCard(role: string, titleText: string): HTMLElement {
   panel.append(title);
   document.body.appendChild(panel);
   return panel;
-}
-
-/**
- * The browser drops the session cookie, so no check can help: one card that
- * stays, with nothing to click (task 0677).
- */
-function showCookiesPanel(): void {
-  showCard('alert', 'This site needs cookies');
 }
 
 /**

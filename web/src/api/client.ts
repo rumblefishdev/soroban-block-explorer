@@ -20,16 +20,14 @@ if (turnstileSiteKey) {
     return request;
   });
 
-  client.interceptors.response.use(async (response, request, options) => {
+  client.interceptors.response.use(async (response, request) => {
     if (response.status !== 401) return response;
-    if (!(await session.renew(mintsWhenSent.get(request) ?? 0))) {
-      return response;
-    }
+    // A read the map does not know counts as sent now, so it gets a fresh
+    // check rather than a bare repeat that would read as blocked cookies.
+    const seenMints = mintsWhenSent.get(request) ?? session.mints();
+    if (!(await session.renew(seenMints))) return response;
     // Reads are GETs without a body, so the same Request can go out again.
-    // Called unbound, like the client does: `options.fetch(request)` would run
-    // the browser's fetch with `options` as `this` and throw Illegal invocation.
-    const fetchOnce = options.fetch!;
-    const repeated = await fetchOnce(request);
+    const repeated = await fetch(request);
     if (repeated.status === 401) session.cookiesBlocked();
     return repeated;
   });

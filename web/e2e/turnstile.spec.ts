@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 /**
  * The browser check against the REAL Cloudflare Turnstile widget (task 0289).
@@ -8,8 +8,10 @@ import { expect, test, type Page } from '@playwright/test';
  * passes, two that always fail, one that always asks for a challenge. The
  * widget and its script come from challenges.cloudflare.com, so these tests
  * need the internet. The API itself is never reached: the session mint and
- * every data call are answered by `page.route`, which plays the cookie the
- * real API sets (task 0677): data calls get 401 until a mint has happened.
+ * every data call are answered by `page.route`. The mint answers with the
+ * same `Set-Cookie` the real API sends (task 0677), and a data call passes
+ * only when the browser sends that cookie back — so these tests prove the
+ * browser keeps it across reloads and pages.
  */
 
 const PASSES = 'http://localhost:4281';
@@ -61,31 +63,40 @@ type Seen = {
   order: string[];
 };
 
+const SESSION_COOKIE = '__Host-session=e2e-session';
+
 /**
- * Answer the API: the session mint with 204 (the real one sets the cookie),
- * the account with a body the page can render, every other data call with an
- * empty list — and every data call with 401 while no session exists. With
- * `cookieSticks: false` the browser never keeps the cookie, so data calls
- * stay 401 after the mint. Records every call so the tests can say what went
- * out and in which order.
+ * Answer the API: the session mint with 204 and the session cookie, the
+ * account with a body the page can render, every other data call with an
+ * empty list — and every data call that does not send the cookie with 401.
+ * With `cookieSticks: false` the mint sets no cookie, which is what a browser
+ * that keeps no cookies sees. Records every call so the tests can say what
+ * went out and in which order. Routes the whole context, so a second page
+ * shares the counts.
  */
 async function serveApi(
-  page: Page,
+  context: BrowserContext,
   { cookieSticks = true } = {}
 ): Promise<Seen> {
   const seen: Seen = { mints: [], data: [], order: [] };
-  let session = false;
 
-  await page.route('**/api/auth/session', async (route) => {
+  await context.route('**/api/auth/session', async (route) => {
     seen.mints.push(route.request().postDataJSON());
     seen.order.push('mint');
-    session = cookieSticks;
-    await route.fulfill({ status: 204 });
+    await route.fulfill({
+      status: 204,
+      headers: cookieSticks
+        ? {
+            'set-cookie': `${SESSION_COOKIE}; Max-Age=900; Path=/; Secure; HttpOnly; SameSite=Strict`,
+          }
+        : {},
+    });
   });
 
-  await page.route('**/api/v1/**', async (route) => {
+  await context.route('**/api/v1/**', async (route) => {
     const request = route.request();
-    const status = session ? 200 : 401;
+    const cookie = (await request.allHeaders())['cookie'] ?? '';
+    const status = cookie.includes(SESSION_COOKIE) ? 200 : 401;
     seen.data.push({
       url: request.url(),
       authorization: request.headers()['authorization'],
@@ -122,7 +133,7 @@ test.describe('a key that always passes', () => {
   test('answers the first 401 with a check and a mint, then loads data', async ({
     page,
   }) => {
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     await expect(page.getByText('3 assets · 1 with a balance')).toBeVisible({
@@ -148,7 +159,7 @@ test.describe('a key that always passes', () => {
   test('a browser that drops the cookie gets one cookies panel and one mint', async ({
     page,
   }) => {
-    const seen = await serveApi(page, { cookieSticks: false });
+    const seen = await serveApi(page.context(), { cookieSticks: false });
     await page.goto(`/accounts/${ACCOUNT}`);
 
     await expect(page.getByRole('alert')).toHaveText(
@@ -162,7 +173,7 @@ test.describe('a key that always passes', () => {
 
   test('one solve serves the next page too', async ({ page }) => {
     // Task AC: "data loads with at most one solve per session".
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
     await expect(page.getByText('3 assets · 1 with a balance')).toBeVisible({
       timeout: CARD_TIMEOUT,
@@ -181,6 +192,29 @@ test.describe('a key that always passes', () => {
 
     expect(seen.mints).toHaveLength(1);
   });
+
+  // Decision 2, the goal of task 0677: the browser keeps the cookie, so a
+  // reload and a second tab read data with no new check.
+  test('a reload and a second tab need no new check', async ({ page }) => {
+    const seen = await serveApi(page.context());
+    await page.goto(`/accounts/${ACCOUNT}`);
+    await expect(page.getByText('3 assets · 1 with a balance')).toBeVisible({
+      timeout: CARD_TIMEOUT,
+    });
+
+    await page.reload();
+    await expect(page.getByText('3 assets · 1 with a balance')).toBeVisible({
+      timeout: CARD_TIMEOUT,
+    });
+
+    const second = await page.context().newPage();
+    await second.goto(`/accounts/${ACCOUNT}`);
+    await expect(second.getByText('3 assets · 1 with a balance')).toBeVisible({
+      timeout: CARD_TIMEOUT,
+    });
+
+    expect(seen.mints).toHaveLength(1);
+  });
 });
 
 test.describe('a key that always fails', () => {
@@ -188,7 +222,7 @@ test.describe('a key that always fails', () => {
   test.setTimeout(150_000);
 
   test('shows the plain failure card and no data loads', async ({ page }) => {
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
@@ -210,7 +244,7 @@ test.describe('a key that always fails', () => {
   test('the card is an alertdialog with focus on Try again', async ({
     page,
   }) => {
-    await serveApi(page);
+    await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
@@ -221,7 +255,7 @@ test.describe('a key that always fails', () => {
   test('Try again checks again without reloading the page', async ({
     page,
   }) => {
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     let documentLoads = 0;
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) documentLoads += 1;
@@ -296,7 +330,7 @@ test.describe('a key that always fails', () => {
     test('the card spans the screen less 16 px a side, fully on screen', async ({
       page,
     }) => {
-      await serveApi(page);
+      await serveApi(page.context());
       await page.goto(`/accounts/${ACCOUNT}`);
 
       const card = failureCard(page);
@@ -314,7 +348,7 @@ test.describe('a key that always fails', () => {
   });
 
   test('on a desktop the card is at most 360 px wide', async ({ page }) => {
-    await serveApi(page);
+    await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
@@ -330,7 +364,7 @@ test.describe('an invisible key that always fails', () => {
   test.setTimeout(90_000);
 
   test('shows the same failure card and no data loads', async ({ page }) => {
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
@@ -350,7 +384,7 @@ test.describe('a key that forces an interactive challenge', () => {
   test("shows Cloudflare's widget alone, keeps it up, and waits", async ({
     page,
   }) => {
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     // The widget's iframe sits in Turnstile's shadow root, so find it through
@@ -394,7 +428,7 @@ test.describe('a key that forces an interactive challenge', () => {
     test("shows Cloudflare's widget at its full width, on screen", async ({
       page,
     }) => {
-      await serveApi(page);
+      await serveApi(page.context());
       await page.goto(`/accounts/${ACCOUNT}`);
 
       // A container half the screen wide squeezed the widget to ~140 px and cut

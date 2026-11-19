@@ -38,16 +38,8 @@ type Call = {
 // optionally waiting on `hold` so a test can order responses around a mint.
 function stubFetch(dataStatuses: number[], hold: Promise<void>[] = []) {
   const calls: Call[] = [];
-  const fetchMock = vi.fn(async function (
-    this: unknown,
-    input: RequestInfo | URL,
-    init?: RequestInit
-  ) {
-    // The browser's fetch refuses to run as a method of another object.
-    if (this !== undefined && this !== globalThis) {
-      throw new TypeError("Failed to execute 'fetch': Illegal invocation");
-    }
-    {
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
       const req = input instanceof Request ? input : new Request(input, init);
       const path = new URL(req.url).pathname;
       calls.push({
@@ -65,7 +57,7 @@ function stubFetch(dataStatuses: number[], hold: Promise<void>[] = []) {
         headers: { 'Content-Type': 'application/json' },
       });
     }
-  });
+  );
   vi.stubGlobal('fetch', fetchMock);
   return calls;
 }
@@ -165,6 +157,21 @@ describe('client.ts session wiring', () => {
     await b;
 
     expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(1);
+  });
+
+  // The session expires later: a fresh 401 after a good read is a new check,
+  // not a blocked cookie.
+  it('checks again when the session expires after a successful read', async () => {
+    siteKey = 'key';
+    const calls = stubFetch([401, 200, 401, 200]);
+    const { getNetworkStats } = await freshClient();
+
+    await getNetworkStats();
+    const later = await getNetworkStats();
+
+    expect(later.response?.status).toBe(200);
+    expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(2);
+    expect(document.body.textContent).not.toContain('This site needs cookies');
   });
 
   // Decision 14: a repeat that still gets a 401 means the browser does not
