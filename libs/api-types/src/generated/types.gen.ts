@@ -2543,17 +2543,6 @@ export type SessionRequest = {
   token: string;
 };
 
-export type SessionResponse = {
-  /**
-   * Seconds until `token` expires.
-   */
-  expires_in: number;
-  /**
-   * Free-tier session JWT, sent back as `Authorization: Bearer <token>`.
-   */
-  token: string;
-};
-
 /**
  * Single signature on a transaction envelope.
  */
@@ -2875,9 +2864,9 @@ export type MintSessionError = MintSessionErrors[keyof MintSessionErrors];
 
 export type MintSessionResponses = {
   /**
-   * Session JWT minted
+   * Session minted
    */
-  200: SessionResponse;
+  204: void;
 };
 
 export type MintSessionResponse =

@@ -1,23 +1,39 @@
 import { client } from '@rumblefish/api-types';
 
 import { apiBaseUrl, turnstileSiteKey } from './config.js';
-import { createSession, isSessionMint } from './session.js';
+import { createSession } from './session.js';
 
-client.setConfig({ baseUrl: apiBaseUrl });
+// `credentials: 'include'`: the free-tier session is an HttpOnly cookie on the
+// API host (task 0677), and a cross-origin read carries it only with this.
+client.setConfig({ baseUrl: apiBaseUrl, credentials: 'include' });
 
-const session = createSession({ siteKey: turnstileSiteKey, apiBaseUrl });
+// Free-tier access layer (task 0277), wired only when the site key is set.
+// A read goes out at once; a 401 means no valid session cookie, so the tab
+// renews it and repeats the read once — the page never sees that 401.
+if (turnstileSiteKey) {
+  const session = createSession({ siteKey: turnstileSiteKey, apiBaseUrl });
+  // How many mints had finished when each read went out (see `renew`).
+  const mintsWhenSent = new WeakMap<Request, number>();
 
-// Free-tier access layer (task 0277): attach the session JWT to every request.
-// No-op until `VITE_TURNSTILE_SITE_KEY` is set — `session.ensureToken()` returns
-// `null` and the request goes out unchanged (the backend gate is also dark).
-client.interceptors.request.use(async (request) => {
-  if (isSessionMint(request.url)) return request;
-  const token = await session.ensureToken();
-  if (token) {
-    request.headers.set('Authorization', `Bearer ${token}`);
-  }
-  return request;
-});
+  client.interceptors.request.use((request) => {
+    mintsWhenSent.set(request, session.mints());
+    return request;
+  });
+
+  client.interceptors.response.use(async (response, request, options) => {
+    if (response.status !== 401) return response;
+    if (!(await session.renew(mintsWhenSent.get(request) ?? 0))) {
+      return response;
+    }
+    // Reads are GETs without a body, so the same Request can go out again.
+    // Called unbound, like the client does: `options.fetch(request)` would run
+    // the browser's fetch with `options` as `this` and throw Illegal invocation.
+    const fetchOnce = options.fetch!;
+    const repeated = await fetchOnce(request);
+    if (repeated.status === 401) session.cookiesBlocked();
+    return repeated;
+  });
+}
 
 // Always present a real `Error` to downstream code so consumers get a usable
 // `.message` and stack trace. Attach `.status` (from the response, since the
@@ -25,14 +41,6 @@ client.interceptors.request.use(async (request) => {
 // and preserve the original thrown body as `.body` for typed access.
 client.interceptors.error.use((error, response) => {
   const status = response?.status;
-
-  // A 401 means the session JWT was rejected (expired/invalid) — drop it so the
-  // next request re-solves Turnstile and mints a fresh one. Harmless when the
-  // access layer is dark (no token was ever cached). Does not auto-retry the
-  // failed request; TanStack Query's retry will, now with a valid session.
-  if (status === 401) {
-    session.invalidate();
-  }
 
   if (error instanceof Error) {
     return Object.assign(error, { status });

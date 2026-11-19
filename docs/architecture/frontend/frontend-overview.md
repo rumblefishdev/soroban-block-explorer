@@ -122,10 +122,15 @@ shared secrets; API protection belongs at the ingress boundary — API Gateway t
 plus the Cloudflare edge in front of the API hostname — not in the bundle. Note that the
 Cloudflare Turnstile widget the SPA loads gates **API access**: the widget produces a
 challenge token, the SPA posts it to `/auth/session`, and the backend verifies it against
-Cloudflare's siteverify endpoint before minting a free-tier session JWT
-(`crates/api/src/auth/`). The token and the JWT are different things — the widget never
-issues the session. Until a session exists every API request waits for it; none goes out
-without one. When Cloudflare asks for a click, its widget stays alone at the centre until the
+Cloudflare's siteverify endpoint before setting a free-tier session JWT in the HttpOnly
+cookie `__Host-session` (`crates/api/src/auth/`, task 0677). The token and the session are
+different things — the widget never issues the session. The SPA sends every read with
+`credentials: 'include'` and never sees the cookie, so one check serves every tab and
+reload until it expires (15 min). A read goes out at once; its 401 makes the tab run the
+check, mint, and repeat that read once, so no page shows the 401. A read sent before the
+last mint finished is only repeated. If the repeated read still gets a 401, the browser
+does not keep cookies: one "This site needs cookies" panel shows and no further check
+runs. When Cloudflare asks for a click, its widget stays alone at the centre until the
 visitor solves it; when the check fails, a "Try again" panel says the check failed (the reason goes to the console), and nothing
 is solved again until it is clicked (`web/src/api/session.ts`, task 0289). This is also
 not Cloudflare fronting the frontend's own domain, which sits on Route 53 with no edge
@@ -238,11 +243,10 @@ Authoring rule: changes to API DTOs, request params, or routes must be made in t
 Rust crate; the frontend regenerates and consumes the result. Hand-edited types in
 `libs/api-types/src/generated/` will be overwritten on the next regeneration.
 
-The session exchange `POST /auth/session` is in the spec too (task 0510), so the
-frontend takes its `SessionResponse` type from the package. `web/src/api/session.ts`
-calls it with plain `fetch`, not the generated SDK: the SDK client's request
-interceptor waits for the session, so routing the session call through that client
-would wait on itself. Session state lives in the object `createSession` returns;
+The session exchange `POST /auth/session` is in the spec too (task 0510); it answers
+204 with the session cookie. `web/src/api/session.ts` calls it with plain `fetch`
+(with `credentials: 'include'`), not the generated SDK: the SDK client's 401 handling
+would call the session again from inside it. Session state lives in the object `createSession` returns;
 `web/src/api/client.ts` holds the one the app uses.
 
 ### 4.6 State Strategy

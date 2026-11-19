@@ -78,8 +78,8 @@ fn app(config: &AppConfig, state: AppState) -> Router {
         router
     };
 
-    // ── Access layer (task 0277 paid-API; docs/paid-api/plan-platne-api.md):
-    // free tier via Turnstile → session JWT, paid tier via X-API-Key. Built only
+    // ── Access layer (task 0277 paid-API): free tier via Turnstile → session
+    // cookie (task 0677), paid tier via X-API-Key. Built only
     // when ARMED (jwt_secret set) so it deploys "dark"; sits INSIDE the edge-secret
     // lock (which runs first), so only Cloudflare traffic reaches the auth gate.
     let auth_config = config
@@ -94,15 +94,17 @@ fn app(config: &AppConfig, state: AppState) -> Router {
             api_keys: std::sync::Arc::new(config.api_keys.clone()),
         });
 
-    // `/auth/session` — verify a Turnstile token, mint a free-tier session JWT.
+    // `/auth/session` — verify a Turnstile token, set the free-tier session cookie.
     // Exempt from the gate (it is called precisely to OBTAIN a session).
     let router = match auth_config.clone() {
         Some(a) => router.route(
             "/auth/session",
-            post(move |body: Json<auth::SessionRequest>| {
-                let a = a.clone();
-                async move { auth::session(a, body).await }
-            }),
+            post(
+                move |headers: axum::http::HeaderMap, body: Json<auth::SessionRequest>| {
+                    let a = a.clone();
+                    async move { auth::session(a, headers, body).await }
+                },
+            ),
         ),
         None => router,
     };
@@ -134,6 +136,8 @@ fn app(config: &AppConfig, state: AppState) -> Router {
     // `None` (CORS_ALLOW_ORIGIN unset) = no CORS layer (same-origin/non-browser).
     // A comma-separated list serves the SPA on its old and new hosts at once
     // (task 0663): the response echoes the request's origin when it is listed.
+    // Credentials allowed: the session is a cookie the SPA sends with every
+    // read (task 0677); the browser drops a credentialed response without it.
     let origins: Vec<axum::http::HeaderValue> = config
         .cors_allow_origin
         .as_deref()
@@ -148,6 +152,7 @@ fn app(config: &AppConfig, state: AppState) -> Router {
     router.layer(
         tower_http::cors::CorsLayer::new()
             .allow_origin(tower_http::cors::AllowOrigin::list(origins))
+            .allow_credentials(true)
             .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
             .allow_headers([
                 axum::http::header::AUTHORIZATION,

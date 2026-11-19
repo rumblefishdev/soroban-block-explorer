@@ -24,10 +24,9 @@ function fakeTurnstile() {
   return { api, renders };
 }
 
-function okResponse(token: string) {
-  return new Response(JSON.stringify({ token, expires_in: 900 }), {
-    status: 200,
-  });
+// The mint sets the session cookie and answers 204 (task 0677).
+function minted() {
+  return new Response(null, { status: 204 });
 }
 
 function retryButton() {
@@ -61,7 +60,7 @@ describe('Turnstile solver and retry panel', () => {
   it('renders a widget Cloudflare may not restart on its own', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(renders[0]).toMatchObject({
@@ -74,8 +73,8 @@ describe('Turnstile solver and retry panel', () => {
   it('keeps an interactive challenge on screen until it is solved', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    fetchMock.mockResolvedValueOnce(okResponse('jwt-1'));
-    const pending = armedSession().ensureToken();
+    fetchMock.mockResolvedValueOnce(minted());
+    const pending = armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
 
     // Only Cloudflare's widget: no text of our own around it.
@@ -86,7 +85,7 @@ describe('Turnstile solver and retry panel', () => {
     expect(retryButton()).toBeUndefined();
 
     renders[0].callback('turnstile-token');
-    expect(await pending).toBe('jwt-1');
+    expect(await pending).toBe(true);
     expect(api.remove).toHaveBeenCalledWith('widget-1');
   });
 
@@ -95,8 +94,8 @@ describe('Turnstile solver and retry panel', () => {
     window.turnstile = api as unknown as Window['turnstile'];
     fetchMock
       .mockResolvedValueOnce(new Response('busy', { status: 503 }))
-      .mockResolvedValueOnce(okResponse('jwt-1'));
-    const pending = armedSession().ensureToken();
+      .mockResolvedValueOnce(minted());
+    const pending = armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
 
     renders[0].callback('turnstile-token');
@@ -107,13 +106,13 @@ describe('Turnstile solver and retry panel', () => {
     retryButton()?.click();
     await vi.advanceTimersByTimeAsync(0);
     renders[1].callback('turnstile-token-2');
-    expect(await pending).toBe('jwt-1');
+    expect(await pending).toBe(true);
   });
 
   it('waits for Cloudflare with no time limit of its own', async () => {
     const { api } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(api.remove).not.toHaveBeenCalled();
@@ -123,8 +122,8 @@ describe('Turnstile solver and retry panel', () => {
   it('shows the retry panel at once for a browser Cloudflare does not support, and retries on click', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    fetchMock.mockResolvedValueOnce(okResponse('jwt-1'));
-    const pending = armedSession().ensureToken();
+    fetchMock.mockResolvedValueOnce(minted());
+    const pending = armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
 
     renders[0]['unsupported-callback']();
@@ -141,13 +140,13 @@ describe('Turnstile solver and retry panel', () => {
     expect(retryButton()).toBeUndefined();
 
     renders[1].callback('turnstile-token');
-    expect(await pending).toBe('jwt-1');
+    expect(await pending).toBe(true);
   });
 
   it('labels the panel for assistive technology and focuses its button', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
     renders[0]['error-callback']('600010');
     await vi.advanceTimersByTimeAsync(0);
@@ -163,7 +162,7 @@ describe('Turnstile solver and retry panel', () => {
   it('says only what failed and offers Try again, with no explanation', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
     renders[0]['error-callback']('600010');
     await vi.advanceTimersByTimeAsync(0);
@@ -176,7 +175,7 @@ describe('Turnstile solver and retry panel', () => {
   it('fills a phone screen less a margin, up to 360 px', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
     renders[0]['error-callback']('600010');
     await vi.advanceTimersByTimeAsync(0);
@@ -190,7 +189,7 @@ describe('Turnstile solver and retry panel', () => {
   it("shows Cloudflare's widget alone, as wide as a phone allows up to 300 px", async () => {
     const { api } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
 
     const container = api.render.mock.calls[0][0];
@@ -203,7 +202,7 @@ describe('Turnstile solver and retry panel', () => {
   it("keeps Cloudflare's error code out of the panel, in the console", async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
 
     renders[0]['error-callback']('600010');
@@ -220,7 +219,7 @@ describe('Turnstile solver and retry panel', () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
     fetchMock.mockResolvedValue(new Response('nope', { status: 403 }));
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
 
     renders[0].callback('turnstile-token');
@@ -232,7 +231,7 @@ describe('Turnstile solver and retry panel', () => {
   });
 
   it('loads the script again on retry when it came up without window.turnstile', async () => {
-    void armedSession().ensureToken();
+    void armedSession().renew(0);
     await vi.advanceTimersByTimeAsync(0);
     const scripts = () => document.head.querySelectorAll('script');
     expect(scripts()).toHaveLength(1);

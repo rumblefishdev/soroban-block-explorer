@@ -73,8 +73,63 @@ async fn wrong_api_key_is_401() {
     );
 }
 
+// Decision 2 (task 0677): the free-tier session travels in an HttpOnly cookie.
+// Cloudflare sets cookies of its own on the API host, so ours sits among them.
 #[tokio::test]
-async fn valid_bearer_jwt_passes() {
+async fn session_cookie_among_other_cookies_passes() {
+    let token = jwt::issue("test-secret", now_secs()).unwrap();
+    assert_eq!(
+        status(
+            "/v1/data",
+            Some(("cookie", &format!("__cf_bm=abc; __Host-session={token}")))
+        )
+        .await,
+        StatusCode::OK
+    );
+}
+
+// HTTP/2 may split cookies over several `Cookie` headers.
+#[tokio::test]
+async fn session_cookie_in_a_second_cookie_header_passes() {
+    let token = jwt::issue("test-secret", now_secs()).unwrap();
+    let resp = gated_app()
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/v1/data")
+                .header("cookie", "a=1")
+                .header("cookie", format!("__Host-session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn invalid_session_cookie_is_401() {
+    assert_eq!(
+        status("/v1/data", Some(("cookie", "__Host-session=not.a.jwt"))).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn cookie_with_a_longer_name_is_not_the_session() {
+    let token = jwt::issue("test-secret", now_secs()).unwrap();
+    assert_eq!(
+        status(
+            "/v1/data",
+            Some(("cookie", &format!("__Host-session2={token}")))
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+// Decision 6: one cut-over, the gate no longer reads `Authorization: Bearer`.
+#[tokio::test]
+async fn bearer_jwt_is_401() {
     let token = jwt::issue("test-secret", now_secs()).unwrap();
     assert_eq!(
         status(
@@ -82,28 +137,17 @@ async fn valid_bearer_jwt_passes() {
             Some(("authorization", &format!("Bearer {token}")))
         )
         .await,
-        StatusCode::OK
-    );
-}
-
-#[tokio::test]
-async fn lowercase_bearer_scheme_passes() {
-    let token = jwt::issue("test-secret", now_secs()).unwrap();
-    assert_eq!(
-        status(
-            "/v1/data",
-            Some(("authorization", &format!("bearer {token}")))
-        )
-        .await,
-        StatusCode::OK
-    );
-}
-
-#[tokio::test]
-async fn invalid_bearer_is_401() {
-    assert_eq!(
-        status("/v1/data", Some(("authorization", "Bearer not.a.jwt"))).await,
         StatusCode::UNAUTHORIZED
+    );
+}
+
+// Decision 9: the attributes the browser needs to keep the cookie host-only,
+// out of page scripts, and away from cross-site requests.
+#[test]
+fn session_cookie_has_the_decided_attributes() {
+    assert_eq!(
+        session_cookie("TOK"),
+        "__Host-session=TOK; Max-Age=900; Path=/; Secure; HttpOnly; SameSite=Strict"
     );
 }
 
@@ -131,6 +175,7 @@ async fn session_without_turnstile_secret_is_503() {
     // network call, so this is hermetic.
     let resp = session(
         test_auth(),
+        axum::http::HeaderMap::new(),
         Json(SessionRequest {
             token: "x".to_string(),
         }),
