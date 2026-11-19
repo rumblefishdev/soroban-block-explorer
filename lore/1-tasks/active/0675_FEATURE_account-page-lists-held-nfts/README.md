@@ -39,6 +39,13 @@ the NFTs the account holds now, each linked to its NFT page.
   Read shape B — no JOIN for the owner read; `filter[owner]` refuses other
   filters. Server join settings stay as they are (measured: a thread cap would
   slow the transactions list, ~10 cores per query).
+- In force: the switch is `Tokens N` / `NFTs N` pills under the card title, in
+  place of the token counter (2026-11-19, chosen from five prototypes, branch
+  `proto/0675-holdings-switch`).
+- In force: the NFT list stays its own cursor request, not part of
+  `GET /v1/accounts/:id` (2026-11-19). Inside the account response it would
+  have no size bound (651 KiB for the largest holder today, 283 B per NFT),
+  and one failed NFT read would fail the whole account page.
 - Cost on production (`system.query_log`, 3 owners × 3 runs): the shared list
   shape took 155–385 MiB / 190–400 ms; `fetch_held_by` takes 4–10 MiB /
   24–35 ms plus two name lookups of ~2.6 MiB; the count takes 8 ms / 7 MiB.
