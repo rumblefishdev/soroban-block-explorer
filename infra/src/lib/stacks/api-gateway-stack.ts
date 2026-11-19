@@ -16,9 +16,10 @@ import {
 // API Gateway account-level default throttle (rps / burst). Used as the
 // "lifted" ceiling when `config.loadTesting` is set, so the per-stage 50/100
 // cap stops being the bottleneck during a load test. The account limit still
-// backstops genuine abuse. This throttle is now the only volumetric protection
-// on the origin — the REGIONAL WAF WebACL that used to add a per-IP rate rule
-// was removed (ADR 0048, task 0302).
+// backstops genuine abuse. This throttle is the only volumetric protection on
+// the AWS side — the REGIONAL WAF WebACL that used to add a per-IP rate rule
+// was removed (ADR 0048, task 0302); Cloudflare's per-IP rate limit sits in
+// front of the API hostname.
 const LOAD_TEST_THROTTLE_RATE = 10_000;
 const LOAD_TEST_THROTTLE_BURST = 5_000;
 
