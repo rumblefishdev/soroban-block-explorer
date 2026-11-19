@@ -35,7 +35,13 @@ task 0520 will lose its test material. This task drains them per
 ## Stan teraz
 
 - Done: state verified in read-only CloudWatch and SQS, 2026-11-13.
-- Next: Step 1, testnet first.
+- Done 2026-11-19: step 1, every message read; testnet redriven at 13:27, 44
+  of 46 came back (`dev.radox.net` 5xx, and a testnet worker without 0520's
+  gateway fix). Contents, errors and keys:
+  [R-dlq-contents-2026-11-19](notes/R-dlq-contents-2026-11-19.md).
+- Next: purge both DLQs with the note as the record. The backfill runner's
+  default drain refetches every key, so the data doesn't need the messages.
+  Testnet's NFTs after its worker is deployed from `develop`.
 - In force: ADR 0054 rule 2 allows a level alarm on a DLQ only because it
   gets drained (:159-164). `dlq.md` names "cleared because the messages aged
   out" as the failure this rule exists to stop.
