@@ -39,10 +39,10 @@ browser until it expires.
 
 ## Stan teraz
 
-- Done: first research (cookie attributes, CORS, CSRF, caching, x402, AOP);
-  measurement F12; row 4.
-- Next: the one PR of the PR split, on a feature branch, test first.
-- In force: rows 1–11 of Decisions so far.
+- Done: research, measurement (F12), two plan reviews, foundations review;
+  decisions 1–15; frontier empty.
+- Next: the one PR (PR split), test first; then testnet, then mainnet.
+- In force: rows 1–15 of Decisions so far.
 
 ## Context
 
@@ -105,8 +105,8 @@ peer comparison: [notes/R-facts-and-peers.md](notes/R-facts-and-peers.md).
 
 ## Not yet decided
 
-- Foundations review (notes/S-foundations-review.md) questions decision 1:
-  is the gate on every read needed for x402 at all.
+None (2026-11-19). The foundations review did not change decision 1: the
+grant text is silent on browser reads (notes/S-foundations-review.md, B1).
 
 ## PR split
 
