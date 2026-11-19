@@ -160,6 +160,19 @@ describe('Turnstile solver and retry panel', () => {
     expect(document.activeElement).toBe(retryButton());
   });
 
+  it('says only what failed and offers Try again, with no explanation', async () => {
+    const { api, renders } = fakeTurnstile();
+    window.turnstile = api as unknown as Window['turnstile'];
+    void armedSession().ensureToken();
+    await vi.advanceTimersByTimeAsync(0);
+    renders[0]['error-callback']('600010');
+    await vi.advanceTimersByTimeAsync(0);
+
+    const panel = document.querySelector('[role="alertdialog"]');
+    expect(panel?.textContent).toBe("We couldn't verify your browserTry again");
+    expect(panel?.hasAttribute('aria-describedby')).toBe(false);
+  });
+
   it('fills a phone screen less a margin, up to 360 px', async () => {
     const { api, renders } = fakeTurnstile();
     window.turnstile = api as unknown as Window['turnstile'];
