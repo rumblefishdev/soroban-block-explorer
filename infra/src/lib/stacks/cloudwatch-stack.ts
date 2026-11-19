@@ -931,7 +931,7 @@ export class CloudWatchStack extends cdk.Stack {
         // graphed metrics that production never emits, so both rendered
         // empty from the day they were written:
         // - `CacheHitCount` / `CacheMissCount` need a stage cache cluster.
-        //   `apiGatewayCacheEnabled` is false and stays false by decision;
+        //   There is none, by decision (its config was removed, task 0679);
         //   rationale and return condition in
         //   `docs/architecture/backend/api-gateway-cache-spec.md`.
         // - `InitDuration` is NOT a CloudWatch metric at all (verified

@@ -807,10 +807,9 @@ Two endpoints carry **conditional** logic:
   applies in this case as well, so a fix that ever re-parses the row
   cleanly surfaces within one ledger cycle.
 
-The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
-`infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway
-clamps to its configured floor); raising above 10s would expose stale data
-past one Stellar ledger cycle (~5s).
+Raising the 10s value would expose stale data past one Stellar ledger cycle
+(~5s). There is no API Gateway stage cache (not adopted, task 0455; its config
+was removed in task 0679), so only browsers honour these headers.
 
 #### Conditional GET — `ETag` / `304` on the Live tier (task 0292)
 
