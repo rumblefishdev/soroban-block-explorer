@@ -131,18 +131,19 @@ export class ApiGatewayStack extends cdk.Stack {
         // paid-API). The SPA on `domainName` calls the API on a different host,
         // so every non-simple request triggers a browser preflight.
         allowMethods: ['GET', 'POST', 'OPTIONS'],
-        // `Authorization` (free-tier session JWT) and `x-api-key` (paid tier)
-        // are non-safelisted request headers — without them the preflight is
-        // rejected and the armed SPA cannot send a Bearer / partner key.
+        // `x-api-key` (paid tier) is a non-safelisted request header — without
+        // it the preflight is rejected and a browser cannot send a partner key.
         allowHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-api-key'],
-        // Cache the preflight so the browser does NOT re-`OPTIONS` before every
-        // `/v1` request (task 0317). Each `/v1` call carries `Authorization`, a
-        // non-safelisted header, so without `Access-Control-Max-Age` Chrome
-        // re-runs the preflight on every request — an extra edge round-trip per
-        // call. The preflight is answered here by API Gateway's MOCK
-        // integration (not the Lambda), so the max-age MUST be set on the
-        // gateway, not on the axum `CorsLayer`. 1h is within Chromium's 2h cap;
-        // CORS config rarely changes, so a stale cached preflight is low-risk.
+        // The free-tier session is an HttpOnly cookie (task 0677). The SPA's
+        // mint is a JSON POST, so it is preflighted, and the browser refuses a
+        // credentialed request whose preflight lacks this — no session is set.
+        allowCredentials: true,
+        // Cache the preflight so the browser does not re-`OPTIONS` before each
+        // request (task 0317). Since task 0677 the `/v1` reads carry no custom
+        // header and need no preflight; the JSON mint still does. The preflight
+        // is answered here by API Gateway's MOCK integration (not the Lambda),
+        // so the max-age MUST be set on the gateway, not on the axum
+        // `CorsLayer`. 1h is within Chromium's 2h cap.
         maxAge: cdk.Duration.hours(1),
       },
       endpointTypes: [apigateway.EndpointType.REGIONAL],
