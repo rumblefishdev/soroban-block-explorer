@@ -18,10 +18,12 @@ describe('createSession', () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     fetchMock.mockReset();
     solve.mockClear();
   });
@@ -101,25 +103,24 @@ describe('createSession', () => {
     expect(await session.ensureToken()).toBe('jwt-2');
   });
 
-  it('resolves null, not a throw, when the exchange fails', async () => {
-    fetchMock.mockResolvedValueOnce(new Response('nope', { status: 403 }));
-    solve.mockRejectedValueOnce(new Error('widget failed'));
+  it('treats a 404 from the mint like any refusal: the panel, no bare request', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 404 }));
     const session = createSession({
       siteKey: 'key',
       apiBaseUrl: 'https://api',
       solve,
     });
 
-    expect(await session.ensureToken()).toBeNull(); // solve throws
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(await session.ensureToken()).toBeNull(); // server 403
-    expect(solve).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    let settled = false;
+    void session.ensureToken().then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
 
-    // A failure is not cached: the next call tries again and succeeds.
-    fetchMock.mockResolvedValueOnce(okResponse('jwt-after-failure'));
-    expect(await session.ensureToken()).toBe('jwt-after-failure');
-    expect(solve).toHaveBeenCalledTimes(3);
+    expect(settled).toBe(false);
+    expect(document.body.textContent).toContain('Try again');
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('404'));
+    document.body.innerHTML = '';
   });
 
   it('keeps state per instance', async () => {

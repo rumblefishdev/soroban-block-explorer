@@ -10,10 +10,16 @@ const SITEVERIFY_URL: &str = "https://challenges.cloudflare.com/turnstile/v0/sit
 #[derive(Deserialize)]
 struct SiteverifyResponse {
     success: bool,
+    /// Why Cloudflare refused the token (`timeout-or-duplicate`,
+    /// `invalid-input-response`, …); empty on success.
+    #[serde(rename = "error-codes", default)]
+    error_codes: Vec<String>,
 }
 
 /// POST `secret` + `token` to Cloudflare siteverify. `true` iff Cloudflare
 /// confirms the token. Any network/parse error → `false` (fail-closed).
+/// Every `false` is logged with its cause: a visitor who cannot get a session
+/// sees no data, and the log is the only place we learn why.
 pub async fn verify(client: &reqwest::Client, secret: &str, token: &str) -> bool {
     let resp = client
         .post(SITEVERIFY_URL)
@@ -21,12 +27,23 @@ pub async fn verify(client: &reqwest::Client, secret: &str, token: &str) -> bool
         .send()
         .await;
 
-    match resp {
-        Ok(r) => r
-            .json::<SiteverifyResponse>()
-            .await
-            .map(|b| b.success)
-            .unwrap_or(false),
-        Err(_) => false,
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("turnstile siteverify request failed: {e}");
+            return false;
+        }
+    };
+    let status = resp.status();
+    match resp.json::<SiteverifyResponse>().await {
+        Ok(body) if body.success => true,
+        Ok(body) => {
+            tracing::warn!("turnstile verification refused: {:?}", body.error_codes);
+            false
+        }
+        Err(e) => {
+            tracing::warn!("turnstile siteverify response unreadable (HTTP {status}): {e}");
+            false
+        }
     }
 }
