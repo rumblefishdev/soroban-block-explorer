@@ -2,7 +2,7 @@
 id: '0679'
 title: 'REFACTOR: remove dead API Gateway config (partner usage plan, second CORS, unused keys)'
 type: REFACTOR
-status: backlog
+status: active
 related_adr: ['0048']
 related_tasks: ['0677', '0678']
 tags: [phase-future, effort-small, priority-low, layer-infra]
@@ -12,6 +12,18 @@ history:
     status: backlog
     who: karolkow
     note: 'Spawned from the 0677 foundations review (W32 A).'
+  - date: 2026-11-19
+    status: active
+    who: karolkow
+    note: >
+      Activated. Checked what is really dead: the partner usage plan and key
+      (AWS applies usage plans per key on key-required methods only; the proxy
+      method requires none; 0 usage on both networks in 30 days; the Lambda
+      allowlist is a separate secret) and `apiGatewayCacheTtlImmutable` (never
+      read). Not dead, kept: the legacy and rumblefishdev.com API domain
+      branches (they carry the mTLS attachment task 0678 needs and the
+      API_BASE_URL fallback) and the preflight MOCK (it answers the credentialed
+      mint preflight of task 0677; removing it is a behaviour change).
 ---
 
 # REFACTOR: remove dead API Gateway config
