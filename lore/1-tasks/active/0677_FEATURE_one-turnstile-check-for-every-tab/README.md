@@ -41,8 +41,8 @@ browser until it expires.
 
 - Done: first research (cookie attributes, CORS, CSRF, caching, x402, AOP);
   measurement F12; row 4.
-- Next: one point left (Not yet decided), then code on a feature branch.
-- In force: rows 1–10 of Decisions so far.
+- Next: the one PR of the PR split, on a feature branch, test first.
+- In force: rows 1–11 of Decisions so far.
 
 ## Context
 
@@ -97,10 +97,11 @@ peer comparison: [notes/R-facts-and-peers.md](notes/R-facts-and-peers.md).
 | 8   | First real proof of the cookie is testnet: deploy, the owner checks, then mainnet (no local path crosses origins)                                                                         | owner, grilling W13 A, 2026-11-19              | beyond it   | —                                                               | —    | testnet run      |
 | 9   | The cookie has `SameSite=Strict` (with `__Host-`, `HttpOnly`, `Secure`, `Path=/`, `Max-Age=900`, no `Domain`)                                                                             | owner, grilling W11 A, 2026-11-19              | beyond it   | IETF BFF §6.1.3.2, Vercel BotID                                 | —    | to write         |
 | 10  | Authenticated Origin Pulls is not part of this task: a separate backlog task 0678 for later                                                                                               | owner, grilling W6 B, 2026-11-19               | beyond it   | —                                                               | none | none             |
+| 11  | No extra custom header on reads: one request per read; a page on a taken-over subdomain still cannot read the answer (CORS list)                                                          | owner, grilling W12 A, 2026-11-19              | beyond it   | Vercel BotID, Blockscout                                        | —    | none (no code)   |
 
 ## Not yet decided
 
-- No static custom header on reads (IETF BFF §6.1.3.3): proposed none.
+None — the frontier is empty (2026-11-19).
 
 ## PR split
 
