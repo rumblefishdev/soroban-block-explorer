@@ -10,8 +10,8 @@
 //!   polls re-read a stale payload and the feed advance 2-3 ledgers per
 //!   visible update. `max-age=0, must-revalidate` forces every poll to
 //!   consult the origin.
-//! - `SHORT` — 10s for lists / frequently-mutating detail (matches API
-//!   Gateway `apiGatewayCacheTtlMutable`).
+//! - `SHORT` — 10s for lists / frequently-mutating detail (one Stellar
+//!   ledger cycle is ~5s).
 //! - `MEDIUM` — 60s for slowly-changing metadata (asset/contract/nft
 //!   detail, LP chart).
 //! - `LONG` — 300s for immutable resources (closed ledgers, finalized

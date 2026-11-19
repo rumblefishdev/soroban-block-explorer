@@ -118,12 +118,10 @@ export class ApiGatewayStack extends cdk.Stack {
         // EMF metric keyed on the route), not from the gateway.
         throttlingRateLimit: throttleRate,
         throttlingBurstLimit: throttleBurst,
-        cacheClusterEnabled: config.apiGatewayCacheEnabled,
-        ...(config.apiGatewayCacheEnabled && {
-          cacheClusterSize: config.apiGatewayCacheSize,
-          cacheTtl: cdk.Duration.seconds(config.apiGatewayCacheTtlMutable),
-          cacheDataEncrypted: true,
-        }),
+        // No stage cache: not adopted (task 0455); if origin pressure ever
+        // shows, a Cloudflare cache rule is the lever, not this cluster
+        // (`docs/architecture/backend/api-gateway-cache-spec.md`).
+        cacheClusterEnabled: false,
       },
       defaultCorsPreflightOptions: {
         allowOrigins: spaOrigins(config),
