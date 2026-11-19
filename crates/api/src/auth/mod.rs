@@ -107,16 +107,19 @@ fn session_cookie(token: &str) -> String {
     )
 }
 
-/// The session cookie's value, if the request carries one. Cloudflare sets
-/// cookies of its own on this host, and HTTP/2 may split them over several
-/// `Cookie` headers.
-fn session_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+/// Every value of a session cookie the request carries. Cloudflare sets
+/// cookies of its own on this host and HTTP/2 may split them over several
+/// `Cookie` headers. Split as bytes, and keep every match: a cookie with bytes
+/// outside ASCII, or a junk one of the same name set by a sibling host, must
+/// not hide the valid session.
+fn session_tokens(headers: &axum::http::HeaderMap) -> Vec<&[u8]> {
     headers
         .get_all(header::COOKIE)
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|s| s.split(';'))
-        .find_map(|c| c.trim().strip_prefix(SESSION_COOKIE)?.strip_prefix('='))
+        .flat_map(|v| v.as_bytes().split(|b| *b == b';'))
+        .filter_map(|c| c.trim_ascii_start().strip_prefix(SESSION_COOKIE.as_bytes()))
+        .filter_map(|rest| rest.strip_prefix(b"="))
+        .collect()
 }
 
 // In the spec through `ApiDoc`'s `paths(...)`, not `register_routes`: the
@@ -127,6 +130,7 @@ fn session_token(headers: &axum::http::HeaderMap) -> Option<&str> {
     post,
     path = "/auth/session",
     tag = "auth",
+    // Pins the generated SDK name (`mintSession`); utoipa would name it `session`.
     operation_id = "mint_session",
     // Exempt from the gate (see `is_exempt`) — called to OBTAIN a session.
     security(()),
@@ -153,26 +157,24 @@ pub async fn session(
     if !turnstile::verify(http_client(), ts_secret, &req.token).await {
         return (StatusCode::FORBIDDEN, "turnstile verification failed").into_response();
     }
-    let token = match jwt::issue(&auth.jwt_secret, now_secs()) {
-        Ok(token) => token,
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "token issue failed").into_response();
-        }
+    let Ok(token) = jwt::issue(&auth.jwt_secret, now_secs()) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "token issue failed").into_response();
     };
-    // A mint from a browser that already sends the cookie means its session
-    // expired; one that never sends it is new, or does not keep cookies.
+    // The browser drops the cookie when the JWT inside it expires, so a mint
+    // normally comes with no cookie (`false`): a new visitor, an expired
+    // session, or a browser that keeps no cookies. `true` means another tab
+    // minted first, or the JWT was refused (e.g. a rotated secret).
     tracing::info!(
-        cookie_present = session_token(&headers).is_some(),
+        cookie_present = !session_tokens(&headers).is_empty(),
         "session minted"
     );
-    let Ok(cookie) = axum::http::HeaderValue::from_str(&session_cookie(&token)) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "session cookie build failed",
+    no_store(
+        (
+            [(header::SET_COOKIE, session_cookie(&token))],
+            StatusCode::NO_CONTENT,
         )
-            .into_response();
-    };
-    no_store(([(header::SET_COOKIE, cookie)], StatusCode::NO_CONTENT).into_response())
+            .into_response(),
+    )
 }
 
 // ── auth gate middleware ───────────────────────────────────────────────
@@ -198,16 +200,21 @@ pub async fn require_auth(State(auth): State<AuthConfig>, req: Request, next: Ne
         return next.run(req).await;
     }
 
-    // Free tier — valid session JWT in the session cookie.
-    let cookie = session_token(req.headers());
-    if cookie.is_some_and(|tok| jwt::verify(&auth.jwt_secret, tok)) {
-        return next.run(req).await;
+    // Free tier — valid session JWT in a session cookie.
+    let tokens = session_tokens(req.headers());
+    for token in &tokens {
+        if let Ok(token) = std::str::from_utf8(token)
+            && jwt::verify(&auth.jwt_secret, token)
+        {
+            return next.run(req).await;
+        }
     }
 
-    // Shows in production whether visitors' browsers keep the cookie: a 401
-    // with no cookie right after a mint means it did not stick.
+    // `cookie_present=false` is every first read of a session (new visitor,
+    // expired session) and every read of a browser that keeps no cookies;
+    // `true` is a cookie the gate refused.
     tracing::info!(
-        cookie_present = cookie.is_some(),
+        cookie_present = !tokens.is_empty(),
         path = req.uri().path(),
         "session rejected"
     );

@@ -127,6 +127,44 @@ async fn cookie_with_a_longer_name_is_not_the_session() {
     );
 }
 
+// Any page on a sorobanscan.com host may set a cookie with bytes outside
+// ASCII; it must not hide ours (security review of task 0677, F1).
+#[tokio::test]
+async fn session_cookie_next_to_a_non_ascii_cookie_passes() {
+    let token = jwt::issue("test-secret", now_secs()).unwrap();
+    let value =
+        axum::http::HeaderValue::from_bytes(format!("x=\u{e4}; __Host-session={token}").as_bytes())
+            .unwrap();
+    let resp = gated_app()
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/v1/data")
+                .header("cookie", value)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+// A junk cookie of the same name sent first must not shadow the valid one.
+#[tokio::test]
+async fn a_valid_session_after_a_junk_one_of_the_same_name_passes() {
+    let token = jwt::issue("test-secret", now_secs()).unwrap();
+    assert_eq!(
+        status(
+            "/v1/data",
+            Some((
+                "cookie",
+                &format!("__Host-session=junk; __Host-session={token}")
+            ))
+        )
+        .await,
+        StatusCode::OK
+    );
+}
+
 // Decision 6: one cut-over, the gate no longer reads `Authorization: Bearer`.
 #[tokio::test]
 async fn bearer_jwt_is_401() {
