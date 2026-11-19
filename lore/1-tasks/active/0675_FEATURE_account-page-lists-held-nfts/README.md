@@ -50,6 +50,9 @@ the NFTs the account holds now, each linked to its NFT page.
   view (500), loudly, instead of being dropped (2026-11-19). 0 of 17,532 NFTs
   on production; the writer ends `soroban_contracts` before `nfts`, so such a
   row means an indexer defect.
+- In force: the NFTs view has no header row, like the Tokens list beside it,
+  and declares its own two columns (NFT, Contract ID) instead of a `hideOwner`
+  flag on the `/nfts` table (2026-11-19); `ExplorerTable` takes `showHeader`.
 - Cost on production (`system.query_log`, 3 owners × 3 runs): the shared list
   shape took 155–385 MiB / 190–400 ms; `fetch_held_by` takes 4–10 MiB /
   24–35 ms plus two name lookups of ~2.6 MiB; the count takes 8 ms / 7 MiB.
