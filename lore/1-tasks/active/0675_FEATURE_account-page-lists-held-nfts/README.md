@@ -46,6 +46,10 @@ the NFTs the account holds now, each linked to its NFT page.
   `GET /v1/accounts/:id` (2026-11-19). Inside the account response it would
   have no size bound (651 KiB for the largest holder today, 283 B per NFT),
   and one failed NFT read would fail the whole account page.
+- In force: an NFT whose contract has no `soroban_contracts` row fails the NFTs
+  view (500), loudly, instead of being dropped (2026-11-19). 0 of 17,532 NFTs
+  on production; the writer ends `soroban_contracts` before `nfts`, so such a
+  row means an indexer defect.
 - Cost on production (`system.query_log`, 3 owners × 3 runs): the shared list
   shape took 155–385 MiB / 190–400 ms; `fetch_held_by` takes 4–10 MiB /
   24–35 ms plus two name lookups of ~2.6 MiB; the count takes 8 ms / 7 MiB.
@@ -94,10 +98,12 @@ when the account holds none.
 
 ## Acceptance Criteria
 
-- [ ] The account page of the account in issue 741 lists token `3` of
-      `CDC5ZX53…GJFGB`, linked to its NFT page.
-- [ ] An account with more NFTs than one page (e.g. the 2,350-NFT holder)
-      paginates.
+- [x] The account page of the account in issue 741 lists token `3` of
+      `CDC5ZX53…GJFGB`, linked to its NFT page (local API on production CH,
+      2026-11-19: `nft_count` 1, the list returns `Stroopies 3`).
+- [x] An account with more NFTs than one page (e.g. the 2,350-NFT holder)
+      paginates (2026-11-19: 118 pages of 20, 2,350 rows, 2,350 unique,
+      equal to `nft_count`).
 - [x] An account with no NFTs shows the Assets card without an NFTs tab and
       sends no NFT request.
 - [x] A CH-gated test: an NFT with unmerged rows for two owners lists only
