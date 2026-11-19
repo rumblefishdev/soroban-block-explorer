@@ -2,7 +2,7 @@
 id: '0289'
 title: 'FEATURE: Turnstile widget UX (clean gate, do not block all reads)'
 type: FEATURE
-status: active
+status: completed
 related_adr: ['0048']
 related_tasks: ['0277']
 tags: [phase-future, effort-medium, priority-low, frontend, ux, turnstile]
@@ -29,6 +29,12 @@ history:
       keep the gate; a failed or interactive check shows a persistent verify
       panel instead of the render-error state, retries stop until it is
       solved, and the API logs each failed verification.
+  - date: '2026-11-19'
+    status: completed
+    who: karolkow
+    note: >
+      PRs #731 and #744 merged. Both acceptance criteria hold on develop:
+      unit tests plus 14 browser tests against the real Turnstile widget.
 ---
 
 # Turnstile widget UX
@@ -45,12 +51,11 @@ and the request interceptor blocks every call until a session exists (`web/src/a
 
 ## Implementation
 
-- Dedicated verifying/gate screen (or fixed corner) instead of the floating kafelek.
-- Mint the session in the background; don't block first paint / non-data nav on the solve.
+Built in PRs #731 and #744 to the 2026-11-13 scope (see Decisions so far).
 
 ## Acceptance Criteria
 
-- [ ] Clean widget placement; data loads with at most one solve per session
+- [x] Clean widget placement; data loads with at most one solve per session
 
 ## 2026-09-24 — a failed solve reads as a crash (decision 93 A)
 
@@ -61,7 +66,7 @@ after 20 s, the request went out without a Bearer, the API answered 401, and
 occurred while rendering this section"**. The user waits 20 s and is then
 told the page is broken, when the cause is a verification that did not pass.
 
-- [ ] A 401 after a failed or timed-out solve renders "could not verify your
+- [x] A 401 after a failed or timed-out solve renders "could not verify your
       browser — try again" (with a retry that re-solves), not the section's
       render-error boundary.
 
