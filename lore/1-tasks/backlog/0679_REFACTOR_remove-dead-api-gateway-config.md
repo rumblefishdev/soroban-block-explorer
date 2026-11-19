@@ -1,0 +1,52 @@
+---
+id: '0679'
+title: 'REFACTOR: remove dead API Gateway config (partner usage plan, second CORS, unused keys)'
+type: REFACTOR
+status: backlog
+related_adr: ['0048']
+related_tasks: ['0677', '0678']
+tags: [phase-future, effort-small, priority-low, layer-infra]
+links: []
+history:
+  - date: 2026-11-19
+    status: backlog
+    who: karolkow
+    note: 'Spawned from the 0677 foundations review (W32 A).'
+---
+
+# REFACTOR: remove dead API Gateway config
+
+## Summary
+
+The 0677 foundations review found infrastructure that does nothing. Each piece
+is a second place a reader must keep in mind.
+
+## Context
+
+- **Partner usage plan + `PartnerApiKey` + daily quota**
+  (`infra/src/lib/stacks/api-gateway-stack.ts:159-185`): the `{proxy+}`
+  method has `apiKeyRequired=false`, so the plan gates and counts nothing.
+  Measured 2026-11-19: `aws apigateway get-usage` on `production-partner-plan`
+  shows 0 usage for 2026-10-21..11-19. The real paid check is the Lambda
+  allowlist (`crates/api/src/auth/mod.rs`).
+- **Two CORS truths**: the API Gateway preflight MOCK
+  (`api-gateway-stack.ts:128-147`) and the axum `CorsLayer`
+  (`crates/api/src/main.rs:149-159`) must agree. axum can answer preflights
+  alone (cost: ~60–120 more Lambda calls a day, F12 in task 0677). This one
+  changes behaviour; it may need its own PR.
+- **Unused config**: `apiGatewayCacheTtlImmutable` is declared
+  (`infra/src/lib/types.ts:114`) and never read; the legacy and
+  `rumblefishdev.com` API domain branches are off in both envs. The mTLS
+  truststore branch stays: task 0678 uses it.
+- Stale comment: `api-gateway-stack.ts:19` calls the stage throttle the only
+  volumetric protection; Cloudflare's rate limit exists too.
+
+## Acceptance Criteria
+
+- [ ] Partner usage plan, key and quota removed; `cdk diff` shows only their
+      deletion.
+- [ ] Decision recorded on the second CORS layer (remove the MOCK or keep it).
+- [ ] Unused config keys and dead domain branches removed.
+- [ ] **Docs updated** — `docs/architecture/infrastructure/**` where they
+      describe these.
+- [ ] **API types regenerated** — N/A unless `crates/api` changes.
