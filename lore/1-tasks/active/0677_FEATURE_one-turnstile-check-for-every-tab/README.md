@@ -39,10 +39,11 @@ browser until it expires.
 
 ## Stan teraz
 
-- Done: research (cookie attributes, CORS, CSRF, caching, x402, AOP); this file.
-- Next: first grilling round (see Not yet decided); no code before the
-  frontier is empty.
-- In force: rows 1–3 of Decisions so far.
+- Done: first research (cookie attributes, CORS, CSRF, caching, x402, AOP);
+  measurement F12; row 4.
+- Next: grilling round 2 (Not yet decided), after the deeper research and
+  code recon the owner asked for (notes/R-peers-standards-recon.md).
+- In force: rows 1–4 of Decisions so far.
 
 ## Context
 
@@ -90,19 +91,21 @@ peer comparison: [notes/R-facts-and-peers.md](notes/R-facts-and-peers.md).
 | 1   | The gate stays on every read and the session stays 15 min: the x402 grant (Tranche #3) gates the explorer API, so a free read path would undercut it                     | owner, team daily 2026-11-17                   | matches     | —                                                               | none | none (no change) |
 | 2   | One passed check serves every tab and reload: the session lives in an HttpOnly cookie set by the API, per the OWASP Session Management Cheat Sheet                       | owner, team daily 2026-11-17                   | matches     | Cloudflare pre-clearance, Blockscout, Prices portal (see Peers) | —    | to write         |
 | 3   | The site stays on CloudFront, not behind Cloudflare: it holds no data, the API that does is already behind Cloudflare, and 30 days showed 43,006 requests with no attack | owner, team daily 2026-11-17 (keeps task 0302) | matches     | —                                                               | none | none (no change) |
+| 4   | Build the HttpOnly cookie now, not a JWT in `localStorage` and not a measurement first (premise review: frequency doubtful)                                              | owner, grilling W3 A, 2026-11-19               | matches     | Prices portal, Blockscout, Cloudflare pre-clearance             | —    | to write         |
 
 ## Not yet decided
 
-- How a tab learns its session is missing or expired (401 and a repeated
-  request, or an expiry hint the SPA keeps). Touches 0289 decision 1 ("no
-  request goes out without a session").
-- Old tabs after the deploy: a transition where the API accepts both the
+Round 2 of the grilling (research: notes/R-peers-standards-recon.md):
+
+- How a tab learns its session is missing: 401 and one repeated request,
+  a check-session probe, or an expiry hint. Touches 0289 decision 1.
+- Old tabs after the deploy: one release where the API accepts both the
   cookie and `Bearer`, or the cookie only at once.
-- Cookie attributes: `SameSite=Strict` or `Lax`.
-- Several visible tabs at one expiry: one check shared through the Web Locks
-  API, or each tab checks on its own.
+- `SameSite=Strict` or `Lax`.
+- A static custom header on every read (IETF BFF §6.1.3.3), or none.
+- Several visible tabs at one expiry: Web Locks, or each tab on its own.
+- PR split and where the cookie is first proven (no local cross-origin path).
 - Authenticated Origin Pulls: in this task, a separate task, or not now.
-- PR split (proposal: API + CDK CORS → SPA → removal of `Bearer`).
 
 ## Out of scope
 
