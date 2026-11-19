@@ -164,9 +164,7 @@ test.describe('a key that always fails', () => {
     const card = failureCard(page);
     await expect(card).toBeVisible({ timeout: CARD_TIMEOUT });
     await expect(card).toContainText("We couldn't verify your browser");
-    await expect(card).toContainText(
-      'This explorer checks that visitors are human before it loads data.'
-    );
+    await expect(card).not.toContainText('This explorer checks');
     await expect(card.getByRole('button', { name: 'Try again' })).toBeVisible();
 
     await expect(page.getByText('Something went wrong')).toHaveCount(0);

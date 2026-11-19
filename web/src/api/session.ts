@@ -288,26 +288,20 @@ function showRetryPanel(): Promise<void> {
   const panel = document.createElement('div');
   panel.setAttribute('role', 'alertdialog');
   panel.setAttribute('aria-labelledby', 'turnstile-retry-title');
-  panel.setAttribute('aria-describedby', 'turnstile-retry-detail');
   panel.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
 
-  // Named and described for screen readers, with focus on the button, so a
+  // Named for screen readers, with focus on the button, so a
   // keyboard user is not left on a page whose sections only say "loading".
   const title = document.createElement('p');
   title.id = 'turnstile-retry-title';
   title.textContent = "We couldn't verify your browser";
   title.style.cssText = PANEL_TEXT_CSS + 'font-weight:600;font-size:16px;';
-  const detail = document.createElement('p');
-  detail.id = 'turnstile-retry-detail';
-  detail.textContent =
-    'This explorer checks that visitors are human before it loads data.';
-  detail.style.cssText = PANEL_TEXT_CSS;
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = 'Try again';
   button.style.cssText = `padding:8px 20px;border:0;border-radius:8px;background:${colorsDark.surface.primaryMain};color:${colorsDark.text.inverted};font:inherit;font-weight:600;cursor:pointer;`;
 
-  panel.append(title, detail, button);
+  panel.append(title, button);
   document.body.appendChild(panel);
   button.focus();
 
