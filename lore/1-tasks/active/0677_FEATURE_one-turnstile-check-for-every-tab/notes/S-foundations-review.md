@@ -29,3 +29,9 @@ decisions. Checked by the main thread where marked.
 | B8  | Cookie as the only carrier: a browser blocking all cookies reads nothing (works per tab today). Fallbacks: cookie + Bearer (mint also returns the token), or `localStorage` JWT + memory + Bearer (frontend only, ~15 lines)                           | derived from decision 6                                                                    | decisions 4, 6  |
 | B9  | Kept: Cloudflare WAF + rate limit, edge-secret lock, stage throttle (global cap, not per IP)                                                                                                                                                           | —                                                                                          | —               |
 | B10 | Rejected: same-origin `/v1` on CloudFront (bypasses Cloudflare or breaks per-IP limits), Turnstile pre-clearance (cross-origin challenge has no CORS header)                                                                                           | derived, untested                                                                          | —               |
+
+**B1 checked (2026-11-19)** against the full panel-review response (owner's
+copy, not in a repo): the explorer appears only in the Tranche #3 line
+"Example integrations: Prices API, Block Explorer, Express/TS demo (mainnet
+gating)", 1.5 dev-weeks for all three. No sentence requires every read to
+be gated or browser reads to stop being free.
