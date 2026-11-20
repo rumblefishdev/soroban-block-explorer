@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from 'react';
 
 import { PAGE_SIZE, useNftsList, usePagedRows } from '../../api/index.js';
+import { routes } from '../../router/routes.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { NftNameCell } from '../nfts/NftNameCell.js';
 
@@ -32,7 +33,16 @@ function NftRow({ row, alt }: { row: NftItem; alt: boolean }) {
       })}
     >
       <NftNameCell row={row} nameFontSize={16} mono={false} />
-      <IdentifierDisplay value={row.contract_id} type="contract" />
+      {/* The collection, linked to its NFT list. A row has no column header,
+          so a bare contract id here does not say what it is: the name goes
+          first, the short id only when the collection has none. */}
+      <IdentifierDisplay
+        value={row.collection_name ?? row.contract_id}
+        type="contract"
+        href={routes.nftsByContract(row.contract_id)}
+        truncate={!row.collection_name}
+        mono={!row.collection_name}
+      />
     </Box>
   );
 }

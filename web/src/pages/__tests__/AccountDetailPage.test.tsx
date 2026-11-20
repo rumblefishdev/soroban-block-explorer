@@ -750,6 +750,37 @@ describe('AccountDetailPage', () => {
     ).toBe(true);
   });
 
+  it.each([
+    ['its collection name', 'Stroopies', 'Stroopies'],
+    [
+      'the short contract id when the collection has no name',
+      null,
+      'CDC5…JFGB',
+    ],
+  ])(
+    'labels an NFT row with %s, linked to the collection',
+    (_, collectionName, label) => {
+      mockDetail({
+        data: { ...SAMPLE, balances: [], nft_count: 1 },
+        isLoading: false,
+        isError: false,
+      });
+      mockNfts([{ ...HELD_NFT, collection_name: collectionName }]);
+
+      renderWithProviders(<AccountDetailPage />, {
+        initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+        routePath: '/accounts/:accountId',
+      });
+
+      expect(
+        assetsCard().getByRole('link', {
+          name: collectionName ?? HELD_NFT.contract_id,
+        })
+      ).toHaveAttribute('href', `/nfts?contract=${HELD_NFT.contract_id}`);
+      expect(assetsCard().getByText(label)).toBeInTheDocument();
+    }
+  );
+
   it('shows no pager when every NFT fits on one page', () => {
     mockDetail({
       data: { ...SAMPLE, nft_count: 1 },
