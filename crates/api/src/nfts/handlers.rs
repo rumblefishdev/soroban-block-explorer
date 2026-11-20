@@ -106,6 +106,23 @@ pub async fn list_nfts(
         return resp;
     }
 
+    if let Err(resp) = filters::strkey_opt(params.filter_owner.as_deref(), 'G', "owner") {
+        return resp;
+    }
+    // The owner read is its own query (see `queries::fetch_held_by`) and
+    // takes no other filter, so a combination is refused, not half-applied.
+    if params.filter_owner.is_some()
+        && (params.filter_collection.is_some()
+            || params.filter_contract_id.is_some()
+            || params.filter_name.is_some())
+    {
+        return errors::bad_request_with_details(
+            errors::INVALID_FILTER,
+            "filter[owner] cannot be combined with other filters",
+            serde_json::json!({ "filter": "owner", "received": params.filter_owner }),
+        );
+    }
+
     let has_predecessor = pagination.has_predecessor();
     let direction = pagination.direction;
     let resolved = ResolvedListParams {
@@ -116,7 +133,19 @@ pub async fn list_nfts(
         filter_name: params.filter_name,
     };
 
-    let fetched = queries::fetch_list(&state.ch(), &resolved, direction).await;
+    let fetched = match &params.filter_owner {
+        Some(owner) => {
+            queries::fetch_held_by(
+                &state.ch(),
+                owner,
+                resolved.limit,
+                resolved.cursor.as_ref(),
+                direction,
+            )
+            .await
+        }
+        None => queries::fetch_list(&state.ch(), &resolved, direction).await,
+    };
     let mut rows = match fetched {
         Ok(r) => r,
         Err(e) => {

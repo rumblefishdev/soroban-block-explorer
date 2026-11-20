@@ -1,28 +1,32 @@
 import type {
   AccountBalance,
   AccountDetailResponse,
+  NftItem,
 } from '@rumblefish/api-types';
 import { screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderWithProviders } from '../test-utils.js';
+import { renderWithProviders } from '../../test-utils.js';
 
-import AccountDetailPage from './AccountDetailPage.js';
+import AccountDetailPage from '../AccountDetailPage.js';
 
 const hookMocks = vi.hoisted(() => ({
   useAccountDetail: vi.fn(),
   useAccountTransactions: vi.fn(),
+  useNftsList: vi.fn(),
 }));
 
-vi.mock('../api/index.js', async () => ({
+vi.mock('../../api/index.js', async () => ({
   useAccountDetail: hookMocks.useAccountDetail,
   useAccountTransactions: hookMocks.useAccountTransactions,
+  useNftsList: hookMocks.useNftsList,
+  PAGE_SIZE: 20,
   // Pure pagination helper — keep the real implementation so the
   // transactions section renders instead of hitting its error boundary.
   usePagedRows: (
-    await vi.importActual<typeof import('../api/usePagedRows.js')>(
-      '../api/usePagedRows.js'
+    await vi.importActual<typeof import('../../api/usePagedRows.js')>(
+      '../../api/usePagedRows.js'
     )
   ).usePagedRows,
 }));
@@ -59,8 +63,9 @@ const SAMPLE: AccountDetailResponse = {
   balances: [NATIVE_BALANCE, USDC_BALANCE],
   first_seen_ledger: 50,
   last_seen_ledger: 200,
-  sequence_number: 99_123_456,
+  sequence_number: '99123456',
   deleted: false,
+  nft_count: 0,
 };
 
 const DELETED_SAMPLE: AccountDetailResponse = {
@@ -105,7 +110,30 @@ beforeEach(() => {
     error: null,
     refetch: vi.fn(),
   });
+  mockNfts([]);
 });
+
+function mockNfts(rows: NftItem[]): void {
+  hookMocks.useNftsList.mockReturnValue({
+    data: { data: rows, page: { limit: 20 } },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+}
+
+/** Token 3 of a collection, held by the account (issue 741's shape). */
+const HELD_NFT: NftItem = {
+  contract_id: 'CDC5ZX53PWDPVS5AGZPHJ6WHFPB66AZFFEHK4NCFH2AR7ZZQUKOGJFGB',
+  token_id: '3',
+  collection_name: null,
+  name: null,
+  media_url: null,
+  minted_at_ledger: 65048584,
+  owner: VALID_ACCOUNT,
+  last_seen_ledger: 65048584,
+};
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -187,6 +215,26 @@ describe('AccountDetailPage', () => {
     expect(screen.getByText('1,250.50')).toBeInTheDocument();
     // Classic credit balance shows the code as the row name.
     expect(screen.getAllByText('USDC').length).toBeGreaterThan(0);
+  });
+
+  it('shows a sequence number above 2^53 digit for digit', () => {
+    // Most live accounts carry a sequence above 2^53 (86.6% on mainnet,
+    // 2026-11-17): (ledger << 32) + count. A JSON number would lose the last
+    // digits in the browser, so the API sends it as decimal text.
+    mockDetail({
+      data: { ...SAMPLE, sequence_number: '214748364800000017' },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('214,748,364,800,000,017')).toBeInTheDocument();
   });
 
   it('shows a Soroban balance with no known scale as a dash, not a number', () => {
@@ -599,5 +647,258 @@ describe('AccountDetailPage', () => {
     ).toBeInTheDocument();
     // Transactions section is intentionally hidden on detail error.
     expect(screen.queryByText(/recent transactions/i)).not.toBeInTheDocument();
+  });
+
+  it('shows no NFTs switch and asks for no NFTs when the account holds none', () => {
+    mockDetail({ data: SAMPLE, isLoading: false, isError: false });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByText('Assets')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /NFTs/ })
+    ).not.toBeInTheDocument();
+    expect(hookMocks.useNftsList).not.toHaveBeenCalled();
+  });
+
+  it('switches the Assets card to the NFTs the account holds, linked, as a list without a header row', async () => {
+    const user = userEvent.setup();
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 1 },
+      isLoading: false,
+      isError: false,
+    });
+    mockNfts([HELD_NFT]);
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    // Tokens first, each tab carrying its count; no NFT request until asked.
+    expect(screen.getByRole('button', { name: 'Tokens 2' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(hookMocks.useNftsList).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'NFTs 1' }));
+
+    expect(hookMocks.useNftsList).toHaveBeenLastCalledWith(null, {
+      limit: 20,
+      'filter[owner]': VALID_ACCOUNT,
+    });
+    const card = screen
+      .getByRole('button', { name: 'NFTs 1' })
+      .closest('.MuiCard-root');
+    if (!card) throw new Error('Assets card not found');
+    const links = within(card as HTMLElement).getAllByRole('link');
+    expect(
+      links.some(
+        (a) => a.getAttribute('href') === `/nfts/${HELD_NFT.contract_id}/3`
+      )
+    ).toBe(true);
+    // Rows like the Tokens list beside it, not a table with a header row.
+    expect(within(card as HTMLElement).queryByRole('table')).toBeNull();
+  });
+
+  it('keeps the asset counter in the header and puts the switch beside it', () => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 1 },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    // The same header line as an account without NFTs.
+    expect(assetsCard().getByText(/^2 assets/)).toBeInTheDocument();
+    expect(
+      assetsCard().getByRole('button', { name: 'NFTs 1' })
+    ).toBeInTheDocument();
+  });
+
+  it('opens straight on the NFTs, with no switch, when the account holds no tokens', () => {
+    mockDetail({
+      data: { ...SAMPLE, balances: [], nft_count: 1 },
+      isLoading: false,
+      isError: false,
+    });
+    mockNfts([HELD_NFT]);
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(
+      screen.queryByRole('button', { name: /Tokens|NFTs/ })
+    ).not.toBeInTheDocument();
+    expect(assetsCard().getByText('1 NFT')).toBeInTheDocument();
+    expect(
+      assetsCard()
+        .getAllByRole('link')
+        .some(
+          (a) => a.getAttribute('href') === `/nfts/${HELD_NFT.contract_id}/3`
+        )
+    ).toBe(true);
+  });
+
+  it('shows no pager when every NFT fits on one page', () => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 1 },
+      isLoading: false,
+      isError: false,
+    });
+    mockNfts([HELD_NFT]);
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(assetsCard().queryByText('Latest results')).toBeNull();
+    expect(
+      assetsCard().queryByRole('button', { name: /next/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('pages NFTs past one page, captioned with how many the account holds', () => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 25 },
+      isLoading: false,
+      isError: false,
+    });
+    hookMocks.useNftsList.mockReturnValue({
+      data: { data: [HELD_NFT], page: { limit: 20, next: 'c2' } },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(assetsCard().getByText('25 NFTs')).toBeInTheDocument();
+    expect(
+      assetsCard().getByRole('button', { name: /next/i })
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    [20, undefined, false],
+    [21, 'c2', true],
+  ])('with %i NFTs shows a pager only past one page', (count, next, pager) => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: count },
+      isLoading: false,
+      isError: false,
+    });
+    hookMocks.useNftsList.mockReturnValue({
+      data: { data: [HELD_NFT], page: { limit: 20, next } },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(
+      assetsCard().queryAllByRole('button', { name: /next/i })
+    ).toHaveLength(pager ? 1 : 0);
+  });
+
+  it('holds placeholder rows while the next page loads, not the old rows', () => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 3 },
+      isLoading: false,
+      isError: false,
+    });
+    hookMocks.useNftsList.mockReturnValue({
+      data: { data: [HELD_NFT], page: { limit: 20 } },
+      isLoading: false,
+      isPlaceholderData: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(assetsCard().getAllByTestId('nft-row-placeholder')).toHaveLength(3);
+  });
+
+  it.each([
+    [3, 3],
+    [50, 20],
+  ])(
+    'while loading %i NFTs, holds %i placeholder rows, not a full page',
+    (count, rows) => {
+      mockDetail({
+        data: { ...SAMPLE, nft_count: count },
+        isLoading: false,
+        isError: false,
+      });
+      hookMocks.useNftsList.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+
+      renderWithProviders(<AccountDetailPage />, {
+        initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
+        routePath: '/accounts/:accountId',
+      });
+
+      expect(assetsCard().getAllByTestId('nft-row-placeholder')).toHaveLength(
+        rows
+      );
+    }
+  );
+
+  it('opens the NFTs view from the URL and shows its error when the NFT fetch fails', () => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 1 },
+      isLoading: false,
+      isError: false,
+    });
+    hookMocks.useNftsList.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: Object.assign(new Error('boom'), { status: 500 }),
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(screen.getByRole('button', { name: 'NFTs 1' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(
+      screen.getByRole('button', { name: /try again/i })
+    ).toBeInTheDocument();
   });
 });

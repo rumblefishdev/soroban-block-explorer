@@ -150,7 +150,17 @@ export type AccountDetailResponse = {
   first_seen_ledger: number;
   home_domain?: string | null;
   last_seen_ledger: number;
-  sequence_number: number;
+  /**
+   * How many NFTs the account holds now. Counts only what the indexer
+   * classified as an NFT; `0` also for an account whose NFTs are not
+   * indexed.
+   */
+  nft_count: number;
+  /**
+   * Decimal text, not a JSON number: most sequence numbers exceed 2^53,
+   * where a browser's JSON parser drops the last digits.
+   */
+  sequence_number: string;
   signing?: null | AccountSigning;
   sponsorship?: null | AccountSponsorship;
 };
@@ -2539,17 +2549,6 @@ export type SessionRequest = {
   token: string;
 };
 
-export type SessionResponse = {
-  /**
-   * Seconds until `token` expires.
-   */
-  expires_in: number;
-  /**
-   * Free-tier session JWT, sent back as `Authorization: Bearer <token>`.
-   */
-  token: string;
-};
-
 /**
  * Single signature on a transaction envelope.
  */
@@ -2871,9 +2870,9 @@ export type MintSessionError = MintSessionErrors[keyof MintSessionErrors];
 
 export type MintSessionResponses = {
   /**
-   * Session JWT minted
+   * Session minted
    */
-  200: SessionResponse;
+  204: void;
 };
 
 export type MintSessionResponse =
@@ -3984,6 +3983,10 @@ export type ListNftsData = {
      * `%` / `_` literals.
      */
     'filter[name]'?: string | null;
+    /**
+     * Account G-StrKey; only the NFTs that account holds now.
+     */
+    'filter[owner]'?: string | null;
   };
   url: '/v1/nfts';
 };

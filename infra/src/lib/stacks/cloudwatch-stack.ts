@@ -604,9 +604,9 @@ export class CloudWatchStack extends cdk.Stack {
           // Only probe a vector whose lock is actually live. With its lock
           // off an origin legitimately returns 2xx, so probing it would make
           // the canary alarm forever during a staged (one-leg-at-a-time)
-          // rollout. The raw execute-api URL returns 403 under EITHER API lock:
-          // the app-layer edge-secret check (missing X-Edge-Secret) OR mTLS
-          // (disableExecuteApiEndpoint) — so probe it whenever either is live.
+          // rollout. The raw execute-api URL is closed for good
+          // (disableExecuteApiEndpoint, task 0285) and 403s under either API
+          // lock as well, so it is probed whenever one of them is on.
           // Gating only on enableApiMtls would leave the edge-secret-only prod
           // config (the current one) with no API target → every run fails.
           ...((config.enableApiMtls || config.enableEdgeSecretLock) && {
@@ -931,7 +931,7 @@ export class CloudWatchStack extends cdk.Stack {
         // graphed metrics that production never emits, so both rendered
         // empty from the day they were written:
         // - `CacheHitCount` / `CacheMissCount` need a stage cache cluster.
-        //   `apiGatewayCacheEnabled` is false and stays false by decision;
+        //   There is none, by decision (its config was removed, task 0679);
         //   rationale and return condition in
         //   `docs/architecture/backend/api-gateway-cache-spec.md`.
         // - `InitDuration` is NOT a CloudWatch metric at all (verified

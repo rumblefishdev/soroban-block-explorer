@@ -151,7 +151,9 @@ jobs:
       # in the cache and install either way.
       #
       # The API is intercepted inside the tests (page.route), so this needs no
-      # ClickHouse certificate and no network beyond the browser download.
+      # ClickHouse certificate. Network: the browser download, and
+      # challenges.cloudflare.com for the Turnstile tests (task 0289), which
+      # load the real widget.
       - name: Playwright version
         if: env.e2e != '[]'
         run: echo "playwright=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_ENV"

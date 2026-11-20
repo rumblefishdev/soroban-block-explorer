@@ -80,7 +80,15 @@ function priceStr(value: unknown): string | null {
   if (value == null || typeof value !== 'object') return null;
   const { n, d } = value as { n?: unknown; d?: unknown };
   if (typeof n !== 'number' || typeof d !== 'number' || d === 0) return null;
-  return (n / d).toLocaleString('en-US', { maximumFractionDigits: 7 });
+  const price = n / d;
+  // Seven decimals read well for a price of 1 or more; below 1 they would
+  // round a tiny price to "0", so count seven significant digits instead.
+  return price.toLocaleString(
+    'en-US',
+    Math.abs(price) < 1
+      ? { maximumSignificantDigits: 7 }
+      : { maximumFractionDigits: 7 }
+  );
 }
 
 /** `details.asset` + `details.amount` as one formatted string, or null when

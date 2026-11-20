@@ -122,10 +122,20 @@ shared secrets; API protection belongs at the ingress boundary — API Gateway t
 plus the Cloudflare edge in front of the API hostname — not in the bundle. Note that the
 Cloudflare Turnstile widget the SPA loads gates **API access**: the widget produces a
 challenge token, the SPA posts it to `/auth/session`, and the backend verifies it against
-Cloudflare's siteverify endpoint before minting a free-tier session JWT
-(`crates/api/src/auth/`). The token and the JWT are different things — the widget never
-issues the session. This is also not Cloudflare fronting the frontend's own domain, which
-sits on Route 53 with no edge filter.
+Cloudflare's siteverify endpoint before setting a free-tier session JWT in the HttpOnly
+cookie `__Host-session` (`crates/api/src/auth/`, task 0677). The token and the session are
+different things — the widget never issues the session. The SPA sends every read with
+`credentials: 'include'` and never sees the cookie, so one check serves every tab and
+reload until it expires (15 min). A read goes out at once; its 401 makes the tab run the
+check, mint, and repeat that read once, so no page shows the 401. A read sent before the
+last mint finished is only repeated. If the repeated read still gets a 401, the tab
+writes a test cookie: a browser that refuses it blocks cookies, so one "This site needs
+cookies" panel shows and no further check runs; a browser that keeps it lost the session
+on our side, so the "Try again" panel shows and the click brings a fresh check. When Cloudflare asks for a click, its widget stays alone at the centre until the
+visitor solves it; when the check fails, a "Try again" panel says the check failed (the reason goes to the console), and nothing
+is solved again until it is clicked (`web/src/api/session.ts`, task 0289). This is also
+not Cloudflare fronting the frontend's own domain, which sits on Route 53 with no edge
+filter.
 
 ```
 ┌────────┐     ┌──────────────────────────────────────────────────┐
@@ -234,11 +244,10 @@ Authoring rule: changes to API DTOs, request params, or routes must be made in t
 Rust crate; the frontend regenerates and consumes the result. Hand-edited types in
 `libs/api-types/src/generated/` will be overwritten on the next regeneration.
 
-The session exchange `POST /auth/session` is in the spec too (task 0510), so the
-frontend takes its `SessionResponse` type from the package. `web/src/api/session.ts`
-calls it with plain `fetch`, not the generated SDK: the SDK client's request
-interceptor waits for the session, so routing the session call through that client
-would wait on itself. Session state lives in the object `createSession` returns;
+The session exchange `POST /auth/session` is in the spec too (task 0510); it answers
+204 with the session cookie. `web/src/api/session.ts` calls it with plain `fetch`
+(with `credentials: 'include'`), not the generated SDK: the SDK client's 401 handling
+would call the session again from inside it. Session state lives in the object `createSession` returns;
 `web/src/api/client.ts` holds the one the app uses.
 
 ### 4.6 State Strategy
@@ -281,11 +290,13 @@ Navigation rules:
   `/api`. Everything below `/api/` belongs to a portal: CloudFront serves the
   Stellar Prices API portal, a separate SPA, at `/api/prices-api/*`. The navbar, the
   footer and the hub link it with a plain anchor (`PRICES_API_URL`), never through
-  the router
-- `/prices-api`, `/prices-api/*`, `/pricing-api`, `/pricing-api/*` and every other
-  `/api/*` path are not explorer routes either: the portal's old homes, which
-  CloudFront answers with a `301` to the same path under `/api/prices-api` (tasks
-  0608, 0660)
+  the router. The x402 facilitator's API key portal, another separate SPA, is at
+  `/api/x402-facilitator/*` (task 0670); the hub does not list it yet
+- `/prices-api`, `/prices-api/*`, `/pricing-api` and `/pricing-api/*` are not
+  explorer routes either: the Prices portal's old homes, which CloudFront answers
+  with a `301` to the same path under `/api/prices-api` (tasks 0608, 0660). So do
+  the portal's routes from when it lived at `/api/` (`/api/dashboard` and the
+  like); every other `/api/*` path answers `302` to the hub at `/api/` (task 0670)
 
 ## 6. Routes and Pages
 
@@ -519,7 +530,15 @@ Expanded behavior:
 Account detail view for a Stellar account.
 
 - Account summary - account ID (full, copyable), sequence number, first seen ledger, last seen ledger
-- **Assets** - native XLM plus every trustline, INCLUDING the ones standing at zero
+- **Assets** - native XLM plus every trustline, INCLUDING the ones standing at zero.
+  When the account holds both tokens and NFTs a `Tokens N` / `NFTs N` pill switch
+  sits on the right of the header, beside the asset counter (`?holdings=nfts`); an
+  address with NFTs and no tokens opens straight on its NFTs, counted as `N NFTs`.
+  The NFTs view lists the NFTs held now in the Tokens row layout, each linked to its
+  NFT page, fed by `GET /nfts?filter[owner]=` and paged by cursor under `?cursor_n=`;
+  the pager shows only past one page (20).
+  The count comes with the account (`nft_count`), so the card is laid out once and
+  an account without NFTs sends no NFT request (task 0675).
 - **Signers** - the signer set and the three thresholds
 - Recent transactions - paginated table of transactions involving this account,
   carrying the **`Balance change`** column

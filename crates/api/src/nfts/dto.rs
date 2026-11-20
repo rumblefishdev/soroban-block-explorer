@@ -23,6 +23,9 @@ pub struct ListParams {
     /// `%` / `_` literals.
     #[serde(rename = "filter[name]")]
     pub filter_name: Option<String>,
+    /// Account G-StrKey; only the NFTs that account holds now.
+    #[serde(rename = "filter[owner]")]
+    pub filter_owner: Option<String>,
 }
 
 /// One NFT row. Same shape on `GET /v1/nfts` list rows and as the

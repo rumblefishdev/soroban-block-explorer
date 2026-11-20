@@ -67,7 +67,24 @@ honestly render. One task, because they all change the same seam.
 3. **u256/i256 decode (absorbs the rest of 0380).** `scval.rs` renders
    `u256`/`i256` as 64-char hex; decode to decimal strings with
    `stellar-xdr`'s `num256::{u256,i256}_str_from_pieces` (do NOT hand-roll —
-   see 0431).
+   see 0431). **Moved to 0363 (2026-11-17):** the parser adopts the
+   library's value format for every ScVal type at once, `u256`/`i256`
+   included.
+4. **Details that lose the value (audit 2026-11-17, findings 3–6 in
+   [0363 notes](0363_FEATURE_advanced-scval-decoded-rendering/notes/R-audit-hand-rolled-decoding-2026-11.md)).**
+   Change-trust to a pool share keeps only the variant name
+   (`operation.rs:658`); revoke-sponsorship keeps only the ledger-key type
+   (`operation.rs:519`); create-contract drops the contract-id preimage;
+   pool and claimable-balance ids are bare hex where the library and SEP-23
+   give `L…` / `B…`.
+
+## Added 2026-11-18 — stage 2 of 0363 decision 13
+
+64-bit fields of classic operation details (`amount`, `limit`, `offerId`,
+`bumpTo`, claim atoms, predicate times) reach the page as JSON numbers and
+lose digits above 2^53 (0.2% of pool amounts). Follow the format chosen for
+events in 0572 (official stellar-xdr JSON). Context: rows 13–24 of
+[`0363 S note`](0363_FEATURE_advanced-scval-decoded-rendering/notes/S-events-table-value-rendering.md).
 
 ## Acceptance criteria
 

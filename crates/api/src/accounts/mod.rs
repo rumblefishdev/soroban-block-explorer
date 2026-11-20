@@ -10,6 +10,7 @@
 mod balance_changes;
 pub mod dto;
 mod handlers;
+mod nft_count;
 mod queries;
 mod sponsorship;
 

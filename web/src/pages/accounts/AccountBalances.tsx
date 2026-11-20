@@ -9,6 +9,7 @@ import {
   IdentifierDisplay,
   PaginationControls,
   scaleByDecimals,
+  useTabUrlState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useSearchParams } from 'react-router-dom';
 
@@ -17,6 +18,7 @@ import { PAGE_SIZE } from '../../api/polling.js';
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { AssetIcon } from '../assets/AssetIcon.js';
+import { AccountNfts } from './AccountNfts.js';
 import { NATIVE_ASSET_CODE, SAC_TAG } from '../assets/assetType.js';
 
 interface BalanceShape {
@@ -57,6 +59,8 @@ interface BalanceShape {
  * Position would have worked only per page: with pagination the index restarts
  * at 0 on every page, so page 2's first row would claim page 1's key.
  */
+const HOLDINGS_TABS = ['tokens', 'nfts'];
+
 function assetKey(balance: AccountBalance): string {
   return [
     balance.type,
@@ -269,12 +273,17 @@ function BalanceRow({
  * has to fall in the same place the server put it.
  */
 export function AccountBalances({
+  accountId,
   balances,
   deleted,
+  nftCount,
 }: {
+  accountId: string;
   balances: readonly AccountBalance[];
   /** The account was closed — "yet" would promise something that cannot come. */
   deleted: boolean;
+  /** NFTs the account holds now; at 0 the card has no NFTs view. */
+  nftCount: number;
 }) {
   const funded = balances.filter((b) => b.balance !== '0').length;
   const noun = balances.length === 1 ? 'asset' : 'assets';
@@ -320,8 +329,44 @@ export function AccountBalances({
   const start = page * PAGE_SIZE;
   const shown = paged ? balances.slice(start, start + PAGE_SIZE) : balances;
 
+  // NFTs are a second view of this card, not assets of their own: SEP-50 NFTs
+  // carry no balance, so they get their own list. The switch exists only when
+  // the account holds both; `?holdings=nfts` keeps the view across a reload.
+  const { activeKey, setActiveKey } = useTabUrlState({
+    param: 'holdings',
+    defaultKey: 'tokens',
+    validKeys: HOLDINGS_TABS,
+  });
+  const holdsBoth = nftCount > 0 && balances.length > 0;
+  // An address can hold NFTs and no tokens: it may not exist on the ledger at
+  // all, since a contract can send an NFT to any G address.
+  const showNfts =
+    nftCount > 0 && (balances.length === 0 || activeKey === 'nfts');
+  const holdingsSwitch = holdsBoth ? (
+    <HoldingsSwitch
+      active={showNfts ? 'nfts' : 'tokens'}
+      tokens={balances.length}
+      nfts={nftCount}
+      onChange={setActiveKey}
+    />
+  ) : undefined;
+
+  if (showNfts) {
+    return (
+      <SectionCard
+        title="Assets"
+        meta={
+          holdsBoth ? meta : `${nftCount} ${nftCount === 1 ? 'NFT' : 'NFTs'}`
+        }
+        action={holdingsSwitch}
+      >
+        <AccountNfts accountId={accountId} nftCount={nftCount} />
+      </SectionCard>
+    );
+  }
+
   return (
-    <SectionCard title="Assets" meta={meta}>
+    <SectionCard title="Assets" meta={meta} action={holdingsSwitch}>
       {balances.length === 0 ? (
         <EmptyState
           icon={<AccountBalanceWalletIcon />}
@@ -355,5 +400,76 @@ export function AccountBalances({
         />
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * Tokens / NFTs pills on the right of the Assets header, each with its count,
+ * where the pool page's activity card puts its filter. Same pill look as the
+ * chart range picker on the pool page (`IntervalPills` in `PoolCharts.tsx`).
+ */
+function HoldingsSwitch({
+  active,
+  tokens,
+  nfts,
+  onChange,
+}: {
+  active: 'tokens' | 'nfts';
+  tokens: number;
+  nfts: number;
+  onChange: (next: string) => void;
+}) {
+  const options = [
+    { key: 'tokens', label: 'Tokens', count: tokens },
+    { key: 'nfts', label: 'NFTs', count: nfts },
+  ] as const;
+  return (
+    <Stack
+      direction="row"
+      spacing={0.5}
+      role="group"
+      aria-label="Assets view"
+      // Beside the counter on a phone: the pills keep their one-line size.
+      sx={{ flexShrink: 0 }}
+    >
+      {options.map(({ key, label, count }) => {
+        const isActive = key === active;
+        return (
+          <Box
+            key={key}
+            component="button"
+            type="button"
+            aria-pressed={isActive}
+            onClick={() => onChange(key)}
+            sx={(theme) => ({
+              ...theme.typography.bodyXsMedium,
+              whiteSpace: 'nowrap',
+              border: 'none',
+              borderRadius: `${theme.shape.radius.s}px`,
+              px: 1.25,
+              py: 0.5,
+              cursor: 'pointer',
+              backgroundColor: isActive
+                ? theme.palette.surface.primaryMain
+                : theme.palette.surface.grayLight,
+              color: isActive
+                ? theme.palette.grey[900]
+                : theme.palette.text.secondary,
+              '&:hover': {
+                backgroundColor: isActive
+                  ? theme.palette.surface.primaryHover
+                  : theme.palette.surface.grayHover,
+              },
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.stroke.action}`,
+                outlineOffset: 2,
+              },
+            })}
+          >
+            {label} {count}
+          </Box>
+        );
+      })}
+    </Stack>
   );
 }

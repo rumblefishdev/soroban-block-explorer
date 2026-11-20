@@ -387,7 +387,8 @@ transactions.
 #### Accounts
 
 **`GET /accounts/:account_id`** — Account detail: current balances, sequence number,
-and first/last seen ledger.
+first/last seen ledger, and `nft_count` — the NFTs the account holds now (the merged
+`nfts` row, the same rule as `GET /nfts?filter[owner]=`).
 
 **`GET /accounts/:account_id/transactions`** — Paginated transactions involving this
 account.
@@ -416,7 +417,7 @@ types, return types).
 #### NFTs
 
 **`GET /nfts`** — Paginated list of NFTs. Query params: `limit`, `cursor`,
-`filter[collection]`, `filter[contract_id]`.
+`filter[collection]`, `filter[contract_id]`, `filter[name]`, `filter[owner]`.
 
 **`GET /nfts/:contract_id/:token_id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL. The owner (`owner`) is a `G…` account or a `C…` contract; null once the NFT is
@@ -1596,8 +1597,8 @@ report.
    >
    > **"WAF/throttling active on public ingress" is satisfied without AWS WAF.** Both
    > AWS WAF WebACLs were dropped ([ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
-   > task 0302). What holds the criterion: API Gateway throttling (`50` rps / `100`
-   > burst) plus usage-plan limits on every public route, and the Cloudflare edge —
+   > task 0302). What holds the criterion: API Gateway stage throttling (`50` rps /
+   > `100` burst) on every public route, and the Cloudflare edge —
    > managed rules, DDoS, Managed Challenge, rate limiting — on the API hostname, with
    > the origin locked to Cloudflare. The CloudFront frontend distribution carries no
    > edge filter; it serves static, edge-cached files from a private S3 origin, so the

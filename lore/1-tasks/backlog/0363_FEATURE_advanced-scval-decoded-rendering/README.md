@@ -4,10 +4,12 @@ title: 'FEATURE: tx-detail — decode ScVals to typed chips (kill the raw-JSON w
 type: FEATURE
 status: backlog
 related_adr: []
-related_tasks: ['0352', '0071', '0453', '0462']
+related_tasks: ['0352', '0071', '0453', '0462', '0431', '0456']
 tags:
   [frontend, transaction-detail, soroban, ux, priority-medium, effort-medium]
-links: ['https://github.com/rumblefishdev/soroban-block-explorer/issues/378']
+links:
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/378'
+  - 'https://github.com/rumblefishdev/soroban-block-explorer/issues/735'
 history:
   - date: 2026-07-07
     status: backlog
@@ -70,6 +72,23 @@ history:
       it; 0462 ships a local ~40-line stopgap until then. Stale references
       corrected in the body (the advanced/ path, the "advanced mode" framing —
       that split no longer exists).
+  - date: '2026-11-17'
+    status: active
+    who: karolkow
+    note: >
+      Activated. Issue #735 (the Data column squeezed on the transaction
+      page) enters as the first PR: value rendering in the Events table.
+      Its design decisions are recorded under "2026-11-17 — first PR". One
+      question stays open: how values are encoded between parser and page —
+      the parser's own JSON dialect differs from the official stellar-xdr
+      JSON in five value types, and one of them loses digits in the browser.
+  - date: '2026-11-18'
+    status: backlog
+    who: karolkow
+    note: >
+      Back to backlog. #735 done (#736, #738, #739, #740 merged). The value
+      format work moved out: stage 1 to 0572, stage 2 to 0456, the indexer to
+      0431 (rows 13-24 of the S note). Left here: B and C-lite.
 ---
 
 # FEATURE: decoded ScVal rendering in tx detail
@@ -106,27 +125,34 @@ Options considered (A ⊂ B ⊂ C; D=lib, E=raw):
 **Now (2026-08-19):** A is done (0453), the call tree is done (0462), C exists only
 inside the trace. **The open target is B + C-lite's semantic line.**
 
+## Premise
+
+Reviewed 2026-11-17 by a fresh reviewer given only the goal and constraints:
+
+- The problem is real but is two problems. The squeezed Events table (#735) is
+  caused by full addresses in Topics; truncating them is frontend-only. The
+  64-bit precision loss is real and rare (10,581 of 172,988,828 events in
+  ledgers 64.0M–64.2M), in five encoder arms (`scval.rs:21-27,116`), not one.
+- The digits are lost in one place: the generated client's `JSON.parse`
+  (`libs/api-types/src/generated/client/client.gen.ts:177`); serde keeps them.
+- Changing the parser's value format, as the first decision draft said,
+  silently breaks Rust readers (`asset_transfers.rs:100` reads `to_muxed_id`
+  with `as_u64()`; `executable_ref.rs`, `pool_config_factory.rs`, `nft.rs`),
+  the stored rows (mixed until a backfill) and the price service's weekly
+  `JSONExtractString(topics_xdr, …)` query. "Official values inside our
+  `{type, value}` envelope" is a third format no peer emits.
+- Bytes in full: 5.2% of bytes values exceed 1,000 hex characters (p99 1,056),
+  so "no per-row expand" brings the wall back for them.
+- Upstream renderers start from raw XDR: stellar.expert's MIT `sc-val.js`
+  (value + type tag), Stellar Lab's `@stellar/stellar-xdr-json`.
+
+Where to fix the precision loss and how long bytes render went back to the
+owner as decisions ([`notes/S-events-table-value-rendering.md`](notes/S-events-table-value-rendering.md)).
+
 ## Reference — how mature explorers do it (researched)
 
-- **stellar.expert (same chain, open-source — north star):** ScVals rendered as
-  **typed chips with a small dimmed type subscript** (`0i128`, `164266u32`,
-  `"mint"sym`, `…bytes`); maps/vecs as `{key: val}` / `[…]`. Invocation shown as
-  a **function signature `fn(arg,arg) → result`** with a **nested sub-call tree**
-  (each sub-call's return after `→`); an ⓘ tooltip fetches the WASM interface to
-  show **named parameters**. Events decoded **twice**: a semantic line
-  (`0.55 KALE minted`) + the decoded `["mint"sym, …] with data …i128` (topics vs
-  data separated). Zero raw XDR embedded — links out to Stellar Lab/Horizon for
-  raw. Addresses truncated + identicon + clickable + known-name label (`[Kale]`).
-- **Etherscan / Solscan / Blockscout:** decoded is the **default**, raw/hex is a
-  toggle or a tab labeled "debugging"; a plain-language **"assets moved" summary
-  line** at the top (Tokens Transferred / Balance Change), decimal-adjusted +
-  logo + truncated links; typed **named param tables** (`#/Name/Type/Value`) with
-  the resolved signature as header; **prominent decoded failure reason** in the
-  status row (red "Fail with error 'X'"); verbose logs collapsed by default.
-- **Architectural note:** StellarChain's invocation trace uses **ephemeral
-  Soroban RPC → disappears for old txs.** stellar.expert (and us, via `heavy`
-  archive-XDR fetch, ADR 0029) reconstruct from **persisted** meta → always
-  available. Our foundation is on the robust side; keep it.
+stellar.expert, Etherscan, Solscan, Blockscout and StellarChain, as read on
+2026-07-07: [`notes/R-explorer-reference-2026-07.md`](notes/R-explorer-reference-2026-07.md).
 
 ## Target design (A + B + C-lite)
 
@@ -264,20 +290,8 @@ Events section further down, which nothing has touched.
 
 ## Wireframe (Events)
 
-Now:
-
-```
-Type      Topics                        Data
-Contract  [ {"type":"sym",              { "type":"i128",
-             "value":"fee"}, … ]          "value":"947930" }
-```
-
-Target (collapsed):
-
-```
-● transfer   CCW67T…MI75   GX…4P → GY…8K        326,131,711   [raw ⌄]
-● fee        CAS3J7…OWMA   GB6KVOP2…KNFCP            947,930   [raw ⌄]
-```
+The 2026-07 wireframe, replaced by the 2026-11-17 design round:
+[`notes/G-wireframe-events-2026-07.md`](notes/G-wireframe-events-2026-07.md).
 
 ## Component inventory (reuse, don't rebuild)
 
@@ -338,51 +352,8 @@ original wording is kept struck through so the change is visible, not silent.
 
 ## UX Expert Analysis (`/ux-expert`)
 
-Audit of the current state + per-option verdict, grounded in the actual
-components (`EventsSection`, `OperationJsonDetail`, `HighlightedJson`, `XdrRow`)
-and the decoder (`crates/xdr-parser/src/scval.rs`). Premise confirmed:
-`scval_to_typed_json` emits a clean, recursive tagged union `{type, value}` — a
-`switch(type)` renderer is real, not speculative. `scval.rs:19` (`e.name()`)
-does drop the error code, so the `Type/Code` chip needs the Rust fix.
-
-### Current-state findings (2 Critical, 5 Major)
-
-| #   | Finding                                                                                                                                        | Dimension                                     | Sev         |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------- |
-| F1  | Meaning buried under `{type,value}` scaffolding — type tags dominate, values buried (signal-to-noise inverted)                                 | Cognitive Load / Data Presentation            | 🔴 Critical |
-| F2  | No overview / progressive disclosure — all events fully expanded = ~13k px wall; `XdrRow` collapse exists but only on base64 blobs             | Information Architecture / Screen Real Estate | 🔴 Critical |
-| F3  | Amounts unreadable — `i128` as raw digit string, no grouping / decimal-adjust / asset context; `formatCompactAmount` unused here               | Data Presentation                             | 🟠 Major    |
-| F4  | Addresses raw + unclickable inside topics/data/args — same datum rendered two ways (Contract column uses `IdentifierDisplay`, inline does not) | Interaction Cost / Data Presentation          | 🟠 Major    |
-| F5  | Table container fights tree content — 2 free-width JSON columns, `overflowX:auto`, `break-all` snaps strkeys mid-char                          | Screen Real Estate / Responsiveness           | 🟠 Major    |
-| F6  | No semantic/human layer — even decoded, reader must assemble "Transfer X: A→B" themselves                                                      | Information Architecture                      | 🟠 Major    |
-| F7  | Error code dropped at `scval.rs:19` (`e.name()` only) — `Type/Code` chip impossible without Rust fix (shared w/ 0352)                          | Data Presentation / Correctness               | 🟠 Major    |
-
-F1+F2 together = user cannot do the primary task (understand the tx) without
-hand-parsing JSON. **Quick wins (parts already exist):** collapse via `XdrRow`
-kills the wall before any decoder work; route addresses → `IdentifierDisplay`,
-amounts → `formatCompactAmount`. `XdrRow` already has `role=button` /
-`aria-expanded` — carry that a11y into `ScValView` collapse.
-
-### Per-option verdict
-
-- **E (raw JSON, current):** ✅ keep ONLY as per-node "raw" fallback; ❌ never default. Escape hatch, not a view.
-- **A (collapse):** ✅ highest ROI, uses existing `XdrRow`. **But collapse without a decoded summary line is a blind toggle** — A has a hard dependency on ≥ B-lite (decode `topics[0]` sym + contract) for the row label.
-- **B (`ScValView`):** ✅ the load-bearing fix (F1/F3/F4/F5). Input already a clean union → one component, table-driven `switch`. Ponytail: no plugin architecture; first cut = common types (sym/address/int/bool/bytes/vec/map), tail (void/duration/timepoint/contract_instance) handled but not gold-plated. Must default-collapse nested structures or it becomes a new wall.
-- **C / C-lite (semantic):** ✅ biggest comprehension gain (F6), biggest domain risk. Known-shape match is a heuristic → unknown shapes MUST degrade to plain B, never guess; "assets moved" amount needs decimals metadata. C-lite (known events + `fn(args)→result` signature/call-tree) is the right ceiling. Named-params-from-ABI = genuine bonus, defer.
-- **D (JSON-viewer lib):** ❌ reject. Renders the same `{type,value}` scaffolding prettier — no decode, no linked addresses, no formatted amounts. Solves F2 weakly, nothing else, adds a dependency + foreign visual language. Wrong rung when B (one component + existing primitives) solves 100%.
-
-### Sequencing (affirms the Implementation Plan, two nuances)
-
-1. **B-core** first — A and C both depend on a decoded summary. Wire into events topics/data + op args.
-2. **A** (collapse via `XdrRow`) — each collapsed row now has a real summary line. Kills the wall.
-3. **C-lite** — known-event line + invocation signature/call-tree, with graceful fallback to B.
-4. Fix **`scval.rs:19`** error code (with 0352) — unblocks the `Type/Code` chip.
-5. Bonus: named params from ABI — defer.
-
-**Two corrections to make explicit in the plan:** (1) A has a hard dependency on
-B-lite — collapse needs a summary to show; (2) reject D outright. AC mapping is
-clean: "13k→scannable" ← A, "typed chips" ← B, "semantic summary" ← C-lite.
-Task is well-diagnosed and well-scoped.
+The 2026-07 analysis (2 critical, 5 major findings, per-option verdict,
+sequencing): [`notes/R-ux-expert-analysis-2026-07.md`](notes/R-ux-expert-analysis-2026-07.md).
 
 ## Status (2026-08-05)
 
@@ -479,16 +450,15 @@ raised, told apart only by a glyph.
    per-operation events carry no stage, so there is no total order to build
    from it. Its job is to remove an information gap, not to compute.
 
+## 2026-11-17 — first PR: the Events table (Refs #735)
+
+Value rendering in the Events table ships first; the other renderers follow,
+one PR each. Decisions and the one open question (how values are encoded
+between parser and page): [`notes/S-events-table-value-rendering.md`](notes/S-events-table-value-rendering.md).
+
 ## Future Work
 
-- **The execution trace renders the diagnostic COPY, not the consensus
-  event.** On the reported transaction the trace's `•` row is `#6` (debug
-  channel), not `#2` (consensus). Same payload, but the copy carries no
-  `op_index` — the consensus row is the richer record. Nothing differs on
-  screen today, so this is latent: if a copy ever diverged, the trace would
-  show debug data wearing a consensus event's clothes and nothing would flag
-  it. Fix shape: use the diagnostic stream for POSITION only and render the
-  matching consensus event. Zero visible change, so not done now.
+Moved to [`notes/S-events-table-value-rendering.md`](notes/S-events-table-value-rendering.md) ("Future work").
 
 ## Notes
 

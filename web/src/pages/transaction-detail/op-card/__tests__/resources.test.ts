@@ -96,9 +96,21 @@ describe('resource counters (#378)', () => {
     );
     expect(all).toEqual([
       { label: 'cpu_insn', value: '5,063,570' },
-      // A big int stays the digits it arrived as — never rounded, never gone.
-      { label: 'big_counter', value: '18446744073709551615' },
+      // A big int keeps every digit it arrived with — never rounded, never gone.
+      { label: 'big_counter', value: '18,446,744,073,709,551,615' },
       { label: 'shapeless', value: 'null' },
+    ]);
+  });
+
+  it('groups a counter that arrives as decimal text like one that arrives as a number', () => {
+    // The API sends every contract integer as text (lore 0363, decision 13),
+    // so a u64 counter reaches this panel as '5063570', not 5063570.
+    const asText: XdrEventDto = {
+      ...counter('cpu_insn', 0),
+      data: { type: 'u64', value: '5063570' },
+    };
+    expect(allResourceFacts(readResourceCounters([asText]))).toEqual([
+      { label: 'cpu_insn', value: '5,063,570' },
     ]);
   });
 

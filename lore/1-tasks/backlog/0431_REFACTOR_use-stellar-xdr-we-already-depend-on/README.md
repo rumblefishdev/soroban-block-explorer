@@ -150,8 +150,7 @@ envelope shape added.
 - [ ] Docs updated — `N/A` (test infrastructure; no architecture shape change).
 - [ ] API types regenerated — `N/A`.
 
-## Explicitly out of scope
+## Added 2026-11-18 and out of scope
 
-Replacing our parser with the CLI. The CLI is a process, not a library; at 13M
-ledgers, spawning one per transaction is not viable. We already link the same
-crate — the goal is to _call more of it_, not to shell out.
+Indexer readers of our JSON move to stellar-xdr types here (0363 stage 3);
+both are in [`notes/S-scope-2026-11.md`](notes/S-scope-2026-11.md).

@@ -24,6 +24,12 @@ history:
     note: >
       Filed after task 0541 closed: the two payload columns are 88% of
       `soroban_events`, and the table is one fifth of the database.
+  - date: '2026-11-18'
+    status: backlog
+    who: karolkow
+    note: >
+      Decided, no longer only a question: store events as raw XDR and serve
+      the official SEP-51 JSON. Stage 1 of 0363 decision 13 moved here.
 ---
 
 # Event topics and data as binary XDR instead of JSON text
@@ -70,3 +76,21 @@ before deciding anything.
       sample's ratio
 - [ ] Every reader of the JSON shape listed with its migration
 - [ ] Decision recorded: a rebuild (folding in the 0541 idea) or not, and why
+
+## Decided 2026-11-18 — build it (stage 1 of 0363 decision 13)
+
+The owner decided (rows 22–24 of [`0363 S note`](../0363_FEATURE_advanced-scval-decoded-rendering/notes/S-events-table-value-rendering.md)):
+
+- events are stored as raw XDR; the contract events tab cannot get the
+  official JSON from our stored dialect;
+- the API sends event topics and data only as the official stellar-xdr JSON
+  (SEP-51, the library's serde; enable its `serde` feature), and every web
+  view reads that one format;
+- in stages: this task is events only; indexer readers of our JSON move in 0431.
+
+Done when the transaction page and the contract events tab show SEP-51 JSON
+(e.g. `{"u64":"17933488432273231284"}` for tx `cd965249…c591`), new events
+store XDR, the backfill command is handed to the owner, tests cover each
+value type against the library, and PR #742 (our dialect with integers as
+text) is closed as superseded. Differences ours vs official: second pass of
+[`R-audit-hand-rolled-decoding`](../0363_FEATURE_advanced-scval-decoded-rendering/notes/R-audit-hand-rolled-decoding-2026-11.md).

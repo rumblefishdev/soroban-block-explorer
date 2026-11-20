@@ -102,7 +102,9 @@ pub struct AccountBalance {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AccountDetailResponse {
     pub account_id: String,
-    pub sequence_number: i64,
+    /// Decimal text, not a JSON number: most sequence numbers exceed 2^53,
+    /// where a browser's JSON parser drops the last digits.
+    pub sequence_number: String,
     pub balances: Vec<AccountBalance>,
     pub home_domain: Option<String>,
     pub first_seen_ledger: i64,
@@ -124,6 +126,10 @@ pub struct AccountDetailResponse {
     /// `account_entry_state` row) — so it holds no reserves to count. Render
     /// nothing for `null`.
     pub sponsorship: Option<AccountSponsorship>,
+    /// How many NFTs the account holds now. Counts only what the indexer
+    /// classified as an NFT; `0` also for an account whose NFTs are not
+    /// indexed.
+    pub nft_count: u64,
 }
 
 /// The CAP-33 counters the network keeps on the account itself, copied as

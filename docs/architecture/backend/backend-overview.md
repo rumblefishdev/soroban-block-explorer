@@ -124,11 +124,14 @@ The backend implementation direction implied by the current design is:
   `libs/api-types` codegen pipeline (task 0096). A secondary `extract_openapi`
   binary in the `api` crate dumps the spec at build time, so codegen does not
   require booting the Lambda. The spec also declares the access-layer security
-  schemes (task 0277/0287) — `api_key` (`x-api-key` header, paid tier) and
-  `bearer_jwt` (free-tier session JWT) — as a global OR requirement, so Swagger
-  UI renders an "Authorize" dialog and "Try it out" can reach the gated `/v1`
-  surface; `/health` and `POST /auth/session` opt out with an empty per-path
-  requirement. `/auth/session` is listed in `ApiDoc`'s `paths(...)` rather than
+  scheme (task 0277/0287) `api_key` (`x-api-key` header, paid tier) as a
+  global requirement, so Swagger UI renders an "Authorize" dialog and "Try it
+  out" can reach the gated `/v1` surface; `/health` and `POST /auth/session`
+  opt out with an empty per-path requirement. The free tier's session is the
+  HttpOnly cookie `__Host-session` that `POST /auth/session` sets (204,
+  `SameSite=Strict`, 15 min, task 0677); Swagger cannot set it, so it is no
+  scheme in the spec. The gate reads only that cookie or `x-api-key`; it logs
+  one `session minted` / `session rejected` line each, with `cookie_present`. `/auth/session` is listed in `ApiDoc`'s `paths(...)` rather than
   `register_routes`, because it is mounted only when the auth layer is armed and
   the spec must describe it either way (task 0510).
 - **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)
@@ -428,7 +431,8 @@ Deliberately omits address search (exact lookup is the global-search redirect) a
 balance ranking / `xlm_supply_percent` (no index / no XLM-supply source — see task 0274).
 
 **`GET /accounts/:account_id`** - Account detail: current balances, sequence number,
-and first/last seen ledger.
+first/last seen ledger, and `nft_count` — the NFTs the account holds now (the merged
+`nfts` row, the same rule as `GET /nfts?filter[owner]=`).
 
 **`GET /accounts/:account_id/transactions`** - Paginated transactions involving this
 account.
@@ -557,7 +561,14 @@ place where indexed contract metadata and decoded usage history are exposed.
 
 **`GET /nfts`** - Paginated list of NFTs. Query params: `limit`, `cursor`,
 `filter[collection]` (exact match), `filter[contract_id]` (C-StrKey), `filter[name]`
-(substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`).
+(substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`), `filter[owner]`
+(G-StrKey; the NFTs that account holds now, matched on the merged `nfts` row so a token
+sold in a later batch never lists under its previous owner). `filter[owner]` takes no
+other filter (400 `invalid_filter`) and is served by its own read, `fetch_held_by`: it
+reads each source for the owner's tokens and folds them with `GROUP BY` instead of
+joining them, because every JOIN builds a hash table per server thread whatever the
+row count (measured in task 0675). An NFT whose contract has no `soroban_contracts`
+row fails that read; the unfiltered list drops such a row.
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL. The owner (`owner`) is a `G…` account or a `C…` contract, resolved through
@@ -807,10 +818,9 @@ Two endpoints carry **conditional** logic:
   applies in this case as well, so a fix that ever re-parses the row
   cleanly surfaces within one ledger cycle.
 
-The 10s value matches the API Gateway `apiGatewayCacheTtlMutable` config in
-`infra/envs/{staging,production}.json`. Lowering below 10s is wasted (gateway
-clamps to its configured floor); raising above 10s would expose stale data
-past one Stellar ledger cycle (~5s).
+Raising the 10s value would expose stale data past one Stellar ledger cycle
+(~5s). There is no API Gateway stage cache (not adopted, task 0455; its config
+was removed in task 0679), so only browsers honour these headers.
 
 #### Conditional GET — `ETag` / `304` on the Live tier (task 0292)
 

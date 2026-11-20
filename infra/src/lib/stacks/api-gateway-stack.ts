@@ -16,9 +16,10 @@ import {
 // API Gateway account-level default throttle (rps / burst). Used as the
 // "lifted" ceiling when `config.loadTesting` is set, so the per-stage 50/100
 // cap stops being the bottleneck during a load test. The account limit still
-// backstops genuine abuse. This throttle is now the only volumetric protection
-// on the origin — the REGIONAL WAF WebACL that used to add a per-IP rate rule
-// was removed (ADR 0048, task 0302).
+// backstops genuine abuse. This throttle is the only volumetric protection on
+// the AWS side — the REGIONAL WAF WebACL that used to add a per-IP rate rule
+// was removed (ADR 0048, task 0302); Cloudflare's per-IP rate limit sits in
+// front of the API hostname.
 const LOAD_TEST_THROTTLE_RATE = 10_000;
 const LOAD_TEST_THROTTLE_BURST = 5_000;
 
@@ -35,7 +36,6 @@ export interface ApiGatewayStackProps extends cdk.StackProps {
  * - Environment-specific throttling (rate + burst limits)
  * - Optional response caching (disabled on staging to save cost)
  * - CORS for SPA browser access
- * - API key usage plan for non-browser consumers
  *
  * NOTE on edge protection: this stack used to create its own REGIONAL WAF
  * WebACL (task 0035). It was removed together with the CLOUDFRONT-scoped one
@@ -52,7 +52,7 @@ export class ApiGatewayStack extends cdk.Stack {
 
     const { config, apiFunction } = props;
 
-    // Load-test window (task 0338): lift the per-stage + usage-plan throttle to
+    // Load-test window (task 0338): lift the per-stage throttle to
     // the account ceiling so a load test measures backend capacity rather than
     // edge throttling. It used to drop the REGIONAL WAF per-IP rate rule too;
     // that WebACL is gone (task 0302), so the throttle is all this switch moves.
@@ -93,9 +93,14 @@ export class ApiGatewayStack extends cdk.Stack {
       restApiName: `${config.envName}-soroban-explorer-api`,
       handler: apiFunction,
       proxy: true,
-      // Phase 2: kill the raw execute-api endpoint, which bypasses
-      // custom-domain mTLS. Only flips with enableApiMtls.
-      ...(config.enableApiMtls && { disableExecuteApiEndpoint: true }),
+      // Clients reach the API through its custom domains, which Cloudflare
+      // fronts. The raw execute-api address skips Cloudflare's rate limit,
+      // so it answers 403 to everything (task 0285). The REGIONAL custom
+      // domain is still reachable without Cloudflare (any regional API
+      // Gateway IP plus SNI `api.sorobanscan.com`); only the edge-secret
+      // lock guards it until API mTLS is on. An environment needs a custom
+      // domain mapped to this stage, or nothing can reach the API.
+      disableExecuteApiEndpoint: true,
       deployOptions: {
         stageName: config.envName,
         tracingEnabled: true,
@@ -113,12 +118,10 @@ export class ApiGatewayStack extends cdk.Stack {
         // EMF metric keyed on the route), not from the gateway.
         throttlingRateLimit: throttleRate,
         throttlingBurstLimit: throttleBurst,
-        cacheClusterEnabled: config.apiGatewayCacheEnabled,
-        ...(config.apiGatewayCacheEnabled && {
-          cacheClusterSize: config.apiGatewayCacheSize,
-          cacheTtl: cdk.Duration.seconds(config.apiGatewayCacheTtlMutable),
-          cacheDataEncrypted: true,
-        }),
+        // No stage cache: not adopted (task 0455); if origin pressure ever
+        // shows, a Cloudflare cache rule is the lever, not this cluster
+        // (`docs/architecture/backend/api-gateway-cache-spec.md`).
+        cacheClusterEnabled: false,
       },
       defaultCorsPreflightOptions: {
         allowOrigins: spaOrigins(config),
@@ -126,61 +129,24 @@ export class ApiGatewayStack extends cdk.Stack {
         // paid-API). The SPA on `domainName` calls the API on a different host,
         // so every non-simple request triggers a browser preflight.
         allowMethods: ['GET', 'POST', 'OPTIONS'],
-        // `Authorization` (free-tier session JWT) and `x-api-key` (paid tier)
-        // are non-safelisted request headers — without them the preflight is
-        // rejected and the armed SPA cannot send a Bearer / partner key.
-        allowHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-api-key'],
-        // Cache the preflight so the browser does NOT re-`OPTIONS` before every
-        // `/v1` request (task 0317). Each `/v1` call carries `Authorization`, a
-        // non-safelisted header, so without `Access-Control-Max-Age` Chrome
-        // re-runs the preflight on every request — an extra edge round-trip per
-        // call. The preflight is answered here by API Gateway's MOCK
-        // integration (not the Lambda), so the max-age MUST be set on the
-        // gateway, not on the axum `CorsLayer`. 1h is within Chromium's 2h cap;
-        // CORS config rarely changes, so a stale cached preflight is low-risk.
+        // `x-api-key` (paid tier) is a non-safelisted request header — without
+        // it the preflight is rejected and a browser cannot send a partner key.
+        allowHeaders: ['Content-Type', 'Accept', 'x-api-key'],
+        // The free-tier session is an HttpOnly cookie (task 0677). The SPA's
+        // mint is a JSON POST, so it is preflighted, and the browser refuses a
+        // credentialed request whose preflight lacks this — no session is set.
+        allowCredentials: true,
+        // Cache the preflight so the browser does not re-`OPTIONS` before each
+        // request (task 0317). Since task 0677 the `/v1` reads carry no custom
+        // header and need no preflight; the JSON mint still does. The preflight
+        // is answered here by API Gateway's MOCK integration (not the Lambda),
+        // so the max-age MUST be set on the gateway, not on the axum
+        // `CorsLayer`. 1h is within Chromium's 2h cap.
         maxAge: cdk.Duration.hours(1),
       },
       endpointTypes: [apigateway.EndpointType.REGIONAL],
     });
     this.api = api;
-
-    // ---------------------
-    // Usage Plan + API Key
-    // ---------------------
-    // Optional API key access for non-browser consumers (automation,
-    // partner integrations). Browser traffic does not require an API
-    // key — the SPA calls the API anonymously.
-    //
-    // NOTE: In proxy mode, LambdaRestApi creates a greedy {proxy+}
-    // resource with apiKeyRequired=false. The usage plan tracks and
-    // throttles requests that voluntarily include an x-api-key header,
-    // but does not gate access. To enforce API key requirement on
-    // specific routes, add non-proxy resources with apiKeyRequired=true.
-    const usagePlan = api.addUsagePlan('UsagePlan', {
-      name: `${config.envName}-partner-plan`,
-      throttle: {
-        rateLimit: throttleRate,
-        burstLimit: throttleBurst,
-      },
-      // Daily quota is dropped during a load-test window: with the throttle
-      // lifted, a key'd run would otherwise burn the per-day limit in ~1s and
-      // 429 for the rest of the day, masking backend capacity. Restored (and
-      // the only volumetric cap on key'd traffic) when loadTesting is off.
-      ...(config.loadTesting
-        ? {}
-        : {
-            quota: {
-              limit: config.apiGatewayPartnerDailyQuota,
-              period: apigateway.Period.DAY,
-            },
-          }),
-    });
-    usagePlan.addApiStage({ stage: api.deploymentStage });
-
-    const apiKey = api.addApiKey('PartnerApiKey', {
-      apiKeyName: `${config.envName}-partner-key`,
-    });
-    usagePlan.addApiKey(apiKey);
 
     // ---------------------
     // Custom Domains (Cloudflare migration — task 0277 / ADR 0048)

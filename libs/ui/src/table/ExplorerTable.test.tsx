@@ -95,6 +95,21 @@ describe('ExplorerTable', () => {
     );
     expect(screen.getByTestId('empty')).toHaveTextContent('nothing here');
   });
+
+  it('renders no header row when showHeader is false', () => {
+    render(
+      withTheme(
+        <ExplorerTable
+          columns={COLUMNS}
+          rows={ROWS}
+          rowKey={(r) => r.id}
+          showHeader={false}
+        />
+      )
+    );
+    expect(screen.queryAllByRole('columnheader')).toHaveLength(0);
+    expect(screen.getAllByRole('row')).toHaveLength(ROWS.length);
+  });
 });
 
 describe('hideBelow', () => {

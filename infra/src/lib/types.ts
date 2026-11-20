@@ -106,21 +106,11 @@ export interface EnvironmentConfig {
   readonly apiGatewayThrottleRate: number;
   /** Maximum concurrent requests allowed in a short burst above the rate limit. */
   readonly apiGatewayThrottleBurst: number;
-  /** Whether to provision a dedicated cache cluster (Memcached) on the stage. false = no cluster, no cost. */
-  readonly apiGatewayCacheEnabled: boolean;
-  /** Cache cluster size in GB. String because AWS API accepts '0.5', '1.6', '6.1', etc. */
-  readonly apiGatewayCacheSize: string;
-  /** Cache TTL (seconds) for immutable endpoints (e.g. /transactions/{hash}). */
-  readonly apiGatewayCacheTtlImmutable: number;
-  /** Cache TTL (seconds) for mutable endpoints (e.g. /transactions?limit=20). Used as the stage-level default. */
-  readonly apiGatewayCacheTtlMutable: number;
-  /** Daily request quota for partner API key usage plans. */
-  readonly apiGatewayPartnerDailyQuota: number;
 
   /**
    * Load-test window switch (task 0338). When `true`, the API Gateway stack
    * lifts the volumetric DDoS protections so a load test measures backend
-   * capacity instead of edge throttling: the per-stage + usage-plan throttle
+   * capacity instead of edge throttling: the per-stage throttle
    * is raised to the account ceiling. It used to drop the REGIONAL WAF's per-IP
    * rate-based rule as well; that WebACL no longer exists (ADR 0048, task 0302),
    * so the throttle is now the only thing this switch touches. Everything else
@@ -196,6 +186,20 @@ export interface EnvironmentConfig {
    */
   readonly enableApiSpaBasicAuth: boolean;
 
+  /**
+   * Enable CloudFront Function basic auth on `/api/x402-facilitator` +
+   * `/api/x402-facilitator/*` only (task 0670): the API key portal of
+   * stellar-x402, a third SPA, served from `apiSpaBucket` under the
+   * `api/x402-facilitator/` prefix. On while the portal is built and tested;
+   * off when it opens.
+   *
+   * Independent of `enableBasicAuth` and `enableApiSpaBasicAuth`: same
+   * KeyValueStore, but a key of its own, `auth-token-x402`, so this password
+   * is not the main site's or the Prices portal's. Closed by default: until
+   * the key is written (see `delivery-stack.ts`), the page answers `503`.
+   */
+  readonly enableX402PortalBasicAuth: boolean;
+
   // Cloudflare edge migration (task 0277 / ADR 0048) — origin lockdown.
   // All default false until the Cloudflare zone + certs/secrets exist;
   // enabling them does NOT move DNS, it provisions the AWS-side locks
@@ -215,24 +219,16 @@ export interface EnvironmentConfig {
 
   /**
    * Phase 2 — lock the API Gateway custom domain to Cloudflare via mTLS
-   * (Path B in [ADR 0048]). When true the `ApiGatewayStack`:
-   *  - attaches the S3 **truststore** (the CA bundle that signed
-   *    Cloudflare's uploaded Authenticated-Origin-Pulls client cert) to
-   *    the REGIONAL custom domain, and
-   *  - sets `disableExecuteApiEndpoint=true` so the raw
-   *    `execute-api` URL — which bypasses custom-domain mTLS — stops
-   *    answering.
+   * (Path B in [ADR 0048]). When true the `ApiGatewayStack` attaches the S3
+   * **truststore** (the CA bundle that signed Cloudflare's uploaded
+   * Authenticated-Origin-Pulls client cert) to the REGIONAL custom domain.
+   * The raw `execute-api` URL is closed regardless of this flag
+   * (`disableExecuteApiEndpoint`, task 0285).
    *
    * REQUIRES `provisionApiMtlsTruststore=true` AND the PEM already uploaded
    * (enforced in `validateConfig`). The CA bundle is a **non-secret** PEM
    * uploaded out-of-band; no value is committed. No `crates/api` change
    * (handshake-level reject).
-   *
-   * ORDERING GOTCHA (task 0277 Step 2): the custom-domain base-path mapping
-   * MUST already be live before `disableExecuteApiEndpoint` flips, otherwise
-   * the edge 403s itself. The custom domain already exists today, so flipping
-   * this on the existing domain is safe — but never enable it before the
-   * custom domain serves.
    */
   readonly enableApiMtls: boolean;
 

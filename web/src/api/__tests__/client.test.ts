@@ -1,5 +1,13 @@
 import type * as ApiTypes from '@rumblefish/api-types';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 // The session is wired into the shared API client by `client.ts` at import
 // time. These tests import it fresh per case, with the config mocked, and
@@ -17,29 +25,33 @@ vi.mock('../config.js', () => ({
   },
 }));
 
-type Call = { url: string; method: string; auth: string | null; body: string };
+type Call = {
+  path: string;
+  method: string;
+  auth: string | null;
+  credentials: RequestCredentials;
+  body: string;
+};
 
-function stubFetch(dataStatuses: number[]) {
+// A fake API: `/auth/session` answers 204 (the real one sets the cookie);
+// each data read takes the next status from `dataStatuses` (default 200),
+// optionally waiting on `hold` so a test can order responses around a mint.
+function stubFetch(dataStatuses: number[], hold: Promise<void>[] = []) {
   const calls: Call[] = [];
-  let mints = 0;
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const req = input instanceof Request ? input : new Request(input, init);
-      const call = {
-        url: req.url,
+      const path = new URL(req.url).pathname;
+      calls.push({
+        path,
         method: req.method,
         auth: req.headers.get('Authorization'),
+        credentials: init?.credentials ?? req.credentials,
         body: req.method === 'POST' ? await req.clone().text() : '',
-      };
-      calls.push(call);
-      if (new URL(req.url).pathname === '/auth/session') {
-        mints += 1;
-        return new Response(
-          JSON.stringify({ token: `jwt${mints}`, expires_in: 900 }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
+      });
+      if (path === '/auth/session') return new Response(null, { status: 204 });
       const status = dataStatuses.shift() ?? 200;
+      await hold.shift();
       return new Response(status === 200 ? '{}' : 'nope', {
         status,
         headers: { 'Content-Type': 'application/json' },
@@ -59,6 +71,14 @@ async function freshClient() {
 }
 
 describe('client.ts session wiring', () => {
+  // The first import of `client.ts` transforms the generated SDK and the UI
+  // library (`session.ts` takes its panel colours from it): ~2 s alone, past
+  // 5 s when the whole suite runs at once. Paid here, under the hook's own
+  // timeout, so no case's 5 s goes to it; each later import takes ~50 ms.
+  beforeAll(async () => {
+    await freshClient();
+  });
+
   beforeEach(() => {
     window.turnstile = {
       render: (_el, opts) => {
@@ -74,44 +94,127 @@ describe('client.ts session wiring', () => {
     siteKey = undefined;
   });
 
-  it('sends no Authorization and mints nothing when the layer is dark', async () => {
+  it('mints nothing when the layer is dark, and still sends credentials', async () => {
     siteKey = undefined;
     const calls = stubFetch([]);
     const { getNetworkStats } = await freshClient();
 
     await getNetworkStats();
 
-    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
-      '/v1/network/stats',
-    ]);
-    expect(calls[0].auth).toBeNull();
+    expect(calls.map((c) => c.path)).toEqual(['/v1/network/stats']);
+    expect(calls[0].credentials).toBe('include');
   });
 
-  it('mints once for parallel calls and sends the JWT on each', async () => {
-    siteKey = 'key';
-    const calls = stubFetch([]);
-    const { getNetworkStats } = await freshClient();
-
-    await Promise.all([getNetworkStats(), getNetworkStats()]);
-
-    const mints = calls.filter((c) => c.url === `${BASE}/auth/session`);
-    expect(mints).toHaveLength(1);
-    expect(mints[0].method).toBe('POST');
-    expect(JSON.parse(mints[0].body)).toEqual({ token: 'ts' });
-    expect(mints[0].auth).toBeNull();
-    const data = calls.filter((c) => c.url.endsWith('/v1/network/stats'));
-    expect(data.map((c) => c.auth)).toEqual(['Bearer jwt1', 'Bearer jwt1']);
-  });
-
-  it('drops the JWT after a 401 and mints a fresh one for the next call', async () => {
+  // Decision 5: a read goes out at once; its 401 becomes one check and one
+  // repeat, so the page gets the data and never the 401.
+  it('turns a 401 into one check and one repeated read', async () => {
     siteKey = 'key';
     const calls = stubFetch([401, 200]);
     const { getNetworkStats } = await freshClient();
 
-    await getNetworkStats();
-    await getNetworkStats();
+    const result = await getNetworkStats();
 
-    const data = calls.filter((c) => c.url.endsWith('/v1/network/stats'));
-    expect(data.map((c) => c.auth)).toEqual(['Bearer jwt1', 'Bearer jwt2']);
+    expect(result.response?.status).toBe(200);
+    expect(calls.map((c) => c.path)).toEqual([
+      '/v1/network/stats',
+      '/auth/session',
+      '/v1/network/stats',
+    ]);
+    const mint = calls[1];
+    expect(mint.method).toBe('POST');
+    expect(mint.credentials).toBe('include');
+    expect(JSON.parse(mint.body)).toEqual({ token: 'ts' });
+    // Decision 6: the session is the cookie, never a header.
+    expect(calls.every((c) => c.auth === null)).toBe(true);
+  });
+
+  it('shares one check between parallel reads that both get a 401', async () => {
+    siteKey = 'key';
+    const calls = stubFetch([401, 401, 200, 200]);
+    const { getNetworkStats } = await freshClient();
+
+    const results = await Promise.all([getNetworkStats(), getNetworkStats()]);
+
+    expect(results.map((r) => r.response?.status)).toEqual([200, 200]);
+    expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(1);
+  });
+
+  // Decision 12: a slow read sent before the mint finished is only repeated.
+  it('repeats a read whose 401 lands after the mint, without a second check', async () => {
+    siteKey = 'key';
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    // Read A: 401 at once. Read B: 401 held until A's mint is done.
+    const calls = stubFetch([401, 401, 200, 200], [Promise.resolve(), slow]);
+    const { getNetworkStats } = await freshClient();
+
+    const a = getNetworkStats();
+    const b = getNetworkStats();
+    await a;
+    releaseSlow();
+    await b;
+
+    expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(1);
+  });
+
+  // The session expires later: a fresh 401 after a good read is a new check,
+  // not a blocked cookie.
+  it('checks again when the session expires after a successful read', async () => {
+    siteKey = 'key';
+    const calls = stubFetch([401, 200, 401, 200]);
+    const { getNetworkStats } = await freshClient();
+
+    await getNetworkStats();
+    const later = await getNetworkStats();
+
+    expect(later.response?.status).toBe(200);
+    expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(2);
+    expect(document.body.textContent).not.toContain('This site needs cookies');
+  });
+
+  // Decision 14 (W46 B): a repeat that still gets a 401 in a browser that
+  // refuses a test cookie means it blocks cookies: one panel, no more checks.
+  it('shows the cookies panel and stops checking when the browser refuses cookies', async () => {
+    siteKey = 'key';
+    // A browser that blocks cookies drops every write to `document.cookie`.
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => '',
+      set: () => undefined,
+    });
+    try {
+      const calls = stubFetch([401, 401, 401]);
+      const { getNetworkStats } = await freshClient();
+
+      await getNetworkStats();
+      await getNetworkStats();
+
+      expect(document.body.textContent).toContain('This site needs cookies');
+      expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(1);
+    } finally {
+      delete (document as { cookie?: string }).cookie;
+    }
+    document.body.innerHTML = '';
+  });
+
+  // A browser that keeps cookies, while our side lost the session: Try again,
+  // and the click brings a fresh check and the data.
+  it('shows Try again when the session is lost on our side, then checks again', async () => {
+    siteKey = 'key';
+    const calls = stubFetch([401, 401, 200]);
+    const { getNetworkStats } = await freshClient();
+
+    const pending = getNetworkStats();
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain('Try again')
+    );
+    expect(document.body.textContent).not.toContain('needs cookies');
+    document.querySelector('button')?.click();
+
+    expect((await pending).response?.status).toBe(200);
+    expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(2);
+    document.body.innerHTML = '';
   });
 });

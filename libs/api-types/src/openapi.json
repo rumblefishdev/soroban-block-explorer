@@ -29,13 +29,14 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "Session JWT minted",
-            "content": {
-              "application/json": {
+          "204": {
+            "description": "Session minted",
+            "headers": {
+              "Set-Cookie": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionResponse"
-                }
+                  "type": "string"
+                },
+                "description": "`__Host-session`, HttpOnly, 15 min"
               }
             }
           },
@@ -1802,6 +1803,15 @@
             "schema": {
               "type": ["string", "null"]
             }
+          },
+          {
+            "name": "filter[owner]",
+            "in": "query",
+            "description": "Account G-StrKey; only the NFTs that account holds now.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
           }
         ],
         "responses": {
@@ -2317,7 +2327,8 @@
           "balances",
           "first_seen_ledger",
           "last_seen_ledger",
-          "deleted"
+          "deleted",
+          "nft_count"
         ],
         "properties": {
           "account_id": {
@@ -2344,9 +2355,15 @@
             "type": "integer",
             "format": "int64"
           },
-          "sequence_number": {
+          "nft_count": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "How many NFTs the account holds now. Counts only what the indexer\nclassified as an NFT; `0` also for an account whose NFTs are not\nindexed.",
+            "minimum": 0
+          },
+          "sequence_number": {
+            "type": "string",
+            "description": "Decimal text, not a JSON number: most sequence numbers exceed 2^53,\nwhere a browser's JSON parser drops the last digits."
           },
           "signing": {
             "oneOf": [
@@ -5133,22 +5150,6 @@
           }
         }
       },
-      "SessionResponse": {
-        "type": "object",
-        "required": ["token", "expires_in"],
-        "properties": {
-          "expires_in": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Seconds until `token` expires.",
-            "minimum": 0
-          },
-          "token": {
-            "type": "string",
-            "description": "Free-tier session JWT, sent back as `Authorization: Bearer <token>`."
-          }
-        }
-      },
       "SignatureDto": {
         "type": "object",
         "description": "Single signature on a transaction envelope.",
@@ -5537,20 +5538,12 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-api-key"
-      },
-      "bearer_jwt": {
-        "type": "http",
-        "scheme": "bearer",
-        "bearerFormat": "JWT"
       }
     }
   },
   "security": [
     {
       "api_key": []
-    },
-    {
-      "bearer_jwt": []
     }
   ]
 }

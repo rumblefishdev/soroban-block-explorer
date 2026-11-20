@@ -1,0 +1,34 @@
+---
+title: "Plan review: devil's advocate and ponytail"
+type: synthesis
+status: developing
+spawns: []
+tags: [review]
+links: []
+history:
+  - date: 2026-11-19
+    status: developing
+    who: karolkow
+    note: 'Two independent opus reviews of the plan (no code yet), triaged.'
+---
+
+# Plan review: devil's advocate and ponytail (2026-11-19)
+
+Two independent reviews of the plan on develop, blind to each other.
+Devil's advocate verdict: **ship with changes**; the cookie design holds.
+Ponytail: about −60 lines against the plan (estimate) and no new crates.
+
+| #   | Finding                                                                                                                                                                                                                                                                                    | From                                   | Checked              | Outcome                                                                                 |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- | -------------------- | --------------------------------------------------------------------------------------- |
+| R1  | The standard release set is Compute + SPA (`docs/deployment.md:41-44,210`); the credentialed mint POST is preflighted by API Gateway itself, so without the `ApiGateway` stack every mint fails on production. Testnet's `deploy-testnet` deploys all stacks, so testnet would not show it | devil's advocate 1                     | yes, `deployment.md` | PR split: deploy order `ApiGateway` → `Compute` → `web`, rehearsed per stack on testnet |
+| R2  | The mint `fetch` (`session.ts:89-93`) is plain `fetch`, not the hey-api client: without its own `credentials: 'include'` the browser drops `Set-Cookie`                                                                                                                                    | ponytail                               | yes                  | in the PR                                                                               |
+| R3  | OpenAPI still declares `bearer_jwt` on the data routes (`crates/api/src/openapi/mod.rs:60-66,162-166`)                                                                                                                                                                                     | both                                   | yes                  | removed in the PR (decision 6); no cookie scheme added (Swagger cannot set HttpOnly)    |
+| R4  | Mint body: nothing can read `expires_in` once the SPA cannot see the token                                                                                                                                                                                                                 | ponytail                               | —                    | `204` + `Set-Cookie` + `no-store` (decision 6)                                          |
+| R5  | Browsers that block cookies work today (JWT in memory) and would get a check on every query and a broken page                                                                                                                                                                              | devil's advocate 3                     | derived              | owner question                                                                          |
+| R6  | A 401 that arrives after a mint finished, for a read sent before it, starts a second check                                                                                                                                                                                                 | devil's advocate 4; ponytail says skip | derived              | owner question                                                                          |
+| R7  | `axum-extra` + `cookie` crates vs one `get_all(COOKIE)` pipeline and one `format!`                                                                                                                                                                                                         | ponytail                               | yes, Cargo.lock      | owner question (exception to library-first)                                             |
+| R8  | No production signal: logs show no mints, no 401s (F12)                                                                                                                                                                                                                                    | devil's advocate 7b                    | yes                  | owner question (log line)                                                               |
+| R9  | Testnet checklist: browsers × {first load, reload, second tab, 15-min expiry on the home page, arrival from another site, cookies blocked}                                                                                                                                                 | devil's advocate 7a                    | —                    | in the task (decision 8)                                                                |
+| R10 | When x402 lands, an expired session may get 402, and the SPA reacts only to 401                                                                                                                                                                                                            | devil's advocate 5                     | —                    | recorded for the x402 task (Out of scope)                                               |
+| R11 | Cut-over gap breaks every load between the Compute and web deploys                                                                                                                                                                                                                         | devil's advocate 2                     | —                    | dropped: decision 6 accepts it                                                          |
+| R12 | Smaller shape: `session.ts` keeps only a single-flight `renew()` (solve → mint → retry panel); token, expiry, skew, `invalidate`, `isSessionMint` go; client keeps one response interceptor that repeats via `opts.fetch`; no ADR, `edge_lock.rs`, axum `allow_headers` or `jwt.rs` edits  | ponytail                               | —                    | code shape, in the PR                                                                   |

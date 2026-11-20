@@ -1,0 +1,104 @@
+---
+title: 'Events table: value rendering (first PR, Refs #735)'
+type: synthesis
+status: developing
+spawns: []
+tags: [frontend, transaction-detail, events, scval]
+links: ['https://github.com/rumblefishdev/soroban-block-explorer/issues/735']
+history:
+  - date: '2026-11-17'
+    status: developing
+    who: karolkow
+    note: 'Design round for issue #735; one question open (value encoding).'
+---
+
+# Events table: value rendering (first PR, Refs #735)
+
+Issue #735: on a transaction page the Data column is squeezed. The measured
+cause is a full address in Topics, rendered by `HighlightedJson`, breaking
+character by character; the event ID is not the cause. A design round settled
+the shape below for the Events table; the other renderers follow it, one PR
+each.
+
+## Decisions so far
+
+| #   | Decision                                                                                                                                                                                                                                                                                                                                                                                                      | From                                              | vs this task           | Who does the same                                                          | Code                             | Test                             |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------- | -------------------------------- | -------------------------------- |
+| 1   | Readers are developers and regular users: every value keeps its type, nothing is a JSON wall                                                                                                                                                                                                                                                                                                                  | design round                                      | matches B              | stellar.expert                                                             | —                                | —                                |
+| 2   | One table row per event, with columns; one view, no per-row expand, no two-line cards                                                                                                                                                                                                                                                                                                                         | design round                                      | matches                | stellar.expert, Soroscan                                                   | —                                | —                                |
+| 3   | The Type column stays with its coloured chip                                                                                                                                                                                                                                                                                                                                                                  | design round                                      | matches F              | stellar.expert                                                             | —                                | —                                |
+| 4   | Column order Type, Where, Contract, Topics, Data, ID; the ID in full, wrapping only after the dash                                                                                                                                                                                                                                                                                                            | design round                                      | changes (ID was first) | Soroscan (ID last)                                                         | `EventsSection.tsx`              | `e2e/transaction-events.spec.ts` |
+| 5   | A scalar renders as its value plus a muted type tag (`81147 i128`); an unknown type renders as its raw JSON                                                                                                                                                                                                                                                                                                   | design round                                      | matches B              | stellar.expert (`0i128`)                                                   | —                                | —                                |
+| 6   | `vec` and `map`: one entry per line, indented                                                                                                                                                                                                                                                                                                                                                                 | design round                                      | matches                | Stellar Lab                                                                | —                                | —                                |
+| 7   | Lists and maps always in full (measured: map median 2 fields, max 15; vec median 3, max 13)                                                                                                                                                                                                                                                                                                                   | design round                                      | beyond                 | stellar.expert                                                             | —                                | —                                |
+| 8   | Bytes in full, wrapped, as lowercase hex — the form the contract page uses for the wasm hash                                                                                                                                                                                                                                                                                                                  | design round                                      | beyond                 | Soroscan, Stellar Lab, `stellar xdr decode`                                | —                                | —                                |
+| 9   | Addresses truncated 4…4, linked, with copy                                                                                                                                                                                                                                                                                                                                                                    | design round                                      | matches                | stellar.expert, Soroscan                                                   | `HighlightedJson.tsx` (`narrow`) | `HighlightedJson.test.tsx`, e2e  |
+| 10  | A number never breaks across lines                                                                                                                                                                                                                                                                                                                                                                            | design round                                      | beyond                 | all compared explorers                                                     | —                                | —                                |
+| 11  | Amounts stay in smallest units in this PR; token units come later in this task                                                                                                                                                                                                                                                                                                                                | design round                                      | changes order          | stellar.expert, Soroscan, Stellar Lab (raw in events)                      | —                                | —                                |
+| 12  | The Events table first; operation args, the execution trace and the contract Events tab follow, one PR each                                                                                                                                                                                                                                                                                                   | design round                                      | matches                | —                                                                          | —                                | —                                |
+| 13  | 64-bit integers (`u64`, `i64`, `timepoint`, `duration`, nonce; the account sequence number; 64-bit operation-detail fields) leave the API as decimal text. The parser and stored rows keep exact JSON numbers — digits are lost only in the browser's `JSON.parse`. Replaces the first draft (official format at the parser), which would have broken Rust readers, stored rows and the price service's query | design round, after the premise review            | changes                | Horizon (`sequence` as text), official `stellar-xdr` JSON (`u64` as text)  | —                                | —                                |
+| 14  | The parser stores two values without loss: a string or symbol with invalid UTF-8 as escaped bytes (`ab\\xffcd`) instead of `<invalid-utf8>`, and an error with its type and code instead of the name only. New rows only (1 placeholder row in 450,861,344 measured; not rewritten). Shared with 0352                                                                                                         | design round                                      | beyond                 | official `stellar-xdr` JSON                                                | —                                | —                                |
+| 15  | In the Events table an asset string keeps its code whole and shortens only the issuer (`USDC:GA5Z…KZVN`): on a 25-event mainnet swap the full form (61 characters) took 572 px of Topics and pushed the table 30 px past the card                                                                                                                                                                             | first PR, measured                                | beyond                 | —                                                                          | `HighlightedJson.tsx`            | `HighlightedJson.test.tsx`       |
+| 16  | Topics and Data break between words first, inside a word only when the word alone does not fit; before, every word could break (`break-all`), so `81147` read as `81 14 7`                                                                                                                                                                                                                                    | first PR, measured                                | beyond                 | —                                                                          | `HighlightedJson.tsx`            | `e2e/transaction-events.spec.ts` |
+| 17  | The raw JSON in the Events table keeps addresses and asset issuers shortened (`LAG5…FO5C`, `MONEYSTELLAR:GBTJ…GO5D`); the copy button copies the full value, and text selected by hand is not a goal. Full addresses wrapped anywhere were compared on a 12-event mainnet path payment (`e597a628…bdb7`): every one of 37 addresses broke across lines and the table grew 26%                                 | owner, after a side-by-side of both               | beyond                 | Blockscout and stellar.expert shorten addresses in event data (their code) | `HighlightedJson.tsx`            | `HighlightedJson.test.tsx`       |
+| 18  | Decision 13, first step: only contract values (event topics and data, diagnostic events, the invocation tree, function args and return values, the contract events tab). Classic operation details are a later step                                                                                                                                                                                           | owner                                             | changes                | —                                                                          | —                                | —                                |
+| 19  | Every integer inside a typed contract value leaves the API as a decimal string, small ones too (`{"type":"u32","value":"5"}`): one rule, no per-type list. Compared ~25 chain and finance APIs: Ethereum Beacon, Polkadot sidecar and Etherscan use one rule; Horizon, Cosmos and Aptos split by bit width                                                                                                    | owner, after research and a devil's-advocate pass | changes                | Ethereum Beacon API, Polkadot sidecar                                      | —                                | —                                |
+| 20  | u256 and i256 leave the API as decimal strings, signed for i256 (the parser writes 64 hex characters, which the page misread as decimal). Converted in the API; the parser and stored rows keep hex until decision 14 rewrites the parser (a SQL rewrite of the stored JSON works, checked read-only)                                                                                                         | owner                                             | beyond                 | SEP-51, stellar-xdr, `stellar` CLI, js-stellar-base, stellar.expert        | —                                | —                                |
+| 21  | No API versioning for the change: no outside API keys exist today; the rule is written into the API schema description                                                                                                                                                                                                                                                                                        | owner                                             | beyond                 | —                                                                          | —                                | —                                |
+| 22  | Supersedes rows 19–20 for the wire: the API sends event topics and data only in the official stellar-xdr JSON (SEP-51), made by the library's serde, and every web view reads that one format. PR #742 (our dialect, integers as text) is not merged                                                                                                                                                          | owner, after he called raw-JSON rewriting a smell | changes                | stellar-rpc `xdrFormat: json`, `stellar` CLI, Stellar Lab                  | —                                | —                                |
+| 23  | Events are stored as raw XDR (scope of 0572) before the contract events tab gets the official JSON; the tab cannot be rebuilt from our stored dialect                                                                                                                                                                                                                                                         | owner                                             | changes                | stellar-rpc, Horizon store XDR                                             | —                                | —                                |
+| 24  | In stages: first events (raw XDR stored, official JSON in the API, web on the official format); then indexer modules move from our JSON to stellar-xdr types one by one in 0431. Target: our dialect gone from DB and indexer                                                                                                                                                                                 | owner                                             | beyond                 | stellar-rpc, Horizon                                                       | —                                | —                                |
+
+## Not yet decided
+
+- **Readable view of the Events table** — parked 2026-11-17: the first
+  PR ships only what #735 needs (rows 4, 9, 15, 16); the Events table keeps
+  its raw JSON. After that PR merges, decide again whether the table also gets
+  the typed view of rows 1, 5–8, 10–12. The execution trace already shows the
+  same events readably, so the question is whether two readable views pay
+  for themselves.
+  The owner doubts shortened values in a raw view: when this returns, decide
+  too whether the raw values get the full width (outside a narrow column), so
+  they can show in full.
+
+- **Decision 13, step 2: classic operation details** — the same text rule
+  for amounts, limit, `offerId`, `bumpTo`, predicate times (0.2% of pool
+  amounts above 2^53). After step 1 ships.
+
+- **Storage form of event payloads** — decided 2026-11-17: stays JSON, in the
+  decision-13 format. REVERSED 2026-11-18 by rows 23–24: raw XDR. The alternatives (raw XDR for all payloads; standard
+  events kept only in typed tables) moved to 0572 with their measurements, see
+  [`0572 notes`](../../0572_RESEARCH_event-payload-binary-xdr/notes/R-storage-measurements-2026-11.md).
+
+Why decision 13 (measured 2026-11-17): the parser's own dialect differs from the
+official JSON in five types, and a browser's `JSON.parse` rounds integers above
+2^53 — e.g. the USDC `transfer` in transaction `e376edec…a19a` (ledger 64081288) carries `to_muxed_id` 6952519163801588163, read as
+6952519163801588000; 6,378 / 6,871 / 6,966 events per 200,000-ledger slice
+(from 52M, 58M, 64M) carry such a value. Audit of other hand-rolled decoding:
+[`R-audit-hand-rolled-decoding-2026-11.md`](R-audit-hand-rolled-decoding-2026-11.md).
+
+## Out of scope
+
+- Interpreting contract-specific fixed-point values (e.g. a pool's square-root
+  price in `pool_state`): no SEP or CAP defines them.
+
+## Future work (moved from the README, 2026-11-18)
+
+- **The execution trace renders the diagnostic COPY, not the consensus
+  event.** On the reported transaction the trace's `•` row is `#6` (debug
+  channel), not `#2` (consensus). Same payload, but the copy carries no
+  `op_index` — the consensus row is the richer record. Nothing differs on
+  screen today, so this is latent: if a copy ever diverged, the trace would
+  show debug data wearing a consensus event's clothes and nothing would flag
+  it. Fix shape: use the diagnostic stream for POSITION only and render the
+  matching consensus event. Zero visible change, so not done now.
+
+## Where the rest went (2026-11-18)
+
+- Rows 22–24, stage 1 (events stored as raw XDR, official SEP-51 JSON in the
+  API, the web on that format, PR #742 closed as superseded): task 0572.
+- Stage 2 (64-bit fields of classic operation details): task 0456.
+- Indexer modules off our JSON onto stellar-xdr types, and the adopt findings
+  of both audits: task 0431.
+- Left in 0363: B (readable view, parked by the owner), C-lite, and the
+  parked Events-view questions (phone width among them).

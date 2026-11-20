@@ -346,7 +346,11 @@ asymmetry is deliberate:
 - **API** (`api.sorobanscan.com`, `api-testnet.sorobanscan.com`) — fronted by **Cloudflare**: WAF
   managed rules, unmetered DDoS, Managed Challenge, rate limiting. The AWS origin
   accepts Cloudflare only, via a secret request header verified in the application
-  (`crates/api/src/common/edge_lock.rs`).
+  (`crates/api/src/common/edge_lock.rs`). The raw `execute-api` address is closed
+  (`disableExecuteApiEndpoint`, task 0285): it answers `403` to every request.
+  The REGIONAL custom domain is still reachable without Cloudflare — any
+  regional API Gateway IP with SNI `api.sorobanscan.com` — and only the
+  edge-secret lock guards it (`/health` exempt) until API mTLS is on.
   `sorobanscanApiDomainName` is one more custom domain on the same API (task
   0662), with the `*.sorobanscan.com` certificate in `sorobanscanApiCertificateArn`
   (task 0661). Its records and edge rules live in soroban-infrastructure's
@@ -374,9 +378,10 @@ asymmetry is deliberate:
   CloudFront would stack two CDNs. AWS Shield Standard still covers volumetric
   L3/L4; nothing caps HTTP requests per IP.
 
-API Gateway throttling and the usage-plan limits are independent of all of the
-above and are now the only volumetric control on the origin. Production defaults
-are `50` rps / `100` burst. They are **not** unconditional: setting
+API Gateway stage throttling is independent of all of the above and is the only
+volumetric control on the AWS side (the partner usage plan was removed in task
+0679: on a `{proxy+}` method that requires no API key it limited nothing).
+Production defaults are `50` rps / `100` burst. They are **not** unconditional: setting
 `loadTesting: true` raises both to the account ceiling for a coordinated
 load-test window (`LOAD_TEST_THROTTLE_RATE` / `_BURST` in
 `stacks/api-gateway-stack.ts`), which leaves the public API with no rate
@@ -404,21 +409,39 @@ redeploying `ApiGateway` as soon as the run ends.
   _default_ behavior's origin, not the originating one. The same function
   also does the basic-auth check when `enableApiSpaBasicAuth` is on,
   independent of the main site's `enableBasicAuth`/`enableOriginSecretLock`
-  — sharing the KeyValueStore (not the Function itself) so there's one
-  credential to manage, not two. The KVS is provisioned even with both
+  — sharing the KeyValueStore (not the Function itself) and its key
+  `auth-token`, so those two gates have one credential, not two (the x402
+  portal's gate, below, has its own). The KVS is provisioned even with both
   flags off, so turning a gate off keeps its credentials for re-arming.
   Production runs with `enableApiSpaBasicAuth=false` (the portal is
   public; its backend lives on a separate host).
+- since task 0670, a third SPA, the API key portal of stellar-x402, under
+  `/api/x402-facilitator` + `/api/x402-facilitator/*`: the same bucket (key
+  prefix `api/x402-facilitator/`), the same pair of behaviors above `/api/*`
+  and a second function from the same source (`api-spa-routing.ts` takes the
+  prefix). stellar-x402 uploads the files with `aws s3 sync`; this stack only
+  routes. `enableX402PortalBasicAuth` puts it behind Basic Auth with a key of
+  its own in the shared KeyValueStore, `auth-token-x402`, so its password is
+  not the main site's or the Prices portal's; until the key is written the
+  answer is `503`. Production runs with it `true` while the portal is built
+  and tested, testnet with `false`.
 - `/api` and `/api/` are the portal hub, a route of the main SPA (task 0660):
   bare `/api` falls to the default behavior, and `/api/` has an exact-match
   behavior with the main behaviors' settings, since `/api/*` would take it.
-- The portal's old homes keep behaviors on the portal origin, but their
+- The Prices portal's old homes keep behaviors on the portal origin, but their
   function (`api-path-redirect.ts`) answers every request with a `301` to the
   same path under `/api/prices-api`, query string kept, so links shared
   before a move still land on the portal in one hop: `/prices-api` +
-  `/prices-api/*` (task 0608 until task 0660), `/pricing-api` +
-  `/pricing-api/*` (a few hours on 2026-10-02), and every other `/api/*`
-  path (the portal's home until task 0608).
+  `/prices-api/*` (task 0608 until task 0660) and `/pricing-api` +
+  `/pricing-api/*` (a few hours on 2026-10-02).
+- Every other `/api/*` path has its own function (`api-hub-redirect.ts`, task
+  0670). The routes the Prices portal had while it lived at `/api/` (until
+  task 0608: `docs`, `dashboard`, `login`, `quick-start`, `privacy-policy`,
+  `openapi.json`) answer `301` to the same path under `/api/prices-api`, query
+  string kept; anything else answers `302` to the hub at `/api/` (not a
+  `301`, which a browser keeps: an unknown path can be the next portal's).
+  `api-path-redirect.ts` still strips `/api` too, for the minutes of a deploy
+  in which the distribution has not moved `/api/*` to the new function.
 - since task 0576, writes standard (access) logs for every request, explorer
   and portal alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
   referrer, user agent and viewer IP, never cookies. Objects expire after 30
