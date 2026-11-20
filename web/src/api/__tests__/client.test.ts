@@ -184,15 +184,18 @@ describe('client.ts session wiring', () => {
       get: () => '',
       set: () => undefined,
     });
-    const calls = stubFetch([401, 401, 401]);
-    const { getNetworkStats } = await freshClient();
+    try {
+      const calls = stubFetch([401, 401, 401]);
+      const { getNetworkStats } = await freshClient();
 
-    await getNetworkStats();
-    await getNetworkStats();
+      await getNetworkStats();
+      await getNetworkStats();
 
-    expect(document.body.textContent).toContain('This site needs cookies');
-    expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(1);
-    delete (document as { cookie?: string }).cookie;
+      expect(document.body.textContent).toContain('This site needs cookies');
+      expect(calls.filter((c) => c.path === '/auth/session')).toHaveLength(1);
+    } finally {
+      delete (document as { cookie?: string }).cookie;
+    }
     document.body.innerHTML = '';
   });
 

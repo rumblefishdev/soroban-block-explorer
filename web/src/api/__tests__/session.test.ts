@@ -153,6 +153,29 @@ describe('createSession', () => {
     expect(session.mints()).toBe(1);
   });
 
+  // While the "Try again" card waits, nothing is checked: a read that gets a
+  // 401 meanwhile waits for the click too (code review of W46, F1).
+  it('starts no check while the Try again card waits for its click', async () => {
+    fetchMock.mockResolvedValueOnce(minted());
+    const session = createSession({
+      siteKey: 'key',
+      apiBaseUrl: 'https://api',
+      solve,
+      keepsCookies: () => true,
+    });
+
+    const lost = session.sessionLost();
+    const meanwhile = session.renew(session.mints());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(solve).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    document.querySelector('button')?.click();
+    expect(await lost).toBe(true);
+    expect(await meanwhile).toBe(true);
+    expect(solve).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps state per instance', async () => {
     fetchMock.mockResolvedValueOnce(minted());
     const a = createSession({

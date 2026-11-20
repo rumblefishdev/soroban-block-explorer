@@ -4,7 +4,7 @@
 // `__Host-session` (task 0677). The browser sends it with every read, so one
 // check serves every tab and reload until it expires; the SPA never sees it.
 //
-// A read goes out at once; `./client.ts` turns its 401 into `renew()` and one
+// A read goes out at once; `./client.ts` turns its 401 into `renew()` and a
 // repeat. Wired only when `VITE_TURNSTILE_SITE_KEY` is set, in lockstep with
 // the backend `enableAuthLayer`.
 //
@@ -60,6 +60,8 @@ export function createSession({
   const renew = (seenMints: number): Promise<boolean> => {
     if (blocked) return Promise.resolve(false);
     if (mints > seenMints) return Promise.resolve(true);
+    // The "Try again" card is up: nothing is checked before its click.
+    if (lostInFlight) return lostInFlight.then(() => renew(seenMints));
     if (inFlight) return inFlight;
 
     inFlight = (async () => {
