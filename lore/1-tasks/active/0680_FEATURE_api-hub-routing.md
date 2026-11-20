@@ -30,7 +30,7 @@ section "The explorer's distribution".
 ## Stan teraz
 
 - Done: the function, the behaviours, the `apiHub` setting, their tests and the notes below.
-- Next: the pull request, then the deployment in two pull requests (see "The setting").
+- Next: the pull request, then the deployment in two pull requests.
 - In force: `infra/envs/production.json` has no `apiHub`: production builds what it built.
 
 ## Context
@@ -42,20 +42,9 @@ per product.
 
 ## Implementation Plan
 
-### Step 1: The hub's routing function
-
-`infra/src/lib/cloudfront-functions/api-hub-routing.ts`, with its tests in `__tests__/`.
-
-### Step 2: Behaviours and settings
-
-The `/api/hub/*` behaviour (backend, secret header), `/api/assets/*`, `/api/prices-api{,/*}`,
-`/api/*` and the exact `/api` redirect, armed by the settings in two stages; the x402 portal's
-two behaviours and function go once the pages are on.
-
-### Step 3: Tests and docs
-
-Each row of the spec's three tables that the distribution answers, with both stages on; the
-backend alone with the first; today's answers with neither.
+1. The hub's routing function (`api-hub-routing.ts`), with its tests.
+2. The behaviours and settings, armed in two stages; the x402 portal goes once the pages are on.
+3. Tests for each row of the spec's three tables, with both stages on; the backend alone; neither.
 
 ## Acceptance Criteria
 
@@ -86,7 +75,7 @@ https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-cloudfr
 **The pages, synthesized by hand (2026-11-20).** Production's Delivery stack, three times, by the
 `cdk` CLI with `infra/cdk.json`'s context and a made-up `backendHost`
 (`made-up-backend.lambda-url.eu-central-1.on.aws`), each compared with `origin/develop`'s
-(72032230f) by `cdk diff --strict --template <develop's template>`:
+(`cf1e5601e` after the rebase; 72032230f before) by `cdk diff --strict --template <develop's template>`:
 
 - _Neither:_ "There were no differences". The JSON equals develop's once its keys are sorted;
   the file lists some resources in another order, since today's `/api` behaviours are now built
@@ -95,8 +84,8 @@ https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-cloudfr
   `X-Hub-Origin-Secret` as `{{resolve:secretsmanager:…:SecretString:current::}}` and
   `X-Hub-Origin-Revision`), one origin request policy, one behaviour (`/api/hub/*`, before
   `/api/*`) and its viewer-request function (`api-hub-backend-headers`, step 4's), and the CDK's
-  own usage record (`AWS::CDK::Metadata`) with them. Nothing else. The same JSON as task 2's
-  backend-only template (abb163bd1), so turning the pages off again gives that one back.
+  own usage record (`AWS::CDK::Metadata`) with them. Nothing else. The same JSON as the
+  backend-only template of commit `170567856`, so turning the pages off again gives that one back.
 - _Both_ (`pages: true`): under `/api`, `/api/assets/*` (the bucket, `CachingOptimized`, the
   main behaviours' function, so the old host still answers `301`), `/api/prices-api` and
   `/api/prices-api/*` (the hub's function, a policy `…-headers-noindex` with
@@ -125,21 +114,28 @@ https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-cloudfr
 - **`pages: true` (the start).** The hub's bundle in the API bucket serves `/api`, `/api/*` and
   `/api/prices-api{,/*}` through `api-hub-routing`; `/api/assets/*` comes from the bucket with the
   long cache; `/api/hub/*` is as above. The x402 portal's two behaviours and function, and the
-  explorer's `/api/` route, are gone. `validateConfig` refuses `pages: true` together with
+  explorer's `/api/` route, are gone. `validateConfig` refuses `pages: true` with
   `pricesPortalOnLegacyHost`.
 
 **Deployment.** The pull request changes nothing on production. `infra/envs/production.json`
 changes only at the deployment, in two pull requests, as the hub's runbook has it
 (`docs/runbook.md` in `rumblefishdev/sorobanscan-api-portal`): first `apiHub` with
 `pages: false`, then, once the backend answers from AWS, `pages: true`. Testnet is never changed.
+The distribution answers every 403 and 404 with the explorer's `index.html`, so a failing backend
+(no invoke permission, a wrong `backendHost`) looks like the explorer: call the function URL
+directly first.
 
 **The way back.** Set `pages` to `false`: the stack goes back to the backend-only template, which
-is the same JSON as task 2's backend-only one, with the old pages and the x402 portal as before.
-Removing `apiHub` goes back to today's.
+is the backend-only template (commit `170567856`), with the old pages and the x402 portal as before.
+Removing `apiHub` goes back to today's. Either recreates `api-spa-routing`,
+`x402-portal-routing` and `api-hub-redirect` under the names the start deletes: after the start's
+deploy, check they are gone: `aws cloudfront list-functions --stage LIVE --query
+"FunctionList.Items[?contains(Name,'api-spa-routing')||contains(Name,'x402-portal-routing')||contains(Name,'api-hub-redirect')].Name"`
+must print `[]`.
 
 ## Left for a clean-up after the start
 
-Not done here, because the way back needs them:
+Not done here, since the way back needs them:
 
 - `ApiHubPage` and its route in the explorer's app (the way back shows the old hub).
 - `enableX402PortalBasicAuth`, which gates nothing once `pages` is on.

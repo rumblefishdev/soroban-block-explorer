@@ -106,6 +106,11 @@ export function apiHubPageBehaviors(
  * when `originSecretRevision` changes the template) so the backend can refuse
  * a call that did not come through here.
  *
+ * The distribution turns every 403 and 404 into the explorer's `index.html`
+ * (200), and that cannot be limited to this path: a 403 or 404 from the
+ * function URL (a missing invoke permission, a wrong `backendHost`) shows as
+ * the explorer's page. Call the function URL directly to tell.
+ *
  * Call only with `config.apiHub` set.
  */
 export function apiHubBackendBehavior(

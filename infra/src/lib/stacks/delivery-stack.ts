@@ -174,8 +174,8 @@ export class DeliveryStack extends cdk.Stack {
     // function).
     //
     // The `/api/prices-api` + `/api/prices-api/*` behaviors (tasks 0519, 0660) are
-    // separate behaviors with their own function slot. They always get
-    // `apiSpaFunction` (`api-portal-behaviors.ts`) for SPA routing (independent
+    // separate behaviors with their own function slot. With the pages off they
+    // always get `apiSpaFunction` (`api-portal-behaviors.ts`) for SPA routing (independent
     // of auth), and it also does the basic-auth check — reusing this same KVS,
     // not a second, separately-credentialed one — when
     // `config.enableApiSpaBasicAuth` is on.
