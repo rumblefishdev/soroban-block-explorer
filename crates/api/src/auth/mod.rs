@@ -1,6 +1,7 @@
-//! Paid-API access layer (task 0277, see `docs/paid-api/plan-platne-api.md`):
-//!  - **free tier** — SPA solves Turnstile → `/auth/session` mints a short session
-//!    JWT → the gate accepts `Authorization: Bearer <jwt>`;
+//! Paid-API access layer (task 0277):
+//!  - **free tier** — SPA solves Turnstile → `/auth/session` sets a short session
+//!    JWT in the HttpOnly cookie `__Host-session` → the gate accepts that cookie,
+//!    so one check serves every tab and reload of the browser (task 0677);
 //!  - **paid tier** — `X-API-Key` in the configured allowlist (skips Turnstile);
 //!  - anything else on a data route → `401`.
 //!
@@ -20,7 +21,7 @@ use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use utoipa::ToSchema;
 
 /// Everything the access layer needs at runtime. Built only when armed.
@@ -92,12 +93,33 @@ pub struct SessionRequest {
     pub token: String,
 }
 
-#[derive(Serialize, ToSchema)]
-pub struct SessionResponse {
-    /// Free-tier session JWT, sent back as `Authorization: Bearer <token>`.
-    pub token: String,
-    /// Seconds until `token` expires.
-    pub expires_in: u64,
+/// Name of the session cookie. `__Host-` makes the browser keep it on the API
+/// host only (no `Domain`), so mainnet and testnet sessions never mix.
+const SESSION_COOKIE: &str = "__Host-session";
+
+/// `Set-Cookie` value for a minted session: `HttpOnly` keeps it out of page
+/// scripts, `SameSite=Strict` off cross-site requests, and it lives as long
+/// as the JWT inside it.
+fn session_cookie(token: &str) -> String {
+    format!(
+        "{SESSION_COOKIE}={token}; Max-Age={}; Path=/; Secure; HttpOnly; SameSite=Strict",
+        jwt::SESSION_TTL_SECS
+    )
+}
+
+/// Every value of a session cookie the request carries. Cloudflare sets
+/// cookies of its own on this host and HTTP/2 may split them over several
+/// `Cookie` headers. Split as bytes, and keep every match: a cookie with bytes
+/// outside ASCII, or a junk one of the same name set by a sibling host, must
+/// not hide the valid session.
+fn session_tokens(headers: &axum::http::HeaderMap) -> Vec<&[u8]> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .flat_map(|v| v.as_bytes().split(|b| *b == b';'))
+        .filter_map(|c| c.trim_ascii_start().strip_prefix(SESSION_COOKIE.as_bytes()))
+        .filter_map(|rest| rest.strip_prefix(b"="))
+        .collect()
 }
 
 // In the spec through `ApiDoc`'s `paths(...)`, not `register_routes`: the
@@ -108,14 +130,14 @@ pub struct SessionResponse {
     post,
     path = "/auth/session",
     tag = "auth",
-    // Without it the operation is named `session`, which collides with the
-    // `SessionResponse` schema in the generated TS (`SessionResponse2`).
+    // Pins the generated SDK name (`mintSession`); utoipa would name it `session`.
     operation_id = "mint_session",
     // Exempt from the gate (see `is_exempt`) — called to OBTAIN a session.
     security(()),
     request_body = SessionRequest,
     responses(
-        (status = 200, description = "Session JWT minted", body = SessionResponse),
+        (status = 204, description = "Session minted",
+            headers(("Set-Cookie" = String, description = "`__Host-session`, HttpOnly, 15 min"))),
         (status = 403, description = "Turnstile verification failed",
             body = String, content_type = "text/plain"),
         (status = 500, description = "Token issue failed",
@@ -124,28 +146,40 @@ pub struct SessionResponse {
             body = String, content_type = "text/plain"),
     ),
 )]
-pub async fn session(auth: AuthConfig, Json(req): Json<SessionRequest>) -> Response {
+pub async fn session(
+    auth: AuthConfig,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<SessionRequest>,
+) -> Response {
     let Some(ts_secret) = auth.turnstile_secret.as_ref() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "turnstile not configured").into_response();
     };
     if !turnstile::verify(http_client(), ts_secret, &req.token).await {
         return (StatusCode::FORBIDDEN, "turnstile verification failed").into_response();
     }
-    match jwt::issue(&auth.jwt_secret, now_secs()) {
-        Ok(token) => no_store(
-            Json(SessionResponse {
-                token,
-                expires_in: jwt::SESSION_TTL_SECS,
-            })
+    let Ok(token) = jwt::issue(&auth.jwt_secret, now_secs()) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "token issue failed").into_response();
+    };
+    // The browser drops the cookie when the JWT inside it expires, so a mint
+    // normally comes with no cookie (`false`): a new visitor, an expired
+    // session, or a browser that keeps no cookies. `true` means another tab
+    // minted first, or the JWT was refused (e.g. a rotated secret).
+    tracing::info!(
+        cookie_present = !session_tokens(&headers).is_empty(),
+        "session minted"
+    );
+    no_store(
+        (
+            [(header::SET_COOKIE, session_cookie(&token))],
+            StatusCode::NO_CONTENT,
+        )
             .into_response(),
-        ),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "token issue failed").into_response(),
-    }
+    )
 }
 
 // ── auth gate middleware ───────────────────────────────────────────────
 /// Accept a request iff it is exempt, OR carries a valid paid `X-API-Key`, OR a
-/// valid free session JWT (`Authorization: Bearer …`). Else `401`.
+/// valid free session JWT in the `__Host-session` cookie. Else `401`.
 pub async fn require_auth(State(auth): State<AuthConfig>, req: Request, next: Next) -> Response {
     if is_exempt(req.uri().path()) {
         return next.run(req).await;
@@ -166,20 +200,24 @@ pub async fn require_auth(State(auth): State<AuthConfig>, req: Request, next: Ne
         return next.run(req).await;
     }
 
-    // Free tier — valid session JWT in `Authorization: Bearer …`. The scheme is
-    // case-insensitive (RFC 7235), so accept any casing of "bearer" + trim.
-    let free = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split_once(' '))
-        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-        .map(|(_, tok)| jwt::verify(&auth.jwt_secret, tok.trim()))
-        .unwrap_or(false);
-    if free {
-        return next.run(req).await;
+    // Free tier — valid session JWT in a session cookie.
+    let tokens = session_tokens(req.headers());
+    for token in &tokens {
+        if let Ok(token) = std::str::from_utf8(token)
+            && jwt::verify(&auth.jwt_secret, token)
+        {
+            return next.run(req).await;
+        }
     }
 
+    // `cookie_present=false` is every first read of a session (new visitor,
+    // expired session) and every read of a browser that keeps no cookies;
+    // `true` is a cookie the gate refused.
+    tracing::info!(
+        cookie_present = !tokens.is_empty(),
+        path = req.uri().path(),
+        "session rejected"
+    );
     no_store((StatusCode::UNAUTHORIZED, "authentication required").into_response())
 }
 

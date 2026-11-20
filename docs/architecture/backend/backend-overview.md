@@ -124,11 +124,14 @@ The backend implementation direction implied by the current design is:
   `libs/api-types` codegen pipeline (task 0096). A secondary `extract_openapi`
   binary in the `api` crate dumps the spec at build time, so codegen does not
   require booting the Lambda. The spec also declares the access-layer security
-  schemes (task 0277/0287) — `api_key` (`x-api-key` header, paid tier) and
-  `bearer_jwt` (free-tier session JWT) — as a global OR requirement, so Swagger
-  UI renders an "Authorize" dialog and "Try it out" can reach the gated `/v1`
-  surface; `/health` and `POST /auth/session` opt out with an empty per-path
-  requirement. `/auth/session` is listed in `ApiDoc`'s `paths(...)` rather than
+  scheme (task 0277/0287) `api_key` (`x-api-key` header, paid tier) as a
+  global requirement, so Swagger UI renders an "Authorize" dialog and "Try it
+  out" can reach the gated `/v1` surface; `/health` and `POST /auth/session`
+  opt out with an empty per-path requirement. The free tier's session is the
+  HttpOnly cookie `__Host-session` that `POST /auth/session` sets (204,
+  `SameSite=Strict`, 15 min, task 0677); Swagger cannot set it, so it is no
+  scheme in the spec. The gate reads only that cookie or `x-api-key`; it logs
+  one `session minted` / `session rejected` line each, with `cookie_present`. `/auth/session` is listed in `ApiDoc`'s `paths(...)` rather than
   `register_routes`, because it is mounted only when the auth layer is armed and
   the spec must describe it either way (task 0510).
 - **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)

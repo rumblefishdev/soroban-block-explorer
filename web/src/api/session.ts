@@ -1,101 +1,89 @@
-// Free-tier session handling for the paid-API access layer (task 0277, see
-// docs/paid-api/plan-platne-api.md). Flow: the SPA solves a Cloudflare Turnstile
-// challenge → exchanges that token at `POST /auth/session` for a short-lived
-// session JWT → attaches `Authorization: Bearer <jwt>` to every API call (wired
-// in `./client.ts`). The JWT lives in memory only (never persisted) — a reload
-// re-solves Turnstile, which is cheap in managed mode.
+// Free-tier session for the paid-API access layer (task 0277). Flow: the SPA
+// solves a Cloudflare Turnstile challenge → posts that token to
+// `POST /auth/session` → the API sets the session in the HttpOnly cookie
+// `__Host-session` (task 0677). The browser sends it with every read, so one
+// check serves every tab and reload until it expires; the SPA never sees it.
 //
-// GATED on `siteKey`: when `VITE_TURNSTILE_SITE_KEY` is unset the session is
-// inert (`ensureToken` resolves to `null`, no widget loads), so the SPA runs
-// unchanged against an un-armed backend. Arm the SPA in lockstep with the
-// backend `enableAuthLayer`.
+// A read goes out at once; `./client.ts` turns its 401 into `renew()` and a
+// repeat. Wired only when `VITE_TURNSTILE_SITE_KEY` is set, in lockstep with
+// the backend `enableAuthLayer`.
 //
 // All state lives in the object `createSession` returns — nothing mutable at
 // module scope — so a test builds a fresh one (task 0510). The app holds one,
 // in `./client.ts`.
 
-import type { SessionResponse } from '@rumblefish/api-types';
 import { colorsDark } from '@rumblefish/soroban-block-explorer-ui';
 
-// Refresh a touch early so an in-flight request never rides an edge-expired JWT.
-const EXPIRY_SKEW_MS = 30_000;
-
 export interface SessionOptions {
-  /** Turnstile site key; unset = the layer is dark. */
-  siteKey: string | undefined;
+  siteKey: string;
   apiBaseUrl: string;
   /** Solves a Turnstile challenge. Injectable so a test needs no widget. */
   solve?: (siteKey: string) => Promise<string>;
+  /** Whether the browser keeps a cookie at all. Injectable for tests. */
+  keepsCookies?: () => boolean;
 }
 
 export interface Session {
+  /** How many mints have finished in this tab. A read notes it when sent. */
+  mints(): number;
   /**
-   * Resolve a usable session JWT, or `null` when the layer is dark (no site
-   * key). Reuses a fresh token; otherwise solves Turnstile once and exchanges it. Never
-   * throws, and never resolves `null` while armed: a failed solve or a refused
-   * exchange shows the retry panel and waits for the visitor, so no request
-   * goes out without a session (task 0289 — a bare request gets a 401 that
-   * the page can only show as a broken section).
+   * Make the API set a fresh session cookie, after a read got a 401.
+   * `seenMints` is `mints()` when that read was sent: if a mint finished
+   * since, the read went out without the new cookie and only needs repeating.
+   * Otherwise solves Turnstile once and mints; concurrent callers share it.
+   * A failed solve or a refused mint shows the retry panel and waits for the
+   * visitor. Resolves `false` once the browser is known to drop the cookie.
    */
-  ensureToken(): Promise<string | null>;
-  /** Drop the cached JWT so the next request re-solves Turnstile. Called on 401. */
-  invalidate(): void;
-}
-
-/**
- * True for the session-mint request itself. The request interceptor must not
- * attach a session to it: minting would wait on its own in-flight promise.
- */
-export function isSessionMint(url: string): boolean {
-  return new URL(url).pathname.endsWith('/auth/session');
+  renew(seenMints: number): Promise<boolean>;
+  /**
+   * A read repeated right after a fresh mint still got a 401. If the browser
+   * refuses a test cookie it blocks cookies: one panel, `renew` stops
+   * checking, resolves `false`. Otherwise the cookie was lost on our side
+   * (proxy, deploy): the retry panel, and `true` once the visitor clicks
+   * "Try again". Concurrent callers share one panel.
+   */
+  sessionLost(): Promise<boolean>;
 }
 
 export function createSession({
   siteKey,
   apiBaseUrl,
   solve = createTurnstileSolver(),
+  keepsCookies = keepsTestCookie,
 }: SessionOptions): Session {
-  // The JWT lives in memory only (never persisted). `expiresAtMs` is the
-  // absolute wall-clock expiry.
-  let token: string | null = null;
-  let expiresAtMs = 0;
-  // Single-flight: concurrent callers (e.g. a burst of queries on first paint)
-  // share one Turnstile solve + one `/auth/session` round-trip.
-  let inFlight: Promise<string | null> | null = null;
+  let mints = 0;
+  let blocked = false;
+  // Single-flight: the burst of 401s on first paint shares one check.
+  let inFlight: Promise<boolean> | null = null;
+  let lostInFlight: Promise<boolean> | null = null;
 
-  const invalidate = () => {
-    token = null;
-    expiresAtMs = 0;
-  };
-
-  const ensureToken = async (): Promise<string | null> => {
-    if (!siteKey) return null;
-    if (token !== null && Date.now() < expiresAtMs - EXPIRY_SKEW_MS) {
-      return token;
-    }
+  const renew = (seenMints: number): Promise<boolean> => {
+    if (blocked) return Promise.resolve(false);
+    if (mints > seenMints) return Promise.resolve(true);
+    // The "Try again" card is up: nothing is checked before its click.
+    if (lostInFlight) return lostInFlight.then(() => renew(seenMints));
     if (inFlight) return inFlight;
 
     inFlight = (async () => {
       try {
-        // Until a session is minted: solve, exchange, and on failure wait for
+        // Until a session is minted: solve, mint, and on failure wait for
         // the visitor's "Try again" before solving again.
         for (;;) {
           let reason: string;
           try {
             const turnstileToken = await solve(siteKey);
-            // Plain `fetch`, not the generated SDK: the SDK client's request
-            // interceptor awaits `ensureToken`, so calling it here would wait
-            // on its own in-flight promise forever.
+            // Plain `fetch`, not the generated SDK: the SDK's 401 handling
+            // would call `renew` again from inside it.
             const res = await fetch(`${apiBaseUrl}/auth/session`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ token: turnstileToken }),
+              // Without it the browser drops the cross-origin `Set-Cookie`.
+              credentials: 'include',
             });
             if (res.ok) {
-              const body = (await res.json()) as SessionResponse;
-              token = body.token;
-              expiresAtMs = Date.now() + body.expires_in * 1000;
-              return token;
+              mints += 1;
+              return true;
             }
             reason = `The server did not accept the check (HTTP ${res.status}).`;
           } catch (e) {
@@ -112,7 +100,42 @@ export function createSession({
     return inFlight;
   };
 
-  return { ensureToken, invalidate };
+  const sessionLost = (): Promise<boolean> => {
+    if (blocked) return Promise.resolve(false);
+    if (lostInFlight) return lostInFlight;
+    if (!keepsCookies()) {
+      blocked = true;
+      console.warn(
+        'The session cookie was not kept: the browser blocks cookies.'
+      );
+      // No check can help, so one card that stays, with nothing to click.
+      showCard('alert', 'This site needs cookies');
+      return Promise.resolve(false);
+    }
+    console.warn(
+      'The session cookie was lost although the browser keeps cookies.'
+    );
+    lostInFlight = showRetryPanel()
+      .then(() => true)
+      .finally(() => {
+        lostInFlight = null;
+      });
+    return lostInFlight;
+  };
+
+  return { mints: () => mints, renew, sessionLost };
+}
+
+/**
+ * Whether the browser keeps a cookie at all: write a test cookie on the page's
+ * host, read it back, remove it. Reliable where `navigator.cookieEnabled` is
+ * not (it stayed `true` in Chromium with every cookie blocked).
+ */
+function keepsTestCookie(): boolean {
+  document.cookie = 'cookie-probe=1; Path=/; SameSite=Strict';
+  const kept = document.cookie.includes('cookie-probe=1');
+  document.cookie = 'cookie-probe=; Path=/; Max-Age=0';
+  return kept;
 }
 
 // ── Turnstile widget ────────────────────────────────────────────────────────
@@ -278,6 +301,22 @@ const PANEL_POSITION_CSS =
 const PANEL_CARD_CSS = `box-sizing:border-box;width:calc(100vw - 32px);max-width:360px;padding:20px 24px;border-radius:12px;border:1px solid ${colorsDark.stroke.default};background-color:${colorsDark.surface.grayMain};color:${colorsDark.text.primary};text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-family:inherit;`;
 const PANEL_TEXT_CSS = 'margin:0 0 12px;font-size:14px;line-height:1.5;';
 
+/** One card with a title, appended to the page. */
+function showCard(role: string, titleText: string): HTMLElement {
+  const panel = document.createElement('div');
+  panel.setAttribute('role', role);
+  panel.setAttribute('aria-labelledby', 'turnstile-panel-title');
+  panel.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
+
+  const title = document.createElement('p');
+  title.id = 'turnstile-panel-title';
+  title.textContent = titleText;
+  title.style.cssText = PANEL_TEXT_CSS + 'font-weight:600;font-size:16px;';
+  panel.append(title);
+  document.body.appendChild(panel);
+  return panel;
+}
+
 /**
  * A card that says the check failed, with a "Try again" button; the technical
  * reason goes only to the console. Resolves (and removes the card) on the
@@ -285,24 +324,15 @@ const PANEL_TEXT_CSS = 'margin:0 0 12px;font-size:14px;line-height:1.5;';
  * new challenges.
  */
 function showRetryPanel(): Promise<void> {
-  const panel = document.createElement('div');
-  panel.setAttribute('role', 'alertdialog');
-  panel.setAttribute('aria-labelledby', 'turnstile-retry-title');
-  panel.style.cssText = PANEL_POSITION_CSS + PANEL_CARD_CSS;
-
   // Named for screen readers, with focus on the button, so a
   // keyboard user is not left on a page whose sections only say "loading".
-  const title = document.createElement('p');
-  title.id = 'turnstile-retry-title';
-  title.textContent = "We couldn't verify your browser";
-  title.style.cssText = PANEL_TEXT_CSS + 'font-weight:600;font-size:16px;';
+  const panel = showCard('alertdialog', "We couldn't verify your browser");
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = 'Try again';
   button.style.cssText = `padding:8px 20px;border:0;border-radius:8px;background:${colorsDark.surface.primaryMain};color:${colorsDark.text.inverted};font:inherit;font-weight:600;cursor:pointer;`;
 
-  panel.append(title, button);
-  document.body.appendChild(panel);
+  panel.append(button);
   button.focus();
 
   return new Promise<void>((resolve) => {

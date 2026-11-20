@@ -256,7 +256,6 @@ export type {
   SearchHit,
   SearchResults,
   SessionRequest,
-  SessionResponse,
   SignatureDto,
   SourceVerificationResponse,
   SourceVerifier,
