@@ -442,13 +442,23 @@ redeploying `ApiGateway` as soon as the run ends.
   `301`, which a browser keeps: an unknown path can be the next portal's).
   `api-path-redirect.ts` still strips `/api` too, for the minutes of a deploy
   in which the distribution has not moved `/api/*` to the new function.
-- since task 0680, `apiHub` in `envs/<env>.json` (`{backendHost, originSecretName,
-originSecretRevision, pages}`) hands `/api/` to the separate API hub app
-  (`sorobanscan-api-portal`), in two stages. The bullets above on the `/api`
-  behaviors describe the stack with it unset, which is what production and
-  testnet build until a setting is added:
+- since task 0680, `apiHub` in `envs/<env>.json` hands `/api/` to the separate
+  API hub app (`sorobanscan-api-portal`), in two stages. Its fields:
+  `{backendHostParameter, originSecretName, originSecretRevision, pages}`. The
+  bullets above on the `/api` behaviors describe the stack with it unset, which
+  is what production and testnet build until a setting is added:
   - `apiHub` set, `pages: false`: the same, plus `/api/hub/*`, the hub's
-    backend, a Lambda function URL (`backendHost`) over HTTPS only. Nothing is
+    backend, a Lambda function URL over HTTPS only. Its host is not in git:
+    `backendHostParameter` names the SSM String parameter the hub's own stack
+    writes (`/sorobanscan-hub/production/backend-host`, same account and
+    region), which the stack reads as a template parameter of type
+    `AWS::SSM::Parameter::Value<String>` on every deploy. This repo and the
+    hub's are public, and a call straight to the function URL would skip
+    CloudFront and use up the backend's reserved concurrency. The parameter
+    must exist before the first deploy with `apiHub`; a new host takes a
+    Delivery deploy, which `cdk diff` (comparing templates) does not show, and
+    with `apiHub` set the CDK CLI never skips Delivery as unchanged
+    ([`docs/deployment.md`](../../deployment.md)). Nothing is
     cached, every method is allowed, and cookies, the query string and the
     headers `Origin`, `Content-Type`, `Accept` and `X-Hub-Viewer-Ip` are
     forwarded. CloudFront adds `X-Hub-Origin-Secret` (the `current` field of the

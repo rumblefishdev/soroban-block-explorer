@@ -277,8 +277,14 @@ export interface EnvironmentConfig {
    * Unset = today's distribution, unchanged.
    */
   readonly apiHub?: {
-    /** The backend's Lambda function URL host, with no scheme and no path. */
-    readonly backendHost: string;
+    /**
+     * The name of the SSM String parameter that holds the backend's Lambda
+     * function URL host, e.g. `/sorobanscan-hub/production/backend-host`,
+     * which the hub's own stack writes. Not the host itself: this repo is
+     * public, and a call straight to the function URL skips CloudFront and
+     * uses up the backend's reserved concurrency. Read on every deploy.
+     */
+    readonly backendHostParameter: string;
     /** In Secrets Manager: JSON whose `current` CloudFront sends as `X-Hub-Origin-Secret`. */
     readonly originSecretName: string;
     /**
@@ -671,11 +677,13 @@ export function validateConfig(config: EnvironmentConfig): void {
   }
   if (config.apiHub) {
     const hub = config.apiHub;
-    // A host name alone: CloudFront's origin takes no scheme, port or path.
-    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(hub.backendHost)) {
+    // An SSM parameter's full name. A host or a URL here is the value the
+    // setting keeps out of git, so the message does not repeat it.
+    if (!/^\/[A-Za-z0-9_.\-/]+$/.test(hub.backendHostParameter)) {
       errors.push(
-        `apiHub.backendHost must be the function URL's host alone, with no ` +
-          `scheme, port or path: "${hub.backendHost}".`
+        `apiHub.backendHostParameter must be the name of the SSM parameter ` +
+          `that holds the backend's host, starting with "/" (e.g. ` +
+          `/sorobanscan-hub/production/backend-host), not the host or a URL.`
       );
     }
     if (!hub.originSecretName.trim()) {

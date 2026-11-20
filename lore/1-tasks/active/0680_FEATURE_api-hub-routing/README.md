@@ -29,7 +29,8 @@ section "The explorer's distribution".
 
 ## Stan teraz
 
-- Done: the function, the behaviours, the `apiHub` setting, their tests and the notes below.
+- Done: the function, the behaviours, the `apiHub` setting (the backend's host from SSM), their
+  tests and the notes below.
 - Next: the pull request, then the deployment in two pull requests.
 - In force: `infra/envs/production.json` has no `apiHub`: production builds what it built.
 
@@ -69,37 +70,56 @@ from `legacy-host-redirect.ts`.
 ## The setting (2026-11-20)
 
 `apiHub` in `EnvironmentConfig` (`infra/src/lib/types.ts`):
-`{ backendHost, originSecretName, originSecretRevision, pages }`. Three states:
+`{ backendHostParameter, originSecretName, originSecretRevision, pages }`. Three states:
 
 - **Unset (every environment today).** The stack builds what it built before: the Prices portal,
   the x402 portal, the explorer's `ApiHubPage` at `/api` and `/api/`, and `301`/`302` for the other
   `/api/*` paths (`api-portal-behaviors.ts`). Checked by `cdk diff --strict`: no differences.
-- **`pages: false` (the backend).** The same, plus `/api/hub/*`: the hub's Lambda function URL,
-  HTTPS only, never cached, every method, cookies and query forwarded, with the secret from
-  Secrets Manager as `X-Hub-Origin-Secret` and `originSecretRevision` as `X-Hub-Origin-Revision`.
-  A viewer-request function writes the client's address into `X-Hub-Viewer-Ip`. No page changes
-  and nothing links to the backend, so it can be tried from AWS first.
+- **`pages: false` (the backend).** The same, plus `/api/hub/*`: the hub's Lambda function URL
+  (its host from SSM, below), HTTPS only, never cached, every method, cookies and query
+  forwarded, with the secret from Secrets Manager as `X-Hub-Origin-Secret` and
+  `originSecretRevision` as `X-Hub-Origin-Revision`. A viewer-request function writes the
+  client's address into `X-Hub-Viewer-Ip`. No page changes and nothing links to the backend, so
+  it can be tried from AWS first.
 - **`pages: true` (the start).** The hub's bundle in the API bucket serves `/api`, `/api/*` and
   `/api/prices-api{,/*}` through `api-hub-routing`; `/api/assets/*` comes from the bucket with the
   long cache; `/api/hub/*` is as above. The x402 portal's two behaviours and function, and the
   explorer's `/api/` route, are gone. `validateConfig` refuses `pages: true` with
   `pricesPortalOnLegacyHost`.
 
-**Since the review (2026-11-20).** `validateConfig` also refuses a malformed `backendHost`, an empty
-secret name or revision, `apiHub` with `enableOriginSecretLock` (behind Cloudflare the viewer's
-address is Cloudflare's) and `pages` with `enableBasicAuth`. CloudFormation reads the secret again
-on any update of the distribution, not only on a new revision: rotate it as the hub's runbook says.
+**Since the review (2026-11-20).** `validateConfig` also refuses an empty secret name or revision,
+`apiHub` with `enableOriginSecretLock` (behind Cloudflare the viewer's address is Cloudflare's)
+and `pages` with `enableBasicAuth`. CloudFormation reads the secret again on any update of the
+distribution, not only on a new revision: rotate it as the hub's runbook says.
+
+**The host from SSM (2026-11-20, approved by adamkoot).** The setting held the function URL's
+host, to be written into `production.json`. Both repos are public, the host can't be found
+otherwise (wildcard certificate and DNS), and a call straight to it skips CloudFront and uses up
+the backend's 20 reserved concurrency. So `backendHostParameter` names the SSM String parameter
+the hub's own stack writes (`/sorobanscan-hub/production/backend-host`, same account and region),
+read as a template parameter of type `AWS::SSM::Parameter::Value<String>`, as the CloudWatch stack
+reads the Slack IDs; not a `{{resolve:ssm:…}}` reference. `validateConfig` wants a name starting
+with `/` and refuses a host or a URL there, without repeating it. What follows:
+
+- The parameter must exist before the first deploy with `apiHub`, or the change set fails.
+- CloudFormation reads it on every deploy of Delivery. A new host takes a Delivery deploy, and
+  `cdk diff` doesn't show it: it compares templates.
+- The CDK CLI never skips a stack with such a parameter as unchanged (2.1116.0, `canSkipDeploy`:
+  "some parameters come from SSM"), so with `apiHub` every deploy naming Delivery, `-all` too,
+  makes a change set; `docs/deployment.md` says so. `deploy-scope.sh` needs no change.
+- Without `apiHub` nothing changes: every template is byte for byte `e75ef6219`'s, and no
+  parameter is added (a test checks the template's parameters).
 
 **Deployment.** The pull request changes nothing on production. `infra/envs/production.json`
 changes only at the deployment, in two pull requests, as the hub's runbook has it
 (`docs/runbook.md` in `rumblefishdev/sorobanscan-api-portal`): first `apiHub` with
 `pages: false`, then, once the backend answers from AWS, `pages: true`. Testnet is never changed.
 The distribution answers every 403 and 404 with the explorer's `index.html`, so a failing backend
-(no invoke permission, a wrong `backendHost`) looks like the explorer: call the function URL
-directly first.
+(no invoke permission, a wrong host in the parameter) looks like the explorer: call the function
+URL directly first.
 
-**The way back.** Set `pages` to `false`: the stack goes back to the backend-only template (commit
-`170567856`), with the old pages and the x402 portal as before.
+**The way back.** Set `pages` to `false`: the stack goes back to the backend-only template, with
+the old pages and the x402 portal as before.
 Removing `apiHub` goes back to today's. Either recreates `api-spa-routing`,
 `x402-portal-routing` and `api-hub-redirect` under the names the start deletes: after the start's
 deploy, check they are gone: `aws cloudfront list-functions --stage LIVE --query

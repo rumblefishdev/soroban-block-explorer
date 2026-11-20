@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import type { Construct } from 'constructs';
 
 import { apiHubBackendHeadersFunctionCode } from '../cloudfront-functions/api-hub-backend-headers.js';
@@ -99,8 +100,9 @@ export function apiHubPageBehaviors(
 }
 
 /**
- * `/api/hub/*` (task 0680): the API hub's backend, a Lambda function URL
- * (`config.apiHub.backendHost`). Never cached; the viewer's cookies, query
+ * `/api/hub/*` (task 0680): the API hub's backend, a Lambda function URL whose
+ * host is read from SSM at deploy time (`config.apiHub.backendHostParameter`
+ * names the parameter). Never cached; the viewer's cookies, query
  * string and four headers are forwarded. CloudFront stamps the origin with
  * `X-Hub-Origin-Secret` (a Secrets Manager dynamic reference, which
  * CloudFormation reads again whenever it updates the distribution, for any
@@ -109,8 +111,8 @@ export function apiHubPageBehaviors(
  *
  * The distribution turns every 403 and 404 into the explorer's `index.html`
  * (200), and that cannot be limited to this path: a 403 or 404 from the
- * function URL (a missing invoke permission, a wrong `backendHost`) shows as
- * the explorer's page. Call the function URL directly to tell.
+ * function URL (a missing invoke permission, a wrong host in the parameter)
+ * shows as the explorer's page. Call the function URL directly to tell.
  *
  * Call only with `config.apiHub` set.
  */
@@ -159,8 +161,22 @@ export function apiHubBackendBehavior(
     }
   );
 
+  // The function URL's host is an identifier we keep OUT of the (public)
+  // repo: a call straight to it skips CloudFront and uses up the backend's
+  // reserved concurrency. So it comes from SSM Parameter Store (plain String,
+  // not a credential) at deploy time, not from env config. The hub's own
+  // stack writes it (`/sorobanscan-hub/production/backend-host`, same account
+  // and region); it must exist before this stack deploys with `apiHub`. A
+  // template parameter of type `AWS::SSM::Parameter::Value<String>`, which
+  // CloudFormation reads on every deploy of this stack: a new host takes a
+  // deploy, and `cdk diff`, which compares templates, does not show it.
+  const backendHost = ssm.StringParameter.valueForStringParameter(
+    scope,
+    hub.backendHostParameter
+  );
+
   return {
-    origin: new origins.HttpOrigin(hub.backendHost, {
+    origin: new origins.HttpOrigin(backendHost, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
       readTimeout: cdk.Duration.seconds(30),
       customHeaders: {

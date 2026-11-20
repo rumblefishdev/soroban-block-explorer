@@ -40,3 +40,9 @@ made-up `backendHost` (`made-up-backend.lambda-url.eu-central-1.on.aws`), each c
   origins) and every other resource: as develop's. The bucket's behaviours are listed before the
   backend's, so the bucket stays the distribution's second origin and keeps its origin access
   control when the pages are turned on or off.
+
+**Since then (2026-11-20).** The setting held the host itself then. It now names an SSM parameter
+(the README, "The host from SSM"): the backend's origin is a `Ref` to a template parameter, which
+the backend-only template adds, so that template is no longer `170567856`'s. Without `apiHub`
+every production and testnet template was synthesized again and is byte for byte the one of
+`e75ef6219`, the commit before the change.

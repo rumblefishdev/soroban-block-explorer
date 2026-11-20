@@ -17,7 +17,7 @@ const envs = {
 };
 
 const apiHub = {
-  backendHost: 'abc123.lambda-url.eu-central-1.on.aws',
+  backendHostParameter: '/sorobanscan-hub/production/backend-host',
   originSecretName: 'sorobanscan-hub/production/origin-secret',
   originSecretRevision: '1',
   pages: false,
@@ -26,6 +26,7 @@ const apiHub = {
 // The template is read as loose JSON.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Resource = { Type: string; Properties: Record<string, any> };
+type Parameter = { Type: string; Default?: string };
 type Behavior = Record<string, any>;
 
 function delivery(
@@ -48,8 +49,11 @@ function delivery(
     join(out, `Explorer-${env}-Delivery.template.json`),
     'utf8'
   );
-  const resources = (JSON.parse(raw) as { Resources: Record<string, Resource> })
-    .Resources;
+  const template = JSON.parse(raw) as {
+    Parameters: Record<string, Parameter>;
+    Resources: Record<string, Resource>;
+  };
+  const resources = template.Resources;
   const find = (type: string) =>
     Object.values(resources).filter((r) => r.Type === type);
   const dist = find('AWS::CloudFront::Distribution')[0]?.Properties[
@@ -89,6 +93,7 @@ function delivery(
   };
   return {
     raw,
+    parameters: template.Parameters,
     resources,
     distConfig: dist,
     find,
@@ -137,6 +142,8 @@ describe('without apiHub', () => {
       }
       expect(d.raw).not.toContain('X-Hub-Origin');
       expect(d.raw).not.toContain('api-hub-backend');
+      // No parameter of the hub's: the CDK's own and nothing else.
+      expect(Object.keys(d.parameters)).toEqual(['BootstrapVersion']);
     });
   }
 });
@@ -170,6 +177,12 @@ describe('with the backend alone', () => {
       'AWS::CloudFront::Function',
       'AWS::CloudFront::OriginRequestPolicy',
     ]);
+    const addedParameters = Object.keys(d.parameters).filter(
+      (k) => !(k in before.parameters)
+    );
+    expect(addedParameters.map((k) => d.parameters[k]?.Type)).toEqual([
+      'AWS::SSM::Parameter::Value<String>',
+    ]);
     for (const k of Object.keys(before.resources)) {
       if (before.resources[k]?.Type === 'AWS::CloudFront::Distribution')
         continue;
@@ -190,7 +203,12 @@ describe('with the backend alone', () => {
       (h) => h.HeaderName === 'X-Hub-Origin-Revision'
     );
 
-    expect(origin['DomainName']).toBe(apiHub.backendHost);
+    // The host is read from SSM at deploy time, never written in the template.
+    const host = d.parameters[origin['DomainName'].Ref];
+    expect(host).toEqual({
+      Type: 'AWS::SSM::Parameter::Value<String>',
+      Default: apiHub.backendHostParameter,
+    });
     expect(origin['CustomOriginConfig'].OriginProtocolPolicy).toBe(
       'https-only'
     );
@@ -454,12 +472,20 @@ describe("the setting's own checks", () => {
   });
 
   it.each([
+    'abc123.lambda-url.eu-central-1.on.aws',
     'https://abc123.lambda-url.eu-central-1.on.aws',
-    'abc123.lambda-url.eu-central-1.on.aws/',
-    'abc123.lambda-url.eu-central-1.on.aws:443',
+    'https://abc123.lambda-url.eu-central-1.on.aws/',
+    'sorobanscan-hub/production/backend-host',
+    '/sorobanscan-hub/production/backend host',
     '',
-  ])('refuses the backend host %j', (backendHost) => {
-    expect(check({ backendHost })).toThrow(/apiHub\.backendHost/);
+  ])('refuses %j for the parameter name', (backendHostParameter) => {
+    const run = check({ backendHostParameter });
+    expect(run).toThrow(/apiHub\.backendHostParameter[\s\S]*SSM parameter/);
+    // The message does not repeat a host: it is what the setting keeps out
+    // of git.
+    if (backendHostParameter.includes('lambda-url')) {
+      expect(run).not.toThrow(backendHostParameter);
+    }
   });
 
   it('refuses an empty secret name or revision', () => {
