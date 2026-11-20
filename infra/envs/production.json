@@ -32,7 +32,6 @@
   "galexieBackfillEnabled": false,
   "apiGatewayThrottleRate": 50,
   "apiGatewayThrottleBurst": 100,
-  "apiGatewayPartnerDailyQuota": 10000,
   "loadTesting": false,
   "domainName": "sorobanscan.com",
   "legacyDomainName": "sorobanscan.rumblefish.dev",

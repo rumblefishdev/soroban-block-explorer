@@ -1596,8 +1596,8 @@ report.
    >
    > **"WAF/throttling active on public ingress" is satisfied without AWS WAF.** Both
    > AWS WAF WebACLs were dropped ([ADR 0048](../../lore/2-adrs/0048_cloudflare-edge-over-aws-waf.md),
-   > task 0302). What holds the criterion: API Gateway throttling (`50` rps / `100`
-   > burst) plus usage-plan limits on every public route, and the Cloudflare edge —
+   > task 0302). What holds the criterion: API Gateway stage throttling (`50` rps /
+   > `100` burst) on every public route, and the Cloudflare edge —
    > managed rules, DDoS, Managed Challenge, rate limiting — on the API hostname, with
    > the origin locked to Cloudflare. The CloudFront frontend distribution carries no
    > edge filter; it serves static, edge-cached files from a private S3 origin, so the
