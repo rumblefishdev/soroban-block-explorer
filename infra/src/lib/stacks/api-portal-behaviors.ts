@@ -16,21 +16,16 @@ export interface ApiPortalShared extends ApiHubShared {
   readonly portalMove: HostMove | undefined;
   /** The Basic Auth credentials the portals' gates read. */
   readonly basicAuthKvs: cloudfront.IKeyValueStore;
-  /** The main SPA's default behavior: the portal hub at `/api/` is a route of it. */
-  readonly explorerPage: cloudfront.BehaviorOptions;
-  /** A short-TTL behavior on the API SPA bucket that runs `fn`. */
-  readonly apiSpaBehavior: (
-    fn: cloudfront.IFunction
-  ) => cloudfront.BehaviorOptions;
 }
 
 /**
- * The behaviors under `/api` before the API hub's pages (tasks 0519, 0608,
- * 0660, 0670): the Prices portal at `/api/prices-api`+`/api/prices-api/*`,
- * the x402 portal at `/api/x402-facilitator`+`/api/x402-facilitator/*`, the
- * portal hub at `/api/` (a route of the main SPA; bare `/api` falls to the
- * default behavior), the API hub's backend at `/api/hub/*` with
- * `config.apiHub` (task 0680), and a redirect for every other `/api/*`.
+ * The behaviors under `/api` without the API hub's pages (`apiHub.pages` off;
+ * tasks 0519, 0608, 0660, 0670): the Prices portal at
+ * `/api/prices-api`+`/api/prices-api/*`, the x402 portal at
+ * `/api/x402-facilitator`+`/api/x402-facilitator/*`, the portal hub at `/api/`
+ * (a route of the main SPA; bare `/api` falls to the default behavior), the
+ * API hub's backend at `/api/hub/*` with `config.apiHub` (task 0680), and a
+ * redirect for every other `/api/*`.
  *
  * Each portal is an independently-built SPA in the API SPA bucket, under its
  * own key prefix, with its own CloudFront Function handling SPA routing
@@ -158,12 +153,13 @@ export function apiPortalBehaviors(
     // The portal hub (task 0660), a route of the main SPA. Bare `/api`
     // already falls to the default behavior; `/api/` would match `/api/*`.
     '/api/': shared.explorerPage,
-    // The redirects (tasks 0608, 0660, 0670): the function answers `301`
-    // or `302` before the origin is reached; the origin is there because a
-    // behavior needs one.
+    // The API hub's backend (task 0680), only with `config.apiHub`.
     ...(config.apiHub && {
       '/api/hub/*': apiHubBackendBehavior(scope, config, shared),
     }),
+    // The redirects (tasks 0608, 0660, 0670): the function answers `301`
+    // or `302` before the origin is reached; the origin is there because a
+    // behavior needs one.
     '/api/*': apiSpaBehavior(apiHubRedirectFunction),
   };
 }

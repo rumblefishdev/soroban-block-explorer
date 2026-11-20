@@ -84,3 +84,29 @@ own example function writes `True-Client-IP`; the function also deletes a viewer
 `X-Hub-Origin-Secret` and `X-Hub-Origin-Revision`. Sources:
 https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/add-origin-custom-headers.html
 https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-cloudfront-headers.html
+
+**The pages, synthesized by hand (2026-11-20).** Production's Delivery stack, three times, by the
+`cdk` CLI with `infra/cdk.json`'s context and a made-up `backendHost`
+(`made-up-backend.lambda-url.eu-central-1.on.aws`), each compared with `origin/develop`'s
+(72032230f) by `cdk diff --strict --template <develop's template>`:
+
+- _Neither:_ "There were no differences". The JSON equals develop's once its keys are sorted;
+  the file lists some resources in another order, since today's `/api` behaviours are now built
+  in `api-portal-behaviors.ts`. Testnet the same.
+- _The backend_ (`pages: false`): one origin added (the function URL, HTTPS only, with
+  `X-Hub-Origin-Secret` as `{{resolve:secretsmanager:…:SecretString:current::}}` and
+  `X-Hub-Origin-Revision`), one origin request policy, one behaviour (`/api/hub/*`, before
+  `/api/*`) and its viewer-request function (`api-hub-backend-headers`, step 4's), and the CDK's
+  own usage record (`AWS::CDK::Metadata`) with them. Nothing else. The same JSON as task 2's
+  backend-only template (abb163bd1), so turning the pages off again gives that one back.
+- _Both_ (`pages: true`): under `/api`, `/api/assets/*` (the bucket, `CachingOptimized`, the
+  main behaviours' function, so the old host still answers `301`), `/api/prices-api` and
+  `/api/prices-api/*` (the hub's function, a policy `…-headers-noindex` with
+  `X-Robots-Tag: noindex` and the shared security headers), `/api/hub/*` (as above), `/api` and
+  `/api/*` (the hub's function, short TTL); `/api/x402-facilitator`, `/api/x402-facilitator/*`
+  and `/api/` gone. Functions `api-spa-routing`, `x402-portal-routing` and `api-hub-redirect`
+  destroyed, `api-hub-routing` added. Outside `/api` (the default behaviour, `/assets/*`,
+  `/static/*`, `/prices-api*`, `/pricing-api*`, the distribution's other settings and their
+  origins) and every other resource: as develop's. The bucket's behaviours are listed before the
+  backend's, so the bucket stays the distribution's second origin and keeps its origin access
+  control when the pages are turned on or off.

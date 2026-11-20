@@ -665,6 +665,12 @@ export function validateConfig(config: EnvironmentConfig): void {
   if (config.pricesPortalOnLegacyHost && !config.legacyDomainName) {
     errors.push(`pricesPortalOnLegacyHost needs legacyDomainName.`);
   }
+  if (config.apiHub?.pages && config.pricesPortalOnLegacyHost) {
+    errors.push(
+      `apiHub.pages cannot be combined with pricesPortalOnLegacyHost: the ` +
+        `hub's bundle serves /api/prices-api on domainName only.`
+    );
+  }
   // The old host's redirect (task 0664) is the main behaviors' viewer-request
   // function too.
   if (

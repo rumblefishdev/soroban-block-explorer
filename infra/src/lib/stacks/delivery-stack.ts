@@ -7,6 +7,7 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
+import { apiHubPageBehaviors } from './api-hub-behaviors.js';
 import { apiPortalBehaviors } from './api-portal-behaviors.js';
 import { apiPathRedirectFunctionCode } from '../cloudfront-functions/api-path-redirect.js';
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
@@ -30,27 +31,26 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *
  * Creates:
  * - S3 bucket for React SPA static hosting (private, CloudFront OAC)
- * - S3 bucket for a second, independently-built SPA (the Stellar Prices
- *   portal) served at `/api/prices-api`+`/api/prices-api/*` on the same
- *   distribution (task 0519; moved from `/api` by task 0608 and from
- *   `/prices-api` by task 0660), with its own CloudFront Function handling
- *   SPA routing fallback (bare `/api/prices-api` redirect, extensionless
- *   paths rewritten to `/api/prices-api/index.html`) — the main behaviors'
- *   `errorResponses` below can't do this for `/api/prices-api/*` since
- *   custom error pages are resolved through the _default_ behavior's origin,
- *   not the originating one
- * - `/api/x402-facilitator`+`/api/x402-facilitator/*`: a third SPA, the API
- *   key portal of stellar-x402, from the same bucket and the same function
- *   source (task 0670). stellar-x402 uploads its files; this stack only routes
- * - `/api` + `/api/`: the portal hub, a route of the main SPA (task 0660)
- * - `/api/hub/*`, only with `config.apiHub` (task 0680): the API hub's
- *   backend, a Lambda function URL, uncached (see `api-hub-behaviors.ts`)
+ * - S3 bucket for the SPAs built elsewhere and served under `/api` on the same
+ *   distribution (task 0519), each routed by a CloudFront Function — the main
+ *   behaviors' `errorResponses` below can't, since custom error pages are
+ *   resolved through the _default_ behavior's origin, not the originating one
+ * - `/api`, by `config.apiHub` (task 0680), in one of three states:
+ *   - unset: the Prices portal at `/api/prices-api*` (tasks 0519, 0608,
+ *     0660), the x402 portal at `/api/x402-facilitator*` (task 0670), the
+ *     portal hub at `/api` + `/api/` (a route of the main SPA, task 0660), and
+ *     for every other `/api/*` a `301` under `/api/prices-api` for the Prices
+ *     portal's old routes, a `302` to `/api/` for the rest
+ *     (`api-portal-behaviors.ts`)
+ *   - the backend (`pages: false`): the same, and `/api/hub/*`, the API hub's
+ *     backend, a Lambda function URL, uncached (`api-hub-behaviors.ts`)
+ *   - the pages too (`pages: true`, the start): the API hub's bundle from the
+ *     bucket serves `/api`, `/api/*` and the Prices API's pages, with
+ *     `/api/hub/*` the backend; the x402 portal and the main SPA's hub route
+ *     are gone (`api-hub-behaviors.ts`)
  * - `/prices-api`+`/prices-api/*` and `/pricing-api`+`/pricing-api/*`: the
  *   Prices portal's old homes, now only a `301` to the same path under
  *   `/api/prices-api` (tasks 0608, 0660)
- * - every other `/api/*`: a `301` to the same path under `/api/prices-api` for
- *   the routes the Prices portal had at `/api/` (until task 0608), and a `302`
- *   to the hub at `/api/` for the rest (task 0670)
  * - CloudFront distribution with SPA routing fallback
  * - `legacyDomainName`, the SPA's old host: every request answers `301` to the
  *   same path on `domainName` (task 0664), from whichever function the
@@ -60,7 +60,8 @@ export interface DeliveryStackProps extends cdk.StackProps {
  * - Optional CloudFront Function basic auth gating - see `config.enableBasicAuth`
  *   (main behaviors), `config.enableApiSpaBasicAuth`
  *   (`/api/prices-api/*` only) and `config.enableX402PortalBasicAuth`
- *   (`/api/x402-facilitator/*` only, with credentials of its own)
+ *   (`/api/x402-facilitator/*` only, with credentials of its own); the last
+ *   two are the portals', and gate nothing with `apiHub.pages`
  *
  * This distribution has **no AWS WAF and no CDN-level request filtering**, and
  * that is deliberate (ADR 0048, task 0302). The only viewer-side gate this stack
@@ -275,44 +276,46 @@ export class DeliveryStack extends cdk.Stack {
     // CSP is intentionally omitted here — it should be added in a
     // follow-up task once the frontend is deployed and we know what it
     // actually loads (then dial in via Content-Security-Policy-Report-Only
-    // before enforcing).
+    // before enforcing). Every policy of this stack is built from these
+    // settings (the hub's `noindex` one too), so none can drift from them.
+    const securityHeaders: cloudfront.ResponseSecurityHeadersBehavior = {
+      strictTransportSecurity: {
+        // 1 year on production, 1 week on staging. Short max-age on
+        // staging means HSTS misconfiguration is recoverable within
+        // days rather than a year.
+        accessControlMaxAge:
+          config.envName === 'production'
+            ? cdk.Duration.days(365)
+            : cdk.Duration.days(7),
+        // Only on production: staging is itself a subdomain, so
+        // includeSubdomains here would force ALL sibling subdomains
+        // (sandbox, dev, internal tools) to HTTPS and break legit
+        // dev workflows.
+        includeSubdomains: config.envName === 'production',
+        // Never set automatically: HSTS preload submission to
+        // hstspreload.org is a one-way door — removal takes months
+        // and is not guaranteed. Enable explicitly only after a
+        // production launch decision and security sign-off.
+        preload: false,
+        override: true,
+      },
+      contentTypeOptions: { override: true },
+      frameOptions: {
+        frameOption: cloudfront.HeadersFrameOption.DENY,
+        override: true,
+      },
+      referrerPolicy: {
+        referrerPolicy:
+          cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+        override: true,
+      },
+    };
     const responseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
       this,
       'ResponseHeadersPolicy',
       {
         responseHeadersPolicyName: `${config.envName}-soroban-explorer-headers`,
-        securityHeadersBehavior: {
-          strictTransportSecurity: {
-            // 1 year on production, 1 week on staging. Short max-age on
-            // staging means HSTS misconfiguration is recoverable within
-            // days rather than a year.
-            accessControlMaxAge:
-              config.envName === 'production'
-                ? cdk.Duration.days(365)
-                : cdk.Duration.days(7),
-            // Only on production: staging is itself a subdomain, so
-            // includeSubdomains here would force ALL sibling subdomains
-            // (sandbox, dev, internal tools) to HTTPS and break legit
-            // dev workflows.
-            includeSubdomains: config.envName === 'production',
-            // Never set automatically: HSTS preload submission to
-            // hstspreload.org is a one-way door — removal takes months
-            // and is not guaranteed. Enable explicitly only after a
-            // production launch decision and security sign-off.
-            preload: false,
-            override: true,
-          },
-          contentTypeOptions: { override: true },
-          frameOptions: {
-            frameOption: cloudfront.HeadersFrameOption.DENY,
-            override: true,
-          },
-          referrerPolicy: {
-            referrerPolicy:
-              cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
-            override: true,
-          },
-        },
+        securityHeadersBehavior: securityHeaders,
       }
     );
 
@@ -386,16 +389,22 @@ export class DeliveryStack extends cdk.Stack {
       ],
     });
 
-    // Everything under `/api`. Built before the function below, so the
-    // template's CDK metadata lists the functions in the order they had.
-    const apiBehaviors = apiPortalBehaviors(this, config, {
+    // Everything under `/api`, by `config.apiHub` (see the header). Built
+    // before the function below, so the template's CDK metadata lists the
+    // functions in the order they had.
+    const apiShared = {
       responseHeadersPolicy,
+      securityHeaders,
       legacyMove,
+      explorerPage,
+      apiSpaOrigin,
+      apiSpaBehavior,
       portalMove,
       basicAuthKvs,
-      explorerPage,
-      apiSpaBehavior,
-    });
+    };
+    const apiBehaviors = config.apiHub?.pages
+      ? apiHubPageBehaviors(this, config, apiShared)
+      : apiPortalBehaviors(this, config, apiShared);
 
     // The Prices portal's old homes outside `/api/` (tasks 0608, 0660): every
     // request answers `301` to the same path under `/api/prices-api`.
