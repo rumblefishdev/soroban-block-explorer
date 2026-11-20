@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../lib/app.js';
-import type { EnvironmentConfig } from '../lib/types.js';
+import { validateConfig, type EnvironmentConfig } from '../lib/types.js';
 
 // The API hub's backend behavior, `/api/hub/*`, added by a setting (task 0680).
 const here = dirname(fileURLToPath(import.meta.url));
@@ -217,21 +217,16 @@ describe('with the backend alone', () => {
   });
 
   it('forwards every cookie, query string and exactly four headers', () => {
-    const policy = d
-      .find('AWS::CloudFront::OriginRequestPolicy')
-      .find((p) => p.Properties['OriginRequestPolicyConfig']);
-    const config = d
-      .find('AWS::CloudFront::OriginRequestPolicy')
-      .map((p) => p.Properties['OriginRequestPolicyConfig'])
-      .find((c) => c.Name?.includes('hub'));
+    // The behavior's own policy, by the logical id it references.
+    const policy = d.resources[b['OriginRequestPolicyId'].Ref];
+    expect(policy?.Type).toBe('AWS::CloudFront::OriginRequestPolicy');
+    const config = policy?.Properties['OriginRequestPolicyConfig'];
 
-    expect(policy).toBeDefined();
     expect(config.CookiesConfig.CookieBehavior).toBe('all');
     expect(config.QueryStringsConfig.QueryStringBehavior).toBe('all');
     expect([...config.HeadersConfig.Headers].sort()).toEqual(
       ['Accept', 'Content-Type', 'Origin', 'X-Hub-Viewer-Ip'].sort()
     );
-    expect(b['OriginRequestPolicyId']).toBeDefined();
   });
 
   it("strips the viewer's own trusted headers before CloudFront adds its own", () => {
@@ -437,5 +432,53 @@ describe('the pages with the Prices portal on the old host', () => {
         { pricesPortalOnLegacyHost: true }
       )
     ).toThrow(/apiHub\.pages[\s\S]*pricesPortalOnLegacyHost/);
+  });
+});
+
+describe("the setting's own checks", () => {
+  // On one host, the one in the zone: the old host's own rule would refuse
+  // both gates first.
+  const base = {
+    ...envs.production,
+    domainName: envs.production.legacyDomainName as string,
+    legacyDomainName: undefined,
+  };
+  const check =
+    (hub: Partial<typeof apiHub>, more: Partial<EnvironmentConfig> = {}) =>
+    () =>
+      validateConfig({ ...base, ...more, apiHub: { ...apiHub, ...hub } });
+
+  it('takes the values the runbook gives', () => {
+    expect(check({ pages: false })).not.toThrow();
+    expect(check({ pages: true })).not.toThrow();
+  });
+
+  it.each([
+    'https://abc123.lambda-url.eu-central-1.on.aws',
+    'abc123.lambda-url.eu-central-1.on.aws/',
+    'abc123.lambda-url.eu-central-1.on.aws:443',
+    '',
+  ])('refuses the backend host %j', (backendHost) => {
+    expect(check({ backendHost })).toThrow(/apiHub\.backendHost/);
+  });
+
+  it('refuses an empty secret name or revision', () => {
+    expect(check({ originSecretName: '' })).toThrow(/apiHub\.originSecretName/);
+    expect(check({ originSecretRevision: ' ' })).toThrow(
+      /apiHub\.originSecretRevision/
+    );
+  });
+
+  it("refuses the origin-secret lock: the viewer's address would be Cloudflare's", () => {
+    expect(check({ pages: false }, { enableOriginSecretLock: true })).toThrow(
+      /apiHub[\s\S]*enableOriginSecretLock/
+    );
+  });
+
+  it("refuses the pages with the main site's Basic Auth", () => {
+    expect(check({ pages: true }, { enableBasicAuth: true })).toThrow(
+      /apiHub\.pages[\s\S]*enableBasicAuth/
+    );
+    expect(check({ pages: false }, { enableBasicAuth: true })).not.toThrow();
   });
 });

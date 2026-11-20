@@ -453,10 +453,10 @@ originSecretRevision, pages}`) hands `/api/` to the separate API hub app
     headers `Origin`, `Content-Type`, `Accept` and `X-Hub-Viewer-Ip` are
     forwarded. CloudFront adds `X-Hub-Origin-Secret` (the `current` field of the
     Secrets Manager secret `originSecretName`, a dynamic reference that
-    CloudFormation reads again only when the template changes, so
-    `originSecretRevision`, sent as `X-Hub-Origin-Revision`, is raised after the
-    value changes) so the backend can refuse a call that did not come through
-    here. A viewer-request function (`api-hub-backend-headers.ts`) writes the
+    CloudFormation reads again whenever it updates the distribution, for any
+    reason; `originSecretRevision`, sent as `X-Hub-Origin-Revision`, is raised
+    after the value changes to force that) so the backend can refuse a call
+    that did not come through here. A viewer-request function (`api-hub-backend-headers.ts`) writes the
     client's address from `event.viewer.ip` into `X-Hub-Viewer-Ip` and drops a
     viewer's own secret and revision headers. The behavior sits before
     `/api/*`; no page changes and nothing links to it.
@@ -475,7 +475,10 @@ originSecretRevision, pages}`) hands `/api/` to the separate API hub app
     now a `302` to `/api/`), so `enableX402PortalBasicAuth` gates nothing; the
     Prices portal's `api-spa-routing.ts` function, so `enableApiSpaBasicAuth`
     gates nothing; `api-hub-redirect.ts`; and `/api/` as a route of the main
-    SPA. `pages: true` is refused together with `pricesPortalOnLegacyHost`.
+    SPA. `pages: true` is refused together with `pricesPortalOnLegacyHost` or
+    `enableBasicAuth`, and `apiHub` with `enableOriginSecretLock` (behind
+    Cloudflare `event.viewer.ip` is Cloudflare's address, so the hub's request
+    limit would count everybody behind one edge as one client).
     Setting `pages` back to `false` is the way back. The behaviors are built in
     `stacks/api-hub-behaviors.ts` (with the pages) and
     `stacks/api-portal-behaviors.ts` (without).

@@ -102,8 +102,9 @@ export function apiHubPageBehaviors(
  * `/api/hub/*` (task 0680): the API hub's backend, a Lambda function URL
  * (`config.apiHub.backendHost`). Never cached; the viewer's cookies, query
  * string and four headers are forwarded. CloudFront stamps the origin with
- * `X-Hub-Origin-Secret` (a Secrets Manager dynamic reference, read again only
- * when `originSecretRevision` changes the template) so the backend can refuse
+ * `X-Hub-Origin-Secret` (a Secrets Manager dynamic reference, which
+ * CloudFormation reads again whenever it updates the distribution, for any
+ * reason; raising `originSecretRevision` makes it) so the backend can refuse
  * a call that did not come through here.
  *
  * The distribution turns every 403 and 404 into the explorer's `index.html`

@@ -117,6 +117,11 @@ https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-cloudfr
   explorer's `/api/` route, are gone. `validateConfig` refuses `pages: true` with
   `pricesPortalOnLegacyHost`.
 
+**Since the review (2026-11-20).** `validateConfig` also refuses a malformed `backendHost`, an empty
+secret name or revision, `apiHub` with `enableOriginSecretLock` (behind Cloudflare the viewer's
+address is Cloudflare's) and `pages` with `enableBasicAuth`. CloudFormation reads the secret again
+on any update of the distribution, not only on a new revision: rotate it as the hub's runbook says.
+
 **Deployment.** The pull request changes nothing on production. `infra/envs/production.json`
 changes only at the deployment, in two pull requests, as the hub's runbook has it
 (`docs/runbook.md` in `rumblefishdev/sorobanscan-api-portal`): first `apiHub` with
@@ -125,8 +130,8 @@ The distribution answers every 403 and 404 with the explorer's `index.html`, so 
 (no invoke permission, a wrong `backendHost`) looks like the explorer: call the function URL
 directly first.
 
-**The way back.** Set `pages` to `false`: the stack goes back to the backend-only template, which
-is the backend-only template (commit `170567856`), with the old pages and the x402 portal as before.
+**The way back.** Set `pages` to `false`: the stack goes back to the backend-only template (commit
+`170567856`), with the old pages and the x402 portal as before.
 Removing `apiHub` goes back to today's. Either recreates `api-spa-routing`,
 `x402-portal-routing` and `api-hub-redirect` under the names the start deletes: after the start's
 deploy, check they are gone: `aws cloudfront list-functions --stage LIVE --query
