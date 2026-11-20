@@ -1,15 +1,17 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
 
 import { apiHubBackendHeadersFunctionCode } from '../cloudfront-functions/api-hub-backend-headers.js';
+import type { HostMove } from '../cloudfront-functions/legacy-host-redirect.js';
 import type { EnvironmentConfig } from '../types.js';
 
 /** What the stack already has that the hub's behaviors share. */
 export interface ApiHubShared {
   readonly responseHeadersPolicy: cloudfront.IResponseHeadersPolicy;
+  /** The main SPA's host move: the hub lives on the new host only. */
+  readonly legacyMove: HostMove | undefined;
 }
 
 /**
@@ -30,11 +32,11 @@ export function apiHubBackendBehavior(
   const hub = config.apiHub;
   if (!hub) throw new Error('apiHubBackendBehavior needs config.apiHub');
 
-  const secret = secretsmanager.Secret.fromSecretNameV2(
-    scope,
-    'ApiHubOriginSecret',
-    hub.originSecretName
-  );
+  // By the secret's name, the form CloudFormation documents for a dynamic
+  // reference (`fromSecretNameV2` would put a partial ARN in it).
+  const secretValue = cdk.SecretValue.secretsManager(hub.originSecretName, {
+    jsonField: 'current',
+  });
 
   const originRequestPolicy = new cloudfront.OriginRequestPolicy(
     scope,
@@ -62,7 +64,7 @@ export function apiHubBackendBehavior(
       functionName: `${config.envName}-soroban-explorer-api-hub-backend-headers`,
       runtime: cloudfront.FunctionRuntime.JS_2_0,
       code: cloudfront.FunctionCode.fromInline(
-        apiHubBackendHeadersFunctionCode()
+        apiHubBackendHeadersFunctionCode(shared.legacyMove)
       ),
     }
   );
@@ -72,9 +74,7 @@ export function apiHubBackendBehavior(
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
       readTimeout: cdk.Duration.seconds(30),
       customHeaders: {
-        'X-Hub-Origin-Secret': secret
-          .secretValueFromJson('current')
-          .unsafeUnwrap(),
+        'X-Hub-Origin-Secret': secretValue.unsafeUnwrap(),
         'X-Hub-Origin-Revision': hub.originSecretRevision,
       },
     }),

@@ -545,6 +545,7 @@ export class DeliveryStack extends cdk.Stack {
         ...(config.apiHub && {
           '/api/hub/*': apiHubBackendBehavior(this, config, {
             responseHeadersPolicy,
+            legacyMove,
           }),
         }),
         '/api/*': apiSpaBehavior(apiHubRedirectFunction),

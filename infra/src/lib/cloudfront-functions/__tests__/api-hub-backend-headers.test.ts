@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
+import type { HostMove } from '../legacy-host-redirect.js';
 import { apiHubBackendHeadersFunctionCode } from '../api-hub-backend-headers.js';
 
 type Headers = Record<string, { value: string }>;
-type Handler = (event: unknown) => { headers: Headers; uri: string };
+type Handler = (event: unknown) => {
+  headers: Headers;
+  uri: string;
+  statusCode?: number;
+};
 
-const handler = new Function(
-  `${apiHubBackendHeadersFunctionCode()}; return handler;`
-)() as Handler;
+const handlerFor = (move?: HostMove) =>
+  new Function(
+    `${apiHubBackendHeadersFunctionCode(move)}; return handler;`
+  )() as Handler;
+
+const handler = handlerFor();
 
 describe('apiHubBackendHeadersFunctionCode', () => {
   it("drops the viewer's secret and revision, and replaces x-hub-viewer-ip", () => {
@@ -58,5 +66,42 @@ describe('apiHubBackendHeadersFunctionCode', () => {
     });
 
     expect(out.headers['x-hub-viewer-ip']?.value).toBe('2001:db8::1');
+  });
+
+  describe('with the old host moved', () => {
+    const move: HostMove = { from: 'old.example', to: 'sorobanscan.com' };
+    const moved = handlerFor(move);
+
+    it("answers the old host's request with a 301 in one hop, query kept", () => {
+      const out = moved({
+        viewer: { ip: '198.51.100.7' },
+        request: {
+          uri: '/api/hub/me',
+          querystring: { x: { value: '1' } },
+          headers: { host: { value: 'old.example' } },
+        },
+      }) as unknown as {
+        statusCode: number;
+        headers: { location: { value: string } };
+      };
+
+      expect(out.statusCode).toBe(301);
+      expect(out.headers.location.value).toBe(
+        'https://sorobanscan.com/api/hub/me?x=1'
+      );
+    });
+
+    it("passes the new host's request with the address written", () => {
+      const out = moved({
+        viewer: { ip: '198.51.100.7' },
+        request: {
+          uri: '/api/hub/me',
+          headers: { host: { value: 'sorobanscan.com' } },
+        },
+      });
+
+      expect(out.statusCode).toBeUndefined();
+      expect(out.headers['x-hub-viewer-ip']?.value).toBe('198.51.100.7');
+    });
   });
 });

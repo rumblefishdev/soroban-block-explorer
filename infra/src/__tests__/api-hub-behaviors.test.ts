@@ -62,6 +62,7 @@ function delivery(env: keyof typeof envs, hub?: Partial<typeof apiHub>) {
   return {
     raw,
     resources,
+    distConfig: dist,
     find,
     dist,
     behavior,
@@ -91,9 +92,17 @@ describe('without apiHub', () => {
       const d = delivery(env);
 
       expect(d.patterns).toEqual(TODAY);
-      expect(d.functionName('/api/*')).toBe(
-        `${env}-soroban-explorer-api-hub-redirect`
-      );
+      for (const [pattern, name] of Object.entries({
+        '/api/prices-api': 'api-spa-routing',
+        '/api/prices-api/*': 'api-spa-routing',
+        '/api/x402-facilitator': 'x402-portal-routing',
+        '/api/x402-facilitator/*': 'x402-portal-routing',
+        '/api/*': 'api-hub-redirect',
+      })) {
+        expect(d.functionName(pattern), pattern).toBe(
+          `${env}-soroban-explorer-${name}`
+        );
+      }
       expect(d.raw).not.toContain('X-Hub-Origin');
       expect(d.raw).not.toContain('api-hub-backend');
     });
@@ -108,6 +117,32 @@ describe('with the backend alone', () => {
     const expected = [...TODAY];
     expected.splice(expected.indexOf('/api/*'), 0, '/api/hub/*');
     expect(d.patterns).toEqual(expected);
+  });
+
+  it('changes nothing else in the distribution or the stack', () => {
+    const before = delivery('production');
+    const hubOrigin = b['TargetOriginId'];
+    const rest = {
+      ...d.distConfig,
+      CacheBehaviors: d.distConfig.CacheBehaviors.filter(
+        (x) => x['PathPattern'] !== '/api/hub/*'
+      ),
+      Origins: d.distConfig.Origins.filter((o) => o['Id'] !== hubOrigin),
+    };
+    expect(rest).toEqual(before.distConfig);
+
+    const added = Object.keys(d.resources).filter(
+      (k) => !(k in before.resources)
+    );
+    expect(added.map((k) => d.resources[k]?.Type).sort()).toEqual([
+      'AWS::CloudFront::Function',
+      'AWS::CloudFront::OriginRequestPolicy',
+    ]);
+    for (const k of Object.keys(before.resources)) {
+      if (before.resources[k]?.Type === 'AWS::CloudFront::Distribution')
+        continue;
+      expect(d.resources[k], k).toEqual(before.resources[k]);
+    }
   });
 
   it('points at the backend over HTTPS with the secret and revision', () => {
@@ -137,6 +172,7 @@ describe('with the backend alone', () => {
     expect(JSON.stringify(secret?.HeaderValue)).toContain(
       ':SecretString:current'
     );
+    expect(JSON.stringify(secret?.HeaderValue)).not.toContain('arn:');
     expect(revision?.HeaderValue).toBe('1');
   });
 
