@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from 'react';
 
 import { PAGE_SIZE, useNftsList, usePagedRows } from '../../api/index.js';
+import { routes } from '../../router/routes.js';
 import { CURSOR_PARAMS } from '../cursorParams.js';
 import { NftNameCell } from '../nfts/NftNameCell.js';
 
@@ -32,7 +33,19 @@ function NftRow({ row, alt }: { row: NftItem; alt: boolean }) {
       })}
     >
       <NftNameCell row={row} nameFontSize={16} mono={false} />
-      <IdentifierDisplay value={row.contract_id} type="contract" />
+      {/* The collection by name, linked to its contract. A row has no column
+          header, so a bare contract id here does not say what it is. */}
+      {row.collection_name ? (
+        <IdentifierDisplay
+          value={row.collection_name}
+          type="contract"
+          href={routes.contract(row.contract_id)}
+          truncate={false}
+          mono={false}
+        />
+      ) : (
+        <IdentifierDisplay value={row.contract_id} type="contract" />
+      )}
     </Box>
   );
 }
