@@ -7,6 +7,7 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
+import { apiHubBackendBehavior } from './api-hub-behaviors.js';
 import { apiHubRedirectFunctionCode } from '../cloudfront-functions/api-hub-redirect.js';
 import { apiPathRedirectFunctionCode } from '../cloudfront-functions/api-path-redirect.js';
 import { apiSpaRoutingFunctionCode } from '../cloudfront-functions/api-spa-routing.js';
@@ -44,6 +45,8 @@ export interface DeliveryStackProps extends cdk.StackProps {
  *   key portal of stellar-x402, from the same bucket and the same function
  *   source (task 0670). stellar-x402 uploads its files; this stack only routes
  * - `/api` + `/api/`: the portal hub, a route of the main SPA (task 0660)
+ * - `/api/hub/*`, only with `config.apiHub` (task 0680): the API hub's
+ *   backend, a Lambda function URL, uncached (see `api-hub-behaviors.ts`)
  * - `/prices-api`+`/prices-api/*` and `/pricing-api`+`/pricing-api/*`: the
  *   Prices portal's old homes, now only a `301` to the same path under
  *   `/api/prices-api` (tasks 0608, 0660)
@@ -539,6 +542,11 @@ export class DeliveryStack extends cdk.Stack {
         // The redirects (tasks 0608, 0660, 0670): the function answers `301`
         // or `302` before the origin is reached; the origin is there because a
         // behavior needs one.
+        ...(config.apiHub && {
+          '/api/hub/*': apiHubBackendBehavior(this, config, {
+            responseHeadersPolicy,
+          }),
+        }),
         '/api/*': apiSpaBehavior(apiHubRedirectFunction),
         '/prices-api': apiSpaBehavior(apiPathRedirectFunction),
         '/prices-api/*': apiSpaBehavior(apiPathRedirectFunction),

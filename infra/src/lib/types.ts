@@ -273,6 +273,21 @@ export interface EnvironmentConfig {
   readonly sorobanscanApiDomainName?: string;
 
   /**
+   * Hands `/api/` to the separate API hub app (task 0680), in two stages.
+   * Unset = today's distribution, unchanged.
+   */
+  readonly apiHub?: {
+    /** The backend's Lambda function URL host, with no scheme and no path. */
+    readonly backendHost: string;
+    /** In Secrets Manager: JSON whose `current` CloudFront sends as `X-Hub-Origin-Secret`. */
+    readonly originSecretName: string;
+    /** Raised after the secret's value changed: CloudFormation reads a reference again only when the template changes. */
+    readonly originSecretRevision: string;
+    /** The start: the hub's bundle serves `/api/` and the pages under it (task 0680, stage 2). */
+    readonly pages: boolean;
+  };
+
+  /**
    * ACM cert ARN covering `sorobanscanApiDomainName`, in `awsRegion` (the
    * eu-central-1 `*.sorobanscan.com` wildcard of task 0661).
    */
