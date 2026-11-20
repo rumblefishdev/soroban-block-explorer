@@ -442,6 +442,46 @@ redeploying `ApiGateway` as soon as the run ends.
   `301`, which a browser keeps: an unknown path can be the next portal's).
   `api-path-redirect.ts` still strips `/api` too, for the minutes of a deploy
   in which the distribution has not moved `/api/*` to the new function.
+- since task 0680, `apiHub` in `envs/<env>.json` (`{backendHost, originSecretName,
+originSecretRevision, pages}`) hands `/api/` to the separate API hub app
+  (`sorobanscan-api-portal`), in two stages. The bullets above on the `/api`
+  behaviors describe the stack with it unset, which is what production and
+  testnet build until a setting is added:
+  - `apiHub` set, `pages: false`: the same, plus `/api/hub/*`, the hub's
+    backend, a Lambda function URL (`backendHost`) over HTTPS only. Nothing is
+    cached, every method is allowed, and cookies, the query string and the
+    headers `Origin`, `Content-Type`, `Accept` and `X-Hub-Viewer-Ip` are
+    forwarded. CloudFront adds `X-Hub-Origin-Secret` (the `current` field of the
+    Secrets Manager secret `originSecretName`, a dynamic reference that
+    CloudFormation reads again whenever it updates the distribution, for any
+    reason; `originSecretRevision`, sent as `X-Hub-Origin-Revision`, is raised
+    after the value changes to force that) so the backend can refuse a call
+    that did not come through here. A viewer-request function (`api-hub-backend-headers.ts`) writes the
+    client's address from `event.viewer.ip` into `X-Hub-Viewer-Ip` and drops a
+    viewer's own secret and revision headers. The behavior sits before
+    `/api/*`; no page changes and nothing links to it.
+  - `pages: true` (the start): the hub's bundle, in the same bucket under
+    `api/`, serves the pages. `/api`, `/api/*`, `/api/prices-api` and
+    `/api/prices-api/*` run one function (`api-hub-routing.ts`): the old host's
+    `301`; bare `/api` and `/api/prices-api` get their trailing slash; for
+    `/api/`, `login`, `dashboard`, `quick-start`, `docs`, `privacy-policy` and
+    `prices-api` a path with a `.` in its last segment is the bundle's file and
+    any other is rewritten to `/api/index.html`; `openapi.json` is a `301` to
+    `/api/prices-api/openapi.json`; any other first segment is a `302` to
+    `/api/`. The two Prices behaviors add `X-Robots-Tag: noindex`.
+    `/api/assets/*` is the bundle's hashed files with the long cache of the
+    explorer's own `/assets/*`; `/api/hub/*` is as above. No longer applying:
+    the x402 portal's two behaviors and function (`/api/x402-facilitator*` is
+    now a `302` to `/api/`), so `enableX402PortalBasicAuth` gates nothing; the
+    Prices portal's `api-spa-routing.ts` function, so `enableApiSpaBasicAuth`
+    gates nothing; `api-hub-redirect.ts`; and `/api/` as a route of the main
+    SPA. `pages: true` is refused together with `pricesPortalOnLegacyHost` or
+    `enableBasicAuth`, and `apiHub` with `enableOriginSecretLock` (behind
+    Cloudflare `event.viewer.ip` is Cloudflare's address, so the hub's request
+    limit would count everybody behind one edge as one client).
+    Setting `pages` back to `false` is the way back. The behaviors are built in
+    `stacks/api-hub-behaviors.ts` (with the pages) and
+    `stacks/api-portal-behaviors.ts` (without).
 - since task 0576, writes standard (access) logs for every request, explorer
   and portal alike, to `${envName}-soroban-explorer-cf-logs`: path, status,
   referrer, user agent and viewer IP, never cookies. Objects expire after 30
