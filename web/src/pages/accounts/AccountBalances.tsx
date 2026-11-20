@@ -282,7 +282,7 @@ export function AccountBalances({
   balances: readonly AccountBalance[];
   /** The account was closed — "yet" would promise something that cannot come. */
   deleted: boolean;
-  /** NFTs the account holds now; at 0 the card has no NFTs tab. */
+  /** NFTs the account holds now; at 0 the card has no NFTs view. */
   nftCount: number;
 }) {
   const funded = balances.filter((b) => b.balance !== '0').length;
@@ -329,43 +329,44 @@ export function AccountBalances({
   const start = page * PAGE_SIZE;
   const shown = paged ? balances.slice(start, start + PAGE_SIZE) : balances;
 
-  // NFTs are a second tab of this card, not assets of their own: SEP-50 NFTs
-  // carry no balance, so they get their own list. The tab exists only for an
-  // account that holds one, and `?holdings=nfts` keeps it across a reload.
+  // NFTs are a second view of this card, not assets of their own: SEP-50 NFTs
+  // carry no balance, so they get their own list. The switch exists only when
+  // the account holds both; `?holdings=nfts` keeps the view across a reload.
   const { activeKey, setActiveKey } = useTabUrlState({
     param: 'holdings',
     defaultKey: 'tokens',
     validKeys: HOLDINGS_TABS,
   });
-  const showNfts = nftCount > 0 && activeKey === 'nfts';
-  // The pills take the counter's place under the title: they carry both counts.
-  const title =
-    nftCount > 0 ? (
-      <Stack spacing={0.75} alignItems="flex-start">
-        <Typography variant="heading5SemiBold" component="h2">
-          Assets
-        </Typography>
-        <HoldingsSwitch
-          active={showNfts ? 'nfts' : 'tokens'}
-          tokens={balances.length}
-          nfts={nftCount}
-          onChange={setActiveKey}
-        />
-      </Stack>
-    ) : (
-      'Assets'
-    );
+  const holdsBoth = nftCount > 0 && balances.length > 0;
+  // An address can hold NFTs and no tokens: it may not exist on the ledger at
+  // all, since a contract can send an NFT to any G address.
+  const showNfts =
+    nftCount > 0 && (balances.length === 0 || activeKey === 'nfts');
+  const holdingsSwitch = holdsBoth ? (
+    <HoldingsSwitch
+      active={showNfts ? 'nfts' : 'tokens'}
+      tokens={balances.length}
+      nfts={nftCount}
+      onChange={setActiveKey}
+    />
+  ) : undefined;
 
   if (showNfts) {
     return (
-      <SectionCard title={title}>
-        <AccountNfts accountId={accountId} />
+      <SectionCard
+        title="Assets"
+        meta={
+          holdsBoth ? meta : `${nftCount} ${nftCount === 1 ? 'NFT' : 'NFTs'}`
+        }
+        action={holdingsSwitch}
+      >
+        <AccountNfts accountId={accountId} nftCount={nftCount} />
       </SectionCard>
     );
   }
 
   return (
-    <SectionCard title={title} meta={nftCount > 0 ? undefined : meta}>
+    <SectionCard title="Assets" meta={meta} action={holdingsSwitch}>
       {balances.length === 0 ? (
         <EmptyState
           icon={<AccountBalanceWalletIcon />}
@@ -403,9 +404,9 @@ export function AccountBalances({
 }
 
 /**
- * Tokens / NFTs pills under the Assets title, each with its count. Same pill
- * look as the chart range picker on the pool page (`IntervalPills` in
- * `PoolCharts.tsx`).
+ * Tokens / NFTs pills on the right of the Assets header, each with its count,
+ * where the pool page's activity card puts its filter. Same pill look as the
+ * chart range picker on the pool page (`IntervalPills` in `PoolCharts.tsx`).
  */
 function HoldingsSwitch({
   active,
