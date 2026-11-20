@@ -424,7 +424,14 @@ function HoldingsSwitch({
     { key: 'nfts', label: 'NFTs', count: nfts },
   ] as const;
   return (
-    <Stack direction="row" spacing={0.5} role="group" aria-label="Show">
+    <Stack
+      direction="row"
+      spacing={0.5}
+      role="group"
+      aria-label="Assets view"
+      // Beside the counter on a phone: the pills keep their one-line size.
+      sx={{ flexShrink: 0 }}
+    >
       {options.map(({ key, label, count }) => {
         const isActive = key === active;
         return (
@@ -436,6 +443,7 @@ function HoldingsSwitch({
             onClick={() => onChange(key)}
             sx={(theme) => ({
               ...theme.typography.bodyXsMedium,
+              whiteSpace: 'nowrap',
               border: 'none',
               borderRadius: `${theme.shape.radius.s}px`,
               px: 1.25,

@@ -795,6 +795,56 @@ describe('AccountDetailPage', () => {
   });
 
   it.each([
+    [20, undefined, false],
+    [21, 'c2', true],
+  ])('with %i NFTs shows a pager only past one page', (count, next, pager) => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: count },
+      isLoading: false,
+      isError: false,
+    });
+    hookMocks.useNftsList.mockReturnValue({
+      data: { data: [HELD_NFT], page: { limit: 20, next } },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(
+      assetsCard().queryAllByRole('button', { name: /next/i })
+    ).toHaveLength(pager ? 1 : 0);
+  });
+
+  it('holds placeholder rows while the next page loads, not the old rows', () => {
+    mockDetail({
+      data: { ...SAMPLE, nft_count: 3 },
+      isLoading: false,
+      isError: false,
+    });
+    hookMocks.useNftsList.mockReturnValue({
+      data: { data: [HELD_NFT], page: { limit: 20 } },
+      isLoading: false,
+      isPlaceholderData: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AccountDetailPage />, {
+      initialEntries: [`/accounts/${VALID_ACCOUNT}?holdings=nfts`],
+      routePath: '/accounts/:accountId',
+    });
+
+    expect(assetsCard().getAllByTestId('nft-row-placeholder')).toHaveLength(3);
+  });
+
+  it.each([
     [3, 3],
     [50, 20],
   ])(

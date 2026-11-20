@@ -60,6 +60,7 @@ function NftRowPlaceholder({ alt }: { alt: boolean }) {
         <Skeleton width={120} height={22} />
         <Skeleton width={32} height={17} />
       </Stack>
+      <Skeleton width={76} height={20} sx={{ ml: 'auto' }} />
     </Box>
   );
 }
