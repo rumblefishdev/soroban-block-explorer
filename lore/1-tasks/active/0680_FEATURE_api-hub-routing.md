@@ -62,8 +62,8 @@ backend alone with the first; today's answers with neither.
 - [ ] With neither setting, the stack's template is unchanged
 - [ ] With the backend's values alone, `/api/hub/*` is added and nothing else changes
 - [ ] With both stages on, the behaviours and the routing function answer as the spec's tables say
-- [ ] **Docs updated** — `docs/architecture/**` describes the distribution's `/api` behaviours,
-      or `N/A — reason`.
+- [x] **Docs updated** — `docs/architecture/infrastructure/infrastructure-overview.md` describes
+      the `apiHub` setting and its `/api` behaviours.
 - [ ] **API types regenerated** — N/A — no change under `crates/api/**`, `Cargo.{toml,lock}` or
       `libs/api-types/**`.
 
