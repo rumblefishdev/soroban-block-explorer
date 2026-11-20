@@ -2,7 +2,7 @@
 id: '0675'
 title: 'FEATURE: account page lists the NFTs the account holds'
 type: FEATURE
-status: active
+status: completed
 related_adr: []
 related_tasks: ['0376', '0493']
 tags: [priority-medium, effort-medium, layer-api, layer-frontend, nft]
@@ -20,6 +20,15 @@ history:
     status: active
     who: karolkow
     note: 'PR 743 merged: filter[owner], nft_count, NFTs tab of the Assets card. Stays active for three follow-up PRs from the review walkthrough.'
+  - date: 2026-11-20
+    status: completed
+    who: karolkow
+    note: >
+      Done in PR 743 (filter[owner], nft_count, NFTs view) and PR 751 (the NFTs
+      view matches the Tokens list; header counter kept, switch on the right;
+      an address with NFTs and no tokens opens on its NFTs), with PR 750 as its
+      structure step. 34 account-page tests. Issue 741 closes at deploy.
+      The other review follow-ups are out of this task (Future Work).
 ---
 
 # FEATURE: account page lists the NFTs the account holds
@@ -36,30 +45,18 @@ the NFTs the account holds now, each linked to its NFT page.
   `fetch_held_by`; `nft_count` in `GET /v1/accounts/:id`; NFTs as a second tab
   of the Assets card; docs; API types. Reviews: /code-review (both axes),
   /ponytail-review, /devils-advocate, /ux-expert — findings applied.
-- Merged 2026-11-20 (PR #743, merge 757c560f3). Every acceptance criterion
-  holds; not deployed yet.
-- Next — follow-up PRs, then close the task:
-  1. `[structure only]`: the account handler's four reads all call
-     `queries::…(&state.ch(), id)` (no `_for_source` wrappers); the `join!`
-     comment counts four reads.
-  2. One NFT read: `fetch_list` moves to the `UNION ALL` + `GROUP BY` shape
-     and `owner` becomes one of its filters, so `fetch_held_by` goes away.
-     The collection, name and contract filters are measured first; a
-     differential test compares the old and new list for every filter.
-  3. The NFTs view matches the Tokens view beside it: rows laid out like
-     `BalanceRow` (name font, row height, contract id at the right edge);
-     the pager only when `nft_count` > 20, captioned with the count; as many
-     skeleton rows as NFTs held (at most 20) instead of a 1283 → 219 px jump;
-     the card header (pills against the `N assets · M with a balance` line)
-     chosen from a prototype.
-- In force: NFTs are a tab of the Assets card — `Tokens N | NFTs N`, only when
-  `nft_count` > 0, `?holdings=nfts` (2026-11-18, replaces the separate card).
+- Done: PR #743 (merged 2026-11-20), PR #750 `[structure only]` and PR #751
+  (merged 2026-11-20). Not deployed yet; issue #741 closes at deploy.
+- In force (PR #751): the Assets header keeps its counter
+  (`N assets · M with a balance`) with the `Tokens N` / `NFTs N` pills on its right,
+  only when the account holds both; an address with NFTs and no tokens opens on its
+  NFTs, header `N NFTs`. NFT rows use the Tokens row layout; the pager shows only
+  past one page (caption `N NFTs`); loading holds min(nft_count, 20) placeholder rows.
+- In force: NFTs are a second view of the Assets card, `?holdings=nfts`
+  (2026-11-18, replaces the separate card).
   Read shape B — no JOIN for the owner read; `filter[owner]` refuses other
   filters. Server join settings stay as they are (measured: a thread cap would
   slow the transactions list, ~10 cores per query).
-- In force: the switch is `Tokens N` / `NFTs N` pills under the card title, in
-  place of the token counter (2026-11-19, chosen from five prototypes, branch
-  `proto/0675-holdings-switch`).
 - In force: the NFT list stays its own cursor request, not part of
   `GET /v1/accounts/:id` (2026-11-19). Inside the account response it would
   have no size bound (651 KiB for the largest holder today, 283 B per NFT),
@@ -68,9 +65,6 @@ the NFTs the account holds now, each linked to its NFT page.
   view (500), loudly, instead of being dropped (2026-11-19). 0 of 17,532 NFTs
   on production; the writer ends `soroban_contracts` before `nfts`, so such a
   row means an indexer defect.
-- In force: the NFTs view has no header row, like the Tokens list beside it,
-  and declares its own two columns (NFT, Contract ID) instead of a `hideOwner`
-  flag on the `/nfts` table (2026-11-19); `ExplorerTable` takes `showHeader`.
 - Cost on production (`system.query_log`, 3 owners × 3 runs): the shared list
   shape took 155–385 MiB / 190–400 ms; `fetch_held_by` takes 4–10 MiB /
   24–35 ms plus two name lookups of ~2.6 MiB; the count takes 8 ms / 7 MiB.
@@ -137,3 +131,18 @@ when the account holds none.
 
 - Out of scope: NFTs in `nfts_pending` (task 0392), names and media of
   unenriched NFTs (token `3` above has neither).
+
+## Future Work
+
+Found in the PR #743 walkthrough and the PR #751 reviews; not needed for issue #741.
+
+- API handlers: 18 of 22 `_for_source` wrappers (left from the Postgres to
+  ClickHouse move, task 0243) only forward the call; remove them in all five
+  modules at once, and name the four that carry logic for what they do.
+- One NFT read: `fetch_list` in the `UNION ALL` + `GROUP BY` shape with `owner`
+  as one of its filters, so `fetch_held_by` goes away; measure the other filters
+  first and prove it with a differential test.
+- `DataList` draws its pager on every list; hiding an idle pager (12 lists)
+  would let `AccountNfts` go back onto `DataList` instead of its own copy of
+  the loading / error / empty chain.
+- `ExplorerTable`'s `showHeader` prop has no caller since PR #751.
