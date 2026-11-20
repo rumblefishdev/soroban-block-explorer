@@ -16,6 +16,10 @@ history:
     status: active
     who: karolkow
     note: 'Activated: option A chosen — an NFTs card under Balances, shown only when the account holds one, fed by filter[owner] on GET /v1/nfts.'
+  - date: 2026-11-20
+    status: active
+    who: karolkow
+    note: 'PR 743 merged: filter[owner], nft_count, NFTs tab of the Assets card. Stays active for three follow-up PRs from the review walkthrough.'
 ---
 
 # FEATURE: account page lists the NFTs the account holds
@@ -32,8 +36,22 @@ the NFTs the account holds now, each linked to its NFT page.
   `fetch_held_by`; `nft_count` in `GET /v1/accounts/:id`; NFTs as a second tab
   of the Assets card; docs; API types. Reviews: /code-review (both axes),
   /ponytail-review, /devils-advocate, /ux-expert — findings applied.
-- Next: look at the card on real data (local API on production CH) once the
-  certificate links exist; then merge.
+- Merged 2026-11-20 (PR #743, merge 757c560f3). Every acceptance criterion
+  holds; not deployed yet.
+- Next — follow-up PRs, then close the task:
+  1. `[structure only]`: the account handler's four reads all call
+     `queries::…(&state.ch(), id)` (no `_for_source` wrappers); the `join!`
+     comment counts four reads.
+  2. One NFT read: `fetch_list` moves to the `UNION ALL` + `GROUP BY` shape
+     and `owner` becomes one of its filters, so `fetch_held_by` goes away.
+     The collection, name and contract filters are measured first; a
+     differential test compares the old and new list for every filter.
+  3. The NFTs view matches the Tokens view beside it: rows laid out like
+     `BalanceRow` (name font, row height, contract id at the right edge);
+     the pager only when `nft_count` > 20, captioned with the count; as many
+     skeleton rows as NFTs held (at most 20) instead of a 1283 → 219 px jump;
+     the card header (pills against the `N assets · M with a balance` line)
+     chosen from a prototype.
 - In force: NFTs are a tab of the Assets card — `Tokens N | NFTs N`, only when
   `nft_count` > 0, `?holdings=nfts` (2026-11-18, replaces the separate card).
   Read shape B — no JOIN for the owner read; `filter[owner]` refuses other
