@@ -29,11 +29,9 @@ section "The explorer's distribution".
 
 ## Stan teraz
 
-- Done: task created, branch `feat/0680_api-hub-routing`.
-- Next: the hub's routing function (`api-hub-routing.ts`), then the behaviours, settings and
-  tests that attach it.
-- In force: one CloudFront Function for `/api/*` and the two Prices behaviours; the old host's
-  `301` first, then by the first segment after `/api/`.
+- Done: the function, the behaviours, the `apiHub` setting, their tests and the notes below.
+- Next: the pull request, then the deployment in two pull requests (see "The setting").
+- In force: `infra/envs/production.json` has no `apiHub`: production builds what it built.
 
 ## Context
 
@@ -110,3 +108,42 @@ https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-cloudfr
   origins) and every other resource: as develop's. The bucket's behaviours are listed before the
   backend's, so the bucket stays the distribution's second origin and keeps its origin access
   control when the pages are turned on or off.
+
+## The setting (2026-11-20)
+
+`apiHub` in `EnvironmentConfig` (`infra/src/lib/types.ts`):
+`{ backendHost, originSecretName, originSecretRevision, pages }`. Three states:
+
+- **Unset (every environment today).** The stack builds what it built before: the Prices portal,
+  the x402 portal, the explorer's `ApiHubPage` at `/api` and `/api/`, and `301`/`302` for the other
+  `/api/*` paths (`api-portal-behaviors.ts`). Checked by `cdk diff --strict`: no differences.
+- **`pages: false` (the backend).** The same, plus `/api/hub/*`: the hub's Lambda function URL,
+  HTTPS only, never cached, every method, cookies and query forwarded, with the secret from
+  Secrets Manager as `X-Hub-Origin-Secret` and `originSecretRevision` as `X-Hub-Origin-Revision`.
+  A viewer-request function writes the client's address into `X-Hub-Viewer-Ip`. No page changes
+  and nothing links to the backend, so it can be tried from AWS first.
+- **`pages: true` (the start).** The hub's bundle in the API bucket serves `/api`, `/api/*` and
+  `/api/prices-api{,/*}` through `api-hub-routing`; `/api/assets/*` comes from the bucket with the
+  long cache; `/api/hub/*` is as above. The x402 portal's two behaviours and function, and the
+  explorer's `/api/` route, are gone. `validateConfig` refuses `pages: true` together with
+  `pricesPortalOnLegacyHost`.
+
+**Deployment.** The pull request changes nothing on production. `infra/envs/production.json`
+changes only at the deployment, in two pull requests, as the hub's runbook has it
+(`docs/runbook.md` in `rumblefishdev/sorobanscan-api-portal`): first `apiHub` with
+`pages: false`, then, once the backend answers from AWS, `pages: true`. Testnet is never changed.
+
+**The way back.** Set `pages` to `false`: the stack goes back to the backend-only template, which
+is the same JSON as task 2's backend-only one, with the old pages and the x402 portal as before.
+Removing `apiHub` goes back to today's.
+
+## Left for a clean-up after the start
+
+Not done here, because the way back needs them:
+
+- `ApiHubPage` and its route in the explorer's app (the way back shows the old hub).
+- `enableX402PortalBasicAuth`, which gates nothing once `pages` is on.
+- The unarmed path: `api-portal-behaviors.ts` and the x402 portal's function, behaviours and
+  `api-hub-redirect`.
+- The bucket's `api/x402-facilitator/` prefix.
+- The KeyValueStore's `auth-token-x402` key.
