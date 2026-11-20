@@ -190,8 +190,10 @@ The backend serves data from the block explorer's own database, adding:
     schema, and merges `[[CURRENCIES]]` per-token fields plus
     `[DOCUMENTATION]` org info into asset detail responses (task 0188).
     Built-in safeguards: 100 KB body cap (per SEP-1 spec), 1 s connect / 2 s
-    request timeouts, RFC 1035 hostname validation rejecting IP literals, and
-    a 24 h LRU cache (1024 entries) keyed by lowercase home_domain. Currently
+    request timeouts, RFC 1035 hostname validation rejecting IP literals,
+    refusal of a name that resolves to a non-public address
+    (`enrichment_shared::outbound_guard`, task 0656), and a 24 h LRU cache
+    (1024 entries) keyed by lowercase home_domain. Currently
     consumed only by `GET /v1/assets/{id}`; future detail endpoints
     (accounts, etc.) will reuse the same fetcher
   - **`runtime_enrichment::source_verification`** — reads a verifier

@@ -24,5 +24,6 @@
 pub mod enrich_and_persist;
 pub(crate) mod http_transient;
 pub mod nft_token_uri;
+pub mod outbound_guard;
 pub mod sep1;
 pub mod soroban_rpc;
