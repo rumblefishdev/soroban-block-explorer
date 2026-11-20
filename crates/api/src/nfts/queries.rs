@@ -76,6 +76,8 @@
 //! (YAGNI). A skip index on a stored mint ledger is not an option: `nfts` no
 //! longer has one (task 0497).
 
+use std::collections::HashMap;
+
 use clickhouse::Row;
 use serde::Deserialize;
 
@@ -304,6 +306,156 @@ pub async fn fetch_list(
     // `params.limit` is the handler's `fetch_limit()` (already the peek +1).
     let rows = query.bind(params.limit).fetch_all::<NftListChRow>().await?;
     Ok(rows.into_iter().map(map_list_row).collect())
+}
+
+// ---------------------------------------------------------------------------
+// Held by one account — GET /v1/nfts?filter[owner]=G…
+// ---------------------------------------------------------------------------
+
+/// SELECT column order MUST match [`fetch_held_by`] (positional decode).
+#[derive(Debug, Row, Deserialize)]
+struct HeldChRow {
+    contract_surrogate: i64,
+    token_id: String,
+    enrichment_collection_name: Option<String>,
+    name: Option<String>,
+    media_url: Option<String>,
+    minted_at_ledger: Option<i64>,
+    last_seen_ledger: Option<i64>,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct LedgerCollectionNameRow {
+    contract_id: String,
+    name: String,
+}
+
+/// `GET /v1/nfts?filter[owner]=G…` — the NFTs one account holds now, one page:
+/// the rows, order and cursor [`fetch_list`] gives, read without a JOIN.
+///
+/// An account holds a few NFTs, but every JOIN builds a hash table per server
+/// thread whatever the row count, so the joined list read costs far more memory
+/// than the data (measured in task 0675). Here each source is read for the
+/// owner's tokens only, the three are folded into one row per token by
+/// `GROUP BY`, and the page's few contracts are named afterwards.
+///
+/// The holding is the `FINAL` row of `nfts`: a token sold in a later ingest
+/// batch can sit unmerged beside its old row, and must not count. The
+/// `owned` scope reads without `FINAL` — it only narrows what is read, and may
+/// include a token the owner no longer holds.
+///
+/// One difference from the list: an NFT whose contract has no
+/// `soroban_contracts` row fails the page here, where the list's INNER JOIN
+/// drops the row unseen.
+pub async fn fetch_held_by(
+    client: &clickhouse::Client,
+    owner: &str,
+    limit: i64,
+    cursor: Option<&NftListCursor>,
+    direction: Direction,
+) -> Result<Vec<NftRow>, clickhouse::error::Error> {
+    let (op, order) = keyset_sql_desc(direction);
+    let keyset = if cursor.is_some() {
+        format!(" AND (ifNull(minted_at_ledger, 0), contract_id, token_id) {op} (?, ?, ?)")
+    } else {
+        String::new()
+    };
+    let sql = format!(
+        "WITH owner AS (SELECT id FROM accounts WHERE account_id = ? LIMIT 1), \
+              owned AS ( \
+                  SELECT contract_id, token_id FROM nfts \
+                  WHERE current_owner_id IN (SELECT id FROM owner) \
+              ) \
+         SELECT contract_id                         AS contract_surrogate, \
+                token_id                             AS token_id, \
+                nullIf(argMax(e_collection, version), '') AS enrichment_collection_name, \
+                nullIf(argMax(e_name, version), '')  AS name, \
+                nullIf(argMax(e_media, version), '') AS media_url, \
+                min(minted_at)                       AS minted_at_ledger, \
+                nullIf(max(owner_ledger), 0)         AS last_seen_ledger \
+         FROM ( \
+             SELECT contract_id, token_id, 1 AS held, current_owner_ledger AS owner_ledger, \
+                    CAST(NULL AS Nullable(String)) AS e_name, \
+                    CAST(NULL AS Nullable(String)) AS e_media, \
+                    CAST(NULL AS Nullable(String)) AS e_collection, \
+                    CAST(NULL AS Nullable(DateTime64(3, 'UTC'))) AS version, \
+                    CAST(NULL AS Nullable(Int64)) AS minted_at \
+             FROM nfts FINAL \
+             WHERE current_owner_id IN (SELECT id FROM owner) \
+             UNION ALL \
+             SELECT contract_id, token_id, 0, 0, name, media_url, collection_name, version, NULL \
+             FROM nft_enrichment \
+             WHERE (contract_id, token_id) IN (SELECT contract_id, token_id FROM owned) \
+             UNION ALL \
+             SELECT contract_id, token_id, 0, 0, NULL, NULL, NULL, NULL, ledger_sequence \
+             FROM nft_ownership_changes \
+             WHERE event_type = 0 \
+               AND (contract_id, token_id) IN (SELECT contract_id, token_id FROM owned) \
+         ) \
+         GROUP BY contract_id, token_id \
+         HAVING max(held) = 1{keyset} \
+         ORDER BY ifNull(minted_at_ledger, 0) {order}, contract_id {order}, token_id {order} \
+         LIMIT ?"
+    );
+
+    let mut query = client.query(&sql).bind(owner);
+    if let Some(c) = cursor {
+        query = query
+            .bind(c.minted_at_ledger)
+            .bind(c.contract_surrogate)
+            .bind(&c.token_id);
+    }
+    let rows = query.bind(limit).fetch_all::<HeldChRow>().await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Name the page's contracts: the C… address, and the collection name the
+    // contract itself publishes, which wins over the enrichment one (the same
+    // precedence as the list).
+    let ids: Vec<i64> = rows.iter().map(|r| r.contract_surrogate).collect();
+    let contract_ids_sql = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    let (contracts, ledger_names) = tokio::try_join!(
+        resolve_contracts(client, ids),
+        client
+            .query(&format!(
+                "SELECT contract_id, assumeNotNull(name) AS name \
+                 FROM soroban_contract_metadata FINAL \
+                 WHERE contract_id IN \
+                       (SELECT contract_id FROM soroban_contracts WHERE id IN ({contract_ids_sql})) \
+                   AND name != ''"
+            ))
+            .fetch_all::<LedgerCollectionNameRow>(),
+    )?;
+    let ledger_names: HashMap<String, String> = ledger_names
+        .into_iter()
+        .map(|r| (r.contract_id, r.name))
+        .collect();
+
+    rows.into_iter()
+        .map(|r| {
+            let Some(contract_id) = contracts.get(&r.contract_surrogate).cloned() else {
+                return Err(clickhouse::error::Error::Custom(format!(
+                    "NFT contract surrogate {} has no soroban_contracts row",
+                    r.contract_surrogate
+                )));
+            };
+            Ok(NftRow {
+                collection_name: ledger_names
+                    .get(&contract_id)
+                    .cloned()
+                    .or(r.enrichment_collection_name),
+                contract_id,
+                token_id: r.token_id,
+                name: r.name,
+                media_url: r.media_url,
+                minted_at_ledger: r.minted_at_ledger,
+                owner: Some(owner.to_string()),
+                last_seen_ledger: r.last_seen_ledger,
+                contract_surrogate: r.contract_surrogate,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

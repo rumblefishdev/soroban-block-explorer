@@ -63,8 +63,10 @@ export default function AccountDetailPage() {
     summary = <AccountSummary account={account.data} />;
     balances = (
       <AccountBalances
+        accountId={accountId}
         balances={account.data.balances}
         deleted={account.data.deleted}
+        nftCount={account.data.nft_count}
       />
     );
     signers = (

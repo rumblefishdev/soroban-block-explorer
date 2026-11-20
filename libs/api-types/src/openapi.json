@@ -1802,6 +1802,15 @@
             "schema": {
               "type": ["string", "null"]
             }
+          },
+          {
+            "name": "filter[owner]",
+            "in": "query",
+            "description": "Account G-StrKey; only the NFTs that account holds now.",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
           }
         ],
         "responses": {
@@ -2317,7 +2326,8 @@
           "balances",
           "first_seen_ledger",
           "last_seen_ledger",
-          "deleted"
+          "deleted",
+          "nft_count"
         ],
         "properties": {
           "account_id": {
@@ -2343,6 +2353,12 @@
           "last_seen_ledger": {
             "type": "integer",
             "format": "int64"
+          },
+          "nft_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many NFTs the account holds now. Counts only what the indexer\nclassified as an NFT; `0` also for an account whose NFTs are not\nindexed.",
+            "minimum": 0
           },
           "sequence_number": {
             "type": "string",

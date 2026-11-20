@@ -428,7 +428,8 @@ Deliberately omits address search (exact lookup is the global-search redirect) a
 balance ranking / `xlm_supply_percent` (no index / no XLM-supply source — see task 0274).
 
 **`GET /accounts/:account_id`** - Account detail: current balances, sequence number,
-and first/last seen ledger.
+first/last seen ledger, and `nft_count` — the NFTs the account holds now (the merged
+`nfts` row, the same rule as `GET /nfts?filter[owner]=`).
 
 **`GET /accounts/:account_id/transactions`** - Paginated transactions involving this
 account.
@@ -557,7 +558,14 @@ place where indexed contract metadata and decoded usage history are exposed.
 
 **`GET /nfts`** - Paginated list of NFTs. Query params: `limit`, `cursor`,
 `filter[collection]` (exact match), `filter[contract_id]` (C-StrKey), `filter[name]`
-(substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`).
+(substring; rejects `%`/`_` literals — `crates/api/src/nfts/queries.rs`), `filter[owner]`
+(G-StrKey; the NFTs that account holds now, matched on the merged `nfts` row so a token
+sold in a later batch never lists under its previous owner). `filter[owner]` takes no
+other filter (400 `invalid_filter`) and is served by its own read, `fetch_held_by`: it
+reads each source for the owner's tokens and folds them with `GROUP BY` instead of
+joining them, because every JOIN builds a hash table per server thread whatever the
+row count (measured in task 0675). An NFT whose contract has no `soroban_contracts`
+row fails that read; the unfiltered list drops such a row.
 
 **`GET /nfts/:id`** - NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL. The owner (`owner`) is a `G…` account or a `C…` contract, resolved through

@@ -387,7 +387,8 @@ transactions.
 #### Accounts
 
 **`GET /accounts/:account_id`** — Account detail: current balances, sequence number,
-and first/last seen ledger.
+first/last seen ledger, and `nft_count` — the NFTs the account holds now (the merged
+`nfts` row, the same rule as `GET /nfts?filter[owner]=`).
 
 **`GET /accounts/:account_id/transactions`** — Paginated transactions involving this
 account.
@@ -416,7 +417,7 @@ types, return types).
 #### NFTs
 
 **`GET /nfts`** — Paginated list of NFTs. Query params: `limit`, `cursor`,
-`filter[collection]`, `filter[contract_id]`.
+`filter[collection]`, `filter[contract_id]`, `filter[name]`, `filter[owner]`.
 
 **`GET /nfts/:contract_id/:token_id`** — NFT detail: name, token ID, collection, contract, owner, metadata,
 media URL. The owner (`owner`) is a `G…` account or a `C…` contract; null once the NFT is

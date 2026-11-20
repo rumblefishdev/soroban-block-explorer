@@ -77,6 +77,11 @@ export interface ExplorerTableProps<T> {
   loading?: boolean;
   /** Placeholder row count while `loading`. */
   skeletonRows?: number;
+  /**
+   * `false` drops the header row, for a table that sits beside a header-less
+   * list in the same card and whose cells name themselves.
+   */
+  showHeader?: boolean;
 }
 
 interface SortableHeaderProps {
@@ -158,6 +163,7 @@ export function ExplorerTable<T>({
   rowHeight = EXPLORER_TABLE_ROW_HEIGHT,
   loading = false,
   skeletonRows = 10,
+  showHeader = true,
 }: ExplorerTableProps<T>) {
   const isEmpty = rows.length === 0;
 
@@ -191,46 +197,48 @@ export function ExplorerTable<T>({
       }}
     >
       <Table sx={{ tableLayout: 'fixed', minWidth }}>
-        <TableHead
-          sx={(theme) => ({
-            backgroundColor: theme.palette.surface.backgroundAlt,
-          })}
-        >
-          <TableRow>
-            {visibleColumns.map((col) => {
-              const isSorted = sortBy === col.id;
-              return (
-                <TableCell
-                  key={col.id}
-                  align={col.align ?? 'left'}
-                  width={col.width}
-                  sortDirection={isSorted ? sortDir : false}
-                  sx={{
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}
-                >
-                  {col.sortable ? (
-                    <SortableHeader
-                      label={col.header}
-                      isSorted={isSorted}
-                      direction={isSorted ? sortDir : 'desc'}
-                      align={col.align ?? 'left'}
-                      onClick={() => {
-                        const next: SortDirection =
-                          isSorted && sortDir === 'desc' ? 'asc' : 'desc';
-                        onSortChange?.(col.id, next);
-                      }}
-                    />
-                  ) : (
-                    col.header
-                  )}
-                </TableCell>
-              );
+        {showHeader && (
+          <TableHead
+            sx={(theme) => ({
+              backgroundColor: theme.palette.surface.backgroundAlt,
             })}
-          </TableRow>
-        </TableHead>
+          >
+            <TableRow>
+              {visibleColumns.map((col) => {
+                const isSorted = sortBy === col.id;
+                return (
+                  <TableCell
+                    key={col.id}
+                    align={col.align ?? 'left'}
+                    width={col.width}
+                    sortDirection={isSorted ? sortDir : false}
+                    sx={{
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {col.sortable ? (
+                      <SortableHeader
+                        label={col.header}
+                        isSorted={isSorted}
+                        direction={isSorted ? sortDir : 'desc'}
+                        align={col.align ?? 'left'}
+                        onClick={() => {
+                          const next: SortDirection =
+                            isSorted && sortDir === 'desc' ? 'asc' : 'desc';
+                          onSortChange?.(col.id, next);
+                        }}
+                      />
+                    ) : (
+                      col.header
+                    )}
+                  </TableCell>
+                );
+              })}
+            </TableRow>
+          </TableHead>
+        )}
         <TableBody>
           {loading
             ? // Skeleton placeholder rows in the EXACT same row/cell layout as

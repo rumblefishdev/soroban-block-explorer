@@ -9,6 +9,7 @@ import {
   IdentifierDisplay,
   PaginationControls,
   scaleByDecimals,
+  useTabUrlState,
 } from '@rumblefish/soroban-block-explorer-ui';
 import { useSearchParams } from 'react-router-dom';
 
@@ -17,6 +18,7 @@ import { PAGE_SIZE } from '../../api/polling.js';
 import { routes } from '../../router/routes.js';
 import { SectionCard } from '../detail/SectionCard.js';
 import { AssetIcon } from '../assets/AssetIcon.js';
+import { AccountNfts } from './AccountNfts.js';
 import { NATIVE_ASSET_CODE, SAC_TAG } from '../assets/assetType.js';
 
 interface BalanceShape {
@@ -57,6 +59,8 @@ interface BalanceShape {
  * Position would have worked only per page: with pagination the index restarts
  * at 0 on every page, so page 2's first row would claim page 1's key.
  */
+const HOLDINGS_TABS = ['tokens', 'nfts'];
+
 function assetKey(balance: AccountBalance): string {
   return [
     balance.type,
@@ -269,12 +273,17 @@ function BalanceRow({
  * has to fall in the same place the server put it.
  */
 export function AccountBalances({
+  accountId,
   balances,
   deleted,
+  nftCount,
 }: {
+  accountId: string;
   balances: readonly AccountBalance[];
   /** The account was closed — "yet" would promise something that cannot come. */
   deleted: boolean;
+  /** NFTs the account holds now; at 0 the card has no NFTs tab. */
+  nftCount: number;
 }) {
   const funded = balances.filter((b) => b.balance !== '0').length;
   const noun = balances.length === 1 ? 'asset' : 'assets';
@@ -320,8 +329,43 @@ export function AccountBalances({
   const start = page * PAGE_SIZE;
   const shown = paged ? balances.slice(start, start + PAGE_SIZE) : balances;
 
+  // NFTs are a second tab of this card, not assets of their own: SEP-50 NFTs
+  // carry no balance, so they get their own list. The tab exists only for an
+  // account that holds one, and `?holdings=nfts` keeps it across a reload.
+  const { activeKey, setActiveKey } = useTabUrlState({
+    param: 'holdings',
+    defaultKey: 'tokens',
+    validKeys: HOLDINGS_TABS,
+  });
+  const showNfts = nftCount > 0 && activeKey === 'nfts';
+  // The pills take the counter's place under the title: they carry both counts.
+  const title =
+    nftCount > 0 ? (
+      <Stack spacing={0.75} alignItems="flex-start">
+        <Typography variant="heading5SemiBold" component="h2">
+          Assets
+        </Typography>
+        <HoldingsSwitch
+          active={showNfts ? 'nfts' : 'tokens'}
+          tokens={balances.length}
+          nfts={nftCount}
+          onChange={setActiveKey}
+        />
+      </Stack>
+    ) : (
+      'Assets'
+    );
+
+  if (showNfts) {
+    return (
+      <SectionCard title={title}>
+        <AccountNfts accountId={accountId} />
+      </SectionCard>
+    );
+  }
+
   return (
-    <SectionCard title="Assets" meta={meta}>
+    <SectionCard title={title} meta={nftCount > 0 ? undefined : meta}>
       {balances.length === 0 ? (
         <EmptyState
           icon={<AccountBalanceWalletIcon />}
@@ -355,5 +399,68 @@ export function AccountBalances({
         />
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * Tokens / NFTs pills under the Assets title, each with its count. Same pill
+ * look as the chart range picker on the pool page (`IntervalPills` in
+ * `PoolCharts.tsx`).
+ */
+function HoldingsSwitch({
+  active,
+  tokens,
+  nfts,
+  onChange,
+}: {
+  active: 'tokens' | 'nfts';
+  tokens: number;
+  nfts: number;
+  onChange: (next: string) => void;
+}) {
+  const options = [
+    { key: 'tokens', label: 'Tokens', count: tokens },
+    { key: 'nfts', label: 'NFTs', count: nfts },
+  ] as const;
+  return (
+    <Stack direction="row" spacing={0.5} role="group" aria-label="Show">
+      {options.map(({ key, label, count }) => {
+        const isActive = key === active;
+        return (
+          <Box
+            key={key}
+            component="button"
+            type="button"
+            aria-pressed={isActive}
+            onClick={() => onChange(key)}
+            sx={(theme) => ({
+              ...theme.typography.bodyXsMedium,
+              border: 'none',
+              borderRadius: `${theme.shape.radius.s}px`,
+              px: 1.25,
+              py: 0.5,
+              cursor: 'pointer',
+              backgroundColor: isActive
+                ? theme.palette.surface.primaryMain
+                : theme.palette.surface.grayLight,
+              color: isActive
+                ? theme.palette.grey[900]
+                : theme.palette.text.secondary,
+              '&:hover': {
+                backgroundColor: isActive
+                  ? theme.palette.surface.primaryHover
+                  : theme.palette.surface.grayHover,
+              },
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.stroke.action}`,
+                outlineOffset: 2,
+              },
+            })}
+          >
+            {label} {count}
+          </Box>
+        );
+      })}
+    </Stack>
   );
 }
