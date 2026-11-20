@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 /**
  * The browser check against the REAL Cloudflare Turnstile widget (task 0289).
@@ -8,15 +8,16 @@ import { expect, test, type Page } from '@playwright/test';
  * passes, two that always fail, one that always asks for a challenge. The
  * widget and its script come from challenges.cloudflare.com, so these tests
  * need the internet. The API itself is never reached: the session mint and
- * every data call are answered by `page.route`.
+ * every data call are answered by `page.route`. The mint answers with the
+ * same `Set-Cookie` the real API sends (task 0677), and a data call passes
+ * only when the browser sends that cookie back — so these tests prove the
+ * browser keeps it across reloads and pages.
  */
 
 const PASSES = 'http://localhost:4281';
 const FAILS = 'http://localhost:4282';
 const CHALLENGES = 'http://localhost:4283';
 const FAILS_INVISIBLE = 'http://localhost:4284';
-
-const JWT = 'e2e-session-jwt';
 
 /** A refusal shows the card within seconds. */
 const CARD_TIMEOUT = 25_000;
@@ -53,32 +54,59 @@ const ACCOUNT_BODY = {
 
 type Seen = {
   mints: { token: unknown }[];
-  data: { url: string; authorization: string | undefined }[];
+  data: {
+    url: string;
+    authorization: string | undefined;
+    status: number;
+  }[];
   /** 'mint' and 'data' in the order the browser sent them. */
   order: string[];
 };
 
+const SESSION_COOKIE = '__Host-session=e2e-session';
+
 /**
- * Answer the API: the session mint with a fixed JWT, the account with a body
- * the page can render, every other data call with an empty list. Records
- * every call so the tests can say what went out and in which order.
+ * Answer the API: the session mint with 204 and the session cookie, the
+ * account with a body the page can render, every other data call with an
+ * empty list — and every data call that does not send the cookie with 401.
+ * With `cookieSticks: false` the mint sets no cookie, which is what a browser
+ * that keeps no cookies sees. Records every call so the tests can say what
+ * went out and in which order. Routes the whole context, so a second page
+ * shares the counts.
  */
-async function serveApi(page: Page): Promise<Seen> {
+async function serveApi(
+  context: BrowserContext,
+  { cookieSticks = true } = {}
+): Promise<Seen> {
   const seen: Seen = { mints: [], data: [], order: [] };
 
-  await page.route('**/api/auth/session', async (route) => {
+  await context.route('**/api/auth/session', async (route) => {
     seen.mints.push(route.request().postDataJSON());
     seen.order.push('mint');
-    await route.fulfill({ json: { token: JWT, expires_in: 900 } });
+    await route.fulfill({
+      status: 204,
+      headers: cookieSticks
+        ? {
+            'set-cookie': `${SESSION_COOKIE}; Max-Age=900; Path=/; Secure; HttpOnly; SameSite=Strict`,
+          }
+        : {},
+    });
   });
 
-  await page.route('**/api/v1/**', async (route) => {
+  await context.route('**/api/v1/**', async (route) => {
     const request = route.request();
+    const cookie = (await request.allHeaders())['cookie'] ?? '';
+    const status = cookie.includes(SESSION_COOKIE) ? 200 : 401;
     seen.data.push({
       url: request.url(),
       authorization: request.headers()['authorization'],
+      status,
     });
     seen.order.push('data');
+    if (status === 401) {
+      await route.fulfill({ status, body: 'authentication required' });
+      return;
+    }
     if (new URL(request.url()).pathname === `/api/v1/accounts/${ACCOUNT}`) {
       await route.fulfill({ json: ACCOUNT_BODY });
       return;
@@ -102,10 +130,10 @@ test.describe('a key that always passes', () => {
   test.use({ baseURL: PASSES });
   test.setTimeout(90_000);
 
-  test('mints a session with the widget token, then loads data with the Bearer', async ({
+  test('answers the first 401 with a check and a mint, then loads data', async ({
     page,
   }) => {
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     await expect(page.getByText('3 assets · 1 with a balance')).toBeVisible({
@@ -117,17 +145,37 @@ test.describe('a key that always passes', () => {
     // widget ran and its token, not a placeholder, went to the mint.
     expect(seen.mints[0].token).toBe('XXXX.DUMMY.TOKEN.XXXX');
 
-    // No data call may go out before a session exists.
-    expect(seen.order[0]).toBe('mint');
-    expect(seen.data.length).toBeGreaterThan(0);
+    // Reads go out at once, and their 401s share one check (decision 5).
+    expect(seen.order[0]).toBe('data');
+    expect(seen.mints).toHaveLength(1);
+    expect(seen.data.some((call) => call.status === 200)).toBe(true);
+    // The session is the cookie, never a header (decision 6).
     for (const call of seen.data) {
-      expect(call.authorization, call.url).toBe(`Bearer ${JWT}`);
+      expect(call.authorization, call.url).toBeUndefined();
     }
+  });
+
+  // Decision 14 (W46 B): the browser keeps cookies but the session cookie
+  // never comes back (here the mint sets none, as a proxy stripping it would):
+  // the visitor is not blamed, the retry card shows, nothing is checked again
+  // before the click.
+  test('a session lost on our side shows Try again, not the cookies panel', async ({
+    page,
+  }) => {
+    const seen = await serveApi(page.context(), { cookieSticks: false });
+    await page.goto(`/accounts/${ACCOUNT}`);
+
+    await expect(failureCard(page)).toContainText(
+      "We couldn't verify your browser",
+      { timeout: CARD_TIMEOUT }
+    );
+    await expect(page.getByText('This site needs cookies')).toHaveCount(0);
+    expect(seen.mints).toHaveLength(1);
   });
 
   test('one solve serves the next page too', async ({ page }) => {
     // Task AC: "data loads with at most one solve per session".
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
     await expect(page.getByText('3 assets · 1 with a balance')).toBeVisible({
       timeout: CARD_TIMEOUT,
@@ -145,9 +193,29 @@ test.describe('a key that always passes', () => {
     await expect.poll(() => seen.data.length).toBeGreaterThan(dataBefore);
 
     expect(seen.mints).toHaveLength(1);
-    for (const call of seen.data) {
-      expect(call.authorization, call.url).toBe(`Bearer ${JWT}`);
-    }
+  });
+
+  // Decision 2, the goal of task 0677: the browser keeps the cookie, so a
+  // reload and a second tab read data with no new check.
+  test('a reload and a second tab need no new check', async ({ page }) => {
+    const seen = await serveApi(page.context());
+    await page.goto(`/accounts/${ACCOUNT}`);
+    await expect(page.getByText('3 assets · 1 with a balance')).toBeVisible({
+      timeout: CARD_TIMEOUT,
+    });
+
+    await page.reload();
+    await expect(page.getByText('3 assets · 1 with a balance')).toBeVisible({
+      timeout: CARD_TIMEOUT,
+    });
+
+    const second = await page.context().newPage();
+    await second.goto(`/accounts/${ACCOUNT}`);
+    await expect(second.getByText('3 assets · 1 with a balance')).toBeVisible({
+      timeout: CARD_TIMEOUT,
+    });
+
+    expect(seen.mints).toHaveLength(1);
   });
 });
 
@@ -155,10 +223,8 @@ test.describe('a key that always fails', () => {
   test.use({ baseURL: FAILS });
   test.setTimeout(150_000);
 
-  test('shows the plain failure card and sends no data request', async ({
-    page,
-  }) => {
-    const seen = await serveApi(page);
+  test('shows the plain failure card and no data loads', async ({ page }) => {
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
@@ -168,7 +234,8 @@ test.describe('a key that always fails', () => {
     await expect(card.getByRole('button', { name: 'Try again' })).toBeVisible();
 
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
-    expect(seen.data).toHaveLength(0);
+    // Reads go out at once (decision 5), but none gets past its 401.
+    expect(seen.data.every((call) => call.status === 401)).toBe(true);
 
     // No HTTP status (401, 403, …) and no Cloudflare error code (300030,
     // 110200, 600010, …) in what the visitor reads.
@@ -179,7 +246,7 @@ test.describe('a key that always fails', () => {
   test('the card is an alertdialog with focus on Try again', async ({
     page,
   }) => {
-    await serveApi(page);
+    await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
@@ -190,7 +257,7 @@ test.describe('a key that always fails', () => {
   test('Try again checks again without reloading the page', async ({
     page,
   }) => {
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     let documentLoads = 0;
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) documentLoads += 1;
@@ -255,7 +322,8 @@ test.describe('a key that always fails', () => {
         () => (window as unknown as Record<string, unknown>).__e2eMarker
       )
     ).toBe('kept');
-    expect(seen.data).toHaveLength(0);
+    // Reads go out at once (decision 5), but none gets past its 401.
+    expect(seen.data.every((call) => call.status === 401)).toBe(true);
   });
 
   test.describe('on a phone', () => {
@@ -264,7 +332,7 @@ test.describe('a key that always fails', () => {
     test('the card spans the screen less 16 px a side, fully on screen', async ({
       page,
     }) => {
-      await serveApi(page);
+      await serveApi(page.context());
       await page.goto(`/accounts/${ACCOUNT}`);
 
       const card = failureCard(page);
@@ -282,7 +350,7 @@ test.describe('a key that always fails', () => {
   });
 
   test('on a desktop the card is at most 360 px wide', async ({ page }) => {
-    await serveApi(page);
+    await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
@@ -297,10 +365,8 @@ test.describe('an invisible key that always fails', () => {
   test.use({ baseURL: FAILS_INVISIBLE });
   test.setTimeout(90_000);
 
-  test('shows the same failure card and sends no data request', async ({
-    page,
-  }) => {
-    const seen = await serveApi(page);
+  test('shows the same failure card and no data loads', async ({ page }) => {
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     const card = failureCard(page);
@@ -308,7 +374,8 @@ test.describe('an invisible key that always fails', () => {
     await expect(card).toContainText("We couldn't verify your browser");
     await expect(card.getByRole('button', { name: 'Try again' })).toBeVisible();
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
-    expect(seen.data).toHaveLength(0);
+    // Reads go out at once (decision 5), but none gets past its 401.
+    expect(seen.data.every((call) => call.status === 401)).toBe(true);
   });
 });
 
@@ -319,7 +386,7 @@ test.describe('a key that forces an interactive challenge', () => {
   test("shows Cloudflare's widget alone, keeps it up, and waits", async ({
     page,
   }) => {
-    const seen = await serveApi(page);
+    const seen = await serveApi(page.context());
     await page.goto(`/accounts/${ACCOUNT}`);
 
     // The widget's iframe sits in Turnstile's shadow root, so find it through
@@ -353,7 +420,8 @@ test.describe('a key that forces an interactive challenge', () => {
     await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(
       0
     );
-    expect(seen.data).toHaveLength(0);
+    // Reads go out at once (decision 5), but none gets past its 401.
+    expect(seen.data.every((call) => call.status === 401)).toBe(true);
   });
 
   test.describe('on a phone', () => {
@@ -362,7 +430,7 @@ test.describe('a key that forces an interactive challenge', () => {
     test("shows Cloudflare's widget at its full width, on screen", async ({
       page,
     }) => {
-      await serveApi(page);
+      await serveApi(page.context());
       await page.goto(`/accounts/${ACCOUNT}`);
 
       // A container half the screen wide squeezed the widget to ~140 px and cut

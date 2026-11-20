@@ -29,13 +29,14 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "Session JWT minted",
-            "content": {
-              "application/json": {
+          "204": {
+            "description": "Session minted",
+            "headers": {
+              "Set-Cookie": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionResponse"
-                }
+                  "type": "string"
+                },
+                "description": "`__Host-session`, HttpOnly, 15 min"
               }
             }
           },
@@ -5149,22 +5150,6 @@
           }
         }
       },
-      "SessionResponse": {
-        "type": "object",
-        "required": ["token", "expires_in"],
-        "properties": {
-          "expires_in": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Seconds until `token` expires.",
-            "minimum": 0
-          },
-          "token": {
-            "type": "string",
-            "description": "Free-tier session JWT, sent back as `Authorization: Bearer <token>`."
-          }
-        }
-      },
       "SignatureDto": {
         "type": "object",
         "description": "Single signature on a transaction envelope.",
@@ -5553,20 +5538,12 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-api-key"
-      },
-      "bearer_jwt": {
-        "type": "http",
-        "scheme": "bearer",
-        "bearerFormat": "JWT"
       }
     }
   },
   "security": [
     {
       "api_key": []
-    },
-    {
-      "bearer_jwt": []
     }
   ]
 }

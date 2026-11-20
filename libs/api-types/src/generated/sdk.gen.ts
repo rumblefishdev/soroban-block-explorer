@@ -165,10 +165,7 @@ export const listAccounts = <ThrowOnError extends boolean = false>(
     ListAccountsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/accounts',
     ...options,
   });
@@ -185,10 +182,7 @@ export const getAccount = <ThrowOnError extends boolean = false>(
     GetAccountErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/accounts/{account_id}',
     ...options,
   });
@@ -201,10 +195,7 @@ export const getAccountSponsorship = <ThrowOnError extends boolean = false>(
     GetAccountSponsorshipErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/accounts/{account_id}/sponsorship',
     ...options,
   });
@@ -222,10 +213,7 @@ export const listAccountTransactions = <ThrowOnError extends boolean = false>(
     ListAccountTransactionsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/accounts/{account_id}/transactions',
     ...options,
   });
@@ -238,10 +226,7 @@ export const listAssets = <ThrowOnError extends boolean = false>(
     ListAssetsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/assets',
     ...options,
   });
@@ -254,10 +239,7 @@ export const getAsset = <ThrowOnError extends boolean = false>(
     GetAssetErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/assets/{id}',
     ...options,
   });
@@ -270,10 +252,7 @@ export const listAssetTransactions = <ThrowOnError extends boolean = false>(
     ListAssetTransactionsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/assets/{id}/transactions',
     ...options,
   });
@@ -291,10 +270,7 @@ export const listContracts = <ThrowOnError extends boolean = false>(
     ListContractsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/contracts',
     ...options,
   });
@@ -307,10 +283,7 @@ export const getContract = <ThrowOnError extends boolean = false>(
     GetContractErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/contracts/{contract_id}',
     ...options,
   });
@@ -332,10 +305,7 @@ export const getDecompiled = <ThrowOnError extends boolean = false>(
     GetDecompiledErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/contracts/{contract_id}/decompiled',
     ...options,
   });
@@ -348,10 +318,7 @@ export const listEvents = <ThrowOnError extends boolean = false>(
     ListEventsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/contracts/{contract_id}/events',
     ...options,
   });
@@ -364,10 +331,7 @@ export const getInterface = <ThrowOnError extends boolean = false>(
     GetInterfaceErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/contracts/{contract_id}/interface',
     ...options,
   });
@@ -380,10 +344,7 @@ export const listInvocations = <ThrowOnError extends boolean = false>(
     ListInvocationsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/contracts/{contract_id}/invocations',
     ...options,
   });
@@ -403,10 +364,7 @@ export const getVerification = <ThrowOnError extends boolean = false>(
     GetVerificationErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/contracts/{contract_id}/verification',
     ...options,
   });
@@ -427,10 +385,7 @@ export const getVerifiedSource = <ThrowOnError extends boolean = false>(
     GetVerifiedSourceErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/contracts/{contract_id}/verified-source',
     ...options,
   });
@@ -448,10 +403,7 @@ export const listLedgers = <ThrowOnError extends boolean = false>(
     ListLedgersErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/ledgers',
     ...options,
   });
@@ -483,10 +435,7 @@ export const getLedger = <ThrowOnError extends boolean = false>(
     GetLedgerErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/ledgers/{sequence}',
     ...options,
   });
@@ -499,10 +448,7 @@ export const listPools = <ThrowOnError extends boolean = false>(
     ListPoolsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/liquidity-pools',
     ...options,
   });
@@ -512,10 +458,7 @@ export const getPool = <ThrowOnError extends boolean = false>(
 ) =>
   (options.client ?? client).get<GetPoolResponses, GetPoolErrors, ThrowOnError>(
     {
-      security: [
-        { name: 'x-api-key', type: 'apiKey' },
-        { scheme: 'bearer', type: 'http' },
-      ],
+      security: [{ name: 'x-api-key', type: 'apiKey' }],
       url: '/v1/liquidity-pools/{pool_id}',
       ...options,
     }
@@ -541,10 +484,7 @@ export const listPoolActivity = <ThrowOnError extends boolean = false>(
     ListPoolActivityErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/liquidity-pools/{pool_id}/activity',
     ...options,
   });
@@ -557,10 +497,7 @@ export const getPoolChart = <ThrowOnError extends boolean = false>(
     GetPoolChartErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/liquidity-pools/{pool_id}/chart',
     ...options,
   });
@@ -573,10 +510,7 @@ export const listParticipants = <ThrowOnError extends boolean = false>(
     ListParticipantsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/liquidity-pools/{pool_id}/participants',
     ...options,
   });
@@ -612,10 +546,7 @@ export const getNetworkStats = <ThrowOnError extends boolean = false>(
     GetNetworkStatsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/network/stats',
     ...options,
   });
@@ -628,10 +559,7 @@ export const listNfts = <ThrowOnError extends boolean = false>(
     ListNftsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/nfts',
     ...options,
   });
@@ -640,10 +568,7 @@ export const getNft = <ThrowOnError extends boolean = false>(
   options: Options<GetNftData, ThrowOnError>
 ) =>
   (options.client ?? client).get<GetNftResponses, GetNftErrors, ThrowOnError>({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/nfts/{contract_id}/{token_id}',
     ...options,
   });
@@ -656,10 +581,7 @@ export const listNftTransfers = <ThrowOnError extends boolean = false>(
     ListNftTransfersErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/nfts/{contract_id}/{token_id}/transfers',
     ...options,
   });
@@ -695,10 +617,7 @@ export const getSearch = <ThrowOnError extends boolean = false>(
     GetSearchErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/search',
     ...options,
   });
@@ -714,10 +633,7 @@ export const listTransactions = <ThrowOnError extends boolean = false>(
     ListTransactionsErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/transactions',
     ...options,
   });
@@ -743,10 +659,7 @@ export const getTransaction = <ThrowOnError extends boolean = false>(
     GetTransactionErrors,
     ThrowOnError
   >({
-    security: [
-      { name: 'x-api-key', type: 'apiKey' },
-      { scheme: 'bearer', type: 'http' },
-    ],
+    security: [{ name: 'x-api-key', type: 'apiKey' }],
     url: '/v1/transactions/{hash}',
     ...options,
   });

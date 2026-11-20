@@ -80,6 +80,16 @@ async fn armed_app_serves_the_advertised_session_path() {
         spec["paths"]["/auth/session"]["post"].is_object(),
         "spec missing POST /auth/session: {spec}"
     );
+    // Task 0677: the mint answers 204 with the session cookie, and the gate no
+    // longer reads `Authorization: Bearer`, so the spec must not offer it.
+    assert!(
+        spec["paths"]["/auth/session"]["post"]["responses"]["204"].is_object(),
+        "mint must answer 204: {spec}"
+    );
+    assert!(
+        spec["components"]["securitySchemes"]["bearer_jwt"].is_null(),
+        "spec still advertises bearer_jwt: {spec}"
+    );
 
     let response = app
         .oneshot(
@@ -124,6 +134,33 @@ async fn cors_allows_every_listed_origin() {
             allowed.then_some(origin)
         );
     }
+}
+
+/// The session lives in a cookie (task 0677): a browser exposes a
+/// credentialed cross-origin response to the SPA only with this header.
+#[tokio::test]
+async fn cors_allows_credentials_for_a_listed_origin() {
+    let config = AppConfig {
+        cors_allow_origin: Some("https://sorobanscan.com".to_string()),
+        ..test_config()
+    };
+    let response = test_app_with(&config)
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header("origin", "https://sorobanscan.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-credentials")
+            .map(|v| v.to_str().unwrap()),
+        Some("true")
+    );
 }
 
 #[tokio::test]
