@@ -15,6 +15,10 @@ export function nftLabel(row: NftItem): string {
 
 interface NftNameCellProps {
   row: NftItem;
+  /** Name font size; the table's default when unset. */
+  nameFontSize?: number;
+  /** Name in the monospace font; the identifier default (mono) when unset. */
+  mono?: boolean;
 }
 
 /**
@@ -24,7 +28,7 @@ interface NftNameCellProps {
  * and an error placeholder when the URL fails to load — in which case the
  * token-id sub-label also flags the broken media.
  */
-export function NftNameCell({ row }: NftNameCellProps) {
+export function NftNameCell({ row, nameFontSize, mono }: NftNameCellProps) {
   const [failed, setFailed] = useState(false);
 
   // A new row may reuse this slot — reset the failure flag when src changes.
@@ -79,6 +83,8 @@ export function NftNameCell({ row }: NftNameCellProps) {
           type="nft"
           truncate={false}
           href={routes.nft(row.contract_id, row.token_id)}
+          fontSize={nameFontSize}
+          mono={mono}
         />
         <Typography
           variant="bodyXsRegular"
