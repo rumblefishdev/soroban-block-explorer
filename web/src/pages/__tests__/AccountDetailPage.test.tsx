@@ -758,7 +758,7 @@ describe('AccountDetailPage', () => {
       'CDC5…JFGB',
     ],
   ])(
-    'labels an NFT row with %s, linked to the collection contract',
+    'labels an NFT row with %s, linked to the collection',
     (_, collectionName, label) => {
       mockDetail({
         data: { ...SAMPLE, balances: [], nft_count: 1 },
@@ -776,7 +776,7 @@ describe('AccountDetailPage', () => {
         assetsCard().getByRole('link', {
           name: collectionName ?? HELD_NFT.contract_id,
         })
-      ).toHaveAttribute('href', `/contracts/${HELD_NFT.contract_id}`);
+      ).toHaveAttribute('href', `/nfts?contract=${HELD_NFT.contract_id}`);
       expect(assetsCard().getByText(label)).toBeInTheDocument();
     }
   );

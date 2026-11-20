@@ -33,19 +33,16 @@ function NftRow({ row, alt }: { row: NftItem; alt: boolean }) {
       })}
     >
       <NftNameCell row={row} nameFontSize={16} mono={false} />
-      {/* The collection by name, linked to its contract. A row has no column
-          header, so a bare contract id here does not say what it is. */}
-      {row.collection_name ? (
-        <IdentifierDisplay
-          value={row.collection_name}
-          type="contract"
-          href={routes.contract(row.contract_id)}
-          truncate={false}
-          mono={false}
-        />
-      ) : (
-        <IdentifierDisplay value={row.contract_id} type="contract" />
-      )}
+      {/* The collection, linked to its NFT list. A row has no column header,
+          so a bare contract id here does not say what it is: the name goes
+          first, the short id only when the collection has none. */}
+      <IdentifierDisplay
+        value={row.collection_name ?? row.contract_id}
+        type="contract"
+        href={routes.nftsByContract(row.contract_id)}
+        truncate={!row.collection_name}
+        mono={!row.collection_name}
+      />
     </Box>
   );
 }
