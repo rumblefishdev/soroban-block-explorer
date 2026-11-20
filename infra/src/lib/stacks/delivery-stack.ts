@@ -7,10 +7,8 @@ import * as targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
-import { apiHubBackendBehavior } from './api-hub-behaviors.js';
-import { apiHubRedirectFunctionCode } from '../cloudfront-functions/api-hub-redirect.js';
+import { apiPortalBehaviors } from './api-portal-behaviors.js';
 import { apiPathRedirectFunctionCode } from '../cloudfront-functions/api-path-redirect.js';
-import { apiSpaRoutingFunctionCode } from '../cloudfront-functions/api-spa-routing.js';
 import { basicAuthFunctionCode } from '../cloudfront-functions/basic-auth.js';
 import {
   type HostMove,
@@ -176,9 +174,10 @@ export class DeliveryStack extends cdk.Stack {
     //
     // The `/api/prices-api` + `/api/prices-api/*` behaviors (tasks 0519, 0660) are
     // separate behaviors with their own function slot. They always get
-    // `apiSpaFunction` below for SPA routing (independent of auth), and it also
-    // does the basic-auth check — reusing this same KVS, not a second,
-    // separately-credentialed one — when `config.enableApiSpaBasicAuth` is on.
+    // `apiSpaFunction` (`api-portal-behaviors.ts`) for SPA routing (independent
+    // of auth), and it also does the basic-auth check — reusing this same KVS,
+    // not a second, separately-credentialed one — when
+    // `config.enableApiSpaBasicAuth` is on.
     //
     // The old host's redirect (task 0664) takes the main behaviors' slot too;
     // `validateConfig` keeps it apart from both gates.
@@ -266,111 +265,6 @@ export class DeliveryStack extends cdk.Stack {
         }
       );
     }
-
-    // `/api/prices-api` + `/api/prices-api/*` routing function — always
-    // created. SPA routing (bare-`/api/prices-api` redirect, extensionless-path
-    // fallback to `/api/prices-api/index.html`) must work whether or not auth is on; the auth
-    // check is folded in only when `enableApiSpaBasicAuth` is set, since
-    // CloudFront allows only one viewer-request function per behavior.
-    const apiSpaKvs = config.enableApiSpaBasicAuth ? basicAuthKvs : undefined;
-    const apiSpaFunction = new cloudfront.Function(
-      this,
-      'ApiSpaRoutingFunction',
-      {
-        functionName: `${config.envName}-soroban-explorer-api-spa-routing`,
-        runtime: cloudfront.FunctionRuntime.JS_2_0,
-        ...(apiSpaKvs && { keyValueStore: apiSpaKvs }),
-        code: cloudfront.FunctionCode.fromInline(
-          apiSpaRoutingFunctionCode({
-            prefix: '/api/prices-api',
-            ...(apiSpaKvs && {
-              auth: {
-                kvsId: apiSpaKvs.keyValueStoreId,
-                key: 'auth-token',
-                realm: 'API',
-              },
-            }),
-            move: portalMove,
-          })
-        ),
-      }
-    );
-
-    // `/api/x402-facilitator` + `/api/x402-facilitator/*` (task 0670): the
-    // same routing for the API key portal of stellar-x402. Its page is on
-    // `domainName` only, so the old host answers `301` (`legacyMove`), whatever
-    // the Prices portal does.
-    //
-    // The gate reads a key of its own, so its password is not the main site's
-    // or the Prices portal's. Write it BEFORE the deploy that creates these
-    // behaviors, and the page is never served without it (until the key
-    // exists, the answer is `503`):
-    //
-    //   KVS_ARN=$(aws cloudfront list-key-value-stores --query "KeyValueStoreList.Items[?Name=='production-soroban-explorer-basic-auth'].ARN" --output text)
-    //   ETAG=$(aws cloudfront-keyvaluestore describe-key-value-store --kvs-arn "$KVS_ARN" --query "ETag" --output text)
-    //   read -rs PW
-    //   TOKEN=$(printf '%s' "<user>:$PW" | base64 | tr -d '\n')
-    //   aws cloudfront-keyvaluestore put-key --kvs-arn "$KVS_ARN" \
-    //     --key auth-token-x402 --value "$TOKEN" --if-match "$ETAG"
-    //
-    // `read -rs` keeps the password out of the shell's history, `printf '%s'`
-    // takes a `%` in it as it is, and `tr` joins the lines GNU `base64` breaks
-    // a long value into.
-    const x402PortalKvs = config.enableX402PortalBasicAuth
-      ? basicAuthKvs
-      : undefined;
-    const x402PortalFunction = new cloudfront.Function(
-      this,
-      'X402PortalRoutingFunction',
-      {
-        functionName: `${config.envName}-soroban-explorer-x402-portal-routing`,
-        runtime: cloudfront.FunctionRuntime.JS_2_0,
-        ...(x402PortalKvs && { keyValueStore: x402PortalKvs }),
-        code: cloudfront.FunctionCode.fromInline(
-          apiSpaRoutingFunctionCode({
-            prefix: '/api/x402-facilitator',
-            ...(x402PortalKvs && {
-              auth: {
-                kvsId: x402PortalKvs.keyValueStoreId,
-                key: 'auth-token-x402',
-                realm: 'x402 facilitator',
-              },
-            }),
-            move: legacyMove,
-          })
-        ),
-      }
-    );
-
-    // The Prices portal's old homes outside `/api/` (tasks 0608, 0660): every
-    // request answers `301` to the same path under `/api/prices-api`.
-    const apiPathRedirectFunction = new cloudfront.Function(
-      this,
-      'ApiPathRedirectFunction',
-      {
-        functionName: `${config.envName}-soroban-explorer-api-path-redirect`,
-        runtime: cloudfront.FunctionRuntime.JS_2_0,
-        code: cloudfront.FunctionCode.fromInline(
-          apiPathRedirectFunctionCode(portalMove)
-        ),
-      }
-    );
-
-    // Every `/api/*` path no portal and not the hub takes (task 0670): the
-    // Prices portal's routes from when it lived at `/api/` answer `301` to the
-    // same path under `/api/prices-api`, the rest `302` to the hub: a path that
-    // is unknown today can be the next portal's, and a browser keeps a `301`.
-    const apiHubRedirectFunction = new cloudfront.Function(
-      this,
-      'ApiHubRedirectFunction',
-      {
-        functionName: `${config.envName}-soroban-explorer-api-hub-redirect`,
-        runtime: cloudfront.FunctionRuntime.JS_2_0,
-        code: cloudfront.FunctionCode.fromInline(
-          apiHubRedirectFunctionCode(portalMove, legacyMove)
-        ),
-      }
-    );
 
     // ---------------------
     // Response Headers Policy — security baseline
@@ -470,6 +364,10 @@ export class DeliveryStack extends cdk.Stack {
           ],
         }),
       };
+    const explorerPage: cloudfront.BehaviorOptions = {
+      ...sharedBehaviorProps,
+      cachePolicy: shortTtlCachePolicy,
+    };
 
     const apiSpaOrigin =
       origins.S3BucketOrigin.withOriginAccessControl(apiSpaBucket);
@@ -488,6 +386,31 @@ export class DeliveryStack extends cdk.Stack {
       ],
     });
 
+    // Everything under `/api`. Built before the function below, so the
+    // template's CDK metadata lists the functions in the order they had.
+    const apiBehaviors = apiPortalBehaviors(this, config, {
+      responseHeadersPolicy,
+      legacyMove,
+      portalMove,
+      basicAuthKvs,
+      explorerPage,
+      apiSpaBehavior,
+    });
+
+    // The Prices portal's old homes outside `/api/` (tasks 0608, 0660): every
+    // request answers `301` to the same path under `/api/prices-api`.
+    const apiPathRedirectFunction = new cloudfront.Function(
+      this,
+      'ApiPathRedirectFunction',
+      {
+        functionName: `${config.envName}-soroban-explorer-api-path-redirect`,
+        runtime: cloudfront.FunctionRuntime.JS_2_0,
+        code: cloudfront.FunctionCode.fromInline(
+          apiPathRedirectFunctionCode(portalMove)
+        ),
+      }
+    );
+
     // ---------------------
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       // The old host stays an alias (task 0663); its functions answer `301` to
@@ -502,10 +425,7 @@ export class DeliveryStack extends cdk.Stack {
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       enableLogging: true,
       logBucket,
-      defaultBehavior: {
-        ...sharedBehaviorProps,
-        cachePolicy: shortTtlCachePolicy,
-      },
+      defaultBehavior: explorerPage,
       additionalBehaviors: {
         // Long TTL only for hashed asset directories. CACHING_OPTIMIZED
         // is the AWS-managed policy with min/default/max = 1s/1d/1y.
@@ -519,36 +439,9 @@ export class DeliveryStack extends cdk.Stack {
           ...sharedBehaviorProps,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         },
-        // Second, independently-built SPA (task 0519) — its own S3 origin,
-        // gated independently of the main behaviors via `apiSpaFunction`
-        // above, which also handles SPA routing. Single short-TTL behavior
-        // for now; split out a long-TTL asset sub-path once this SPA's
-        // build output layout is known.
-        //
-        // `/api/prices-api/*` requires the literal trailing slash, so it does
-        // NOT match bare `/api/prices-api` — that needs its own exact-match
-        // behavior, redirected to `/api/prices-api/` by the same function.
-        // Behaviors match in this order: both stay above `/api/*`.
-        '/api/prices-api': apiSpaBehavior(apiSpaFunction),
-        '/api/prices-api/*': apiSpaBehavior(apiSpaFunction),
-        // The x402 portal (task 0670): the same bucket, under the
-        // `api/x402-facilitator/` prefix, and the same pair of behaviors, above
-        // `/api/*` too.
-        '/api/x402-facilitator': apiSpaBehavior(x402PortalFunction),
-        '/api/x402-facilitator/*': apiSpaBehavior(x402PortalFunction),
-        // The portal hub (task 0660), a route of the main SPA. Bare `/api`
-        // already falls to the default behavior; `/api/` would match `/api/*`.
-        '/api/': { ...sharedBehaviorProps, cachePolicy: shortTtlCachePolicy },
-        // The redirects (tasks 0608, 0660, 0670): the function answers `301`
-        // or `302` before the origin is reached; the origin is there because a
-        // behavior needs one.
-        ...(config.apiHub && {
-          '/api/hub/*': apiHubBackendBehavior(this, config, {
-            responseHeadersPolicy,
-            legacyMove,
-          }),
-        }),
-        '/api/*': apiSpaBehavior(apiHubRedirectFunction),
+        ...apiBehaviors,
+        // The Prices portal's old homes: the function answers `301` before the
+        // origin is reached; the origin is there because a behavior needs one.
         '/prices-api': apiSpaBehavior(apiPathRedirectFunction),
         '/prices-api/*': apiSpaBehavior(apiPathRedirectFunction),
         '/pricing-api': apiSpaBehavior(apiPathRedirectFunction),
