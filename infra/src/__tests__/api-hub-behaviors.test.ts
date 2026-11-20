@@ -23,6 +23,8 @@ const apiHub = {
   pages: false,
 };
 
+// The template is read as loose JSON.
+/* eslint-disable @typescript-eslint/no-explicit-any */
 type Resource = { Type: string; Properties: Record<string, any> };
 type Behavior = Record<string, any>;
 
@@ -159,7 +161,7 @@ describe('with the backend alone', () => {
     expect(config.CookiesConfig.CookieBehavior).toBe('all');
     expect(config.QueryStringsConfig.QueryStringBehavior).toBe('all');
     expect([...config.HeadersConfig.Headers].sort()).toEqual(
-      ['Accept', 'CloudFront-Viewer-Address', 'Content-Type', 'Origin'].sort()
+      ['Accept', 'Content-Type', 'Origin', 'X-Hub-Viewer-Ip'].sort()
     );
     expect(b['OriginRequestPolicyId']).toBeDefined();
   });

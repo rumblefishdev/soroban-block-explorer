@@ -74,13 +74,13 @@ backend alone with the first; today's answers with neither.
 Spec: see Summary. The routing function consumes `HostMove`, `legacyHostSnippet` and `MOVED_JS`
 from `legacy-host-redirect.ts`.
 
-**Step 4, the viewer's own headers (2026-11-20).** AWS's guide "Add custom headers to origin requests"
-says an origin custom header is overwritten onto a viewer's header of the same name ("If a header is
-present, CloudFront overwrites the header value before forwarding the request to the origin").
-Neither "Add CloudFront request headers" nor "Control origin requests with a policy" says what
-CloudFront does with a viewer-supplied `CloudFront-Viewer-Address`, so that was not confirmed.
-`/api/hub/*` therefore has a viewer-request function
-(`cloudfront-functions/api-hub-backend-headers.ts`) deleting `X-Hub-Origin-Secret`,
-`X-Hub-Origin-Revision` and `CloudFront-Viewer-Address` from the viewer's request. Sources:
+**Step 4, the viewer's own headers (2026-11-20).** AWS's guide "Add custom headers to origin
+requests" says an origin custom header replaces a viewer's header of the same name ("If a header is
+present, CloudFront overwrites the header value before forwarding the request to the origin"). The
+guides on CloudFront's request headers don't say the same of `CloudFront-Viewer-Address`, so the
+client's address travels in `X-Hub-Viewer-Ip`, written by the viewer-request function on
+`/api/hub/*` (`cloudfront-functions/api-hub-backend-headers.ts`) from `event.viewer.ip`, as AWS's
+own example function writes `True-Client-IP`; the function also deletes a viewer's own
+`X-Hub-Origin-Secret` and `X-Hub-Origin-Revision`. Sources:
 https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/add-origin-custom-headers.html
 https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-cloudfront-headers.html

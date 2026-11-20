@@ -1,24 +1,25 @@
 /**
  * CloudFront Function source for `/api/hub/*` (task 0680), a viewer-request
- * function: it deletes the viewer's own copies of the headers the backend
- * trusts CloudFront for, `X-Hub-Origin-Secret` and `X-Hub-Origin-Revision`
- * (origin custom headers) and `CloudFront-Viewer-Address` (the address the
- * hub's rate limit reads).
+ * function:
  *
- * AWS documents that an origin custom header overwrites a viewer's header of
- * the same name, but its pages say nothing of a viewer-supplied
- * `CloudFront-Viewer-Address`; so the function does not rely on either.
- * CloudFront adds its own values after the viewer-request stage.
+ * - It writes the client's address into `X-Hub-Viewer-Ip` from
+ *   `event.viewer.ip`, replacing any the viewer sent, as AWS's own example
+ *   function writes `True-Client-IP`. The hub's rate limit reads it. An IPv6
+ *   address is written as it is.
+ * - It deletes the viewer's own `X-Hub-Origin-Secret` and
+ *   `X-Hub-Origin-Revision`. AWS says an origin custom header replaces a
+ *   viewer's of the same name; this does not rely on it.
+ *
+ * `CloudFront-Viewer-Address` is not touched: the guide does not say what
+ * CloudFront does with a viewer-sent one, so nothing reads it.
  */
 export function apiHubBackendHeadersFunctionCode(): string {
   return `
-var TRUSTED = ['x-hub-origin-secret', 'x-hub-origin-revision', 'cloudfront-viewer-address'];
-
 function handler(event) {
   var request = event.request;
-  for (var i = 0; i < TRUSTED.length; i++) {
-    delete request.headers[TRUSTED[i]];
-  }
+  delete request.headers['x-hub-origin-secret'];
+  delete request.headers['x-hub-origin-revision'];
+  request.headers['x-hub-viewer-ip'] = { value: event.viewer.ip };
   return request;
 }
 `.trim();

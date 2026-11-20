@@ -48,13 +48,13 @@ export function apiHubBackendBehavior(
         'Origin',
         'Content-Type',
         'Accept',
-        'CloudFront-Viewer-Address'
+        'X-Hub-Viewer-Ip'
       ),
     }
   );
 
-  // See the function's own comment: AWS says an origin custom header
-  // overwrites a viewer's, but says nothing for `CloudFront-Viewer-Address`.
+  // Writes `X-Hub-Viewer-Ip` and drops a viewer's own secret and revision
+  // (see the function's own comment).
   const headersFunction = new cloudfront.Function(
     scope,
     'ApiHubBackendHeadersFunction',
