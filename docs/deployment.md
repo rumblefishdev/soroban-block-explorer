@@ -215,6 +215,14 @@ any name at all.
   sat undeployed for weeks). Prefer naming the one stack you mean; typing
   `-all` is what keeps a full deploy a choice rather than a side effect, the
   same job the typed `yes` does in `infra/Makefile`.
+- **A stack that reads an SSM parameter is never skipped as unchanged.**
+  CloudWatch (the Slack IDs) and, with `apiHub` set, Delivery (the API hub's
+  backend host, task 0680) take values from SSM at deploy time, so the CDK CLI
+  makes a change set for them on every deploy that names them, `-all`
+  included. An unchanged value gives an empty change set and nothing changes.
+  A new value is not in `cdk diff`, which compares templates: it ships with
+  the next deploy of that stack, whatever the tag was for. After the hub's
+  host changes, deploy Delivery on purpose (`-Delivery`).
 - **The SPA step is not a Delivery deploy.** It reads that stack's
   `SpaBucketName` / `DistributionId` outputs and syncs S3. Changes to
   `delivery-stack.ts` itself need `-Delivery` or `-all`.
