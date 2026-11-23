@@ -36,6 +36,12 @@
   "domainName": "sorobanscan.com",
   "legacyDomainName": "sorobanscan.rumblefish.dev",
   "pricesPortalOnLegacyHost": false,
+  "apiHub": {
+    "backendHostParameter": "/sorobanscan-hub/production/backend-host",
+    "originSecretName": "sorobanscan-hub/production/origin-secret",
+    "originSecretRevision": "1",
+    "pages": false
+  },
   "apiDomainName": "api.sorobanscan.rumblefish.dev",
   "hostedZoneId": "Z10396861CRMUIWWA8TL9",
   "hostedZoneName": "sorobanscan.rumblefish.dev",
