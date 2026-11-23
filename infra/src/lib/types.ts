@@ -273,6 +273,31 @@ export interface EnvironmentConfig {
   readonly sorobanscanApiDomainName?: string;
 
   /**
+   * Hands `/api/` to the separate API hub app (task 0680), in two stages.
+   * Unset = today's distribution, unchanged.
+   */
+  readonly apiHub?: {
+    /**
+     * The name of the SSM String parameter that holds the backend's Lambda
+     * function URL host, e.g. `/sorobanscan-hub/production/backend-host`,
+     * which the hub's own stack writes. Not the host itself: this repo is
+     * public, and a call straight to the function URL skips CloudFront and
+     * uses up the backend's reserved concurrency. Read on every deploy.
+     */
+    readonly backendHostParameter: string;
+    /** In Secrets Manager: JSON whose `current` CloudFront sends as `X-Hub-Origin-Secret`. */
+    readonly originSecretName: string;
+    /**
+     * Raised after the secret's value changed. CloudFormation reads the
+     * reference again whenever it updates the distribution, for any reason;
+     * a new revision is what makes it do so.
+     */
+    readonly originSecretRevision: string;
+    /** The start: the hub's bundle serves `/api/` and the pages under it (task 0680, stage 2). */
+    readonly pages: boolean;
+  };
+
+  /**
    * ACM cert ARN covering `sorobanscanApiDomainName`, in `awsRegion` (the
    * eu-central-1 `*.sorobanscan.com` wildcard of task 0661).
    */
@@ -649,6 +674,48 @@ export function validateConfig(config: EnvironmentConfig): void {
   }
   if (config.pricesPortalOnLegacyHost && !config.legacyDomainName) {
     errors.push(`pricesPortalOnLegacyHost needs legacyDomainName.`);
+  }
+  if (config.apiHub) {
+    const hub = config.apiHub;
+    // An SSM parameter's full name. A host or a URL here is the value the
+    // setting keeps out of git, so the message does not repeat it.
+    if (!/^\/[A-Za-z0-9_.\-/]+$/.test(hub.backendHostParameter)) {
+      errors.push(
+        `apiHub.backendHostParameter must be the name of the SSM parameter ` +
+          `that holds the backend's host, starting with "/" (e.g. ` +
+          `/sorobanscan-hub/production/backend-host), not the host or a URL.`
+      );
+    }
+    if (!hub.originSecretName.trim()) {
+      errors.push(`apiHub.originSecretName is empty.`);
+    }
+    if (!hub.originSecretRevision.trim()) {
+      errors.push(`apiHub.originSecretRevision is empty.`);
+    }
+    // With Cloudflare in front of the distribution, `event.viewer.ip` is
+    // Cloudflare's address: the hub would count everybody behind one of its
+    // edges as one client. The hub's function would have to read
+    // `CF-Connecting-IP` first.
+    if (config.enableOriginSecretLock) {
+      errors.push(
+        `apiHub cannot be combined with enableOriginSecretLock: behind ` +
+          `Cloudflare, X-Hub-Viewer-Ip would be Cloudflare's address and the ` +
+          `hub's request limit would count its users as one client.`
+      );
+    }
+    if (hub.pages && config.enableBasicAuth) {
+      errors.push(
+        `apiHub.pages cannot be combined with enableBasicAuth: the hub's ` +
+          `pages have no gate, and /api/assets/* would ask for the main ` +
+          `site's password.`
+      );
+    }
+    if (hub.pages && config.pricesPortalOnLegacyHost) {
+      errors.push(
+        `apiHub.pages cannot be combined with pricesPortalOnLegacyHost: the ` +
+          `hub's bundle serves /api/prices-api on domainName only.`
+      );
+    }
   }
   // The old host's redirect (task 0664) is the main behaviors' viewer-request
   // function too.
