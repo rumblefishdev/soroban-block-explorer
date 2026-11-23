@@ -282,6 +282,7 @@ const HUB_PAGES = [
   'docs',
   'privacy-policy',
   'prices-api',
+  'x402-facilitator',
 ];
 const CACHING_OPTIMIZED = '658327ea-f89d-4fab-a63d-7e88639e58f6';
 

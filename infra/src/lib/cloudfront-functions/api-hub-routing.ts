@@ -7,7 +7,9 @@ import {
 /**
  * The first segments under `/api/` that are pages of the API hub app (the
  * Prices portal's own pages included, `prices-api` being the old address of
- * its tab). The list is closed: any other first segment is not served.
+ * its tab, and the x402 Facilitator's landing page, `x402-facilitator`, its
+ * old address too). The list is closed: any other first segment is not
+ * served.
  */
 export const API_HUB_PAGES = [
   'login',
@@ -16,6 +18,7 @@ export const API_HUB_PAGES = [
   'docs',
   'privacy-policy',
   'prices-api',
+  'x402-facilitator',
 ] as const;
 
 /**
@@ -24,8 +27,9 @@ export const API_HUB_PAGES = [
  *
  * - The host move (task 0664), `301` to the same address on the new host, in
  *   the same hop as every redirect below.
- * - Bare `/api` and bare `/api/prices-api` get their trailing slash (`301`):
- *   CloudFront's `<prefix>/*` pattern does not match them.
+ * - Bare `/api`, bare `/api/prices-api` and bare `/api/x402-facilitator` get
+ *   their trailing slash (`301`): CloudFront's `<prefix>/*` pattern does not
+ *   match the first two, and the two landing pages keep one address each.
  * - Then by the first segment after `/api/`:
  *   - none (`/api/`), or one of `API_HUB_PAGES`: a last segment with a `.` is
  *     a file and goes to the bucket as asked; anything else is rewritten to
@@ -49,7 +53,11 @@ function handler(event) {
   var request = event.request;
   var uri = request.uri;
 ${legacyHostSnippet(move)}
-  if (uri === '/api' || uri === '/api/prices-api') {
+  if (
+    uri === '/api' ||
+    uri === '/api/prices-api' ||
+    uri === '/api/x402-facilitator'
+  ) {
     return moved(origin + uri + '/' + search, status);
   }
   var rest = uri.slice('/api/'.length);
