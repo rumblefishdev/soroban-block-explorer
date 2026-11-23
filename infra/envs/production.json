@@ -40,7 +40,7 @@
     "backendHostParameter": "/sorobanscan-hub/production/backend-host",
     "originSecretName": "sorobanscan-hub/production/origin-secret",
     "originSecretRevision": "1",
-    "pages": false
+    "pages": true
   },
   "apiDomainName": "api.sorobanscan.rumblefish.dev",
   "hostedZoneId": "Z10396861CRMUIWWA8TL9",
