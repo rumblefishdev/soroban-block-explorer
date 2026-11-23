@@ -473,16 +473,20 @@ redeploying `ApiGateway` as soon as the run ends.
   - `pages: true` (the start): the hub's bundle, in the same bucket under
     `api/`, serves the pages. `/api`, `/api/*`, `/api/prices-api` and
     `/api/prices-api/*` run one function (`api-hub-routing.ts`): the old host's
-    `301`; bare `/api` and `/api/prices-api` get their trailing slash; for
-    `/api/`, `login`, `dashboard`, `quick-start`, `docs`, `privacy-policy` and
-    `prices-api` a path with a `.` in its last segment is the bundle's file and
+    `301`; bare `/api`, `/api/prices-api` and `/api/x402-facilitator` get
+    their trailing slash; for `/api/`, `login`, `dashboard`, `quick-start`,
+    `docs`, `privacy-policy`, `prices-api` and `x402-facilitator` (the x402
+    Facilitator's landing page, part of the hub's bundle since 2026-11-23) a
+    path with a `.` in its last segment is the bundle's file and
     any other is rewritten to `/api/index.html`; `openapi.json` is a `301` to
     `/api/prices-api/openapi.json`; any other first segment is a `302` to
     `/api/`. The two Prices behaviors add `X-Robots-Tag: noindex`.
     `/api/assets/*` is the bundle's hashed files with the long cache of the
     explorer's own `/assets/*`; `/api/hub/*` is as above. No longer applying:
     the x402 portal's two behaviors and function (`/api/x402-facilitator*` is
-    now a `302` to `/api/`), so `enableX402PortalBasicAuth` gates nothing; the
+    the hub's page now, from its bundle, not from the bucket's
+    `api/x402-facilitator/` prefix), so `enableX402PortalBasicAuth` gates
+    nothing; the
     Prices portal's `api-spa-routing.ts` function, so `enableApiSpaBasicAuth`
     gates nothing; `api-hub-redirect.ts`; and `/api/` as a route of the main
     SPA. `pages: true` is refused together with `pricesPortalOnLegacyHost` or

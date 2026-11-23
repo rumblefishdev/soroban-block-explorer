@@ -57,7 +57,7 @@ const redirect = (
 };
 
 describe('api-hub-routing', () => {
-  it('knows the six pages of the hub', () => {
+  it('knows the seven pages of the hub', () => {
     expect([...API_HUB_PAGES].sort()).toEqual([
       'dashboard',
       'docs',
@@ -65,6 +65,7 @@ describe('api-hub-routing', () => {
       'prices-api',
       'privacy-policy',
       'quick-start',
+      'x402-facilitator',
     ]);
   });
 
@@ -80,6 +81,8 @@ describe('api-hub-routing', () => {
     '/api/privacy-policy',
     '/api/prices-api/',
     '/api/prices-api/login',
+    '/api/x402-facilitator/',
+    '/api/x402-facilitator/anything',
   ])('%s is the hub page', (uri) => {
     expect(pass(uri).uri).toBe('/api/index.html');
   });
@@ -95,6 +98,7 @@ describe('api-hub-routing', () => {
   it.each([
     ['/api', '/api/'],
     ['/api/prices-api', '/api/prices-api/'],
+    ['/api/x402-facilitator', '/api/x402-facilitator/'],
     ['/api/openapi.json', '/api/prices-api/openapi.json'],
   ])('%s answers 301 to %s', (uri, location) => {
     const out = redirect(uri);
@@ -105,6 +109,7 @@ describe('api-hub-routing', () => {
   it.each([
     ['/api', '/api/'],
     ['/api/prices-api', '/api/prices-api/'],
+    ['/api/x402-facilitator', '/api/x402-facilitator/'],
     ['/api/openapi.json', '/api/prices-api/openapi.json'],
   ])('%s keeps its query in the 301', (uri, location) => {
     const out = redirect(uri, { x: { value: '1' } });
@@ -112,9 +117,8 @@ describe('api-hub-routing', () => {
   });
 
   it.each([
-    '/api/x402-facilitator',
-    '/api/x402-facilitator/',
-    '/api/x402-facilitator/dashboard',
+    '/api/x402-facilitatorx',
+    '/api/X402-facilitator/',
     '/api/foo',
     '/api/foo.js',
     '/api/loginx',
