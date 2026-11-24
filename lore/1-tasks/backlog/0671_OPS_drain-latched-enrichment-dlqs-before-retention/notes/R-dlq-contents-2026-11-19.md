@@ -13,6 +13,10 @@ history:
     status: mature
     who: stkrolikiewicz
     note: 'Every message read before the testnet redrive; the redrive and its errors'
+  - date: 2026-11-24
+    status: mature
+    who: stkrolikiewicz
+    note: 'Production read again: 8 messages arrived after 11-19 without a page'
 ---
 
 # What the enrichment DLQs held on 2026-11-19, and what the testnet redrive showed
@@ -122,3 +126,47 @@ row written)`), and `backfill-enrichment-runner`'s default drain takes every ass
 | ----------- | ---------------------- | -------- | ------ |
 | 11-16 22:16 | `-5731955624881490446` | `11`     | 1      |
 | 11-17 20:36 | `-5731955624881490446` | `25`     | 1      |
+
+## Production, read again on 2026-11-24
+
+Both alarms were still in ALARM: production since 11-05 09:50, testnet since 11-19 13:39.
+Production's DLQ held 10 messages: the 2 NFT messages above and 8 that arrived after 11-19.
+None of the 8 paged, because the alarm was already in ALARM.
+
+All 10 were received with `VisibilityTimeout=30`, so none was deleted. Each was hidden for 30 s.
+The new 8 read `ApproximateReceiveCount` 4: three worker tries and this read. The 2 NFT messages
+read 14 and 24, because the polls on 11-19 and today raised them.
+
+`Sent` is the message's first send to the source queue, which the DLQ keeps. The failures are
+in the production worker's log a few minutes later.
+
+| Sent (UTC)        | Issuer id              | Asset code | Copies | Worker log (UTC)                                                  |
+| ----------------- | ---------------------- | ---------- | ------ | ----------------------------------------------------------------- |
+| 11-19 19:04       | `6271003847480919647`  | `XLM`      | 2      | `timeout fetching stellar.toml from wtg-qfs.com`, 19:05–19:08     |
+| 11-19 19:04–19:05 | `6271003847480919647`  | `XRP`      | 2      | the same                                                          |
+| 11-22 20:47       | `-8089211510502436884` | `WWG1WGA`  | 2      | `timeout fetching stellar.toml from wwg1wga-qfs.com`, 20:48–20:52 |
+| 11-22 20:48       | `-8089211510502436884` | `USAT`     | 2      | the same                                                          |
+
+All 8 are `sep1_assets` with `asset_type` 1 and `contract_id` 0. The first of them ages out
+around 12-03 19:04 UTC.
+
+### What it shows
+
+- **One outage on a host can end in both the DLQ and a sentinel.** On 11-22 the same issuer's
+  `BTC`, `WTI`, `GOLD` and `APXLM` first timed out too, then got a sentinel at 20:54–20:56:
+  `sep1_fetch_permanent`, `error sending request for url
+(https://wwg1wga-qfs.com/.well-known/stellar.toml)`. A timeout is `Sep1Error::Timeout` and
+  retryable, so a message whose last try timed out ends in the DLQ. A connect-level failure is
+  permanent (`http_transient.rs`), so it writes the `''` sentinel. The error the last try hit
+  decides which.
+- **The two hosts did not fail the same way.** Checked from a laptop on 11-24:
+  `wwg1wga-qfs.com` answers 200 with a valid `stellar.toml`, so 11-22 was an outage, not a dead
+  domain. `wtg-qfs.com` gets `SERVFAIL` from DNS. These 8 messages therefore don't show that
+  timeouts are a dead-host signature, the condition under which `http_transient.rs` says to
+  "move them across". One host came back.
+- **The sentinel side is the one that needs repair.** `WWG1WGA` and `USAT` ended on a timeout,
+  which writes no row, so the runner's default drain fetches them again, now that the host
+  answers. `BTC`, `WTI`, `GOLD` and `APXLM` carry a sentinel, which only a `--retry-sentinels`
+  run fetches again.
+- **The data still doesn't need the messages.** A timeout writes no row (`retry candidate (no
+row written)`: 6 lines each for `XLM` on 11-19 and `USAT` on 11-22, nothing after either).
