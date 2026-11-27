@@ -34,7 +34,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::{MethodRouter, get};
 use serde_json::json;
-use stellar_x402::axum::{PaymentEvent, PaymentGate};
+use stellar_x402::axum::{PaidRoute, PaymentEvent, PaymentGate};
 use stellar_x402::{Facilitator, Listing, Network, Price};
 
 use crate::common::{cache_control, errors};
@@ -154,8 +154,6 @@ fn routes(
     let gate = PaymentGate::lazy(facilitator)
         .base_url(base_url)
         .on_event(log);
-    // The payment layer goes on last, so it is the outermost: an unpaid request
-    // is answered before the handler runs.
     let paid = |route: MethodRouter<AppState>,
                 description: &str,
                 listing: Listing|
@@ -169,10 +167,7 @@ fn routes(
             .description(description)
             .mime_type("application/json")
             .listing(listing);
-        Ok(route
-            .layer::<_, Infallible>(axum::middleware::map_response(sold))
-            .route_layer(price)
-            .with_state(state.clone()))
+        Ok(sell(route, price, state.clone()))
     };
 
     let transaction = Listing::query(json!({})).output(json!({
@@ -273,6 +268,20 @@ fn log(event: &PaymentEvent<'_>) {
 /// itself ignores it: a response extension is never sent.
 #[derive(Clone, Copy)]
 pub(crate) struct Nothing(pub(crate) StatusCode, pub(crate) &'static str);
+
+/// `route` behind `price`. The payment layer goes on last, so it is the
+/// outermost: an unpaid request is answered before the handler runs, and
+/// [`sold`] has turned an answer marked [`Nothing`] into an error before the
+/// layer decides whether to settle.
+fn sell<S>(route: MethodRouter<S>, price: PaidRoute, state: S) -> MethodRouter
+where
+    S: Clone + Send + Sync + 'static,
+{
+    route
+        .layer::<_, Infallible>(axum::middleware::map_response(sold))
+        .route_layer(price)
+        .with_state(state)
+}
 
 /// The keyed route's answer, as the paid twin sends it: an error in place of
 /// an answer marked [`Nothing`], so the payment layer does not settle, and
