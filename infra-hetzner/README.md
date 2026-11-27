@@ -20,7 +20,7 @@ docker-compose.prod.yml      ← Production overlay over the dev compose file
 
 (in crates/db-clickhouse/)
 config.d/memory.xml          ← Production memory tuning
-config.d/prometheus.xml      ← Native metrics endpoint on loopback
+config.d/prometheus.xml      ← Native metrics endpoint, Compose network only
 config.d/system-logs.xml     ← Server log retention and levels (task 0563)
 ```
 
@@ -684,6 +684,7 @@ maintenance window; not for rapid incident response.
 - AWS CDK changes in `infra/src/` to remove the NAT Gateway, move
   Lambdas out of the VPC, and move Galexie to a public subnet —
   tracked separately as part of the AWS-side cutover.
-- Native Prometheus scraper on the box + a dashboard. The CH
-  metrics endpoint is exposed on `127.0.0.1:9363` and waiting.
+- A Prometheus scrape of ClickHouse + a dashboard (ADR 0062). The
+  CH metrics endpoint listens on `:9363` inside the container,
+  reachable over the Compose network, not published on the host.
 - Borg restore drill (separate operational task).
