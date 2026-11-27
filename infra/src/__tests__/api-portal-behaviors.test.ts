@@ -31,8 +31,11 @@ function delivery(env: keyof typeof envs) {
   process.env['CDK_CONTEXT_JSON'] = JSON.stringify({
     'aws:cdk:bundling-stacks': [],
   });
+  // These behaviors are the ones without the API hub's pages (task 0680), so
+  // the env file's `apiHub` is left out: production's serves the pages since
+  // 2026-11-23, and this is the layout it falls back to with them off.
   createApp({
-    config: envs[env],
+    config: { ...envs[env], apiHub: undefined },
     cargoWorkspacePath: resolve(here, '../../..'),
   });
   const raw = readFileSync(
@@ -68,7 +71,7 @@ function delivery(env: keyof typeof envs) {
   return { raw, patterns: behaviors.map((b) => b.PathPattern), functionOf };
 }
 
-describe('the /api/ behaviors in production', () => {
+describe('the /api/ behaviors in production, without the API hub', () => {
   const { raw, patterns, functionOf } = delivery('production');
 
   it('matches both portals and the hub before /api/*', () => {

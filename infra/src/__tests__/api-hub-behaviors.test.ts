@@ -39,10 +39,12 @@ function delivery(
   process.env['CDK_CONTEXT_JSON'] = JSON.stringify({
     'aws:cdk:bundling-stacks': [],
   });
+  // Without `hub` the config has no `apiHub` at all, whatever the env file
+  // says: production's turns the hub on since 2026-11-23.
   const config = {
     ...envs[env],
     ...more,
-    ...(hub && { apiHub: { ...apiHub, ...hub } }),
+    apiHub: hub && { ...apiHub, ...hub },
   };
   createApp({ config, cargoWorkspacePath: resolve(here, '../../..') });
   const raw = readFileSync(
