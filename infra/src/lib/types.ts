@@ -273,6 +273,22 @@ export interface EnvironmentConfig {
   readonly sorobanscanApiDomainName?: string;
 
   /**
+   * The paid routes under `/x402/v1/` (task 0682): a caller with no key and
+   * no browser pays USDC for one request. Unset = no paid routes, in the
+   * Lambda or on the gateway.
+   *
+   * `network` must be the network of `stellarNetworkPassphrase`: data of one
+   * network is never sold for the other's USDC, and testnet's is free.
+   */
+  readonly x402?: {
+    /** The Stellar account that is paid. The service holds no key for it. */
+    readonly payTo: string;
+    readonly network: 'stellar:testnet' | 'stellar:pubnet';
+    /** USD for one request, as a decimal: `"0.001"`. */
+    readonly priceUsd: string;
+  };
+
+  /**
    * Hands `/api/` to the separate API hub app (task 0680), in two stages.
    * Unset = today's distribution, unchanged.
    */
@@ -779,6 +795,36 @@ export function validateConfig(config: EnvironmentConfig): void {
       `enableCloudflareApiDomain=true requires cloudflareApiDomainName and a real ` +
         `cloudflareApiCertificateArn (got a placeholder).`
     );
+  }
+
+  // The Lambda checks these again and serves no paid route when one is wrong;
+  // failing the synth says so before a deploy does.
+  if (config.x402) {
+    const { payTo, network, priceUsd } = config.x402;
+    if (!/^[GM][A-Z2-7]{55,68}$/.test(payTo ?? '')) {
+      errors.push(
+        `x402.payTo must be a Stellar account address (G… or M…), got: "${payTo}"`
+      );
+    }
+    const indexed = config.stellarNetworkPassphrase.startsWith('Test SDF')
+      ? 'stellar:testnet'
+      : 'stellar:pubnet';
+    if (network !== indexed) {
+      errors.push(
+        `x402.network must be "${indexed}", the network of ` +
+          `stellarNetworkPassphrase, got: "${network}"`
+      );
+    }
+    if (
+      typeof priceUsd !== 'string' ||
+      !/^\d+(\.\d{1,7})?$/.test(priceUsd) ||
+      Number(priceUsd) <= 0
+    ) {
+      errors.push(
+        `x402.priceUsd must be a positive decimal with at most 7 decimals, ` +
+          `as a string, got: ${JSON.stringify(priceUsd)}`
+      );
+    }
   }
 
   // The sorobanscan.com API domain is all or nothing: a name without a

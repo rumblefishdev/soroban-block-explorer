@@ -13,6 +13,12 @@ import {
   type EnvironmentConfig,
 } from '../types.js';
 
+// The paid routes' gateway resource and its request limit (task 0682), in the
+// form a stage method setting names them. One bucket for every caller: it
+// bounds load, and fairness between callers is Cloudflare's per-address limit.
+const X402_RESOURCE_PATH = '/x402/{proxy+}';
+const X402_THROTTLE = { rate: 10, burst: 20 } as const;
+
 // API Gateway account-level default throttle (rps / burst). Used as the
 // "lifted" ceiling when `config.loadTesting` is set, so the per-stage 50/100
 // cap stops being the bottleneck during a load test. The account limit still
@@ -122,6 +128,17 @@ export class ApiGatewayStack extends cdk.Stack {
         // shows, a Cloudflare cache rule is the lever, not this cluster
         // (`docs/architecture/backend/api-gateway-cache-spec.md`).
         cacheClusterEnabled: false,
+        // The paid routes get their own bucket (task 0682), see below.
+        ...(config.x402
+          ? {
+              methodOptions: {
+                [`${X402_RESOURCE_PATH}/GET`]: {
+                  throttlingRateLimit: X402_THROTTLE.rate,
+                  throttlingBurstLimit: X402_THROTTLE.burst,
+                },
+              },
+            }
+          : {}),
       },
       defaultCorsPreflightOptions: {
         allowOrigins: spaOrigins(config),
@@ -147,6 +164,29 @@ export class ApiGatewayStack extends cdk.Stack {
       endpointTypes: [apigateway.EndpointType.REGIONAL],
     });
     this.api = api;
+
+    // ---------------------
+    // The paid routes (task 0682): /x402/v1/...
+    // ---------------------
+    // A caller with no key and no browser pays for one request through x402;
+    // the API Lambda owns the routes under the prefix (`crates/api/src/x402.rs`).
+    // They would be served by the `ANY /{proxy+}` above as well. They get a
+    // resource of their own, with `GET` named, for one thing: a request limit
+    // that is theirs. `ANY` cannot carry a stage method setting, and without
+    // one a loop of unpaid requests, each a Lambda invocation that answers
+    // 402, would spend the 50 requests a second the whole API shares.
+    // `new Resource`, not `api.root.addResource`: a proxying `LambdaRestApi`
+    // refuses the latter, and turning `proxy` off to allow it would mean
+    // declaring `ANY /{proxy+}` by hand. The method inherits the root's
+    // integration, the API Lambda.
+    if (config.x402) {
+      new apigateway.Resource(this, 'X402', {
+        parent: api.root,
+        pathPart: 'x402',
+      })
+        .addResource('{proxy+}')
+        .addMethod('GET');
+    }
 
     // ---------------------
     // Custom Domains (Cloudflare migration — task 0277 / ADR 0048)
