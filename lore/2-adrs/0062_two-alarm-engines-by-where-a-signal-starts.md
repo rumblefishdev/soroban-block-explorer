@@ -5,11 +5,11 @@ status: proposed
 deciders: [karolkow, stkrolikiewicz]
 related_tasks:
   [
-    '0681',
-    '0682',
-    '0683',
     '0237',
     '0476',
+    '0428',
+    '0488',
+    '0447',
     '0455',
     '0671',
     '0672',
@@ -20,21 +20,29 @@ related_adrs: ['0054', '0032']
 tags: [observability, ops, infrastructure, policy, prometheus]
 links:
   - lore/2-adrs/0054_one-alarm-engine-and-three-rules-for-alarms.md
+  - lore/1-tasks/archive/0428_OPS_alert-on-accounts-recent-mv-refresh-failure.md
   - infra/src/lib/stacks/cloudwatch-stack.ts
   - infra/src/lib/stacks/ingestion-alarms.ts
   - crates/db-clickhouse/config.d/prometheus.xml
-  - crates/db-clickhouse/users.d/services.xml
-  - docker-compose.prod.yml
 history:
   - date: 2026-11-26
     status: proposed
     who: stkrolikiewicz
     note: >
       Drafted to supersede ADR 0054 (`0054_one-alarm-engine-and-three-rules-for-alarms.md`) now
-      that a monitoring VM runs outside ch-prod-01 (stellar-x402 ADR 0011, task 0139). A
-      proposal before implementation, as ADR 0054 was before its gates. Tasks 0681–0683
-      implement it once it merges as proposed, and their drills tick the gates below before it is
-      accepted. Draft for Karol's review.
+      that a monitoring VM runs outside ch-prod-01 (stellar-x402 ADR 0011, task 0139). The first
+      draft added an explorer metrics agent beside ClickHouse, a data-check exporter and a
+      textfile exporter (tasks 0681–0683, PR #763).
+  - date: 2026-11-27
+    status: proposed
+    who: stkrolikiewicz
+    note: >
+      Slimmed after Karol's review on PR #762. The demand behind the machinery was 0237 and
+      0476: 0476 stays closed by 0428's decision, with a ready CloudWatch design, and ClickHouse's
+      disk is already alarmed (`prices-production-ch-disk-free`). Decision 2 (the explorer's own
+      agent) is replaced by "nothing new runs for the explorer", 0681–0683 are dropped, and rule 1
+      gains an exception for facts that must page when the VM can't. Checked on ch-prod-01: the
+      ClickHouse metrics endpoint listens on `0.0.0.0:9363`, not the container's loopback.
 ---
 
 # ADR 0062: Two alarm engines by where a signal starts, with ADR 0054's rules for both
@@ -44,12 +52,14 @@ history:
 - [ADR 0054: one alarm engine and three rules](./0054_one-alarm-engine-and-three-rules-for-alarms.md)
   (not `0054_concurrent-clickhouse-reads.md`, which shares its id): its rule 1 is replaced; its
   rules 2–5 are restated below and hold for both engines
-- The implementation, in three tasks:
-  [0681: the metrics agent beside ClickHouse](../1-tasks/backlog/0681_OPS_metrics-agent-beside-clickhouse.md),
-  [0682: the data-check exporter](../1-tasks/backlog/0682_OPS_data-check-exporter-beside-clickhouse.md),
-  [0683: the textfile exporter and host timer](../1-tasks/backlog/0683_OPS_textfile-exporter-and-host-timer.md)
-- [Task 0237: reboot-required alert](../1-tasks/backlog/0237_FEATURE_reboot-required-notification.md)
-- [Task 0476: alert on a stalled `balance_aggregates_mv` refresh](../1-tasks/backlog/0476_OPS_balance-aggregates-refresh-alert.md)
+- [Task 0428](../1-tasks/archive/0428_OPS_alert-on-accounts-recent-mv-refresh-failure.md): the
+  refresh alarm closed by decision, with its return conditions and its design
+- [Task 0237: reboot-required alert](../1-tasks/backlog/0237_FEATURE_reboot-required-notification.md),
+  the one host fact this ADR places now
+- [Task 0476: alert on a stalled `balance_aggregates_mv` refresh](../1-tasks/backlog/0476_OPS_balance-aggregates-refresh-alert.md),
+  under 0428's decision
+- [Task 0488](../1-tasks/backlog/0488_OPS_backfill-must-not-starve-production.md), whose step 4
+  plans a disk and a lag alarm
 - Tasks 0671–0674: CloudWatch-side work under ADR 0054's rules; their "In force" lines point here
   once this ADR is accepted
 - stellar-x402 ADR 0011 ("Logs, metrics and alerts") and task 0139; soroban-infrastructure
@@ -65,52 +75,46 @@ one boolean, and Prometheus on the host itself was rejected as "partially inside
 observes" (its Alternative 1b). Its Negative consequences say so: "Signals that originate outside
 AWS have no ruling here, so each still needs its own decision."
 
-Since stellar-x402 ADR 0011 the host has an AWS identity, but it is x402's: its CloudWatch agent,
-through IAM Roles Anywhere, whose role writes only x402's logs and metrics, and which ADR 0011
-names the server's only AWS credential. It reads nothing of ClickHouse and turns no host fact into
-an explorer alarm. So these signals are still waiting:
-
-- **0237:** `/var/run/reboot-required` on ch-prod-01, a host fact. The task still proposes its own
-  Slack webhook and a cooldown file.
-- **0476:** a stalled `balance_aggregates_mv` refresh, a ClickHouse fact. The check exists only
-  as a manual runbook query.
-- **ClickHouse itself:** merges, failed queries, refreshes. Its Prometheus endpoint is on
-  (`crates/db-clickhouse/config.d/prometheus.xml`, mounted by `docker-compose.prod.yml`), bound
-  to the container's loopback for "a future Prometheus scraper". Nothing scrapes it.
-
 What changed between 2026-11-17 and 2026-11-25 (stellar-x402 ADR 0011, task 0139):
 
 - **A monitoring VM**, `monitoring-hel1-01`, a Hetzner Cloud CPX12 in Helsinki, in another
-  location than ch-prod-01 in Falkenstein. It runs Prometheus (90 days, capped at 20 GB),
-  Alertmanager and Grafana for every project on ch-prod-01, provisioned from
-  soroban-infrastructure `monitoring/`. Each project keeps its rules and dashboards in its own
-  public repository; the VM downloads each file at a pinned commit, refuses it unless its SHA-256
-  matches, and checks the rules with its own `promtool`. Today only x402's are pinned.
-- **One Prometheus agent on ch-prod-01, x402's**, today the VM's only writer (its CN
-  `x402-metrics-agent-production` is the one entry in `metrics_writer_cns`). It scrapes the
-  facilitator, the host's node_exporter and itself, and sends with `remote_write` over mTLS, with
-  a client certificate from this project's CA. It evaluates nothing, and its write-ahead log
-  holds a few hours of samples while the VM can't be reached. ADR 0011 planned that one agent to
-  scrape ClickHouse too; its config doesn't.
+  location than ch-prod-01 in Falkenstein. It runs Prometheus, Alertmanager and Grafana for every
+  project on ch-prod-01, provisioned from soroban-infrastructure `monitoring/`. Each project keeps
+  its rules in its own repository; the VM downloads them at a pinned commit and checks them with
+  `promtool`. Today only x402's are pinned.
+- **One Prometheus agent on ch-prod-01, x402's**, the VM's only writer. It scrapes the
+  facilitator, the host's node_exporter (with the textfiles x402's host probe writes) and itself.
+  x402 owns the host's metrics: `x402-disk-root` (80%) and `x402-memory`. ADR 0011 planned that
+  one agent to scrape ClickHouse too; its config doesn't.
 - **A witness for the VM.** An always-firing Watchdog goes to an SNS topic every minute, and a
-  CloudWatch alarm with missing data breaching fires when it stops. That is a dead-man's switch
-  for the VM, judged by CloudWatch. It is not the one ADR 0054 named, a service outside the
-  CloudWatch → Slack chain that would also witness CloudWatch; that one is still not adopted. A
-  failed Slack send is posted through SNS, a failed SNS send through Slack.
-- **One Slack webhook.** Alertmanager posts through one incoming webhook, to x402's alarm channel
-  `#stellar-x402-bot`. The explorer's CloudWatch alarms post to its own channels, one per
-  environment.
-- **Grafana** shows dashboards only, its alerting off, behind Cloudflare Access for every
-  @rumblefish.pl address.
-- **x402 moved its metric alarms there** on 2026-11-25 and drilled them the same day, except
-  `agent-behind`, `disk-root`, `memory` and `agent-certificate`, which weren't fired live (task
-  0139). `x402-watch`, its uptime probe and the heartbeat stay in CloudWatch.
+  CloudWatch alarm fires when it stops. A failed Slack send is posted through SNS, a failed SNS
+  send through Slack. Both reach x402's channel.
+- **One Slack webhook**, to x402's alarm channel `#stellar-x402-bot`. The explorer's CloudWatch
+  alarms post to its own channels, one per environment.
+
+What the explorer was waiting on:
+
+- **0237:** `/var/run/reboot-required` on ch-prod-01, a host fact. The task proposed its own Slack
+  webhook and a cooldown file.
+- **0476:** a stalled `balance_aggregates_mv` refresh. 0428 measured the same class on all 8
+  refreshable views (0 exceptions over 29 days, a refresh in every hour of the view's life) and
+  closed the alarm by decision, with two return conditions (a silent refresh failure observed,
+  or 0447 raising `REFRESH EVERY`) and a design for its return: `now() - last_success_time`
+  published from the indexer's existing CloudWatch call. Neither condition is met.
+- **ClickHouse's disk:** already alarmed, as `prices-production-ch-disk-free` (`Prices/Rollup`,
+  20% free) and by `x402-disk-root` on the same filesystem.
+- **ClickHouse's own metrics** (merges, failed queries): no task needs them yet. The endpoint is
+  on (`crates/db-clickhouse/config.d/prometheus.xml`) and nothing scrapes it. It listens on
+  `0.0.0.0:9363` inside the container, so the Compose network reaches it: checked on ch-prod-01
+  on 2026-11-27 (`ss` in the container's namespace, and `wget http://clickhouse:9363/metrics`
+  from the Caddy container). The `<listen_host>` under `<prometheus>` had no effect; ClickHouse
+  binds the port on the top-level `listen_host` list like every other port. It is not published
+  on the host.
 
 ADR 0054's revisit conditions for its Alternatives 1 and 1b are not met, and this ADR doesn't
-claim them: two people are on call, and the retention 0054 meant was Lambda logs, which stay in
-CloudWatch. This ADR answers 0054's Negative consequences instead: signals that start outside AWS
-need their own decision, and the stack 1b rejected now runs off the box and is already operated
-for x402.
+claim them. It answers 0054's Negative consequences instead: signals that start outside AWS need
+their own decision, and the stack 1b rejected now runs off the box and is already operated for
+x402.
 
 ---
 
@@ -118,88 +122,49 @@ for x402.
 
 **1. Each signal has one engine, chosen by where it starts.** This replaces ADR 0054's rule 1.
 
-- **Components emit metrics, or a host timer writes a textfile; none notifies a human.** No other
-  notifier (a webhook, an email relay, a cron that posts) is added for any signal. 0237's webhook
-  and cooldown file become a textfile and a rule.
+- **Components emit metrics, or a host probe writes a textfile; none notifies a human.** No other
+  notifier (a webhook, an email relay, a cron that posts) is added for any signal.
 - **AWS-side signals stay in CloudWatch**, as ADR 0054 decided: metrics an AWS resource in this
-  account emits (SQS, Lambda, API Gateway, ECS), and what our Lambdas already measure as part of
-  their own work (`IngestionLagSeconds`, the `IndexerFailures` log filter). Delivery stays SNS →
-  Chatbot (Amazon Q Developer) → Slack, and thresholds stay in CloudWatchStack
-  (`cloudwatch-stack.ts`, `ingestion-alarms.ts`).
-- **ClickHouse and host facts go to Prometheus on the monitoring VM.** They are read on the host:
-  host facts as textfiles (0237), ClickHouse's own metrics, and data checks, SQL against
-  ClickHouse whose answer is a number (0476). No new Lambda is written to read one. The rules live
-  in this repository and are checked with `promtool` in CI.
-- **No signal goes through both.**
+  account emits (SQS, Lambda, API Gateway, ECS), and what our Lambdas measure as part of their own
+  work (`IngestionLagSeconds`, the `IndexerFailures` log filter, and 0428's
+  `now() - last_success_time` when it returns). Delivery stays SNS → Chatbot (Amazon Q
+  Developer) → Slack, and thresholds stay in CloudWatchStack.
+- **Host facts and ClickHouse's own metrics go to Prometheus on the monitoring VM.** They are
+  read on the host, by x402's agent, and no new Lambda is written to read one.
+- **Exception: a fact that must page when the VM can't goes to CloudWatch.** A whole-Hetzner
+  outage or a dead VM silences the VM's path, so a fact whose alarm has to survive that is read
+  by a Lambda over mTLS, as stellar-prices-api's `rollup-freshness-probe` reads ClickHouse, with
+  no AWS credential on the host. stellar-x402 made the same call for OpenBao's audit disk (its
+  ADR 0011, "it must page when the VM can't"). The rule that places such a fact names why.
+- **No signal goes through both**, except a fact that already has an alarm on each side for its
+  own reason, such as the disk above.
 
-**2. The explorer runs its own agent next to ClickHouse, a second writer on the VM**, where
-stellar-x402 ADR 0011 planned one agent for the whole server.
+**2. Nothing new runs for the explorer.** ADR 0011's single agent stays the only writer on the VM.
 
-- **Where it runs.** In `docker-compose.prod.yml`, with ClickHouse's network namespace
-  (`network_mode: "service:clickhouse"`), the shape `prometheus.xml` reserved, so ClickHouse's
-  endpoint stays on the container's loopback.
-- **Its lifecycle.** Compose resolves `service:clickhouse` to that container's ID when it creates
-  the agent, so when `clickhouse` is recreated or restarted (a deploy, a crash, an OOM kill,
-  `docker restart`), the agent and the exporter are left without network and send nothing until
-  they are recreated too. A `docker compose up -d` of the whole project recreates them in the same
-  run, since the new ID changes their configuration. `depends_on` doesn't, and its `restart: true`
-  acts only on Compose operations. A command that names only `clickhouse`, such as
-  `up -d --force-recreate clickhouse`, leaves them behind, so that procedure names them too. After
-  any other restart the agent's silence rule (below) pages, and its runbook step recreates the
-  agent and the exporter.
-- **Its reach.** Anything in that namespace reaches ClickHouse's loopback ports, where the
-  `<no_password/>` users of `users.d/services.xml` accept it, `dev_shared` (admin) among them. The
-  exporter's read-only user guards against our own query mistakes, not a compromised sidecar. So
-  the agent, the exporter and the textfile exporter run digest-pinned images with
-  `read_only: true`, `cap_drop: [ALL]` and no published port, as x402's agent does.
-- **What it scrapes:**
-  - itself (`job="agent"`, `localhost:9090`), for its `remote_write` backlog and failures;
-  - an allowlist of ClickHouse's metric names, not all four families;
-  - a data-check exporter in the same namespace;
-  - a node_exporter of its own with only the textfile collector on
-    (`--collector.disable-defaults --collector.textfile --collector.textfile.directory=<dir>`),
-    reading a directory a host timer writes: 0237's flag and the agent certificate's days left.
-    It sits on the Compose network, outside ClickHouse's namespace, so a ClickHouse restart
-    doesn't strand it.
-- **The exporter.** Its queries, its series names and the rules that read them live in this
-  repository and change in one commit; it is built from this repository or runs a digest-pinned
-  image (the implementation task chooses). It reads with a read-only ClickHouse user granted only
-  what its checks read, the `system.*` tables included, under a statement timeout. The queries
-  reach ch-prod-01 with the explorer's deploy and the rules reach the VM with soroban-infrastructure's
-  pin, so each check also has a rule on its series being absent while the exporter is up: a
-  series renamed at one end pages instead of going quiet.
-- **Every check exports:**
-  - its value; one it can't compute (`last_success_time` NULL with no `exception`, after a
-    ClickHouse restart) is no value, never 0, while a non-empty `exception` is a failing value;
-  - the time it last succeeded, so a check that can't run stops advancing it and a rule fires on
-    its age;
-  - how many of the objects it checks it can see. A read the grants filter returns no rows, not
-    an error, and would read as healthy; a rule fires when the count is 0. stellar-prices-api's
-    probe, on the CloudWatch path, has `MvDriftUnreadable` and `MvRefreshUnreadable` for this
-    reason.
-- **Every textfile** has a rule on its age, as x402's `textfile-stale` does:
-  `time() - node_textfile_mtime_seconds{project="explorer"}` beyond the timer's period plus five
-  minutes, a scrape error, or the file absent while the node_exporter is up. The collector keeps
-  serving a file nobody writes.
-- **Rules on ClickHouse's `events` and `errors` counters use `increase()`**, since a restart
-  resets them.
-- **Labels.** Every series carries `project="explorer"`. A data check's series also carries
-  `network`: `stellar:pubnet` for `default.*`, `stellar:testnet` for `testnet.*`, since both
-  databases are in this ClickHouse and Alertmanager groups by `network`. A testnet check is a
-  `warning` at most.
-- **Its own witness.** The explorer's rules watch its agent: `absent_over_time(up{project="explorer"}[5m])`
-  for the agent and its namespace, and a rule on its `remote_write` falling behind, as x402's
-  `agent-behind` does, tested with `promtool test rules`, since its series reach the VM only
-  through the sends it measures. x402's silence rule watches x402's agent only.
-- **Its certificate** has a CN of its own on the VM's `metrics_writer_cns`, and a rule fires 30
-  days before it expires, on the days-left textfile the host timer writes, as x402's host probe
-  does.
-- **The host.** x402 keeps the host's metrics: its node_exporter, and its rules on the root
-  filesystem (`x402-disk-root`, 80%) and on memory (`x402-memory`); there is no CPU rule. The
-  host's base setup stays with this repository's `infra-hetzner`, the timer that writes the
-  explorer's textfiles included. ClickHouse's data (`/srv/clickhouse-data`) is on the root
-  filesystem, so `x402-disk-root` covers it; the explorer relies on that rule and doesn't alarm on
-  the disk twice. Neither project's rules read the other's series or files.
+- **0237** becomes one more check in x402's host probe and one rule beside `x402-disk-root`: a
+  pending reboot is a fact about the shared host, which x402's probe and rules already cover. The
+  explorer's `security` role keeps what writes the flag (task 0227). To be agreed in stellar-x402
+  (Open, below).
+- **0476** stays under 0428's decision. When a return condition is met, it is built as 0428
+  designed it, on the CloudWatch path.
+- **ClickHouse's own metrics** wait for a task that needs them. That task makes x402's agent scrape
+  `clickhouse:9363` over the Compose network, not through ClickHouse's network namespace, with:
+  - `project="explorer"` set by the job's relabelling, so the explorer's alerts don't read as
+    x402's;
+  - an allowlist of metric names and a `sample_limit` on the job, since a CPX12 holds about
+    8,000 series (stellar-x402 ADR 0011) and the explorer's series must not crowd out x402's;
+  - the rules in this repository, checked with `promtool` in CI, pinned in soroban-infrastructure,
+    with the order of the three repositories' changes and who runs the playbook named in that
+    task;
+  - a CI check that every explorer rule's selectors carry `project="explorer"`: the ingest admits
+    a writer by its certificate's CN, so labels are trusted, not checked;
+  - rules on ClickHouse's `events` and `errors` counters with `increase()`, since a restart resets
+    them.
+- **The channel.** Until an explorer rule exists on the VM, there's nothing to route. If one
+  arrives with an explorer route of its own, that route gives up what x402's channel gets: the
+  Watchdog's alarm, the failed-send rule and `x402-disk-root`. It also has to sit before the
+  shared `shape` and `severity` routes, which have no `continue`, and so loses their no-resolved
+  and hourly behaviour unless it repeats them.
 
 **3. ADR 0054's rules 2–5 hold for both engines.** Restated here, so this ADR stands on its own,
 with what each means on the VM:
@@ -207,65 +172,45 @@ with what each means on the VM:
 - **Rule 2: alarm on change, not on level, wherever a condition can persist.** A standing
   condition belongs on a dashboard, an event on the pager. Carve-out: a level alarm is correct
   where policy forces the steady state to zero (a DLQ, 5xx), because it is drained and re-armed.
-  In Alertmanager an alert instance is its label set, so a new cause (a new `check`, a new table)
-  posts while another fires. A standing alert repeats at the shared route's interval, a `warning`
-  every 24 hours and a `critical` every hour (stellar-x402 task 0139, decisions 1 and 2). That is
-  a deliberate change, for the VM's path, to ADR 0054's rule 2, which "is not repeated reminders"
-  and under which "a standing condition never re-pages"; CloudWatch's path keeps it as it was.
+  In Alertmanager an alert instance is its label set, so a new cause posts while another fires. A
+  standing alert repeats at the shared route's interval, a `warning` every 24 hours and a
+  `critical` every hour (stellar-x402 task 0139, decisions 1 and 2). That is a deliberate change,
+  for the VM's path, to ADR 0054's rule 2, under which "a standing condition never re-pages";
+  CloudWatch's path keeps it as it was.
 - **Rule 3: absence is breaching only where nothing else witnesses the same absence.** Paging
-  twice for one fault is how alarms get muted. The explorer agent's silence rule witnesses the
-  agent, its namespace and its network, so a per-signal absence rule is written only for what it
-  can't see: one exporter or check that stops while the agent runs. Two absences are knowingly
-  witnessed twice: a whole-host or network outage posts x402's `server-silent` and the explorer's
-  agent rule, one per project, since neither reads the other's series; and a stopped `clickhouse`
-  container posts CloudWatch's indexer alarms and the agent rule, since the agent shares its
-  namespace. The agent rule's description names both causes. An inhibition across projects would
-  make the explorer's witness depend on x402's rule again, so none is added. Any inhibition goes in
-  soroban-infrastructure's shared `alertmanager.yml`, scoped by `project="explorer"` matchers and
-  reviewed there.
+  twice for one fault is how alarms get muted. On the VM, x402's `server-silent` and
+  `textfile-stale` witness its agent and its host probe, so a rule placed there by decision 2
+  inherits them and adds no absence rule of its own.
 - **Rule 4: a page caused by planned work the operator just performed is cheap; suppression
   logic is expensive. Don't build it.** One knowing page per planned pause is the accepted cost.
-  Prefer the bare signal; revisit only if knowing pages become genuinely noisy, with a count, not
-  a feeling. An Alertmanager silence expires on its own, so ADR 0054's objection to disabling
-  actions (a forgotten re-enable leaves a mute alarm) doesn't apply to it, but no procedure depends
-  on one.
+  Revisit only if knowing pages become genuinely noisy, with a count, not a feeling.
 - **Rule 5: the delivery path is verified on every change to it, before the change is called
   done.** A message that arrives counts, not a diff that looks right.
-  - CloudWatch's path, as ADR 0054 had it: every deploy of the alarm stack, including one that
-    doesn't appear to touch delivery, is done only when one message has travelled CloudWatch → SNS
-    → Chatbot → Slack and been seen in the channel.
-  - The VM's path, for a change to the explorer's rules: done when the VM lists the explorer's
-    group at the new pin (`/api/v1/rules`) and each new or changed rule has fired once into the
-    channel from a real or a drill series (`network="drill"`, as x402's 0139 drill did).
-    `amtool alert add` tests only Alertmanager onward.
-  - A change to `alertmanager.yml` (routes, receivers, inhibitions) is soroban-infrastructure's,
-    verified there after every playbook run with a test alert carrying the route's matchers (its
-    README). The shared routes match `severity` and `shape`, not `project`.
-  - Between changes, the Watchdog and the cross-posting failed-notification rule watch the VM's
-    path.
-- **In every rule:** the labels the shared Alertmanager routes and groups on, `project="explorer"`,
-  `check`, `severity` (`critical` only for what would page on mainnet) and `shape` (`event` for a
-  one-off, which posts no resolved; `level` or `server` otherwise); a description written for
-  whoever it wakes (what is happening, where the runbook is); for a level rule, a comment with its
-  re-arm answer; and a comment naming what covers its silence.
+  - CloudWatch's path, as ADR 0054 had it: every deploy of the alarm stack is done only when one
+    message has travelled CloudWatch → SNS → Chatbot → Slack and been seen in the channel.
+  - The VM's path: a new or changed rule is done when the VM lists it at the new pin
+    (`/api/v1/rules`) and it has fired once into the channel from a real or a drill series.
+  - A change to `alertmanager.yml` is soroban-infrastructure's, verified there after every
+    playbook run.
+- **In every rule:** the labels the shared Alertmanager routes and groups on (`project`, `check`,
+  `severity`, with `critical` only for what would page on mainnet, and `shape`); a description
+  written for whoever it wakes; for a level rule, a comment with its re-arm answer; and a comment
+  naming what covers its silence.
 
 ---
 
 ## Rationale
 
-- 0237 is a host file no Lambda can read, and ClickHouse's own endpoint is on the container's
-  loopback. What they lack is a reader on the host, rules and a witness. The VM has the rules and
-  a witness; the agent is the reader.
-- A CloudWatch path for host facts would need a second AWS credential on the server, the
-  explorer's, beside x402's, and still no scraper for ClickHouse.
-- ADR 0054's objections to Prometheus were where it runs (on the database box), who runs it (a
-  third system for two people), and Alertmanager as "yet another alarm state machine to configure
-  and keep honest". The VM is elsewhere, has a witness of its own, and is already run for x402. Its
-  Alertmanager configuration is shared and reviewed in soroban-infrastructure, and rule 2 above
-  records where its state machine differs from CloudWatch's.
-- AWS-side signals gain nothing by moving. Prometheus can't scrape a Lambda, and reading
-  CloudWatch from the VM would add a hop, a credential and a per-metric charge to signals
-  CloudWatch already evaluates.
+- The demand was two signals. 0237 is one host fact on a host whose metrics x402 already reads;
+  0476 is closed by a measurement, with a design for its return that needs no new component.
+  ClickHouse's disk is alarmed twice already. A second agent, a data-check exporter, a textfile
+  exporter, a ClickHouse user, a client certificate and their drills (roughly 45–70 hours across
+  the first draft's 0681–0683) would serve none of them better.
+- Rule 1 still settles where the next signal goes, which is what ADR 0054 left open. AWS-side
+  signals gain nothing by moving: Prometheus can't scrape a Lambda, and pulling the explorer's
+  ~25 alarm metrics into the VM would cost $2–11 a month and add `cloudwatch_exporter`'s 600 s
+  default delay to a 120 s backlog threshold (`ingestion-alarms.ts`).
+- The exception keeps rule 1 from forbidding what stellar-x402 already did for a good reason.
 
 ---
 
@@ -273,76 +218,61 @@ with what each means on the VM:
 
 ### Alternative 1: Keep ADR 0054
 
-**Description:** ADR 0054's pointer for 0237, a healthchecks.io-style ping from a host timer;
-CloudWatch for the rest; and task 0476's own option, a scheduled Lambda that reads ClickHouse
-over mTLS.
-
-**Pros:**
-
-- No new system to run: a ping service and one more check in a scheduled Lambda.
-- stellar-prices-api already runs such a Lambda (`rollup-freshness-probe`: one schedule, many
-  checks, `system.view_refreshes` among them), so 0476 alone could follow it.
+**Description:** ADR 0054's pointer for 0237, a healthchecks.io-style ping from a host timer, and
+CloudWatch for the rest.
 
 **Cons:**
 
-- A third delivery path and another vendor for 0237.
-- Each ClickHouse fact is code in a Lambda plus a custom metric and an alarm ($0.30 and $0.10 a
-  month, stellar-x402 ADR 0011).
-- ClickHouse's own metrics stay unread: the endpoint is on the container's loopback.
+- A third delivery path and another vendor for one host fact the VM can already read.
+- Leaves host facts and ClickHouse's metrics without a ruling, as 0054 itself says.
 
-**Decision:** REJECTED. The VM gives the host and ClickHouse an engine, with a witness in place.
+**Decision:** REJECTED.
 
-### Alternative 2: Move every explorer alarm to Prometheus
+### Alternative 2: The explorer's own agent beside ClickHouse (this ADR's first draft)
+
+**Description:** A Prometheus agent in ClickHouse's network namespace as a second writer on the
+VM, a data-check exporter with a read-only ClickHouse user, and a textfile-only node_exporter with
+a host timer (tasks 0681–0683).
+
+**Cons:**
+
+- The namespace bought no privacy: the endpoint listens on `0.0.0.0` and the Compose network
+  already reaches it. It did cost: every restart of `clickhouse` strands the agent and the
+  exporter until they are recreated, right when they matter.
+- Its first host fact was its own certificate, and its first data check a signal 0428 closed.
+- A second writer, CN, key, WAL, rules pin and route to run for two signals.
+
+**Decision:** REJECTED. Revisit when the explorer has enough host or ClickHouse signals that
+x402's agent and host probe can't carry them.
+
+### Alternative 3: Move every explorer alarm to Prometheus
 
 **Description:** Read SQS, Lambda and API Gateway metrics into Prometheus with a CloudWatch
 exporter on the VM, or have the Lambdas push their metrics.
 
-**Pros:**
-
-- One engine; one rule could join an AWS series and a ClickHouse one.
-
 **Cons:**
 
-- `GetMetricData` on every scrape, and an AWS credential on the VM beyond its SNS role.
-- A second hop for signals CloudWatch evaluates natively.
+- `GetMetricData` on every scrape, an AWS credential on the VM beyond its SNS role, $2–11 a month,
+  and a delay that undoes the backlog threshold.
 - A Lambda push needs a client certificate per function; stellar-x402 ADR 0011 leaves "metrics
   from the Lambdas" for later.
 
 **Decision:** REJECTED for now. Revisit when one rule needs an AWS metric and a ClickHouse one
 together.
 
-### Alternative 3: Prometheus on ch-prod-01
+### Alternative 4: Prometheus on ch-prod-01
 
-**Description:** Prometheus and Alertmanager in this repository's compose on ch-prod-01.
-
-**Cons:**
-
-- It would stop with every fault, full disk and reboot of the box it watches, and the metrics from
-  the outage would be lost (ADR 0054's Alternative 1b, stellar-x402 ADR 0011).
-
-**Decision:** REJECTED.
-
-### Alternative 4: Grafana Cloud
-
-**Description:** Grafana Cloud Free for metrics and alerts.
-
-**Cons:**
-
-- 10,000 series, 14 days, 3 people a month (stellar-x402 ADR 0011), and a second stack beside the
-  VM.
+**Cons:** It would stop with every fault, full disk and reboot of the box it watches (ADR 0054's
+Alternative 1b, stellar-x402 ADR 0011).
 
 **Decision:** REJECTED.
 
 ### Alternative 5: ClickHouse as the sink
 
-**Description:** Check results and alerts stored in ClickHouse.
+**Cons:** Observability inside the system it observes goes quiet exactly when it is needed (ADR
+0054's Alternative 2).
 
-**Cons:**
-
-- Observability inside the system it observes goes quiet exactly when it is needed (ADR 0054's
-  Alternative 2).
-
-**Decision:** REJECTED. Data checks read ClickHouse; their results and alerts live off it.
+**Decision:** REJECTED.
 
 ---
 
@@ -350,54 +280,30 @@ together.
 
 ### Positive
 
-- 0237 and 0476 get an engine: a textfile fact and a SQL check, each a rule in this repository.
-- ClickHouse's own state is alarmed and graphed for the first time, beside the host and the
-  facilitator in one Grafana.
-- stellar-prices-api could later run its checks through an exporter of its own on this pattern,
-  with `project="prices"` and its own user. That is its decision, not this ADR's.
+- 0237 gets an engine for the cost of one probe check and one rule, with no webhook and no
+  cooldown file.
+- The next host or ClickHouse signal has a ruling and a path that already runs.
+- Nothing new to deploy, secure or drill on ch-prod-01 for the explorer.
 
 ### Negative
 
 - Two engines: a reviewer first asks where a signal starts, and an alarm is defined in one of two
-  places (CloudWatchStack, the rules file).
+  places.
 - A standing alert on the VM reminds every 24 hours or every hour; one in CloudWatch never does.
-- Until the channel is settled (Open, below), the explorer's alarms arrive in two places: its
-  CloudWatch channels and x402's.
-- The agent and the exporter share ClickHouse's network namespace, so every restart or recreate of
-  `clickhouse` must recreate them too, and an unplanned one pages until someone does.
-- The explorer depends on x402's `x402-disk-root` for ClickHouse's disk, and that rule hasn't been
-  fired live.
-- The VM is a dependency this repository doesn't run: it is provisioned from
-  soroban-infrastructure and operated with x402. Its size bounds what we scrape (a CPX12 holds
-  about 8,000 series, stellar-x402 ADR 0011), hence the allowlist.
+- The explorer's host alarms are x402's rules in x402's channel, so the explorer's operators read
+  `#stellar-x402-bot` for them.
+- The explorer depends on a VM and an agent this repository doesn't run.
 - CloudWatch's path still has no external witness, as in ADR 0054.
-- What the explorer adds is components, not a stack, but several of them: an agent, a data-check
-  exporter, a textfile-only node_exporter and the host timer that writes its files, a read-only
-  ClickHouse user, a client certificate and key with an expiry rule, a rules file with `promtool`
-  in CI, a dashboard, a deploy step that recreates the agent with `clickhouse`, and in
-  soroban-infrastructure its CN, the pins and download tasks for its rules and dashboard, and its
-  route.
 
 ---
 
 ## Open / Pending (gates proposed → accepted)
 
-- [ ] (0681, Step 1, as are the next four) The channel agreed: the explorer's operators read `#stellar-x402-bot`, or an explorer route
-      with its own webhook in soroban-infrastructure's `alertmanager.yml`.
-- [ ] A second writer on the VM agreed with stellar-x402, and ADR 0011's sentence on its agent
-      scraping ClickHouse changed to say the explorer's agent does.
-- [ ] Rule 2's reminders accepted for the explorer, or an explorer route with a longer repeat.
-- [ ] The VM's series count read (`/api/v1/status/tsdb`) before the allowlist is chosen.
-- [ ] `x402-disk-root` seen in the channel once, with x402's agreement, since the explorer relies
-      on it for ClickHouse's disk.
-- [x] The implementation tasks created and linked from this ADR: 0681 (agent, rules, pins,
-      dashboard), 0682 (data-check exporter, 0476 first), 0683 (textfile exporter and host timer,
-      0237 next).
-- [ ] The first data check (0476, in 0682) and the first host fact (the agent certificate's days
-      left, in 0683) running and drilled, including a visible-object count of 0 and a stale
-      textfile.
-- [ ] Rule 5 demonstrated once on the VM's path with an explorer rule fired from a drill series
-      (0683's certificate drill).
+- [ ] 0237 agreed in stellar-x402: the probe check, the rule beside `x402-disk-root`, and ADR
+      0011's sentence on its agent scraping ClickHouse left as it is.
+- [ ] 0237's rule fired once into the channel from a touched `/var/run/reboot-required` (rule 5).
+- [ ] 0488 step 4 reread under rule 1: its disk alarm already exists twice; its lag alarm is a
+      Lambda measure, so CloudWatch.
 - [ ] On acceptance, ADR 0054 (`0054_one-alarm-engine-and-three-rules-for-alarms.md`) marked
       `superseded` with `by: '0062'`, and the "In force" lines of 0671–0674 repointed to 0062.
 
@@ -406,27 +312,24 @@ together.
 ## Delivery Checklist (per ADR 0032)
 
 - [ ] `docs/architecture/technical-design-general-overview.md`: N/A — no change to the system's
-      overall design until the agent lands; updated with the implementation task if it names
-      monitoring.
-- [ ] `docs/architecture/database-schema/database-schema-overview.md`: N/A — no schema change;
-      the exporter reads existing tables.
+      design.
+- [ ] `docs/architecture/database-schema/database-schema-overview.md`: N/A — no schema change.
 - [ ] `docs/architecture/backend/backend-overview.md`: N/A — the API is unchanged.
 - [ ] `docs/architecture/frontend/frontend-overview.md`: N/A — the frontend is unchanged.
 - [ ] `docs/architecture/indexing-pipeline/indexing-pipeline-overview.md`: N/A — its alarms stay
       in CloudWatch.
-- [ ] `docs/architecture/infrastructure/infrastructure-overview.md`: pending — the agent, the
-      exporters and the host timer on ch-prod-01 and the monitoring VM, with 0681–0683.
+- [ ] `docs/architecture/infrastructure/infrastructure-overview.md`: pending — which engine
+      watches what, and this ADR linked at the monitoring section.
 - [ ] `docs/architecture/xdr-parsing/xdr-parsing-overview.md`: N/A — unrelated.
-- [ ] This ADR linked from `infrastructure-overview.md` at the monitoring section.
 
 ---
 
 ## References
 
-- stellar-x402 `docs/adr/0011-facilitator-hosting.md`, "Keys, secrets and access", "Logs, metrics
-  and alerts" and "Alternatives considered"
-- stellar-x402 task 0139, the switch and its drills (`notes/G-switch-plan.md`); its rules in
-  `deploy/metrics/rules/x402-production.yml` and its agent in `deploy/metrics/`
+- stellar-x402 `docs/adr/0011-facilitator-hosting.md`, "Logs, metrics and alerts" and
+  "Alternatives considered"; its host probe `deploy/libexec/x402-host-probe` and rules
+  `deploy/metrics/rules/x402-production.yml`
 - soroban-infrastructure `monitoring/README.md` and `monitoring/ansible/roles/monitoring/files/alertmanager.yml`
 - stellar-prices-api `packages/rollup-freshness-probe/` (`mv_drift.rs`, `refresh_waits.rs`)
+- Karol's review on PR #762 (2026-11-26) and the reply (2026-11-27)
 - [ADR 0054](./0054_one-alarm-engine-and-three-rules-for-alarms.md)
