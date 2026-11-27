@@ -133,7 +133,8 @@ The backend implementation direction implied by the current design is:
   scheme in the spec. The gate reads only that cookie or `x-api-key`; it logs
   one `session minted` / `session rejected` line each, with `cookie_present`. `/auth/session` is listed in `ApiDoc`'s `paths(...)` rather than
   `register_routes`, because it is mounted only when the auth layer is armed and
-  the spec must describe it either way (task 0510).
+  the spec must describe it either way (task 0510). The paid x402 routes
+  (§6.3) are outside the gate and outside the spec.
 - **AWS Lambda** for serverless compute and on-demand scaling (via cargo-lambda)
 - **API Gateway** for public HTTP ingress, throttling, request validation, and response
   caching
@@ -354,6 +355,17 @@ filter, and had to be corrected — the exception looked like the rule.
 | NFTs            | `GET /nfts`, `GET /nfts/:id`, `GET /nfts/:id/transfers`                                                                                                                                                                                                                                                        |
 | Liquidity Pools | `GET /liquidity-pools`, `GET /liquidity-pools/:id`, `GET /liquidity-pools/:id/activity`, `GET /liquidity-pools/:id/chart`, `GET /liquidity-pools/:id/participants`                                                                                                                                             |
 | Search          | `GET /search?q=&type=transaction,contract,asset,account,nft,pool&limit=10`                                                                                                                                                                                                                                     |
+
+Paid twins (task 0682), on testnet only: `GET /x402/v1/transactions/:hash`,
+`GET /x402/v1/contracts/:contract_id/events` and
+`GET /x402/v1/contracts/:contract_id/interface` run the keyed handler behind the
+`stellar-x402` crate's payment layer. They ask for no key and no session (they
+are added after the auth gate's layer, `x402::mount`) and stay behind the edge
+lock. Without a payment they answer `402` with the terms; an answer with nothing
+in it is an error that is not settled (`404 no_data`, `503 heavy_unavailable`).
+They are not in the OpenAPI document: a buyer reads the terms from the `402`
+and the stellar-x402 catalog. They exist only with `X402_PAY_TO` set for the
+network the deployment indexes.
 
 ### 6.4 Resource Details
 

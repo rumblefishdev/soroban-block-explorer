@@ -13,6 +13,7 @@ fn test_config() -> AppConfig {
         api_keys: Vec::new(),
         cors_allow_origin: None,
         load_testing: false,
+        x402: None,
     }
 }
 
@@ -534,4 +535,181 @@ async fn swagger_ui_absent_without_feature() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ── The paid routes under `/x402/v1/` (task 0682) ──────────────────────────
+// The CH client is unconnected: none of these reaches a handler, which is the
+// point of most of them. The answers that need data are checked on the
+// deployed testnet API, by stellar-x402's evidence run.
+
+const PAID_TRANSACTION: &str =
+    "/x402/v1/transactions/6bd72a6ef6a77a7dc08e501bd4849b6c28ad88cceabb51a4fd105673949412a2";
+const PAY_TO: &str = "GAE63ENKLHRYHJP4V3PYYSPIAKW7DLZ3JOYGS6TQSSJGDH5MGQFVZFVC";
+
+/// A facilitator that settles the `exact` scheme on testnet.
+async fn facilitator() -> wiremock::MockServer {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::path("/supported"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "kinds": [{
+                    "x402Version": 2,
+                    "scheme": "exact",
+                    "network": "stellar:testnet",
+                    "extra": { "areFeesSponsored": true }
+                }]
+            })),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+/// A config that sells through the facilitator at `url`.
+fn selling(url: &str) -> AppConfig {
+    AppConfig {
+        base_url: "https://api-testnet.example.com".to_string(),
+        x402: Some(x402::Settings {
+            pay_to: PAY_TO.to_string(),
+            network: stellar_x402::Network::Testnet,
+            facilitator_url: url.to_string(),
+            price_usd: "0.001".to_string(),
+        }),
+        ..test_config()
+    }
+}
+
+async fn answer_to(app: &Router, request: Request<Body>) -> axum::response::Response {
+    app.clone().oneshot(request).await.unwrap()
+}
+
+async fn status_of(app: &Router, uri: &str) -> StatusCode {
+    let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+    answer_to(app, request).await.status()
+}
+
+#[tokio::test]
+async fn a_paid_route_answers_its_terms_with_no_key_and_no_session() {
+    use base64::Engine;
+    let facilitator = facilitator().await;
+    // The auth gate is armed, and the request carries neither a key nor a session.
+    let config = AppConfig {
+        jwt_secret: Some("test-secret".to_string()),
+        ..selling(&facilitator.uri())
+    };
+    let app = test_app_with(&config);
+
+    let request = Request::builder()
+        .uri(PAID_TRANSACTION)
+        .body(Body::empty())
+        .unwrap();
+    let response = answer_to(&app, request).await;
+
+    assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+    let header = response.headers()["payment-required"].as_bytes();
+    let terms: Value = serde_json::from_slice(
+        &base64::engine::general_purpose::STANDARD
+            .decode(header)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        terms["resource"]["url"],
+        format!("https://api-testnet.example.com{PAID_TRANSACTION}")
+    );
+    assert_eq!(terms["accepts"][0]["network"], "stellar:testnet");
+    assert_eq!(terms["accepts"][0]["payTo"], PAY_TO);
+    // 0.001 USDC in its 7 decimals.
+    assert_eq!(terms["accepts"][0]["amount"], "10000");
+    // One catalog listing for every transaction, not one per hash.
+    assert_eq!(
+        terms["extensions"]["bazaar"]["routeTemplate"],
+        "/x402/v1/transactions/:hash"
+    );
+
+    for paid in [
+        "/x402/v1/contracts/CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA/events",
+        "/x402/v1/contracts/CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA/interface",
+    ] {
+        assert_eq!(status_of(&app, paid).await, StatusCode::PAYMENT_REQUIRED);
+    }
+    // Only the three routes are keyless: their keyed twin, another path under
+    // the prefix and an unknown path still meet the auth gate.
+    for gated in [
+        &PAID_TRANSACTION.replace("/x402", ""),
+        "/x402/v1/transactions",
+        "/no/such/path",
+    ] {
+        assert_eq!(
+            status_of(&app, gated).await,
+            StatusCode::UNAUTHORIZED,
+            "{gated}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_paid_route_stays_behind_the_edge_lock() {
+    let facilitator = facilitator().await;
+    let config = AppConfig {
+        edge_secret: Some("edge-secret".to_string()),
+        ..selling(&facilitator.uri())
+    };
+    let app = test_app_with(&config);
+
+    let through_cloudflare = Request::builder()
+        .uri(PAID_TRANSACTION)
+        .header("x-edge-secret", "edge-secret")
+        .body(Body::empty())
+        .unwrap();
+
+    assert_eq!(
+        status_of(&app, PAID_TRANSACTION).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        answer_to(&app, through_cloudflare).await.status(),
+        StatusCode::PAYMENT_REQUIRED
+    );
+}
+
+#[tokio::test]
+async fn without_settings_the_paid_paths_do_not_exist() {
+    let facilitator = facilitator().await;
+    let wrong_account = AppConfig {
+        x402: selling(&facilitator.uri())
+            .x402
+            .map(|settings| x402::Settings {
+                pay_to: "GABC".to_string(),
+                ..settings
+            }),
+        ..test_config()
+    };
+
+    for config in [test_config(), wrong_account] {
+        let app = test_app_with(&config);
+        assert_eq!(
+            status_of(&app, PAID_TRANSACTION).await,
+            status_of(&app, "/no/such/path").await
+        );
+        assert_eq!(
+            status_of(&app, PAID_TRANSACTION).await,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(status_of(&app, "/health").await, StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn a_facilitator_outage_costs_the_paid_routes_only() {
+    // Nothing is mounted: this facilitator answers 404 to `/supported`.
+    let facilitator = wiremock::MockServer::start().await;
+    let app = test_app_with(&selling(&facilitator.uri()));
+
+    // The crate answers as `@x402/express` does for a facilitator it could not read.
+    assert_eq!(
+        status_of(&app, PAID_TRANSACTION).await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(status_of(&app, "/health").await, StatusCode::OK);
 }

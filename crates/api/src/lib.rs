@@ -32,5 +32,6 @@ pub mod runtime_enrichment;
 mod search;
 mod state;
 mod transactions;
+mod x402;
 
 pub use state::AppState;

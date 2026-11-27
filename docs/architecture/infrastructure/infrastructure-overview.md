@@ -381,6 +381,11 @@ asymmetry is deliberate:
 API Gateway stage throttling is independent of all of the above and is the only
 volumetric control on the AWS side (the partner usage plan was removed in task
 0679: on a `{proxy+}` method that requires no API key it limited nothing).
+On testnet the paid routes' `GET /x402/{proxy+}` has a method limit of its own,
+`10` rps / `20` burst (task 0682), so unpaid requests cannot spend the stage's
+budget. It equals Cloudflare's per-address limit, so one caller can fill it;
+callers then get `429` and nothing is charged. Only `GET` is mapped there: other
+methods under `/x402` get the gateway's own `403`.
 Production defaults are `50` rps / `100` burst. They are **not** unconditional: setting
 `loadTesting: true` raises both to the account ceiling for a coordinated
 load-test window (`LOAD_TEST_THROTTLE_RATE` / `_BURST` in

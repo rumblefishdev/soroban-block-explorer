@@ -322,14 +322,31 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     // Finalized tx + full heavy overlay → immutable per Stellar consensus.
     // Degraded response (heavy unavailable) gets short TTL so a retry can
     // pick up the archive sooner.
+    let parse_error = light.parse_error;
     let body = merge_e3_response(light, heavy);
     let cache_value = if body.heavy_fields_status == HeavyFieldsStatus::Ok {
         cache_control::LONG
     } else {
         cache_control::SHORT
     };
+    let degraded = body.heavy_fields_status != HeavyFieldsStatus::Ok;
     let mut resp = Json(body).into_response();
     cache_control::attach(&mut resp, cache_value);
+    // For the paid twin only (task 0682); never sent. A `parse_error` row never
+    // gets its archive part, so it is no data, not an outage: a `5xx` here
+    // would let any caller fire the 5xx alarm at will.
+    if degraded {
+        let (status, code) = if parse_error {
+            (axum::http::StatusCode::NOT_FOUND, errors::NO_DATA)
+        } else {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                errors::HEAVY_UNAVAILABLE,
+            )
+        };
+        resp.extensions_mut()
+            .insert(crate::x402::Nothing(status, code));
+    }
     resp
 }
 

@@ -319,6 +319,17 @@ export class ComputeStack extends cdk.Stack {
         // failure. Same list the enrichment worker gets (see its block
         // below). Required: the Lambda refuses to start without it.
         SOROBAN_RPC_URLS: config.sorobanRpcUrls.join(','),
+        // The paid routes under `/x402/v1/` (task 0682). Without
+        // `X402_PAY_TO` the Lambda mounts none of them. An address, a network
+        // name and a price: nothing here is a secret, and the service holds no
+        // key for the account.
+        ...(config.x402
+          ? {
+              X402_PAY_TO: config.x402.payTo,
+              X402_NETWORK: config.x402.network,
+              X402_PRICE_USD: config.x402.priceUsd,
+            }
+          : {}),
         // Verified-source lookups for the contract page (task 0639), only on
         // networks that configure a verifier service.
         ...(config.sourceVerificationApiUrl

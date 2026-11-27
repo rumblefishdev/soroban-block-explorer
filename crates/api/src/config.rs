@@ -53,6 +53,10 @@ pub struct AppConfig {
     /// `system.query_log.log_comment` with the inbound `X-Request-Id` (B2).
     /// `false` (default) leaves the mechanism fully inert.
     pub load_testing: bool,
+    /// The paid routes under `/x402/v1/` (task 0682). `None` (no `X402_PAY_TO`,
+    /// or settings that name another network than the one indexed) = the routes
+    /// do not exist. See [`crate::x402`].
+    pub x402: Option<crate::x402::Settings>,
 }
 
 impl AppConfig {
@@ -88,6 +92,7 @@ impl AppConfig {
             // the load-test correlation off. Matches the `'true'` literal set by
             // `compute-stack.ts`.
             load_testing: std::env::var("LOAD_TESTING").as_deref() == Ok("true"),
+            x402: crate::x402::Settings::from_env(),
         }
     }
 }

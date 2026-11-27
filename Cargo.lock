@@ -128,6 +128,7 @@ dependencies = [
  "sha2",
  "soroban-ret",
  "stellar-strkey 1.0.0",
+ "stellar-x402",
  "stellar-xdr 30.0.0",
  "tar",
  "thiserror 2.0.18",
@@ -2285,6 +2286,16 @@ dependencies = [
 
 [[package]]
 name = "heapless"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
+]
+
+[[package]]
+name = "heapless"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
@@ -4397,14 +4408,41 @@ dependencies = [
 
 [[package]]
 name = "stellar-strkey"
+version = "0.0.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "084afcb0d458c3d5d5baa2d294b18f881e62cc258ef539d8fdf68be7dbe45520"
+dependencies = [
+ "crate-git-revision 0.0.6",
+ "data-encoding",
+ "heapless 0.8.0",
+]
+
+[[package]]
+name = "stellar-strkey"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5038ed2bf4e11842210d118f65791d8ca4747622daddd222338b3d06b6051bc1"
 dependencies = [
  "crate-git-revision 0.0.9",
  "data-encoding",
- "heapless",
+ "heapless 0.9.3",
  "zeroize",
+]
+
+[[package]]
+name = "stellar-x402"
+version = "0.0.0"
+source = "git+https://github.com/rumblefishdev/stellar-x402.git?rev=ff5933c2b8648b327fe09f7c0369df88efea37d3#ff5933c2b8648b327fe09f7c0369df88efea37d3"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "stellar-strkey 0.0.16",
+ "thiserror 2.0.18",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
