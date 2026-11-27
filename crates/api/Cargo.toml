@@ -35,6 +35,10 @@ tower-http = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
 reqwest = { workspace = true }
+# Pay per request (task 0682): the seller's side of x402 on Stellar. Pinned
+# by `rev` to a commit of that repository's `develop`, never a branch: what
+# answers a buyer's payment must not change under a `cargo update`.
+stellar-x402 = { git = "https://github.com/rumblefishdev/stellar-x402.git", rev = "ff5933c2b8648b327fe09f7c0369df88efea37d3" }
 # Session JWT for the free-tier auth (task 0277 paid-API): HS256 issue/verify.
 jsonwebtoken = "9"
 utoipa-swagger-ui = { workspace = true, optional = true }

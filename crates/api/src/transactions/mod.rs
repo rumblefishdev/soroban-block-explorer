@@ -1,7 +1,7 @@
 //! Transactions API module: GET /v1/transactions and GET /v1/transactions/:hash.
 
 pub mod dto;
-mod handlers;
+pub(crate) mod handlers;
 mod queries;
 
 /// Hash → candidate ledgers; search's transaction bucket reads it too.

@@ -8,7 +8,7 @@
 
 pub mod cache;
 pub mod dto;
-mod handlers;
+pub(crate) mod handlers;
 mod queries;
 mod verified_source;
 

@@ -248,6 +248,7 @@ pub async fn get_interface(
             );
         }
     };
+    let empty = interface_metadata.is_none();
     let mut resp = Json(InterfaceResponse {
         contract_id: row.contract_id,
         wasm_hash: row.wasm_hash,
@@ -255,6 +256,13 @@ pub async fn get_interface(
     })
     .into_response();
     cache_control::attach(&mut resp, cache_control::MEDIUM);
+    // For the paid twin only (task 0682); never sent.
+    if empty {
+        resp.extensions_mut().insert(crate::x402::Nothing(
+            axum::http::StatusCode::NOT_FOUND,
+            errors::NO_DATA,
+        ));
+    }
     resp
 }
 
@@ -420,8 +428,16 @@ pub async fn list_events(
         },
     );
     let items: Vec<EventItem> = rows.into_iter().map(|r| r.item).collect();
+    let empty = items.is_empty();
     let mut resp = Json(into_envelope(items, page)).into_response();
     cache_control::attach(&mut resp, cache_control::SHORT);
+    // For the paid twin only (task 0682); never sent.
+    if empty {
+        resp.extensions_mut().insert(crate::x402::Nothing(
+            axum::http::StatusCode::NOT_FOUND,
+            errors::NO_DATA,
+        ));
+    }
     resp
 }
 

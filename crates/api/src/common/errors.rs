@@ -135,6 +135,20 @@ pub const INVALID_SEARCH_TYPE: &str = "invalid_search_type";
 // Builders
 // ---------------------------------------------------------------------------
 
+/// A paid route has no data to sell for the request (task 0682).
+pub const NO_DATA: &str = "no_data";
+/// A paid route could not read the transaction's archive part (task 0682).
+pub const HEAVY_UNAVAILABLE: &str = "heavy_unavailable";
+
+/// Build a refusal with a caller-chosen status and code, never cached. For the
+/// paid routes (task 0682), whose error answers are what keep a payment from
+/// being settled.
+pub fn refusal(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
+    let mut response = envelope(status, code, message, None);
+    crate::common::cache_control::attach(&mut response, crate::common::cache_control::NO_STORE);
+    response
+}
+
 /// Build a 400 Bad Request response with an [`ErrorEnvelope`] body.
 ///
 /// Preferred helper for parameter validation failures in handlers and

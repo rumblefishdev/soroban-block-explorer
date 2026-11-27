@@ -16,6 +16,7 @@ mod ops;
 mod search;
 pub mod state;
 mod transactions;
+mod x402;
 // Runtime details enrichment — S3 archive reread + HTTP stellar.toml fetch.
 // stellar_archive submodule drives E3 (`/transactions/:hash`) and E14
 // (`/contracts/:id/events`); sep1 submodule drives E9 (`/assets/:id`).
@@ -48,7 +49,7 @@ fn app(config: &AppConfig, state: AppState) -> Router {
     // then stamp the runtime `servers` block (resolved from
     // AppConfig.base_url) onto the registered spec.
     let (router, mut spec) = openapi::register_routes()
-        .with_state(state)
+        .with_state(state.clone())
         .split_for_parts();
     spec.servers = Some(vec![utoipa::openapi::server::Server::new(&config.base_url)]);
 
@@ -114,6 +115,11 @@ fn app(config: &AppConfig, state: AppState) -> Router {
         Some(a) => router.layer(axum::middleware::from_fn_with_state(a, auth::require_auth)),
         None => router,
     };
+
+    // The paid routes (task 0682), when `X402_PAY_TO` is set. Added AFTER the
+    // auth gate's layer, so they ask for no key and no session, and BEFORE the
+    // edge lock's, so a buyer still has to come through Cloudflare.
+    let router = x402::mount(router, config, state);
 
     // Origin lock (task 0277 Step 2, ADR 0048): reject any request that did NOT
     // arrive through the Cloudflare edge — i.e. that carries no matching

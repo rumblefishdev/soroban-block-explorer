@@ -328,8 +328,16 @@ pub async fn get_transaction(State(state): State<AppState>, Path(hash): Path<Str
     } else {
         cache_control::SHORT
     };
+    let degraded = body.heavy_fields_status != HeavyFieldsStatus::Ok;
     let mut resp = Json(body).into_response();
     cache_control::attach(&mut resp, cache_value);
+    // For the paid twin only (task 0682); never sent.
+    if degraded {
+        resp.extensions_mut().insert(crate::x402::Nothing(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            errors::HEAVY_UNAVAILABLE,
+        ));
+    }
     resp
 }
 
