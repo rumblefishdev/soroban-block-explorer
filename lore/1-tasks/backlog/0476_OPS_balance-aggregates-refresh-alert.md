@@ -3,8 +3,8 @@ id: '0476'
 title: 'OPS: alert on a stalled balance_aggregates_mv refresh (system.view_refreshes)'
 type: OPS
 status: backlog
-related_adr: []
-related_tasks: ['0310', '0331']
+related_adr: ['0062']
+related_tasks: ['0310', '0331', '0428', '0447']
 tags:
   ['phase-future', 'effort-small', 'priority-low', 'clickhouse', 'monitoring']
 links: []
@@ -28,6 +28,15 @@ history:
       is the cheaper side to move — the FEATURE one is already referenced by
       merged commits. 0475 was taken meanwhile, hence 0476. Content unchanged:
       only the id, the filename and the three references from 0310 moved.
+  - date: '2026-11-27'
+    status: backlog
+    who: stkrolikiewicz
+    note: >
+      Placed under ADR 0062 (PR #762, slimmed after Karol's review): the
+      transport is decided, and the alarm stays closed by 0428's decision
+      until one of its return conditions is met. The "Under ADR 0062" section
+      below carries 0428's design and two notes from that review for when it
+      returns.
 ---
 
 # OPS: alert on a stalled `balance_aggregates_mv` refresh
@@ -46,6 +55,24 @@ Inherited from 0310 (which closed the dead-column cleanup). The check itself
 exists as a manual runbook query in task 0331's `ops-runbook.md`; this task is
 about making it fire on its own.
 
+## Under ADR 0062
+
+- **Not built yet, by decision.** 0428 measured the same class on all 8
+  refreshable views (0 exceptions over 29 days) and closed the alarm with two
+  return conditions: a silent refresh failure observed, or 0447 raising
+  `REFRESH EVERY`. Until one is met, this stays in the backlog.
+- **When it returns, 0428's design, on CloudWatch's path** (ADR 0062, rule 1:
+  what our Lambdas measure): the indexer publishes `now() - last_success_time`
+  from its existing `put_metric_data` call, with a bare threshold of 3× the
+  refresh interval and missing data `NOT_BREACHING` (absence means the indexer
+  is paused, which is alarmed already).
+- **Two notes from the review of the first draft (PR #762):**
+  - don't count every `exception` as failing: stellar-prices-api's
+    `refresh_waits.rs` skips a `Disabled` view (the `SYSTEM STOP VIEW` is its
+    own signal) and a `Running` one (it may be retrying that very error), or
+    the alarm fires on every retry and every planned stop;
+  - drill the pubnet alarm, not only testnet's.
+
 ## Implementation
 
 Source query (from 0310/0331):
@@ -59,11 +86,8 @@ WHERE view = 'balance_aggregates_mv';
 Alert when `exception != ''` OR `now() - last_success_time > ~10 min` (a few
 missed 2-minute cycles).
 
-- Decide the transport: the CH box is Hetzner (no CloudWatch agent on it), so
-  either a cron + webhook on `ch-prod-01` (Ansible-managed, see
-  `infra-hetzner/`), or a small scheduled Lambda in the CloudWatch stack that
-  queries CH over mTLS like the API does. Pick whichever the existing
-  monitoring already leans on.
+- The transport is decided (ADR 0062, above): the indexer's CloudWatch
+  metric, not a cron, a webhook or a new Lambda.
 - Pairs with the existing CH monitoring — do not build a new channel for one
   alert.
 
