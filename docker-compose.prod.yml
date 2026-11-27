@@ -124,13 +124,11 @@ services:
     ports: !override
       - '127.0.0.1:8123:8123'
       - '127.0.0.1:9000:9000'
-      # No host mapping for 9363 (Prometheus metrics): the listener
-      # inside the container binds to 127.0.0.1 (see config.d/prometheus.xml
-      # for the rationale). A host port mapping with `userland-proxy:
-      # false` cannot reach a container-loopback listener anyway —
-      # publishing it would only create a confusing dead port on
-      # the host. Scrapers reach the endpoint via `docker exec` or
-      # by sharing the container's network namespace.
+      # No host mapping for 9363 (Prometheus metrics): the endpoint
+      # has no authentication, so it stays off the host. It listens on
+      # every interface inside the container (config.d/prometheus.xml),
+      # and a scraper reaches it as `clickhouse:9363` over the Compose
+      # network (ADR 0062).
     # `!override` on volumes too: the base file mounts a named
     # volume at /var/lib/clickhouse, prod replaces it with a bind
     # mount under /srv/ so backups and recovery operate on host
