@@ -56,9 +56,13 @@ its first way in for a caller without one.
 - [ ] An unpaid request to a paid route answers 402 with the terms and the catalog listing,
       with no key and no session, only through Cloudflare; every other route keeps its gate
 - [ ] An answer with nothing in it is an error that is not charged: 503 `heavy_unavailable`
-      for a transaction without its archive part, 404 `no_data` for an empty events page or a
-      null interface
+      for a transaction whose archive part could not be read, 404 `no_data` for a
+      `parse_error` transaction, an empty events page or a null interface
 - [ ] Testnet's gateway gives the prefix its own request limit; production maps nothing
+- [x] **Docs updated** — `docs/architecture/backend/backend-overview.md` (§6.3, the gate's
+      opt-outs) and `infrastructure/infrastructure-overview.md` (the method limit)
+- [x] **API types regenerated** — N/A: the paid routes are not in the OpenAPI document, and
+      the `API types freshness` check passes
 
 ## Implementation Notes
 
@@ -69,10 +73,13 @@ its first way in for a caller without one.
   with nothing in it. It is never sent, so the SPA's answers are the same bytes.
 - `x402::mount` is called in `main.rs` after the auth gate's layer and before the edge lock's.
 - Gateway: `GET /x402/{proxy+}`, 10 requests a second with a burst of 20, on testnet only.
-- Tests: 5 in `src/x402/tests.rs`, 4 in `src/tests/main_tests.rs` (no ClickHouse, the
-  facilitator on wiremock), 3 in `infra/src/__tests__/x402-paid-routes.test.ts`.
-- Not run here: a paid request, and the three empty answers through a handler. Both need the
-  testnet ClickHouse, so they are stellar-x402 0041's evidence run after the testnet deploy.
+- Tests: 4 in `src/x402/tests.rs`, 4 in `src/tests/main_tests.rs` (no ClickHouse, the
+  facilitator on wiremock), 3 in `infra/src/__tests__/x402-paid-routes.test.ts`. One of the
+  first four sends a paid request through `x402::sell` (the layers every route gets) to a
+  handler that answers a marked `200` and to one that answers data: the first is a `404` and
+  `/settle` is never asked, the second a `200` with `PAYMENT-RESPONSE` and one settlement.
+- Not run here: the three keyed handlers' own marks with real data. They need the testnet
+  ClickHouse, so they are stellar-x402 0041's evidence run after the testnet deploy.
 
 ## Design Decisions
 
@@ -96,9 +103,23 @@ its first way in for a caller without one.
    refuses the latter; `ANY /{proxy+}` stays as it is.
 8. **The paid routes are not in the OpenAPI document.** A buyer reads the terms from the
    `402` and from the catalog.
-9. **A wrong setting leaves the API running without paid routes**, logged as an error.
+9. **A malformed setting leaves the API running without paid routes**, logged as an error:
+   an address, a price or a URL that does not parse, or another network than the one
+   indexed. A well-formed wrong value (a mistyped facilitator host) leaves the routes in
+   place, and each request to them is a `5xx`.
 10. **Six stale infra tests had to be fixed first** (`test(lore-0680)`, its own pull request):
     they failed on `develop` since 2026-11-23 and the hooks run them for every commit here.
+
+11. **No facilitator API key setting** (the plan's `X402_FACILITATOR_API_KEY`). Our
+    facilitator asks for one on pubnet only, and this deployment sells testnet.
+12. **The 5xx alarm counts the paid routes** (stellar-x402 0041's decision 11 asked it not
+    to). The gateway's metric has no per-path dimension and the stage has no access log. It
+    sees a facilitator that cannot be read, an archive read that failed, and a gateway `504`.
+    A `parse_error` transaction answers `404 no_data`, not `503`: it never gets its archive
+    part, and a `503` there would let any caller fire the alarm at will.
+13. **The 25 s timeout is per call to the facilitator, not per request** (stellar-x402 0041's
+    decision 14, accepted for testnet). Verify, the handler and settle together can pass the
+    gateway's 29 s: the buyer then gets `504` while the payment can still land.
 
 ## Future Work
 
