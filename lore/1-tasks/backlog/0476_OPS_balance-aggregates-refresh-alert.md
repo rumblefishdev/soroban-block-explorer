@@ -4,7 +4,7 @@ title: 'OPS: alert on a stalled balance_aggregates_mv refresh (system.view_refre
 type: OPS
 status: backlog
 related_adr: ['0062']
-related_tasks: ['0310', '0331', '0682']
+related_tasks: ['0310', '0331', '0428', '0447']
 tags:
   ['phase-future', 'effort-small', 'priority-low', 'clickhouse', 'monitoring']
 links: []
@@ -28,13 +28,15 @@ history:
       is the cheaper side to move — the FEATURE one is already referenced by
       merged commits. 0475 was taken meanwhile, hence 0476. Content unchanged:
       only the id, the filename and the three references from 0310 moved.
-  - date: '2026-11-26'
+  - date: '2026-11-27'
     status: backlog
     who: stkrolikiewicz
     note: >
-      ADR 0062 (proposed, PR #762) decides the transport: a check in the data-check exporter
-      beside ClickHouse (0682), alarmed on the monitoring VM. This task's query is 0682's first
-      check and lands with it.
+      Placed under ADR 0062 (PR #762, slimmed after Karol's review): the
+      transport is decided, and the alarm stays closed by 0428's decision
+      until one of its return conditions is met. The "Under ADR 0062" section
+      below carries 0428's design and two notes from that review for when it
+      returns.
 ---
 
 # OPS: alert on a stalled `balance_aggregates_mv` refresh
@@ -53,6 +55,24 @@ Inherited from 0310 (which closed the dead-column cleanup). The check itself
 exists as a manual runbook query in task 0331's `ops-runbook.md`; this task is
 about making it fire on its own.
 
+## Under ADR 0062
+
+- **Not built yet, by decision.** 0428 measured the same class on all 8
+  refreshable views (0 exceptions over 29 days) and closed the alarm with two
+  return conditions: a silent refresh failure observed, or 0447 raising
+  `REFRESH EVERY`. Until one is met, this stays in the backlog.
+- **When it returns, 0428's design, on CloudWatch's path** (ADR 0062, rule 1:
+  what our Lambdas measure): the indexer publishes `now() - last_success_time`
+  from its existing `put_metric_data` call, with a bare threshold of 3× the
+  refresh interval and missing data `NOT_BREACHING` (absence means the indexer
+  is paused, which is alarmed already).
+- **Two notes from the review of the first draft (PR #762):**
+  - don't count every `exception` as failing: stellar-prices-api's
+    `refresh_waits.rs` skips a `Disabled` view (the `SYSTEM STOP VIEW` is its
+    own signal) and a `Running` one (it may be retrying that very error), or
+    the alarm fires on every retry and every planned stop;
+  - drill the pubnet alarm, not only testnet's.
+
 ## Implementation
 
 Source query (from 0310/0331):
@@ -64,32 +84,16 @@ WHERE view = 'balance_aggregates_mv';
 ```
 
 Alert when `exception != ''` OR `now() - last_success_time > ~10 min` (a few
-missed 2-minute cycles). Both `default` and `testnet` hold the view, so the
-check runs it once per network:
+missed 2-minute cycles).
 
-```sql
-SELECT status, last_success_time, exception
-FROM system.view_refreshes
-WHERE database = 'default' AND view = 'balance_aggregates_mv'; -- 'testnet' too
-```
-
-- Transport, decided by ADR 0062: a check in the data-check exporter beside
-  ClickHouse (0682), for both networks (`default` and `testnet`), alarmed on
-  the monitoring VM. No cron, webhook or Lambda of its own.
-- The check exports no value while `last_success_time` is NULL and
-  `exception` is empty (unknown after a ClickHouse restart); a non-empty
-  `exception` is a failing value whatever `last_success_time` holds. It also
-  exports a visible-object count, so a filtered grant can't read as healthy
-  (0682, Step 3).
+- The transport is decided (ADR 0062, above): the indexer's CloudWatch
+  metric, not a cron, a webhook or a new Lambda.
+- Pairs with the existing CH monitoring — do not build a new channel for one
+  alert.
 
 ## Acceptance Criteria
 
 - [ ] Alert fires on `exception != ''` or `last_success_time` older than ~10 min.
 - [ ] Verified end-to-end once (e.g. by temporarily suspending the MV in a
       controlled window, or lowering the threshold to trigger).
-- [ ] `docs/runbooks/health.md` carries the alert (a coverage row and a
-      symptom entry with the query above), and the rule's description links it.
-- [ ] **Docs updated** — with 0682 (`infrastructure-overview.md`,
-      `clickhouse-rbac.md`, `docs/runbooks/health.md`).
-- [ ] **API types regenerated** — N/A — a query and rules only; nothing under
-      `crates/api/**`, `Cargo.{toml,lock}` or `libs/api-types/**`.
+- [ ] Runbook note in 0331's `ops-runbook.md` updated to point at the alert.
